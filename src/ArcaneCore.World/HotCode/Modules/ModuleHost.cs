@@ -160,6 +160,20 @@ public sealed class ModuleHost
     /// <summary>Remove the module's registrations and release it.</summary>
     public Task<ModuleResult> UnloadAsync(string name, HotSwapOrigin? origin = null) => RunAsync("unload", name, ModuleOperation.Unload, origin);
 
+    /// <summary>What one world-thread commit does (the fault injection seam and the logs tell them apart).</summary>
+    internal enum ModuleCommit
+    {
+        Load,
+        Replace,
+        Unload,
+
+        /// <summary>Unloading the previous version after a failed replace.</summary>
+        Cleanup,
+
+        /// <summary>Loading the last good version again after a failed replace.</summary>
+        Restore,
+    }
+
     private enum ModuleOperation
     {
         Load,
@@ -174,9 +188,10 @@ public sealed class ModuleHost
         try
         {
             ModuleResult result;
+            var followUps = new List<(string Verb, ModuleResult Result)>();
             try
             {
-                result = await CoreAsync(name, operation).ConfigureAwait(false);
+                result = await CoreAsync(name, operation, followUps).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -184,8 +199,15 @@ public sealed class ModuleHost
                 result = new ModuleResult(false, $"unexpected failure: {ex.GetType().Name}: {ex.Message}");
             }
 
+            // In order: the failed operation, then what the host did about it ("failed -> unloaded -> restored").
             Record(verb, name, result);
             ReportSwap(verb, name, result, origin ?? HotSwapOrigin.Console, Stopwatch.GetElapsedTime(started));
+            foreach ((string stepVerb, ModuleResult step) in followUps)
+            {
+                Record(stepVerb, name, step);
+                ReportSwap(stepVerb, name, step, origin ?? HotSwapOrigin.Console, Stopwatch.GetElapsedTime(started));
+            }
+
             return result;
         }
         finally
@@ -194,7 +216,7 @@ public sealed class ModuleHost
         }
     }
 
-    private async Task<ModuleResult> CoreAsync(string name, ModuleOperation operation)
+    private async Task<ModuleResult> CoreAsync(string name, ModuleOperation operation, List<(string Verb, ModuleResult Result)> followUps)
     {
         if (!NamePattern.IsMatch(name))
         {
@@ -236,9 +258,16 @@ public sealed class ModuleHost
             }
         }
 
+        ModuleCommit kind = operation switch
+        {
+            ModuleOperation.Load => ModuleCommit.Load,
+            ModuleOperation.Reload => ModuleCommit.Replace,
+            _ => ModuleCommit.Unload,
+        };
+
         // The queued closure holds the swap, not the module: the world thread may keep the last command it ran
         // reachable for a while (an unoptimized loop frame), and that must not keep an unloaded module alive.
-        var swap = new PendingSwap(existing, prepared);
+        var swap = new PendingSwap(existing, prepared, kind);
         string? error = await WorldCommit.RunAsync(_world, _commitTimeout, () => Apply(swap)).ConfigureAwait(false);
         swap.Clear();
         if (error is not null)
@@ -250,17 +279,14 @@ public sealed class ModuleHost
                 return new ModuleResult(false, $"{error}; the tables are unchanged");
             }
 
-            // A failure after validation: every slot was rolled back, so the module keeps its previous state (loaded as before, or not loaded).
-            return swap.RollbackError is null
-                ? new ModuleResult(false, $"{error}; every slot was rolled back, nothing changed", Failed: true)
-                : new ModuleResult(false, $"{error}; ROLLBACK INCOMPLETE, these slots could not be put back: {swap.RollbackError} (a restart restores a known state)", Failed: true);
+            return await AfterFailedCommitAsync(name, operation, existing, error, swap, followUps).ConfigureAwait(false);
         }
 
         lock (_gate)
         {
             if (prepared is not null)
             {
-                _loaded[name] = new LoadedModule(name, prepared.Context, prepared.Opcodes, prepared.RootNames, _clock(), prepared.Sha256, prepared.Game);
+                _loaded[name] = new LoadedModule(name, prepared, _clock());
             }
             else
             {
@@ -285,17 +311,115 @@ public sealed class ModuleHost
                 $"{(operation == ModuleOperation.Reload ? "reloaded" : "loaded")} '{name}': {prepared!.Opcodes.Count} opcode handlers, {prepared.RootNames.Length} command roots ({string.Join(", ", prepared.RootNames.Select(r => "." + r))}); sha256 {prepared.Sha256}",
                 SwapFields(prepared, existing)),
         };
-        if (swap.Game.CreaturesSwitched > 0 || swap.Game.CreaturesDeferred > 0)
+        return WithGameFacts(final, swap.Game);
+    }
+
+    /// <summary>
+    /// A commit failed after validation and every slot was rolled back (or the rollback itself failed). Owner policy: a failed version is never
+    /// left in place. A failed load leaves nothing registered; a failed unload leaves the module loaded as before; a failed replace has already
+    /// unloaded the previous version too (in the same tick, <see cref="Apply"/>), and the last good version is now rebuilt from the bytes kept
+    /// when it was loaded (the file on disk may have changed), checked against the allowlist again and loaded. Each step is recorded and announced
+    /// (<paramref name="followUps"/>): failed, then unloaded, then restored (or restore failed, the module staying unloaded).
+    /// </summary>
+    private async Task<ModuleResult> AfterFailedCommitAsync(
+        string name, ModuleOperation operation, LoadedModule? existing, string error, PendingSwap swap, List<(string Verb, ModuleResult Result)> followUps)
+    {
+        if (swap.RollbackError is not null)
         {
-            List<AnnounceField> fields = [.. final.Fields ?? [], new("creatures_switched", swap.Game.CreaturesSwitched.ToString(CultureInfo.InvariantCulture)), new("creatures_in_combat_deferred", swap.Game.CreaturesDeferred.ToString(CultureInfo.InvariantCulture))];
-            final = final with
+            return new ModuleResult(false, $"{error}; ROLLBACK INCOMPLETE, these slots could not be put back: {swap.RollbackError} (a restart restores a known state)", Failed: true);
+        }
+
+        switch (operation)
+        {
+            case ModuleOperation.Load:
+                return new ModuleResult(false, $"load of '{name}' failed: {error}; every slot was rolled back, nothing of it is registered", Failed: true);
+            case ModuleOperation.Unload:
+                return new ModuleResult(false, $"unload of '{name}' failed: {error}; every slot was rolled back, the module stays loaded as before", Failed: true);
+        }
+
+        if (!swap.PreviousUnloaded)
+        {
+            // The previous version is live again (rolled back) but could not be unloaded either: it stays, and the operator is told.
+            return new ModuleResult(false, $"replace of '{name}' failed: {error}; rolled back, but unloading the previous version also failed ({swap.CleanupError}), so it stays loaded", Failed: true);
+        }
+
+        LoadedModule previous = existing!;
+        lock (_gate)
+        {
+            _loaded.Remove(name);
+        }
+
+        previous.Context.Unload();
+        Retire(previous.Context);
+        string previousSha = previous.Info.Sha256[..12];
+        followUps.Add(("unload", WithGameFacts(
+            new ModuleResult(true, $"unloaded '{name}' (previous version sha256 {previousSha}) after the failed replace", [new("sha256", previousSha), new("after", "failed replace")]),
+            swap.Game)));
+
+        string? restoreError;
+        Prepared? restored = null;
+        try
+        {
+            restored = await Task.Run(() => Build(name, previous.Directory, previous.Bytes)).ConfigureAwait(false);
+            var restoreSwap = new PendingSwap(null, restored, ModuleCommit.Restore);
+            restoreError = await WorldCommit.RunAsync(_world, _commitTimeout, () => Apply(restoreSwap)).ConfigureAwait(false);
+            restoreSwap.Clear();
+            if (restoreSwap.RollbackError is { } restoreRollback)
             {
-                Detail = $"{final.Detail}; {swap.Game.CreaturesSwitched} creatures switched AI, {swap.Game.CreaturesDeferred} in combat keep the old AI for now",
+                restoreError = $"{restoreError}; ROLLBACK INCOMPLETE, these slots could not be put back: {restoreRollback} (a restart restores a known state)";
+            }
+
+            if (restoreError is null)
+            {
+                lock (_gate)
+                {
+                    _loaded[name] = new LoadedModule(name, restored, _clock());
+                }
+
+                followUps.Add(("restore", WithGameFacts(
+                    new ModuleResult(true, $"restored the previous version of '{name}' (sha256 {previousSha}) from the bytes kept at its load", [new("sha256", previousSha), new("after", "failed replace")]),
+                    restoreSwap.Game)));
+                return new ModuleResult(false, $"replace of '{name}' failed: {error} -> unloaded -> restored previous version sha256 {previousSha}", [new("restored_sha256", previousSha)], Failed: true);
+            }
+        }
+        catch (ModuleRejectedException ex)
+        {
+            restoreError = ex.Message;
+        }
+
+        if (restored is not null)
+        {
+            restored.Context.Unload();
+            Retire(restored.Context);
+        }
+
+        followUps.Add(("restore", new ModuleResult(false, $"restoring the previous version of '{name}' (sha256 {previousSha}) failed: {restoreError}", [new("sha256", previousSha)], Failed: true)));
+        return new ModuleResult(false, $"replace of '{name}' failed: {error} -> unloaded -> restoring previous version sha256 {previousSha} failed too: {restoreError}; the module is not loaded", Failed: true);
+    }
+
+    /// <summary>Add what the creature part of a commit did (AI switches now and deferred, EventAI respawns queued) to a result.</summary>
+    private static ModuleResult WithGameFacts(ModuleResult result, ModuleGameCommit game)
+    {
+        if (game.CreaturesSwitched > 0 || game.CreaturesDeferred > 0)
+        {
+            List<AnnounceField> fields = [.. result.Fields ?? [], new("creatures_switched", game.CreaturesSwitched.ToString(CultureInfo.InvariantCulture)), new("creatures_in_combat_deferred", game.CreaturesDeferred.ToString(CultureInfo.InvariantCulture))];
+            result = result with
+            {
+                Detail = $"{result.Detail}; {game.CreaturesSwitched} creatures switched AI, {game.CreaturesDeferred} in combat keep the old AI for now",
                 Fields = fields,
             };
         }
 
-        return final;
+        if (game.EventAiRespawnsQueued > 0)
+        {
+            result = result with
+            {
+                Detail = $"{result.Detail}; {game.EventAiRespawnsQueued} EventAI creatures respawn over the next ticks to pick up the changed event handlers",
+                Fields = [.. result.Fields ?? [], new("eventai_respawns_queued", game.EventAiRespawnsQueued.ToString(CultureInfo.InvariantCulture))],
+            };
+        }
+
+        return result;
     }
 
     private static List<AnnounceField> SwapFields(Prepared prepared, LoadedModule? replaced)
@@ -356,21 +480,69 @@ public sealed class ModuleHost
     }
 
     /// <summary>
-    /// Test seam: called on the world thread with each slot's name (<see cref="SwapSlots"/>) during a commit, right after that slot changed (for
-    /// <see cref="SwapSlots.Commands"/>, just before the command table is swapped, the last step). A throw is a failure after validation and must be
-    /// rolled back completely. Null in production.
+    /// Test seam: called on the world thread with the kind of commit and each slot's name (<see cref="SwapSlots"/>), right after that slot changed
+    /// (for <see cref="SwapSlots.Commands"/>, just before the command table is swapped, the last step). A throw is a failure after validation.
+    /// Null in production.
     /// </summary>
-    internal Action<string>? FaultInjection { get; set; }
+    internal Action<ModuleCommit, string>? FaultInjection { get; set; }
 
     /// <summary>
-    /// World thread, start of a tick: swap the old version of the module (if any) for the new one (if any). Every slot (opcodes, creature AI,
-    /// script hooks, spell scripts, instance scripts, EventAI, commands) is validated before any changes; the commit then records an undo step per
-    /// changed slot, and a failure in any slot rolls every slot back to the state before the swap (<see cref="PendingSwap.Failed"/>). Live
-    /// creatures are given the new AI only once every slot is in.
+    /// World thread, start of a tick: swap the old version of the module (if any) for the new one (if any). On a failure after validation every
+    /// slot is rolled back (<see cref="TryCommit"/>), and for a replace the previous version is then unloaded too, in the same tick, so no
+    /// version of the module is left half applied; the host rebuilds the last good version afterwards (<see cref="AfterFailedCommitAsync"/>).
+    /// Live creatures are given new AI only once every slot of a commit is in.
     /// </summary>
     private string? Apply(PendingSwap swap)
     {
         (LoadedModule? old, Prepared? added) = swap.Take();
+        string? error = TryCommit(old, added, swap.Kind, out bool failed, out string? rollbackError);
+        if (error is null)
+        {
+            if (_seams is not null)
+            {
+                swap.Game = _seams.Complete(old?.Game, added?.Game, old?.Context);
+            }
+
+            return null;
+        }
+
+        if (!failed)
+        {
+            return error;
+        }
+
+        swap.Failed = true;
+        swap.RollbackError = rollbackError;
+        if (swap.Kind == ModuleCommit.Replace && rollbackError is null && old is not null)
+        {
+            string? cleanupError = TryCommit(old, null, ModuleCommit.Cleanup, out _, out string? cleanupRollback);
+            if (cleanupError is null)
+            {
+                swap.PreviousUnloaded = true;
+                if (_seams is not null)
+                {
+                    swap.Game = _seams.Complete(old.Game, null, old.Context);
+                }
+            }
+            else
+            {
+                swap.CleanupError = cleanupRollback is null ? cleanupError : $"{cleanupError}; ROLLBACK INCOMPLETE: {cleanupRollback}";
+            }
+        }
+
+        return error;
+    }
+
+    /// <summary>
+    /// Validate every slot (opcodes, creature AI, script hooks, spell scripts, instance scripts, EventAI, commands) without changing anything,
+    /// then commit them one by one, recording an undo step per changed slot. Null when it applied. A refusal in validation returns why with
+    /// <paramref name="failedAfterValidation"/> false and nothing changed; a failure while committing rolls every changed slot back
+    /// (<paramref name="rollbackError"/>: the slots that could not be put back, or null) and sets <paramref name="failedAfterValidation"/>.
+    /// </summary>
+    private string? TryCommit(LoadedModule? old, Prepared? added, ModuleCommit kind, out bool failedAfterValidation, out string? rollbackError)
+    {
+        failedAfterValidation = false;
+        rollbackError = null;
         IReadOnlyCollection<WorldOpcode> removeOpcodes = old?.Opcodes ?? [];
         IReadOnlyCollection<string> removeRoots = old?.RootNames ?? [];
         IReadOnlyList<ChatCommand> addRoots = added?.Roots ?? [];
@@ -393,7 +565,8 @@ public sealed class ModuleHost
             return commandError;
         }
 
-        Action<string>? inject = FaultInjection;
+        Action<ModuleCommit, string>? fault = FaultInjection;
+        Action<string>? inject = fault is null ? null : slot => fault(kind, slot);
         var undo = new SwapUndo();
         try
         {
@@ -411,22 +584,17 @@ public sealed class ModuleHost
             {
                 throw new InvalidOperationException($"the command table refused the swap: {commands.Error}");
             }
+
+            return null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             IReadOnlyList<string> changed = undo.Slots;
-            _logger.LogError(ex, "Applying a hot module failed after validation; rolling back {Slots}", changed.Count == 0 ? "nothing" : string.Join(", ", changed));
-            swap.Failed = true;
-            swap.RollbackError = undo.RollBack((slot, rollbackEx) => _logger.LogFault("hotmodule-rollback", rollbackEx, "Rolling back the {Slot} slot of a hot module swap failed", slot));
-            return $"applying the module failed after validation ({ex.GetType().Name}: {ex.Message})";
+            _logger.LogError(ex, "A hot module {Kind} failed after validation; rolling back {Slots}", kind, changed.Count == 0 ? "nothing" : string.Join(", ", changed));
+            failedAfterValidation = true;
+            rollbackError = undo.RollBack((slot, rollbackEx) => _logger.LogFault("hotmodule-rollback", rollbackEx, "Rolling back the {Slot} slot of a hot module swap failed", slot));
+            return $"applying it failed after validation ({ex.GetType().Name}: {ex.Message})";
         }
-
-        if (_seams is not null)
-        {
-            swap.Game = _seams.Complete(old?.Game, added?.Game, old?.Context);
-        }
-
-        return null;
     }
 
     private void Retire(System.Runtime.Loader.AssemblyLoadContext? context)
@@ -508,7 +676,16 @@ public sealed class ModuleHost
             throw new ModuleRejectedException($"module file is larger than {MaxModuleBytes / (1024 * 1024)} MB");
         }
 
-        byte[] bytes = File.ReadAllBytes(file.FullName);
+        return Build(name, directory, File.ReadAllBytes(file.FullName));
+    }
+
+    /// <summary>
+    /// Build a module version from <paramref name="bytes"/> (read from its file by <see cref="Prepare"/>, or kept from an earlier load to restore
+    /// the last good version): allowlist check, a new collectible context, discovery of every slot. Off the world thread; changes nothing live.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Prepared Build(string name, string directory, byte[] bytes)
+    {
         string sha = Convert.ToHexString(SHA256.HashData(bytes));
         // The hash is of the very bytes that are loaded below (no second read), so the check cannot be raced.
         AllowlistVerdict allowlist = ModuleAllowlist.Check(_options.Allowlist, sha);
@@ -605,7 +782,7 @@ public sealed class ModuleHost
                 throw new ModuleRejectedException(rootError);
             }
 
-            return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha, game);
+            return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha, game, directory, bytes);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -640,8 +817,16 @@ public sealed class ModuleHost
     }
 
     /// <summary>What a queued commit will swap; emptied once it ran (or was given up on) so the closure never pins a module.</summary>
-    private sealed class PendingSwap(LoadedModule? old, Prepared? added)
+    private sealed class PendingSwap(LoadedModule? old, Prepared? added, ModuleCommit kind)
     {
+        public ModuleCommit Kind { get; } = kind;
+
+        /// <summary>After a failed replace: the previous version was unloaded too (world thread), so the host restores it from its bytes.</summary>
+        public bool PreviousUnloaded { get; set; }
+
+        /// <summary>After a failed replace: why unloading the previous version failed (it then stays loaded).</summary>
+        public string? CleanupError { get; set; }
+
         /// <summary>What the creature AI / script hook part of the commit did (set on the world thread, read after the commit completed).</summary>
         public ModuleGameCommit Game { get; set; }
 
@@ -677,37 +862,39 @@ public sealed class ModuleHost
         IReadOnlyList<ChatCommand> Roots,
         string[] RootNames,
         string Sha256,
-        ModuleGameParts Game);
+        ModuleGameParts Game,
+        string Directory,
+        byte[] Bytes);
 
-    private sealed class LoadedModule(
-        string name,
-        System.Runtime.Loader.AssemblyLoadContext context,
-        IReadOnlyCollection<WorldOpcode> opcodes,
-        string[] rootNames,
-        DateTimeOffset loadedUtc,
-        string sha256,
-        ModuleGameParts game)
+    /// <summary>A module version in force. Keeps its assembly bytes and folder, so a failed replace can rebuild it without the file on disk.</summary>
+    private sealed class LoadedModule(string name, Prepared version, DateTimeOffset loadedUtc)
     {
-        public ModuleGameParts Game { get; } = game;
+        public ModuleGameParts Game { get; } = version.Game;
 
         public string Name { get; } = name;
 
-        public System.Runtime.Loader.AssemblyLoadContext Context { get; } = context;
+        public System.Runtime.Loader.AssemblyLoadContext Context { get; } = version.Context;
 
-        public IReadOnlyCollection<WorldOpcode> Opcodes { get; } = opcodes;
+        public IReadOnlyCollection<WorldOpcode> Opcodes { get; } = version.Opcodes;
 
-        public string[] RootNames { get; } = rootNames;
+        public string[] RootNames { get; } = version.RootNames;
+
+        /// <summary>The module folder this version was loaded from (its private dependencies resolve there).</summary>
+        public string Directory { get; } = version.Directory;
+
+        /// <summary>The exact bytes this version was loaded from (its SHA-256 is <see cref="ModuleInfo.Sha256"/>).</summary>
+        public byte[] Bytes { get; } = version.Bytes;
 
         public ModuleInfo Info { get; } = new(
             name,
-            opcodes.Count,
-            rootNames,
+            version.Opcodes.Count,
+            version.RootNames,
             loadedUtc,
-            sha256,
-            game.AiEntries.Count + game.AiNames.Count,
-            game.Hooks.Count,
-            game.SpellScripts.Count,
-            game.InstanceScripts.Count,
-            game.EventAiEvents.Count + game.EventAiActions.Count);
+            version.Sha256,
+            version.Game.AiEntries.Count + version.Game.AiNames.Count,
+            version.Game.Hooks.Count,
+            version.Game.SpellScripts.Count,
+            version.Game.InstanceScripts.Count,
+            version.Game.EventAiEvents.Count + version.Game.EventAiActions.Count);
     }
 }

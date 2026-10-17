@@ -20,11 +20,12 @@ using Xunit;
 namespace ArcaneCore.World.Tests.HotCode;
 
 /// <summary>
-/// A module swap that fails after validation is rolled back in every slot (design hot-reload-tiers.md section 3.5): opcodes, creature AI, script
-/// hooks, spell scripts, instance scripts, EventAI and commands are exactly as before, the module keeps its previous state, the reply and the
-/// announcement say "failed". Faults are injected after each slot changed (<see cref="ModuleHost.FaultInjection"/>), on a replace of each fixture
-/// module (HotFixture: opcodes and commands; HotGame: creature AI and hooks; HotScripts: spell, instance and EventAI scripts), so every slot is
-/// both removed from and added to before it is undone. Also: a failing <see cref="SpellScriptRegistry.ScriptsChanged"/> handler fails the swap
+/// A module swap that fails after validation (design hot-reload-tiers.md section 3.5, owner policy): every slot (opcodes, creature AI, script hooks,
+/// spell scripts, instance scripts, EventAI, commands) is rolled back, a failed replace then unloads the module completely and restores the last
+/// good version from the bytes kept at its load (allowlist checked again), and each step is reported and audited ("failed -> unloaded ->
+/// restored"). A first load that fails leaves nothing; a restore that fails too leaves the module fully unloaded. Faults are injected after each
+/// slot changed (<see cref="ModuleHost.FaultInjection"/>) on each fixture module (HotFixture: opcodes and commands; HotGame: creature AI and
+/// hooks; HotScripts: spell, instance and EventAI scripts). Also: a failing <see cref="SpellScriptRegistry.ScriptsChanged"/> handler fails the swap
 /// visibly, and a registry that went away does not keep a module from being unloaded.
 /// </summary>
 public sealed class ModuleRollbackTests : IDisposable
@@ -95,9 +96,9 @@ public sealed class ModuleRollbackTests : IDisposable
         return data;
     }
 
-    private ModuleHost NewHost()
+    private ModuleHost NewHost(string allowlist = "")
         => new(
-            new HotModuleOptions { Enabled = true, Directory = _root },
+            new HotModuleOptions { Enabled = true, Directory = _root, Allowlist = allowlist },
             _world, _opcodes, _commands,
             new HotCodeAudit(Path.Combine(_dir, "audit.log")),
             NullLogger.Instance,
@@ -120,15 +121,6 @@ public sealed class ModuleRollbackTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, module));
         File.Copy(Path.Combine(AppContext.BaseDirectory, "hotfixtures", folder, dll + ".dll"), Path.Combine(_root, module, module + ".dll"), overwrite: true);
     }
-
-    private static Action<string> FailAt(string slot)
-        => current =>
-        {
-            if (current == slot)
-            {
-                throw new InvalidOperationException($"injected fault at {slot}");
-            }
-        };
 
     /// <summary>Everything a module swap can change, by reference (the objects themselves, not copies).</summary>
     private sealed record LiveState(
@@ -197,7 +189,77 @@ public sealed class ModuleRollbackTests : IDisposable
         Assert.Equal(expected.ModuleActions, actual.ModuleActions);
     }
 
-    /// <summary>What version 2 adds that version 1 lacks: proof that a later, clean reload applies it (the rollback left a consistent state).</summary>
+    private static Action<ModuleHost.ModuleCommit, string> FailAt(ModuleHost.ModuleCommit kind, string slot, bool alsoFailRestore = false)
+        => (currentKind, current) =>
+        {
+            if ((currentKind == kind && current == slot) || (alsoFailRestore && currentKind == ModuleHost.ModuleCommit.Restore))
+            {
+                throw new InvalidOperationException($"injected fault at {currentKind} {current}");
+            }
+        };
+
+    /// <summary>What a module version has registered, by name and count only (holds no module object, so it never keeps a context alive).</summary>
+    private sealed record Registrations(
+        WorldOpcode[] Opcodes,
+        string[] Roots,
+        (bool Entry1, bool Entry2, bool Named) Ai,
+        int Hooks,
+        bool LoginHook,
+        bool Spell,
+        bool ExtraSpell,
+        int HotSpells,
+        uint[] ModuleMaps,
+        byte[] ModuleEvents,
+        byte[] ModuleActions);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Registrations Names() => new(
+        [.. _opcodes.Opcodes.Order()],
+        [.. _commands.Current.Roots.Select(r => r.Name)],
+        (_ai.HasScript(990001, string.Empty), _ai.HasScript(990002, string.Empty), _ai.HasScript(0, "HotGameAI")),
+        _hooks.Registered.Count,
+        _hooks.Player.HasLogin,
+        _spells.Find(SpellId) is not null,
+        _spells.Find(ExtraSpellId) is not null,
+        _spells.HotScripts.Count,
+        [.. _instances.ModuleMapIds.Order()],
+        [.. _eventAi.ModuleEventTypes.Order()],
+        [.. _eventAi.ModuleActionTypes.Order()]);
+
+    private static void AssertSameRegistrations(Registrations expected, Registrations actual)
+    {
+        Assert.Equal(expected.Opcodes, actual.Opcodes);
+        Assert.Equal(expected.Roots, actual.Roots);
+        Assert.Equal(expected.Ai, actual.Ai);
+        Assert.Equal(expected.Hooks, actual.Hooks);
+        Assert.Equal(expected.LoginHook, actual.LoginHook);
+        Assert.Equal(expected.Spell, actual.Spell);
+        Assert.Equal(expected.ExtraSpell, actual.ExtraSpell);
+        Assert.Equal(expected.HotSpells, actual.HotSpells);
+        Assert.Equal(expected.ModuleMaps, actual.ModuleMaps);
+        Assert.Equal(expected.ModuleEvents, actual.ModuleEvents);
+        Assert.Equal(expected.ModuleActions, actual.ModuleActions);
+    }
+
+    /// <summary>The HotScripts slots serve version <paramref name="version"/> objects from a collectible context (reads the fixture's Marker).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void AssertScriptsVersion(int version)
+    {
+        Assert.Equal(version, VersionOf(_spells.Find(SpellId)!));
+        Assert.Equal(version, VersionOf(_eventAi.FindEvent(EventType)!));
+        Assert.Equal(version, VersionOf(_eventAi.FindAction(ActionType)!));
+        Assert.Equal(version, VersionOf(_instances.Create(_runtime.GetMap(MapId, 77))!));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int VersionOf(object moduleObject)
+    {
+        Type type = moduleObject.GetType();
+        Assert.True(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(type.Assembly) is { IsCollectible: true }, $"{type.FullName} must come from a module context");
+        return (int)type.Assembly.GetType("HotScripts.Marker")!.GetField("Version")!.GetRawConstantValue()!;
+    }
+
+    /// <summary>What version 2 adds that version 1 lacks: proof that a later, clean reload applies it (the restore left a consistent state).</summary>
     private bool Version2IsLive(string module) => module switch
     {
         "HotFixture" => _commands.Current.Roots.Any(r => r.Name == "hotfixtureextra") && _opcodes.TryGet(WorldOpcode.CmsgTutorialFlag, out _),
@@ -209,52 +271,116 @@ public sealed class ModuleRollbackTests : IDisposable
     private InstanceData? OpenInstanceIfScripted()
         => _instances.HasScript(MapId) ? _instances.Create(_runtime.GetMap(MapId, 1)) : null;
 
+    private async Task<string[]> AuditVerbs()
+        => [.. (await File.ReadAllLinesAsync(Path.Combine(_dir, "audit.log")))
+            .Select(line => line.Split('\t')[1])];
+
     [Theory]
     [MemberData(nameof(FixtureAndSlot))]
-    public async Task AReplaceThatFailsAfterValidation_InAnySlot_RollsEverySlotBack(string module, string slot)
+    public async Task AReplaceThatFailsAfterValidation_InAnySlot_IsUnloaded_AndThePreviousVersionIsRestoredFromItsBytes(string module, string slot)
     {
         Install(module, 1);
         ModuleHost host = NewHost();
         Assert.True((await host.LoadAsync(module)).Ok);
         string sha1 = Assert.Single(host.List()).Sha256;
-        InstanceData? v1Data = OpenInstanceIfScripted();
-        LiveState before = Capture(v1Data);
+        Registrations v1 = Names();
         Install(module, 2);
-        host.FaultInjection = FailAt(slot);
+        host.FaultInjection = FailAt(ModuleHost.ModuleCommit.Replace, slot);
 
         ModuleResult result = await host.ReloadAsync(module);
 
         Assert.False(result.Ok);
         Assert.True(result.Failed, result.Detail);
-        Assert.Contains($"injected fault at {slot}", result.Detail);
-        Assert.Contains("every slot was rolled back", result.Detail);
-        AssertSame(before, Capture(v1Data));
-        Assert.Equal(sha1, Assert.Single(host.List()).Sha256); // version 1 stays the loaded module
-        Assert.Equal(HotSwapResult.Failed, _reporter.Events[^1].Result);
-        Assert.Contains("module-failed", await File.ReadAllTextAsync(Path.Combine(_dir, "audit.log")));
+        Assert.Contains($"injected fault at Replace {slot}", result.Detail);
+        Assert.Contains($"-> unloaded -> restored previous version sha256 {sha1[..12]}", result.Detail);
+        AssertSameRegistrations(v1, Names()); // every registration of version 1 is live again
+        if (module == "HotScripts")
+        {
+            AssertScriptsVersion(1);
+        }
+
+        Assert.Equal(sha1, Assert.Single(host.List()).Sha256); // restored from the bytes kept at load: the file on disk is version 2
+        Assert.Equal(
+            [("load", HotSwapResult.Applied), ("replace", HotSwapResult.Failed), ("unload", HotSwapResult.Applied), ("restore", HotSwapResult.Applied)],
+            _reporter.Events.Select(e => (e.Action, e.Result)));
+        Assert.Equal(["module-load", "module-failed", "module-unload", "module-restore"], await AuditVerbs());
+
+        // The first version 1 context and the failed version 2 context are both released; only the restored one lives.
+        Assert.True(await WaitForRetiredCount(host, 0), "the replaced and the failed versions must both be collected");
 
         host.FaultInjection = null;
         ModuleResult retry = await host.ReloadAsync(module);
         Assert.True(retry.Ok, retry.Detail);
-        Assert.True(Version2IsLive(module), "after the rollback a clean reload must apply version 2");
+        Assert.True(Version2IsLive(module), "after the restore a clean reload must apply version 2");
     }
+
+    [Theory]
+    [InlineData("HotScripts", SwapSlots.InstanceScripts, false)]
+    [InlineData("HotGame", SwapSlots.Commands, false)]
+    [InlineData("HotFixture", SwapSlots.Opcodes, false)]
+    [InlineData("HotScripts", SwapSlots.EventAi, true)]
+    public async Task WhenTheRestoreFailsToo_TheModuleIsFullyUnloaded(string module, string slot, bool allowlistDropsVersion1)
+    {
+        Registrations empty = Names();
+        string allowlist = Path.Combine(_dir, "allowlist.txt");
+        Install(module, 1);
+        string sha1 = Sha(module);
+        Install(module, 2);
+        string sha2 = Sha(module);
+        await File.WriteAllLinesAsync(allowlist, [sha1, sha2]);
+        Install(module, 1);
+        ModuleHost host = NewHost(allowlist);
+        Assert.True((await host.LoadAsync(module)).Ok);
+        Install(module, 2);
+        Action<ModuleHost.ModuleCommit, string> fail = FailAt(ModuleHost.ModuleCommit.Replace, slot, alsoFailRestore: !allowlistDropsVersion1);
+        host.FaultInjection = allowlistDropsVersion1
+            ? (kind, current) =>
+            {
+                if (kind == ModuleHost.ModuleCommit.Replace && current == slot)
+                {
+                    File.WriteAllLines(allowlist, [sha2]); // the operator removed version 1 from the allowlist meanwhile
+                }
+
+                fail(kind, current);
+            }
+            : fail;
+
+        ModuleResult result = await host.ReloadAsync(module);
+
+        Assert.True(result.Failed, result.Detail);
+        Assert.Contains("failed too", result.Detail);
+        Assert.Contains(allowlistDropsVersion1 ? "allowlist" : "injected fault at Restore", result.Detail);
+        Assert.Contains("the module is not loaded", result.Detail);
+        Assert.Empty(host.List());
+        AssertSameRegistrations(empty, Names()); // neither version 1 nor version 2 left anything behind
+        Assert.Equal(
+            [("load", HotSwapResult.Applied), ("replace", HotSwapResult.Failed), ("unload", HotSwapResult.Applied), ("restore", HotSwapResult.Failed)],
+            _reporter.Events.Select(e => (e.Action, e.Result)));
+        Assert.Equal(["module-load", "module-failed", "module-unload", "module-failed"], await AuditVerbs());
+        Assert.True(await WaitForRetiredCount(host, 0), "a fully unloaded module must not stay referenced");
+    }
+
+    private string Sha(string module)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(_root, module, module + ".dll"))));
 
     [Theory]
     [InlineData("HotScripts", SwapSlots.EventAi)]
     [InlineData("HotGame", SwapSlots.Commands)]
     [InlineData("HotFixture", SwapSlots.Opcodes)]
-    public async Task ALoadThatFailsAfterValidation_LeavesNothingBehind_AndTheModuleIsCollected(string module, string slot)
+    public async Task AFirstLoadThatFailsAfterValidation_LeavesNothingBehind_AndTheModuleIsCollected(string module, string slot)
     {
         Install(module, 1);
         ModuleHost host = NewHost();
         LiveState before = Capture(null);
-        host.FaultInjection = FailAt(slot);
+        host.FaultInjection = FailAt(ModuleHost.ModuleCommit.Load, slot);
 
         ModuleResult result = await host.LoadAsync(module);
 
         Assert.True(result.Failed, result.Detail);
+        Assert.Contains("nothing of it is registered", result.Detail);
         Assert.Empty(host.List());
         AssertSame(before, Capture(null));
+        Assert.Equal(HotSwapResult.Failed, Assert.Single(_reporter.Events).Result); // no last good version: nothing to restore
         Assert.True(await WaitForRetiredCount(host, 0), "a rolled-back load must not keep the module alive");
     }
 
@@ -266,24 +392,31 @@ public sealed class ModuleRollbackTests : IDisposable
         Assert.True((await host.LoadAsync("HotScripts")).Ok);
         InstanceData? v1Data = OpenInstanceIfScripted();
         LiveState before = Capture(v1Data);
-        host.FaultInjection = FailAt(SwapSlots.Commands);
+        host.FaultInjection = FailAt(ModuleHost.ModuleCommit.Unload, SwapSlots.Commands);
 
         ModuleResult result = await host.UnloadAsync("HotScripts");
 
         Assert.True(result.Failed, result.Detail);
+        Assert.Contains("stays loaded as before", result.Detail);
         AssertSame(before, Capture(v1Data));
         Assert.Equal("HotScripts", Assert.Single(host.List()).Name);
     }
 
     [Fact]
-    public async Task AFailingScriptsChangedHandler_FailsTheSwapVisibly_AndRollsItBack()
+    public async Task AFailingScriptsChangedHandler_FailsTheSwapVisibly_AndThePreviousVersionIsRestored()
     {
         Install("HotScripts", 1);
         ModuleHost host = NewHost();
         Assert.True((await host.LoadAsync("HotScripts")).Ok);
-        InstanceData? v1Data = OpenInstanceIfScripted();
-        LiveState before = Capture(v1Data);
-        _spells.ScriptsChanged += () => throw new InvalidOperationException("effect chaining failed");
+        Registrations v1 = Names();
+        int raised = 0;
+        _spells.ScriptsChanged += () =>
+        {
+            if (++raised == 1)
+            {
+                throw new InvalidOperationException("effect chaining failed"); // only while version 2 goes in
+            }
+        };
         Install("HotScripts", 2);
 
         ModuleResult result = await host.ReloadAsync("HotScripts");
@@ -291,8 +424,10 @@ public sealed class ModuleRollbackTests : IDisposable
         Assert.False(result.Ok);
         Assert.True(result.Failed, result.Detail);
         Assert.Contains("effect chaining failed", result.Detail);
-        AssertSame(before, Capture(v1Data));
-        Assert.Equal(HotSwapResult.Failed, _reporter.Events[^1].Result);
+        Assert.Contains("restored previous version", result.Detail);
+        AssertSameRegistrations(v1, Names());
+        AssertScriptsVersion(1);
+        Assert.Equal(HotSwapResult.Failed, _reporter.Events[1].Result);
     }
 
     [Fact]
