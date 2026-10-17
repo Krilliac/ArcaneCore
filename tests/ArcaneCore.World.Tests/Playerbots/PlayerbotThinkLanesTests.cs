@@ -675,4 +675,46 @@ public sealed class PlayerbotThinkLanesTests
             await host.DisposeAsync();
         }
     }
+
+    [Fact]
+    public async Task ABotSilentPastHalfTheBound_MakesTheFeatureShrinkTheFirstLanesShare()
+    {
+        // A zero budget thinks one bot per tick and each think takes 1.2 s: a bot waits about 3.6 s between thinks, past half of the 4 s bound.
+        // ReportStarvedBots records that silence and Update hands PriorityScale of it to TickLanes: the rotation must have run with a scale under 1.
+        var (host, feature, capture, _) = await StartAsync(budgetMs: 0, boundMs: 4000, burnMs: 1200, "Scalebot");
+        try
+        {
+            double scale = 1;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && (scale = await host.World.InvokeAsync(() => feature.LastPriorityScale)) >= 1) await Task.Delay(50);
+            Assert.True(scale < 1, $"a bot sat silent past half the bound but the first lane kept its whole share (scale {scale})");
+            Assert.True(scale >= PlayerbotThinkStarvation.MinPriorityScale, $"scale {scale} is under the floor");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WithTheBoundOff_TheFeatureNeverShrinksTheFirstLanesShare()
+    {
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 0, burnMs: 1200, "Noscalebot");
+        try
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => thinks.Values.Sum()) < 6) await Task.Delay(100);
+            (int total, double scale) = await host.World.InvokeAsync(() => (thinks.Values.Sum(), feature.LastPriorityScale));
+            Assert.True(total >= 6, "the bots did not think two cycles");
+            Assert.Equal(1.0, scale);
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
 }

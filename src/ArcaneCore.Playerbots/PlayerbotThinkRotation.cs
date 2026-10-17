@@ -111,6 +111,9 @@ internal sealed class PlayerbotThinkRotation
     /// <summary>The first lane's visits in the last <see cref="TickLanes"/> (tests, metrics).</summary>
     internal int LastPriorityVisits { get; private set; }
 
+    /// <summary>The scale the last <see cref="TickLanes"/> applied to the first lane's time share, clamped to 0..1 (tests: proves the caller's feedback reaches the rotation).</summary>
+    internal double LastPriorityScale { get; private set; } = 1;
+
     /// <summary>The actions the main lane keeps of <c>MaxActionsPerTick</c>: at least one, whatever the share.</summary>
     internal static int ActionReserve(int maxActions, double priorityShare) => maxActions - PriorityActions(maxActions, priorityShare);
 
@@ -161,7 +164,8 @@ internal sealed class PlayerbotThinkRotation
         }
 
         int tick = _tickNumber;
-        double priorityMs = budgetMs * Math.Clamp(priorityShare, 0, 1) * (double.IsFinite(priorityScale) ? Math.Clamp(priorityScale, 0, 1) : 1);
+        LastPriorityScale = double.IsFinite(priorityScale) ? Math.Clamp(priorityScale, 0, 1) : 1;
+        double priorityMs = budgetMs * Math.Clamp(priorityShare, 0, 1) * LastPriorityScale;
         int thinks = 0;
         Walk(ref _priorityCursor, count, index =>
         {

@@ -100,6 +100,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>The action budgets the last tick gave the combat lane and the main lane (tests).</summary>
     internal (int Combat, int Main) LastLaneActions { get; private set; }
 
+    /// <summary>The scale the last tick gave the first think lane's time share (tests).</summary>
+    internal double LastPriorityScale => _rotation.LastPriorityScale;
+
     /// <summary>The inputs of the last tick's think budget: tick interval, smoothed non-bot tick time and the time the bots already used (tests).</summary>
     internal (double TickIntervalMs, double NonBotMs, double SpentMs) LastThinkBudgetInputs { get; private set; }
 
