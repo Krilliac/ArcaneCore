@@ -39,10 +39,67 @@ internal sealed class PlayerbotThinkBudget
     internal double Budget(double tickIntervalMs, double spentMs, double floorMs, double ceilingMs, double share)
         => Compute(tickIntervalMs, _nonBotMs, spentMs, floorMs, ceilingMs, share);
 
-    /// <summary>The formula of <see cref="Budget"/>, pure. NaN inputs give the floor; a ceiling under the floor is the floor.</summary>
-    internal static double Compute(double tickIntervalMs, double nonBotMs, double spentMs, double floorMs, double ceilingMs, double share)
+    /// <summary>
+    /// <see cref="Budget(double, double, double, double, double)"/> with the floor raised to what the rotation needs to walk
+    /// <paramref name="bots"/> bots within the starvation bound (<see cref="CoverageMs"/>, from the measured cost of a main-lane visit).
+    /// </summary>
+    internal double Budget(double tickIntervalMs, double spentMs, double floorMs, double ceilingMs, double share, int bots, double boundMs, double combatShare)
+        => Compute(tickIntervalMs, _nonBotMs, spentMs, floorMs, ceilingMs, share, CoverageMs(bots, tickIntervalMs, boundMs, _visitMs, combatShare));
+
+    /// <summary>Weight of a new main-lane visit in the smoothed visit cost.</summary>
+    internal const double VisitAlpha = 0.02;
+
+    /// <summary>The fraction of the starvation bound the rotation should need for one full walk over the bots, the rest being headroom for tick-to-tick variation and the slow thinks.</summary>
+    internal const double CoverageFraction = 0.5;
+
+    private double _visitMs;
+    private bool _visitPrimed;
+
+    /// <summary>The smoothed wall time (ms) of one main-lane visit (tests, metrics).</summary>
+    internal double VisitMs => _visitMs;
+
+    /// <summary>
+    /// One main-lane visit took <paramref name="ms"/>. A single visit counts for at most <see cref="PlayerbotThinkRotation.TickBudgetMs"/>:
+    /// a search that hit its node cap (30 to 50 ms, or seconds on a bad tile) is not what the next hundred visits will cost.
+    /// </summary>
+    internal void ObserveVisit(double ms)
+    {
+        if (!double.IsFinite(ms)) return;
+        ms = Math.Clamp(ms, 0, PlayerbotThinkRotation.TickBudgetMs);
+        if (!_visitPrimed)
+        {
+            _visitMs = ms;
+            _visitPrimed = true;
+            return;
+        }
+
+        _visitMs += VisitAlpha * (ms - _visitMs);
+    }
+
+    /// <summary>
+    /// The think time per tick (ms) the rotation needs to walk every one of <paramref name="bots"/> bots within <see cref="CoverageFraction"/> of
+    /// <paramref name="boundMs"/> (0 = off, nothing needed). A tick of <paramref name="tickIntervalMs"/> walks <c>budget / visitMs</c> bots, so the
+    /// walk takes <c>bots * visitMs / budget</c> ticks; solving for a walk of <c>CoverageFraction * boundMs / tickIntervalMs</c> ticks gives
+    /// <c>bots * tickIntervalMs * visitMs / (CoverageFraction * boundMs)</c>, divided by what the combat lane leaves the main lane at its least
+    /// (1 - share * <see cref="PlayerbotThinkStarvation.MinPriorityScale"/>). 1000 bots, 50 ms ticks, a 10 s bound and 1.3 ms a visit: about 15 ms,
+    /// where the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Pure.
+    /// </summary>
+    internal static double CoverageMs(int bots, double tickIntervalMs, double boundMs, double visitMs, double combatShare)
+    {
+        if (bots <= 0 || !(boundMs > 0) || !(tickIntervalMs > 0) || !(visitMs > 0)) return 0;
+        double mainLeft = 1 - Math.Clamp(double.IsFinite(combatShare) ? combatShare : 0, 0, 0.9) * PlayerbotThinkStarvation.MinPriorityScale;
+        double need = bots * tickIntervalMs * visitMs / (CoverageFraction * boundMs) / mainLeft;
+        return double.IsFinite(need) ? need : 0;
+    }
+
+    /// <summary>
+    /// The formula of <see cref="Budget(double, double, double, double, double)"/>, pure. NaN inputs give the floor; a ceiling under the floor is the floor.
+    /// <paramref name="coverageMs"/> (<see cref="CoverageMs"/>) raises the floor, never past the ceiling.
+    /// </summary>
+    internal static double Compute(double tickIntervalMs, double nonBotMs, double spentMs, double floorMs, double ceilingMs, double share, double coverageMs = 0)
     {
         double hi = Math.Max(floorMs, ceilingMs);
+        if (double.IsFinite(coverageMs) && coverageMs > floorMs) floorMs = Math.Min(coverageMs, hi);
         double wanted = share * (tickIntervalMs - nonBotMs) - spentMs;
         return double.IsFinite(wanted) ? Math.Clamp(wanted, floorMs, hi) : floorMs;
     }
