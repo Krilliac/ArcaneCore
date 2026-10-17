@@ -916,6 +916,201 @@ public sealed class PlayerbotQuestGoalsTests
         }
     }
 
+    /// <summary>
+    /// The quest giver's fixture with a full journal's worth of quests (<see cref="Filler"/>, kill quests of creature 90 no giver offers)
+    /// and, at the fixture's giver instead of its own quest, <see cref="Offered"/>: a level 10 quest, worth taking for a level 10 bot.
+    /// The first <c>grey</c> fillers are grey to a level 10 bot (grey level 4): levels 3, 2, 2, ...
+    /// </summary>
+    private sealed class FullLogQuests(QuestInteractionFixture original, int grey) : IQuestContentStore
+    {
+        public const uint Filler = 910_000;
+        public const uint Offered = 910_100;
+
+        public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            QuestContent content = await ((IQuestContentStore)original).LoadAsync(cancellationToken);
+            static QuestTemplate Kill(uint entry, int level) => new()
+            {
+                Entry = entry, Method = 2, MinLevel = 1, QuestLevel = level, Title = "Quest " + entry, Details = "Kill one.",
+                RequestItemsText = "Kill one.", ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1,
+            };
+            var templates = new List<QuestTemplate>(content.Templates);
+            for (int i = 0; i < QuestConstants.MaxQuestLogSize; i++)
+                templates.Add(Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
+            templates.Add(Kill(Offered, 10));
+            var offered = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = Offered };
+            return new QuestContent(templates, [.. content.Starters.Where(r => r.Quest != QuestInteractionFixture.QuestId), offered],
+                [.. content.Enders, offered]);
+        }
+    }
+
+    private static PlayerNpcState FillTheLog(QuestHost quest, Player player)
+    {
+        player.Level = 10;
+        PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+        for (uint i = 0; i < QuestConstants.MaxQuestLogSize; i++)
+            Assert.Equal(GmQuestAddResult.Added, quest.Feature.Services.GmAddQuest(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler + i)!));
+        Assert.False(PlayerbotQuestGoals.HasFreeLogSlot(state));
+        return state;
+    }
+
+    /// <summary>
+    /// GitHub #786: a bot with a full journal walked to quest givers and asked for quests the server refuses with SMSG_QUESTLOG_FULL,
+    /// thousands of times ("code=QuestLogFull"). With nothing it may give up (no grey or failed quest) it leaves the giver alone.
+    /// </summary>
+    [Fact]
+    public async Task AFullLogWithNothingToShed_DoesNotAskTheGiver()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            int asks = 0, abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode =>
+            {
+                if (opcode is WorldOpcode.CmsgQuestgiverQueryQuest or WorldOpcode.CmsgQuestgiverAcceptQuest) asks++;
+                if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++;
+            };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.False(goals.HasCandidate(player));
+            for (int think = 0; think < 4; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            Assert.Equal(0, asks);
+            Assert.Equal(0, abandons);
+            Assert.Null(state.Quests.Get(FullLogQuests.Offered));
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// GitHub #786: at a giver offering a quest worth taking, a full journal sheds its lowest grey quest through the ordinary abandon
+    /// packet (the lowest level first, then the lowest id), and the bot takes the offered quest. The shed quest is set aside, not
+    /// taken straight back.
+    /// </summary>
+    [Fact]
+    public async Task AFullLogAtAGiverOfAWorthwhileQuest_ShedsItsLowestGreyQuestAndTakesTheOffer()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 3));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            Assert.Equal(FullLogQuests.Filler + 1, PlayerbotQuestGoals.LowValueQuestToShed(player, quest.Feature.Services, state));
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            for (int think = 0; think < 4 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler + 1)?.Status); // the one shed
+            Assert.Equal(QuestConstants.MaxQuestLogSize, state.Quests.FindSlot(FullLogQuests.Filler + 1));
+            for (uint i = 0; i < QuestConstants.MaxQuestLogSize; i++)
+                if (i != 1) Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler + i)?.Status);
+            Assert.True(goals.IsRefused(FullLogQuests.Filler + 1));
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
+            return true;
+        });
+    }
+
+    /// <summary>A grey quest at the giver is no reason to give up another one: a full log skips it.</summary>
+    [Fact]
+    public async Task AFullLogAtAGiverOfAGreyQuest_ShedsNothing()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 3));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            FillTheLog(quest, player);
+            player.Level = 20; // the offered level 10 quest is grey now (grey level 13)
+            int abandons = 0, asks = 0;
+            quest.Session.ManagedDispatchObserver = opcode =>
+            {
+                if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++;
+                if (opcode is WorldOpcode.CmsgQuestgiverQueryQuest or WorldOpcode.CmsgQuestgiverAcceptQuest) asks++;
+            };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            for (int think = 0; think < 4; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            Assert.Equal(0, abandons);
+            Assert.Equal(0, asks);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// GitHub #786 ("code=OutOfRange reason=out of interaction range (44.4 yd)"): a bot pulled 44 yards from the giver mid-exchange (a
+    /// fight) timed the stage out at that distance, reported the giver as refusing it and set the quest aside for ten minutes. The
+    /// server refused nothing: the bot left the conversation, and it starts it again when it is back in reach.
+    /// </summary>
+    [Fact]
+    public async Task AnExchangeTheBotWasPulledAwayFrom_IsNotARefusal_AndIsTakenUpAgainInReach()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        float homeX = 0, homeY = 0, homeZ = 0;
+        int queries = 0;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            (homeX, homeY, homeZ) = (player.X, player.Y, player.Z);
+            session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
+            session.ManagedBudget = new ManagedActionBudget(1);
+            goals.Update(player, 500);
+            Assert.Equal(1, queries);
+            Assert.Equal("AcceptDetails", goals.StageName);
+            // Pulled away before the response was read: 44 yards off, as in the live report.
+            _ = session.DrainManagedPackets();
+            player.Relocate(player.X + 44f, player.Y, player.Z, player.Orientation, quest.Host.World.NowMs);
+            return true;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(16_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            session.ManagedBudget = new ManagedActionBudget(0);
+            goals.Update(player, 500);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
+            Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId));
+            Assert.False(goals.Busy);
+
+            // Back at the giver it asks again and takes the quest.
+            player.Relocate(homeX, homeY, homeZ, player.Orientation, quest.Host.World.NowMs);
+            for (int think = 0; think < 4 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId) is null; think++)
+            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            Assert.Equal(2, queries);
+            Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// A quest-giving game object is in reach as the server measures it (vmangos GameObject::IsAtInteractDistance): its per-type distance
+    /// to its centre, without bounding radii. With the creature rule a large object's radius had the bot ask from where the server
+    /// answers "out of interaction range".
+    /// </summary>
+    [Fact]
+    public async Task AQuestGivingGameObject_IsInReachByTheServersObjectRule()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            NpcInfo At(float distance, bool gameObject) => new(ObjectGuid.WithEntry(HighGuid.GameObject, 1, 1), 1, 1, NpcFlags.QuestGiver,
+                player.MapId, player.X + distance, player.Y, player.Z, 6f, true, false, false, false, 0,
+                IsGameObject: gameObject, GameObjectInteractionDistance: gameObject ? 5.55556f : 0f);
+            Assert.True(PlayerbotQuestGoals.WithinReach(player, At(5.5f, gameObject: true)));
+            Assert.False(PlayerbotQuestGoals.WithinReach(player, At(8f, gameObject: true))); // inside 5 + radii, outside the object's distance
+            Assert.True(PlayerbotQuestGoals.WithinReach(player, At(8f, gameObject: false))); // a creature keeps 5 + both radii
+            return true;
+        });
+    }
+
     /// <summary>A world with the synthetic quest giver beside a managed player and a SQLite character database.</summary>
     private sealed class QuestHost : IAsyncDisposable
     {
@@ -931,7 +1126,8 @@ public sealed class PlayerbotQuestGoalsTests
 
         public QuestNpcFeature Feature => Host.WorldServices.GetRequiredService<QuestNpcFeature>();
 
-        public static async Task<QuestHost> StartAsync(QuestInteractionFixture? questFixture = null, bool manualClock = false)
+        public static async Task<QuestHost> StartAsync(QuestInteractionFixture? questFixture = null, bool manualClock = false,
+            Func<QuestInteractionFixture, IQuestContentStore>? quests = null)
         {
             QuestInteractionFixture fixture = questFixture ?? new QuestInteractionFixture();
             string databasePath = Path.Combine(Path.GetTempPath(), "arcane-playerbot-quest-" + Guid.NewGuid().ToString("N") + ".db");
@@ -949,6 +1145,7 @@ public sealed class PlayerbotQuestGoalsTests
                 {
                     services.AddCharacterDatabase(configuration);
                     if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
+                    if (quests is not null) services.AddSingleton(quests(fixture));
                 });
             }
             finally { QuestInteractionTestServices.Current.Value = null; }

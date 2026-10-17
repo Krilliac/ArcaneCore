@@ -197,6 +197,68 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return state.Quests.Get(questId) is not { Status: QuestStatus.Complete, Rewarded: false };
     }
 
+    /// <summary>
+    /// Whether the quest log has a free slot (vmangos <c>FindQuestSlot(0) &lt; MAX_QUEST_LOG_SIZE</c>, the first check of CanAddQuest): with
+    /// none the server refuses every accept with SMSG_QUESTLOG_FULL, so a new quest is neither travelled to (the destinations' giver
+    /// choice) nor asked for (<see cref="FindCandidate(Player, QuestNpcServices, PlayerNpcState)"/>). GitHub #786: thousands of accepts
+    /// refused as QuestLogFull.
+    /// </summary>
+    internal static bool HasFreeLogSlot(PlayerNpcState state) => state.Quests.FindSlot(0) < QuestConstants.MaxQuestLogSize;
+
+    /// <summary>
+    /// The quest a bot with a full log gives up to make room, as a player does: a failed quest first (dead weight until abandoned), then
+    /// the lowest grey one still incomplete (quest level at or below the player's grey level, vmangos <c>MaNGOS::XP::GetGrayLevel</c>:
+    /// next to no experience). Completed quests are kept for their turn-in, and a quest whose level follows the player's (level 0 or
+    /// less) is never grey. Zero when nothing qualifies: the bot then takes no new quest until one is turned in.
+    /// </summary>
+    internal static uint LowValueQuestToShed(Player player, QuestNpcServices services, PlayerNpcState state, Func<uint, bool>? skip = null)
+    {
+        uint best = 0;
+        int bestRank = int.MaxValue;
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            uint id = state.Quests.SlotQuestId(slot);
+            if (id == 0 || skip?.Invoke(id) == true || state.Quests.Get(id) is not { } status || status.Rewarded) continue;
+            int rank;
+            if (status.Status == QuestStatus.Failed) rank = -1;
+            else if (status.Status == QuestStatus.Incomplete && services.Quests.Get(id) is { } quest && IsGrey(player, quest))
+                rank = quest.QuestLevel;
+            else continue;
+            if (rank < bestRank || (rank == bestRank && id < best)) { best = id; bestRank = rank; }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// A full log sheds one low-value quest (<see cref="LowValueQuestToShed"/>) through the ordinary client abandon packet (vmangos
+    /// <c>WorldSession::HandleQuestLogRemoveQuest</c>), so the slot, source item and persistence follow a player's path. A refused
+    /// abandon sets the quest aside so the packet is not sent on every think. True when a packet was sent.
+    /// </summary>
+    private bool TryMakeRoomInFullLog(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
+    {
+        if (HasFreeLogSlot(state) || player.Combat.IsInCombat || !player.IsAlive) return false;
+        uint id = LowValueQuestToShed(player, services, state, IsRefused);
+        if (id == 0) return false;
+        int slot = state.Quests.FindSlot(id);
+        if (slot >= QuestConstants.MaxQuestLogSize
+            || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+        // Set aside whether the abandon landed or was refused: a shed quest is not taken straight back from a giver in sight, and a
+        // refused abandon is not sent on every think.
+        Refuse(id, now);
+        return true;
+    }
+
+    /// <summary>Set by <see cref="FindCandidate(Player, QuestNpcServices, PlayerNpcState)"/>: a giver in sight offers a quest worth taking that only the full log keeps from the bot.</summary>
+    private bool _roomWanted;
+
+    /// <summary>
+    /// Whether <paramref name="quest"/> is grey to <paramref name="player"/>: its level at or below the grey level (vmangos
+    /// <c>MaNGOS::XP::GetGrayLevel</c>, next to no experience). A quest whose level follows the player's (0 or less) never is.
+    /// </summary>
+    internal static bool IsGrey(Player player, Quest quest)
+        => quest.QuestLevel > 0 && (uint)quest.QuestLevel <= ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(player.Level);
+
     internal static bool ReasonableReturnTrip(PlayerbotHomeArea home, uint mapId, float playerX, float playerY,
         ArcaneCore.Kernel.WorldData.Creatures.CreatureSpawn ender)
     {
@@ -242,7 +304,20 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return false;
             }
         }
-        else if (_stage is Stage.AcceptDetails or Stage.CompleteResponse or Stage.RewardOffer)
+
+        // The exchange is a conversation held in reach of the NPC (the client closes the quest window when its player walks away):
+        // a bot pulled away mid-exchange (a fight, a flight from danger) left it, the server refused nothing. It starts again
+        // from the greeting when it is back, instead of timing the stage out at a distance and reporting the giver as refusing it
+        // "out of interaction range" (GitHub #786: quest 3376 at giver 3209 from 44 yards) and setting the quest aside.
+        if (_stage != Stage.None
+            && services.Deps.Creatures?.Find(player, _stageNpc) is { IsAlive: true } stageNpc && !WithinReach(player, stageNpc))
+        {
+            ClearStage();
+            _route = null;
+            return false;
+        }
+
+        if (_stage is Stage.AcceptDetails or Stage.CompleteResponse or Stage.RewardOffer)
         {
             bool confirmed = false;
             foreach (ManagedSessionPacket packet in _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverQuestDetails,
@@ -327,6 +402,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             return true;
 
         QuestTarget? target = FindCandidate(player, services, state);
+        if (target is null && _roomWanted && _stage == Stage.None && TryMakeRoomInFullLog(player, services, state, now))
+            return true;
         if (target is null)
             return _stage != Stage.None || TryUseObjectiveItem(player, elapsedMs, now);
 
@@ -482,6 +559,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         bool returning = ReturnQuest != 0 && _stage == Stage.None;
+        _roomWanted = false;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
@@ -532,6 +610,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                             Home?.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y, npc.Z) ?? true, quest, _trip,
                             Home is null ? _options.MaxDeliveryYards : 0))
                         continue;
+                    // A full log is refused by the server (SMSG_QUESTLOG_FULL; GitHub #786): the giver is not asked. A quest worth
+                    // taking (not grey) is what a full log makes room for (Update, TryMakeRoomInFullLog); a grey one is skipped.
+                    if (!HasFreeLogSlot(state))
+                    {
+                        if (!IsGrey(player, quest)) _roomWanted = true;
+                        continue;
+                    }
                 }
                 else if (_stage != Stage.Accept && (services.CanTakeQuest(player, id) != true
                     || state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }))
@@ -560,12 +645,21 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// <summary>
     /// The server's creature reach: vmangos <c>WorldObject::IsWithinDist</c> (Object.cpp:1738) adds both bounding radii and compares strict
     /// 3D distance. The last walkable point can already be in reach. <see cref="Update"/> and the return-trip filter share it.
+    /// A quest-giving game object is reached as the server reaches it (<see cref="QuestNpcServices.InteractableNpc(Player, ObjectGuid, NpcFlags)"/>,
+    /// vmangos GameObject::IsAtInteractDistance): its own per-type distance to its centre, inclusive, with no bounding radii; with the
+    /// creature rule a large object's radius put the bot "in reach" where the server refused it as out of range.
     /// </summary>
-    private static bool WithinReach(Player player, NpcInfo npc)
+    internal static bool WithinReach(Player player, NpcInfo npc)
     {
         float dx = npc.X - player.X, dy = npc.Y - player.Y, dz = npc.Z - player.Z;
-        float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
         float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
+        if (npc.IsGameObject)
+        {
+            float objectReach = npc.GameObjectInteractionDistance;
+            return float.IsFinite(distanceSquared) && float.IsFinite(objectReach) && objectReach >= 0
+                && distanceSquared <= objectReach * objectReach;
+        }
+        float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
         return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
     }
 
