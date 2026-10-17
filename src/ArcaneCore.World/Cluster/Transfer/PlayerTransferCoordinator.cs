@@ -199,6 +199,52 @@ public sealed class PlayerTransferCoordinator
         Func<PlayerTransferStage, TransferDecisionRecord, CancellationToken, Task>? afterStageHook = null,
         CancellationToken cancellationToken = default)
     {
+        PlayerTransferOutcome prepared = await PrepareTransferAsync(request, afterStageHook, cancellationToken);
+        if (!prepared.Succeeded)
+            return prepared;
+
+        ITransferTargetWorker targetWorker = GetTargetWorker(prepared.DecisionRecord!.TargetWorkerId);
+
+        // Stage 5: CommitDecision (Single Point of No Return!)
+        TransferDecisionRecord record = await _decisionStore.CommitDecisionAsync(
+            request.TransferId,
+            targetWorker.Incarnation,
+            cancellationToken);
+
+        if (afterStageHook is not null)
+        {
+            await afterStageHook(PlayerTransferStage.CommitDecision, record, cancellationToken);
+        }
+
+        // Stage 6: ActivateAndRetire
+        record = await CompleteCommittedTransferAsync(request.TransferId, cancellationToken);
+
+        if (afterStageHook is not null)
+        {
+            await afterStageHook(PlayerTransferStage.ActivateAndRetire, record, cancellationToken);
+        }
+
+        return new PlayerTransferOutcome(
+            Succeeded: true,
+            FinalStage: record.CurrentStage,
+            DecisionState: record.DecisionState,
+            FailureCode: null,
+            FailureMessage: null,
+            DecisionRecord: record);
+    }
+
+    /// <summary>
+    /// Runs the pre-commit stages 1 to 4 (reserve, suspend and capture, install passive, stage the world-port) and stops before the
+    /// commit. <see cref="PlayerTransferOutcome.Succeeded"/> means the transfer stands at <see cref="PlayerTransferStage.StageWorldPort"/>,
+    /// still abortable; a failure has already been aborted. A whole-World handoff (Tier 3b) prepares every player this way, then commits
+    /// them all at once with the epoch takeover (<c>IWorldHandoffStore.CommitEpochTakeoverAsync</c>) and finishes each one with
+    /// <see cref="CompleteCommittedTransferAsync"/>.
+    /// </summary>
+    public async Task<PlayerTransferOutcome> PrepareTransferAsync(
+        PlayerTransferRequest request,
+        Func<PlayerTransferStage, TransferDecisionRecord, CancellationToken, Task>? afterStageHook = null,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(request);
 
         // Resolve target worker from placement router unless explicitly pinned and valid.
@@ -370,25 +416,6 @@ public sealed class PlayerTransferCoordinator
             TransferDecisionRecord? refreshed = await _decisionStore.GetDecisionAsync(request.TransferId, cancellationToken);
             if (refreshed is { DecisionState: PlayerTransferDecisionState.Aborted })
                 return AbortedOutcome(refreshed);
-        }
-
-        // Stage 5: CommitDecision (Single Point of No Return!)
-        record = await _decisionStore.CommitDecisionAsync(
-            request.TransferId,
-            targetWorker.Incarnation,
-            cancellationToken);
-
-        if (afterStageHook is not null)
-        {
-            await afterStageHook(PlayerTransferStage.CommitDecision, record, cancellationToken);
-        }
-
-        // Stage 6: ActivateAndRetire
-        record = await CompleteCommittedTransferAsync(request.TransferId, cancellationToken);
-
-        if (afterStageHook is not null)
-        {
-            await afterStageHook(PlayerTransferStage.ActivateAndRetire, record, cancellationToken);
         }
 
         return new PlayerTransferOutcome(

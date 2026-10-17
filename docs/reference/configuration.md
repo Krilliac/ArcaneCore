@@ -77,6 +77,7 @@ How to read the tables:
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
+- [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
 - [`World:Duel`](#worldduel)
 - [`World:Exploration`](#worldexploration)
@@ -292,7 +293,7 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Cluster:Fencing:ClaimWatchIntervalSeconds` | `int` | `10` | - | With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim. |
-| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. |
+| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. |
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
@@ -304,11 +305,12 @@ How to read the tables:
 | `Cluster:Worker:BindAddress` | `string` | `"127.0.0.1"` | - | Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted. |
 | `Cluster:Worker:CharactersSchemaVersion` | `int` | `1` | - | Characters schema version both ends must agree on (an operator label, not read from the database). |
 | `Cluster:Worker:ContentRevision` | `string` | `"dev"` | - | Content revision both ends of the link must agree on (an operator label; nothing reads it from the data). |
-| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode). `false`, the default, is Combined mode: no listener, no change. |
+| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change. |
 | `Cluster:Worker:LinkSecret` | `string` | `""` | - | Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password. |
 | `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
 | `Cluster:Worker:Port` | `int` | `8095` | - | Port of the gateway listener; must equal the gateway's Gateway:WorkerPort. |
 | `Cluster:Worker:RealmId` | `int` | `1` | - | Realm id both ends of the link must agree on. |
+| `Cluster:Worker:Standby` | `bool` | `false` | - | Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock, open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker. |
 | `Cluster:Worker:WorldSchemaVersion` | `int` | `1` | - | World schema version both ends must agree on (an operator label, not read from the database). |
 
 ## `Combat`
@@ -1136,6 +1138,15 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `World:Console:Enabled` | `bool` | `true` | - | Accept typed GM commands at the daemon's console window when standard input is an interactive console. The commands run on the world thread with Administrator authority and no character. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
+
+## `World:Control:Pipe`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:Pipe:Enabled` | `bool` | `false` | - | Accept console commands on a local Windows named pipe. Each line runs exactly like a line typed at the console: on the world thread, Administrator authority, no character, logged and GM-audited as the console. The pipe admits only the account the daemon runs as and SYSTEM, refuses network clients, and is not created on other operating systems. Default off. |
+| `World:Control:Pipe:IdleTimeoutSeconds` | `int` | `120` | - | Seconds a connected client may stay silent before the daemon closes the connection (frees the single pipe instance). |
+| `World:Control:Pipe:MaxLineLength` | `int` | `4096` | - | The longest command line in bytes; a longer line closes the connection without running anything. |
+| `World:Control:Pipe:Name` | `string` | `"arcanecore-world-{pid}"` | - | The pipe name (without `\\.\pipe\`); `{pid}` is replaced by the world process id, so two daemons on one machine never share a name. The daemon refuses to serve a name another process already created. Letters, digits, '.', '_', '-' and the token only. |
 
 ## `World:Death`
 

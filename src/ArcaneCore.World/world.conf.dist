@@ -34,7 +34,7 @@
 #   BATTLEGROUND                8 keys
 #   CHARACTERCREATION           13 keys
 #   CLIENTDATA                  2 keys
-#   CLUSTER                     14 keys
+#   CLUSTER                     15 keys
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       587 keys
+#   WORLD                       591 keys
 #
 ###############################################################################
 
@@ -1672,7 +1672,8 @@ Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 #
 #    Cluster.Fencing.Enabled
 #        Description: Enable durable character ownership fencing at world startup; disabled by
-#                     default.
+#                     default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with
+#                     fencing off refuses to start.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -1759,8 +1760,10 @@ Cluster.Worker.ContentRevision = "dev"
 
 #
 #    Cluster.Worker.Enabled
-#        Description: true opens the gateway listener (worker mode). false, the default, is Combined
-#                     mode: no listener, no change.
+#        Description: true opens the gateway listener (worker mode) and makes character fencing
+#                     mandatory: Cluster:Fencing:Enabled must be true, and the characters write
+#                     fence is attached either way. false, the default, is Combined mode: no
+#                     listener, no change.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -1816,6 +1819,22 @@ Cluster.Worker.Port = 8095
 #        Docs: docs/reference/configuration.md#clusterworker
 #
 Cluster.Worker.RealmId = 1
+
+#
+#    Cluster.Worker.Standby
+#        Description: Standby (Tier 3b handoff target; needs Enabled): start the process, build its
+#                     services and link to the gateway, but admit no session, claim no characters
+#                     ownership, run no schema DDL, take no writer lock, open no World:Port
+#                     listener, and attach no feature nor start the simulation until promoted by a
+#                     handoff (features read the characters database, which the active world still
+#                     owns). false, the default, is an active worker.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.Standby = false
 
 #
 #    Cluster.Worker.WorldSchemaVersion
@@ -9631,6 +9650,63 @@ World.Collision.VMapDirectory = ""
 #        Docs: docs/reference/configuration.md#worldconsole
 #
 World.Console.Enabled = true
+
+#----------------------------------------------------------------------------
+# World:Control:Pipe
+#----------------------------------------------------------------------------
+
+#
+#    World.Control.Pipe.Enabled
+#        Description: Accept console commands on a local Windows named pipe. Each line runs exactly
+#                     like a line typed at the console: on the world thread, Administrator
+#                     authority, no character, logged and GM-audited as the console. The pipe admits
+#                     only the account the daemon runs as and SYSTEM, refuses network clients, and
+#                     is not created on other operating systems. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.Enabled = false
+
+#
+#    World.Control.Pipe.IdleTimeoutSeconds
+#        Description: Seconds a connected client may stay silent before the daemon closes the
+#                     connection (frees the single pipe instance).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.IdleTimeoutSeconds = 120
+
+#
+#    World.Control.Pipe.MaxLineLength
+#        Description: The longest command line in bytes; a longer line closes the connection without
+#                     running anything.
+#        Type: int
+#        Default: 4096
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.MaxLineLength = 4096
+
+#
+#    World.Control.Pipe.Name
+#        Description: The pipe name (without \\.\pipe\); {pid} is replaced by the world process id,
+#                     so two daemons on one machine never share a name. The daemon refuses to serve
+#                     a name another process already created. Letters, digits, '.', '_', '-' and the
+#                     token only.
+#        Type: string
+#        Default: "arcanecore-world-{pid}"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.Name = "arcanecore-world-{pid}"
 
 #----------------------------------------------------------------------------
 # World:Death

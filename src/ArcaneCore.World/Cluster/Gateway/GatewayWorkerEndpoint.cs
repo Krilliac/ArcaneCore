@@ -4,6 +4,7 @@ using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,12 +23,16 @@ public sealed class GatewayWorkerEndpoint(
     OpcodeTable opcodes,
     WorldRuntime world,
     SessionRegistry registry,
-    ILoggerFactory loggers) : IHostedService, IAsyncDisposable
+    ILoggerFactory loggers,
+    WorkerAdmission? admission = null) : IHostedService, IAsyncDisposable
 {
     private GatewaySessionLinkHost? _host;
 
     /// <summary>The acceptor of the running listener (null before start): its open sessions.</summary>
     public WorldGatewaySessionAcceptor? Acceptor { get; private set; }
+
+    /// <summary>Whether new sessions are admitted (null: always, as in a fixture that builds the endpoint by hand).</summary>
+    public WorkerAdmission? Admission => admission;
 
     /// <summary>The running link host (null before start).</summary>
     public GatewaySessionLinkHost? Host => _host;
@@ -36,7 +41,7 @@ public sealed class GatewayWorkerEndpoint(
     {
         GatewayWorkerOptions config = options.Value;
         ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
-        Acceptor = new WorldGatewaySessionAcceptor(scopes, opcodes, world, registry, sessionOptions.Value, loggers);
+        Acceptor = new WorldGatewaySessionAcceptor(scopes, opcodes, world, registry, sessionOptions.Value, loggers, admission);
         // Owner epoch: the fenced ownership token's epoch when fencing holds one, else 1 (unfenced single node), as the
         // readiness probe reports it. A change after a takeover makes every older packet stale.
         _host = new GatewaySessionLinkHost(
@@ -73,7 +78,8 @@ public static class GatewayWorkerServiceCollectionExtensions
 {
     /// <summary>
     /// Bind <see cref="GatewayWorkerOptions"/> and, only when Cluster:Worker:Enabled is true, register the
-    /// <see cref="GatewayWorkerEndpoint"/>. Off (the default) registers nothing else: Combined mode is unchanged.
+    /// <see cref="GatewayWorkerEndpoint"/> and make character fencing mandatory (<see cref="Clustering.CharacterFencingOptions.RequiredByWorkerMode"/>).
+    /// Off (the default) registers nothing else: Combined mode is unchanged.
     /// Call after <c>AddHostedService&lt;WorldServer&gt;()</c> so the endpoint stops before the world host.
     /// </summary>
     public static IServiceCollection AddGatewayWorker(this IServiceCollection services, IConfiguration configuration)
@@ -84,10 +90,37 @@ public static class GatewayWorkerServiceCollectionExtensions
         services.Configure<GatewayWorkerOptions>(section);
         if (section.GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))
         {
+            // Fencing is mandatory in worker mode: the host refuses to start without it, and the characters write fence is attached regardless.
+            services.PostConfigure<Clustering.CharacterFencingOptions>(fencing => fencing.RequiredByWorkerMode = true);
+            bool standby = section.GetValue<bool>(nameof(GatewayWorkerOptions.Standby));
+            services.AddSingleton(new WorkerAdmission(standby ? WorkerAdmission.StandbyReason : null));
+            if (standby)
+            {
+                AddStandby(services);
+            }
+
             services.AddSingleton<GatewayWorkerEndpoint>();
             services.AddHostedService(sp => sp.GetRequiredService<GatewayWorkerEndpoint>());
         }
 
         return services;
+    }
+
+    /// <summary>
+    /// Standby (Tier 3b): the world loads its content, maps and caches and links to the gateway, but it is not a writer until it is promoted.
+    /// Its schema check runs validate-only (no DDL: the active world runs on that schema), it takes no characters writer file lock and claims no
+    /// ownership (the active world holds both; fencing, mandatory in worker mode, refuses its characters writes), and it has no client listener of
+    /// its own (World:Port belongs to the active world; clients reach a promoted standby through the gateway only).
+    /// </summary>
+    private static void AddStandby(IServiceCollection services)
+    {
+        services.PostConfigure<Data.DatabaseOptions>(database => database.Upgrade.ValidateOnly = true);
+        services.RemoveAll<WorldWriterGuard>();
+        services.AddSingleton(new WorldWriterGuard()); // no database options: Acquire takes nothing
+        ServiceDescriptor? listener = services.LastOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(WorldServer));
+        if (listener is not null)
+        {
+            services.Remove(listener);
+        }
     }
 }

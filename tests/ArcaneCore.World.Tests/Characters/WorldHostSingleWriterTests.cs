@@ -411,6 +411,9 @@ public sealed class WorldHostSingleWriterTests
             return Task.FromResult<CharacterOwnershipToken?>(new(scope, 1, incarnation));
         }
 
+        public Task<CharacterOwnershipToken?> GetCurrentAsync(string scope, CancellationToken cancellationToken = default)
+            => Task.FromResult<CharacterOwnershipToken?>(null);
+
         public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default)
             => Task.FromResult<CharacterOwnershipToken?>(new(observed.Scope, observed.Epoch + 1, newIncarnation));
 

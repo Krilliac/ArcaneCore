@@ -23,6 +23,7 @@ unfinished parts documented as limits).
 | [Runtime health watchdogs](ops/watchdog.md) | The `Ops:Watchdog` monitors: world-tick overruns and hangs, memory pressure, thread-pool starvation, the systemd/file heartbeat and the counters registry. |
 | [Memory and GC diagnostics](ops/diagnostics.md) | GC pause attribution on slow ticks, `.debug gc`, the sampling allocation profiler `.debug alloc`, the gated process dump `.debug dump` (`Ops:Diagnostics:Dumps`), and the recipe for a GC-pause TickHang. |
 | [Operator tooling](ops/tooling.md) | The scripts in `tools/ops/` (bot provisioning, GM command runner, RSI digests, live deploy, diagnostics, Node1 CI, and LLM review jobs), their `ARCANECORE_*` environment variables, and which scripts touch a live server. |
+| [Redeploy prefers hot reload](ops/redeploy.md) | How `tools/ops/live/redeploy.ps1` plans a redeploy (None, Hot, Restart, Blocked), the deploy record, the hot apply through the World's control pipe and when it falls back to the hard restart. |
 | [Wiring audit](ops/wiring-audit.md) | `.server wiring` and the start-up summary line: client opcodes with no handler, options asked for but never configured, config checks `check-config` does not run, handlers on server-only opcodes; the CI guards behind them. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Realm PIN, TOTP and client integrity](security/realm-pin-integrity.md) | Account login factors, Administrator commands, and opt-in client integrity checks. |

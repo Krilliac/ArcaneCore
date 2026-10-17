@@ -91,7 +91,8 @@ public sealed class WorldGatewaySessionAcceptor(
     WorldRuntime world,
     SessionRegistry registry,
     WorldSessionOptions options,
-    ILoggerFactory loggers) : IGatewaySessionAcceptor
+    ILoggerFactory loggers,
+    WorkerAdmission? admission = null) : IGatewaySessionAcceptor
 {
     private readonly ConcurrentDictionary<Task, byte> _running = new();
     private readonly CancellationTokenSource _stopping = new();
@@ -101,6 +102,10 @@ public sealed class WorldGatewaySessionAcceptor(
 
     public async ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
     {
+        // A standby world (not yet promoted) or a draining one admits no session; nothing is created for the refused client.
+        if (admission is { IsOpen: false, ClosedReason: var closed })
+            return GatewaySessionAcceptResult.Refused(AuthResponseCode.Unavailable, "the worker admits no sessions (" + closed + ")");
+
         AsyncServiceScope scope = scopes.CreateAsyncScope();
         WorldSession session = WorldSession.CreateRemote(output, request.ClientEndpoint, scope.ServiceProvider, opcodes, world, registry,
             options, loggers.CreateLogger<WorldSession>());

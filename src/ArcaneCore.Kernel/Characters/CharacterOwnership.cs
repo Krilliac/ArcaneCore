@@ -8,6 +8,12 @@ public interface ICharacterOwnershipStore
 {
     Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The active ownership of <paramref name="scope"/> as the database holds it now, or null when no one owns it. Read-only: unlike
+    /// <see cref="TryAcquireAsync"/> it never claims an inactive row, so a caller that only verifies a token changes nothing.
+    /// </summary>
+    Task<CharacterOwnershipToken?> GetCurrentAsync(string scope, CancellationToken cancellationToken = default);
+
     Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, CancellationToken cancellationToken = default);
 
     Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default);

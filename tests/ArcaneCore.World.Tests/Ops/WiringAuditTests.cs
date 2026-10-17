@@ -97,6 +97,7 @@ public sealed class WiringAuditTests
             // The build validation above only fails on a dependency that is missing; a registration nothing depends on (the console, the
             // watchdog, the metrics store, the diagnostics services: all absent from the mock fixture) is checked by what it adds.
             AssertConfigured<WorldConsoleOptions>(services);
+            AssertConfigured<ArcaneCore.World.Ops.Control.WorldControlPipeOptions>(services);
             AssertConfigured<NetProtectionOptions>(services);
             AssertConfigured<WatchdogOptions>(services);
             AssertConfigured<MetricsOptions>(services);

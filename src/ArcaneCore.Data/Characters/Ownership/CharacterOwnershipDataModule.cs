@@ -71,6 +71,15 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             .AnyAsync(r => r.Scope == scope && r.Active, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<CharacterOwnershipToken?> GetCurrentAsync(string scope, CancellationToken cancellationToken = default)
+    {
+        RequireWorld(scope);
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // the ownership store is the fence itself; this only reads
+        CharacterOwnershipRow? row = await db.Set<CharacterOwnershipRow>().AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Scope == scope, cancellationToken).ConfigureAwait(false);
+        return row is { Active: true } && Guid.TryParse(row.OwnerIncarnation, out _) ? Token(row) : null;
+    }
+
     public async Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, CancellationToken cancellationToken = default)
     {
         RequireWorld(scope);

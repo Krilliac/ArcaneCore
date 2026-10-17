@@ -1,24 +1,45 @@
-# Redeploys the local live server from a built worktree: graceful Ctrl-C stop of World then Realm, a snapshot of <LiveHome>\bin, an
-# optional world.db swap, a copy of both Debug builds into <LiveHome>\bin, then a start of each daemon in its own console through
-# launch-daemon.ps1 at AboveNormal priority.
-#   pwsh -NoProfile -File tools/ops/live/redeploy.ps1 [-Src <worktree>] [-WorldDbSwap <world.db> [-WorldDb <target>]] [-LiveHome <dir>] [-Profile <dir>]
-# **Touches the live server.** -Src defaults to the worktree this script is in; build it first (dotnet build ArcaneCore.slnx, Debug:
-# live stays a Debug build). Uses ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE when the parameters are omitted.
+# Redeploys the local live server from a built worktree, by the cheapest safe path (docs/ops/redeploy.md). A planner (RedeployPlan.ps1)
+# compares the worktree with what the live World runs (the deploy record in <LiveHome>\bin, the profile's configuration, the module
+# directory) and picks one of:
+#   None     nothing that reaches the daemons changed: nothing is touched
+#   Hot      only live configuration keys, content tables .reload supports and allowlisted hot modules changed: applied through the World's
+#            control pipe (World:Control:Pipe:Enabled) with .reload config / .reload <table> / .hotmodule load|reload, no restart
+#   Restart  anything else: graceful Ctrl-C stop of World then Realm, a snapshot of <LiveHome>\bin, an optional world.db swap, a copy of
+#            both Debug builds (and changed approved modules), then a start of each daemon in its own console at AboveNormal priority
+#   Blocked  a changed hot module is not built, stale or not on the allowlist: nothing is touched (exit 2)
+# A hot path that turns out to be unavailable (no pipe, command missing, busy, no answer) falls back to the restart; a change the World
+# rejects (validation, a module refused) stops with exit 3 and the World keeps running what it ran.
+#   pwsh -NoProfile -File tools/ops/live/redeploy.ps1 [-Src <worktree>] [-Plan|-WhatIf] [-Json] [-ForceRestart] [-ContentTables <names>]
+#        [-WorldDbSwap <world.db> [-WorldDb <target>]] [-LiveHome <dir>] [-Profile <dir>]
+# **Touches the live server** (not with -Plan/-WhatIf). -Src defaults to the worktree this script is in; build it first (dotnet build
+# ArcaneCore.slnx, Debug: live stays a Debug build). Uses ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE when the parameters are omitted.
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$Src = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
     # A refreshed world database (for example a content-importer refresh run on a copy) put in place while the World is stopped.
-    # The old one, with its -wal/-shm, is kept beside it as world.db.bak-<stamp>.
+    # The old one, with its -wal/-shm, is kept beside it as world.db.bak-<stamp>. Always a restart.
     [string]$WorldDbSwap = '',
     # The world database the swap replaces. Default: the Data Source of Database:World:ConnectionString in the profile's
     # appsettings.json (the file the World actually opens, which need not be in the profile directory).
     [string]$WorldDb = '',
     [string]$LiveHome,
     [Alias('Profile')][string]$LiveProfile,
+    # Reloadable content names (.reload <name>: spell_template, npc_vendor, ...) whose rows were changed in the live world database.
+    [string[]]$ContentTables = @(),
+    # Print the plan and stop (the same as -WhatIf).
+    [switch]$Plan,
+    # Also print the plan as JSON.
+    [switch]$Json,
+    # Hard restart whatever the plan says (also past a Blocked plan).
+    [switch]$ForceRestart,
+    # The reason announced with each hot step.
+    [string]$Reason = 'redeploy',
     [int]$WorldStopTimeoutSec = 180,
     [int]$RealmStopTimeoutSec = 60
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
+. (Join-Path $PSScriptRoot 'RedeployPlan.ps1')
 $LiveHome = Resolve-LiveHome $LiveHome
 $LiveProfile = Resolve-LiveProfile $LiveProfile
 $launcher = Join-Path $PSScriptRoot 'launch-daemon.ps1'
@@ -40,15 +61,51 @@ if ($WorldDbSwap) {
     "world.db to swap: $WorldDb"
 }
 
+if ($WorldDbSwap -and -not (Test-Path -LiteralPath $WorldDbSwap)) { throw "world db swap source $WorldDbSwap not found" }
+
+$world = Get-LiveDaemon World
+$live = Get-LiveRedeployPlan -Src $Src -LiveHome $LiveHome -LiveProfile $LiveProfile -ContentTables $ContentTables -WorldDbSwap ([bool]$WorldDbSwap) `
+    -WorldRunning ($null -ne $world) -ForceRestart ([bool]$ForceRestart)
+$thePlan = $live.Plan
+Format-RedeployPlan -Plan $thePlan
+if ($Json) { $thePlan | ConvertTo-Json -Depth 6 }
+if ($Plan -or $WhatIfPreference) { exit 0 }
+
+switch ($thePlan.Action) {
+    'Blocked' {
+        [Console]::Error.WriteLine('redeploy: blocked; nothing was touched. Fix the module(s) above or pass -ForceRestart.')
+        exit 2
+    }
+    'None' {
+        'nothing to deploy: no change reaches the daemons'
+        exit 0
+    }
+    'Hot' {
+        $hot = Invoke-HotRedeploy -Plan $thePlan -WorldPid $world.Id -Configuration $live.Configuration -ModuleDirectory $live.ModuleDirectory -Reason $Reason
+        foreach ($line in $hot.Applied) { "applied $line" }
+        if ($hot.Outcome -eq 'Applied') {
+            Write-DeployRecord -LiveHome $LiveHome -Record (New-DeployRecordData -Live $live -Src $Src -Method hot -Modules $hot.Modules)
+            "hot redeploy done ($($hot.Applied.Count) step(s)); deployed $($live.Worktree.Sha) recorded in $(Get-DeployRecordPath -LiveHome $LiveHome)"
+            exit 0
+        }
+        if ($hot.Outcome -eq 'Rejected') {
+            [Console]::Error.WriteLine("redeploy: the World rejected a hot step and keeps running what it ran: $($hot.Detail)")
+            if ($hot.Applied.Count -gt 0) { [Console]::Error.WriteLine("redeploy: applied before the rejection (live now has these): $($hot.Applied -join '; ')") }
+            [Console]::Error.WriteLine('redeploy: the deploy record is unchanged; fix the change, or pass -ForceRestart for the hard restart.')
+            exit 3
+        }
+        "hot path unavailable ($($hot.Detail)); falling back to the hard restart"
+    }
+}
+
 foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
     $built = Join-Path $Src "src\$proj\bin\Debug\net11.0\$proj.exe"
     if (-not (Test-Path -LiteralPath $built)) { throw "$built not found: build $Src (Debug) first" }
 }
-if ($WorldDbSwap -and -not (Test-Path -LiteralPath $WorldDbSwap)) { throw "world db swap source $WorldDbSwap not found" }
 
-function Stop-Graceful([int]$ProcId, [int]$TimeoutSec) {
-    # A console daemon saves and stops on Ctrl-C. A helper process attaches to the daemon's console to send it, so this shell's own
-    # console is never the one that gets the signal.
+function Send-ConsoleCtrl([int]$ProcId, [int]$CtrlEvent) {
+    # A helper process attaches to the daemon's console to send the event, so this shell's own console is never the one that gets it.
+    # Exit codes: 0 sent, 2 attach failed, 3 GenerateConsoleCtrlEvent failed.
     $helper = @"
 Add-Type -Name K -Namespace W -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern bool FreeConsole();
@@ -59,23 +116,57 @@ Add-Type -Name K -Namespace W -MemberDefinition @'
 [W.K]::FreeConsole() | Out-Null
 if (-not [W.K]::AttachConsole($ProcId)) { exit 2 }
 [W.K]::SetConsoleCtrlHandler([System.IntPtr]::Zero, `$true) | Out-Null
-[W.K]::GenerateConsoleCtrlEvent(0, 0) | Out-Null
+if (-not [W.K]::GenerateConsoleCtrlEvent($CtrlEvent, 0)) { exit 3 }
 Start-Sleep -Milliseconds 500
 exit 0
 "@
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper))
     $h = Start-Process pwsh -ArgumentList '-NoProfile', '-EncodedCommand', $enc -PassThru -WindowStyle Hidden
     $h.WaitForExit(30000) | Out-Null
-    "ctrl-c helper for $ProcId exit=$($h.ExitCode)"
+    # Ctrl-Break also reaches the helper (its ignore flag covers Ctrl-C only) and can end it before it exits by itself.
+    "console event $CtrlEvent for $ProcId helper exit=$($h.ExitCode)"
+}
+
+function Stop-Graceful([string]$Role, [int]$ProcId, [int]$TimeoutSec) {
+    # A console daemon saves and stops on Ctrl-C. A daemon started from a process tree that ignores Ctrl-C (a background shell)
+    # inherits that flag and never sees it (2026-10-17). .NET also stops on Ctrl-Break (SIGQUIT), but only before its host has begun
+    # stopping, so Ctrl-Break goes out only when the log shows Ctrl-C did not start the shutdown.
     $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
-    if ($p -and -not $p.WaitForExit($TimeoutSec * 1000)) { throw "PID $ProcId did not exit within $TimeoutSec s" }
+    if (-not $p) { "PID $ProcId already gone"; return }
+    $log = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome
+    $from = if (Test-Path -LiteralPath $log) { (Get-Item -LiteralPath $log).Length } else { 0 }
+    Send-ConsoleCtrl $ProcId 0
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    $started = $false
+    for ($i = 0; $i -lt 15 -and -not $started -and -not $p.HasExited; $i++) {
+        Start-Sleep -Seconds 1
+        $started = Test-LogSince $log $from 'Application is shutting down'
+    }
+    if (-not $started -and -not $p.HasExited) {
+        "Ctrl-C did not start the $Role shutdown within 15 s; sending Ctrl-Break"
+        Send-ConsoleCtrl $ProcId 1
+    }
+    $left = [Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+    if (-not $p.WaitForExit([int]$left)) { throw "PID $ProcId did not exit within $TimeoutSec s" }
     "PID $ProcId stopped"
+}
+
+function Test-LogSince([string]$Path, [long]$From, [string]$Text) {
+    # The daemon holds its log open for writing; open it shared and read only what was appended after $From.
+    try {
+        $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+        try {
+            if ($fs.Length -le $From) { return $false }
+            $fs.Position = $From
+            return (New-Object IO.StreamReader($fs)).ReadToEnd().Contains($Text)
+        } finally { $fs.Dispose() }
+    } catch { return $false }
 }
 
 $world = Get-LiveDaemon World
 $realm = Get-LiveDaemon Realm
-if ($world) { Stop-Graceful $world.Id $WorldStopTimeoutSec }
-if ($realm) { Stop-Graceful $realm.Id $RealmStopTimeoutSec }
+if ($world) { Stop-Graceful World $world.Id $WorldStopTimeoutSec }
+if ($realm) { Stop-Graceful Realm $realm.Id $RealmStopTimeoutSec }
 
 $tail = Get-Content (Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome) -Tail 3000 -ErrorAction SilentlyContinue | Select-String 'saved and stopped' | Select-Object -Last 1
 "last stop line: $tail"
@@ -100,6 +191,19 @@ foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
     "copied $proj (rc $LASTEXITCODE)"
 }
 
+# Changed hot modules that are built and approved go into the module directory while the World is stopped (LoadOnStart or a later
+# .hotmodule load picks them up); an unapproved build is left out, the World would refuse it anyway.
+$restartModules = @{}
+foreach ($name in $thePlan.Modules) {
+    $build = $live.ModuleBuilds[$name]
+    if ($null -eq $build -or -not $build.Dll -or -not $build.Allowlisted) { "module ${name}: not copied (not built or not on the allowlist)"; continue }
+    $folder = Join-Path $live.ModuleDirectory $name
+    Copy-Item -LiteralPath $build.Dll -Destination (Join-Path $folder "$name.dll") -Force
+    if ((Get-FileHash -LiteralPath (Join-Path $folder "$name.dll") -Algorithm SHA256).Hash -ne $build.Sha256) { throw "module ${name}: copied dll hash mismatch" }
+    $restartModules[$name] = $build.Sha256
+    "module ${name}: copied sha256 $($build.Sha256)"
+}
+
 $startedUtc = [DateTime]::UtcNow
 foreach ($role in 'Realm', 'World') {
     Start-Process pwsh -ArgumentList '-NoExit', '-NoProfile', '-File', $launcher, '-Role', $role, '-LiveHome', $LiveHome, '-Profile', $LiveProfile | Out-Null
@@ -119,5 +223,7 @@ if ($fallbacks.Count -gt 0) {
     throw "the daemons are running, but a log name is owned by another writer; fallback files written since the start: $($fallbacks.FullName -join ', ')"
 }
 "logs: $(Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome), $(Get-LiveDaemonLogPath -Role Realm -LiveHome $LiveHome)"
+Write-DeployRecord -LiveHome $LiveHome -Record (New-DeployRecordData -Live $live -Src $Src -Method restart -Modules $restartModules)
+"deployed $($live.Worktree.Sha) recorded in $(Get-DeployRecordPath -LiveHome $LiveHome)"
 # robocopy's 1-7 are success codes; don't let the last one leak out as the script's exit code.
 exit 0

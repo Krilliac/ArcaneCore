@@ -10,7 +10,11 @@ architecture test, section 4.5) is **built** on `claude/hr2-bots`; Tier 2b (Play
 `src/ArcaneCore.Playerbots`, still in the default load context; options in the contracts assembly; core-to-pack
 allowlist 0, section 4.6) is **built** on `claude/hr-2b`; 2c and 2d are planned. Tier 3 phase 3a (gateway passthrough) is **built and mock-client tested** on
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
+Phase 3b **groundwork** (fencing mandatory in worker mode, the durable decision store, standby mode, the drain protocol
+in process) is **built and tested** on `claude/hr3-standby` (section 5.6); the seamless reroute and the operator trigger
+are not.
 All three lanes are merged on `claude/hr2-integrate`.
+"Redeploy prefers hot reload" (section 9.1) is **built and tested, not run on the live server** on `claude/hr3-redeploy-hot`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -44,7 +48,7 @@ listener, runtime upgrade).
 |---|---|---|---|
 | 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost`, with full rollback; T1-live not yet run |
 | 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | 2a parts 1 and 2 **built** (contracts assembly, lifecycle seams, `.feature`, bot registry, call-site inversion, detachable bot features; section 4.5); 2b **built** (Playerbots in its own project, default context, core-to-pack allowlist 0, section 4.6); 2c and 2d planned |
-| 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | 3a passthrough **built** (mock client only, off by default); 3b/3c planned |
+| 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | 3a passthrough **built** (mock client only, off by default); 3b groundwork **built** in process (section 5.6; clients still re-login); 3c planned |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
 
 ## 3. Tier 1: widen the module lane
@@ -486,12 +490,12 @@ Source: Tier 3 research (static reading, no real client used).
 
 | Piece | Status |
 |---|---|
-| `PlayerTransferCoordinator` (6 stages, abort before commit, roll-forward after) | **Test-only**: no production `ITransferSourceWorker` / `ITransferTargetWorker` / `ITransferGatewayRouter` |
-| `ITransferDecisionStore` | In-memory only; no durable journal |
+| `PlayerTransferCoordinator` (6 stages, abort before commit, roll-forward after) | **Test-only**: no production `ITransferSourceWorker` / `ITransferTargetWorker` / `ITransferGatewayRouter` (per-player); `PrepareTransferAsync` (stages 1 to 4) added for a whole-World commit (section 5.6) |
+| `ITransferDecisionStore` | In-memory, plus the durable `EfTransferDecisionStore` in the characters database since `claude/hr3-standby` (section 5.6) |
 | `PlayerTransferBundle` | Record only; nothing captures or installs it; lacks group, pet, threat, cast, reputation, skills, talents, binds |
 | `GatewayWorkerTransport` (envelope with generation, epoch, sequence; loopback TCP) | Hosted only by tests; not connected to `OpcodeTable` or `WorldSession` |
 | `ClusterNodeBridgeFeature` | A monitor with a probe character; routes no traffic |
-| Character fencing (epoch compare-and-swap, save-time token check), durable ID ranges | **Production-wired, opt-in** (`Cluster:Fencing:Enabled`, off by default) |
+| Character fencing (epoch compare-and-swap, save-time token check), durable ID ranges | **Production-wired, opt-in** (`Cluster:Fencing:Enabled`, off by default); **mandatory in worker mode** since `claude/hr3-standby` |
 | `CharacterPersistenceBarrier.TryFlushCharacterAsync` | Production; the flush primitive for a handoff |
 | `ManagedWorldSession` | Production socketless session; the template for a gateway-backed session |
 
@@ -511,7 +515,8 @@ forbids ("never serialize a socket ... or cipher state into a handoff"), is Wind
   `GatewayWorkerTransport`; client address forwarded for per-IP guards; `Combined` mode unchanged. No handoff yet; a
   gateway restart still drops clients, a World restart still drops them too.
 - **Spike first (one day):** does the 1.12.1 client accept `SMSG_NEW_WORLD` to the **same** map? The codebase never
-  sends it (`TeleportService.TeleportTo` routes same-map moves to the near path). The answer decides 3b's design.
+  sends it (`TeleportService.TeleportTo` routes same-map moves to the near path). The answer decides 3b's design. The
+  server half (`.worldport far` / `readd`, timed step log) is built (section 5.5); the real-client run is open.
 - **3b, save-and-reload handoff with a loading screen (about 4 to 8 weeks after 3a):** World **standby mode** (load
   content, maps and nav; skip the writer lock, ownership claim, save queue, bot restore and schema DDL; internal port
   only); production transfer workers at whole-World granularity; a durable decision store in the characters database;
@@ -573,6 +578,103 @@ Differences from 5.2 and what is left of 3a:
 - The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
   coordinator is still test-only.
 
+### 5.5 Same-map world-port spike (`.worldport`, built on `claude/hr3-spike`; real-client run still open)
+
+The spike of 5.3 needs a real 1.12.1 client; what is built is the server half, so a human or an agent driving a client gets a
+clean, timed record of what the server sent and what came back. Operator page:
+[code-hot-reload.md](../areas/code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled).
+
+- `.worldport far [#player] [x y z [o]]`: the existing far-teleport path of `TeleportService` (no copy of it) with a new
+  `TeleportOptions.ForceFar` (ArcaneCore only, no vmangos counterpart): `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` with the
+  map id the player is on, then `MSG_MOVE_WORLDPORT_ACK`, the login packets and the map add, exactly as a cross-map teleport.
+- `.worldport readd [#player]`: the "in-place" detour of section 10: remove from the map and add back at once, login packets
+  around the add, no transfer packet.
+- `.worldport status` and the `worldport-spike` log lines: every step with its wall-clock time (`requested`, `far-scheduled`,
+  `transfer-sent`, `worldport-ack`, `re-added`, `observed`, or `ack-timeout`, `client-left`, `anomaly` for teleport/session
+  anomalies about the player).
+- Seams added to the teleport code (minimal): `TeleportOptions.ForceFar` (one condition in `TeleportTo`) and the diagnostics
+  event `TeleportService.FarStageReached(Player, TeleportStage)` raised after `SMSG_NEW_WORLD` (`Far`) and on the accepted ack
+  (`Arriving`). No game code sets `ForceFar`; with the spike off nothing subscribes to the event.
+- Gate: registered by `WorldportSpikeServiceModule` (an `IWorldServiceModule`) only with `World:HotCode:Enabled`, which the launch
+  gate accepts only in Development or Staging; Administrator only; audited; no path or code argument; no network surface.
+
+Evidence (compiler and tests, at `fe0654a7`): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings / 0 errors;
+`WorldportSpikeTests` 7/7 over real sessions (far: TRANSFER_PENDING then NEW_WORLD for map 0, no near-teleport ack, the player in
+no map until the ack, then the login sequence and back on map 0 at the requested point, the step list and log lines; readd: no
+transfer packet, the login sequence, same map; no ack: `ack-timeout` then `client-left` on a drop; a second run refused;
+GameMaster refused; registered only with `World:HotCode:Enabled`); with them `CommandReferenceTests`, `GridTerrain.TeleportTests`
+and `HotCodeWiringTests` 28/28, the `Docs` filter 98/98, `TeleportServiceTests` (Game) 10/10. RED runs, each restored and green
+again: the `ForceFar` condition removed (4 far tests fail), `FarStageReached` not raised (the far step test fails), the gate
+removed (the registration test fails), the re-add without its login packets (the readd test fails). Nothing was run against a
+real client.
+
+Still open: **the real-client run itself** (the Spike exit criterion in section 9 is not met). How to run it: a Development world
+with `World__HotCode__Enabled=true`, an Administrator character in an open-world zone, `.worldport far`, then `.worldport readd`;
+record per run whether the client showed a loading screen, came back controllable, saw its surroundings, and any client error;
+paste `.worldport status` next to it. Not covered by the spike: instance maps (it runs, but the instance resolver path for a
+same-map entry is untested), ships, battlegrounds (refused).
+### 5.6 Phase 3b groundwork as built
+
+Built and covered by committed tests; everything runs in process (two synthetic Worlds on one set of SQLite databases,
+the real gateway, the mock client). Four steps: fencing, the decision store, standby mode, the drain protocol.
+
+- **Fencing mandatory in worker mode.** `Cluster:Worker:Enabled = true` registers the characters write fence
+  (`DataServiceCollectionExtensions.IsCharacterWriteFenceRequired`) and the World refuses to start without
+  `Cluster:Fencing:Enabled = true` (`CharacterFencingOptions.RequiredByWorkerMode`). Combined mode is unchanged.
+  Tests: `WorkerModeWriteFenceTests` (10), `WorkerModeFencingTests` (9).
+- **Durable decision store.** Characters schema 62 (`ClusterTransferDataModule`): `cluster_transfer_decision`,
+  `cluster_transfer_owner` (the per-character in-flight claim, compare-and-swap) and `cluster_world_handoff` (at most one
+  unresolved). `EfTransferDecisionStore` implements `ITransferDecisionStore` and the new Kernel `IWorldHandoffStore`;
+  `CommitEpochTakeoverAsync` moves the world ownership row (epoch N, A's incarnation, to N + 1, B's) and commits every
+  transfer of the handoff in one transaction, or changes nothing. The module is an `ICharacterDataCleanup`: deleting a
+  character is refused while a transfer of it is unresolved (its in-flight claim is held, or a decision is pre-commit or
+  committed); otherwise its `cluster_transfer_owner` and `cluster_transfer_decision` rows go with it. The SQL update
+  files for schema 62 are generated for all three providers. Tests: `TransferDecisionStoreTests` (7 per provider), and
+  `PlayerTransferCoordinatorTests` now run on both stores, including a restart between stages (16).
+- **Standby mode** (`Cluster:Worker:Standby`, off by default): see [gateway.md](../areas/gateway.md#standby-worker-tier-3b-groundwork).
+  Differs from 5.3: a standby does **not** load characters-backed state or attach features before promotion. The fence
+  refuses a non-owner's transactions, reads included, and that state would be stale at the handoff anyway; so the
+  warm-up covers the process, the container, schema validation and the gateway link, and promotion pays for the feature
+  attach. Promotion only reads the ownership row (`ICharacterOwnershipStore.GetCurrentAsync`) and compares it with the
+  token; a refused promotion changes nothing, including when the row is inactive (released). Tests: `StandbyWorkerTests` (8).
+- **Drain protocol.** `WorldHandoffCoordinator` with `LocalWorldHandoffSource` (A: close admission, park the simulation
+  thread at a tick boundary after capturing every online player's save through the settlement path, then flush every
+  per-character queue through `CharacterPersistenceBarrier`), `StandbyWorldHandoffTarget` (B: `WorldHost.PromoteAsync`)
+  and `GatewayWorldHandoffRouter` (`GatewayServer.RetargetWorkerAsync`). Abort before the takeover resumes A first and
+  then journals the abort, so a failed journal write leaves A running and the handoff open (pre-commit) for
+  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (10).
+
+Known limits of what is built (from the review of the groundwork; none is fixed yet):
+
+- **In process only.** The production participants (`LocalWorldHandoffSource`, `StandbyWorldHandoffTarget`,
+  `GatewayWorldHandoffRouter`) have no DI registration and there is no cross-process control channel. In the real
+  topology A, B and the gateway are separate processes, so one coordinator **cannot** drive a real multi-process
+  handoff with them; only the single-process tests do.
+- **A crash of B after the takeover cannot be rolled forward.** The journal's target token carries the dead B's
+  incarnation, and a restarted B gets a new one (`WorldHost` incarnation is `Guid.NewGuid()` per process), so
+  `RecoverAsync`'s promotion is refused forever. Manual recovery: start a world with
+  `Cluster:Fencing:TakeoverEpoch` / `TakeoverIncarnation` set to the journal's target token (an explicit fencing
+  takeover), then resolve the journal row.
+- **One coordinator is assumed, not enforced.** `CommitEpochTakeoverAsync` and `AbortAsync` read and then update the
+  `cluster_world_handoff` row without a row lock or concurrency token; on MariaDB/PostgreSQL a `RecoverAsync` racing a
+  live `RunAsync` could lose an update (ownership moved, journal says Aborted). There is no coordinator lease.
+- **Only per-character queues are flushed** at the freeze (`CharacterPersistenceBarrier`). Whether non-per-character
+  pending writes (guild, mail, auction, world state) are flushed before the takeover is not verified; any still pending
+  afterwards are refused by the fence.
+- **Admission check and close race.** An open that passes `RemoteWorldSession`'s admission check just before
+  `StopAdmissionsAsync` can log in during the freeze; its writes on A are later fenced.
+- **The standby's link manifest incarnation** is a fresh `Guid`, not the host's `Incarnation`, so it never matches the
+  incarnation the takeover hands the ownership to.
+- **`RetargetWorkerAsync` retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
+  then depends on the caller's cancellation token, with no timeout or diagnostic of its own.
+
+Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
+entities), gateway input buffering and PING answering during the freeze, one link per worker and a per-session reroute
+with synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` (clients on A are disconnected and log in again), the
+operator command (no remote trigger exists, so no new attack surface), a retire that stops A without attempting writes
+(its late writes are refused by the fence), Warden on the gateway, the forced spell-state save that only
+`PlayerLoggingOut` runs, and real-client or MariaDB/PostgreSQL runs. The freeze length is not measured.
+
 ## 6. Tier 4: edit and continue stays dev-only
 
 The `dotnet watch` runner patches a Debug process: no tick atomicity, no rollback, rude edits, unmeasured Debug tick
@@ -619,9 +721,49 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 | 2a | Bot features detach and re-attach in process with bots online; no Playerbots type referenced from core (architecture test) |
 | 2b | Playerbots in its own project, default context, soaked with the usual bot population and no behavioural regression in the playerbot QA reports |
 | 2c | CI unload test green (old context collected after swap), cold swap on a dev server with hundreds of bots and no player disconnect |
-| Spike | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
+| Spike (server side **built**, `.worldport`, section 5.5) | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
 | 3a | Real client and mock client play through the gateway; per-IP guards see the client address; `Combined` unchanged |
-| 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it |
+| 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it (abort at every stage and roll-forward are **met in process** on `claude/hr3-standby`; no-disconnect, freeze time and the dev-server run are not) |
+
+### 9.1 Redeploy prefers hot reload (built on `claude/hr3-redeploy-hot`)
+
+`tools/ops/live/redeploy.ps1` plans before it acts ([runbook](../ops/redeploy.md)). It compares the built worktree with the deploy
+record the previous redeploy wrote (`<LiveHome>\bin\arcanecore-deploy.json`: deployed SHA, paths dirty at the time, a SHA-256
+configuration fingerprint, module hashes) and classifies the change: `None` (nothing the daemons are built from), `Hot` (only `live`
+World configuration keys from the conf catalog, content tables `.reload` supports, allowlisted hot modules), `Restart` (server code,
+any other key, no baseline, `-WorldDbSwap`, `-ForceRestart`), or `Blocked` (a changed module not built or not on the allowlist).
+`-Plan` / `-WhatIf` print the plan and stop. A hot plan is applied through a new **local-only World control pipe**
+(`World:Control:Pipe:*`, off by default; [server console](../areas/server-console.md#control-pipe)): a Windows named pipe with a
+protected DACL (deny NETWORK, allow the World's account and SYSTEM), created natively with `PIPE_REJECT_REMOTE_CLIENTS` (read back
+from the kernel; not served without it) and `FILE_FLAG_FIRST_PIPE_INSTANCE`, whose lines run through
+the console executor (Administrator, GM audit `Console`, redacted `Control pipe command:` log with the client PID). The client refuses a
+pipe served by any process other than the live World. An unavailable hot path falls back to the hard restart; a change the World
+rejects stops with exit 3 and no restart.
+
+Evidence (built): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings, 0 errors; the lane filter
+(`WorldControlPipeTests|RedeployPlanTests|WiringAuditTests|WorldConsoleTests|LiveLogPathTests|Docs`) 196 passed, 0 failed, 0 skipped
+(trx: `WorldControlPipeTests` 15, `RedeployPlanTests` 42 of which 34 planner fixtures, `WiringAuditTests` 17). RED run (one build with
+six mutations): dropping the deny-NETWORK entry fails both descriptor tests; dropping the `Control pipe command:` log line fails the
+command test; treating `restart`/`start` keys as `live` fails the two fixtures for them; dropping the recorded dirty paths fails the
+changed-paths test; dropping the client's server-PID check fails the hot-step test at its refusal assertion. Dropping
+`PipeOptions.FirstPipeInstance` failed nothing then; the cause (found in review, from the dotnet/runtime source) is that the runtime adds
+`FILE_FLAG_FIRST_PIPE_INSTANCE` itself whenever `maxNumberOfServerInstances` is 1.
+
+Review fix cycle 1 (built): the first version's docs said the runtime also rejects remote clients. It does not: the .NET pipe
+constructors pass only the transmission-mode bits, never `PIPE_REJECT_REMOTE_CLIENTS`, so deny-NETWORK was the only remote barrier.
+The pipe is now created by `CreateNamedPipeW` (`Ops/Control/LocalPipeServer.cs`) with `PIPE_REJECT_REMOTE_CLIENTS` and an explicit
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, wrapped in `NamedPipeServerStream`; the World reads the reject bit back
+(`NtQueryInformationFile(FilePipeLocalInformation)`) and leaves the pipe off without it. `#done` is now queued on the world thread right
+after the command ran, so a result posted to a later tick can no longer precede it; a command that throws replies "The command failed"
+instead of ending the connection. Evidence: build 0 warnings, 0 errors; `WorldControlPipeTests` 19 passed, 0 failed. RED: before the
+switch, the new read-back test failed on the live pipe (and a runtime-created pipe reads back false, so the read-back is not constant);
+with the explicit first-instance flag removed, both squatter tests fail (now load-bearing: a squatter allowing many instances would
+otherwise be joined). The `#done` ordering test has no RED (the race needs a world tick to lose to a thread-pool hop); it guards the
+ordering. Not yet tried: a connection from a second machine.
+
+Planned, not built: a Realm-only restart (a restart is still World and Realm); detecting content changes (tables are declared with
+`-ContentTables`); applying `Logging:LogLevel:*` without a restart (planned as a restart today); checking that the core build matches the
+worktree (only module builds are checked); a run against the live server.
 
 ## 10. Open risks
 
@@ -637,7 +779,10 @@ into a production path. It remains the fastest loop for a developer, gated by `H
   in-place sequence, which is riskier).
 - **Freeze length** grows with players times flush latency (barrier default 15 s at the extreme); not measured.
 - **Process-wide caches** (spellbook cache, guilds, auctions) must be loaded by the standby World after the old one's
-  final flush, or reloaded at cutover.
+  final flush, or reloaded at cutover. As built (5.5) the standby attaches its features only at promotion, so they load
+  after the flush; the price is a longer cutover.
+- **A standby on SQLite runs without the writer file lock** (only the fence keeps it from writing before promotion), and
+  a parked A holds its process open until it is stopped. Measured nowhere yet.
 - **Interaction with M15 clustering.** Tier 3 reuses M15 contracts; the two plans must not diverge (one gateway, one
   transfer coordinator).
 - **Stale source docs.** `docs/integration/cluster-transfer-state.md` is partly stale (several "memory-only" rows now
