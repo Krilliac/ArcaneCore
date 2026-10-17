@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
@@ -9,6 +10,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Spells;
@@ -555,6 +557,61 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    /// <summary>
+    /// Shadow Word: Pain (and Lesser Heal, Smite, Immolate) was submitted ten times in the Warsong flag rooms: CheckCast
+    /// returns <see cref="SpellCastResult.LineOfSight"/> before SPELL_START, and the bot only remembered that refusal for
+    /// <see cref="PlayerbotCombatSpells.RefusalBackoffMs"/>. The view must not choose the spell while the wall is there.
+    /// </summary>
+    [Fact]
+    public async Task ShadowWordPain_IsNotChosenWhenAWallBlocksTheTarget_AndIsChosenOnceTheLineIsClear()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 10, 589);
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                var pain = new SpellInfo
+                {
+                    Id = 589,
+                    Name = "Shadow Word: Pain",
+                    RangeIndex = 4,
+                    Range = new SpellRange(0, 30),
+                    Effects =
+                    [
+                        new SpellEffectInfo
+                        {
+                            Effect = SpellEffectName.ApplyAura,
+                            AuraType = AuraType.PeriodicDamage,
+                            TargetA = SpellImplicitTarget.UnitEnemy,
+                            Amplitude = 3000,
+                        },
+                    ],
+                };
+                WorldCollision.Of(host.World).Install(lineOfSight: new WallAtX(player.X + 5f));
+                Assert.Equal(SpellCastResult.LineOfSight, SpellLineOfSight.Check(player, pain, target, triggered: false));
+
+                RotationState blocked = PlayerbotCombatView.Build(
+                    session, session.Services.GetRequiredService<SpellFeature>(), player, target,
+                    PlayerbotAbilities.Empty, PlayerbotRole.Healer, static _ => false);
+                Assert.NotNull(blocked.Victim);
+                Assert.False(blocked.CanCast(pain, blocked.Victim));
+
+                target.Relocate(player.X + 2f, player.Y, player.Z, 0, host.World.NowMs);
+                Assert.Equal(SpellCastResult.CastOk, SpellLineOfSight.Check(player, pain, target, triggered: false));
+                Assert.True(blocked.CanCast(pain, blocked.Victim));
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     private static async Task<Creature> AddTargetAsync(WorldTestHost host, WorldSession session, float xOffset, uint low)
     {
         Creature target = null!;
@@ -575,5 +632,28 @@ public sealed class PlayerbotCombatSpellsTests
         });
         await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(target.Guid), "spell target visibility");
         return target;
+    }
+
+    /// <summary>A vertical wall at x = <paramref name="wallX"/> blocks every segment that crosses it.</summary>
+    private sealed class WallAtX(float wallX) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
+            => (from.X - wallX) * (to.X - wallX) > 0;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => null;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
     }
 }

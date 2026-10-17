@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Totems;
@@ -25,8 +26,8 @@ namespace ArcaneCore.World.Playerbots.Combat;
 /// <summary>
 /// Builds a <see cref="RotationState"/> from the live world (world thread): the bot, its victim, group, attackers, pet, totems
 /// and consumables, plus the castability check of vmangos CombatBotBaseAI::CanTryToCastSpell (CombatBotBaseAI.cpp:2807-2860)
-/// over the ordinary spell rules (cooldowns, global cooldown, power, aura states, form, reagents, equipped items, range). The
-/// check only avoids pointless requests; the ordinary CMSG_CAST_SPELL handler still decides.
+/// over the ordinary spell rules (cooldowns, global cooldown, power, aura states, form, reagents, equipped items, range,
+/// line of sight). The check only avoids pointless requests; the ordinary CMSG_CAST_SPELL handler still decides.
 /// </summary>
 internal static class PlayerbotCombatView
 {
@@ -172,7 +173,11 @@ internal static class PlayerbotCombatView
                 return false;
             if (spell.HasAttribute(SpellAttributes.UsesRangedSlot) && !HasAmmoFor(player, ranged)) return false;
             if (FacingCastCheck.IsFromBehindOnly(spell) && !FacingCastCheck.IsBehindTarget(player, unit, strict: true)) return false;
-            return InRange(player, unit, spell);
+            // CheckCast asks SpellLineOfSight before it ever sends SPELL_START. A refusal is remembered only for
+            // PlayerbotCombatSpells.RefusalBackoffMs, so a priest in a Warsong flag room resubmitted Shadow Word: Pain
+            // (and any other targeted spell) once that memory lapsed. Out of range is cheaper and already refuses.
+            if (!InRange(player, unit, spell)) return false;
+            return SpellLineOfSight.Check(player, spell, unit, triggered: false) == SpellCastResult.CastOk;
         }
 
         bool canUseItemsInForm = !ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player);
