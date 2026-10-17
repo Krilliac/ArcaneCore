@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -30,12 +31,19 @@ public static class PlayerbotScenarioCatalog
     /// The public scenarios of this assembly that are not built-ins, by name (discovered, so a lane that adds one needs no
     /// registration edit; the battlegrounds review found <c>wsg</c> unreachable from the command when it was DI-only).
     /// </summary>
-    public static IReadOnlyList<IPlayerbotScenario> Shipped { get; } = typeof(PlayerbotScenarioCatalog).Assembly.GetTypes()
-        .Where(t => t is { IsClass: true, IsAbstract: false, IsPublic: true } && typeof(IPlayerbotScenario).IsAssignableFrom(t)
-            && t.GetConstructor(Type.EmptyTypes) is not null && Builtins.All(b => b.GetType() != t))
-        .Select(t => (IPlayerbotScenario)Activator.CreateInstance(t)!)
-        .OrderBy(s => s.Name, StringComparer.Ordinal)
-        .ToArray();
+    public static IReadOnlyList<IPlayerbotScenario> Shipped { get; } = DiscoverShipped(CodeAssemblies.Of(typeof(PlayerbotScenarioCatalog).Assembly));
+
+    /// <summary>
+    /// The public, parameterless-constructible scenarios of <paramref name="assemblies"/> (built-ins plus packs) that are not
+    /// <see cref="Builtins"/>, ordered by name (ordinal). <see cref="Shipped"/> is this over the world assembly alone. A type
+    /// that cannot load fails closed (<see cref="CodeAssemblyLoadException"/>).
+    /// </summary>
+    public static IReadOnlyList<IPlayerbotScenario> DiscoverShipped(CodeAssemblies assemblies)
+        => [.. (assemblies ?? throw new ArgumentNullException(nameof(assemblies))).GetLoadableTypes()
+            .Where(t => t is { IsClass: true, IsAbstract: false, IsPublic: true } && typeof(IPlayerbotScenario).IsAssignableFrom(t)
+                && t.GetConstructor(Type.EmptyTypes) is not null && Builtins.All(b => b.GetType() != t))
+            .Select(t => (IPlayerbotScenario)Activator.CreateInstance(t)!)
+            .OrderBy(s => s.Name, StringComparer.Ordinal)];
 
     public static IReadOnlyList<IPlayerbotScenario> All(IServiceProvider services)
     {

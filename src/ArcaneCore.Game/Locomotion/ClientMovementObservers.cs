@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
@@ -50,7 +51,8 @@ public sealed class MovementObserverAttribute : Attribute
 /// <summary>Discovery and dispatch of the <see cref="IClientMovementObserver"/> classes of this assembly.</summary>
 public static class MovementObservers
 {
-    private static readonly (IClientMovementObserver Observer, int Order, string Name)[] s_discovered = Discover();
+    private static readonly (IClientMovementObserver Observer, int Order, string Name)[] s_discovered =
+        Discover(CodeAssemblies.Of(typeof(MovementObservers).Assembly));
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldRuntime, WorldObservers> s_perWorld = new();
 
     /// <summary>The discovered observer types in run order.</summary>
@@ -134,13 +136,25 @@ public static class MovementObservers
     }
 
     /// <summary>
+    /// The <see cref="MovementObserverAttribute"/> types of <paramref name="assemblies"/> (built-ins plus packs), in run order
+    /// (order, then full type name); <see cref="Types"/> is this over the Game assembly alone. Each is instantiated to prove it
+    /// is valid; the instances are discarded. Fails closed as the startup scan does, and on a type that cannot load
+    /// (<see cref="CodeAssemblyLoadException"/>).
+    /// </summary>
+    public static IReadOnlyList<Type> DiscoverTypes(CodeAssemblies assemblies)
+    {
+        ArgumentNullException.ThrowIfNull(assemblies);
+        return [.. Discover(assemblies).Select(o => o.Item1.GetType())];
+    }
+
+    /// <summary>
     /// Every marked type. A marked type that is not a concrete <see cref="IClientMovementObserver"/> or has no
     /// parameterless constructor fails here, at first use, instead of being skipped (fail closed).
     /// </summary>
-    private static (IClientMovementObserver, int, string)[] Discover()
+    private static (IClientMovementObserver, int, string)[] Discover(CodeAssemblies assemblies)
     {
         var found = new List<(IClientMovementObserver Observer, int Order, string Name)>();
-        foreach (Type type in typeof(MovementObservers).Assembly.GetTypes())
+        foreach (Type type in assemblies.GetLoadableTypes())
         {
             if (type.GetCustomAttribute<MovementObserverAttribute>() is not { } attribute)
             {

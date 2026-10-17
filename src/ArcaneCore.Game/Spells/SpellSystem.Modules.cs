@@ -9,7 +9,7 @@ public sealed partial class SpellSystem
     /// <summary>The <see cref="ISpellHandlerModule"/> types applied to this system, in application order.</summary>
     public IReadOnlyList<Type> Modules => _modules;
 
-    /// <summary>Apply every module of <paramref name="assembly"/> (see <see cref="SpellHandlerModules.Discover"/>).</summary>
+    /// <summary>Apply every module of <paramref name="assembly"/> (see <see cref="SpellHandlerModules.Discover(Assembly)"/>).</summary>
     public void RegisterModules(Assembly assembly) => RegisterModules(SpellHandlerModules.Discover(assembly));
 
     /// <summary>

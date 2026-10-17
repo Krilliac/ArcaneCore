@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Npc;
 
@@ -139,7 +140,8 @@ public sealed record QuestSupportSummary(int ActiveQuests, int Supported, IReadO
 
 public sealed partial class QuestNpcServices
 {
-    private static readonly Lazy<IReadOnlyList<IQuestAdapterModule>> s_adapterModules = new(DiscoverAdapterModules);
+    private static readonly Lazy<IReadOnlyList<IQuestAdapterModule>> s_adapterModules =
+        new(() => DiscoverAdapterModules(CodeAssemblies.Of(typeof(QuestNpcServices).Assembly)));
 
     private QuestAdapter? _provided;
 
@@ -177,11 +179,15 @@ public sealed partial class QuestNpcServices
         return (provided, covered);
     }
 
-    private static IReadOnlyList<IQuestAdapterModule> DiscoverAdapterModules()
-        => [.. typeof(QuestNpcServices).Assembly.GetTypes()
+    /// <summary>
+    /// One instance of every public, parameterless-constructible <see cref="IQuestAdapterModule"/> of <paramref name="assemblies"/>
+    /// (built-ins plus packs), ordered by assembly name, then full type name (for the Game assembly alone, the set in force). A
+    /// type that cannot load fails closed (<see cref="CodeAssemblyLoadException"/>).
+    /// </summary>
+    public static IReadOnlyList<IQuestAdapterModule> DiscoverAdapterModules(CodeAssemblies assemblies)
+        => [.. (assemblies ?? throw new ArgumentNullException(nameof(assemblies))).GetLoadableTypes()
             .Where(t => t is { IsClass: true, IsAbstract: false, IsPublic: true } && typeof(IQuestAdapterModule).IsAssignableFrom(t)
                 && t.GetConstructor(Type.EmptyTypes) is not null)
-            .OrderBy(t => t.FullName, StringComparer.Ordinal)
             .Select(t => (IQuestAdapterModule)Activator.CreateInstance(t)!)];
 
     /// <summary>The adapters this quest still lacks (empty when every need is provided).</summary>
