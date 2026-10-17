@@ -2,8 +2,9 @@
 
 Status: design, owner go on 2026-10-16 for tiers 1 to 3. Tier 1 is **built and wired** into the module lane
 (spell scripts, instance scripts and EventAI handlers load, replace and unload through `.hotmodule`; see
-`docs/areas/code-hot-reload.md`). Still open for Tier 1: rollback of a post-validation failure (section 3.5), RED proofs
-for the instance/EventAI registry tests, and a collected-unload proof for the new slots. Tiers 2 and 3 are planned.
+`docs/areas/code-hot-reload.md`). A failure after validation is rolled back in every slot, and the last good version is restored (section 3.5).
+RED proofs and a collected-unload proof exist for the new slots. Still open for Tier 1: the T1-live row (a real client on a dev
+server). Tiers 2 and 3 are planned.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -25,7 +26,7 @@ reading of the code with nothing built or run. Line numbers are at `8baad0b1`.
 | Configuration (`.reload config`) | About 290 keys (a grep of the `Live*` factories in `src/ArcaneCore.World/Reload/WorldConfigKeys.cs`, approximate, most of them playerbot keys) | 8 restart-only entries (`Fixed` / `FixedListener`: `TickIntervalMs`, `World:Maps:DataDirectory`, `Port`, `BindAddress`, ...), reported as "can't be changed at reload" | [hot-reload.md](../areas/hot-reload.md) |
 | Content (`.reload <table>`) | About 35 tables (spells, items, creatures, quests, NPC services, loot, game objects, teleports, area triggers, ...): built off the world thread, validated, committed at a tick boundary in a `ReloadTransaction` with undo steps | Map registry, terrain, collision, DBC-derived data, tables with no store (see the audit table) | [hot-reload.md](../areas/hot-reload.md) |
 | HotCode development runner | Method bodies in the server's own assemblies (Debug, SDK, `dotnet watch`), plus new opcode handler groups, command groups and default map updaters through the additive registry refresh | Rude edits, static initializers, the feature set, DI, EF model, any Release build | [code-hot-reload.md](../areas/code-hot-reload.md) |
-| Module lane (`.hotmodule`) | A collectible `AssemblyLoadContext` per module, Release-capable, SHA-256 allowlist: opcode handler groups, chat command groups, creature AI (`ICreatureAiGroup`) and global script hooks; load, replace, unload, all at a tick boundary | Spell scripts, instance scripts, EventAI handlers, map updaters, `IWorldFeature`s, `IDataModule`s, DI services, the server's own code | [code-hot-reload.md](../areas/code-hot-reload.md#module-lane-load-replace-and-unload-code-in-a-running-server) |
+| Module lane (`.hotmodule`) | A collectible `AssemblyLoadContext` per module, Release-capable, SHA-256 allowlist: opcode handler groups, chat command groups, creature AI (`ICreatureAiGroup`), global script hooks, spell scripts, instance scripts and EventAI handlers; load, replace, unload, all at a tick boundary with full rollback | Map updaters, `IWorldFeature`s, `IDataModule`s, DI services, the server's own code | [code-hot-reload.md](../areas/code-hot-reload.md#module-lane-load-replace-and-unload-code-in-a-running-server) |
 
 So today a restart is still forced by: any change to built-in code on a Release server, any new kind of module
 contribution, a change to a whole subsystem such as Playerbots, and anything structural (features, DI, schema,
@@ -35,7 +36,7 @@ listener, runtime upgrade).
 
 | Tier | Removes the restart for | Mechanism | Status |
 |---|---|---|---|
-| 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost` (rollback of a post-validation failure still open) |
+| 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost`, with full rollback; T1-live not yet run |
 | 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | Planned (research done) |
 | 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | Planned (research done) |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
@@ -101,29 +102,39 @@ instance and swap their internal table in one reference write, so `InstanceManag
 - `EventAiRegistry`: `DiscoverHandlers(assemblies)` returning `EventAiHandlerSet`, `ValidateSwap`, `CommitSwap` for
   event and action types, `IsCurrent(handler)`, `IsBuiltInEvent/Action`, `ModuleEventTypes/ActionTypes`, `Generation`.
   Actions are looked up per action run, so an action swap is live at once. Event handlers are bound to a creature's
-  event rows when the engine builds them, so an event-handler swap reaches a creature at its next respawn.
+  event rows when the engine builds them, so an event-handler swap reaches a creature at its next respawn. The module
+  lane now forces that respawn for affected database creatures, staggered (section 3.5).
 - Same rule as spells: built-ins cannot be overridden or removed; a module replaces its own entry by removing and
   re-adding it in one swap.
 
 Evidence: build green; the two new classes 10/10 alone, 42/42 together with the existing instance and EventAI tests.
-**No RED run** was done for these, so the tests are not yet proven to fail without the change. There is no counter of
-creatures still running a retired EventAI event handler (it would need `EventAiEngine` changes).
+RED proofs were done later (lane `claude/hr2-t1finish`). With the built-in remove check removed, `InstanceScriptSwapTests` failed.
+With the built-in override check removed, `EventAiRegistrySwapTests` failed. Both were restored and green again. Creatures still
+running a retired EventAI event handler are counted by `ModuleGameSeams.CountRetired`, which reads each creature's bound holders.
 
 ### 3.4 Not in Tier 1
 
 Map-specific entry AI and the built-in dungeon boss scripts (consulted before module registrations), `IWorldFeature`s,
 `IDataModule`s and DI services stay out. Features belong to Tier 2; tables need a schema story (section 9).
 
-### 3.5 Integration step (wired; rollback still open)
+### 3.5 Integration step (built: `claude/hr2-t1finish`, commits `d32280b2` and `54937661`)
 
 - Merge the three lane branches into `claude/hot-reload-tiers` and build them together (each built alone so far).
 - `ModuleHost` builds one candidate per module covering all slots (opcodes, commands, creature AI, hooks, spell
   scripts, instance scripts, EventAI events and actions), validates every slot before touching any, and commits all
-  slots in the same posted tick-boundary action. Today a failure after validation leaves a module "only partly
-  applied"; with more slots that case must become a real rollback (the `ReloadTransaction` undo-step pattern from the
-  content lane), not a documented limit.
-- Unload: `RetiredStillReferenced` must include the new reasons a context stays alive (a loaded instance still on a
-  retired script, a creature with a retired event handler, scheduled spell-script work).
+  slots in the same posted tick-boundary action. **Built:** a failure after validation in any slot is rolled back
+  through an undo log (`SwapUndo`). The spell, instance and EventAI registries restore saved tables
+  (`Save`/`Restore(Checkpoint)`); creature AI is undone by an inverse swap; hooks are restored to the saved list
+  and order; opcodes go back to a copy of the old table. For a replace, the owner policy then unloads the previous
+  version and restores the last good one from its kept bytes (failed, unloaded, restored). A throwing
+  `ScriptsChanged` handler fails the swap. A registry that went away only rejects additions.
+  Evidence: `ModuleRollbackTests` injects a fault after each slot for three fixture modules, plus a RED run with a
+  rollback that does nothing.
+- Unload: **built.** `ModuleHost.RetiredGameReferences` counts loaded instances still on a retired script and creatures
+  with a retired EventAI event handler. A test proves the module context is collected after unload (WeakReference),
+  stays alive while a real EventAI creature holds a retired handler, and is collected after that creature respawns.
+  Changed EventAI event handlers now reach live database creatures through a staggered respawn (`EventAiRespawnPolicy`).
+  Scheduled spell-script work stays invisible to any count (from reading).
 - Swaps announced and audited exactly like today's module decisions.
 
 ## 4. Tier 2: core plus reloadable packs (Playerbots pilot)
@@ -274,7 +285,7 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 
 | After | Still a restart (or, after Tier 3, a handoff) |
 |---|---|
-| Tier 1 | Built-in code on Release; features, DI, `IDataModule`s/schema, map-specific entry AI and built-in boss scripts; listener, tick interval, the 8 restart-only config keys; an event-handler change reaching a live creature before it respawns; a loaded instance keeps its old script until it unloads |
+| Tier 1 | Built-in code on Release; features, DI, `IDataModule`s/schema, map-specific entry AI and built-in boss scripts; listener, tick interval, the 8 restart-only config keys; an event-handler change reaching a live creature in combat or a temporary creature (database creatures are respawned, staggered); a loaded instance keeps its old script until it unloads |
 | Tier 2 | Everything above except the pack's own code and features; contract changes (options shapes, service interfaces) restart, because the contracts assembly lives in the default context; pinned core features |
 | Tier 3b | Nothing forces a disconnect except a gateway update, a SQLite deployment, or a crash; a handoff still costs a loading screen and the 3b loss contract |
 | Tier 4 | Unchanged (dev-only) |
@@ -283,7 +294,7 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 
 | Phase | Exit criteria |
 |---|---|
-| T1-int: merge lanes, wire `ModuleHost` | Combined build 0 warnings; filtered tests green with RED proofs for every new seam (including the instance/EventAI tests that have none yet); a fixture module that adds, replaces and removes a spell script, an instance script and an EventAI action through `.hotmodule reload`, with the unload proven collected; a post-validation failure rolls every slot back |
+| T1-int: merge lanes, wire `ModuleHost` (**met** on `claude/hr2-t1finish`, except the `.hotmodule reload` command path, tested through `ModuleHost`, not the chat handler) | Combined build 0 warnings; filtered tests green with RED proofs for every new seam (including the instance/EventAI tests that have none yet); a fixture module that adds, replaces and removes a spell script, an instance script and an EventAI action through `.hotmodule reload`, with the unload proven collected; a post-validation failure rolls every slot back |
 | T1-live | A module with spell scripts reloaded on a dev server while a real client casts; announcement and audit lines present |
 | 2a | Bot features detach and re-attach in process with bots online; no Playerbots type referenced from core (architecture test) |
 | 2b | Playerbots in its own project, default context, soaked with the usual bot population and no behavioural regression in the playerbot QA reports |
@@ -294,8 +305,8 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 
 ## 10. Open risks
 
-- **Partial module commits.** Today a failure after validation leaves a module "only partly applied". More slots
-  make that likelier; T1-int must replace it with a rollback.
+- **Partial module commits.** Resolved: a failure after validation is rolled back. The remaining case is an undo step
+  that itself throws ("ROLLBACK INCOMPLETE"); it is reported, and only a restart then restores a known state.
 - **Leaks found only at runtime.** Unload leaks are invisible statically; every tier needs the weak-reference probe
   and, for Tier 2, a heap-dump round.
 - **Version skew.** A module or pack built against another server build fails at JIT time, not at load. A contracts
@@ -311,4 +322,3 @@ into a production path. It remains the fastest loop for a developer, gated by `H
   transfer coordinator).
 - **Stale source docs.** `docs/integration/cluster-transfer-state.md` is partly stale (several "memory-only" rows now
   have stores); re-verify before relying on it.
-- **Instance and EventAI swap tests have no RED proof yet.**
