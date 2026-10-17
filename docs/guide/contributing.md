@@ -33,7 +33,7 @@ the behaviour in your own code, and never copy their code or data into this repo
 CI runs exactly these commands (`.github/workflows/ci.yml`; a test compares this list with the workflow):
 
 ```
-dotnet restore ArcaneCore.slnx
+dotnet restore ArcaneCore.slnx --locked-mode
 dotnet build ArcaneCore.slnx -c Release --no-restore
 dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal --logger trx --results-directory TestResults
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
@@ -45,6 +45,30 @@ line on one solution filter of `ArcaneCore.slnx` (`tests/ci/<suite>.slnf`), and 
 
 Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors`), not a command-line flag, so a warning anywhere fails the build locally and in CI. Test projects run serially
 (`-m:1`) because first-time database fixture start-up has a bounded deadline. The `.trx` files land in `TestResults/` (ignored by git); CI uploads them and `test-report.yml` posts the summary on the PR. A count of 0 tests, or a run that prints no summary line, means the check did not run.
+
+### Package lock files
+
+Every project has a committed `packages.lock.json` beside its `.csproj` (`Directory.Build.props` sets `RestorePackagesWithLockFile`):
+the exact version and content hash of every direct and transitive package. CI (`ci.yml`, `dotnet.yml`) and the image build
+(`apps/docker/Dockerfile`) restore with `--locked-mode`, so a restore whose package graph differs from the lock files fails (NU1004)
+instead of quietly resolving something new. A test (`PackageLockFileTests`) checks that every project has one and that every scripted
+restore is locked.
+
+When you add, remove or bump a `PackageReference` (or a project reference that brings packages with it), refresh the lock files with
+the repository SDK and commit every changed `packages.lock.json` in the same commit as the `.csproj` change:
+
+```powershell
+& "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --force-evaluate
+& "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/hotmodule-template/GmCommands/GmCommands.csproj --force-evaluate
+& "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/ops/diag/exception-probe/ArcaneCore.ExceptionProbe.csproj --force-evaluate
+& "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --locked-mode
+```
+
+The solution restore also covers the hot-module fixtures (`tests/hotmodule-fixtures`, reached through the World test project's
+references); the two tools outside the solution need their own line. A change in a library such as `ArcaneCore.Data` rewrites the lock
+file of every project that references it, so expect several files to change. The last line repeats CI's check. A new project gets its
+lock file from its first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
+`tools/hotcode-spike` opts out of the repository props (its own `Directory.Build.props`) and has no lock file.
 
 ### Other checks on a pull request
 

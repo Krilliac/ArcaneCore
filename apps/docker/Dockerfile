@@ -15,10 +15,12 @@ WORKDIR /src
 COPY global.json Directory.Build.props ArcaneCore.slnx .editorconfig ./
 COPY src/ src/
 COPY tools/ tools/
-RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj \
- && dotnet restore src/ArcaneCore.Realm/ArcaneCore.Realm.csproj \
- && dotnet restore tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj \
- && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj
+# Locked mode: the restore must match the packages.lock.json committed beside each project (exact versions and content hashes),
+# so the image cannot build against a package graph CI never saw.
+RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode \
+ && dotnet restore src/ArcaneCore.Realm/ArcaneCore.Realm.csproj --locked-mode \
+ && dotnet restore tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj --locked-mode \
+ && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode
 RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world \
  && dotnet publish src/ArcaneCore.Realm/ArcaneCore.Realm.csproj -c $CONFIGURATION --no-restore -o /out/realm \
  && dotnet publish tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj -c $CONFIGURATION --no-restore -o /out/tools \
