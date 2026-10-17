@@ -770,6 +770,7 @@ internal sealed class PlayerbotRisk
         uint phase = _scanned ? 0u : (uint)((player.Guid.Low * 2654435761UL) % HazardScanMs);
         _scanned = true;
         _nextScanMs = unchecked(now + HazardScanMs + phase);
+        _lairEpoch = _lairEpoch == uint.MaxValue ? 1u : _lairEpoch + 1u;
         int seconds = _options.Risk.DangerMemorySeconds;
         SpellStore? store = _session.Services.GetService<SpellFeature>()?.System.Store;
         bool strong = AvoidsStrongCreatures && player.IsAlive;
@@ -781,6 +782,7 @@ internal sealed class PlayerbotRisk
         {
             PlayerbotThreat threat = _threats[index];
             if (threat.Source is not { } creature) continue;
+            MarkLairSeen(creature.Guid);
             CreatureSpellThreat spells = PlayerbotCreatureSpells.Of(creature, store);
             if (spells.IsLethalTo(player.MaxHealth))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
@@ -798,6 +800,10 @@ internal sealed class PlayerbotRisk
 
         _threats.Clear();
         if (strong) Hazards.EndStrongScan();
+        // A remembered creature this look did not see is back at its lair (it evades home, and a stealthed one hides there). The hazard
+        // was following the last place the bot saw it; leaving it there opened the lair, and the bot died to the creature its memory
+        // already held (bot-risk/died-in-known-hazard) or walked back into the same fight (bot-risk/retreat-loop).
+        RestoreUnseenLairs(player, now);
     }
 
     private readonly List<PlayerbotThreat> _threats = [];
@@ -1174,25 +1180,90 @@ internal sealed class PlayerbotRisk
     /// <summary>
     /// The creatures just remembered (fled from or died to) are kept out of at once, each at its home with its aggro reach plus
     /// <see cref="PlayerbotHazards.FledMarginYards"/> (kind "fled"), as the hazard scan keeps a remembered creature it sees. The scan
-    /// follows the creature from then on while it sees it; one it never sees again is still avoided where it went back to. A stealthed
-    /// ambusher is the case: it evades home and hides again, out of the bot's sight and, from more than
-    /// <see cref="PlayerbotRecovery.StealthedHazardYards"/>, of the scan's stealthed pass too, so its hazard was never written and a later
-    /// walk went straight through its lair (live 2026-10-16: Nightsaber Stalkers, 2043, killed bots that already remembered them).
-    /// A creature that loses its target evades home (vmangos <c>CreatureAI::EnterEvadeMode</c>, as <see cref="PlayerbotRetreat"/> notes).
+    /// follows the creature from then on while it sees it; one it never sees again is put back at its home
+    /// (<see cref="RestoreUnseenLairs"/>), where it evades to. A stealthed ambusher is the case: it evades home and hides again, out of
+    /// the bot's sight and, from more than <see cref="PlayerbotRecovery.StealthedHazardYards"/>, of the scan's stealthed pass too. A look
+    /// that had followed it out of the lair used to leave the hazard there, so a later walk went straight through the spawn (live
+    /// 2026-10-16: Nightsaber Stalkers, 2043, killed bots that already remembered them). A creature that loses its target evades home
+    /// (vmangos <c>CreatureAI::EnterEvadeMode</c>, as <see cref="PlayerbotRetreat"/> notes).
     /// </summary>
     private void RememberLairs(Player player, IEnumerable<(ObjectGuid Guid, uint Entry)> creatures)
     {
         if (player.Map is not { } map) return;
-        CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
         uint now = _session.World.NowMs;
         foreach ((ObjectGuid guid, uint _) in creatures)
         {
             if (map.FindObject(guid) is not Creature creature || !ReferenceEquals(creature.Map, map)) continue;
-            float reach = (system?.GetAttackDistance(creature, player) ?? CreatureTemplate.DefaultDetectionRange)
-                + creature.BoundingRadius + player.BoundingRadius;
-            Hazards.Add(player.MapId, new Vector3(creature.Home.X, creature.Home.Y, creature.Home.Z), reach + PlayerbotHazards.FledMarginYards,
-                now, _options.Risk.DangerMemorySeconds, "fled", creature.Guid);
+            NoteLair(guid);
+            AddFledLair(player, creature, now);
         }
+    }
+
+    /// <summary>A "fled" hazard on <paramref name="creature"/>'s home (where it evades to), its aggro reach plus the fled margin.</summary>
+    private void AddFledLair(Player player, Creature creature, uint now)
+    {
+        CreatureMapSystem? system = player.Map?.FindUpdater<CreatureMapSystem>();
+        float reach = (system?.GetAttackDistance(creature, player) ?? CreatureTemplate.DefaultDetectionRange)
+            + creature.BoundingRadius + player.BoundingRadius;
+        Hazards.Add(player.MapId, new Vector3(creature.Home.X, creature.Home.Y, creature.Home.Z), reach + PlayerbotHazards.FledMarginYards,
+            now, _options.Risk.DangerMemorySeconds, "fled", creature.Guid);
+    }
+
+    private struct LairMark
+    {
+        internal ObjectGuid Guid;
+        internal uint Seen;
+    }
+
+    /// <summary>Lairs written by <see cref="RememberLairs"/> (bounded like the danger memory). <see cref="LairMark.Seen"/> is the scan epoch.</summary>
+    private readonly LairMark[] _lairs = new LairMark[32];
+
+    private int _lairCount;
+    private uint _lairEpoch;
+
+    private void NoteLair(ObjectGuid guid)
+    {
+        for (int i = 0; i < _lairCount; i++)
+            if (_lairs[i].Guid == guid) return;
+        if (_lairCount >= _lairs.Length)
+        {
+            Array.Copy(_lairs, 1, _lairs, 0, _lairCount - 1);
+            _lairCount--;
+        }
+
+        _lairs[_lairCount++] = new LairMark { Guid = guid };
+    }
+
+    private void MarkLairSeen(ObjectGuid guid)
+    {
+        for (int i = 0; i < _lairCount; i++)
+            if (_lairs[i].Guid == guid)
+            {
+                _lairs[i].Seen = _lairEpoch;
+                return;
+            }
+    }
+
+    /// <summary>
+    /// Remembered creatures this scan did not see: the hazard goes back to the lair. One the scan did see keeps the hazard just written
+    /// where it stands. A guid the danger memory has dropped leaves the list (no allocation; the scan runs for every bot).
+    /// </summary>
+    private void RestoreUnseenLairs(Player player, uint now)
+    {
+        if (_lairCount == 0 || player.Map is not { } map) return;
+        int kept = 0;
+        for (int i = 0; i < _lairCount; i++)
+        {
+            LairMark lair = _lairs[i];
+            if (!Memory.IsRemembered(lair.Guid, now)) continue;
+            if (kept != i) _lairs[kept] = lair;
+            kept++;
+            if (lair.Seen == _lairEpoch) continue;
+            if (map.FindObject(lair.Guid) is not Creature creature || !creature.IsAlive || !ReferenceEquals(creature.Map, map)) continue;
+            AddFledLair(player, creature, now);
+        }
+
+        _lairCount = kept;
     }
 
     /// <summary>

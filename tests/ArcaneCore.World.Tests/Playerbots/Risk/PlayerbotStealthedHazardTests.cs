@@ -240,6 +240,58 @@ public sealed class PlayerbotStealthedHazardTests(ITestOutputHelper output)
         });
     }
 
+    /// <summary>
+    /// A remembered ambusher the bot can see is a hazard where it stands (the scan follows it). Once it evades home and hides again, out of
+    /// sight and beyond the stealthed pass, that hazard has to be the lair: the scan used to leave it at the last place the bot saw the
+    /// creature, and the next walk went through the spawn (live bot-risk/died-in-known-hazard, Nightsaber Stalkers 2043; the same hole for
+    /// any remembered creature that leashes home out of sight, bot-risk/retreat-loop when the bot then runs the fight again).
+    /// </summary>
+    [Fact]
+    public async Task ARememberedStalker_SeenAwayFromHome_IsAHazardAtItsLairOnceItHidesThere()
+    {
+        await using RiskTestWorld world = await StartLevelTwentyAsync();
+        Creature stalker = await world.OnWorldAsync(() => world.Spawn(Stalker, 0, 80));
+        await world.SeeAsync(stalker);
+        Vector3 home = await world.OnWorldAsync(() => new Vector3(stalker.Home.X, stalker.Home.Y, stalker.Home.Z));
+
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            stalker.Relocate(player.X, player.Y + 12, player.Z);
+            player.Map!.RefreshVisibility(stalker);
+            Assert.Contains(stalker.Guid, player.VisibleObjects);
+            world.Brain.Risk.OnDeath(player, [(stalker.Guid, stalker.Entry)]);
+            world.Brain.Risk.ScanHazards(player);
+            PlayerbotHazard followed = Assert.Single(world.Brain.Risk.Hazards.Active(player.MapId, world.Host.World.NowMs),
+                h => h.Creature == stalker.Guid && h.Kind == "fled");
+            Assert.True(Vector2.Distance(new(followed.At.X, followed.At.Y), new(stalker.X, stalker.Y)) < 1f,
+                $"the scan did not follow the stalker to {stalker.X:F1},{stalker.Y:F1} (hazard at {followed.At})");
+            Assert.Null(world.Brain.Risk.Hazards.FirstOnRoute(player.MapId,
+                [home with { X = home.X - 30 }, home with { X = home.X + 30 }], world.Host.World.NowMs));
+
+            stalker.Relocate(home.X, home.Y, home.Z);
+            Hide(world, stalker);
+            Assert.DoesNotContain(stalker.Guid, player.VisibleObjects);
+            Assert.True(Vector2.Distance(new(player.X, player.Y), new(home.X, home.Y)) > PlayerbotRecovery.StealthedHazardYards);
+            return true;
+        });
+
+        await world.Host.World.AdvanceClockAsync(3 * PlayerbotRisk.HazardScanMs);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            world.Brain.Risk.ScanHazards(player);
+            uint now = world.Host.World.NowMs;
+            PlayerbotHazard lair = Assert.Single(world.Brain.Risk.Hazards.Active(player.MapId, now),
+                h => h.Creature == stalker.Guid && h.Kind == "fled");
+            Assert.True(Vector2.Distance(new(lair.At.X, lair.At.Y), new(home.X, home.Y)) < 1f,
+                $"the hidden lair was left at the last place the bot saw the stalker ({lair.At}), not its home {home}");
+            Assert.NotNull(world.Brain.Risk.Hazards.FirstOnRoute(player.MapId,
+                [home with { X = home.X - 30 }, home with { X = home.X + 30 }], now));
+            return true;
+        });
+    }
+
     /// <summary>The scan with stealthed creatures in range allocates no more than the scan without them.</summary>
     [Fact]
     public async Task TheStealthedPass_AddsNoAllocationToTheScan()
