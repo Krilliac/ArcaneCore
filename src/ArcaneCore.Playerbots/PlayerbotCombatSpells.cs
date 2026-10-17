@@ -480,9 +480,19 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
             case RotationActionKind.UseItem when action.Item is { } item:
                 if (unchecked((int)(_itemBlockedUntil - session.World.NowMs)) > 0) return false;
+                Item? carried = player.Inventory.GetItem(item.Bag, item.Slot);
+                // A bandage is a channel with cast time 0, so CheckCast lets it start while the chase is still
+                // walking; Spell::update then cancels it once that heartbeat moves the caster (ChannelInterruptFlags
+                // include moving). vmangos DoCastSpell stops the mover first, as the out-of-combat bandage already
+                // does. An instant potion is still used on the move. A stop the server did not take retries next think.
+                if (carried is not null && ItemNeedsStillness(player, feature, carried)
+                    && player.Movement.HasFlag(MovementFlags.MaskMoving)
+                    && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
+                    return true;
+
                 _itemBlockedUntil = unchecked(session.World.NowMs + 2000);
-                return player.Inventory.GetItem(item.Bag, item.Slot) is { } used
-                    ? UseItemWatched(player, feature.System, used, PlayerbotNavigation.UseItemPayload(item.Bag, item.Slot))
+                return carried is not null
+                    ? UseItemWatched(player, feature.System, carried, PlayerbotNavigation.UseItemPayload(item.Bag, item.Slot))
                     : session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(item.Bag, item.Slot));
 
             case RotationActionKind.PetAttack:
@@ -499,6 +509,15 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     /// <summary>CMSG_PET_ACTION data: ACT_COMMAND (7) in the top byte, the command below (vmangos UNIT_ACTION_BUTTON_*).</summary>
     private const uint PetCommandFollow = (7u << 24) | 1u;
     private const uint PetCommandAttack = (7u << 24) | 2u;
+
+    /// <summary>A carried item use the bot must stand still for: a channel, or a cast time (vmangos DoCastSpell stops the mover).</summary>
+    private static bool ItemNeedsStillness(Player player, SpellFeature feature, Item item)
+    {
+        if (item.Template.Spells.Count == 0) return false;
+        ItemSpell use = item.Template.Spells[0];
+        if (use.SpellId == 0 || use.Trigger != 0 || feature.System.Store.Get(use.SpellId) is not { } spell) return false;
+        return spell.IsChanneled || spell.GetCastTime(player.Level) > 0;
+    }
 
     private bool PetAction(Player player, uint data, ObjectGuid target)
     {

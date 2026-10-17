@@ -1,10 +1,12 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -22,6 +24,9 @@ public sealed class PlayerbotConsumableRecoveryTests
     private const uint AmbiguousSpell = 992003;
     private const uint FoodItem = 992101;
     private const uint DrinkItem = 992102;
+    private const uint BandageSpellId = 992010;
+    private const uint BandageItem = 992110;
+    private const uint StanceSpellId = 992011;
 
     [Fact]
     public async Task FoodRestStopsMovementAndStandingCancelsFoodBeforeRouteStarts()
@@ -230,6 +235,72 @@ public sealed class PlayerbotConsumableRecoveryTests
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// A bandage is a channel (cast time 0) whose channel-interrupt flags include moving. Combat use used to start it
+    /// while the chase was still walking, so the next heartbeat cancelled it before the cast-in-progress check could
+    /// wait it out. The bot stops and channels in the same think (vmangos DoCastSpell stops the mover first).
+    /// </summary>
+    [Fact]
+    public async Task MovingCombatBandage_StopsAndChannelsInTheSameThink()
+    {
+        await using WorldTestHost host = Start(out _, BandageTemplate(BandageItem, BandageSpellId));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            float x = 0, y = 0;
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+                feature.System.Store = new SpellStore(feature.System.Store.All.Append(BandageChannel()).Append(BattleStance()), [], []);
+                Assert.True(feature.Spellbook.LearnSpell(player, StanceSpellId));
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(BandageItem, 5, out _));
+                player.MaxHealth = 100;
+                player.Health = 30; // below 40 (bandage), at or above 25 (not the healing potion)
+                player.Map!.Combat.SetInCombatState(player, 60_000);
+                var target = new Creature(77, new CreatureTemplate
+                {
+                    Entry = 900020, Name = "spell target", CreatureType = 1, MinLevelHealth = 20, MaxLevelHealth = 20,
+                }, null, new CreatureContent([], [], [], [], []), new Random(1));
+                target.Relocate(player.X + 40, player.Y, player.Z, 0, host.World.NowMs);
+                player.Map.AddObject(target);
+
+                var options = new PlayerbotOptions { MaxPathPoints = 8, MaxRouteYards = 400 };
+                Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X + 100, player.Y, player.Z), options, out PlayerbotRoute? route));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                Assert.True(PlayerbotNavigation.TryAdvance(session, route!, options, 500, host.World.NowMs));
+                Assert.True(player.Movement.HasFlag(MovementFlags.MaskMoving));
+
+                var helper = new PlayerbotCombatSpells(session);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                Assert.True(helper.Update(player, target, 0));
+                Assert.False(player.Movement.HasFlag(MovementFlags.MaskMoving));
+                Assert.False(PlayerbotMotion.IsActive(player));
+                SpellCast cast = feature.System.GetState(player.Guid)!.CurrentCast!;
+                Assert.Equal(SpellCastState.Casting, cast.State);
+                Assert.Equal(BandageSpellId, cast.Spell.Id);
+                x = player.X;
+                y = player.Y;
+                return true;
+            });
+
+            await host.World.AdvanceClockAsync(700);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellCast? cast = host.WorldServices.GetRequiredService<SpellFeature>().System.GetState(player.Guid)?.CurrentCast;
+                Assert.NotNull(cast);
+                Assert.Equal(SpellCastState.Casting, cast.State);
+                Assert.Equal(BandageSpellId, cast.Spell.Id);
+                Assert.False(player.Movement.HasFlag(MovementFlags.MaskMoving));
+                Assert.True(Math.Abs(player.X - x) <= 0.5f && Math.Abs(player.Y - y) <= 0.5f);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     private static WorldTestHost Start(out ItemTestContent items, params ItemTemplate[] templates)
     {
         items = new ItemTestContent();
@@ -245,6 +316,12 @@ public sealed class PlayerbotConsumableRecoveryTests
             Spells = [new ItemSpell(spell, 0, -1, 0, 0, 0, 0)] };
 
     private static ItemTemplate DrinkTemplate(uint entry, uint spell) => FoodTemplate(entry, spell) with { Name = "drink" };
+
+    private static ItemTemplate BandageTemplate(uint entry, uint spell) => new()
+    {
+        Entry = entry, Name = "linen bandage", Class = 0, SubClass = 7, InventoryType = 0, Stackable = 20,
+        Spells = [new ItemSpell(spell, 0, -1, 0, -1, 0, -1)],
+    };
 
     private static SpellInfo Food(uint id) => Aura(id, AuraType.ModRegen);
     private static SpellInfo Drink(uint id) => Aura(id, AuraType.ModPowerRegen, (int)PowerType.Mana);
@@ -263,6 +340,30 @@ public sealed class PlayerbotConsumableRecoveryTests
         AuraInterruptFlags = SpellAuraInterruptFlags.StandingCancels,
         Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = type,
             BasePoints = 4, BaseDice = 1, DieSides = 1, MiscValue = misc, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+    };
+
+    /// <summary>Spell 746's shape: a self channel of periodic heal, cast time 0, channel interrupt flags include moving (0x3C0E).</summary>
+    private static SpellInfo BandageChannel() => new()
+    {
+        Id = BandageSpellId, Name = "Linen Bandage", Mechanic = 16,
+        AttributesEx = SpellAttributesEx.IsChanneled | SpellAttributesEx.IsSelfChanneled,
+        Duration = new SpellDuration(8000, 0, 8000),
+        ChannelInterruptFlags = (SpellAuraInterruptFlags)0x3C0E,
+        AuraInterruptFlags = SpellAuraInterruptFlags.Damage,
+        Effects =
+        [
+            new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.PeriodicHeal, BasePoints = 10,
+                Amplitude = 1000, TargetA = SpellImplicitTarget.UnitFriend },
+            new(), new(),
+        ],
+    };
+
+    private static SpellInfo BattleStance() => new()
+    {
+        Id = StanceSpellId, Name = "Battle Stance", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+        Duration = new SpellDuration(-1, 0, -1),
+        Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModShapeshift, MiscValue = 17,
+            TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
     };
 
     private static void InstallSpells(WorldTestHost host, params SpellInfo[] spells)
