@@ -24,10 +24,12 @@ namespace ArcaneCore.World.Playerbots;
 /// <item><term>under-map</term><description>the terrain surface lies more than <see cref="UnderMapYards"/> above the bot and no
 /// model explains it (inside a WMO, a model floor under it or a model surface just above it: caves, cellars and cities; unloaded model tiles never convict); Error beyond <see cref="FarUnderMapYards"/>. Same sample.</description></item>
 /// <item><term>wall-crossed</term><description>a leg of a navigation-mesh route the bot walked since the last heartbeat is blocked by a
-/// static model (line of sight at chest height). Warning. One to <see cref="MaxCrossingSegments"/> segment queries per
-/// sample, only for mesh legs (a stepped leg is refused by the motion itself).</description></item>
-/// <item><term>door-crossed</term><description>the same leg is clear of walls but blocked by an M2 doodad (a door, a gate, a fence).
-/// Info.</description></item>
+/// static model (line of sight at chest height), unless the bot's walkable mesh walks it on the leg's own storey: the mesh walk never
+/// leaves the mesh and starts and ends within <see cref="MeshStoreyYards"/> of the leg's ends (<see cref="StaysOnMesh"/>). Warning. One
+/// to <see cref="MaxCrossingSegments"/> segment queries per sample (and two mesh walks per blocked one), only for mesh legs (a stepped
+/// leg is refused by the motion itself).</description></item>
+/// <item><term>door-crossed</term><description>the same leg is clear of walls but blocked by an M2 doodad (a door, a gate, a fence),
+/// with the same exemption for a leg the mesh walks on its storey (the mesh is built from the same models). Info.</description></item>
 /// <item><term>position-jump</term><description>the bot's stored position lies more than <see cref="JumpYards"/> from the last
 /// position the motion reported while the route is still being walked: something else moved it, and the next heartbeat pulls it
 /// back. Warning. Two float compares per tick.</description></item>
@@ -85,6 +87,12 @@ internal static class PlayerbotMotionAnomalies
 
     /// <summary>The most segments one sample tests.</summary>
     internal const int MaxCrossingSegments = 6;
+
+    /// <summary>
+    /// How far (up or down) the mesh surface a leg's walk starts and ends on may lie from the leg's own ends for the walk to count as
+    /// the leg's (<see cref="StaysOnMesh"/>): a step or a slab, not another storey (stacked storeys stand a bot's height and a floor apart).
+    /// </summary>
+    internal const float MeshStoreyYards = 2f;
 
     internal enum Code
     {
@@ -363,8 +371,10 @@ internal static class PlayerbotMotionAnomalies
                 tested++;
                 Vector3 a = previous with { Z = previous.Z + PlayerbotMoveCheck.ChestYards };
                 Vector3 b = end with { Z = end.Z + PlayerbotMoveCheck.ChestYards };
-                // ignoreM2 false is the stricter query: a clear answer clears both, so a clean leg costs one query.
-                if (!los.IsInLineOfSight(map.MapId, a, b, ignoreM2: false))
+                // ignoreM2 false is the stricter query: a clear answer clears both, so a clean leg costs one query. A blocked line over a
+                // leg that stays on the walkable mesh is the line's fault, not the walk's: the chest-height line clips a step's edge, a
+                // stair's slab, a lintel or a ramp the mesh (built from the same models) walks over or under.
+                if (!los.IsInLineOfSight(map.MapId, a, b, ignoreM2: false) && !StaysOnMesh(map, previous, end))
                 {
                     bool wall = !los.IsInLineOfSight(map.MapId, a, b, ignoreM2: true);
                     ReportCrossing(player, watch, wall, previous, end, now);
@@ -374,6 +384,26 @@ internal static class PlayerbotMotionAnomalies
 
             previous = end;
         }
+    }
+
+    /// <summary>
+    /// Whether the segment from <paramref name="from"/> to <paramref name="to"/> is a walk over the bot's walkable mesh
+    /// (<see cref="PlayerbotMoveCheck.MeshOptions"/>: steep slopes excluded) on the leg's own storey: the walk
+    /// (<see cref="IMeshPointQuery.Raycast"/>) never leaves the polygons the filter accepts, the polygon it starts from has its surface
+    /// within <see cref="MeshStoreyYards"/> of <paramref name="from"/>, and the surface it ends on lies within <see cref="MeshStoreyYards"/>
+    /// of <paramref name="to"/>. The walk is horizontal (its start polygon is the nearest within 5 yd up or down, its end the surface at
+    /// the end's x/y on whatever storey it reached), so without the two height checks a leg from one storey to another (through a floor,
+    /// a ramp or a wall into a stacked level: Ironforge, Undercity) would pass for one that stays on the mesh. False without a mesh, or
+    /// with the start off it: then the line of sight alone judges the leg. Two mesh walks (a zero-length one for the start polygon).
+    /// </summary>
+    internal static bool StaysOnMesh(Map map, Vector3 from, Vector3 to)
+    {
+        if (map.Collision.MeshPoints is not { } mesh) return false;
+        MeshRaycastResult walk = mesh.Raycast(map.MapId, from, to, PlayerbotMoveCheck.MeshOptions);
+        if (walk is not { Available: true, Hit: false } || !(MathF.Abs(walk.Point.Z - to.Z) <= MeshStoreyYards)) return false;
+        // A zero-length walk answers the start polygon's surface under the start.
+        MeshRaycastResult start = mesh.Raycast(map.MapId, from, from, PlayerbotMoveCheck.MeshOptions);
+        return start.Available && MathF.Abs(start.Point.Z - from.Z) <= MeshStoreyYards;
     }
 
     private static void ReportCrossing(Player player, MotionWatch watch, bool wall, Vector3 from, Vector3 to, uint now)

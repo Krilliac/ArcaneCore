@@ -71,6 +71,90 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         Assert.True(worstUnder <= 1.25f, $"the bot walked {worstUnder:F2} yd under the tunnel floor");
     }
 
+    /// <summary>
+    /// Over open, rolling ground the bot's height is the ground's at every heartbeat, at the motion's own cadence and when the world's
+    /// ticks come seconds apart (the live server under load: think-starved bots, 2-15 s GC ticks). A mesh route's legs are straight
+    /// lines between string-pulled corners (vmangos smooths its paths every 4 yd along the surface instead, PathFinder::findSmoothPath),
+    /// so a leg's own height is a chord through the hill or over the hollow; before, the walk kept that chord wherever the ground lay more
+    /// than 4 yd from it (live: 8-30 yd under the terrain, 6-10 yd above it, all over the open world). The walks run past live reports:
+    /// south of Kharanos (Biskouth 11.5 yd under at -5577.8,-617.3; 10.2 yd under at -5604.4,-636.6) and in the northern Barrens (12.1 yd
+    /// under at 493.0,-3452.7; 8.8 yd above at 519.3,-3472.5).
+    /// </summary>
+    [RealTerrainBotTheory]
+    [InlineData(0u, -5540f, -580f, -5640f, -690f, 50u)]
+    [InlineData(0u, -5540f, -580f, -5640f, -690f, 2000u)]
+    [InlineData(1u, 430f, -3400f, 580f, -3530f, 50u)]
+    [InlineData(1u, 430f, -3400f, 580f, -3530f, 2000u)]
+    public async Task OverRollingGround_TheBotKeepsToTheGround_AtAnyTickCadence(uint map, float fromX, float fromY, float toX, float toY, uint tickMs)
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(new Vector3(fromX, fromY, 1000f), map);
+        Vector3 start = await terrain.Host.OnWorldAsync(() => OnGround(terrain.Player.Map!, fromX, fromY));
+        await terrain.PlaceAsync(new Vector3(toX, toY, 1000f), map);
+        Vector3 goal = await terrain.Host.OnWorldAsync(() => OnGround(terrain.Player.Map!, toX, toY));
+        await terrain.PlaceAsync(start, map);
+        var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 400 };
+        PlayerbotRoute? route = null;
+        for (int attempt = 0; attempt < 50 && route is null; attempt++)
+        {
+            route = await terrain.Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(terrain.Player, goal, options, out PlayerbotRoute? r) ? r : null);
+            if (route is null)
+            {
+                await Task.Delay(20);
+                await terrain.Host.World.AdvanceClockAsync(100);
+            }
+        }
+
+        Assert.NotNull(route);
+        output.WriteLine($"tick {tickMs} ms: route {route!.Points.Count} points, navigated {route.Navigated}: {string.Join(" ", route.Points)}");
+        // This bot's own reports in this world: other tests' bots share its name and guid (PlayerbotAnomalies.CaptureFor).
+        using AnomalyCapture capture = await terrain.Host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(terrain.Player));
+        float worst = 0f;
+        Vector3 worstAt = default;
+        int samples = 0;
+        for (int think = 0; think < 400; think++)
+        {
+            bool going = await terrain.Host.OnWorldAsync(() =>
+                PlayerbotNavigation.TryAdvance(terrain.Session, route, options, 500, terrain.Host.World.NowMs));
+            for (uint waited = 0; waited < 500; waited += Math.Min(tickMs, 500u))
+            {
+                await terrain.Host.World.AdvanceClockAsync(tickMs);
+                (float gap, Vector3 at) = await terrain.Host.OnWorldAsync(() =>
+                {
+                    PlayerbotMotion.Pump(terrain.Session, terrain.Player, terrain.Host.World.NowMs);
+                    var here = new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z);
+                    return (GroundGap(terrain.Player.Map!, here), here);
+                });
+                if (gap > worst) (worst, worstAt) = (gap, at);
+                samples++;
+            }
+
+            if (!going) break;
+        }
+
+        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        output.WriteLine($"{samples} samples; worst {worst:F2} yd off the open ground at {worstAt}; ended at {end} (goal {goal})");
+        AnomalyNotice[] ground = [.. capture.Notices.Where(n => n.Key is "bot-motion/under-map" or "bot-motion/airwalk")];
+        foreach (AnomalyNotice notice in ground) output.WriteLine($"{notice.Key}: {notice.Detail}");
+        Assert.True(Vector2.Distance(new(end.X, end.Y), new(goal.X, goal.Y)) < 5f, $"the bot did not reach the goal (ended at {end})");
+        Assert.True(worst <= 1.5f, $"the bot walked {worst:F2} yd off the ground (at {worstAt})");
+        Assert.Empty(ground);
+    }
+
+    /// <summary>The ground at (<paramref name="x"/>, <paramref name="y"/>): the mesh surface over the terrain there.</summary>
+    private static Vector3 OnGround(Map map, float x, float y)
+        => OnMesh(map, new Vector3(x, y, map.Terrain.GetHeight(x, y, 1000f)));
+
+    /// <summary>How far the point is off the terrain, where the terrain is the ground (outdoors, valid height); 0 elsewhere.</summary>
+    private static float GroundGap(Map map, Vector3 at)
+    {
+        float ground = map.Terrain.GetHeight(at.X, at.Y, at.Z + 100f);
+        if (!(ground > -100000f) || !map.Collision.IsOutdoors(at.X, at.Y, at.Z + 1f)) return 0f;
+        float floor = map.Collision.GetHeight(at.X, at.Y, at.Z);
+        if (floor > ground + 0.5f && MathF.Abs(floor - at.Z) < MathF.Abs(ground - at.Z)) return 0f; // on a model (a bridge, a rock)
+        return MathF.Abs(at.Z - ground);
+    }
+
     /// <summary>The navigation-mesh surface straight under (or over) <paramref name="near"/>.</summary>
     private static Vector3 OnMesh(Map map, Vector3 near)
     {

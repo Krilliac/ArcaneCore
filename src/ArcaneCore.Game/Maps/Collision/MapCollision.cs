@@ -279,6 +279,35 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     }
 
     /// <summary>
+    /// The navigation-mesh surface at (<paramref name="to"/>.X, <paramref name="to"/>.Y) reached by walking the mesh from
+    /// <paramref name="from"/> (<see cref="IMeshPointQuery.Raycast"/>: horizontal, polygon to adjacent polygon): the storey continuous
+    /// with the one under <paramref name="from"/>, whatever lies above or below it. vmangos follows the surface similarly when it builds
+    /// a unit's path (<c>PathFinder::findSmoothPath</c>: <c>moveAlongSurface</c> and <c>getPolyHeight</c> every 4 yards), where a
+    /// straight path's corners alone give only chords through hills and under ramps; unlike <c>moveAlongSurface</c>, which slides along
+    /// a wall, this walk stops at one (false), and the caller falls back to its own estimate. False when the map has no mesh, the tile
+    /// under <paramref name="from"/> is not loaded, <paramref name="from"/> is not on (within 3 yards across, 5 up or down of) a polygon
+    /// <paramref name="options"/> accepts, or the segment leaves the mesh (or the polygons the filter accepts) before it ends.
+    /// </summary>
+    public bool TryWalkMeshSurface(Vector3 from, Vector3 to, out float height, PathOptions? options = null)
+    {
+        height = 0f;
+        if (MeshPoints is not { } mesh || !float.IsFinite(from.X) || !float.IsFinite(from.Y) || !float.IsFinite(from.Z)
+            || !float.IsFinite(to.X) || !float.IsFinite(to.Y) || !float.IsFinite(to.Z))
+        {
+            return false;
+        }
+
+        MeshRaycastResult walk = mesh.Raycast(Map.MapId, from, to, options);
+        if (!walk.Available || walk.Hit || !float.IsFinite(walk.Point.Z))
+        {
+            return false;
+        }
+
+        height = walk.Point.Z;
+        return true;
+    }
+
+    /// <summary>
     /// vmangos <c>TerrainInfo::IsOutdoors</c> without WMOAreaTable.dbc: outside every WMO group,
     /// or inside a group flagged exterior.
     /// </summary>
