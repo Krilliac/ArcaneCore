@@ -245,6 +245,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Recent decision, route, and loop transitions for QA diagnostics.</summary>
     internal PlayerbotTraceLog Trace => _trace;
 
+    /// <summary>Thinks that reached the explore's own wander plan, past the town idle (tests, inspection).</summary>
+    internal int ExploreWanderPlans { get; private set; }
+
     /// <summary>The last <see cref="PlayerbotThinkProbe"/> phase seen while this brain was updating.</summary>
     internal string LastThinkPhase { get; private set; } = "start";
 
@@ -3019,6 +3022,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
         System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
         PlayerbotThinkProbe.Phase("explore wander plan");
+        ExploreWanderPlans++;
         if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
         {
             AbandonRoute();

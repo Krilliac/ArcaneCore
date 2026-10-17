@@ -210,6 +210,38 @@ public sealed class PlayerbotStallTests
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// A Linger past <see cref="PlayerbotTownIdle.HoldYards"/> (the walk to the inn given up) falls through to the explore: with no terrain every
+    /// route is refused, so the explore's own wander plan is reached. Before, the bot stopped at the Linger and the explore was never
+    /// reached (no wander plan, ever).
+    /// </summary>
+    [Fact]
+    public async Task ABotFarFromItsInn_WithTheWalkGivenUp_ExploresInsteadOfStanding()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 600 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + 450f, player.Y, player.Z), 2_000f, "town:stormwind")
+                { Stay = TownStay.Capital };
+                return true;
+            });
+            // 20 s of a walk that gets no closer, then the give-up: Linger far from the inn for the next 180 s.
+            for (int think = 0; think < 600; think++)
+            {
+                await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return true; });
+                await host.World.AdvanceClockAsync(100);
+            }
+
+            Assert.True(await host.OnWorldAsync(() => brain.ExploreWanderPlans) > 0, "the far Linger never reached the explore wander plan");
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
     private sealed class ManualClock : IWorldFeature
     {
         public void Attach(WorldRuntime world) => world.UseManualClock();
