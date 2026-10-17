@@ -41,31 +41,42 @@ internal sealed class PlayerbotThinkBudget
 
     /// <summary>
     /// <see cref="Budget(double, double, double, double, double)"/> with the floor raised to what the rotation needs to walk
-    /// <paramref name="bots"/> bots within the starvation bound (<see cref="CoverageMs"/>, from the measured cost of a main-lane visit).
+    /// <paramref name="bots"/> bots within the starvation bound (<see cref="CoverageMs"/>: the measured cost of a main-lane visit and the
+    /// measured length of a tick, plus the time the combat lane uses).
     /// </summary>
-    internal double Budget(double tickIntervalMs, double spentMs, double floorMs, double ceilingMs, double share, int bots, double boundMs, double combatShare)
-        => Compute(tickIntervalMs, _nonBotMs, spentMs, floorMs, ceilingMs, share, CoverageMs(bots, tickIntervalMs, boundMs, _visitMs, combatShare));
+    internal double Budget(double tickIntervalMs, double spentMs, double floorMs, double ceilingMs, double share, int bots, double boundMs)
+        => Compute(tickIntervalMs, _nonBotMs, spentMs, floorMs, ceilingMs, share,
+            CoverageMs(bots, RealTickMs(tickIntervalMs), boundMs, _visitMs, _priorityMs));
 
     /// <summary>Weight of a new main-lane visit in the smoothed visit cost.</summary>
     internal const double VisitAlpha = 0.02;
+
+    /// <summary>The most one visit counts for in the smoothed visit cost (ms): a search that hit its node cap (30 to 50 ms, or seconds on a bad tile) is not what the next hundred visits will cost.</summary>
+    internal const double MaxVisitSampleMs = 8;
+
+    /// <summary>The longest tick (ms) the smoothed real tick length may reach: a stall longer than that is not the tick rate.</summary>
+    internal const double MaxRealTickMs = 1000;
 
     /// <summary>The fraction of the starvation bound the rotation should need for one full walk over the bots, the rest being headroom for tick-to-tick variation and the slow thinks.</summary>
     internal const double CoverageFraction = 0.5;
 
     private double _visitMs;
     private bool _visitPrimed;
+    private double _priorityMs;
+    private double _realTickMs;
+    private bool _tickPrimed;
 
     /// <summary>The smoothed wall time (ms) of one main-lane visit (tests, metrics).</summary>
     internal double VisitMs => _visitMs;
 
-    /// <summary>
-    /// One main-lane visit took <paramref name="ms"/>. A single visit counts for at most <see cref="PlayerbotThinkRotation.TickBudgetMs"/>:
-    /// a search that hit its node cap (30 to 50 ms, or seconds on a bad tile) is not what the next hundred visits will cost.
-    /// </summary>
+    /// <summary>The smoothed wall time (ms) the combat lane used per tick (tests, metrics).</summary>
+    internal double PriorityMs => _priorityMs;
+
+    /// <summary>One main-lane visit took <paramref name="ms"/>. A single visit counts for at most <see cref="MaxVisitSampleMs"/>.</summary>
     internal void ObserveVisit(double ms)
     {
         if (!double.IsFinite(ms)) return;
-        ms = Math.Clamp(ms, 0, PlayerbotThinkRotation.TickBudgetMs);
+        ms = Math.Clamp(ms, 0, MaxVisitSampleMs);
         if (!_visitPrimed)
         {
             _visitMs = ms;
@@ -76,19 +87,50 @@ internal sealed class PlayerbotThinkBudget
         _visitMs += VisitAlpha * (ms - _visitMs);
     }
 
+    /// <summary>One tick in which the combat lane used <paramref name="ms"/> of think time (0 when it had no due bot), smoothed.</summary>
+    internal void ObservePriorityTick(double ms)
+    {
+        if (!double.IsFinite(ms)) return;
+        _priorityMs += SmoothingAlpha * (Math.Max(0, ms) - _priorityMs);
+    }
+
+    /// <summary>One tick came <paramref name="intervalMs"/> of wall time after the one before (the world's elapsed time handed to the feature), smoothed.</summary>
+    internal void ObserveTickInterval(double intervalMs)
+    {
+        if (!double.IsFinite(intervalMs) || intervalMs <= 0) return;
+        intervalMs = Math.Min(intervalMs, MaxRealTickMs);
+        if (!_tickPrimed)
+        {
+            _realTickMs = intervalMs;
+            _tickPrimed = true;
+            return;
+        }
+
+        _realTickMs += SmoothingAlpha * (intervalMs - _realTickMs);
+    }
+
+    /// <summary>
+    /// The tick length (ms) the starvation bound is walked in: the smoothed real one, never under the configured <paramref name="nominalMs"/>
+    /// (a tick that came early does not shorten the bound's wall time) and never over <see cref="MaxRealTickMs"/>; the nominal one before the first sample.
+    /// The bound is wall-clock time, and live ticks run 105 to 140 ms on slow stretches, so a floor sized for 50 ms ticks walks the bots too slowly there.
+    /// </summary>
+    internal double RealTickMs(double nominalMs)
+        => _tickPrimed ? Math.Clamp(_realTickMs, nominalMs, Math.Max(nominalMs, MaxRealTickMs)) : nominalMs;
+
     /// <summary>
     /// The think time per tick (ms) the rotation needs to walk every one of <paramref name="bots"/> bots within <see cref="CoverageFraction"/> of
-    /// <paramref name="boundMs"/> (0 = off, nothing needed). A tick of <paramref name="tickIntervalMs"/> walks <c>budget / visitMs</c> bots, so the
-    /// walk takes <c>bots * visitMs / budget</c> ticks; solving for a walk of <c>CoverageFraction * boundMs / tickIntervalMs</c> ticks gives
-    /// <c>bots * tickIntervalMs * visitMs / (CoverageFraction * boundMs)</c>, divided by what the combat lane leaves the main lane at its least
-    /// (1 - share * <see cref="PlayerbotThinkStarvation.MinPriorityScale"/>). 1000 bots, 50 ms ticks, a 10 s bound and 1.3 ms a visit: about 15 ms,
-    /// where the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Pure.
+    /// <paramref name="boundMs"/> (0 = off, nothing needed): the main lane's <c>bots * tickMs * visitMs / (CoverageFraction * boundMs)</c>
+    /// (a tick walks <c>budget / visitMs</c> bots, so a walk takes <c>bots * visitMs / budget</c> ticks, and the walk must fit in
+    /// <c>CoverageFraction * boundMs / tickMs</c> of them) plus <paramref name="priorityMs"/>, the time the combat lane takes of the budget first.
+    /// The combat lane is measured rather than guessed from its share, so the floor does not depend on the starvation feedback
+    /// (<see cref="PlayerbotThinkStarvation.PriorityScale"/>) to give time back. 1000 bots, 50 ms ticks, a 10 s bound, 1.6 ms a visit: 16 ms plus the
+    /// combat lane; the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Twice as long a tick needs twice the budget:
+    /// the bots then take up to 30 ms of every tick, more than half of a 50 ms one. Pure.
     /// </summary>
-    internal static double CoverageMs(int bots, double tickIntervalMs, double boundMs, double visitMs, double combatShare)
+    internal static double CoverageMs(int bots, double tickMs, double boundMs, double visitMs, double priorityMs = 0)
     {
-        if (bots <= 0 || !(boundMs > 0) || !(tickIntervalMs > 0) || !(visitMs > 0)) return 0;
-        double mainLeft = 1 - Math.Clamp(double.IsFinite(combatShare) ? combatShare : 0, 0, 0.9) * PlayerbotThinkStarvation.MinPriorityScale;
-        double need = bots * tickIntervalMs * visitMs / (CoverageFraction * boundMs) / mainLeft;
+        if (bots <= 0 || !(boundMs > 0) || !(tickMs > 0) || !(visitMs > 0)) return 0;
+        double need = bots * tickMs * visitMs / (CoverageFraction * boundMs) + (double.IsFinite(priorityMs) ? Math.Max(0, priorityMs) : 0);
         return double.IsFinite(need) ? need : 0;
     }
 

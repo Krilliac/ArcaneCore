@@ -59,7 +59,7 @@ public sealed class PlayerbotOptions
     /// <summary>
     /// The least wall time (ms, 1..200) a world tick spends on the bots' thinks, however loaded the tick is: the guarantee that a busy
     /// server still thinks (<c>PlayerbotThinkBudget</c>). At least one bot always thinks per tick. Equal to
-    /// <see cref="ThinkBudgetMaxMs"/> it is a fixed budget. Raised, up to <see cref="ThinkBudgetMaxMs"/>, to what walking every bot within <see cref="ThinkStarvedGapMs"/> takes at the measured cost of a think (<c>PlayerbotThinkBudget.CoverageMs</c>): 8 ms covers about 500 bots, 1000 bots need about 15 ms.
+    /// <see cref="ThinkBudgetMaxMs"/> it is a fixed budget. Raised, up to <see cref="ThinkBudgetMaxMs"/>, to what walking every bot within <see cref="ThinkStarvedGapMs"/> takes at the measured cost of a think (<c>PlayerbotThinkBudget.CoverageMs</c>): 8 ms covers about 400 bots (1.3 ms a visit, 50 ms ticks, 3 ms of fights), 1000 bots need about 16 ms, and twice as long a real tick twice that, up to the ceiling: the bots then take more of each tick.
     /// </summary>
     public double ThinkBudgetMinMs { get; set; } = 8;
 
