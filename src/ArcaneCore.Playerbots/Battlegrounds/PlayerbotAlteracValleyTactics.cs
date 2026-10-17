@@ -115,7 +115,8 @@ internal sealed class AvDecision
 /// <item>A defender with nothing to retake guards the team's pending captures first, then its held nodes nearest to it, at most
 /// <see cref="MaxGuardsPerNode"/> per node; with every place full it attacks.</item>
 /// <item>An attacker takes an assaultable banner within <see cref="OpportunityYards"/> (it never runs past one), then the first actionable step of
-/// its lane (<see cref="MainRoad"/> or <see cref="FlankRoad"/>), then the other lane's, then the general; with nothing actionable it advances on the
+/// its lane (<see cref="MainRoad"/> or <see cref="FlankRoad"/>), then the other lane's, then the nearest assaultable node neither lane lists (an own
+/// node the enemy holds: retaken before the general, whose fight goes better with the team's towers and graveyards back), then the general; with nothing actionable it advances on the
 /// enemy keep. A bot never idles while the match has an objective.</item>
 /// </list>
 /// </summary>
