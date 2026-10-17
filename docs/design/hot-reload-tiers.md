@@ -207,8 +207,10 @@ must own it to dispose it on detach. Public API:
     `DetachAsync(name, HotSwapOrigin?)`, `AttachAsync(name, HotSwapOrigin?)`, `CycleAsync(name, HotSwapOrigin?)` (each
     `Task<FeatureResult>`); `FeatureState { Attached, Quiesced, Detached, Faulted }`, `FeatureStatus`, `FeatureResult(Ok,
     Detail, HotSwapResult)`. Registered as a singleton by `AddWorldFeatures`; `AttachWorldFeatures` goes through it and
-    `StopWorldFeaturesAsync` skips detached features (their quiesce drained them).
-  - `WorldLifecycleHooks : IWorldLifecycleHooks` with `RunAsync(stage, ct)` and `Registered(stage)`;
+    `StopWorldFeaturesAsync` skips detached and faulted features (their quiesce drained them; neither holds a subscription).
+  - `WorldLifecycleHooks : IWorldLifecycleHooks` with `RunAsync(stage, ct)` and `Registered(stage)`; internal
+    `RegisterLast(stage, name, hook)` for a core hook that runs after every ordinary hook of its stage (the managed-bot
+    orphan sweep, so it follows the playerbot shutdown whatever order features attached in);
     `TeleportWaiverRegistry : IWorldFeature, IAreaTriggerWaiver, ITeleportWaiverRegistry` (discovered like any feature,
     so `TeleportHandlers` consults it unchanged); both registered by `AddWorldFeatures` with their interfaces.
   - `FeatureCommands` (`.feature list|detach|attach`, `RootName = "feature"`), added by `AddFeatureCommands()` inside the
@@ -217,7 +219,9 @@ must own it to dispose it on detach. Public API:
 
 Semantics: commits run through `WorldCommit` (posted, deadline, never applied late). A failed `Detach` or unsubscribe is
 rolled back in the same tick; a failed `AttachFrom` undoes its subscriptions and leaves the feature detached with its
-handover; a failed quiesce detaches nothing (detach and re-attach in one tick restart the feature); a commit that misses
+handover; a failed quiesce detaches nothing (detach and re-attach in one tick restart the feature: the feature's `Detach`
+may refuse while work the quiesce did not drain still runs, which the host rolls back, and its `AttachFrom` keeps, never
+duplicates, a service the quiesce did not stop; `ManagedPlayerbotFeature` does both, see 4.5); a commit that misses
 its deadline leaves the feature `Quiesced` (attached), and `.feature attach` re-attaches it; only a rollback that throws
 leaves it `Faulted` (out of the world, handover kept). A `Stateless` feature is re-attached with a null handover.
 
@@ -283,7 +287,8 @@ Core-owned state (outlives a detach or a pack swap):
   one-slot seams, each claimed by the pack through its `FeatureSubscriptions` bag so a detach empties it:
   `UseSessionPolicy` / `SessionPolicy`, `UseCastRefusals` / `CastRefusals`, `UseHangSink` / `HangSink` (a second claim
   throws; a stale registration's disposal never clears a newer one). At `BeforeWorldStop` (after the playerbot shutdown
-  hook, hooks run newest first) and at `StopAsync` it closes and flushes any bot still logged in (only possible when the
+  hook: it is registered with `RegisterLast`, so it runs after every ordinary `BeforeWorldStop` hook whatever order the
+features attached in) and at `StopAsync` it closes and flushes any bot still logged in (only possible when the
   bot feature was detached) and leaves its row as it is, so the next start restores it.
 - Contracts (`ArcaneCore.World.Contracts`, namespace `ArcaneCore.World.Bots`): `IManagedBotSessionPolicy { Lean,
   KeepsPacket(opcode), BeforeAction(session, player, opcode) }`, `IBotCastRefusalObserver.OnCastRefused`,
@@ -311,8 +316,17 @@ Detachable bot features (`IDetachableWorldFeature`, every subscription through t
 | `PlayerbotPopulationFeature` | Handover | no new pass, wait for the pass and the terrain lookup | creation times, started/parked times, clock; a rush in progress is stopped |
 | `PlayerbotGroupCoordinator` | Stateless | nothing to stop | groups finished (`coordinator-detached`), waiver registered through `ITeleportWaiverRegistry` |
 | `PlayerbotBattlegroundCoordinator` | Stateless | nothing to stop | bots in a match leave it, queue state cleared |
-| `PlayerbotSocialFeature` | Stateless | wait for the registry refresh | conversations and chatter stopped, map and guild subscriptions undone |
-| `PlayerbotQaFeature` | Stateless | the shutdown work (save, export) | findings reloaded from the store file; hang sink and cast observer re-registered |
+| `PlayerbotSocialFeature` | Stateless | start no new registry refresh (a flag the next attach clears), one world-thread hop, wait for the refresh in flight | conversations and chatter stopped, map and guild subscriptions undone |
+| `PlayerbotQaFeature` | Stateless | cancel the background pass and wait for it and the publish as long as the host allows (a pass still running fails the quiesce, it is not abandoned), then save and export | findings reloaded from the store file; hang sink and cast observer re-registered; a new pass starts only after the old one ended |
+
+A quiesce of `ManagedPlayerbotFeature` that fails (an operation such as a fleet reset, a start or a slow checkpoint holds
+the operation lock past the host's quiesce timeout) is undone safely (fix cycle 1 of the tier 2 review): `Detach`
+refuses, changing nothing, while the operation lock is held, so the host rolls back and the running operation is not
+raced; `AttachFrom` keeps the policy engine, navigation executor and chat services that are still running instead of
+starting a second set beside them (the quiesce stops them only after the lock wait). The stop of those services takes
+each field before stopping it, so an attach overlapping a quiesce the host gave up on never ends with two of a service
+(it can end with none of one until the next attach; the bot code treats a missing one as off). A detach that races an
+operation queued on the lock just as the quiesce released it is refused the same way (rare; retry).
 
 Architecture test: `tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests` reads the World assembly's IL
 (`System.Reflection.Metadata`: signatures, attributes, constraints, locals, catch types, every IL token) and fails if a
@@ -350,7 +364,21 @@ ServerInfo, Metrics, WorldHost, Lean, FeatureLifecycle, FeatureSeam, Anomaly, Wa
 5331 passed, 22 failed, 30 skipped of 5383; the same 21 fail on the base commit `8727d55d` built and run the same way
 (real-terrain, battleground, guild chat, bank and config-classification tests that fail on this machine either way), and
 the 22nd (`PlayerbotCombatTelemetryTests.AFight_IsWrittenWithItsDecisionsAndOutcome_WhenTheNextFightStarts`) passed on
-a rerun, alone. RED runs, each restored and rebuilt green: the bot feature not adding to the registry (the 3 tests with bots across a detach fail), no brain rebuilt on attach (the cycle and detach tests fail), the population's update handler added with a bare `+=` instead of the bag (the cycle test fails), the session policy not registered (the detach test fails), bot QA's hang sink not registered (7 watchdog QA tests and the QA cycle test fail), and `WorldMetricsFeature` naming `ManagedPlayerbotFeature` again (the boundary test fails). Against the base commit the boundary test listed 17 core types.
+a rerun, alone.
+
+Fix cycle 1 (review of tier 2; compiler and tests): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings / 0 errors;
+`PlayerbotFeatureDetachTests`, `ManagedBotRegistryTests`, `FeatureLifecycleTests`, `FeatureSeamTests` and
+`PlayerbotCoreBoundaryTests` 33/33. New: `AQuiesceThatTimesOutBehindARunningOperation_DetachesNothing_AndLeavesOneOfEachService`
+(the real feature with policy on, the operation lock held past a 300 ms quiesce timeout: the detach fails as "nothing
+was detached", the same brain, chat, in-process provider and policy engine instances afterwards, then a cycle starts one
+new set), `ALastHook_RunsAfterEveryOrdinaryHook_RegisteredBeforeOrAfterIt` and
+`TheOrphanSweep_RunsAfterThePlayerbotShutdown_WhateverOrderTheHooksWereRegisteredIn`. RED runs, each restored and rebuilt
+green: `AttachFrom` recreating its services (the quiesce test fails on the chat instance), `Detach` not refusing under
+the lock (the quiesce test fails on the brain instance), `RegisterLast` registering an ordinary hook (the last-hook test
+fails; the in-host orphan test still passes, as registration order happens to be right there today). The social flag
+and the bot QA quiesce change have no dedicated test (from reading; the cycle tests still pass).
+
+RED runs of part 2, each restored and rebuilt green: the bot feature not adding to the registry (the 3 tests with bots across a detach fail), no brain rebuilt on attach (the cycle and detach tests fail), the population's update handler added with a bare `+=` instead of the bag (the cycle test fails), the session policy not registered (the detach test fails), bot QA's hang sink not registered (7 watchdog QA tests and the QA cycle test fail), and `WorldMetricsFeature` naming `ManagedPlayerbotFeature` again (the boundary test fails). Against the base commit the boundary test listed 17 core types.
 
 ## 5. Tier 3: gateway plus blue/green handoff
 
@@ -420,6 +448,14 @@ create, enter-world and ping through the gateway against the synthetic realm and
 - Session link on the `GatewayWorkerTransport` framing (new frame types 11 to 17): HMAC challenge on a shared secret, then
   the manifest check; every packet in the generation/epoch/sequence envelope, with stale or foreign packets dropped and
   counted on both ends. The client's `ip:port` is forwarded and becomes the worker session's `RemoteEndpoint`.
+- Fix cycle 1 (review of tier 3): both ends refuse to start with a link secret shorter than 16 characters on **every**
+  bind address (an empty secret on loopback let any local process register as a gateway and open a session for any
+  account); the gateway takes a session's generation and queues its `SessionOpen` under one lock on the link
+  (`GatewaySessionLinkClient.OpenAsync(Func<long>, Func<long, GatewaySessionOpenRequest>, sink, ct)`), so concurrent
+  logins are no longer refused as stale. Compiler and tests: 0 warnings / 0 errors; `ArcaneCore.Gateway.Tests` 26/26
+  (new: empty and 15-character secrets refused on loopback by both ends; an open whose generation was taken first is
+  queued first; a burst of 64 concurrent opens all accepted). RED runs: the strength check reduced to a null check (the
+  three secret tests fail), the open lock removed (the ordering test fails, and 14 of the 64 burst opens are refused).
 
 Differences from 5.2 and what is left of 3a:
 
@@ -432,6 +468,10 @@ Differences from 5.2 and what is left of 3a:
 - The gateway's `Gateway:*` keys are not in the configuration catalog (no `ConfigDaemon` value, no `.conf.dist`, no
   `--check-config`) and it exports no metrics.
 - The gateway's session generation and `SessionRegistry`'s own generation are independent counters.
+- The worker is not authenticated to the gateway, and the link has neither encryption nor a per-frame MAC (gateway.md).
+  Also open from the tier 3 review: no timeout on the gateway's wait for the worker's open reply, an owner-epoch change
+  drops packets without closing the session, unauthenticated connections to the worker port are not capped, one link
+  queue is shared by every client, and Warden timing includes link jitter.
 - The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
   coordinator is still test-only.
 
