@@ -74,6 +74,42 @@ public sealed class PlayerbotNavigationAnomalyTests
         });
     }
 
+    /// <summary>
+    /// Bot QA #784 (live 2026-10-17, main 2b009ad2): the mesh locates a destination off the walkable mesh (a cliff foot, a ledge below a
+    /// road) on a polygon whose nearest point is 12 yards away on another level, and answers the exact query <see cref="PathType.Incomplete"/>
+    /// to there. That is no route to the destination: the bot walked to the wrong level, stood beside it out of reach and planned the same
+    /// route again (probe on the real Elwynn mesh: from -9247.0, 448.4, 89.7 to -9235.9, 450.5, 84.4 the route ends at -9229.5, 439.9, 93.2).
+    /// </summary>
+    [Fact]
+    public async Task AnExactPlan_WhoseMeshEndLiesFarFromTheDestination_IsRefused()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Incomplete,
+            [start, end + new Vector3(6f, -10f, 9f)])));
+        await world.OnWorldAsync(() =>
+        {
+            using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+            Assert.False(PlayerbotNavigation.TryPlan(world.Player, Ahead(world.Player, 40f), Options, out PlayerbotRoute? route), "an exact plan accepted a route ending 11.7 yd from its destination");
+            Assert.Null(route);
+            Assert.False(cap.Any(Key("path-ends-short")), cap.Describe());
+            return true;
+        });
+    }
+
+    /// <summary>A destination just off the mesh (an NPC on a crate, a spawn point a step above the floor) still has its exact route: the end is within reach.</summary>
+    [Fact]
+    public async Task AnExactPlan_WhoseMeshEndLiesWithinReachOfTheDestination_IsKept()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Incomplete,
+            [start, end + new Vector3(-2.5f, 2.5f, -1f)])));
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.TryPlan(world.Player, Ahead(world.Player, 40f), Options, out PlayerbotRoute? route) && route is not null);
+            return true;
+        });
+    }
+
     [Fact]
     public async Task AnExactRoute_ThatReachesItsDestination_IsNotReported()
     {

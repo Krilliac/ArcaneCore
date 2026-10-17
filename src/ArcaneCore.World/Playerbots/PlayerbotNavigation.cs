@@ -870,10 +870,25 @@ internal static class PlayerbotNavigation
                 || PlayerbotMotion.IsBlacklisted(player, path.End)
                 || IsDeadEndPin(player, path.End)))
             return false;
+        // An exact answer the mesh could only end beside the destination (Incomplete, not cut at the point bound): a route only when that end
+        // lies within reach of the destination (ExactEndYards, flat). Farther, the destination's own spot has no walkable polygon near it, and
+        // the one the search located it on lies on another level (bot QA #784).
+        if (!partial && (path.Type & (PathType.Incomplete | PathType.Short)) == PathType.Incomplete && !AtDestination(path.End, destination)
+            && Vector2.Distance(Flat(path.End), Flat(destination)) > ExactEndYards)
+            return false;
 
         route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
         return route is not null;
     }
+
+    /// <summary>
+    /// How far (flat yards) the end of an exact plan's mesh answer may lie from its destination when the destination is off the mesh
+    /// (<see cref="PathType.Incomplete"/>): vmangos' interaction distance (<c>INTERACTION_DISTANCE</c> 5, ObjectDefines.h), which also covers the
+    /// diagonal of the nearest-polygon search box (<c>NavMeshPathfinder.NearExtents</c>, 3 yards each way: 4.24). Farther, the search located
+    /// the destination on a polygon whose nearest point lies outside that box (a ledge or road above a cliff foot, 12 yards away and 9 up on
+    /// the real Elwynn mesh, bot QA #784): no route to the destination, and the bot walked to the wrong level and planned it again.
+    /// </summary>
+    internal const float ExactEndYards = 5f;
 
     private static bool PartialClosesOnGoal(Vector3 from, Vector3 end, Vector3 goal, int pointCount = 2)
     {
@@ -1048,6 +1063,9 @@ internal static class PlayerbotNavigation
                 if ((path.Type & PathType.TilesPending) != 0) return null;
                 // The same arrival rule as Usable: an end at the destination's own spot (EndsAt) reaches it.
                 bool reaches = Reaches(path) || EndsAt(path, destination);
+                // An exact plan's end beside an off-mesh destination: the rule of Usable (ExactEndYards).
+                if (!partial && !reaches && (path.Type & PathType.Short) == 0
+                    && Vector2.Distance(Flat(path.End), Flat(destination)) > ExactEndYards) continue;
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
                     || (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
                         || !PartialClosesOnGoal(start, path.End, goal, path.Points.Count))))
