@@ -3,6 +3,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Protocol;
+using ArcaneCore.Game.Updates;
 using ArcaneCore.World.Net;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -96,6 +98,30 @@ public sealed class PlayerbotLoginFloorTests(ITestOutputHelper output)
         Assert.Equal(Void, stays.Position);
     }
 
+    [Fact]
+    public void Resolve_PrefersAFloorAtOrOverTheSavedHeight_OverACloserOneStoreysBelow()
+    {
+        var upper = new Vector3(Void.X + 14f, Void.Y, Void.Z + 1f);
+        var lower = new Vector3(Void.X - 4f, Void.Y, Void.Z - 8f);
+        PlayerbotLoginFloor.MeshFloorQuery both = (float x, float y, float z, float below, float above, out float height) =>
+            Disc(upper, upper.Z)(x, y, z, below, above, out height) || Disc(lower, lower.Z)(x, y, z, below, above, out height);
+
+        PlayerbotLoginFloor.Result result = PlayerbotLoginFloor.Resolve(Void, p => p.Z > Void.Z - 20f && !(p.X > Void.X - 1f && p.X < Void.X + 1f), both, home: null);
+
+        Assert.Equal(Outcome.MovedToMesh, result.Outcome);
+        Assert.Equal(upper.Z, result.Position.Z);
+    }
+
+    [Fact]
+    public void DueAt_ReportsAgain_AfterTheBotStoodOnGround_AtTheSamePlace()
+    {
+        var watch = new PlayerbotMotionAnomalies.MotionWatch();
+        Assert.True(watch.DueAt(Code.UnderMap, 1000, Void));
+        Assert.False(watch.DueAt(Code.UnderMap, 1000 + PlayerbotMotionAnomalies.EpisodeQuietMs, Void));
+        watch.EndPlace(Code.UnderMap); // an Ok sample
+        Assert.True(watch.DueAt(Code.UnderMap, 1000 + PlayerbotMotionAnomalies.EpisodeQuietMs, Void));
+    }
+
     // ---- one report per place ---------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -157,9 +183,14 @@ public sealed class PlayerbotLoginFloorTests(ITestOutputHelper output)
     [RealTerrainBotFact]
     public async Task ABotSavedInTheIronforgeVoid_LogsInOnAFloor()
     {
-        (Vector3 saved, Vector3 placed, PlayerbotMotionAnomalies.GroundVerdict before, PlayerbotMotionAnomalies.GroundVerdict after) = await LoginAsync(Void);
+        Login login = await LoginAsync(Void);
+        (Vector3 saved, Vector3 placed, PlayerbotMotionAnomalies.GroundVerdict before, PlayerbotMotionAnomalies.GroundVerdict after) = (login.Saved, login.Placed, login.Before, login.After);
 
         output.WriteLine($"saved {saved} ({before}) -> logged in at {placed} ({after})");
+        // The unit's movement state is what the create block sends: it must follow the move, or every observer sees the void.
+        Assert.Equal(placed, login.Movement);
+        Assert.True(login.BlockCarriesPlaced, "the create block does not carry the placed position");
+        Assert.False(login.BlockCarriesSaved, "the create block still carries the void position");
         Assert.NotEqual(PlayerbotMotionAnomalies.GroundVerdict.Ok, before); // the saved point is a real void, so this is not vacuous
         Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, after);
         Assert.InRange(Vector2.Distance(new(saved.X, saved.Y), new(placed.X, placed.Y)), 0.1f, PlayerbotLoginFloor.SearchYards);
@@ -170,14 +201,28 @@ public sealed class PlayerbotLoginFloorTests(ITestOutputHelper output)
     public async Task ABotSavedOnTheIronforgeFloor_LogsInWhereItWasSaved()
     {
         var floorSpot = new Vector3(-4601.65f, -896.47f, 503.01f); // a live report position that is a mesh floor (WmoUnderMapRealTerrainTests)
-        (Vector3 saved, Vector3 placed, PlayerbotMotionAnomalies.GroundVerdict before, _) = await LoginAsync(floorSpot);
+        Login stay = await LoginAsync(floorSpot);
+        (Vector3 saved, Vector3 placed, PlayerbotMotionAnomalies.GroundVerdict before) = (stay.Saved, stay.Placed, stay.Before);
+        Assert.Equal(placed, stay.Movement);
 
         output.WriteLine($"saved {saved} ({before}) -> logged in at {placed}");
         Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, before);
         Assert.Equal(saved, placed);
+        Assert.True(stay.BlockCarriesPlaced);
     }
 
-    private async Task<(Vector3 Saved, Vector3 Placed, PlayerbotMotionAnomalies.GroundVerdict Before, PlayerbotMotionAnomalies.GroundVerdict After)> LoginAsync(Vector3 saved)
+    private sealed record Login(Vector3 Saved, Vector3 Placed, PlayerbotMotionAnomalies.GroundVerdict Before, PlayerbotMotionAnomalies.GroundVerdict After,
+        Vector3 Movement, bool BlockCarriesPlaced, bool BlockCarriesSaved);
+
+    private static bool Carries(Player player, uint nowMs, Vector3 at)
+    {
+        var writer = new PacketWriter();
+        UpdateBlockWriter.WriteCreateBlock(writer, player, player, isNewObject: false, nowMs);
+        byte[] needle = [.. BitConverter.GetBytes(at.X), .. BitConverter.GetBytes(at.Y), .. BitConverter.GetBytes(at.Z)];
+        return writer.ToArray().AsSpan().IndexOf(needle) >= 0;
+    }
+
+    private async Task<Login> LoginAsync(Vector3 saved)
     {
         string root = Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable)!;
         var accounts = new InMemoryAccountStore();
@@ -219,7 +264,9 @@ public sealed class PlayerbotLoginFloorTests(ITestOutputHelper output)
 
                 var placed = new Vector3(player.X, player.Y, player.Z);
                 // The point the character was saved at, judged by the same rule on the map the login loaded.
-                return (saved, placed, Judge(saved), Judge(placed));
+                var movement = new Vector3(player.Movement.X, player.Movement.Y, player.Movement.Z);
+                uint now = host.World.NowMs;
+                return new Login(saved, placed, Judge(saved), Judge(placed), movement, Carries(player, now, placed), Carries(player, now, saved));
             });
         }
         finally

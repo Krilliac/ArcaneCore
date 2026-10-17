@@ -135,6 +135,7 @@ internal static class PlayerbotMotionAnomalies
         private readonly uint[] _last = new uint[Names.Length];
         private readonly Vector3[] _at = new Vector3[Names.Length];
         private int _seen;
+        private int _placed;
         private bool _sampled;
         private uint _nextSampleMs;
 
@@ -160,15 +161,22 @@ internal static class PlayerbotMotionAnomalies
         internal bool DueAt(Code code, uint now, Vector3 at)
         {
             int bit = 1 << (int)code;
-            if ((_seen & bit) != 0 && AgeOf(now, _last[(int)code]) < SamePlaceQuietMs && Vector3.DistanceSquared(_at[(int)code], at) <= SamePlaceYards * SamePlaceYards)
+            if ((_seen & bit) != 0 && (_placed & bit) != 0 && AgeOf(now, _last[(int)code]) < SamePlaceQuietMs && Vector3.DistanceSquared(_at[(int)code], at) <= SamePlaceYards * SamePlaceYards)
             {
                 return false;
             }
 
             if (!Due(code, now)) return false;
             _at[(int)code] = at;
+            _placed |= bit;
             return true;
         }
+
+        /// <summary>
+        /// The bot stood on ground (an Ok sample): the next <paramref name="code"/> report is a new episode even at the same place (a bot
+        /// that falls back into the same void is reported again, still behind the <see cref="EpisodeQuietMs"/> cooldown).
+        /// </summary>
+        internal void EndPlace(Code code) => _placed &= ~(1 << (int)code);
 
         /// <summary>Whether the sampled checks run now; true schedules the next sample.</summary>
         internal bool SampleDue(uint now)
@@ -359,7 +367,13 @@ internal static class PlayerbotMotionAnomalies
         if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !Finite(at)) return;
         float floor = FloorUnder(map.Collision, at);
         GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
-        if (verdict == GroundVerdict.Ok) return;
+        if (verdict == GroundVerdict.Ok)
+        {
+            watch.EndPlace(Code.UnderMap);
+            watch.EndPlace(Code.Airwalk);
+            return;
+        }
+
         ReportGround(player, map, watch, verdict, at, at.Z + underMap.DepthYards, floor, now);
     }
 

@@ -7,7 +7,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Teleport;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Characters;
@@ -1263,11 +1265,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (!entered) throw new InvalidOperationException("login-refused");
             // A bot saved over a void (no floor near its height) would log in there again and wander on a stale height: put it on a floor
             // before its brain starts. Bots only; a real player keeps the saved position (the vmangos login).
-            PlayerbotLoginFloor.Result settled = await world.InvokeAsync(() => session.Player is { Map: { } botMap } botPlayer
-                    ? PlayerbotLoginFloor.Settle(botPlayer, botMap) : new PlayerbotLoginFloor.Result(PlayerbotLoginFloor.Outcome.Kept, default))
-                .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
-            if (settled.Outcome is PlayerbotLoginFloor.Outcome.MovedToMesh or PlayerbotLoginFloor.Outcome.MovedToHome)
-                logger.LogInformation("Playerbot {BotId} logged in over a void; placed {Outcome} at {Position}", bot.BotId, settled.Outcome, settled.Position);
+            try
+            {
+                TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+                PlayerbotLoginFloor.Result settled = await world.InvokeAsync(() => session.Player is { Map: { } botMap } botPlayer
+                        ? PlayerbotLoginFloor.Settle(botPlayer, botMap, world.NowMs, teleports) : new PlayerbotLoginFloor.Result(PlayerbotLoginFloor.Outcome.Kept, default))
+                    .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+                if (settled.Outcome is PlayerbotLoginFloor.Outcome.MovedToMesh or PlayerbotLoginFloor.Outcome.MovedToHome)
+                    logger.LogInformation("Playerbot {BotId} logged in over a void; placed {Outcome} at {Position}", bot.BotId, settled.Outcome, settled.Position);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+            {
+                // The placement is a courtesy: a bug in it must not fault or quarantine a bot that did log in.
+                FaultLedger.Shared.Record("playerbot.login-floor", ex);
+                logger.LogWarning(ex, "Playerbot {BotId} login placement failed; the bot keeps its saved position", bot.BotId);
+            }
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
             // The row, scope and session are the core's (ManagedBotRegistry): they outlive a detach of this feature.
             var entry = new ManagedBot(bot, scope, session);
