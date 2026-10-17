@@ -911,8 +911,13 @@ public sealed partial class SpellSystem
             }
         }
 
-        // ranged (hunter lane): a player's cast bar does not run while feigning death (Spell.cpp:4082-4090).
-        if (cast.State == SpellCastState.Preparing && cast.Timer != 0 && cast.Caster is Player && IsFeigningDeath(cast.Caster))
+        // vmangos Spell::update (Spell.cpp preparing): a player's cast bar stops while feigning death,
+        // and while stunned only when the spell has SPELL_INTERRUPT_FLAG_STUN. A self stun does not
+        // interrupt at apply (SpellAuras.cpp:3573); the bar stops on the next update.
+        if (cast.State == SpellCastState.Preparing && cast.Timer != 0 && cast.Caster is Player incapacitated
+            && (IsFeigningDeath(incapacitated)
+                || ((incapacitated.UnitFlags & UnitFlags.Stunned) != 0
+                    && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Stun))))
         {
             Cancel(cast);
             return;
