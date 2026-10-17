@@ -140,8 +140,13 @@ key produced at logon). Configure `src/ArcaneCore.World/appsettings.json` (the `
 database must match the realm daemon's), then:
 
 ```bash
-dotnet run --project src/ArcaneCore.World
+dotnet build ArcaneCore.slnx -c Release    # the solution build puts the Playerbots pack beside the world executable
+dotnet run --project src/ArcaneCore.World -c Release
 ```
+
+The bot code is its own assembly (`src/ArcaneCore.Playerbots`) that the world executable loads from its own directory; building
+`src/ArcaneCore.World` alone does not build it, and a world without it exits 78. Build the solution (or
+`src/ArcaneCore.Playerbots`) in the configuration you run, and again after changing world code.
 
 After logging in and selecting the realm, the client reaches character select, can create
 characters and enter the world. Acceptance procedures: `docs/M2_ACCEPTANCE.md` …

@@ -5,7 +5,9 @@ installation see [installation and first run](installation.md). Every key named 
 
 ## Start, stop and restart
 
-Start the realm daemon, then the world daemon (`dotnet run --project src/ArcaneCore.Realm` and `src/ArcaneCore.World`). Run the world daemon's
+Start the realm daemon, then the world daemon (`dotnet run --project src/ArcaneCore.Realm -c Release` and `src/ArcaneCore.World`), after a
+solution build in the same configuration (`dotnet build ArcaneCore.slnx -c Release`): the world loads the Playerbots pack from its own directory and
+exits 78 without it, and building `src/ArcaneCore.World` alone does not refresh it. Run the world daemon's
 `check-config` verb before a deployment; it exits with 78 when the configuration is invalid and the daemon runs the same check at every start.
 
 Stop or restart the world from an in-game administrator account with the retail countdown commands: `.server shutdown`, `.server restart`

@@ -25,7 +25,7 @@ dotnet build ArcaneCore.slnx -c Release
 
 The executables are `src/ArcaneCore.Realm` (the logon daemon, port 3724) and `src/ArcaneCore.World` (the world daemon, port 8085), and the
 tools in `tools/`: `arcane-account`, `arcane-db`, `arcane-content-importer`, `arcane-spell-import` and `arcane-mock`. Run any of them with
-`dotnet run --project <path> -- <arguments>`.
+`dotnet run --project <path> -c Release -- <arguments>`.
 
 ## 3. The databases
 
@@ -98,8 +98,12 @@ ignored. Details and limits: [content import](../areas/content-import.md).
 ## 7. Check the configuration, then start the daemons
 
 ```
-dotnet run --project src/ArcaneCore.World -- check-config
+dotnet run --project src/ArcaneCore.World -c Release -- check-config
 ```
+
+Use the configuration of the build in section 2: the world executable loads the Playerbots pack (`ArcaneCore.Playerbots.dll`) from its
+own directory, the solution build puts it there, and a world without it exits 78. Building `src/ArcaneCore.World` alone does not
+refresh the pack, so build the solution again after changing world code.
 
 `check-config` validates the world configuration without starting it and exits with 78 when it is invalid; the daemon runs the same check at every
 start, and `Startup:Strict=true` makes warnings fatal too. Then start the realm daemon, then the world daemon, in two terminals:

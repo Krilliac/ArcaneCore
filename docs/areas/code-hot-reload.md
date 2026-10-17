@@ -139,6 +139,12 @@ scripts/hot-runner.sh [--non-interactive] [--audit-log PATH]
 
 The scripts refuse to run unless `DOTNET_ENVIRONMENT` is Development or Staging (unset means
 Development), set `World__HotCode__Enabled=true` for that one process, and build Debug.
+Since tier 2b the bot code is its own assembly, the Playerbots pack, which the world executable cannot reference (see "The
+Playerbots pack as its own assembly" below). The scripts therefore build `src/ArcaneCore.Playerbots` in Debug before they start
+`dotnet watch` (a failed build exits 4 and starts nothing), and `dotnet watch` watches the world project and the projects it
+references only: **an edit to a file under `src/ArcaneCore.Playerbots` is not applied live, and needs a restart of the script.**
+A restart that `dotnet watch` makes on its own (a rude edit) rebuilds the world but not the pack, so restart the script instead
+when the edit changed a world member the pack uses.
 Edit a `.cs` file under `src/`, save, and the watch window reports whether the change was applied
 or why it could not be. The spike below proves a body edit in a one-project app; an edit in a
 referenced project of this solution (for example `ArcaneCore.Game` while `ArcaneCore.World`
@@ -599,17 +605,48 @@ and `PlayerbotQaFeature` detach and attach again with bots online:
 * A shutdown while the bot feature is detached closes and flushes the bots' sessions and leaves their rows running, so
   the next start restores them.
 * The world host runs the lifecycle hooks (`playerbots.restore` after start, `playerbots.shutdown` before stop,
-  `managed-bots.orphans` after it), and the core reaches the pack only through the registry's seams; an architecture
-  test (`PlayerbotCoreBoundaryTests`) fails when a core type references a playerbot type outside its allowlist of 4
-  (`ClusterCommands`, and the three config types that still name `PlayerbotOptions`).
+  `managed-bots.orphans` after it), and the core reaches the pack only through the registry's seams.
 
-Not done yet (next lanes): the options types into the contracts assembly (clears 3 allowlist entries), `ClusterCommands`
-onto the registry (the 4th), the architecture test that forbids a bare `+=` from pack code, a `ContractsVersion` check
-of a pack at load, and handover values of contract types only (today they are World types, accepted because World is
-not collectible).
+### The Playerbots pack as its own assembly (Tier 2b)
+
+Since tier 2b ([design, section 4.6](../design/hot-reload-tiers.md)) the bot code is its own project,
+`src/ArcaneCore.Playerbots` (assembly `ArcaneCore.Playerbots`, namespaces unchanged: `ArcaneCore.World.Playerbots.*`). It
+references the core; the core (`ArcaneCore.World`) and the contracts (`ArcaneCore.World.Contracts`) never reference it. The
+playerbot options (`PlayerbotOptions` and its section classes) live in the contracts assembly, so `.reload config` and
+`IOptions<PlayerbotOptions>` are keyed by a type outside the pack.
+
+* **How the daemon finds it.** `ArcaneCore.World` is also the executable, so it cannot reference its own pack. The build copies
+  `ArcaneCore.Playerbots.dll` next to `ArcaneCore.World.dll` (the pack project's `CopyPackBesideWorldHost` target; the Docker
+  image publishes it beside the world too), and `Program.cs` registers it with `WorldCodeAssemblies.RegisterBuiltIn` before
+  anything is discovered. A world directory without the pack refuses to start (exit 78, naming the missing file). Build the
+  solution or `src/ArcaneCore.Playerbots`; building `ArcaneCore.World` alone does not refresh the copy.
+* **Discovery.** Every startup discovery of the world (features, `IWorldServiceModule`s, opcode handler groups, command groups and
+  extensions, script modules, content reloadables, config checks, the wiring audit) reads `WorldCodeAssemblies.Startup`: World
+  plus the registered built-in packs, ordered by type name across both, so the features attach, stop and register in the same
+  order as before the move. In-process hosts (the test suites, the mock client) reference the pack project and register it the
+  same way (`BuiltInPacks`, `MockWorldPacks`).
+* **Still the default context.** The pack never unloads; swapping it is tier 2c. `.feature detach|attach` works as above.
+* **The boundary, both ways.** `PlayerbotCoreBoundaryTests` checks that the core and the contracts do not reference the pack
+  (the 4-entry allowlist of tier 2a is now empty), and pins the core internals the pack still uses (World and the contracts
+  grant it `InternalsVisibleTo`) to an explicit list that may only shrink: the managed-bot session members of `WorldSession`, a
+  few battleground, GM boost, teleport and movement helpers, and the internal helpers of the options.
+* **Dev runner and hot runner.** `scripts/dev-runner.ps1` and `scripts/hot-runner.ps1|.sh` build the pack before starting;
+  `dotnet watch` watches the world project only, so an edit to the pack needs a runner restart.
+* **Keep the pack and the world from the same build.** The pack uses world internals (`InternalsVisibleTo`), so a world rebuilt
+  alone (`dotnet build` or `dotnet run` of `src/ArcaneCore.World`, or a restart by `dotnet watch`) next to an older pack can fail
+  with `MissingMethodException` or `TypeLoadException` when a tick first calls the changed member, not at load. After changing
+  world code, build the solution or the pack project, in the configuration you run.
+* **`dotnet run --project src/ArcaneCore.World`** runs only after the pack has been built in the same configuration (the solution
+  build or `dotnet build src/ArcaneCore.Playerbots -c <Configuration>`); without it the world exits 78.
+
+Not done yet (next lanes): the collectible load and swap of the pack (2c), the internals list turned into public seams or
+contracts, the architecture test that forbids a bare `+=` from pack code, a `ContractsVersion` check of a pack at load, and
+handover values of contract types only (today they are World or pack types, accepted because neither is collectible).
 
 Tests (bot features): `PlayerbotFeatureDetachTests` (4) and `ManagedBotRegistryTests` (2) in
-`tests/ArcaneCore.World.Tests/Playerbots`, `PlayerbotCoreBoundaryTests` (2) in `tests/ArcaneCore.World.Tests/Architecture`.
+`tests/ArcaneCore.World.Tests/Playerbots`; `PlayerbotCoreBoundaryTests` (3) and `WorldCodeAssembliesTests` (5) in
+`tests/ArcaneCore.World.Tests/Architecture`. The bot tests stay in `ArcaneCore.World.Tests` (they share its fixtures and
+fakes), which references the pack project.
 
 Tests (lifecycle seams): `FeatureLifecycleTests` (14) and `FeatureSeamTests` (8) in `tests/ArcaneCore.World.Tests/FeatureLifecycle`, with
 RED runs: bag disposal disabled (13 fail), `UnregisterObserver` not removing (11 fail), rollback, pinned refusal and
@@ -649,8 +686,9 @@ The plan for removing these limits (multi-assembly discovery, swappable spell, i
 * **Moving a loaded instance or an existing EventAI creature onto a replaced script.** An instance keeps the instance script it was
   created with until it unloads, and a creature keeps its bound EventAI event handlers until it respawns (the module lane forces that respawn for database creatures, losing their state): their state belongs to
   the old code, and nothing migrates it.
-* **Startup packs.** The startup discovery of spell scripts, instance scripts and EventAI handlers runs over a `CodeAssemblies`
-  set, but no configuration adds a pack assembly to it; extra code arrives only through the module lane.
+* **Configured startup packs.** The world's startup set holds exactly one built-in pack, Playerbots, registered in code by
+  `Program.cs` (tier 2b, above); no configuration adds another, and the spell script, instance script and EventAI startup
+  discovery still runs over Game alone. Other extra code arrives only through the module lane.
 * **Automatic reload on file change** (a `FileSystemWatcher`). A reload is an explicit, audited
   Administrator command.
 * **A module that outlives a restart on its own.** `LoadOnStart` names modules to load again at start;

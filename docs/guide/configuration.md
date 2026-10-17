@@ -59,11 +59,13 @@ The first argument may be a command; a command ends with an exit code (0 success
 | `write-config --current <file> --include-secrets` | Writes the secrets unmasked, for a lossless migration. Refused for `-` (standard output), so a secret never reaches a terminal or a log; the file contains real passwords: keep it out of version control. |
 | `write-config ... --force` | Overwrites a file that already exists; without it an existing file is an error. |
 
-Examples:
+Examples (build the solution first in the same configuration: the world executable needs the Playerbots pack beside it, which
+building `src/ArcaneCore.World` alone does not produce, and exits 78 without it):
 
 ```
-dotnet run --project src/ArcaneCore.World -- check-config
-dotnet run --project src/ArcaneCore.World -- write-config --current world.conf
+dotnet build ArcaneCore.slnx -c Release
+dotnet run --project src/ArcaneCore.World -c Release -- check-config
+dotnet run --project src/ArcaneCore.World -c Release -- write-config --current world.conf
 dotnet run --project src/ArcaneCore.Realm -- write-config --defaults realm.conf
 ```
 
