@@ -60,6 +60,54 @@ public sealed class PlayerbotDeathLoopTests
         }
     }
 
+    /// <summary>
+    /// A pack that engages and kills between two brain updates is still in the danger memory, not only the creature that landed
+    /// the blow. MapCombat raises UnitKilled after it clears the victim's attackers, so a listener that reads the lists then sees
+    /// nobody but the killing blow and the bot walks back into the rest of the pack (bot QA death loops: 1161/1162, 1766/1767/1768,
+    /// 3245/3416/4127/5766, 2070/2163/10158/10159).
+    /// </summary>
+    [Fact]
+    public async Task APackKillingBetweenBrainUpdates_IsRemembered_NotOnlyTheKillingBlow()
+    {
+        const uint killerEntry = 993911;
+        const uint packEntry = 993912;
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            Creature killer = await SpawnAsync(host, session, killerEntry, 411);
+            Creature pack = await SpawnAsync(host, session, packEntry, 412);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                MapCombat combat = player.Map!.Combat;
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500); // alive, before this pack enters combat
+                Assert.True(combat.Attack(pack, player));
+                Assert.True(combat.Attack(killer, player));
+                Assert.Contains(pack, player.Combat.Attackers);
+                Assert.Contains(killer, player.Combat.Attackers);
+                player.Health = 1;
+                combat.DealDamage(killer, player, 2);
+                Assert.False(player.IsAlive);
+                Assert.Empty(player.Combat.Attackers); // the kill already cleared the pack
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.True(brain.Risk.IsRemembered(killer));
+                Assert.True(brain.Risk.IsRemembered(pack));
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+
     [Fact]
     public async Task FatalFall_IsRecordedFromTheEnvironmentalDamagePath()
     {

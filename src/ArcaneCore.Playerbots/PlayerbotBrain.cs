@@ -2649,7 +2649,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     }
 
     // A creature can land its first lethal hit between two bot updates; the living snapshot above
-    // never sees that attacker. The map's kill observer carries it to us before RecordDeath runs.
+    // never sees that attacker. The map's kill observer carries the killer and the pack that was
+    // attacking when the blow landed (taken while the victim was still alive: UnitKilled runs after
+    // those lists are cleared) before RecordDeath runs.
     internal void ObserveKillingBlows(Player player) => WatchKills(player);
 
     private void WatchKills(Player player)
@@ -2667,7 +2669,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
-    private void RememberKiller(Unit? killer)
+    private void RememberKiller(Unit? killer, IReadOnlyList<Unit> engaged)
     {
         if (Volatile.Read(ref _stopped) != 0) return;
         _killingBlowSource = killer switch
@@ -2679,8 +2681,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             Player => "Player",
             _ => "Other",
         };
-        // A player's pet or totem is not the content's danger: never set its entry aside.
-        if (killer is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) return;
+        RememberDanger(killer);
+        foreach (Unit unit in engaged) RememberDanger(unit);
+    }
+
+    /// <summary>A creature that killed the bot or was on it when the blow landed. A player's pet or totem is not the content's danger.</summary>
+    private void RememberDanger(Unit? unit)
+    {
+        if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) return;
         _attackerEntries.Add(creature.Entry);
         if (_observedPlayer is { } player) CaptureAttacker(player, creature);
         if (!_attackers.Contains((creature.Guid, creature.Entry)))
