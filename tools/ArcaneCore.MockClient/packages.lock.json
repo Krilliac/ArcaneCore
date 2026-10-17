@@ -371,9 +371,16 @@
           "ArcaneCore.Game": "[1.0.0, )",
           "ArcaneCore.Kernel": "[1.0.0, )",
           "ArcaneCore.Protocol": "[1.0.0, )",
+          "ArcaneCore.World.Contracts": "[1.0.0, )",
           "Microsoft.Diagnostics.NETCore.Client": "[0.2.750501, )",
           "Microsoft.Extensions.Hosting": "[9.0.0, )",
           "System.Numerics.Tensors": "[10.0.13, )"
+        }
+      },
+      "arcanecore.world.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Game": "[1.0.0, )"
         }
       }
     }

@@ -356,6 +356,12 @@
         "dependencies": {
           "ArcaneCore.Kernel": "[1.0.0, )"
         }
+      },
+      "arcanecore.world.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Game": "[1.0.0, )"
+        }
       }
     }
   }
