@@ -292,7 +292,7 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Cluster:Fencing:ClaimWatchIntervalSeconds` | `int` | `10` | - | With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim. |
-| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. |
+| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. |
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
@@ -304,7 +304,7 @@ How to read the tables:
 | `Cluster:Worker:BindAddress` | `string` | `"127.0.0.1"` | - | Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted. |
 | `Cluster:Worker:CharactersSchemaVersion` | `int` | `1` | - | Characters schema version both ends must agree on (an operator label, not read from the database). |
 | `Cluster:Worker:ContentRevision` | `string` | `"dev"` | - | Content revision both ends of the link must agree on (an operator label; nothing reads it from the data). |
-| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode). `false`, the default, is Combined mode: no listener, no change. |
+| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change. |
 | `Cluster:Worker:LinkSecret` | `string` | `""` | - | Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password. |
 | `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
 | `Cluster:Worker:Port` | `int` | `8095` | - | Port of the gateway listener; must equal the gateway's Gateway:WorkerPort. |

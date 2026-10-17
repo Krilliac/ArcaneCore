@@ -73,7 +73,8 @@ public static class GatewayWorkerServiceCollectionExtensions
 {
     /// <summary>
     /// Bind <see cref="GatewayWorkerOptions"/> and, only when Cluster:Worker:Enabled is true, register the
-    /// <see cref="GatewayWorkerEndpoint"/>. Off (the default) registers nothing else: Combined mode is unchanged.
+    /// <see cref="GatewayWorkerEndpoint"/> and make character fencing mandatory (<see cref="Clustering.CharacterFencingOptions.RequiredByWorkerMode"/>).
+    /// Off (the default) registers nothing else: Combined mode is unchanged.
     /// Call after <c>AddHostedService&lt;WorldServer&gt;()</c> so the endpoint stops before the world host.
     /// </summary>
     public static IServiceCollection AddGatewayWorker(this IServiceCollection services, IConfiguration configuration)
@@ -84,6 +85,8 @@ public static class GatewayWorkerServiceCollectionExtensions
         services.Configure<GatewayWorkerOptions>(section);
         if (section.GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))
         {
+            // Fencing is mandatory in worker mode: the host refuses to start without it, and the characters write fence is attached regardless.
+            services.PostConfigure<Clustering.CharacterFencingOptions>(fencing => fencing.RequiredByWorkerMode = true);
             services.AddSingleton<GatewayWorkerEndpoint>();
             services.AddHostedService(sp => sp.GetRequiredService<GatewayWorkerEndpoint>());
         }

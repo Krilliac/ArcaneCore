@@ -2208,7 +2208,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Enable durable character ownership fencing at world startup; disabled by default.",
+      "meaning": "Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#clusterfencing",
       "isCollection": false
@@ -2320,7 +2320,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "`true` opens the gateway listener (worker mode). `false`, the default, is Combined mode: no listener, no change.",
+      "meaning": "`true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#clusterworker",
       "isCollection": false

@@ -1672,7 +1672,8 @@ Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 #
 #    Cluster.Fencing.Enabled
 #        Description: Enable durable character ownership fencing at world startup; disabled by
-#                     default.
+#                     default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with
+#                     fencing off refuses to start.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -1759,8 +1760,10 @@ Cluster.Worker.ContentRevision = "dev"
 
 #
 #    Cluster.Worker.Enabled
-#        Description: true opens the gateway listener (worker mode). false, the default, is Combined
-#                     mode: no listener, no change.
+#        Description: true opens the gateway listener (worker mode) and makes character fencing
+#                     mandatory: Cluster:Fencing:Enabled must be true, and the characters write
+#                     fence is attached either way. false, the default, is Combined mode: no
+#                     listener, no change.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false

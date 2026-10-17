@@ -12,7 +12,7 @@ public sealed class GatewayWorkerOptions
 {
     public const string SectionName = "Cluster:Worker";
 
-    /// <summary>`true` opens the gateway listener (worker mode). `false`, the default, is Combined mode: no listener, no change.</summary>
+    /// <summary>`true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change.</summary>
     public bool Enabled { get; set; }
 
     /// <summary>Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.</summary>
