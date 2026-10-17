@@ -3168,10 +3168,29 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Whether <paramref name="route"/> is the explore leg in hand and so may be chained onward (<see cref="ChainWanderLeg"/>).</summary>
     internal bool CanChain(PlayerbotRoute? route) => route is not null && ReferenceEquals(route, _wanderLeg);
 
+    /// <summary>The longest exploring leg.</summary>
+    internal const float ExploreLegYards = 48f;
+
+    /// <summary>
+    /// The ray used once a full <see cref="ExploreLegYards"/> leg has been refused.
+    /// <see cref="PlayerbotNavigation.PlanWander"/> rejects a navigated leg that stops more than
+    /// <see cref="PlayerbotNavigation.WanderMaxShortfallYards"/> short of the point it was given, so this length is the stall
+    /// watch's own progress (<see cref="PlayerbotStallWatch.ProgressYards"/>) plus that allowance: a refusal still means the
+    /// mesh cannot move the bot far enough to count, and an accepted leg does. A 48-yard ray in a street, room or canyon is
+    /// refused in every direction (the mesh stops at the wall), the heading changes, and the bot stands with
+    /// <c>moving:no dest:none</c> until the stall watch gives Explore up (live 2026-10-17, the wander-refused stalls).
+    /// </summary>
+    internal static float ExploreLegLength(int refusals)
+        => refusals <= 0
+            ? ExploreLegYards
+            : PlayerbotStallWatch.ProgressYards + PlayerbotNavigation.WanderMaxShortfallYards;
+
     /// <summary>
     /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
     /// +-60 degrees, golden-ratio spread so successive legs differ). After any refusal turn anywhere around the compass so the bot turns
-    /// away from a cliff or canyon wall immediately instead of probing into the same wall again. Beyond 0.8 of the home radius the next leg
+    /// away from a cliff or canyon wall immediately instead of probing into the same wall again, and shorten the ray
+    /// (<see cref="ExploreLegLength"/>): the full 48-yard ray is what <see cref="PlayerbotNavigation.PlanWander"/> keeps refusing.
+    /// Beyond 0.8 of the home radius the next leg
     /// heads back in instead of wandering further out; so does a leg that would end out of a clipped home's zone (a wander across the
     /// Westfall-Duskwood border inside the circle). Back in is the centre first, then, while legs are refused, a fan around it (InwardLeg).
     /// Takes the next direction of the rotation (<c>_roamDirection</c>).
@@ -3186,9 +3205,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         float angle = _exploreRefusals >= 1
             ? orientation + (turnSign * _exploreRefusals * 2.39996323f)
             : orientation + (spread * MathF.PI * 2f / 3f);
+        float leg = ExploreLegLength(_exploreRefusals);
         var destination = new System.Numerics.Vector3(
-            from.X + (MathF.Cos(angle) * ExploreLegYards),
-            from.Y + (MathF.Sin(angle) * ExploreLegYards),
+            from.X + (MathF.Cos(angle) * leg),
+            from.Y + (MathF.Sin(angle) * leg),
             from.Z);
         if (_home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId)
         {
@@ -3217,9 +3237,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             int step = (i + (Math.Max(0, refusals) * 2)) % BorderDeflectDegrees.Length;
             int idx = preferPositive ? step : (step ^ 1);
             float candidateAngle = baseAngle + (BorderDeflectDegrees[idx] * (MathF.PI / 180f));
+            float leg = ExploreLegLength(refusals);
             var candidate = new System.Numerics.Vector3(
-                from.X + (MathF.Cos(candidateAngle) * ExploreLegYards),
-                from.Y + (MathF.Sin(candidateAngle) * ExploreLegYards),
+                from.X + (MathF.Cos(candidateAngle) * leg),
+                from.Y + (MathF.Sin(candidateAngle) * leg),
                 from.Z);
             if (area.DistanceTo(candidate.X, candidate.Y) <= area.ExploreRadius
                 && area.InZone(candidate.X, candidate.Y, candidate.Z))
@@ -3507,16 +3528,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     internal static readonly float[] InwardFanDegrees = [0f, 25f, -25f, 50f, -50f, 75f, -75f];
 
-    /// <summary>The longest exploring leg.</summary>
-    internal const float ExploreLegYards = 48f;
-
     /// <summary>
     /// The end of an exploring bot's leg back in after <paramref name="refusals"/> refused legs: the first turn of
     /// <see cref="InwardFanDegrees"/> from that one on whose leg ends strictly closer to the centre than the bot stands and, for a
     /// clipped home, in its zone. A leg turned θ off the centre is at most the bot's distance × cos θ long (the point of that line
     /// nearest the centre), so it never ends farther out: a full 48-yard leg 75 degrees off from 55 yards out would end 62.9 yards
     /// out, past a 60-yard radius. When no turn qualifies (the bot at the centre, every turn out of the zone), the straight leg
-    /// towards the centre.
+    /// towards the centre. A refusal shortens the ray (<see cref="ExploreLegLength"/>), the same as a wander that the mesh cannot
+    /// finish at 48 yards.
     /// </summary>
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, Player player, int refusals)
         => InwardLeg(home, new System.Numerics.Vector3(player.X, player.Y, player.Z), refusals);
@@ -3526,10 +3545,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         float distance = home.DistanceTo(from.X, from.Y);
         float inward = MathF.Atan2(home.Centre.Y - from.Y, home.Centre.X - from.X);
+        float budget = ExploreLegLength(refusals);
         for (int turn = 0; turn < InwardFanDegrees.Length; turn++)
         {
             float degrees = InwardFanDegrees[(int)((uint)(refusals + turn) % (uint)InwardFanDegrees.Length)];
-            float length = MathF.Min(ExploreLegYards, distance * MathF.Cos(degrees * MathF.PI / 180f));
+            float length = MathF.Min(budget, distance * MathF.Cos(degrees * MathF.PI / 180f));
             if (length < 1f) continue;
             float angle = inward + (degrees * MathF.PI / 180f);
             var end = new System.Numerics.Vector3(from.X + (MathF.Cos(angle) * length), from.Y + (MathF.Sin(angle) * length), from.Z);
@@ -3538,7 +3558,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return end;
         }
 
-        float straight = MathF.Min(ExploreLegYards, distance);
+        float straight = MathF.Min(budget, distance);
         return new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
     }
 

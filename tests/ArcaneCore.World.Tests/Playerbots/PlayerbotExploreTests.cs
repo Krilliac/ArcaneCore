@@ -491,6 +491,72 @@ public sealed class PlayerbotExploreTests
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// The mesh can finish a short step and nothing else (a street, a room, a canyon: every 48-yard ray stops at a wall more than
+    /// <see cref="PlayerbotNavigation.WanderMaxShortfallYards"/> short, so <see cref="PlayerbotNavigation.PlanWander"/> refuses it).
+    /// Live 2026-10-17 bot QA, the Explore stalls whose trace is <c>wander-refused</c> and then ~120s of
+    /// <c>phase=explore-wander-plan moving:no dest:none</c>: the heading changed and the ray stayed 48 yards, so every think refused
+    /// and the bot stood until the stall watch gave the goal up. The next leg has to be short enough that finishing it moves the bot
+    /// by the stall watch's own progress.
+    /// </summary>
+    [Fact]
+    public async Task WanderRefused_NextLegIsShortEnoughToFinishInsteadOfStandingUntilTheStall()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                // Twelve yards of mesh in every direction, then a wall. A 48-yard ray stops 36 yards short and is refused;
+                // an 18-yard ray (progress 10 + the 8-yard shortfall allowance) stops 6 yards short and is walked.
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new ShortOpenGroundPathfinder(12f));
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var origin = new Vector3(player.X, player.Y, player.Z);
+                PlayerbotRoute? walked = null;
+                for (int think = 0; think < 4 && walked is null; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    explore.Invoke(brain, [player, 500u]);
+                    if (routeField.GetValue(brain) is PlayerbotRoute route
+                        && Vector2.Distance(new(origin.X, origin.Y), new(route.Points[^1].X, route.Points[^1].Y))
+                            >= PlayerbotStallWatch.ProgressYards)
+                        walked = route;
+                }
+
+                Assert.NotNull(walked);
+                Assert.True(Vector2.Distance(new(origin.X, origin.Y), new(walked!.Points[^1].X, walked.Points[^1].Y))
+                    < PlayerbotBrain.ExploreLegYards - 1f,
+                    "the leg that finally walked must be the shortened ray, not another refused 48-yard one");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>Completes a ray of at most <paramref name="openYards"/>; a longer ray ends there, short of its point.</summary>
+    private sealed class ShortOpenGroundPathfinder(float openYards) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            float dx = end.X - start.X, dy = end.Y - start.Y;
+            float distance = MathF.Sqrt((dx * dx) + (dy * dy));
+            if (!float.IsFinite(distance) || distance <= openYards + 0.05f)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+            float scale = openYards / distance;
+            var clamped = new Vector3(start.X + (dx * scale), start.Y + (dy * scale), end.Z);
+            return PathResult.StraightLine(start, clamped, PathType.Normal | PathType.Incomplete);
+        }
+    }
+
     private sealed class EastWallPartialPathfinder(float wallX) : IPathfinder
     {
         public bool Enabled => true;
