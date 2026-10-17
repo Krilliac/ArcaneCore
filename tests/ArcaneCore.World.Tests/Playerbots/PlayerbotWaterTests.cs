@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
@@ -228,6 +229,82 @@ public sealed class PlayerbotWaterTests
                 brain.Update(500);
 
                 Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// A bot fighting under water still has to breathe: the out-of-breath escape was gated on being out of combat, so a bot that a
+    /// murloc or a crocolisk held in a fight below the surface stood its ground until the breath timer killed it. The breath timer has
+    /// no combat exemption (LiquidEnvironment runs it whatever the combat state, as a player's does), so the swim out runs in combat too.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FightingBotOutOfBreath_LeavesTheWater(bool moving)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                if (moving)
+                {
+                    MovementInfo info = player.Movement; info.Flags |= MovementFlags.Forward;
+                    var packet = new PacketWriter(); info.Write(packet);
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, packet.ToArray());
+                }
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                player.Map!.Combat.SetInCombatState(player, 60_000);
+                Assert.True(player.Combat.IsInCombat);
+                MirrorTimer breath = player.Locomotion.MirrorTimers[(int)MirrorTimerType.Breath];
+                breath.SetScale(-1);
+                breath.Start(60_000);
+                breath.SetRemaining(10_000);
+                Assert.True(PlayerbotWater.BreathRunningOut(player));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward), "the fighting bot must start toward the shore");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>Control for <see cref="FightingBotOutOfBreath_LeavesTheWater"/>: with breath to spare the fight below the surface goes on.</summary>
+    [Fact]
+    public async Task FightingBotWithBreathToSpare_IsNotDivertedByTheEscape()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                player.Map!.Combat.SetInCombatState(player, 60_000);
+                Assert.True(player.Combat.IsInCombat);
+                MirrorTimer breath = player.Locomotion.MirrorTimers[(int)MirrorTimerType.Breath];
+                breath.SetScale(-1);
+                breath.Start(60_000);
+                breath.SetRemaining(50_000);
+                Assert.False(PlayerbotWater.BreathRunningOut(player));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                Assert.NotEqual(PlayerbotGoalKind.Escape, brain.Goal);
                 return true;
             });
         }

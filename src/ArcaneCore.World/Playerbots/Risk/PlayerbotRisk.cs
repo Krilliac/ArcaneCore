@@ -236,8 +236,11 @@ internal sealed class PlayerbotRisk
             .Concat((Tracker.Active ? Tracker.LastEnemies : []).Select(c => (c.Guid, c.Entry))).Distinct()];
         CheckKnownDanger(player, killers);
         if (Enabled && killers.Length > 0)
+        {
             Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z), killers, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds);
+            RememberLairs(player, killers);
+        }
         _verdicts.Clear();
         if (Enabled)
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
@@ -1148,7 +1151,7 @@ internal sealed class PlayerbotRisk
                 $"died during a retreat begun for '{Retreat.Reason}' after escapes [{string.Join('+', Retreat.UsedEscapes)}]", AnomalySeverity.Info);
         }
 
-        RememberFlight();
+        RememberFlight(player);
         RetreatStats.Record(outcome);
     }
 
@@ -1157,7 +1160,7 @@ internal sealed class PlayerbotRisk
     /// that ends in the bot's death does so too (it is the most common ending, live w29), whichever of the retreat's update and
     /// <see cref="OnDeath"/> sees the death first.
     /// </summary>
-    private void RememberFlight()
+    private void RememberFlight(Player player)
     {
         // A retreat from one creature is the estimate proved wrong about its kind (a death alone is not: one death to a kind still
         // leaves it a target, the stall watch sets it aside at the second, PlayerbotStallWatch.RecordDeath).
@@ -1165,6 +1168,31 @@ internal sealed class PlayerbotRisk
             alone: _fledFrom.Length == 1);
         _verdicts.Clear(); // weighed before the loss: the memory now says more about every candidate near it or of its kind
         Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
+        RememberLairs(player, _fledFrom);
+    }
+
+    /// <summary>
+    /// The creatures just remembered (fled from or died to) are kept out of at once, each at its home with its aggro reach plus
+    /// <see cref="PlayerbotHazards.FledMarginYards"/> (kind "fled"), as the hazard scan keeps a remembered creature it sees. The scan
+    /// follows the creature from then on while it sees it; one it never sees again is still avoided where it went back to. A stealthed
+    /// ambusher is the case: it evades home and hides again, out of the bot's sight and, from more than
+    /// <see cref="PlayerbotRecovery.StealthedHazardYards"/>, of the scan's stealthed pass too, so its hazard was never written and a later
+    /// walk went straight through its lair (live 2026-10-16: Nightsaber Stalkers, 2043, killed bots that already remembered them).
+    /// A creature that loses its target evades home (vmangos <c>CreatureAI::EnterEvadeMode</c>, as <see cref="PlayerbotRetreat"/> notes).
+    /// </summary>
+    private void RememberLairs(Player player, IEnumerable<(ObjectGuid Guid, uint Entry)> creatures)
+    {
+        if (player.Map is not { } map) return;
+        CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
+        uint now = _session.World.NowMs;
+        foreach ((ObjectGuid guid, uint _) in creatures)
+        {
+            if (map.FindObject(guid) is not Creature creature || !ReferenceEquals(creature.Map, map)) continue;
+            float reach = (system?.GetAttackDistance(creature, player) ?? CreatureTemplate.DefaultDetectionRange)
+                + creature.BoundingRadius + player.BoundingRadius;
+            Hazards.Add(player.MapId, new Vector3(creature.Home.X, creature.Home.Y, creature.Home.Z), reach + PlayerbotHazards.FledMarginYards,
+                now, _options.Risk.DangerMemorySeconds, "fled", creature.Guid);
+        }
     }
 
     /// <summary>

@@ -109,9 +109,17 @@ The report then reads `fight ttk=9.4s ttd=28.2s decision=fight reason=winning`.
    `max(1.5 x aggro radius, ThreatRadius) + 5` around where it stood when it joined and around its home (vmangos
    `IsOutOfThreatArea`), or its template's hard leash. The route is the navigation's; without one, the trail itself. With no such
    place, straight away from the enemies past the farthest leash. A route that ends with the bot still pursued is extended 30
-   yards further, up to 8 times.
-3. Ends `safe` when nothing threatens the bot (the creatures evaded), `cornered` after 60 seconds or 8 extensions (it then fights
-   that fight out), or `died`.
+   yards further, up to 8 times. Each further run (and the first, when its own route was refused) asks for straight away from
+   the enemies first, then 45 and 90 degrees to either side (never back toward them), each goal on the ground there, one exact
+   path query a turn; with none, the walkable point nearest the straight one (`PlayerbotRetreat.PlanAway`). A think that finds no
+   way asks up to five plans and the nearest-point search; each of the five that the danger memory refuses (rather than the mesh)
+   also runs the hazard detour search, held to the think's search budget, and counts as one refusal toward the boxed-in escape
+   (`PlayerbotRisk.Refused`), so such a think can add up to five. It once asked for the
+   straight one only, every think: where that was a cliff edge, water or a wall, all 8 replans were refused alike within a few thinks
+   and the bot gave up cornered where it stood (live 2026-10-16, about 200 `bot-risk/retreat-cornered` an hour, most after no
+   escape; `PlayerbotRetreatReplanTests`).
+3. Ends `safe` when nothing threatens the bot (the creatures evaded), `cornered` after 60 seconds, 8 extensions or 8 thinks in a
+   row with no way out in any of those directions (it then fights that fight out), or `died`.
 
 After a safe retreat the bot waits to `RecoverHealthPct` (eating or drinking when it can) before it pulls again; the creatures
 it fled from and the place are remembered for `DangerMemorySeconds`. The report: `retreat reason=losing-to-3 escapes=Frost_Nova+Blink`.
@@ -127,7 +135,12 @@ same way into the same creatures after its revive.
 yards, following it while seen), each creature the bot fled from or died to (its reach plus 3), each creature beyond the bot's
 strength alone or as part of an overlapping pack (`strong`: judged at full health and mana; its reach plus 3,
 dropped at the next look once the bot can take it), the place of each death (25 yards) and of each retreat (20). The brain looks the
-visible creatures over every 2 seconds, alive or a ghost. The `strong` kind is for a bot on its own: a bot-led group's leader and a
+visible creatures over every 2 seconds, alive or a ghost, and the stealthed ones it cannot see within 50 yards
+(`PlayerbotRecovery.StealthedHazardYards`). A creature fled from or died to is a hazard from the moment it is remembered, at its
+home (where it evades to) with its reach plus 3; a look that sees it moves the hazard to where it stands. A stealthed ambusher
+back in hiding at its spawn is out of sight and, from farther than 50 yards, out of the stealthed look too: before, its hazard was
+only ever written by a look that saw it, and a walk planned from afar went through its lair (live 2026-10-16, Nightsaber Stalkers
+2043 on Teldrassil killing bots that already remembered them; `PlayerbotStealthedHazardTests`). The `strong` kind is for a bot on its own: a bot-led group's leader and a
 party bot do not keep it, and the ghost's revive spot does not count it (the recovery judges strength itself). Strong hazards are
 kept apart (their own cap of 64, so they never push a death or retreat place out), updated in place at each look, dropped when a look
 no longer sees the creature alive and strong, and lapse 6 seconds after the last look (a ghost, or a bot whose brain a bot-led
@@ -242,11 +255,20 @@ detour keeps out of a hostile standing on its first waypoint).
 `ConfigReloadTests` checks every risk key is live and range-checked. The live snapshot replay
 (`PlayerbotLiveSnapshotReplayTests`) prints each bot's deaths.
 
+## Water
+
+The brain leaves water when its breath runs out (20 seconds left of the breath timer, `PlayerbotWater.BreathRunningOut`) whether it
+fights or not: the breath timer runs whatever the fight (`LiquidEnvironment`), and a bot that a murloc or a crocolisk held below the
+surface once stood its ground until it drowned. It swims for the shore (`PlayerbotWater.FindExit`) with its attackers behind it and
+fights on once out; while no way out is known yet (the search waits 2 seconds between tries) it fights on where it is. With breath
+to spare a fight below the surface goes on; out of combat a still bot under water is taken out at once (`PlayerbotWaterTests`).
+
 ## Limits
 
 * Only EventAI casts are seen; spells cast by C# creature AIs or scripts are not in the estimate, and a creature's heals or
   crowd control are not counted.
-* A hazard is known only once seen (visibility range) or after a death; the first walk into a creature out of sight is not avoided.
+* A hazard is known only once seen (visibility range) or after a death; the first walk into a creature out of sight is not avoided,
+  and a remembered creature is placed at its home until a look sees it (a wandering one may be elsewhere).
 * A walk refused for hazards leaves the goal to choose again; there is no search for a long way round beyond the two corner offsets.
 * Linked aggro of creature groups (formations, `creature_linking`) is not predicted, only assistance and aggro radii.
 * Enrage is only seen in the observed rates, not predicted.
