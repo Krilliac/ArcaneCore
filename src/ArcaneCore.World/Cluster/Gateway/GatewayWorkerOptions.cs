@@ -15,13 +15,13 @@ public sealed class GatewayWorkerOptions
     /// <summary>`true` opens the gateway listener (worker mode). `false`, the default, is Combined mode: no listener, no change.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Address of the gateway listener. A non-loopback address requires Cluster:Worker:LinkSecret.</summary>
+    /// <summary>Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.</summary>
     public string BindAddress { get; set; } = "127.0.0.1";
 
     /// <summary>Port of the gateway listener; must equal the gateway's Gateway:WorkerPort.</summary>
     public int Port { get; set; } = 8095;
 
-    /// <summary>Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Empty is allowed on a loopback bind only. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password.</summary>
+    /// <summary>Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password.</summary>
     public string LinkSecret { get; set; } = string.Empty;
 
     /// <summary>This worker's node id in the link manifest (shown in the gateway's log).</summary>

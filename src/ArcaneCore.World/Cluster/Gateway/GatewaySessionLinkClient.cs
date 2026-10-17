@@ -45,6 +45,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private readonly TaskCompletionSource<(bool Accepted, string Reason)> _helloAck = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
+    private readonly Lock _openGate = new();
     private GatewayLinkChannel? _channel;
     private Task? _receive;
     private long _nextRequestId;
@@ -56,6 +57,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(gatewayManifest);
         ArgumentNullException.ThrowIfNull(workerEndPoint);
         ArgumentNullException.ThrowIfNull(linkSecret);
+        GatewaySessionLinkHost.ThrowIfWeakSecret(linkSecret, "Gateway:LinkSecret");
         if (gatewayManifest.Role != ClusterRole.Gateway)
         {
             throw new ArgumentException("the gateway end of a link registers with the Gateway role", nameof(gatewayManifest));
@@ -112,27 +114,56 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     }
 
     /// <summary>
-    /// Ask the worker to open a session. Accepted: <see cref="IGatewaySessionSink.OnOpened"/> has run (on the receive loop)
-    /// before this returns. Refused: the sink is never called and the reply carries the client's refusal code.
+    /// Ask the worker to open a session whose generation the caller already chose. Accepted: <see cref="IGatewaySessionSink.OnOpened"/>
+    /// has run (on the receive loop) before this returns. Refused: the sink is never called and the reply carries the client's refusal
+    /// code. The worker refuses an open whose generation is not above every one before it on the link, so concurrent callers must use
+    /// the overload that allocates the generation (<see cref="OpenAsync(Func{long}, Func{long, GatewaySessionOpenRequest}, IGatewaySessionSink, CancellationToken)"/>).
     /// </summary>
-    public async Task<GatewaySessionOpenReply> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionSink sink, CancellationToken cancellationToken)
+    public Task<GatewaySessionOpenReply> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionSink sink, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return OpenAsync(() => request.SessionGeneration, _ => request, sink, cancellationToken);
+    }
+
+    /// <summary>
+    /// Ask the worker to open a session, taking its generation from <paramref name="nextGeneration"/> (ascending) and building the
+    /// request with <paramref name="requestFor"/>. Taking the generation and queueing the SessionOpen happen under one lock, so the
+    /// opens leave on the link in generation order however many clients log in at once: the worker refuses an open whose generation
+    /// is not above the last one it saw. Both callbacks run under that lock: keep them short and non-blocking.
+    /// </summary>
+    public async Task<GatewaySessionOpenReply> OpenAsync(
+        Func<long> nextGeneration, Func<long, GatewaySessionOpenRequest> requestFor, IGatewaySessionSink sink, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nextGeneration);
+        ArgumentNullException.ThrowIfNull(requestFor);
         ArgumentNullException.ThrowIfNull(sink);
         GatewayLinkChannel channel = _channel ?? throw new InvalidOperationException("not connected");
-        long requestId = Interlocked.Increment(ref _nextRequestId);
-        var session = new ClientSession(request.SessionGeneration, request.AccountId, sink, requestId);
-        if (!_sessions.TryAdd(request.SessionGeneration, session))
+        GatewaySessionOpenRequest request;
+        ClientSession session;
+        long requestId;
+        lock (_openGate)
         {
-            throw new InvalidOperationException($"session generation {request.SessionGeneration} is already open on this link");
-        }
+            long generation = nextGeneration();
+            request = requestFor(generation);
+            if (request.SessionGeneration != generation)
+            {
+                throw new InvalidOperationException($"the open request carries generation {request.SessionGeneration}, not the allocated {generation}");
+            }
 
-        _pendingOpens[requestId] = session;
-        if (!channel.TryEnqueue(GatewaySessionWire.EncodeOpen(requestId, request)))
-        {
-            _pendingOpens.TryRemove(requestId, out _);
-            _sessions.TryRemove(request.SessionGeneration, out _);
-            return GatewaySessionOpenReply.Refuse(AuthResponseCode.Unavailable, "the worker link is down");
+            requestId = Interlocked.Increment(ref _nextRequestId);
+            session = new ClientSession(generation, request.AccountId, sink, requestId);
+            if (!_sessions.TryAdd(generation, session))
+            {
+                throw new InvalidOperationException($"session generation {generation} is already open on this link");
+            }
+
+            _pendingOpens[requestId] = session;
+            if (!channel.TryEnqueue(GatewaySessionWire.EncodeOpen(requestId, request)))
+            {
+                _pendingOpens.TryRemove(requestId, out _);
+                _sessions.TryRemove(generation, out _);
+                return GatewaySessionOpenReply.Refuse(AuthResponseCode.Unavailable, "the worker link is down");
+            }
         }
 
         try

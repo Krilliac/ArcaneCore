@@ -206,7 +206,7 @@ public sealed class GatewayEndToEndTests
     /// <summary>A synthetic realm and world, the world's worker endpoint, and a gateway linked to it.</summary>
     private sealed class Stack : IAsyncDisposable
     {
-        public const string Secret = "e2e-link-secret";
+        public const string Secret = "e2e-link-secret-0123456789";
 
         public required SyntheticArcaneServer Server { get; init; }
 

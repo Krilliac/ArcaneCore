@@ -2272,7 +2272,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Address of the gateway listener. A non-loopback address requires Cluster:Worker:LinkSecret.",
+      "meaning": "Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#clusterworker",
       "isCollection": false
@@ -2336,7 +2336,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Empty is allowed on a loopback bind only. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password.",
+      "meaning": "Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#clusterworker",
       "isCollection": false

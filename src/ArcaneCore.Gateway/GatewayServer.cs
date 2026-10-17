@@ -58,12 +58,17 @@ public sealed class GatewayServer(
     /// <summary>Completes when a worker link is registered (the current one, or the next).</summary>
     public Task WaitForLinkAsync(CancellationToken cancellationToken) => Volatile.Read(ref _linkUp).Task.WaitAsync(cancellationToken);
 
-    /// <summary>The next session generation: unique and ascending for this process, so every SessionOpen on a link is newer than the last.</summary>
+    /// <summary>
+    /// The next session generation: unique and ascending for this process. The link client calls it and queues the SessionOpen
+    /// under one lock (<see cref="GatewaySessionLinkClient.OpenAsync(Func{long}, Func{long, GatewaySessionOpenRequest}, IGatewaySessionSink, CancellationToken)"/>),
+    /// so every SessionOpen on a link is newer than the last even when clients log in at once.
+    /// </summary>
     internal long NextGeneration() => Interlocked.Increment(ref _nextGeneration);
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         GatewayOptions config = options.Value;
+        GatewaySessionLinkHost.ThrowIfWeakSecret(config.LinkSecret, "Gateway:LinkSecret"); // fail at start, not in the link loop
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
         _listener = listener;

@@ -61,6 +61,12 @@ public interface IGatewaySessionAcceptor
 /// </summary>
 public sealed class GatewaySessionLinkHost : IAsyncDisposable
 {
+    /// <summary>
+    /// The shortest link secret either end accepts, on every bind address. An empty or short secret makes the link proof
+    /// computable by any local process, and an admitted gateway opens a session for any account it names.
+    /// </summary>
+    public const int MinLinkSecretLength = 16;
+
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RejectFlushBound = TimeSpan.FromSeconds(2);
 
@@ -90,10 +96,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(ownerEpoch);
         ArgumentNullException.ThrowIfNull(linkSecret);
         ArgumentNullException.ThrowIfNull(bindEndPoint);
-        if (linkSecret.Length == 0 && !IPAddress.IsLoopback(bindEndPoint.Address))
-        {
-            throw new ArgumentException("a gateway link bound to a non-loopback address needs a link secret (Cluster:Worker:LinkSecret)", nameof(linkSecret));
-        }
+        ThrowIfWeakSecret(linkSecret, "Cluster:Worker:LinkSecret");
 
         _workerManifest = workerManifest;
         _acceptor = acceptor;
@@ -104,6 +107,20 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     }
 
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
+
+    /// <summary>
+    /// Refuse a link secret shorter than <see cref="MinLinkSecretLength"/> (loopback included: any local process can reach a
+    /// loopback port). <paramref name="key"/> names the setting in the message.
+    /// </summary>
+    public static void ThrowIfWeakSecret(string? linkSecret, string key)
+    {
+        if (string.IsNullOrEmpty(linkSecret) || linkSecret.Length < MinLinkSecretLength)
+        {
+            throw new ArgumentException(
+                $"the gateway link needs a secret of at least {MinLinkSecretLength} characters ({key}, the same on both ends); it is {(string.IsNullOrEmpty(linkSecret) ? "empty" : "too short")}",
+                nameof(linkSecret));
+        }
+    }
 
     /// <summary>Client packets dropped by the envelope rules (stale sequence, wrong generation, account or epoch, unknown session).</summary>
     public long DroppedClientPackets => Interlocked.Read(ref _droppedClientPackets);

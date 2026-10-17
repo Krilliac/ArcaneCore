@@ -36,7 +36,7 @@ public sealed class GatewayOptions
     /// <summary>Port of the world worker's gateway listener (Cluster:Worker:Port).</summary>
     public int WorkerPort { get; set; } = 8095;
 
-    /// <summary>The shared link secret (Cluster:Worker:LinkSecret on the worker).</summary>
+    /// <summary>The shared link secret (Cluster:Worker:LinkSecret on the worker): at least 16 characters, or the gateway refuses to start.</summary>
     public string LinkSecret { get; set; } = string.Empty;
 
     /// <summary>First wait before reconnecting a lost or refused worker link; doubles up to 30 s.</summary>

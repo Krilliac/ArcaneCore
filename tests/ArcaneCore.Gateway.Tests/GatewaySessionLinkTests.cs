@@ -16,7 +16,7 @@ namespace ArcaneCore.Gateway.Tests;
 public sealed class GatewaySessionLinkTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(20);
-    private const string Secret = "link-secret";
+    private const string Secret = "link-secret-0123456789";
 
     [Fact]
     public async Task OpenedSession_DeliversBothDirectionsInOrder_AndNothingOvertakesTheReply()
@@ -126,7 +126,7 @@ public sealed class GatewaySessionLinkTests
     }
 
     [Theory]
-    [InlineData("wrong-secret", "dev")]
+    [InlineData("wrong-secret-0123456789", "dev")]
     [InlineData(Secret, "other-content")]
     public async Task WrongSecretOrManifest_RefusesTheLink(string secret, string contentRevision)
     {
@@ -146,6 +146,69 @@ public sealed class GatewaySessionLinkTests
             Manifest(ClusterRole.Worker), new FakeAcceptor(), () => 1, string.Empty, new IPEndPoint(IPAddress.Any, 0)));
         Assert.Contains("LinkSecret", refused.Message, StringComparison.Ordinal);
         await Task.CompletedTask;
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("fifteen-chars!!")]
+    public void AnEmptyOrShortSecret_IsRefused_OnLoopbackToo_ByBothEnds(string secret)
+    {
+        // An empty secret's proof is HMAC("", nonce): any local process could compute it, register as a gateway and open a session
+        // for any account. Worker mode refuses to start with it on every bind address, and so does the gateway.
+        ArgumentException worker = Assert.Throws<ArgumentException>(() => new GatewaySessionLinkHost(
+            Manifest(ClusterRole.Worker), new FakeAcceptor(), () => 1, secret, new IPEndPoint(IPAddress.Loopback, 0)));
+        Assert.Contains("Cluster:Worker:LinkSecret", worker.Message, StringComparison.Ordinal);
+        ArgumentException gateway = Assert.Throws<ArgumentException>(() => new GatewaySessionLinkClient(
+            Manifest(ClusterRole.Gateway), new IPEndPoint(IPAddress.Loopback, 1), secret));
+        Assert.Contains("Gateway:LinkSecret", gateway.Message, StringComparison.Ordinal);
+        Assert.Equal(16, GatewaySessionLinkHost.MinLinkSecretLength);
+    }
+
+    [Fact]
+    public async Task AnOpenWhoseGenerationWasTakenFirst_IsQueuedFirst_SoTheWorkerAcceptsBoth()
+    {
+        // Client A takes generation 1 and is slow to build its request; client B takes generation 2 meanwhile. Were the generation
+        // taken outside the link's lock, B's open would leave first and the worker would refuse A as stale (AUTH_FAILED).
+        using var cts = new CancellationTokenSource(Deadline);
+        var acceptor = new FakeAcceptor();
+        await using Harness h = await Harness.StartAsync(acceptor, cts.Token);
+        long next = 0;
+        long NextGeneration() => Interlocked.Increment(ref next);
+        using var aBuilding = new ManualResetEventSlim();
+        using var bTookItsGeneration = new ManualResetEventSlim();
+
+        Task<GatewaySessionOpenReply> a = Task.Run(() => h.Client.OpenAsync(NextGeneration, generation =>
+        {
+            aBuilding.Set();
+            bTookItsGeneration.Wait(TimeSpan.FromSeconds(1)); // never set while A holds the lock: B cannot take a generation before A queued
+            Thread.Sleep(200); // were B not held, time for it to queue its open first
+            return Request(generation);
+        }, new RecordingSink(), cts.Token));
+        Assert.True(aBuilding.Wait(Deadline));
+        Task<GatewaySessionOpenReply> b = Task.Run(() => h.Client.OpenAsync(() =>
+        {
+            long generation = NextGeneration();
+            bTookItsGeneration.Set();
+            return generation;
+        }, Request, new RecordingSink(), cts.Token));
+
+        GatewaySessionOpenReply[] replies = await Task.WhenAll(a, b);
+        Assert.All(replies, reply => Assert.True(reply.Accepted, reply.Reason));
+        Assert.Equal(2, acceptor.Sessions.Count);
+    }
+
+    [Fact]
+    public async Task ABurstOfConcurrentOpens_IsAcceptedWhole()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        var acceptor = new FakeAcceptor();
+        await using Harness h = await Harness.StartAsync(acceptor, cts.Token);
+        long next = 0;
+        GatewaySessionOpenReply[] replies = await Task.WhenAll(Enumerable.Range(0, 64).Select(_ => Task.Run(() =>
+            h.Client.OpenAsync(() => Interlocked.Increment(ref next), Request, new RecordingSink(), cts.Token))));
+        Assert.All(replies, reply => Assert.True(reply.Accepted, reply.Reason));
+        Assert.Equal(64, acceptor.Sessions.Count);
+        Assert.Equal(64, h.Host.SessionCount);
     }
 
     [Fact]

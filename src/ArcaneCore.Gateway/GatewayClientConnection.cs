@@ -307,13 +307,20 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             return false;
         }
 
-        long generation = _server.NextGeneration();
         _link = link;
         _pending = new PendingAuth(protocol, stored.SessionKey, request.AddonBlock.ToArray(), request.Account);
         _state = ConnectionState.Authenticating;
-        Interlocked.Exchange(ref _generation, generation);
+        // The link takes the generation and queues the open under one lock: concurrent logins reach the worker in generation order
+        // (it refuses an open not above the last one it saw).
         GatewaySessionOpenReply reply = await link.OpenAsync(
-            new GatewaySessionOpenRequest(generation, stored.Id, request.Account, request.Build, RemoteEndpoint), this, token).ConfigureAwait(false);
+            _server.NextGeneration,
+            generation =>
+            {
+                Interlocked.Exchange(ref _generation, generation);
+                return new GatewaySessionOpenRequest(generation, stored.Id, request.Account, request.Build, RemoteEndpoint);
+            },
+            this,
+            token).ConfigureAwait(false);
         _pending = null;
         if (!reply.Accepted)
         {

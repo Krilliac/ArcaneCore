@@ -43,16 +43,28 @@ Related: [Clustering design](../CLUSTERING_DESIGN.md) (M15.1 gateway target), [n
 A packet is dropped and counted (`GatewaySessionLinkHost.DroppedClientPackets`, `GatewaySessionLinkClient.DroppedServerPackets`)
 when its generation is unknown on that link, its account is not the session's, its owner epoch is not the session's, or its
 sequence is not above the last one accepted. A `SessionOpen` whose generation is not above the highest one the link has seen
-is refused. A frame that does not decode closes the link, and every session on it ends (`LinkLost`).
+is refused. The gateway takes a session's generation and queues its `SessionOpen` under one lock on the link
+(`GatewaySessionLinkClient.OpenAsync(nextGeneration, requestFor, ...)`), so logins that arrive together still reach the
+worker in generation order and none is refused as stale. A frame that does not decode closes the link, and every session
+on it ends (`LinkLost`).
 
 ### Link admission
 
 The worker sends a 32-byte random challenge; the gateway answers with HMAC-SHA256 of it keyed by the shared link secret,
 then registers a `Gateway`-role manifest (realm id, contract version, content revision, schema versions). The worker
-checks the proof, the role and the manifest before it accepts any session. A non-loopback `Cluster:Worker:BindAddress`
-refuses to start without `Cluster:Worker:LinkSecret`. **An admitted gateway can open a session for any account it
-authenticated, so the link secret is as sensitive as a database password.** The link itself is not encrypted; keep it on
-loopback or a private network.
+checks the proof, the role and the manifest before it accepts any session. Worker mode refuses to start unless
+`Cluster:Worker:LinkSecret` is at least 16 characters, **on every bind address, loopback included**: with an empty secret
+the proof is an HMAC any local process can compute, and the manifest values are public defaults. The gateway likewise
+refuses to start unless its own `LinkSecret` (the `Gateway` section below) is at least 16 characters. **An admitted gateway can open a session for any
+account it names (the worker checks the account's status and bans, not a session-key proof), so the link secret is as
+sensitive as a database password.**
+
+What the link does not protect:
+
+- **The worker is not authenticated to the gateway.** The gateway answers any challenge; it never checks that the worker
+  knows the secret. A process that binds the worker port before the World does receives every client's plaintext opcodes.
+- **The link is not encrypted and frames carry no MAC after the handshake.** Anyone on the path can read and inject.
+  Keep the link on loopback or a private network you control.
 
 ## Running it
 
@@ -84,7 +96,7 @@ The `Gateway` section:
 | `PreAuthTimeout` | `00:00:10` | A connection without a valid `CMSG_AUTH_SESSION` by then is closed |
 | `MaxOutboundBytes` | `8388608` | A client with more unsent bytes than this is disconnected |
 | `WorkerAddress` / `WorkerPort` | `127.0.0.1` / `8095` | The worker's `Cluster:Worker` listener |
-| `LinkSecret` | empty | Must equal the worker's link secret |
+| `LinkSecret` | empty | Must equal the worker's link secret; at least 16 characters, or the gateway refuses to start |
 | `LinkRetryDelay` | `00:00:01` | First wait before reconnecting the link; doubles up to 30 s |
 | `NodeId` | `gateway` | Node id in the link manifest |
 | `RealmId`, `ContentRevision`, `CharactersSchemaVersion`, `WorldSchemaVersion` | `1`, `dev`, `1`, `1` | Must equal the worker's values or the link is refused |
