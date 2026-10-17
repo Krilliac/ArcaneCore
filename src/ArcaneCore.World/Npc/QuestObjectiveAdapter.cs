@@ -13,8 +13,9 @@ namespace ArcaneCore.World.Npc;
 /// <summary>
 /// Routes authoritative creature deaths and spell hits to the online quest journals, on the world
 /// thread: vmangos RewardPlayerAndGroupAtKill / RewardPlayerAndGroupAtCast. A grouped actor shares
-/// credit with members on the same map inside the group reward distance (dead members that have
-/// not released included); kills in a raid group only credit raid quests.
+/// credit with members on the same map inside the group reward distance. A corpse that has not
+/// released still receives KilledMonster, solo or grouped; a released ghost does not. Kills in a
+/// raid group only credit raid quests.
 /// </summary>
 public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func<Player, RewardGroup?>? groups = null,
     float rewardDistance = 74.0f) : IDisposable
@@ -97,7 +98,10 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
         (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, groups ?? (_ => null));
         if (group is null)
         {
-            if (tapper is { IsAlive: true })
+            // RewardSinglePlayerAtKill (Player.cpp:19980-19981) always calls KilledMonster for a non-PvP creature.
+            // A corpse that has not released still receives it, the same rule as the group helper (Group.cpp:2345-2350);
+            // a released ghost does not.
+            if (tapper is not null && KillRewards.CanReceiveQuestCredit(tapper))
             {
                 objectives.KilledMonsterCredit(tapper, creature.Entry, creature.Guid);
             }

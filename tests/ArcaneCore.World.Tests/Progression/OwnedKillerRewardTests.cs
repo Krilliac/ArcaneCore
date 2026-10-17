@@ -462,6 +462,27 @@ public sealed class OwnedKillerRewardTests(ITestOutputHelper output)
         });
     }
 
+    [Fact]
+    public async Task ADeadUnreleasedTapper_StillGetsKillCredit()
+    {
+        // Player.cpp:19980-19981 and Group.cpp:2345-2350: a corpse that has not released still receives KilledMonster.
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("DEADTAP", "Deadtap");
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Deadtap")!;
+            using var watch = new Watch(host, player.Map!, player);
+            Creature guard = Spawn(host, player, Helper, 2);
+            Creature victim = Spawn(host, player, Victim, 4);
+            Hit(player, victim, victim.MaxHealth * 40 / 100);
+            player.Health = 0;
+            Assert.False(player.IsAlive);
+            Assert.False(player.Flags.HasFlag(PlayerFlags.Ghost));
+            Finish(guard, victim);
+            Assert.Contains((player.Guid, VictimEntry), watch.Credits);
+        });
+    }
+
     [Theory]
     [InlineData(30u, "player")]
     [InlineData(35u, "player")]
