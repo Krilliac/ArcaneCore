@@ -138,9 +138,16 @@ public sealed partial class MapCombat
                 string.Create(CultureInfo.InvariantCulture, $"threat list holds {(staleTarget is null ? "?" : SubjectOf(staleTarget))} (deathState={staleTarget?.Combat.DeathState}, inWorld={staleTarget?.IsInWorld}) for {StaleThreatBudgetMs} ms{Where(unit)}"));
         }
 
-        // Flagged in combat with nothing to fight: no melee victim, nobody attacking, and no live holder/threat within range.
+        // Flagged in combat with nothing to fight: no melee victim, nobody attacking, and no live holder/threat within range. A creature
+        // the creature system is not updating (outside every active cell) cannot evade until a player comes near, as in vmangos, so its
+        // clock holds: the live 2026-10-17 run reported 424 creatures, mostly pairs at their spawn points, whose fight ended (the bot
+        // that pulled them died or left) in the same tick the cell went inactive.
         bool stuckBad = alive && c.IsInCombat && c.Victim is null && c.AttackersInternal.Count == 0 && !IsEngaged(unit, c, isPlayer);
-        if (Advance(ref _stuckEpisodes, unit, stuckBad, elapsed, CombatNeverLeftBudgetMs, 0))
+        if (stuckBad && unit is Creatures.Creature { IsFrozenOutsideActiveCells: true })
+        {
+            // neither good nor bad: keep the episode, add no time
+        }
+        else if (Advance(ref _stuckEpisodes, unit, stuckBad, elapsed, CombatNeverLeftBudgetMs, 0))
         {
             AnomalyLedger.Shared.Report(AnomalySubsystem, CombatNeverLeftCode, SubjectOf(unit),
                 string.Create(CultureInfo.InvariantCulture, $"flagged in combat for {CombatNeverLeftBudgetMs} ms with no victim, attacker or reachable threat holder (threatenedBy={c.ThreatenedByInternal.Count} threatList={c.HasThreatList}){Where(unit)}"));

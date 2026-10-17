@@ -188,6 +188,13 @@ public sealed partial class Creature : Unit, ICombatCreature
     internal long LastUpdateClockMs { get; set; } = -1;
 
     /// <summary>
+    /// Whether the creature system's last update skipped this creature because it stood outside every active cell (vmangos
+    /// Map::UpdateActiveCellsSynch): its AI, leash and evade do not run until a player or active object comes near again. The combat
+    /// outcome checks hold their clocks while it is set (MapCombat.CheckUnitAnomalies).
+    /// </summary>
+    internal bool IsFrozenOutsideActiveCells { get; set; }
+
+    /// <summary>
     /// Set by script command 21 (SCRIPT_COMMAND_SET_ACTIVEOBJECT): vmangos keeps m_isActiveObject on the creature for its life, so
     /// the mark outlives a death and is applied again when the creature re-enters the map (CreatureMapSystem.QueueActivationIfFlagged).
     /// </summary>

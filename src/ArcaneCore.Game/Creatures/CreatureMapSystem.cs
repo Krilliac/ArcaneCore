@@ -765,10 +765,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 // splines advance only by an active update's delta, never by time spent in an inactive cell.
                 // Keep all map-clock readers (including stop and observer catch-up) on the same frozen position.
                 creature.Spline?.Pause(_clockMs, diffMs);
+                creature.IsFrozenOutsideActiveCells = true;
                 SkippedInactiveCreatures++;
                 continue;
             }
 
+            creature.IsFrozenOutsideActiveCells = false;
             _timing.Updated++;
             long creatureStart = Stopwatch.GetTimestamp();
             // WorldObject::UpdateHelper::UpdateRealTime: the update after a pause gets the time since the last one (update_diff),
