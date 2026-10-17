@@ -74,7 +74,7 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: Restore
-        run: dotnet restore ArcaneCore.slnx
+        run: dotnet restore ArcaneCore.slnx --locked-mode
 
       # Directory.Build.props sets TreatWarningsAsErrors=true, so a warning fails the build.
       # The whole solution is built in every job so warnings anywhere still fail CI.
