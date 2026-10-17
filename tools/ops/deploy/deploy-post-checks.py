@@ -21,6 +21,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import opsenv  # noqa: E402
 
 
+def require(condition: object, message: object) -> None:
+    """A safety gate: stop before anything is marked healthy when the condition is false. Not `assert`, which `python -O` compiles out."""
+    if not condition:
+        sys.exit(f"deploy-post-checks: {message}")
+
+
+def port_of(config: dict, section: str) -> int:
+    """The section's Port from appsettings.json as an integer; it is formatted into PowerShell code, so nothing else may get through."""
+    raw = config.get(section, {}).get("Port")
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        sys.exit(f"deploy-post-checks: {section}:Port in appsettings.json is not a port number: {raw!r}")
+    require(0 < port < 65536, f"{section}:Port in appsettings.json is out of range: {port}")
+    return port
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run post-start deploy checks read-only against a started deploy run.")
     ap.add_argument("--label", required=True, help="deploy run label under the deploy directory")
@@ -34,9 +51,10 @@ def main() -> int:
     out = deploy_dir / args.label
     report_path = out / "report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert not report.get("healthy"), "this run is already marked healthy"
+    require(not report.get("healthy"), "this run is already marked healthy")
     profile = Path(report["profile"])
     config = json.loads((profile / "appsettings.json").read_text(encoding="utf-8-sig"))
+    world_port, auth_port = port_of(config, "World"), port_of(config, "Auth")
     paths = {}
     for role in ("Characters",):
         cs = config["Database"][role]["ConnectionString"]
@@ -44,10 +62,10 @@ def main() -> int:
         paths[role] = Path(parts["data source"])
 
     def ps(code: str):
-        return subprocess.run(["powershell", "-NoProfile", "-Command", code], capture_output=True, text=True, timeout=60)
+        return subprocess.run(["powershell", "-NoProfile", "-Command", code], capture_output=True, text=True, timeout=60, check=False)
 
     def listener_pid(port: int) -> int | None:
-        r = ps(f"(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess")
+        r = ps(f"(Get-NetTCPConnection -LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess")
         return int(r.stdout.strip()) if r.stdout.strip() else None
 
     def ro(role: str):
@@ -58,27 +76,27 @@ def main() -> int:
             return [list(r) for r in db.execute(sql)]
 
     world_pid, realm_pid = report["new_world"], report["new_realm"]
-    assert listener_pid(config["World"]["Port"]) == world_pid, "the new world is not the world listener"
-    assert listener_pid(config["Auth"]["Port"]) == realm_pid, "the new realm is not the auth listener"
+    require(listener_pid(world_port) == world_pid, f"the new world (PID {world_pid}) is not the world listener on port {world_port}")
+    require(listener_pid(auth_port) == realm_pid, f"the new realm (PID {realm_pid}) is not the auth listener on port {auth_port}")
 
     log = (out / "logs" / "world.log") if (out / "logs" / "world.log").is_file() else (out / "world.log")
     text = log.read_text(encoding="utf-8", errors="replace")
     enabled = sum(1 for b in report["bots_stopped"] if b[4])
     max_bots = int(config.get("World", {}).get("Playerbots", {}).get("MaxBots", 8))
     started = text.count("Started managed playerbot")
-    assert started >= min(enabled, max_bots), f"{started} bots started; {min(enabled, max_bots)} expected (enabled {enabled}, MaxBots {max_bots})"
+    require(started >= min(enabled, max_bots), f"{started} bots started; {min(enabled, max_bots)} expected (enabled {enabled}, MaxBots {max_bots})")
 
     now_chars = {tuple(c) for c in query("SELECT Id,AccountId,Name,Race,Class,Gender FROM characters ORDER BY Id")}
     lost_chars = [c for c in report["characters_stopped"] if tuple(c) not in now_chars]
-    assert not lost_chars, f"characters lost or changed: {lost_chars[:5]}"
+    require(not lost_chars, f"characters lost or changed: {lost_chars[:5]}")
     has_pop = query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='playerbot_population_member'")
     pop = set(report["population_stopped"]) | ({r[0] for r in query("SELECT BotId FROM playerbot_population_member")} if has_pop else set())
     now_bots = {tuple(b[:4]): b[4] for b in query(
         "SELECT b.BotId,b.AccountId,b.CharacterId,c.Name,b.DesiredEnabled FROM managed_playerbot b JOIN characters c ON c.Id=b.CharacterId")}
     lost_bots = [b for b in report["bots_stopped"] if tuple(b[:4]) not in now_bots]
-    assert not lost_bots, f"managed bots lost or changed: {lost_bots[:5]}"
+    require(not lost_bots, f"managed bots lost or changed: {lost_bots[:5]}")
     flipped = [b for b in report["bots_stopped"] if b[0] not in pop and now_bots[tuple(b[:4])] != b[4]]
-    assert not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}"
+    require(not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}")
 
     expected_lines = ["Terrain: reading .map files from", "Collision: vmaps from", "Collision: navmeshes from", "elevators and trams:",
                       "Started managed playerbot", "loaded 44 maps, 1081 areas", "loaded 122 graveyards and 191 graveyard-zone links"]
@@ -105,7 +123,7 @@ def main() -> int:
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     if args.status_console:
         subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
-                          "-WorldPort", str(config["World"]["Port"]), "-AuthPort", str(config["Auth"]["Port"])],
+                          "-WorldPort", str(world_port), "-AuthPort", str(auth_port)],
                          creationflags=subprocess.CREATE_NEW_CONSOLE)
     missing = [k for k, ok in report["world_log_checks"].items() if not ok]
     print(json.dumps(dict(healthy=True, world=world_pid, realm=realm_pid, started_bots=started, enabled_bots=enabled, max_bots=max_bots,
