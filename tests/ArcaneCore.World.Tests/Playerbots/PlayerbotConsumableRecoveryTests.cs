@@ -2,12 +2,14 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Spells;
@@ -243,7 +245,8 @@ public sealed class PlayerbotConsumableRecoveryTests
     [Fact]
     public async Task MovingCombatBandage_StopsAndChannelsInTheSameThink()
     {
-        await using WorldTestHost host = Start(out _, BandageTemplate(BandageItem, BandageSpellId));
+        // The 700 ms wait below is game time (AdvanceClockAsync), so this host needs the manual clock.
+        await using WorldTestHost host = Start(out _, manualClock: true, BandageTemplate(BandageItem, BandageSpellId));
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
@@ -301,13 +304,23 @@ public sealed class PlayerbotConsumableRecoveryTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    private sealed class ManualClockFeature : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
+    }
+
     private static WorldTestHost Start(out ItemTestContent items, params ItemTemplate[] templates)
+        => Start(out items, manualClock: false, templates);
+
+    private static WorldTestHost Start(out ItemTestContent items, bool manualClock, params ItemTemplate[] templates)
     {
         items = new ItemTestContent();
         items.Templates.Templates.AddRange(templates);
         using (items.Use())
         {
-            return WorldTestHost.Start();
+            return manualClock
+                ? WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>())
+                : WorldTestHost.Start();
         }
     }
 
