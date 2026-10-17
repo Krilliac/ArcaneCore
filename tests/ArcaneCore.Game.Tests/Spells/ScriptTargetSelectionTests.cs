@@ -16,6 +16,7 @@ public sealed class ScriptTargetSelectionTests
     private const uint NearestSpell = 990100;
     private const uint AreaSpell = 990101;
     private const uint UnlistedAreaSpell = 990102;
+    private const uint DestinationSpell = 990103;
 
     private static SpellInfo Marker(uint id, SpellImplicitTarget targetA, SpellImplicitTarget targetB = SpellImplicitTarget.None, float radius = 0)
         => Spell(id, Effect(SpellEffectName.ApplyAura, 1, targetA, AuraType.Dummy, targetB: targetB) with { Radius = radius }) with
@@ -33,6 +34,7 @@ public sealed class ScriptTargetSelectionTests
             Marker(NearestSpell, SpellImplicitTarget.UnitScriptNearCaster),
             Marker(AreaSpell, SpellImplicitTarget.LocationCasterSrc, SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc, radius: 20),
             Marker(UnlistedAreaSpell, SpellImplicitTarget.LocationCasterSrc, SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc, radius: 20),
+            Marker(DestinationSpell, SpellImplicitTarget.LocationDatabase, SpellImplicitTarget.EnumUnitsScriptAoeAtDestLoc, radius: 5),
         ]);
         kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [], rows);
         return kit;
@@ -112,5 +114,28 @@ public sealed class ScriptTargetSelectionTests
         Assert.True(kit.Spells.System.HasAura(guardian, UnlistedAreaSpell));
         Assert.True(kit.Spells.System.HasAura(wild, UnlistedAreaSpell));
         Assert.False(kit.Spells.System.HasAura(player, UnlistedAreaSpell));
+    }
+
+    /// <summary>
+    /// TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC (8) with TARGET_LOCATION_DATABASE (17) as target A, the build 5875 shape of Mortar Shot 16786
+    /// (SCHOOL_DAMAGE at a spell_target_position spot): the listed units around the database spot are hit, not those around the caster.
+    /// </summary>
+    [Fact]
+    public void ScriptAoeAtDestination_HitsTheListedUnitsAroundTheDatabaseSpot()
+    {
+        using PetTestKit kit = Kit(new SpellStore.ScriptTarget(DestinationSpell, 1, PetTestKit.WildEntry, 0));
+        (Player player, _) = kit.AddPlayer(1);
+        kit.Spells.System.Store = new SpellStore(kit.Spells.System.Store.All, [],
+            [(DestinationSpell, new SpellTargetPosition(player.MapId, 40, 0, player.Z, 0))],
+            [new SpellStore.ScriptTarget(DestinationSpell, 1, PetTestKit.WildEntry, 0)]);
+        Creature nearCaster = Spawn(kit, PetTestKit.WildEntry, 3, player);
+        Creature atSpot = Spawn(kit, PetTestKit.WildEntry, 41, player);
+        Creature unlistedAtSpot = Spawn(kit, PetTestKit.GuardianEntry, 39, player);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(player, DestinationSpell, SpellCastTargets.ForSelf(), triggered: true));
+
+        Assert.True(kit.Spells.System.HasAura(atSpot, DestinationSpell));
+        Assert.False(kit.Spells.System.HasAura(nearCaster, DestinationSpell));
+        Assert.False(kit.Spells.System.HasAura(unlistedAtSpot, DestinationSpell));
     }
 }

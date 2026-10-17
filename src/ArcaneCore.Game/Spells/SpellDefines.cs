@@ -204,6 +204,9 @@ public enum SpellImplicitTarget : uint
 
     /// <summary>TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC: units at the source filtered by spell_script_target (vmangos Spell::SetTargetMap).</summary>
     EnumUnitsScriptAoeAtSrcLoc = 7,
+
+    /// <summary>TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC: units at the destination filtered by spell_script_target (vmangos Spell.cpp:2405-2470).</summary>
+    EnumUnitsScriptAoeAtDestLoc = 8,
     LocationCasterHomeBind = 9,
     EnumUnitsEnemyAoeAtSrcLoc = 15,
     EnumUnitsEnemyAoeAtDestLoc = 16,

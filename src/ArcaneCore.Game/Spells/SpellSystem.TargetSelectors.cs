@@ -95,6 +95,11 @@ public sealed partial class SpellSystem
     /// </summary>
     private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector, Unit? unitTarget)
     {
+        if (selector == SpellImplicitTarget.EnumUnitsScriptAoeAtDestLoc && !_spellTargetSelectors.ContainsKey((cast.Spell.Id, selector)))
+        {
+            return SelectScriptAoeAtDestination(cast, effect, effectIndex, unitTarget);
+        }
+
         bool unitScriptTarget = selector is SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc or SpellImplicitTarget.UnitScriptNearCaster;
         if (unitScriptTarget && Store.GetScriptTargets(cast.Spell.Id).Count > 0)
         {
@@ -106,6 +111,30 @@ public sealed partial class SpellSystem
             : unitScriptTarget
                 ? SelectScriptTargets(cast, effect, effectIndex, selector == SpellImplicitTarget.UnitScriptNearCaster, unitTarget)
             : _targetSelectors.TryGetValue(selector, out TargetSelectorEntry entry) ? entry.Handler(this, cast, effect, unitTarget) : null;
+    }
+
+    /// <summary>
+    /// TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC (vmangos Spell.cpp:2405-2470): nobody for a persistent area aura, the caster for a summon, otherwise
+    /// the script-target area fill around the destination. A TARGET_LOCATION_DATABASE target A puts the destination at the spell's
+    /// spell_target_position row (Spell::SetTargetMap) when it is on the caster's map; else the cast's destination, explicit target or caster.
+    /// </summary>
+    private List<(Unit Unit, float Multiplier)> SelectScriptAoeAtDestination(SpellCast cast, SpellEffectInfo effect, int effectIndex, Unit? unitTarget)
+    {
+        if (effect.Effect == SpellEffectName.PersistentAreaAura)
+        {
+            return [];
+        }
+
+        if (effect.Effect is SpellEffectName.Summon or SpellEffectName.SummonWild or SpellEffectName.SummonObjectWild)
+        {
+            return [(cast.Caster, 1.0f)];
+        }
+
+        (float X, float Y, float Z) centre = effect.TargetA == SpellImplicitTarget.LocationDatabase
+            && Store.GetTargetPosition(cast.Spell.Id) is { } row && row.MapId == cast.Caster.MapId
+                ? (row.X, row.Y, row.Z)
+                : DestinationCentre(cast, unitTarget);
+        return SelectScriptTargets(cast, effect, effectIndex, nearest: false, unitTarget, centre);
     }
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()

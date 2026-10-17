@@ -18,8 +18,12 @@ public sealed partial class SpellSystem
     /// no rows (Spell.cpp:2356-2398). A listed creature caster may select itself with 38, while area 7 excludes the caster. vmangos fails a 38 cast with no target
     /// (SPELL_FAILED_BAD_TARGETS); here the effect only gets no unit.
     /// </summary>
+    /// <para>
+    /// TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC (8, Spell.cpp:2405-2470) is the same area fill around the destination (<paramref name="destination"/>)
+    /// that keeps the caster: a persistent area aura selects nobody (its dynamic object does), and a summon effect acts on the caster.
+    /// </para>
     private List<(Unit Unit, float Multiplier)> SelectScriptTargets(
-        SpellCast cast, SpellEffectInfo effect, int effectIndex, bool nearest, Unit? explicitTarget)
+        SpellCast cast, SpellEffectInfo effect, int effectIndex, bool nearest, Unit? explicitTarget, (float X, float Y, float Z)? destination = null)
     {
         if (cast.Caster.Map is not { } map) return [];
         IReadOnlyList<SpellStore.ScriptTarget> rows = Store.GetScriptTargets(cast.Spell.Id);
@@ -30,11 +34,11 @@ public sealed partial class SpellSystem
         if (radius <= 0) return [];
         // mangos-classic Spell::CheckScriptTargeting bounds the "anywhere" range (50000) of an entry search to 200 yards.
         if (nearest && radius >= 50_000f) radius = 200f;
-        (float x, float y, float z) = nearest ? (cast.Caster.X, cast.Caster.Y, cast.Caster.Z) : SourceCentre(cast, effect);
+        (float x, float y, float z) = nearest ? (cast.Caster.X, cast.Caster.Y, cast.Caster.Z) : destination ?? SourceCentre(cast, effect);
 
         bool Matches(Unit unit)
         {
-            if (!nearest && ReferenceEquals(unit, cast.Caster)) return false;
+            if (!nearest && destination is null && ReferenceEquals(unit, cast.Caster)) return false;
             if (rows.Count == 0) return unit.IsAlive;
             return rows.Any(row => (row.InverseEffectMask & (1u << effectIndex)) == 0
                 && (row.TargetEntry == 0 && row.Type == ScriptTargetPlayer && unit is Player
