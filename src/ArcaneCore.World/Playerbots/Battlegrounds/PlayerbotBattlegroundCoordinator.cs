@@ -53,7 +53,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// reads it from SMSG_BATTLEFIELD_STATUS. Back in the world the brain resumes what it was doing (its quests and memories kept).
 /// </para>
 /// </summary>
-public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, ILogger<PlayerbotBattlegroundCoordinator> logger) : IWorldFeature
+public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, ILogger<PlayerbotBattlegroundCoordinator> logger) : IDetachableWorldFeature
 {
     /// <summary>How often free bots are looked over and the demand snapshot is rebuilt.</summary>
     internal const uint ScanMs = 2_000;
@@ -108,7 +108,49 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>The refusals noted so far, once per type and reason (status and tests).</summary>
     internal IReadOnlyCollection<(BattlegroundType Type, PlayerbotBattlegroundRefusal Why)> Refusals => _loggedRefusals;
 
-    public void Attach(WorldRuntime world) => _world = world;
+    // --- lifecycle (docs/design/hot-reload-tiers.md, section 4.2) -------------------------------------------------------
+
+    /// <summary>
+    /// Stateless: a detach lets every followed bot go (a bot in a match is sent CMSG_LEAVE_BATTLEFIELD once, best effort; a queue is left to
+    /// time out) and its AI drops what it did; after the next attach the free bots are looked over again.
+    /// </summary>
+    public DetachKind DetachKind => DetachKind.Stateless;
+
+    /// <summary>Whether the coordinator is attached to a world (a detached one ignores the managed feature's calls).</summary>
+    internal bool IsAttached => _world is not null;
+
+    public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotBattlegroundCoordinator)));
+
+    public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        _world = world;
+    }
+
+    public Task QuiesceAsync(CancellationToken cancellationToken) => Task.CompletedTask; // world-thread only: nothing runs in the background
+
+    public void Detach(FeatureHandover handover)
+    {
+        try
+        {
+            foreach (Tracked t in _tracked.Values.ToArray())
+            {
+                if (!_bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot bot) || bot.Session.Player is not { } player) continue;
+                if (t.Phase == PlayerbotBattlegroundPhase.InMatch && _world is not null) Leave(t, bot, player);
+                Release(t, bot, player);
+            }
+        }
+        finally
+        {
+            _tracked.Clear();
+            _bots.Clear();
+            _setAside.Clear();
+            _wsgPlans.Clear();
+            _refusedMasters.Clear();
+            _scanElapsed = ScanMs;
+            _world = null;
+        }
+    }
 
     internal PlayerbotBattlegroundOptions Options => _options.Battlegrounds;
 
@@ -150,6 +192,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// </summary>
     internal void Update(IReadOnlyList<PlayerbotBattlegroundBot> bots, uint elapsedMs)
     {
+        if (_world is null) return; // detached
         _bots.Clear();
         _tick++;
         foreach (PlayerbotBattlegroundBot bot in bots) _bots[bot.BotId] = bot;

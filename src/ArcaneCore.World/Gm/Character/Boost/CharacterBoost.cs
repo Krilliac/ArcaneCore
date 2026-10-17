@@ -24,6 +24,7 @@ using Microsoft.Extensions.DependencyInjection;
 using InventoryResult = ArcaneCore.Game.Items.InventoryResult;
 using Item = ArcaneCore.Game.Items.Item;
 using SpellFeature = ArcaneCore.World.Spells.SpellFeature;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Gm.Character.Boost;
 

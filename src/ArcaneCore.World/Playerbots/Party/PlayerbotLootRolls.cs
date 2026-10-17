@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots.Party;
 

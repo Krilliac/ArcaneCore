@@ -22,6 +22,7 @@ using Microsoft.Extensions.Logging;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -36,7 +37,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (Dawnrover and Ironwander, 2026-10-07). The fault history lives in this process; a world restart restores every desired bot.
 /// </para>
 /// </summary>
-public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IWorldFeature, IPlayerbotService
+public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private IServiceScopeFactory scopes => services.GetRequiredService<IServiceScopeFactory>();
@@ -123,12 +124,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal const int SplitBrainConflictThreshold = 3;
 
-    /// <summary>Set when a checkpoint saw more than <see cref="SplitBrainConflictThreshold"/> conflicts: no further playerbot writes are issued by this process until an operator clears it (<see cref="ClearSplitBrainAsync"/>) or the process restarts.</summary>
-    private volatile bool _splitBrain;
+    /// <summary>
+    /// Set when a checkpoint saw more than <see cref="SplitBrainConflictThreshold"/> conflicts: no further playerbot writes are issued by this process until an operator
+    /// clears it (<see cref="ClearSplitBrainAsync"/>) or the process restarts. Kept on the core's <see cref="ManagedBotRegistry"/>, so a detach does not forget it.
+    /// </summary>
+    private bool SplitBrainLatched
+    {
+        get => BotRegistry.SplitBrain;
+        set => BotRegistry.SplitBrain = value;
+    }
+
+    /// <summary>The core-owned bots and seams (docs/design/hot-reload-tiers.md, section 4.1); a private one in a host without the world features.</summary>
+    private ManagedBotRegistry BotRegistry => _botRegistry ??= services.GetService<ManagedBotRegistry>() ?? new ManagedBotRegistry(services);
+    private ManagedBotRegistry? _botRegistry;
     private readonly ConcurrentDictionary<Guid, byte> _conflictLogged = new();
 
     /// <summary>Whether this process stopped writing playerbot rows because another world process owns them (see <see cref="SplitBrainConflictThreshold"/>).</summary>
-    internal bool SplitBrain => _splitBrain;
+    internal bool SplitBrain => SplitBrainLatched;
 
     /// <summary>Whether <see cref="ShutdownBeforeWorldStopAsync"/> has begun: bots stopping now are stopped by the shutdown itself, not by an operator or a fault. Any thread.</summary>
     internal bool IsStopping => Volatile.Read(ref _stopping);
@@ -257,8 +269,43 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return (botCount, executed, before, Chaos.FaultsCaught);
     }
 
-    public void Attach(WorldRuntime world)
+    // --- lifecycle (docs/design/hot-reload-tiers.md, sections 4.2 and 4.4 2a) -------------------------------------------------
+
+    /// <summary>The refusal code of an operation asked for while the feature is being detached (a quarantine retry reschedules on it).</summary>
+    internal const string PlayerbotsDetaching = "playerbots-detaching";
+
+    private const string HandoverSetAsides = "playerbots.setAsides";
+    private const string HandoverControllers = "playerbots.controllers";
+    private const string HandoverSharedSetAsides = "playerbots.sharedSetAsides";
+    private const string HandoverLoadedSetAsides = "playerbots.loadedSetAsides";
+    private const string HandoverHomes = "playerbots.homes";
+    private const string HandoverHomeStore = "playerbots.homeStore";
+    private const string HandoverClock = "playerbots.clockMs";
+    private const string HandoverQuarantine = "playerbots.quarantine";
+    private const string HandoverConflicts = "playerbots.conflictLogged";
+    private const string HandoverSnapshot = "playerbots.snapshot";
+
+    private FeatureSubscriptions? _subscriptions;
+    private volatile bool _detaching;
+
+    /// <summary>
+    /// Handover. The bots stay logged in across a detach: their rows, scopes and sessions are the core's (<see cref="ManagedBotRegistry"/>),
+    /// and the next attach builds new brains and party AIs around them. What a brain remembers that matters (its set-asides) and the
+    /// feature's own state (homes, the shared set-asides, the fault quarantine, the clock, the status lines, scripted controllers) are
+    /// handed over; the policy engine, the navigation executor and the chat services are stopped and started again.
+    /// </summary>
+    public DetachKind DetachKind => DetachKind.Handover;
+
+    /// <summary>Whether the feature is being detached, or is detached: no update runs and every operation refuses (<see cref="PlayerbotsDetaching"/>). Any thread.</summary>
+    internal bool IsDetaching => _detaching;
+
+    public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(ManagedPlayerbotFeature)));
+
+    public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
     {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(subscriptions);
+        _ = PlayerbotAnomalyHistory.Shared; // the bot anomaly history hears the anomaly ledger from now on (the core no longer touches it)
         _options.Validate();
         if (_options.Policy.Enabled) StartPolicy();
         // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
@@ -277,8 +324,177 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _navigationExecutor = new PlayerbotNavigationExecutor(
                 dataset => NavMeshPathfinder.CreateIndependent(dataset, ownerLogger));
         }
-        world.Updated += Update;
+        if (handover is not null) RestoreHandover(handover, world);
+        subscriptions.OnUpdated(world, Update);
+        subscriptions.Add(BotRegistry.UseSessionPolicy(new SessionPolicy(_options)));
+        if (services.GetService<IWorldLifecycleHooks>() is { } hooks)
+        {
+            // The world host runs these (WorldHost): the restore once the world is started, the shutdown before it stops.
+            subscriptions.Add(hooks.Register(WorldLifecycleStage.AfterWorldStart, "playerbots.restore", StartupAsync));
+            subscriptions.Add(hooks.Register(WorldLifecycleStage.BeforeWorldStop, "playerbots.shutdown", _ => ShutdownBeforeWorldStopAsync()));
+        }
+
+        // Bots still logged in from before a detach: new brains and party AIs around the same sessions.
+        Dictionary<Guid, PlayerbotSetAside[]>? setAsides = null;
+        Dictionary<Guid, IPlayerbotController>? controllers = null;
+        handover?.TryGet(HandoverSetAsides, out setAsides);
+        handover?.TryGet(HandoverControllers, out controllers);
+        long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
+        foreach (ManagedBot entry in BotRegistry.Bots)
+        {
+            if (_active.ContainsKey(entry.BotId)) continue;
+            PlayerbotBrain brain = NewBrain(entry.Session, entry.BotId, restoreLoaded: false);
+            if (setAsides?.TryGetValue(entry.BotId, out PlayerbotSetAside[]? rows) == true)
+                brain.Suspensions.Restore(rows, world.NowMs, unixNow);
+            ActiveBot active = NewActiveBot(entry, brain);
+            active.SavedSetAsideVersion = -1; // written again at the next checkpoint
+            if (controllers?.TryGetValue(entry.BotId, out IPlayerbotController? controller) == true) active.Controller = controller;
+            if (_active.TryAdd(entry.BotId, active)) Interlocked.Increment(ref _activeVersion);
+        }
+
+        _subscriptions = subscriptions;
+        _detaching = false;
     }
+
+    /// <summary>
+    /// Stop updating (the flag), wait for the last checkpoint and for the operation in flight (a start, a stop, a home change), then stop the
+    /// policy engine, the navigation executor and the chat services. The bots stay logged in.
+    /// </summary>
+    public async Task QuiesceAsync(CancellationToken cancellationToken)
+    {
+        _detaching = true;
+        if (_world is { } world && !world.IsStopped)
+        {
+            // Read on the world thread, after which no update of ours starts another checkpoint (it sees the flag).
+            Task checkpoint = world.IsWorldThread ? _checkpoint
+                : await world.InvokeAsync(() => _checkpoint, cancellationToken).ConfigureAwait(false);
+            await checkpoint.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // The operation in flight finishes; every later one refuses (playerbots-detaching).
+        await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _operations.Release();
+        await StopServicesAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>World thread (the feature host): stop every brain, hand the state over and forget it. The sessions stay open.</summary>
+    public void Detach(FeatureHandover handover)
+    {
+        ArgumentNullException.ThrowIfNull(handover);
+        long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
+        var setAsides = new Dictionary<Guid, PlayerbotSetAside[]>();
+        var controllers = new Dictionary<Guid, IPlayerbotController>();
+        foreach (ActiveBot active in _active.Values)
+        {
+            lock (active.SetAsideGate)
+            {
+                setAsides[active.Entry.BotId] = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
+                    active.Session.World.NowMs, unixNow);
+            }
+
+            active.Brain.Stop();
+            if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controllers[active.Entry.BotId] = controller;
+        }
+
+        uint nowMs = _world?.NowMs ?? 0;
+        handover.Set(HandoverSetAsides, setAsides);
+        handover.Set(HandoverControllers, controllers);
+        handover.Set(HandoverSharedSetAsides, _sharedSetAsides.Export(nowMs, unixNow));
+        handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
+        handover.Set(HandoverHomes, _homes.Values.ToArray());
+        handover.Set(HandoverHomeStore, _homeStore);
+        handover.Set(HandoverClock, ClockMs);
+        handover.Set(HandoverQuarantine, new Dictionary<Guid, Quarantine>(_quarantine));
+        handover.Set(HandoverConflicts, _conflictLogged.Keys.ToArray());
+        handover.Set(HandoverSnapshot, Volatile.Read(ref _snapshot));
+
+        _active.Clear();
+        Interlocked.Increment(ref _activeVersion);
+        _ordered = [];
+        _homes.Clear();
+        _loadedSetAsides.Clear();
+        _quarantine.Clear();
+        _conflictLogged.Clear();
+        lock (_snapshotGate)
+        {
+            Volatile.Write(ref _snapshot, []);
+            _snapshotEpoch++;
+        }
+
+        _subscriptions = null;
+        _world = null;
+    }
+
+    /// <summary>Put back what <see cref="Detach"/> handed over (before the bots are rebuilt).</summary>
+    private void RestoreHandover(FeatureHandover handover, WorldRuntime world)
+    {
+        long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
+        if (handover.TryGet(HandoverClock, out long clock)) Interlocked.Exchange(ref _clockMs, clock);
+        if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
+            foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
+        if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
+        if (handover.TryGet<Dictionary<Guid, PlayerbotSetAside[]>>(HandoverLoadedSetAsides, out var loaded))
+            foreach ((Guid botId, PlayerbotSetAside[] rows) in loaded) _loadedSetAsides[botId] = rows;
+        if (handover.TryGet<PlayerbotSetAside[]>(HandoverSharedSetAsides, out var shared))
+            _sharedSetAsides.Restore(shared, world.NowMs, unixNow);
+        Volatile.Write(ref _savedSharedSetAsideVersion, -1); // written again at the next checkpoint
+        if (handover.TryGet<Dictionary<Guid, Quarantine>>(HandoverQuarantine, out var quarantine))
+            foreach ((Guid botId, Quarantine entry) in quarantine) _quarantine[botId] = entry;
+        if (handover.TryGet<Guid[]>(HandoverConflicts, out var conflicts))
+            foreach (Guid botId in conflicts) _conflictLogged[botId] = 0;
+        if (handover.TryGet<PlayerbotStatus[]>(HandoverSnapshot, out var snapshot))
+        {
+            lock (_snapshotGate)
+            {
+                Volatile.Write(ref _snapshot, snapshot);
+                _snapshotEpoch++;
+            }
+        }
+    }
+
+    /// <summary>Stop the policy engine, the navigation executor and the chat services (a detach; the next attach starts them again).</summary>
+    private async Task StopServicesAsync()
+    {
+        if (_policy is { } policy) { _policy = null; await policy.DisposeAsync().ConfigureAwait(false); }
+        if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
+        if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
+        _chatInProcess?.Dispose();
+        _chatInProcess = null;
+        _chatClient?.Dispose();
+        _chatClient = null;
+    }
+
+    /// <summary>The feature's driver of one bot around its core entry: the party AI wired to the coordinator, the brain given.</summary>
+    private ActiveBot NewActiveBot(ManagedBot entry, PlayerbotBrain brain)
+    {
+        var party = new PlayerbotPartyAI(entry.Session, _options, _chat, entry.BotId)
+        {
+            // A bot-led group's invitations and loot rolls (PlayerbotGroupCoordinator); everything else is the party AI's own rules.
+            AcceptsBotGroup = (member, inviter) => coordinator?.AcceptsInvite(member, inviter) == true,
+            GroupLootVote = (member, item) => coordinator?.LootVote(member, item),
+            // A group whose lead its master handed to a bot (PlayerbotGroupCoordinator.Handoff.cs) owns the bot until an order takes the lead back.
+            GroupOwns = (member, master, command) => coordinator?.OwnsAgainst(member, master, command) == true,
+        };
+        var active = new ActiveBot(entry, brain, party);
+        // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
+        active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
+        active.Party.BrainDiagnostics = p => FormatBotDiagnostics(active, p);
+        return active;
+    }
+
+    /// <summary>The core's view of a bot session while this feature is attached (<see cref="IManagedBotSessionPolicy"/>).</summary>
+    private sealed class SessionPolicy(PlayerbotOptions options) : IManagedBotSessionPolicy
+    {
+        public bool Lean => options.ClientFidelity == PlayerbotClientFidelity.Lean;
+
+        public bool KeepsPacket(WorldOpcode opcode) => PlayerbotPacketIntake.Contains(opcode);
+
+        public void BeforeAction(IPlayerSession session, Player player, WorldOpcode opcode)
+        {
+            if (session is WorldSession world) PlayerbotMount.DismountForAction(world, player, opcode);
+        }
+    }
+
 
     public async Task StartupAsync(CancellationToken cancellationToken)
     {
@@ -359,14 +575,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
         if (ResetInProgress) return new(false, "fleet-reset-running");
-        if (_splitBrain) return new(false, "playerbot-split-brain");
+        if (SplitBrainLatched) return new(false, "playerbot-split-brain");
+        if (_detaching) return new(false, PlayerbotsDetaching);
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         Account? spare = null;
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
             if (ResetInProgress) return new(false, "fleet-reset-running");
-            if (_splitBrain) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
+            if (SplitBrainLatched) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
+            if (_detaching) return new(false, PlayerbotsDetaching);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
@@ -780,7 +998,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         CancellationToken cancellationToken = default, bool zoneClipped = true, bool logFailures = true)
     {
         ArgumentNullException.ThrowIfNull(targets);
-        if (_splitBrain) throw new PlayerbotSplitBrainException(0);
+        if (SplitBrainLatched) throw new PlayerbotSplitBrainException(0);
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
         if (!float.IsFinite(radius) || radius < PlayerbotHomeBounds.MinRadius || radius > PlayerbotHomeBounds.MaxRadius)
             throw new ArgumentOutOfRangeException(nameof(radius));
@@ -794,7 +1012,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         bool refused = false;
         foreach (HomeTarget target in targets)
         {
-            if (_splitBrain) { refused = true; break; } // latched while this call ran: store nothing more (the homes already stored below are still applied)
+            if (SplitBrainLatched) { refused = true; break; } // latched while this call ran: store nothing more (the homes already stored below are still applied)
             try
             {
                 ManagedPlayerbot? bot = await bots.FindAsync(target.BotId, cancellationToken).ConfigureAwait(false);
@@ -838,7 +1056,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default, bool byOperator = true)
     {
         ArgumentNullException.ThrowIfNull(botIds);
-        if (_splitBrain) throw new PlayerbotSplitBrainException(0);
+        if (SplitBrainLatched) throw new PlayerbotSplitBrainException(0);
         if (byOperator && HomesClearedByOperator is { } handler)
         {
             Guid[] start = [.. botIds.Where(id => _homes.TryGetValue(id, out PlayerbotHome? h) && Population.PopulationStartAreas.TryParse(h.Place, out _, out _))];
@@ -855,7 +1073,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             foreach (Guid botId in botIds)
             {
-                if (_splitBrain) throw new PlayerbotSplitBrainException(cleared); // latched while this call ran: clear nothing more
+                if (SplitBrainLatched) throw new PlayerbotSplitBrainException(cleared); // latched while this call ran: clear nothing more
                 bool stored = await store.ClearAsync(botId, cancellationToken).ConfigureAwait(false);
                 done.Add(botId);
                 if (_homes.TryRemove(botId, out _) || stored) cleared++;
@@ -944,7 +1162,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         bool quarantineRetry = kind != StartKind.Operator;
         if (!_options.Enabled || _stopping || _world is not { } world) return new(false, "playerbots-disabled");
         if (ResetInProgress) return new(false, "fleet-reset-running");
-        if (_splitBrain) return new(false, "playerbot-split-brain");
+        if (SplitBrainLatched) return new(false, "playerbot-split-brain");
+        if (_detaching) return new(false, PlayerbotsDetaching);
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         AsyncServiceScope scope = scopes.CreateAsyncScope();
         WorldSession? session = null;
@@ -954,7 +1173,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             if (_stopping) return new(false, "playerbots-stopping");
             if (ResetInProgress) return new(false, "fleet-reset-running");
-            if (_splitBrain) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
+            if (SplitBrainLatched) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
+            if (_detaching) return new(false, PlayerbotsDetaching);
             bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
             if (kind == StartKind.Operator) _quarantine.TryRemove(bot.BotId, out _);
@@ -981,20 +1201,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
-            var party = new PlayerbotPartyAI(session, _options, _chat, bot.BotId)
+            // The row, scope and session are the core's (ManagedBotRegistry): they outlive a detach of this feature.
+            var entry = new ManagedBot(bot, scope, session);
+            ActiveBot active = NewActiveBot(entry, NewBrain(session, bot.BotId));
+            active.Controller = controller;
+            if (!BotRegistry.TryAdd(entry)) throw new InvalidOperationException("duplicate-bot");
+            if (!_active.TryAdd(bot.BotId, active))
             {
-                // A bot-led group's invitations and loot rolls (PlayerbotGroupCoordinator); everything else is the party AI's own rules.
-                AcceptsBotGroup = (member, inviter) => coordinator?.AcceptsInvite(member, inviter) == true,
-                GroupLootVote = (member, item) => coordinator?.LootVote(member, item),
-                // A group whose lead its master handed to a bot (PlayerbotGroupCoordinator.Handoff.cs) owns the bot until an order takes the lead back.
-                GroupOwns = (member, master, command) => coordinator?.OwnsAgainst(member, master, command) == true,
-            };
-            var active = new ActiveBot(bot, scope, session, NewBrain(session, bot.BotId), party)
-            { Controller = controller };
-            // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
-            active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
-            active.Party.BrainDiagnostics = p => FormatBotDiagnostics(active, p);
-            if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
+                BotRegistry.TryRemove(entry);
+                throw new InvalidOperationException("duplicate-bot");
+            }
+
             _loadedSetAsides.TryRemove(bot.BotId, out _);
             Interlocked.Increment(ref _activeVersion);
             retained = true;
@@ -1070,11 +1287,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     public async Task<PlayerbotOperationResult> StopAsync(string idOrName, CancellationToken cancellationToken = default)
     {
-        if (_splitBrain) return new(false, "playerbot-split-brain");
+        if (SplitBrainLatched) return new(false, "playerbot-split-brain");
+        if (_detaching) return new(false, PlayerbotsDetaching);
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_splitBrain) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
+            if (SplitBrainLatched) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
+            if (_detaching) return new(false, PlayerbotsDetaching);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             ManagedPlayerbot? bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
@@ -1094,12 +1313,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task<PlayerbotOperationResult> DeleteAsync(string idOrName, CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
-        if (_splitBrain) return new(false, "playerbot-split-brain");
+        if (SplitBrainLatched) return new(false, "playerbot-split-brain");
+        if (_detaching) return new(false, PlayerbotsDetaching);
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_stopping) return new(false, "playerbots-disabled");
-            if (_splitBrain) return new(false, "playerbot-split-brain");
+            if (SplitBrainLatched) return new(false, "playerbot-split-brain");
+            if (_detaching) return new(false, PlayerbotsDetaching);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             ManagedPlayerbot? bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
@@ -1148,7 +1369,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         Volatile.Write(ref _stopping, true);
         coordinator?.BeginShutdown();
-        if (_world is not null) _world.Updated -= Update;
         await _checkpoint.ConfigureAwait(false);
         await _operations.WaitAsync().ConfigureAwait(false);
         List<Exception> failures = [];
@@ -1170,7 +1390,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         failures.Add(new TaskCanceledException(stop));
                 }
             }
-            try { if (!_splitBrain) await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
+            try { if (!SplitBrainLatched) await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("playerbot.feature", ex);
@@ -1370,7 +1590,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // Defence only: entering split brain drops every active bot and every start is refused while it is set, so no bot is active here when it is latched
             // (a race that latched it between the lookup above and this check is the one way in). Another process owns the rows, so this stop leaves the active
             // set without a single managed-row or set-aside write. The character's own session-close save still runs (there is no clean way to discard it); wait, bounded, for the session to close.
-            if (_splitBrain)
+            if (SplitBrainLatched)
             {
                 await DropFromActiveAsync(active, active.Record, writeSetAsides: false, announce: false).ConfigureAwait(false);
                 try { await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
@@ -1416,6 +1636,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }, cancellationToken).ConfigureAwait(false);
                 active.Record = bot;
                 if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(bot.BotId, active))) Interlocked.Increment(ref _activeVersion);
+                BotRegistry.TryRemove(active.Entry);
                 PublishStopped(bot, active.Name, active.MapId);
                 await active.Scope.DisposeAsync().ConfigureAwait(false);
             }
@@ -1454,7 +1675,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         else
         {
-            if (_splitBrain) return; // no managed-row write while another process owns the rows
+            if (SplitBrainLatched) return; // no managed-row write while another process owns the rows
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
@@ -1473,7 +1694,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private void Update(uint elapsedMs)
     {
-        if (_stopping || !_options.Enabled || _world is not { } world) return;
+        if (_stopping || _detaching || !_options.Enabled || _world is not { } world) return;
         long updateStarted = Stopwatch.GetTimestamp();
         // What the world spent on everything but the bots in the last tick, smoothed: the think budget is a share of what is left.
         TickPhases lastTick = world.LastTickPhases;
@@ -2074,7 +2295,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private async Task CheckpointAsync()
     {
-        if (_splitBrain) return; // another world process owns the rows: this one issues no playerbot writes
+        if (SplitBrainLatched) return; // another world process owns the rows: this one issues no playerbot writes
         if (!await _operations.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
@@ -2185,7 +2406,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
             }
 
-            if (_splitBrain) return;
+            if (SplitBrainLatched) return;
             foreach ((ActiveBot active, _) in live)
                 if (!conflicted.Contains(active)) await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
@@ -2215,7 +2436,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private async Task EnterSplitBrainAsync(int conflicts, ManagedPlayerbot? lastRow)
     {
-        _splitBrain = true;
+        SplitBrainLatched = true;
         _quarantine.Clear(); // no retry timer fires for a quarantined bot once the latch clears; its row stays Faulted, which only an operator start (or a new fault count) leaves
         string row = lastRow is null ? "no row read" : string.Create(CultureInfo.InvariantCulture,
             $"last conflicting row bot {lastRow.BotId:D}: revision {lastRow.Revision}, state {lastRow.State}, updated {DateTimeOffset.FromUnixTimeSeconds(lastRow.UpdatedUnix):u}");
@@ -2258,13 +2479,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         await _operations.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!_splitBrain) return new(false, 0, 0, 0);
+            if (!SplitBrainLatched) return new(false, 0, 0, 0);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             IReadOnlyList<ManagedPlayerbot> stored = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
                 .LoadAllAsync(CancellationToken.None).ConfigureAwait(false);
             var result = new SplitBrainClear(true, stored.Count, stored.Count(r => r.DesiredEnabled), stored.Count(r => r.State == ManagedPlayerbotState.Faulted));
             _conflictLogged.Clear();
-            _splitBrain = false;
+            SplitBrainLatched = false;
             logger.LogWarning("Playerbot split-brain latch cleared by an operator; playerbot writes resume ({Rows} stored rows re-read, {Enabled} wanted running, {Faulted} faulted)",
                 result.Rows, result.Enabled, result.Faulted);
             return result;
@@ -2310,6 +2531,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         active.Session.Kick();
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
+        BotRegistry.TryRemove(active.Entry);
         if (row is not null)
         {
             active.Record = row;
@@ -2674,7 +2896,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 logger.LogInformation("Playerbot {BotId} left quarantine", botId);
             }
-            else if (result.Code is "playerbot-capacity" or "playerbots-stopping" or "playerbots-disabled")
+            else if (result.Code is "playerbot-capacity" or "playerbots-stopping" or "playerbots-disabled" or PlayerbotsDetaching)
             {
                 lock (quarantine) quarantine.RetryAtMs = ClockMs + (_options.FaultBackoffSeconds * 1000L);
             }
@@ -2774,12 +2996,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
     }
 
-    private sealed class ActiveBot(ManagedPlayerbot record, AsyncServiceScope scope, WorldSession session, PlayerbotBrain brain,
-        PlayerbotPartyAI party)
+    /// <summary>
+    /// A running bot as this feature drives it: the core-owned <see cref="ManagedBot"/> (row, scope, session; it survives a detach) and
+    /// the brain, party AI and bookkeeping this feature builds around it (rebuilt when the feature attaches again).
+    /// </summary>
+    private sealed class ActiveBot(ManagedBot entry, PlayerbotBrain brain, PlayerbotPartyAI party)
     {
-        public ManagedPlayerbot Record = record;
-        public AsyncServiceScope Scope { get; } = scope;
-        public WorldSession Session { get; } = session;
+        public ManagedBot Entry { get; } = entry;
+
+        public ManagedPlayerbot Record
+        {
+            get => Entry.Record;
+            set => Entry.Record = value;
+        }
+
+        public AsyncServiceScope Scope => Entry.Scope;
+        public WorldSession Session => Entry.Session;
         public PlayerbotBrain Brain = brain;
         public int SavedSetAsideVersion;
         public readonly object SetAsideGate = new();
@@ -2787,10 +3019,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public bool PartyDriven;
         public bool GroupDriven;
         public bool BattlegroundDriven;
-        public string Name = session.Player?.Name ?? string.Empty;
-        public string AnomalySubject = session.Player is { } p ? PlayerbotAnomalies.SubjectOf(p) : $"bot {record.BotId:D}";
-        public uint MapId = session.Player?.Map?.MapId ?? session.Player?.MapId ?? 0;
-        public uint LastUpdateMs = session.World.NowMs;
+        public string Name = entry.Session.Player?.Name ?? string.Empty;
+        public string AnomalySubject = entry.Session.Player is { } p ? PlayerbotAnomalies.SubjectOf(p) : $"bot {entry.BotId:D}";
+        public uint MapId = entry.Session.Player?.Map?.MapId ?? entry.Session.Player?.MapId ?? 0;
+        public uint LastUpdateMs = entry.Session.World.NowMs;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
         public bool GapPrimed;
         /// <summary>Whether the current silence of this bot was reported as a starved think gap (cleared by its next think).</summary>
@@ -2815,6 +3047,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
             return _stallCode;
         }
-        public PlayerbotControllerContext ControllerContext { get; } = new(record.BotId, session);
+        public PlayerbotControllerContext ControllerContext { get; } = new(entry.BotId, entry.Session);
     }
 }

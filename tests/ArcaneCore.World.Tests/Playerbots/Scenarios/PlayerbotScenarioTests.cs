@@ -12,6 +12,7 @@ using ArcaneCore.World.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 
@@ -253,7 +254,7 @@ public sealed class PlayerbotScenarioTests
         Assert.Contains(report.LastPackets[PlayerbotScenarioCatalog.BotA], p => p.Opcode == WorldOpcode.CmsgMessagechat);
         Assert.Contains("FAIL expect impossible money", report.ToString());
         // The runner released the bot: stopped and saved, no longer scripted.
-        World.Playerbots.PlayerbotStatus status = world.Bots.Snapshot().Single(s => s.Name == PlayerbotScenarioCatalog.BotA);
+        global::ArcaneCore.World.Bots.PlayerbotStatus status = world.Bots.Snapshot().Single(s => s.Name == PlayerbotScenarioCatalog.BotA);
         Assert.Equal(Kernel.Characters.ManagedPlayerbotState.Stopped, status.State);
         Assert.False(world.Bots.IsScripted(status.BotId));
     }

@@ -544,10 +544,18 @@ public sealed class TickWatchdogFeatureTests
         Assert.Contains("is hung", sink.Sent[0].StaffChat);
     }
 
+    /// <summary>
+    /// Without an announcer the alert subscriber is still installed (bot QA's hang sink is read from the core's ManagedBotRegistry at
+    /// report time, and the QA feature attaches after the watchdog), but with no sink registered an alert reaches nobody and never throws.
+    /// A production host always registers an announcer, so there it is installed either way.
+    /// </summary>
     [Fact]
-    public async Task WithoutAnAnnouncer_TheMonitorHasNoAlertSubscriber()
+    public async Task WithoutAnAnnouncerOrAHangSink_AnAlertReachesNobody()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
-        Assert.Null(host.WorldServices.GetRequiredService<TickMonitor>().Alerted);
+        Assert.Null(host.WorldServices.GetRequiredService<ArcaneCore.World.Bots.ManagedBotRegistry>().HangSink);
+        Action<TickAlert> alerted = host.WorldServices.GetRequiredService<TickMonitor>().Alerted!;
+        Assert.NotNull(alerted);
+        alerted(HangAlert(inProgress: false));
     }
 }

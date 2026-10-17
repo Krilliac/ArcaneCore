@@ -8,6 +8,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Talents;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 

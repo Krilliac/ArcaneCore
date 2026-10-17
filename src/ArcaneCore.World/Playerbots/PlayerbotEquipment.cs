@@ -11,6 +11,7 @@ using ArcaneCore.World.Spells;
 using ArcaneCore.Protocol;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots;
 

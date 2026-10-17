@@ -20,6 +20,8 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.World.Bots;
+
 namespace ArcaneCore.World.Playerbots.Groups;
 
 /// <summary>How a run's group moves between places: the seam for the follow-pathing lane's catch-up policy.</summary>
@@ -56,7 +58,12 @@ public sealed partial class PlayerbotGroupCoordinator
 
     private readonly Dictionary<(Guid Bot, uint Map, int Segment), uint> _runSetAside = [];
     private readonly Dictionary<(uint Map, int Segment, AreaTriggerRequirement Kind), int> _rejectionsNoted = [];
-    private IReadOnlyList<InstanceEncounter> _encounters = [];
+    private InstanceEncounterCatalog? _encounterCatalog;
+
+    /// <summary>The core's encounter catalogue (a private one in a host without it).</summary>
+    private InstanceEncounterCatalog EncounterCatalog => _encounterCatalog ??= services.GetService<InstanceEncounterCatalog>() ?? new InstanceEncounterCatalog();
+
+    private IReadOnlyList<InstanceEncounter> CurrentEncounters => EncounterCatalog.Current;
     private PlayerbotRunCatalogue _catalogue = PlayerbotRunCatalogue.Empty;
     private MapRegistry? _catalogueRegistry;
     private object? _catalogueTriggers;
@@ -73,26 +80,24 @@ public sealed partial class PlayerbotGroupCoordinator
     internal (int Completed, int GivenUp) RunTotals => (_runsCompleted, _runsGivenUp);
 
     /// <summary>
-    /// The encounters in force: the <c>instance_encounter</c> table as read at startup (<see cref="Attach"/>) or by the last
-    /// <c>.reload instance_encounter</c> (<see cref="ReplaceEncounters"/>).
+    /// The encounters in force (<see cref="InstanceEncounterCatalog"/>): the <c>instance_encounter</c> table as read when this
+    /// coordinator first attached, or by the last <c>.reload instance_encounter</c>.
     /// </summary>
-    internal IReadOnlyList<InstanceEncounter> Encounters => _encounters;
+    internal IReadOnlyList<InstanceEncounter> Encounters => CurrentEncounters;
 
     /// <summary>
-    /// Swap the encounters in force (world thread, from <c>.reload instance_encounter</c>); the catalogue is rebuilt from them at the next
-    /// scan. Runs already under way keep the plan they were formed with. Returns the encounters replaced (the reload's rollback).
+    /// Swap the encounters in force (world thread, from <c>.reload instance_encounter</c> through the catalogue); the run catalogue is rebuilt
+    /// from them at the next scan. Runs already under way keep the plan they were formed with. Returns the encounters replaced (the reload's rollback).
     /// </summary>
-    internal IReadOnlyList<InstanceEncounter> ReplaceEncounters(IReadOnlyList<InstanceEncounter> encounters)
-    {
-        ArgumentNullException.ThrowIfNull(encounters);
-        IReadOnlyList<InstanceEncounter> previous = _encounters;
-        _encounters = encounters;
-        return previous;
-    }
+    internal IReadOnlyList<InstanceEncounter> ReplaceEncounters(IReadOnlyList<InstanceEncounter> encounters) => EncounterCatalog.Replace(encounters);
 
-    /// <summary>Read the <c>instance_encounter</c> rows (startup; blocking, as the other content loads of <c>Attach</c>). An empty table is an empty catalogue, logged.</summary>
+    /// <summary>
+    /// Read the <c>instance_encounter</c> rows into the core catalogue (first attach; blocking, as the other content loads of the attach). A
+    /// catalogue already loaded (a re-attach, or a reload) is kept. An empty table is an empty catalogue, logged.
+    /// </summary>
     private void LoadEncounters()
     {
+        if (EncounterCatalog.IsLoaded) return;
         if (services.GetService<IServiceScopeFactory>() is not { } scopes) return;
         try
         {
@@ -103,8 +108,8 @@ public sealed partial class PlayerbotGroupCoordinator
                 return;
             }
 
-            _encounters = store.LoadAsync().GetAwaiter().GetResult();
-            if (_encounters.Count == 0)
+            EncounterCatalog.Replace(store.LoadAsync().GetAwaiter().GetResult());
+            if (CurrentEncounters.Count == 0)
                 logger.LogInformation("Playerbot runs: the instance_encounter table is empty (refresh the world database from a classic-db dump); no dungeon or raid runs");
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -127,16 +132,16 @@ public sealed partial class PlayerbotGroupCoordinator
         IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
         if (ReferenceEquals(_catalogueRegistry, maps.Registry) && ReferenceEquals(_catalogueTriggers, triggers)
             && ReferenceEquals(_catalogueCreatures, creatures) && _catalogueVersion == creatures.DefinitionsVersion
-            && ReferenceEquals(_catalogueEncounters, _encounters))
+            && ReferenceEquals(_catalogueEncounters, CurrentEncounters))
             return _catalogue;
 
         _catalogue = PlayerbotRunCatalogue.Build(maps.Registry, triggers,
-            triggers.Select(t => maps.FindAreaTriggerTeleport(t.Id)).OfType<AreaTriggerTeleport>(), creatures, _encounters);
+            triggers.Select(t => maps.FindAreaTriggerTeleport(t.Id)).OfType<AreaTriggerTeleport>(), creatures, CurrentEncounters);
         _catalogueRegistry = maps.Registry;
         _catalogueTriggers = triggers;
         _catalogueCreatures = creatures;
         _catalogueVersion = creatures.DefinitionsVersion;
-        _catalogueEncounters = _encounters;
+        _catalogueEncounters = CurrentEncounters;
         _rejectionsNoted.Clear();
         logger.LogInformation("Playerbot runs: {Plans} dungeon and raid wings can be run, {Excluded} left out", _catalogue.Plans.Count, _catalogue.Exclusions.Count);
         foreach (PlayerbotRunExclusion exclusion in _catalogue.Exclusions)

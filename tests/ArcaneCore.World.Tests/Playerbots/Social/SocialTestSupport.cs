@@ -15,6 +15,7 @@ using ArcaneCore.World.Tests.Playerbots.Party;
 using ArcaneCore.World.Tests.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
 

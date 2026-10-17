@@ -12,12 +12,12 @@ using ArcaneCore.World.HotCode.Modules;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Persistence;
-using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World;
 
@@ -43,6 +43,9 @@ public static class WorldServiceCollectionExtensions
         return table;
     }
 
+    /// <summary>Every <see cref="IWorldServiceModule"/> of this assembly (parameterless constructor), ordered by full type name.</summary>
+    public static IReadOnlyList<IWorldServiceModule> ServiceModules { get; } = AssemblyDiscovery.CreateAll<IWorldServiceModule>();
+
     public static IServiceCollection AddWorldDaemon(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
@@ -57,13 +60,11 @@ public static class WorldServiceCollectionExtensions
         services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
         services.Configure<Game.AntiCheat.AntiCheatOptions>(configuration.GetSection(Game.AntiCheat.AntiCheatOptions.SectionName));
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
-        services.Configure<Playerbots.PlayerbotOptions>(options => Playerbots.PlayerbotOptions.ApplyConfiguration(options, configuration));
-        services.AddSingleton<Playerbots.IPlayerbotService>(sp => sp.GetRequiredService<Playerbots.ManagedPlayerbotFeature>());
-        // Far travel (docs/areas/playbots.md, Travel): the journey seam; the brain drives journeys, callers begin them through it.
-        services.AddSingleton<Playerbots.IPlayerbotTravel>(sp => new Playerbots.PlayerbotTravel(sp.GetRequiredService<IOptions<Playerbots.PlayerbotOptions>>().Value));
-        // The home progression's travel seam answered by it: a town home across the sea is reachable by boat or zeppelin.
-        services.AddSingleton<Playerbots.IPlayerbotHomeTravel>(sp => new Playerbots.PlayerbotTravelHomeTravel(sp.GetRequiredService<IOptions<Playerbots.PlayerbotOptions>>().Value));
-        services.AddPlayerbotQa(configuration); // bot QA: findings from the bots' warnings (docs/areas/playbots-qa.md)
+        // Subsystem modules (the playerbot pack's options and services, bot QA): discovered, so the core names none of their types.
+        foreach (IWorldServiceModule module in ServiceModules)
+        {
+            module.Register(services, configuration);
+        }
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(Net.UnhandledOpcodeTracker.Shared); // client opcodes with no handler: counted, warned once, metric arcanecore.net.opcode.unhandled
@@ -101,6 +102,7 @@ public static class WorldServiceCollectionExtensions
         if (configuration.IsHotModulesEnabled())
         {
             services.AddHotModules();
+            services.AddFeatureCommands(); // .feature detach/attach (docs/design/hot-reload-tiers.md, section 4.2)
         }
 
         return services;

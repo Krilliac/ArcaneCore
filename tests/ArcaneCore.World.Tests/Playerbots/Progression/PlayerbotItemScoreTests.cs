@@ -10,6 +10,7 @@ using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Tests.Items;
 using Xunit;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Playerbots.Progression;
 

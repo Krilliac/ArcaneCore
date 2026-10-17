@@ -16,9 +16,9 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
 | `GameMaster` | 3 | 239 |
-| `Administrator` | 6 | 352 |
+| `Administrator` | 6 | 355 |
 
-The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
+The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
 ## Commands
 
@@ -421,3 +421,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.hotmodule load` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule load &lt;name&gt; [reason] — load &lt;directory&gt;/&lt;name&gt;/&lt;name&gt;.dll. |
 | `.hotmodule reload` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule reload &lt;name&gt; [reason] — build the new version, then swap it for the loaded one, i.e. replace (the old one stays if the new one is bad). |
 | `.hotmodule unload` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule unload &lt;name&gt; [reason] — remove the module's handlers and commands and release it. |
+| `.feature` ... (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Detach and re-attach world features (opt-in, with the module lane). |
+| `.feature list` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .feature list — the detachable features and their state. |
+| `.feature detach` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .feature detach &lt;name&gt; [reason] — quiesce the feature, then remove it from the world at a tick boundary (rolled back if it fails). |
+| `.feature attach` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .feature attach &lt;name&gt; [reason] — attach a detached feature again from its handover at a tick boundary. |

@@ -2,7 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
-namespace ArcaneCore.World.Playerbots;
+namespace ArcaneCore.World.Bots;
 
 /// <summary>
 /// Startup index of the world's static creature spawns for optional grinding. The bot asks only for nearby cells of its own

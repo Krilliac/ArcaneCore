@@ -14,6 +14,7 @@ using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Party;
 

@@ -30,6 +30,7 @@ using ArcaneCore.World.Spells;
 using ArcaneCore.World.Talents;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots.Party;
 

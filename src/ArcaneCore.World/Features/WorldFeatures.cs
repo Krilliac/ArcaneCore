@@ -3,29 +3,12 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.HotCode;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Features;
-
-/// <summary>
-/// A world-daemon feature service (channels, groups, social lists, teleports, …). Every
-/// non-abstract implementation in this assembly is registered as a singleton and attached to
-/// the world before the world thread starts; <see cref="Attach"/> is where it subscribes to
-/// <see cref="WorldRuntime.PlayerLoggedIn"/> / <see cref="WorldRuntime.PlayerLoggingOut"/>.
-/// <para>
-/// Discovery (instead of a hand-maintained list) lets features built in parallel land without
-/// editing a shared registration file (docs/integration/seams.md). Handlers reach a
-/// feature through <c>session.Services.GetRequiredService&lt;TFeature&gt;()</c>.
-/// </para>
-/// </summary>
-public interface IWorldFeature
-{
-    /// <summary>Called once, before the world thread starts (no world-thread work may run here).</summary>
-    void Attach(WorldRuntime world);
-
-    /// <summary>After the world stops producing updates, drain feature-owned saves before shutdown completes.</summary>
-    Task StopAsync() => Task.CompletedTask;
-}
 
 /// <summary>Registration and attachment of the <see cref="IWorldFeature"/> implementations.</summary>
 public static class WorldFeatures
@@ -57,24 +40,41 @@ public static class WorldFeatures
             }
         }
 
+        // The lifecycle seams (docs/design/hot-reload-tiers.md, section 4): the host that attaches and detaches features, the
+        // startup/shutdown hooks and the teleport waiver registry (a discovered feature itself, registered above).
+        services.TryAddSingleton(sp => new FeatureHost(
+            audit: sp.GetService<HotCodeAudit>,
+            reporter: sp.GetService<IHotSwapReporter>,
+            logger: sp.GetService<ILoggerFactory>()?.CreateLogger("ArcaneCore.Features")));
+        services.TryAddSingleton(sp => new WorldLifecycleHooks(sp.GetService<ILogger<WorldLifecycleHooks>>()));
+        services.TryAddSingleton<IWorldLifecycleHooks>(sp => sp.GetRequiredService<WorldLifecycleHooks>());
+        services.TryAddSingleton<ITeleportWaiverRegistry>(sp => sp.GetRequiredService<TeleportWaiverRegistry>());
         return services;
     }
 
-    /// <summary>Create every registered feature and attach it to <paramref name="world"/> (before <see cref="WorldRuntime.Start"/>).</summary>
+    /// <summary>
+    /// Create every registered feature and attach it to <paramref name="world"/> (before <see cref="WorldRuntime.Start"/>),
+    /// through the <see cref="FeatureHost"/>: a plain feature with <see cref="IWorldFeature.Attach"/>, a detachable one with
+    /// <see cref="IDetachableWorldFeature.AttachFrom"/> and a subscription bag the host owns.
+    /// </summary>
     public static void AttachWorldFeatures(this IServiceProvider services, WorldRuntime world)
     {
-        foreach (IWorldFeature feature in services.GetServices<IWorldFeature>())
-        {
-            feature.Attach(world);
-        }
+        FeatureHost host = services.GetService<FeatureHost>() ?? new FeatureHost();
+        host.AttachAll(world, services.GetServices<IWorldFeature>());
     }
 
     /// <summary>Stop in reverse attachment order; every feature receives shutdown even if one fails.</summary>
     public static async Task StopWorldFeaturesAsync(this IServiceProvider services)
     {
         List<Exception> failures = [];
+        FeatureHost? host = services.GetService<FeatureHost>();
         foreach (IWorldFeature feature in services.GetServices<IWorldFeature>().Reverse())
         {
+            if (host?.IsDetached(feature) == true)
+            {
+                continue; // its quiesce already stopped and drained it
+            }
+
             try
             {
                 await feature.StopAsync().ConfigureAwait(false);

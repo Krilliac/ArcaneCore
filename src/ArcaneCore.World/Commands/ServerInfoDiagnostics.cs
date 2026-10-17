@@ -2,8 +2,9 @@ using System.Globalization;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
-using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
+
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Commands;
 
@@ -78,8 +79,8 @@ internal static class ServerInfoDiagnostics
     {
         TickStatsSnapshot stats = world.Stats.Snapshot();
         int targetMs = Math.Max(1, world.Options.TickIntervalMs);
-        int? bots = services.GetService<ManagedPlayerbotFeature>()?.Snapshot()
-            .Count(status => status.State == ManagedPlayerbotState.Running);
+        // The bots logged in and running, from the core's registry (a detach of the playerbot features does not hide them).
+        int? bots = services.GetService<ManagedBotRegistry>()?.RunningCount;
         return new(targetMs, 1000d / targetMs,
             Finite(stats.FrameSamples > 0 ? stats.EffectiveTicksPerSecond : null),
             stats.FrameSamples,

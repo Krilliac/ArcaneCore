@@ -65,6 +65,23 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// Remove <paramref name="observer"/> (a detached feature's, docs/design/hot-reload-tiers.md section 4.2). Copy-on-write
+    /// like registration: a notification already walking the old array still reaches it once. False when it was not registered.
+    /// </summary>
+    public bool UnregisterObserver(ISpellCastObserver observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        int index = Array.IndexOf(_observers, observer);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        _observers = [.. _observers[..index], .. _observers[(index + 1)..]];
+        return true;
+    }
+
+    /// <summary>
     /// A summon effect put <paramref name="summon"/> into the world: every observer hears of it (the spell script dispatcher turns it into
     /// the script's <see cref="Scripts.ISpellScript.OnSummon"/>, vmangos <c>m_spellScript->OnSummon</c>).
     /// </summary>

@@ -27,6 +27,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots.Groups;
 
@@ -95,7 +96,7 @@ internal enum PlayerbotGroupState : byte
 /// last boss, at <c>MaxWipes</c> or when it cannot go on.
 /// </para>
 /// </summary>
-public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services, ILogger<PlayerbotGroupCoordinator> logger) : IWorldFeature, IAreaTriggerWaiver
+public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services, ILogger<PlayerbotGroupCoordinator> logger) : IDetachableWorldFeature
 {
     /// <summary>How often free bots are looked over for group goals and matched.</summary>
     internal const uint ScanMs = 2_000;
@@ -166,10 +167,65 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return taken;
     }
 
-    public void Attach(WorldRuntime world)
+    // --- lifecycle (docs/design/hot-reload-tiers.md, section 4.2) -------------------------------------------------------
+
+    /// <summary>
+    /// Stateless: a detach ends every bot-led group and wait (the bots leave their server groups and go back to their brains) and
+    /// forgets the set-asides; the bots are matched again after the next attach. The encounters live in the core catalogue.
+    /// </summary>
+    public DetachKind DetachKind => DetachKind.Stateless;
+
+    private FeatureSubscriptions? _subscriptions;
+    private bool _detaching;
+
+    /// <summary>Whether the coordinator is attached to a world (a detached one ignores the managed feature's calls).</summary>
+    internal bool IsAttached => _world is not null;
+
+    public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotGroupCoordinator)));
+
+    public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
     {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(subscriptions);
+        _subscriptions = subscriptions;
+        // The raid runs' entrance waivers, consulted by the teleport handler for exactly as long as this coordinator is attached.
+        if (services.GetService<ITeleportWaiverRegistry>() is { } waivers) subscriptions.Add(waivers.Register(new RunWaiver(this)));
         _world = world;
+        _detaching = false;
         LoadEncounters();
+    }
+
+    public Task QuiesceAsync(CancellationToken cancellationToken) => Task.CompletedTask; // world-thread only: nothing runs in the background
+
+    public void Detach(FeatureHandover handover)
+    {
+        _detaching = true;
+        try
+        {
+            foreach (Guid botId in _memberOf.Keys.Concat(_waiting.Keys).Distinct().ToArray()) Forget(botId);
+            foreach (BotGroup group in _groups.ToArray()) Finish(group, success: false, "coordinator-detached");
+        }
+        finally
+        {
+            _groups.Clear();
+            _memberOf.Clear();
+            _waiting.Clear();
+            _setAside.Clear();
+            _failStreaks.Clear();
+            _declinedPlayers.Clear();
+            _leaderChanges.Clear();
+            _leadersWatched = null;
+            _bots.Clear();
+            _stalls.Clear();
+            _world = null;
+            _subscriptions = null;
+        }
+    }
+
+    /// <summary>The coordinator's area trigger waiver, registered with the core's waiver registry while it is attached.</summary>
+    private sealed class RunWaiver(PlayerbotGroupCoordinator owner) : IAreaTriggerWaiver
+    {
+        public AreaTriggerWaivers Waives(Player player, AreaTriggerTeleport teleport) => owner.Waives(player, teleport);
     }
 
     internal PlayerbotGroupOptions Options => _options.Groups;
@@ -198,6 +254,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     internal void Update(IReadOnlyList<PlayerbotGroupBot> bots, uint elapsedMs)
     {
+        if (_world is null) return; // detached
         _bots.Clear();
         foreach (PlayerbotGroupBot bot in bots) _bots[bot.BotId] = bot;
         TakeLeaderChanges(); // leader handoffs (PlayerbotGroupCoordinator.Handoff.cs)
@@ -1397,7 +1454,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Note($"group {group.Id}: {member.Name} {reason}");
         if (member.BotId == group.LeaderBotId && !member.Real)
         {
-            if (!_shuttingDown)
+            if (!_shuttingDown && !_detaching)
                 PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.LeaderGone,
                     string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader ({reason}) in state {group.State}; the group ends"),
                     AnomalySeverity.Info, _world?.Identity);

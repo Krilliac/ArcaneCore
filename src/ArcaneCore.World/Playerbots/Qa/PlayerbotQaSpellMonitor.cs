@@ -4,6 +4,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 
+using ArcaneCore.World.Bots;
+
 namespace ArcaneCore.World.Playerbots.Qa;
 
 /// <summary>
@@ -26,7 +28,7 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// (kind, spell, detail) is reported at most once per <see cref="ThrottleMs"/>. World thread only (the spell system's callbacks and the cast handler
 /// run there); registered only while QA is enabled.
 /// </summary>
-internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
+internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefusalObserver
 {
     /// <summary>
     /// An expected refusal is reported once one bot got it this many times for one spell ... A bot leaves a refused spell out for
@@ -236,7 +238,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
     /// The server refused <paramref name="player"/>'s cast of <paramref name="spellId"/> with <paramref name="result"/> (SpellHandlers, CMSG_CAST_SPELL of a
     /// managed session). Nothing for a real player or <see cref="SpellCastResult.CastOk"/>.
     /// </summary>
-    internal void OnCastRefused(Player player, uint spellId, SpellCastResult result)
+    public void OnCastRefused(Player player, uint spellId, SpellCastResult result)
     {
         if (result == SpellCastResult.CastOk || _identify(player) is not { } bot) return;
         long now = _clockMs();

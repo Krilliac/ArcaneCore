@@ -2,7 +2,6 @@ using System.Globalization;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Features;
-using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -63,13 +62,11 @@ public sealed class AnomalySummaryFeature : IWorldFeature
     public static void ConfigureServices(IServiceCollection services)
     {
         services.TryAddSingleton(AnomalyLedger.Shared);
-        _ = PlayerbotAnomalyHistory.Shared;
     }
 
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        _ = PlayerbotAnomalyHistory.Shared;
         world.WorldTick += OnTick;
     }
 

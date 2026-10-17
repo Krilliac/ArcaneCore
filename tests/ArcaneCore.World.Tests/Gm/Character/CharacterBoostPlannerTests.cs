@@ -14,6 +14,7 @@ using ArcaneCore.World.Gm.Character.Boost;
 using ArcaneCore.World.Playerbots.Progression;
 using Microsoft.Extensions.Configuration;
 using Xunit;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Gm.Character;
 

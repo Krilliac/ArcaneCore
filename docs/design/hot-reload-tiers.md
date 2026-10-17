@@ -4,7 +4,10 @@ Status: design, owner go on 2026-10-16 for tiers 1 to 3. Tier 1 is **built and w
 (spell scripts, instance scripts and EventAI handlers load, replace and unload through `.hotmodule`; see
 `docs/areas/code-hot-reload.md`). A failure after validation is rolled back in every slot, and the last good version is restored (section 3.5).
 RED proofs and a collected-unload proof exist for the new slots. Still open for Tier 1: the T1-live row (a real client on a dev
-server). Tiers 2 and 3 are planned.
+server). Tier 2a part 1 (contracts assembly and feature lifecycle seams, section 4.2) is **built** on `claude/hr2-lifecycle`;
+Tier 2a part 2 (core `ManagedBotRegistry`, call-site inversion, the six bot features detachable, the core/pack
+architecture test, section 4.5) is **built** on `claude/hr2-bots`; the rest of Tier 2 (options into the contracts
+assembly, 2b to 2d) and Tier 3 are planned.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -37,7 +40,7 @@ listener, runtime upgrade).
 | Tier | Removes the restart for | Mechanism | Status |
 |---|---|---|---|
 | 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost`, with full rollback; T1-live not yet run |
-| 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | Planned (research done) |
+| 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | 2a parts 1 and 2 **built** (contracts assembly, lifecycle seams, `.feature`, bot registry, call-site inversion, detachable bot features; 4 allowlisted core types left, section 4.5); 2b to 2d planned |
 | 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | Planned (research done) |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
 
@@ -161,7 +164,7 @@ rest of `ArcaneCore.World` (about 92,000), so it is both the most useful and the
 - Public seams, not `InternalsVisibleTo`: a pack compiled against changed internals fails at JIT time mid-tick rather
   than at load. A contracts version stamp is checked at load.
 
-### 4.2 Lifecycle contract (proposal)
+### 4.2 Lifecycle contract
 
 `IDetachableWorldFeature : IWorldFeature` with `DetachKind` (`Pinned`, `Stateless`, `Handover`),
 `QuiesceAsync` (off the world thread: stop loops and threads, await tasks, flush saves), `Detach(handover)` (world
@@ -170,6 +173,64 @@ types only) and `AttachFrom(world, handover?)` (same tick, new pack; null = cold
 `AttachFrom` commit in one tick; if `AttachFrom` throws, the old pack is re-attached from the same handover. Core
 features stay `Pinned`. A core-owned `FeatureSubscriptions` bag is the only way pack code subscribes to core events
 (enforced by an architecture test).
+
+**Built** (branch `claude/hr2-lifecycle`, commits `b493ed67`, `3a6a9ec7`; compiler and tests, see Evidence). One refinement
+of the proposal: the bag is a parameter of `AttachFrom` (`AttachFrom(world, handover?, subscriptions)`), because the host
+must own it to dispose it on detach. Public API:
+
+- Assembly `ArcaneCore.World.Contracts` (new project, referenced by World, default context):
+  - `ArcaneCore.World.Contracts.ContractsVersion`: `const int Current = 1`, `static bool IsCompatible(int builtAgainst)`
+    (exact match).
+  - `ArcaneCore.World.Features.IWorldFeature` (moved from World, namespace and members unchanged).
+  - `ArcaneCore.World.Features.DetachKind { Pinned, Stateless, Handover }`.
+  - `ArcaneCore.World.Features.IDetachableWorldFeature : IWorldFeature`: `DetachKind DetachKind { get; }`,
+    `Task QuiesceAsync(CancellationToken)`, `void Detach(FeatureHandover handover)`,
+    `void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)`; the default
+    `IWorldFeature.Attach` is a cold `AttachFrom` with an unowned bag (for callers without the host).
+  - `ArcaneCore.World.Features.FeatureHandover`: `int ContractsVersion`, `Set<T>(string key, T value)` (throws for a type,
+    element type or generic argument from a collectible assembly), `bool TryGet<T>(string key, out T value)`, `Keys`, `Count`.
+  - `ArcaneCore.World.Features.FeatureSubscriptions : IDisposable`: `FeatureSubscriptions(string owner)`, `Owner`, `Count`,
+    `IsDisposed`, `Subscribe<THandler>(handler, add, remove)`, `Add(IDisposable registration)`, `OnPlayerLoggedIn`,
+    `OnPlayerLoggingOut`, `OnUpdated`, `OnWorldTick`, `OnMapCreated`, `OnMapUnloading` (each `(WorldRuntime, handler)`),
+    `Observe(SpellSystem, ISpellCastObserver)`, `Dispose()` (newest first, every undo runs, failures thrown together;
+    subscribing after dispose throws `ObjectDisposedException` before touching the core object).
+  - `ArcaneCore.World.Features.WorldLifecycleStage { AfterWorldStart, BeforeWorldStop }`,
+    `IWorldLifecycleHooks.Register(stage, name, Func<CancellationToken, Task>) : IDisposable`,
+    `ITeleportWaiverRegistry.Register(IAreaTriggerWaiver) : IDisposable`.
+- `ArcaneCore.Game.Spells.SpellSystem.UnregisterObserver(ISpellCastObserver) : bool` (copy-on-write).
+- Assembly `ArcaneCore.World`, namespace `ArcaneCore.World.Features`:
+  - `FeatureHost(IHotCodeWorld? poster, Func<HotCodeAudit?>? audit, Func<IHotSwapReporter?>? reporter, ILogger? logger,
+    TimeSpan? commitTimeout, TimeSpan? quiesceTimeout, Func<DateTimeOffset>? clock)` (all optional);
+    `AttachAll(WorldRuntime, IEnumerable<IWorldFeature>)` (once, at start), `List()`, `Find(name)`, `IsDetached(feature)`,
+    `DetachAsync(name, HotSwapOrigin?)`, `AttachAsync(name, HotSwapOrigin?)`, `CycleAsync(name, HotSwapOrigin?)` (each
+    `Task<FeatureResult>`); `FeatureState { Attached, Quiesced, Detached, Faulted }`, `FeatureStatus`, `FeatureResult(Ok,
+    Detail, HotSwapResult)`. Registered as a singleton by `AddWorldFeatures`; `AttachWorldFeatures` goes through it and
+    `StopWorldFeaturesAsync` skips detached features (their quiesce drained them).
+  - `WorldLifecycleHooks : IWorldLifecycleHooks` with `RunAsync(stage, ct)` and `Registered(stage)`;
+    `TeleportWaiverRegistry : IWorldFeature, IAreaTriggerWaiver, ITeleportWaiverRegistry` (discovered like any feature,
+    so `TeleportHandlers` consults it unchanged); both registered by `AddWorldFeatures` with their interfaces.
+  - `FeatureCommands` (`.feature list|detach|attach`, `RootName = "feature"`), added by `AddFeatureCommands()` inside the
+    `World:HotCode:Modules:Enabled` block of `AddWorldDaemon`.
+- `HotSwapLane.Feature` (reporter text "Server feature '<name>' <action>").
+
+Semantics: commits run through `WorldCommit` (posted, deadline, never applied late). A failed `Detach` or unsubscribe is
+rolled back in the same tick; a failed `AttachFrom` undoes its subscriptions and leaves the feature detached with its
+handover; a failed quiesce detaches nothing (detach and re-attach in one tick restart the feature); a commit that misses
+its deadline leaves the feature `Quiesced` (attached), and `.feature attach` re-attaches it; only a rollback that throws
+leaves it `Faulted` (out of the world, handover kept). A `Stateless` feature is re-attached with a null handover.
+
+Evidence (compiler and tests): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings / 0 errors; `FeatureLifecycleTests`
+14/14 and `FeatureSeamTests` 8/8 (a probe feature with an `Updated` handler, a login handler and a spell observer: gone
+after detach, back exactly once after attach); `CommandReferenceTests` 7/7 with the regenerated `gm-commands.md`; a
+related regression set (Docs, HotCode, Teleport, CharacterDelete, WiringAudit, ServerLifecycle filters) 506 passed,
+1 skipped. RED runs, each restored and rebuilt green: bag disposal skipped (13 tests fail), `UnregisterObserver` not
+removing (11 fail), rollback, pinned refusal and waiver union disabled together (exactly those 5 tests fail), attach
+failure not undoing its subscriptions (its 1 test fails).
+
+Not built yet after part 2 (section 4.5): the architecture test against a bare `+=` from pack code (the part 2 test checks
+type references, not how a subscription is made), a pack-load check of `ContractsVersion`, the 49 static
+`ConditionalWeakTable`s and the other blockers of 4.3. Part 2 made `WorldHost` run `WorldLifecycleHooks` and
+`PlayerbotGroupCoordinator` register its waiver.
 
 ### 4.3 Known unload blockers (from reading)
 
@@ -186,6 +247,12 @@ memory-mapped GGUF model, fire-and-forget tasks, and core statics calling pack s
   call sites inverted; lifecycle interfaces, `FeatureSubscriptions`, `SpellSystem.UnregisterObserver`, a generic
   startup/shutdown hook, a waiver registry; a core `ManagedBotRegistry` split out of `ManagedPlayerbotFeature._active`;
   Detach/AttachFrom on the 6 bot features while they are still inside World, tested by detach and re-attach in process.
+  *Status:* part 1 **built** (contracts assembly, lifecycle interfaces, `FeatureSubscriptions`,
+  `SpellSystem.UnregisterObserver`, hook registry, waiver registry, `FeatureHost` and `.feature`, tested with a probe
+  feature, section 4.2); part 2 **built** (hooks run by `WorldHost`, `ManagedBotRegistry`, call sites inverted except
+  the 4 allowlisted core types, Detach/AttachFrom on the 6 bot features, the architecture test, section 4.5). Still
+  planned in 2a: the options types into the contracts assembly (clears 3 of the 4 allowlist entries) and
+  `ClusterCommands` onto the registry (the 4th).
 - **2b, move the code (about 3 to 5 weeks):** Playerbots into its own project, the compiler's CS0122/CS0246 list as the
   authoritative coupling inventory, re-point the 449 test files, still loaded in the **default** context and soaked.
   Useful on its own as modularization.
@@ -199,6 +266,89 @@ memory-mapped GGUF model, fire-and-forget tasks, and core statics calling pack s
 
 Total to a reliable cold swap: about 8 to 12 engineer-weeks. Expect 1 to 3 rounds of "the old context did not unload"
 found only with a heap dump.
+
+### 4.5 Tier 2a part 2: bot registry, inverted call sites, detachable bot features (built on `claude/hr2-bots`)
+
+**Built** (branch `claude/hr2-bots`, based on `claude/hr2-lifecycle` @ `8727d55d`; compiler and tests, see Evidence). The
+bot features are still inside `ArcaneCore.World` (2b moves them); what changed is that the core no longer needs them
+and that each one can leave and rejoin a running world with bots online.
+
+Core-owned state (outlives a detach or a pack swap):
+
+- `ArcaneCore.World.Bots.ManagedBotRegistry` (World, a pinned discovered feature): `ManagedBot(record, scope, session)`
+  per logged-in bot (`BotId`, volatile `Record`, `Scope`, `Session`, `Name`, `Running`); `Bots`, `Count`,
+  `RunningCount`, `RunningNames()`, `TryAdd`, `TryRemove(bot)` (that entry only), `TryGet`; the `SplitBrain` latch; three
+  one-slot seams, each claimed by the pack through its `FeatureSubscriptions` bag so a detach empties it:
+  `UseSessionPolicy` / `SessionPolicy`, `UseCastRefusals` / `CastRefusals`, `UseHangSink` / `HangSink` (a second claim
+  throws; a stale registration's disposal never clears a newer one). At `BeforeWorldStop` (after the playerbot shutdown
+  hook, hooks run newest first) and at `StopAsync` it closes and flushes any bot still logged in (only possible when the
+  bot feature was detached) and leaves its row as it is, so the next start restores it.
+- Contracts (`ArcaneCore.World.Contracts`, namespace `ArcaneCore.World.Bots`): `IManagedBotSessionPolicy { Lean,
+  KeepsPacket(opcode), BeforeAction(session, player, opcode) }`, `IBotCastRefusalObserver.OnCastRefused`,
+  `IBotTickHangSink { Warmup, ReportHang(phase, work, message, occurrences) }`; `PlayerbotStatus`,
+  `PlayerbotOperationResult`, `IPlayerbotService` moved here. `ArcaneCore.World.Features.IWorldServiceModule.Register(
+  services, configuration)`, discovered by `AddWorldDaemon` (`WorldServiceCollectionExtensions.ServiceModules`).
+- `ArcaneCore.World.Bots.InstanceEncounterCatalog` (pinned): the `instance_encounter` rows; `.reload instance_encounter`
+  swaps it instead of the group coordinator, which reads it.
+- Pure types moved out of the pack: `PlayerbotExploreAtlas` to `ArcaneCore.World.Bots`; `PlayerbotItemScore`,
+  `PlayerbotStatWeights`, `PlayerbotWeaponStyle`, `PlayerbotTalentBuild(s)` to `ArcaneCore.World.Bots.Progression`.
+
+Core call sites inverted: `WorldHost` runs `WorldLifecycleHooks` (`AfterWorldStart` after `world.Start()`,
+`BeforeWorldStop` before `world.Stop()`; one failure is rethrown as itself, a cancellation as
+`OperationCanceledException`); the playerbot pack registers `playerbots.restore` and `playerbots.shutdown`.
+`AddWorldDaemon` no longer lists bot services (`PlayerbotServiceModule` does, same registrations, same order).
+`ManagedWorldSession` reads the session policy per use (no policy, i.e. pack detached: the full client path, always
+correct, only dearer). `SpellHandlers`, `TickWatchdogFeature`, `ServerInfoDiagnostics` and `WorldMetricsFeature` go
+through the registry; `AnomalySummaryFeature` no longer touches `PlayerbotAnomalyHistory` (the pack does).
+
+Detachable bot features (`IDetachableWorldFeature`, every subscription through the bag):
+
+| Feature | Kind | Quiesce | Handover / rebuilt on attach |
+|---|---|---|---|
+| `ManagedPlayerbotFeature` | Handover | refuse new operations (`playerbots-detaching`), wait for the last checkpoint and the operation in flight, stop policy engine, navigation executor, chat | hands over per-bot set-asides, scripted controllers, shared set-asides, homes, start-up set-asides, fault quarantine, conflict ids, clock, status lines; rebuilds a brain and party AI for every registry entry |
+| `PlayerbotPopulationFeature` | Handover | no new pass, wait for the pass and the terrain lookup | creation times, started/parked times, clock; a rush in progress is stopped |
+| `PlayerbotGroupCoordinator` | Stateless | nothing to stop | groups finished (`coordinator-detached`), waiver registered through `ITeleportWaiverRegistry` |
+| `PlayerbotBattlegroundCoordinator` | Stateless | nothing to stop | bots in a match leave it, queue state cleared |
+| `PlayerbotSocialFeature` | Stateless | wait for the registry refresh | conversations and chatter stopped, map and guild subscriptions undone |
+| `PlayerbotQaFeature` | Stateless | the shutdown work (save, export) | findings reloaded from the store file; hang sink and cast observer re-registered |
+
+Architecture test: `tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests` reads the World assembly's IL
+(`System.Reflection.Metadata`: signatures, attributes, constraints, locals, catch types, every IL token) and fails if a
+core type (outermost type outside `ArcaneCore.World.Playerbots`) references a pack type and is not on the allowlist,
+or if an allowlist entry no longer references the pack (the list only shrinks). A positive control
+(`ScannerFindsKnownReferences`) proves the scanner sees references at all. Before this lane it listed 17 core types.
+**Allowlist left (4)**:
+
+- `ArcaneCore.World.Cluster.Tooling.ClusterCommands`: `GetRunningBotNames` reads `ManagedPlayerbotFeature` (Cluster/**
+  belongs to another lane; fix: `ManagedBotRegistry.RunningNames()`).
+- `ArcaneCore.World.Reload.ConfigContentReloadable`, `ArcaneCore.World.Reload.WorldConfigKeys`,
+  `ArcaneCore.World.Reload.WorldConfigView`: the playerbot options types. They move to the contracts assembly as plain
+  data (about 20 files, 4.1), which clears all three.
+
+Behaviour with nothing detached (from reading, plus the regression run below): the same registrations, the same restore
+and shutdown order, the same lean session path (the policy reads the same options object), the same QA hang and cast
+reports. Two observable differences: `.server info` counts running bots from the registry (logged in and running) instead
+of the last published status lines, which lag by up to one publish; and the watchdog's alert subscriber is installed
+even without an announcer (a production host always has one, so production is unchanged).
+
+Limits (from reading): handover values are still World-assembly types (`PlayerbotSetAside`, `PlayerbotHome`, the private
+`Quarantine`); `FeatureHandover` accepts them only because World is not collectible, so 2b must move them to contracts
+before a collectible pack. While the bot feature is detached the bots stand idle in the world (no brain), operator
+commands answer `playerbots-detaching`, and the population makes no pass. A bot in a battleground is taken out of its
+match by a battleground coordinator detach. No 2d gate on bot quiescence (ships, taxis) yet: a cycle mid-flight
+rebuilds the brain mid-flight.
+
+Evidence (compiler and tests): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings / 0 errors.
+`PlayerbotFeatureDetachTests` (4), `ManagedBotRegistryTests` (2), `PlayerbotCoreBoundaryTests` (2) and
+`TickWatchdogFeatureTests` (24) 32/32. The cycle test cycles all six features with three bots online and asserts: the
+same `ManagedBot` entries and sessions still `InWorld`, rows still `Running`, scripted controllers kept, new brains,
+the same subscription count per feature, the population clock advancing exactly with the world (one handler), a changed
+goal written by the next checkpoint, and a stop going through the rebuilt feature. Regression filter (Playerbot, Reload,
+ServerInfo, Metrics, WorldHost, Lean, FeatureLifecycle, FeatureSeam, Anomaly, Watchdog, Spell, Boost, Wiring, Teleport):
+5331 passed, 22 failed, 30 skipped of 5383; the same 21 fail on the base commit `8727d55d` built and run the same way
+(real-terrain, battleground, guild chat, bank and config-classification tests that fail on this machine either way), and
+the 22nd (`PlayerbotCombatTelemetryTests.AFight_IsWrittenWithItsDecisionsAndOutcome_WhenTheNextFightStarts`) passed on
+a rerun, alone. RED runs, each restored and rebuilt green: the bot feature not adding to the registry (the 3 tests with bots across a detach fail), no brain rebuilt on attach (the cycle and detach tests fail), the population's update handler added with a bare `+=` instead of the bag (the cycle test fails), the session policy not registered (the detach test fails), bot QA's hang sink not registered (7 watchdog QA tests and the QA cycle test fail), and `WorldMetricsFeature` naming `ManagedPlayerbotFeature` again (the boundary test fails). Against the base commit the boundary test listed 17 core types.
 
 ## 5. Tier 3: gateway plus blue/green handoff
 

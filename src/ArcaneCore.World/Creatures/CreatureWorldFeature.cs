@@ -9,6 +9,7 @@ using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Creatures;
 

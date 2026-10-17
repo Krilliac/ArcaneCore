@@ -22,6 +22,7 @@ using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Group = ArcaneCore.Game.Groups.Group;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 

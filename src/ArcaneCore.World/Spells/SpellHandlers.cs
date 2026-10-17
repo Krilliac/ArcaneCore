@@ -54,7 +54,7 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         if (result != SpellCastResult.CastOk && session.IsPlayerbot && !session.IsInChaosProbe)
         {
             // Bot QA: a managed bot's refused cast (a real player's never reaches this; nothing when QA is off).
-            session.Services.GetService<Playerbots.Qa.PlayerbotQaFeature>()?.SpellMonitor?.OnCastRefused(player, spellId, result);
+            session.Services.GetService<Bots.ManagedBotRegistry>()?.CastRefusals?.OnCastRefused(player, spellId, result);
         }
 
         if (result == SpellCastResult.NotKnown && !session.IsInChaosProbe)
