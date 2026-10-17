@@ -3042,12 +3042,28 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
         if (_route is { } wanderRoute)
         {
-            _exploreRefusals = 0;
+            // A pause (no budget, rooted, falling) is not a refusal: the leg stays and is walked when movement resumes.
+            // Zeroing the refusal count before the walk starts did the opposite of a pause. TryAdvance then failed (the end
+            // was blacklisted, the first stretch was not walkable, there was no speed), the route was dropped, and the count
+            // was already 0. The next think's 48-yard ray was refused again, the shortened ray came back at refusal 1, and
+            // that is the same heading: the point the failed walk had just given up was kept until the stall watch
+            // (goal Explore, phase explore-wander-plan, dest none).
             PlayerbotThinkProbe.Phase("explore advance");
+            if (ExploreMovementPaused(player, elapsedMs))
+            {
+                _exploreRefusals = 0; // the plan was accepted; the pause is not the wall that refused the last ray
+                return;
+            }
             if (!PlayerbotNavigation.TryAdvance(_session, wanderRoute, _options, elapsedMs, _session.World.NowMs))
+            {
                 AbandonRoute();
+                _exploreRefusals++;
+                if (_exploreRefusals == 1) _trace.Record(_session.World.NowMs, "wander-refused");
+                PlayerbotMovementControl.Stop(_session, player);
+            }
             else
             {
+                _exploreRefusals = 0;
                 MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }

@@ -540,6 +540,77 @@ public sealed class PlayerbotExploreTests
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// A shortened ray that is planned and then not walked (the advance is refused) must not be the next think's target.
+    /// The refusal count was cleared when the route was planned, before <see cref="PlayerbotNavigation.TryAdvance"/>, so a
+    /// failed walk left it at 0. The following think refused the 48-yard ray, came back to refusal 1, and aimed at the same
+    /// heading again for the rest of the stall.
+    /// </summary>
+    [Fact]
+    public async Task WanderWalkRefused_NextLegIsADifferentShortenedPoint()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        var paths = new RecordingShortOpenPathfinder(12f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: paths);
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+                session.ManagedBudget = new ManagedActionBudget(2);
+                explore.Invoke(brain, [player, 500u]); // 48-yard ray, refused: the mesh stops 36 yards short
+                Assert.Empty(paths.Ends.Where(IsShortenedRay));
+
+                options.MoveSpeed = 0f; // the shortened route is planned, then TryAdvance refuses it (no speed)
+                session.ManagedBudget = new ManagedActionBudget(2);
+                explore.Invoke(brain, [player, 500u]);
+                Vector3 failed = Assert.Single(paths.Ends.Where(IsShortenedRay));
+                options.MoveSpeed = 7f;
+
+                int before = paths.Ends.Count;
+                session.ManagedBudget = new ManagedActionBudget(2);
+                explore.Invoke(brain, [player, 500u]);
+                Vector3 next = paths.Ends.Skip(before).First(end => RayYards(end) > 10f);
+                Assert.True(IsShortenedRay(next),
+                    $"the leg after a failed walk must stay shortened, not go back to a 48-yard ray ({RayYards(next):F1} yd)");
+                float turned = MathF.Abs(MathF.Atan2(next.Y - 100f, next.X - 100f) - MathF.Atan2(failed.Y - 100f, failed.X - 100f));
+                if (turned > MathF.PI) turned = (MathF.PI * 2f) - turned;
+                Assert.True(turned > 0.5f, $"the failed walk's point was kept (turn {turned:F2} rad)");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+
+        static float RayYards(Vector3 end) => Vector2.Distance(new(100f, 100f), new(end.X, end.Y));
+        // A full explore leg is 48 yards. The shortened one is progress (10) plus the 8-yard shortfall allowance.
+        static bool IsShortenedRay(Vector3 end) => RayYards(end) is > 10f and < PlayerbotBrain.ExploreLegYards - 1f;
+    }
+
+    /// <summary>Completes a ray of at most <paramref name="openYards"/> and records each requested end.</summary>
+    private sealed class RecordingShortOpenPathfinder(float openYards) : IPathfinder
+    {
+        public bool Enabled => true;
+        public List<Vector3> Ends { get; } = [];
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Ends.Add(end);
+            float dx = end.X - start.X, dy = end.Y - start.Y;
+            float distance = MathF.Sqrt((dx * dx) + (dy * dy));
+            if (!float.IsFinite(distance) || distance <= openYards + 0.05f)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+            float scale = openYards / distance;
+            var clamped = new Vector3(start.X + (dx * scale), start.Y + (dy * scale), end.Z);
+            return PathResult.StraightLine(start, clamped, PathType.Normal | PathType.Incomplete);
+        }
+    }
+
     /// <summary>Completes a ray of at most <paramref name="openYards"/>; a longer ray ends there, short of its point.</summary>
     private sealed class ShortOpenGroundPathfinder(float openYards) : IPathfinder
     {
