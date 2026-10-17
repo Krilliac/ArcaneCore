@@ -34,7 +34,7 @@
 #   BATTLEGROUND                8 keys
 #   CHARACTERCREATION           13 keys
 #   CLIENTDATA                  2 keys
-#   CLUSTER                     5 keys
+#   CLUSTER                     14 keys
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
@@ -1716,6 +1716,117 @@ Cluster.Fencing.Enabled = false
 #        Docs: docs/reference/configuration.md#clusterfencing
 #
 # Cluster.Fencing.TakeoverIncarnation =
+
+#----------------------------------------------------------------------------
+# Cluster:Worker
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Worker.BindAddress
+#        Description: Address of the gateway listener. A non-loopback address requires
+#                     Cluster:Worker:LinkSecret.
+#        Type: string
+#        Default: "127.0.0.1"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.BindAddress = "127.0.0.1"
+
+#
+#    Cluster.Worker.CharactersSchemaVersion
+#        Description: Characters schema version both ends must agree on (an operator label, not read
+#                     from the database).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.CharactersSchemaVersion = 1
+
+#
+#    Cluster.Worker.ContentRevision
+#        Description: Content revision both ends of the link must agree on (an operator label;
+#                     nothing reads it from the data).
+#        Type: string
+#        Default: "dev"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.ContentRevision = "dev"
+
+#
+#    Cluster.Worker.Enabled
+#        Description: true opens the gateway listener (worker mode). false, the default, is Combined
+#                     mode: no listener, no change.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.Enabled = false
+
+#
+#    Cluster.Worker.LinkSecret
+#        Description: Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it
+#                     may open sessions; must equal Gateway:LinkSecret. Empty is allowed on a
+#                     loopback bind only. An admitted gateway opens sessions for any account it
+#                     authenticated, so treat the secret like a database password.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.LinkSecret = ""
+
+#
+#    Cluster.Worker.NodeId
+#        Description: This worker's node id in the link manifest (shown in the gateway's log).
+#        Type: string
+#        Default: "world"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.NodeId = "world"
+
+#
+#    Cluster.Worker.Port
+#        Description: Port of the gateway listener; must equal the gateway's Gateway:WorkerPort.
+#        Type: int
+#        Default: 8095
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.Port = 8095
+
+#
+#    Cluster.Worker.RealmId
+#        Description: Realm id both ends of the link must agree on.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.RealmId = 1
+
+#
+#    Cluster.Worker.WorldSchemaVersion
+#        Description: World schema version both ends must agree on (an operator label, not read from
+#                     the database).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.WorldSchemaVersion = 1
 
 ###############################################################################
 # COMBAT

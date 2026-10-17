@@ -3,7 +3,9 @@
 Status: design, owner go on 2026-10-16 for tiers 1 to 3. Tier 1 is **built and wired** into the module lane
 (spell scripts, instance scripts and EventAI handlers load, replace and unload through `.hotmodule`; see
 `docs/areas/code-hot-reload.md`). Still open for Tier 1: rollback of a post-validation failure (section 3.5), RED proofs
-for the instance/EventAI registry tests, and a collected-unload proof for the new slots. Tiers 2 and 3 are planned.
+for the instance/EventAI registry tests, and a collected-unload proof for the new slots. Tier 2 is planned. Tier 3 phase
+3a (gateway passthrough) is **built and mock-client tested** on `claude/hr2-gateway` (section 5.4,
+[gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -37,7 +39,7 @@ listener, runtime upgrade).
 |---|---|---|---|
 | 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost` (rollback of a post-validation failure still open) |
 | 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | Planned (research done) |
-| 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | Planned (research done) |
+| 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | 3a passthrough **built** (mock client only, off by default); 3b/3c planned |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
 
 ## 3. Tier 1: widen the module lane
@@ -241,6 +243,36 @@ forbids ("never serialize a socket ... or cipher state into a handoff"), is Wind
 open trade, loot, duel and similar transients are cancelled; engaged creatures reset; chat channel membership needs
 a rejoin. Far better than a disconnect, not invisible. SQLite deployments probably cannot run it (single-writer lock);
 MariaDB or PostgreSQL is assumed.
+
+### 5.4 Phase 3a as built (`claude/hr2-gateway`)
+
+Built and covered by `tests/ArcaneCore.Gateway.Tests` (22 tests: wire, link envelope, and a mock-client login, character
+create, enter-world and ping through the gateway against the synthetic realm and world). Operator page:
+[gateway.md](../areas/gateway.md).
+
+- `ArcaneCore.Gateway` executable: client socket, auth challenge and digest check against the realm-stored session key
+  (the same refusals as `WorldSession.HandleAuthSessionAsync`, which stays in place for `Combined` mode), header cipher,
+  PING/PONG, per-account claim, outbound bound, `NetGuard` admission, link reconnect with backoff.
+- World worker mode (`Cluster:Worker:Enabled`, default `false`; with it off nothing is registered): a remote-mode
+  `WorldSession` per client (`WorldSession.Remote.cs`, one branch in `WorldSession.Send`), `RemoteWorldSession`,
+  `GatewayWorkerEndpoint`.
+- Session link on the `GatewayWorkerTransport` framing (new frame types 11 to 17): HMAC challenge on a shared secret, then
+  the manifest check; every packet in the generation/epoch/sequence envelope, with stale or foreign packets dropped and
+  counted on both ends. The client's `ip:port` is forwarded and becomes the worker session's `RemoteEndpoint`.
+
+Differences from 5.2 and what is left of 3a:
+
+- **Warden runs on the worker**, not the gateway: its opcodes are forwarded unchanged. Moving it to the gateway is needed
+  before 3b (a handoff must not restart the Warden exchange).
+- **No real-client acceptance yet** (the 3a exit criterion in section 9).
+- Manifest schema and content versions are operator labels, not read from the databases.
+- The link protocol lives in `ArcaneCore.World`; the gateway references the whole World assembly until a shared protocol
+  assembly is split out.
+- The gateway's `Gateway:*` keys are not in the configuration catalog (no `ConfigDaemon` value, no `.conf.dist`, no
+  `--check-config`) and it exports no metrics.
+- The gateway's session generation and `SessionRegistry`'s own generation are independent counters.
+- The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
+  coordinator is still test-only.
 
 ## 6. Tier 4: edit and continue stays dev-only
 

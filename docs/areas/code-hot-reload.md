@@ -540,7 +540,7 @@ Exit code 77 means "skipped, no SDK": a skip proves nothing.
 
 Be precise about what this page does not offer:
 
-The plan for removing these limits (multi-assembly discovery, swappable spell, instance and EventAI scripts, reloadable packs, a gateway with blue/green handoff) is [Hot reload tiers](../design/hot-reload-tiers.md).
+The plan for removing these limits (multi-assembly discovery, swappable spell, instance and EventAI scripts, reloadable packs, a gateway with blue/green handoff) is [Hot reload tiers](../design/hot-reload-tiers.md). The gateway passthrough (phase 3a) is built: [Gateway passthrough](gateway.md).
 
 * **Hot-replacing the server's own code on a Release build.** The module lane loads *extension
   assemblies*; the server assembly itself (a built-in handler, formula or feature) changes live only
