@@ -32,6 +32,9 @@ public sealed class GatewayServer(
     private TcpListener? _listener;
     private volatile GatewaySessionLinkClient? _link;
     private TaskCompletionSource _linkUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource? _retarget;
+    private volatile IPEndPoint? _worker;
+    private volatile IPEndPoint? _linkWorker;
     private long _nextGeneration;
 
     internal GatewayOptions Options => options.Value;
@@ -52,6 +55,29 @@ public sealed class GatewayServer(
     /// <summary>The current worker link, or null while it is down.</summary>
     public GatewaySessionLinkClient? Link => _link is { IsConnected: true } link ? link : null;
 
+    /// <summary>The worker the link connects to: Gateway:WorkerAddress/WorkerPort until <see cref="RetargetWorkerAsync"/> moves it.</summary>
+    public IPEndPoint WorkerEndPoint => _worker ?? ConfiguredWorker();
+
+    /// <summary>
+    /// Move the worker link to <paramref name="worker"/> (the reroute of a whole-World handoff, Tier 3b): the link to the old worker is closed,
+    /// which disconnects its clients (they log in again through the new link; a seamless per-session reroute is not built), and the link loop
+    /// connects to the new worker with the same secret and manifest. Completes when the new link is registered. In-process only: nothing
+    /// remote can call it. Idempotent.
+    /// </summary>
+    public async Task RetargetWorkerAsync(IPEndPoint worker, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(worker);
+        _worker = worker;
+        _logger.LogInformation("Worker link retargeted to {Worker}", worker);
+        while (!(Link is not null && Equals(_linkWorker, worker)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_link is not null && !Equals(_linkWorker, worker))
+                Volatile.Read(ref _retarget)?.TrySetResult();
+            await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>Open client connections.</summary>
     public int ConnectionCount => _connections.Count;
 
@@ -64,6 +90,8 @@ public sealed class GatewayServer(
     /// so every SessionOpen on a link is newer than the last even when clients log in at once.
     /// </summary>
     internal long NextGeneration() => Interlocked.Increment(ref _nextGeneration);
+
+    private IPEndPoint ConfiguredWorker() => new(IPAddress.Parse(options.Value.WorkerAddress), options.Value.WorkerPort);
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
@@ -155,9 +183,9 @@ public sealed class GatewayServer(
         GatewayOptions config = options.Value;
         TimeSpan delay = config.LinkRetryDelay > TimeSpan.Zero ? config.LinkRetryDelay : TimeSpan.FromSeconds(1);
         TimeSpan nextDelay = delay;
-        var worker = new IPEndPoint(IPAddress.Parse(config.WorkerAddress), config.WorkerPort);
         while (!stoppingToken.IsCancellationRequested)
         {
+            IPEndPoint worker = WorkerEndPoint;
             var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, loggers.CreateLogger<GatewaySessionLinkClient>());
             try
             {
@@ -188,12 +216,15 @@ public sealed class GatewayServer(
             }
 
             nextDelay = delay;
+            var retarget = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _retarget, retarget);
+            _linkWorker = worker;
             _link = link;
             _logger.LogInformation("Worker link to {Worker} registered", worker);
             Volatile.Read(ref _linkUp).TrySetResult();
             try
             {
-                await link.Ended.WaitAsync(stoppingToken).ConfigureAwait(false);
+                await Task.WhenAny(link.Ended, retarget.Task).WaitAsync(stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -202,7 +233,10 @@ public sealed class GatewayServer(
 
             Volatile.Write(ref _linkUp, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
             _link = null;
-            _logger.LogWarning("Worker link to {Worker} lost; its clients were disconnected", worker);
+            if (retarget.Task.IsCompleted)
+                _logger.LogInformation("Worker link to {Worker} closed for the retarget to {Target}; its clients were disconnected", worker, WorkerEndPoint);
+            else
+                _logger.LogWarning("Worker link to {Worker} lost; its clients were disconnected", worker);
             await link.DisposeAsync().ConfigureAwait(false);
         }
     }

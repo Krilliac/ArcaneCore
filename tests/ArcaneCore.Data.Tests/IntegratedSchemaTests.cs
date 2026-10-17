@@ -164,6 +164,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotSetAsideDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotSetAsideDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Ownership.CharacterOwnershipDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Ownership.CharacterOwnershipDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Ids.CharacterIdRangeDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Ids.CharacterIdRangeDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Transfers.ClusterTransferDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transfers.ClusterTransferDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -195,7 +196,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(53, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51), instance_encounter (52), npc_vendor_template and creature_template.VendorTemplateId (53)
-        Assert.Equal(61, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55), managed playerbot home (56), playerbot population members (57), playerbot home zone clip (58), managed playerbot set-asides (59), character ownership (60), character id ranges (61)
+        Assert.Equal(62, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55), managed playerbot home (56), playerbot population members (57), playerbot home zone clip (58), managed playerbot set-asides (59), character ownership (60), character id ranges (61), cluster transfer journal (62)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

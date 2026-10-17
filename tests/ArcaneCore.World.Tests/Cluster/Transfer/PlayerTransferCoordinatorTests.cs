@@ -1,12 +1,67 @@
+using ArcaneCore.Data;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Transfers;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.World.Cluster.Transfer;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Transfer;
 
-public sealed class PlayerTransferCoordinatorTests
+/// <summary>
+/// The six-stage transfer state machine, run against both decision stores: the in-memory one and the durable characters-database one
+/// (<see cref="EfTransferDecisionStore"/>, Tier 3b). With the durable store a "crash" also throws the store away and recovers through a
+/// new store on the same database file, so the roll-back and roll-forward read only what was committed.
+/// </summary>
+public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
 {
+    private readonly List<ServiceProvider> _providers = [];
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "arcanecore-transfer-" + Guid.NewGuid().ToString("N"));
+    private string? _connectionString;
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        foreach (ServiceProvider provider in _providers)
+            await provider.DisposeAsync();
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try
+        {
+            if (Directory.Exists(_directory))
+                Directory.Delete(_directory, recursive: true);
+        }
+        catch (IOException)
+        {
+            // A temp directory a straggling connection still holds is left for the OS to clean.
+        }
+    }
+
+    /// <summary>A durable store on this test's SQLite characters file (created on first use); every call opens a new provider, as a restarted process would.</summary>
+    private async Task<EfTransferDecisionStore> OpenDurableStoreAsync()
+    {
+        if (_connectionString is null)
+        {
+            Directory.CreateDirectory(_directory);
+            _connectionString = $"Data Source={Path.Combine(_directory, "characters.db")}";
+        }
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Database:Provider"] = "Sqlite",
+            ["Database:ConnectionString"] = _connectionString,
+        }).Build();
+        ServiceProvider provider = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).BuildServiceProvider();
+        _providers.Add(provider);
+        await provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+        return provider.GetRequiredService<EfTransferDecisionStore>();
+    }
+
+    /// <summary>After a simulated crash: the same in-memory store, or a brand-new durable store that knows only the database.</summary>
+    private async Task<ITransferDecisionStore> AfterCrashAsync(ITransferDecisionStore store)
+        => store is EfTransferDecisionStore ? await OpenDurableStoreAsync() : store;
     private sealed class FakeWorkerNode : ITransferSourceWorker, ITransferTargetWorker
     {
         private readonly Dictionary<ulong, PlayerTransferBundle> _activePlayers = [];
@@ -224,18 +279,18 @@ public sealed class PlayerTransferCoordinatorTests
         }
     }
 
-    private static (
+    private async Task<(
         ClusterMapPlacementTable MapTable,
-        InMemoryTransferDecisionStore DecisionStore,
+        ITransferDecisionStore DecisionStore,
         FakeGatewayRouter Gateway,
         FakeWorkerNode SourceWorker,
         FakeWorkerNode TargetWorker,
         PlayerTransferCoordinator Coordinator,
         PlayerTransferRequest Request,
-        PlayerTransferBundle SeededBundle) CreateFixture(TransferActiveBlockers? blockers = null)
+        PlayerTransferBundle SeededBundle)> CreateFixtureAsync(bool durable, TransferActiveBlockers? blockers = null)
     {
         var mapTable = new ClusterMapPlacementTable();
-        var decisionStore = new InMemoryTransferDecisionStore();
+        ITransferDecisionStore decisionStore = durable ? await OpenDurableStoreAsync() : new InMemoryTransferDecisionStore();
         var gateway = new FakeGatewayRouter();
         var sourceWorker = new FakeWorkerNode("worker-ek");
         var targetWorker = new FakeWorkerNode("worker-kalimdor");
@@ -294,10 +349,12 @@ public sealed class PlayerTransferCoordinatorTests
         return (mapTable, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, seededBundle);
     }
 
-    [Fact]
-    public async Task ExecuteTransferAsync_HappyPath6Stages_PreservesFullBundle_AdvancesOwnershipEpoch_AndNeverDualActivates()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteTransferAsync_HappyPath6Stages_PreservesFullBundle_AdvancesOwnershipEpoch_AndNeverDualActivates(bool durable)
     {
-        var (_, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, seededBundle) = CreateFixture();
+        var (_, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, seededBundle) = await CreateFixtureAsync(durable);
         var visitedStages = new List<PlayerTransferStage>();
 
         PlayerTransferOutcome outcome = await coordinator.ExecuteTransferAsync(
@@ -357,8 +414,12 @@ public sealed class PlayerTransferCoordinatorTests
         Assert.Equal(activeOwner, gateway.RoutedOwnershipTokens[request.CharacterGuid]);
 
         // Stale source token is fenced out by the decision store
-        Assert.Throws<CharacterOwnershipRejectedException>(() =>
-            decisionStore.EnsureOwnershipActive(request.CharacterGuid, request.SourceOwnershipToken));
+        Assert.NotEqual(request.SourceOwnershipToken, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        if (decisionStore is InMemoryTransferDecisionStore memory)
+        {
+            Assert.Throws<CharacterOwnershipRejectedException>(() =>
+                memory.EnsureOwnershipActive(request.CharacterGuid, request.SourceOwnershipToken));
+        }
 
         // Verify full PlayerTransferBundle fidelity on the activated target worker
         PlayerTransferBundle? activated = targetWorker.GetActiveBundle(request.CharacterGuid);
@@ -388,14 +449,18 @@ public sealed class PlayerTransferCoordinatorTests
     }
 
     [Theory]
-    [InlineData(PlayerTransferStage.Reserve)]
-    [InlineData(PlayerTransferStage.SuspendAndCapture)]
-    [InlineData(PlayerTransferStage.InstallPassive)]
-    [InlineData(PlayerTransferStage.StageWorldPort)]
+    [InlineData(PlayerTransferStage.Reserve, false)]
+    [InlineData(PlayerTransferStage.SuspendAndCapture, false)]
+    [InlineData(PlayerTransferStage.InstallPassive, false)]
+    [InlineData(PlayerTransferStage.StageWorldPort, false)]
+    [InlineData(PlayerTransferStage.Reserve, true)]
+    [InlineData(PlayerTransferStage.SuspendAndCapture, true)]
+    [InlineData(PlayerTransferStage.InstallPassive, true)]
+    [InlineData(PlayerTransferStage.StageWorldPort, true)]
     public async Task PreCommitAbort_AtAnyPreCommitStage_RestoresSourceWorker_DiscardsTargetPassiveState_AndKeepsSourceEpoch(
-        PlayerTransferStage abortAtStage)
+        PlayerTransferStage abortAtStage, bool durable)
     {
-        var (_, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = CreateFixture();
+        var (_, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = await CreateFixtureAsync(durable);
 
         PlayerTransferOutcome outcome = await coordinator.ExecuteTransferAsync(
             request,
@@ -431,10 +496,12 @@ public sealed class PlayerTransferCoordinatorTests
         Assert.Equal(sourceWorker.WorkerId, gateway.ActiveRoutes[request.CharacterGuid]);
     }
 
-    [Fact]
-    public async Task PostCommitAbort_IsStrictlyRejected_AndCrashAfterCommitDecision_RollsForwardToTargetWorker()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PostCommitAbort_IsStrictlyRejected_AndCrashAfterCommitDecision_RollsForwardToTargetWorker(bool durable)
     {
-        var (_, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = CreateFixture();
+        var (mapTable, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = await CreateFixtureAsync(durable);
 
         // Simulate a crash immediately after Stage 5 (CommitDecision) before Stage 6 (ActivateAndRetire) runs.
         var simulatedCrash = new InvalidOperationException("simulated-worker-or-coordinator-crash-after-commit");
@@ -460,6 +527,8 @@ public sealed class PlayerTransferCoordinatorTests
                 }));
 
         Assert.Same(simulatedCrash, caught);
+        decisionStore = await AfterCrashAsync(decisionStore);
+        coordinator = new PlayerTransferCoordinator(mapTable, decisionStore, gateway, [sourceWorker], [targetWorker]);
 
         // Before recovery runs: decision is Committed, ownership token is already at Epoch + 1, and neither worker is dual-active.
         TransferDecisionRecord? committedRecord = await decisionStore.GetDecisionAsync(request.TransferId);
@@ -484,10 +553,12 @@ public sealed class PlayerTransferCoordinatorTests
         Assert.False(await coordinator.TryAbortTransferAsync(request.TransferId, "after-complete"));
     }
 
-    [Fact]
-    public async Task CrashBeforeCommitDecision_RecoverTransferAsync_RollsBackToSourceWorker()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CrashBeforeCommitDecision_RecoverTransferAsync_RollsBackToSourceWorker(bool durable)
     {
-        var (_, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = CreateFixture();
+        var (mapTable, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = await CreateFixtureAsync(durable);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             coordinator.ExecuteTransferAsync(
@@ -499,6 +570,8 @@ public sealed class PlayerTransferCoordinatorTests
                     return Task.CompletedTask;
                 }));
 
+        decisionStore = await AfterCrashAsync(decisionStore);
+        coordinator = new PlayerTransferCoordinator(mapTable, decisionStore, gateway, [sourceWorker], [targetWorker]);
         TransferDecisionRecord? preRecovery = await decisionStore.GetDecisionAsync(request.TransferId);
         Assert.NotNull(preRecovery);
         Assert.Equal(PlayerTransferDecisionState.PreCommit, preRecovery!.DecisionState);
@@ -513,11 +586,13 @@ public sealed class PlayerTransferCoordinatorTests
         Assert.Equal(request.SourceOwnershipToken, decisionStore.GetActiveOwnership(request.CharacterGuid));
     }
 
-    [Fact]
-    public async Task ExecuteTransferAsync_AbortsAndRestoresSource_WhenPlayerHasActiveTradeOrLootWindow()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteTransferAsync_AbortsAndRestoresSource_WhenPlayerHasActiveTradeOrLootWindow(bool durable)
     {
-        var (_, decisionStore, _, sourceWorker, targetWorker, coordinator, request, _) = CreateFixture(
-            blockers: new TransferActiveBlockers(HasActiveTradeWindow: true));
+        var (_, decisionStore, _, sourceWorker, targetWorker, coordinator, request, _) = await CreateFixtureAsync(
+            durable, blockers: new TransferActiveBlockers(HasActiveTradeWindow: true));
 
         PlayerTransferOutcome outcome = await coordinator.ExecuteTransferAsync(request);
 

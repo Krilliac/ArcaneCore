@@ -41,6 +41,12 @@ public sealed class CharacterWriteSweepTests
         ["ArcaneCore.Data/Characters/Spells/CharacterSpellStateDataModule.cs::DeleteRowsAsync"] = "only called from SaveAsync, after its BeginTransactionAsync",
         ["ArcaneCore.Data/Social/SocialDataModule.cs::DeleteReferencesAsync"] = "only called from DeleteCharacterDataAsync, inside the deletion transaction",
 
+        // The transfer journal (characters schema 62): these helpers run only inside EfTransferDecisionStore.InTransactionAsync, which begins its
+        // own transaction under CharacterWriteFence.Exempt; the journal's compare-and-swap on the ownership row is the handoff's own fence.
+        ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::CreateReservationCoreAsync"] = "the claim CAS runs inside the store's InTransactionAsync lambda",
+        ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::CommitRowAsync"] = "only called inside the store's InTransactionAsync (commit and epoch takeover)",
+        ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::ReleaseClaimAsync"] = "only called inside the store's InTransactionAsync (complete and abort)",
+
         // Not the characters database at all (the file also holds a characters store, which is why the file-level scan sees it).
         ["ArcaneCore.Data/Economy/AuctionBotDataModules.cs::DeleteAsync"] = "EfAuctionBotItemStore writes the world database (WorldDbContext)",
 

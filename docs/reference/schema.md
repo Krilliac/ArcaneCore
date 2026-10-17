@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
-| `characters` | 61 | `characters` |
+| `characters` | 62 | `characters` |
 | `world` | 53 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -86,6 +86,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 59 | `Characters.Playerbots.ManagedPlayerbotSetAsideDataModule` | creates `managed_playerbot_set_aside` | yes |
 | 60 | `Characters.Ownership.CharacterOwnershipDataModule` | creates `character_ownership` | yes |
 | 61 | `Characters.Ids.CharacterIdRangeDataModule` | creates `character_id_ranges` | yes |
+| 62 | `Characters.Transfers.ClusterTransferDataModule` | creates `cluster_transfer_decision`, `cluster_transfer_owner`, `cluster_world_handoff` | no |
 
 ## `world`
 

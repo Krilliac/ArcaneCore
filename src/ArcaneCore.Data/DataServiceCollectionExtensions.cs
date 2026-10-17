@@ -80,7 +80,26 @@ public static class DataServiceCollectionExtensions
     public const string FencingEnabledKey = "Cluster:Fencing:Enabled";
 
     /// <summary>
-    /// Registers the process-wide ownership holder and, when <see cref="FencingEnabledKey"/> is true, attaches the write fence to every
+    /// Worker mode (<c>Cluster:Worker:Enabled</c>, the gateway topology of docs/areas/gateway.md). A worker's players can be handed to another
+    /// world process, so every characters write must carry the ownership epoch: in worker mode the write fence is on whatever
+    /// <see cref="FencingEnabledKey"/> says (the world host refuses to start a worker with fencing off).
+    /// </summary>
+    public const string WorkerEnabledKey = "Cluster:Worker:Enabled";
+
+    /// <summary>
+    /// Whether the characters write fence is attached: <see cref="FencingEnabledKey"/> is true, or worker mode (<see cref="WorkerEnabledKey"/>)
+    /// is on, which makes fencing mandatory. Combined mode with fencing unset is unfenced, exactly as before.
+    /// </summary>
+    public static bool IsCharacterWriteFenceRequired(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return IsTrue(configuration[FencingEnabledKey]) || IsTrue(configuration[WorkerEnabledKey]);
+
+        static bool IsTrue(string? value) => bool.TryParse(value, out bool on) && on;
+    }
+
+    /// <summary>
+    /// Registers the process-wide ownership holder and, when <see cref="IsCharacterWriteFenceRequired"/> (fencing on, or worker mode), attaches the write fence to every
     /// characters context. Off (the default) adds nothing to the context options, and the stores add no transaction and no ownership statement for an untokened save, so the statement kinds are the same as train 16 issued (a CharacterWriteFenceTests case captures them); the world host watches the ownership row every Cluster:Fencing:ClaimWatchIntervalSeconds (default 10 s, independent of autosave) instead, so an unfenced world can keep writing for up to that interval after a fenced world claims the database.
     /// </summary>
     private static void AddCharacterWriteFence(IServiceCollection services, IConfiguration configuration)
@@ -95,7 +114,7 @@ public static class DataServiceCollectionExtensions
         var commands = new CharacterWriteFenceCommandInterceptor();
         services.ConfigureDbContext<CharacterDbContext>(builder =>
         {
-            if (bool.TryParse(configuration[FencingEnabledKey], out bool enabled) && enabled)
+            if (IsCharacterWriteFenceRequired(configuration))
             {
                 builder.AddInterceptors(transactions, commands);
             }
