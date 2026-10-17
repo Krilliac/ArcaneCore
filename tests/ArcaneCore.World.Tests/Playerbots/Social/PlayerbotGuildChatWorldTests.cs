@@ -144,6 +144,8 @@ public sealed class PlayerbotGuildChatWorldTests
         {
             options.Chat.Enabled = true;
             options.Social.Guilds.Enabled = false;
+            // The listener stands beside the bots: with emotes on, a bot greets it with a /say half the time (a CMSG_MESSAGECHAT that is no guild line).
+            options.Social.Emotes.Enabled = false;
             options.Social.GuildChat.Enabled = false; // the bots' own joining is not remarked on
         });
         await world.AddBotAsync("Quilla");
