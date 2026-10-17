@@ -833,7 +833,7 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
   off, or a master further away is not walked to.
 - **Planning.** `TryTravelByTaxi(session, player, mapId, destination, options)` is called by `PlayerbotWorldDestinations` for a quest
   destination after the tram and lift checks (a lift's own walk is kept). The estimate of the walk is the straight line (no path query). Taxi
-  is used when it is at least `MinRouteYards` (default 600), the bot knows a node within `MaxWalkToMasterYards` (default 300) of itself, a
+  is used when it is at least `MinRouteYards` (default 600), the bot knows a node within `MaxWalkToMasterYards` (default 300) of itself (or, when none is that close, a farther known node whose walk plus the walk from the landing is at most half the straight line), a
   Dijkstra over known nodes of the map (fare = path price) reaches a known landing node within `MaxWalkToMasterYards` of the destination, the
   two walks together are at most half the straight line, a flight master of the departure node that the bot may approach exists (found in the
   creature content, so one out of sight counts), and the bot can pay the whole fare now. The fare used is the undiscounted path price, an

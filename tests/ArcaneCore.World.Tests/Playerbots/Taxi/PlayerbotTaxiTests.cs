@@ -214,6 +214,48 @@ public sealed partial class PlayerbotTaxiTests
     }
 
     [Fact]
+    public async Task ADepartureBeyondTheWalkRadius_WhoseFlightStillHalvesTheWalk_IsFlown_AndADetourThatDoesNot_Walks()
+    {
+        // Quest 6362 (Ride to Thunder Bluff): the bot stands in the Barrens, hundreds of yards past MaxWalkToMasterYards from the Crossroads
+        // wind rider, with the ender a couple of thousand yards on. The walk to that master plus the walk from the landing is still at most
+        // half the straight line, so the flight is the clear win and the bot speaks to the master. A departure whose walk alone already
+        // exceeds half the straight line is not a win and is still walked.
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options(t => t.MaxWalkToMasterYards = 40f);
+            Vector3 node1 = rig.NodePosition(1);
+            Vector3 goal = rig.Near(2);
+            uint now = rig.Session.World.NowMs;
+
+            player.Relocate(node1.X - 400f, node1.Y, node1.Z, 0, now);
+            Vector3 far = new(player.X, player.Y, player.Z);
+            float farStraight = Vector3.Distance(far, goal);
+            Assert.True(400f > options.Taxi.MaxWalkToMasterYards);
+            Assert.True(400f > farStraight * 0.5f);
+            Assert.Equal(TaxiTravel.Walk, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, goal, options));
+            Assert.Null(PlayerbotTaxi.TripOf(player));
+
+            player.Relocate(node1.X - 80f, node1.Y, node1.Z, 0, now);
+            Vector3 here = new(player.X, player.Y, player.Z);
+            float straight = Vector3.Distance(here, goal);
+            float landing = Vector3.Distance(goal, rig.NodePosition(2));
+            Assert.True(straight >= options.Taxi.MinRouteYards);
+            Assert.True(80f > options.Taxi.MaxWalkToMasterYards);
+            Assert.True(landing <= options.Taxi.MaxWalkToMasterYards);
+            Assert.True(80f + landing <= straight * 0.5f);
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, goal, options));
+            TaxiTrip trip = Assert.IsType<TaxiTrip>(PlayerbotTaxi.TripOf(player));
+            Assert.Equal([1u, 2u], trip.Nodes);
+            Assert.Equal(100u, trip.Fare);
+            Assert.Equal(TaxiFixture.MasterEntry, trip.MasterEntry);
+            return 0;
+        });
+    }
+
+    [Fact]
     public async Task AServerRefusal_BacksTaxiUseOff_AndTheGoalWalks()
     {
         await using Rig rig = await Rig.StartAsync();

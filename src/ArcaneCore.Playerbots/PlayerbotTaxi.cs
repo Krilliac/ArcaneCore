@@ -339,9 +339,11 @@ internal static class PlayerbotTransitBackoff
 /// <item><see cref="Discover"/>: a bot within interaction range of a flight master it may use, whose node it does not know yet, sends
 /// CMSG_TAXIQUERYAVAILABLENODES, which learns the node (vmangos <c>HandleTaxiQueryAvailableNodes</c>).</item>
 /// <item><see cref="TryTravelByTaxi"/> + <see cref="Drive"/>: a long trip (the straight line is at least
-/// <see cref="PlayerbotTaxiOptions.MinRouteYards"/>) whose start has a known node within <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/>
-/// and whose end has a known, affordable landing node near it becomes: walk to that node's flight master, CMSG_ACTIVATETAXI (one hop)
-/// or CMSG_ACTIVATETAXIEXPRESS (several), read SMSG_ACTIVATETAXIREPLY, and wait while the server flies the bot. The brain drives the
+/// <see cref="PlayerbotTaxiOptions.MinRouteYards"/>) with a known, affordable landing node near its end becomes: walk to that route's
+/// flight master, CMSG_ACTIVATETAXI (one hop) or CMSG_ACTIVATETAXIEXPRESS (several), read SMSG_ACTIVATETAXIREPLY, and wait while the
+/// server flies the bot. The departure is the nearest known node within <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/>, or, when
+/// none is that close, a farther known node whose walk plus the walk from the landing is at most half the straight line (a flight master
+/// off the road is spoken to instead of walking the whole trip). The brain drives the
 /// trip before anything else (<see cref="PlayerbotBrain"/>), so the bot neither thinks nor moves in the air.</item>
 /// </list>
 /// <para>
@@ -634,9 +636,10 @@ internal static class PlayerbotTaxi
     /// <summary>
     /// Begin a taxi trip towards <paramref name="destination"/> on <paramref name="mapId"/> when flying is the clear win, else
     /// <see cref="TaxiTravel.Walk"/>. A trip already under way answers <see cref="TaxiTravel.Traveling"/>. The estimate of the walk is the
-    /// straight line (no path query); flying needs a known departure node within <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/> of the
-    /// bot, a flight master for it that the bot may approach, and a known landing node reachable over known nodes whose total fare (without
-    /// discounts) the bot can pay now.
+    /// straight line (no path query); flying needs a known departure node (the nearest within
+    /// <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/>, or a farther one when the walk to it plus the walk from the landing is at
+    /// most half the straight line), a flight master for it that the bot may approach, and a known landing node reachable over known nodes
+    /// whose total fare (without discounts) the bot can pay now.
     /// </summary>
     internal static TaxiTravel TryTravelByTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options)
         => TryTravelByTaxi(session, player, mapId, destination, options, uint.MaxValue);
@@ -682,7 +685,8 @@ internal static class PlayerbotTaxi
         bool alliance = player.Team == Team.Alliance;
 
         // The departure: the known node nearest the bot, close enough to walk to, and not backed off after a failed trip from it (another
-        // known node may still fly).
+        // known node may still fly). A node farther than the walk radius is not considered here; TryFartherDeparture does, and only when
+        // this search finds nobody.
         TaxiNode? source = null;
         float nearest = taxi.MaxWalkToMasterYards;
         foreach (TaxiNode node in index.All)
@@ -693,21 +697,108 @@ internal static class PlayerbotTaxi
             if (walk <= nearest) { source = node; nearest = walk; }
         }
 
-        if (source is null) return false;
         Memo cache = Memos.GetOrCreateValue(player);
         // What the fare may cost: the money, and a journey's spend left (the cache is keyed by this budget, not the money alone).
         uint budget = Math.Min(player.Money, maxFare);
-        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, budget, index, taxi.MaxWalkToMasterYards, out bool routed, out route, out fare))
+        if (source is not null && TryDeparture(session, player, services, index, cache, state, mapId, source, here, destination, budget, taxi.MaxWalkToMasterYards, straight, out route, out fare, out master))
+            return true;
+        // A nearby node that flies but has no master the bot may approach is a dead end: the report already went out. A nearby node with
+        // no route (or no nearby node at all) still leaves a farther known node, which flies when the win test says so.
+        if (route.Length > 0) return false;
+
+        // No known node inside the walk radius (quest 6362: the Crossroads wind rider is ~600 yards off while Thunder Bluff is a couple of
+        // thousand away). The win test is still the one TryRoute applies — the walk to the node plus the walk from the landing at most half
+        // the straight line — so a flight master beyond the radius is spoken to when flying is that clear a win, and walked past otherwise.
+        return TryFartherDeparture(session, player, services, index, cache, state, alliance, mapId, here, destination, budget, taxi.MaxWalkToMasterYards, straight, now, out route, out fare, out master);
+    }
+
+    /// <summary>
+    /// A known departure farther than <paramref name="maxWalk"/> whose flight <see cref="TaxiIndex.TryRoute"/> still calls a win, nearest first.
+    /// False when none is (the caller walks). A route whose master the bot may not approach is reported once, as <see cref="TryDeparture"/> does.
+    /// </summary>
+    private static bool TryFartherDeparture(WorldSession session, Player player, QuestNpcServices services, TaxiIndex index, Memo cache, PlayerNpcState state,
+        bool alliance, uint mapId, Vector3 here, Vector3 destination, uint budget, float maxWalk, float straight, uint now,
+        out uint[] route, out uint fare, out CreatureSpawn master)
+    {
+        route = [];
+        fare = 0;
+        master = default!;
+        float half = straight * 0.5f;
+        var departures = new List<(TaxiNode Node, float Walk)>();
+        foreach (TaxiNode node in index.All)
         {
-            routed = index.TryRoute(state.TaxiMask, source, here, destination, budget, taxi.MaxWalkToMasterYards, straight, out route, out fare);
-            cache.Store(state.TaxiMask, source.Id, destination, here, budget, index, taxi.MaxWalkToMasterYards, routed, route, fare);
+            if (node.MapId != mapId || (alliance ? node.MountAlliance : node.MountHorde) == 0 || !TaxiIndex.IsKnown(state.TaxiMask, node.Id)) continue;
+            if (IsBackedOff(player, node.Id, now)) continue;
+            float walk = Vector3.Distance(here, new Vector3(node.X, node.Y, node.Z));
+            // A walk longer than half the trip can never pass TryRoute's win test, and every farther node is worse.
+            if (walk > half) continue;
+            departures.Add((node, walk));
         }
 
-        if (!routed) return false;
+        departures.Sort(static (a, b) =>
+        {
+            int byWalk = a.Walk.CompareTo(b.Walk);
+            return byWalk != 0 ? byWalk : a.Node.Id.CompareTo(b.Node.Id);
+        });
+        uint missingMaster = 0;
+        uint[] missingRoute = [];
+        foreach ((TaxiNode node, _) in departures)
+        {
+            if (!TryDeparture(session, player, services, index, cache, state, mapId, node, here, destination, budget, maxWalk, straight, out route, out fare, out master, reportMissingMaster: false))
+            {
+                if (route.Length > 0 && missingMaster == 0)
+                {
+                    missingMaster = node.Id;
+                    missingRoute = route;
+                }
+
+                continue;
+            }
+
+            return true;
+        }
+
+        if (missingMaster != 0 && cache.MasterMissingNode != missingMaster)
+        {
+            cache.MasterMissingNode = missingMaster;
+            PlayerbotAnomalies.Report(player, Area, "master-not-found",
+                $"a taxi route {string.Join('>', missingRoute)} is known and affordable, but no flight master spawn the bot may approach maps to departure node {missingMaster}");
+        }
+
+        route = [];
+        fare = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="source"/> flies to a known landing near <paramref name="destination"/> the bot can pay for, and a flight master
+    /// of that node the bot may approach exists. <paramref name="reportMissingMaster"/> reports a route with no such master once per node
+    /// (the within-radius search); a farther search reports the nearest such node itself after every candidate has been tried.
+    /// </summary>
+    private static bool TryDeparture(WorldSession session, Player player, QuestNpcServices services, TaxiIndex index, Memo cache, PlayerNpcState state,
+        uint mapId, TaxiNode source, Vector3 here, Vector3 destination, uint budget, float maxWalk, float straight,
+        out uint[] route, out uint fare, out CreatureSpawn master, bool reportMissingMaster = true)
+    {
+        route = [];
+        fare = 0;
+        master = default!;
+        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, budget, index, maxWalk, out bool routed, out route, out fare))
+        {
+            routed = index.TryRoute(state.TaxiMask, source, here, destination, budget, maxWalk, straight, out route, out fare);
+            cache.Store(state.TaxiMask, source.Id, destination, here, budget, index, maxWalk, routed, route, fare);
+        }
+
+        if (!routed)
+        {
+            route = [];
+            fare = 0;
+            return false;
+        }
+
         if (FindMasterSpawn(session, player, services, index, mapId, source.Id, here) is not { } found)
         {
             // A known, affordable route whose departure has no flight master the bot may approach: reported once per node, not per plan.
-            if (cache.MasterMissingNode != source.Id)
+            if (reportMissingMaster && cache.MasterMissingNode != source.Id)
             {
                 cache.MasterMissingNode = source.Id;
                 PlayerbotAnomalies.Report(player, Area, "master-not-found",
