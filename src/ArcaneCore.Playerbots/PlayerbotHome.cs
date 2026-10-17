@@ -508,6 +508,7 @@ internal sealed class PlayerbotHomeReturn
         _highestAreaLevel = null;
         _teleportRetryPending = false;
         _returnTracked = false;
+        _returnOverdue = false;
     }
 
     /// <summary>Decide where the bot stands against <paramref name="area"/>; keeps the hysteresis of a walk in progress.</summary>
@@ -530,6 +531,7 @@ internal sealed class PlayerbotHomeReturn
     private PlayerbotHomeArea? _validatedArea;
     private bool _returnTracked;
     private bool _returnReported;
+    private bool _returnOverdue;
     private uint _returnSince;
 
     /// <summary>A home that can hold nothing: no finite centre, no radius, or the null island of a map where that is no place (<c>home/invalid</c>). Once per area.</summary>
@@ -544,12 +546,16 @@ internal sealed class PlayerbotHomeReturn
             string.Create(CultureInfo.InvariantCulture, $"home {area.Place ?? "(unnamed)"} on map {area.MapId} is invalid: {fault} (centre {area.Centre.X},{area.Centre.Y},{area.Centre.Z}, radius {area.Radius})"));
     }
 
-    /// <summary>The return began at <c>_returnSince</c>; past <see cref="ReturnBudgetMs"/> it is reported once (<c>home/return-timeout</c>).</summary>
+    /// <summary>
+    /// The return began at <c>_returnSince</c>; past <see cref="ReturnBudgetMs"/> it is reported once (<c>home/return-timeout</c>) and
+    /// remembered (<see cref="_returnOverdue"/>) so Auto stops walking a town home it will not reach (bot QA #818).
+    /// </summary>
     private void TrackReturn(Player player, PlayerbotHomeArea area, PlayerbotHomeState state, uint nowMs)
     {
         if (state is not (PlayerbotHomeState.Returning or PlayerbotHomeState.Blocked))
         {
             _returnTracked = false;
+            _returnOverdue = false;
             return;
         }
 
@@ -557,11 +563,17 @@ internal sealed class PlayerbotHomeReturn
         {
             _returnTracked = true;
             _returnReported = false;
+            _returnOverdue = false;
             _returnSince = nowMs;
             return;
         }
 
-        if (_returnReported || unchecked(nowMs - _returnSince) <= ReturnBudgetMs || PlayerbotNavigationAnomalies.Silenced(player)) return;
+        if (unchecked(nowMs - _returnSince) <= ReturnBudgetMs) return;
+        // The walk (or the blocked wait that followed it) used the whole budget and the bot is still not home. Auto teleports
+        // on the next judgement, the same as a walk set aside as blocked. A town home's walk range is the whole continent when
+        // town teleports are off, so distance alone never chooses the teleport (bot QA #818: 15 min, still thousands of yards out).
+        _returnOverdue = true;
+        if (_returnReported || PlayerbotNavigationAnomalies.Silenced(player)) return;
         _returnReported = true;
         PlayerbotAnomalies.Report(player, "home", "return-timeout",
             string.Create(CultureInfo.InvariantCulture, $"{state.ToString().ToLowerInvariant()} for {unchecked(nowMs - _returnSince) / 60_000} min, {Distance:F0} yd from the centre of {area.Place ?? "its home"}, and never arrived"));
@@ -632,6 +644,11 @@ internal sealed class PlayerbotHomeReturn
         {
             return LastJudgement = PlayerbotHomeTeleportReason.Island;
         }
+
+        // Past the return budget the walk is given up (TrackReturn). Auto teleports; Walk mode keeps walking.
+        if (_returnOverdue && options.ReturnMode == PlayerbotHomeReturnMode.Auto)
+            return LastJudgement = PlayerbotHomeTeleportReason.WalkBlocked;
+
         // A town home is walked to from farther away than a Home-option home (WalkRangeYards), unless water no bot crosses lies between
         // (Teldrassil): then the distance counts as unbounded and the bot takes the return teleport.
         float teleportAt = PlayerbotHomeRules.TeleportDistanceFor(options, area.WalkRangeYards);

@@ -199,6 +199,45 @@ public sealed class PlayerbotDestinationAnomalyTests
         });
     }
 
+    /// <summary>
+    /// Bot QA #818: a town home with <c>TownProgressionTeleport</c> off is walked from up to 20000 yards, so a bot 3000 yards away
+    /// (Stormwind, home Kharanos) is inside the walk range and Auto keeps choosing a walk. Fifteen minutes later it is still there.
+    /// Past <see cref="PlayerbotHomeReturn.ReturnBudgetMs"/> that walk is given up: Auto teleports (the same reason as a blocked walk).
+    /// Walk mode never teleports. The timeout is reported once.
+    /// </summary>
+    [Fact]
+    public async Task ATownReturnPastItsBudget_IsGivenUpForATeleport_AndReportedOnce()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+            Player player = world.Player;
+            var homeReturn = new PlayerbotHomeReturn();
+            var area = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + 3_000f, player.Y, player.Z), 100f,
+                "town:kharanos;m=stormwind;s=kharanos")
+            {
+                WalkRangeYards = 20_000f,
+                TownTeleports = false,
+            };
+            var auto = new PlayerbotHomeOptions { ReturnMode = PlayerbotHomeReturnMode.Auto, TeleportDistanceYards = 1_500f };
+            var walk = new PlayerbotHomeOptions { ReturnMode = PlayerbotHomeReturnMode.Walk, TeleportDistanceYards = 1_500f };
+            Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, area, 1_000));
+            Assert.Equal(PlayerbotHomeTeleportReason.None, homeReturn.Judge(player, area, auto));
+            homeReturn.Evaluate(player, area, 1_000 + PlayerbotHomeReturn.ReturnBudgetMs);
+            Assert.Equal(PlayerbotHomeTeleportReason.None, homeReturn.Judge(player, area, auto));
+            Assert.False(cap.Any(HomeKey("return-timeout")), cap.Describe());
+
+            Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, area, 1_001 + PlayerbotHomeReturn.ReturnBudgetMs));
+            Assert.Equal(PlayerbotHomeTeleportReason.WalkBlocked, homeReturn.Judge(player, area, auto));
+            Assert.Equal(PlayerbotHomeTeleportReason.None, homeReturn.Judge(player, area, walk));
+            homeReturn.Evaluate(player, area, 90_000 + PlayerbotHomeReturn.ReturnBudgetMs);
+            homeReturn.Judge(player, area, auto);
+            Assert.Equal(1, cap.Count(HomeKey("return-timeout")));
+            return true;
+        });
+    }
+
     private sealed class Canned(Func<Vector3, Vector3, PathResult> answer) : IPathfinder
     {
         public bool Enabled => true;
