@@ -524,8 +524,9 @@ tick loop; the swap is exercised through the same `IHotCodeWorld` seam the regis
 ## Feature lifecycle: detach and re-attach a world feature (`.feature`)
 
 Tier 2a, part 1 of [Hot reload tiers](../design/hot-reload-tiers.md#42-lifecycle-contract). The seams a reloadable pack
-needs to leave and rejoin a running world. **No existing feature is detachable yet**, so on a default server this changes
-nothing: every feature is pinned, attached once at start and stopped at shutdown exactly as before.
+needs to leave and rejoin a running world. The six playerbot features are detachable (Tier 2a part 2, below); every other
+feature is pinned. Nothing detaches unless an Administrator runs `.feature detach|attach`, so on a default server the
+features attach once at start and stop at shutdown as before.
 
 * **Contracts assembly** `src/ArcaneCore.World.Contracts` (default load context, `ContractsVersion.Current = 1`):
   `IWorldFeature` (moved here, namespace unchanged), `IDetachableWorldFeature` with `DetachKind` (`Pinned`, `Stateless`,
@@ -547,12 +548,35 @@ nothing: every feature is pinned, attached once at start and stopped at shutdown
   `TeleportWaiverRegistry` (itself a pinned feature and `IAreaTriggerWaiver`, so the teleport handler consults registered
   waivers without a change of its own; with none registered it waives nothing).
 
-Not done yet (next lanes): the world host does not run `WorldLifecycleHooks` yet (`ManagedPlayerbotFeature` is still
-called by type at shutdown), `PlayerbotGroupCoordinator` still implements `IAreaTriggerWaiver` directly instead of
-registering, no bot feature implements `IDetachableWorldFeature`, the architecture test that forbids a bare `+=` from
-pack code does not exist, and nothing reads `ContractsVersion` from a pack at load.
+### Detaching the playerbot features (Tier 2a part 2)
 
-Tests: `FeatureLifecycleTests` (14) and `FeatureSeamTests` (8) in `tests/ArcaneCore.World.Tests/FeatureLifecycle`, with
+Built on `claude/hr2-bots` ([design, section 4.5](../design/hot-reload-tiers.md)). `ManagedPlayerbotFeature`,
+`PlayerbotPopulationFeature`, `PlayerbotGroupCoordinator`, `PlayerbotBattlegroundCoordinator`, `PlayerbotSocialFeature`
+and `PlayerbotQaFeature` detach and attach again with bots online:
+
+* The logged-in bots belong to the core's `ManagedBotRegistry` (row, service scope, session), so `.feature detach
+  ManagedPlayerbotFeature` leaves every bot in the world, standing idle: no brain runs, operator commands answer
+  `playerbots-detaching`, and the bot sessions do the full client packet work (the lean path is the pack's policy).
+  `.feature attach ManagedPlayerbotFeature` builds a new brain and party AI for each of them, with their set-asides,
+  homes, fault quarantine and scripted controllers handed over.
+* The group coordinator finishes its groups on detach, the battleground coordinator takes its bots out of their matches,
+  the population stops a rush in progress, and bot QA saves its findings and reloads them on attach.
+* A shutdown while the bot feature is detached closes and flushes the bots' sessions and leaves their rows running, so
+  the next start restores them.
+* The world host runs the lifecycle hooks (`playerbots.restore` after start, `playerbots.shutdown` before stop,
+  `managed-bots.orphans` after it), and the core reaches the pack only through the registry's seams; an architecture
+  test (`PlayerbotCoreBoundaryTests`) fails when a core type references a playerbot type outside its allowlist of 4
+  (`ClusterCommands`, and the three config types that still name `PlayerbotOptions`).
+
+Not done yet (next lanes): the options types into the contracts assembly (clears 3 allowlist entries), `ClusterCommands`
+onto the registry (the 4th), the architecture test that forbids a bare `+=` from pack code, a `ContractsVersion` check
+of a pack at load, and handover values of contract types only (today they are World types, accepted because World is
+not collectible).
+
+Tests (bot features): `PlayerbotFeatureDetachTests` (4) and `ManagedBotRegistryTests` (2) in
+`tests/ArcaneCore.World.Tests/Playerbots`, `PlayerbotCoreBoundaryTests` (2) in `tests/ArcaneCore.World.Tests/Architecture`.
+
+Tests (lifecycle seams): `FeatureLifecycleTests` (14) and `FeatureSeamTests` (8) in `tests/ArcaneCore.World.Tests/FeatureLifecycle`, with
 RED runs: bag disposal disabled (13 fail), `UnregisterObserver` not removing (11 fail), rollback, pinned refusal and
 waiver union disabled together (exactly their 5 tests fail), attach-failure undo disabled (its 1 test fails).
 
