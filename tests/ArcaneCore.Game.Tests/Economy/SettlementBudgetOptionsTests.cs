@@ -4,16 +4,16 @@ using Xunit;
 
 namespace ArcaneCore.Game.Tests.Economy;
 
-/// <summary>The economy and dungeon chest loot settlement budgets: shipped 5 s, configurable, never below one second.</summary>
+/// <summary>The economy and dungeon chest loot settlement budgets: shipped 15 s, configurable, never below one second.</summary>
 public sealed class SettlementBudgetOptionsTests
 {
     [Fact]
-    public void Budgets_DefaultToTheShippedFiveSeconds()
+    public void Budgets_DefaultToTheShippedFifteenSeconds()
     {
-        Assert.Equal(5, new EconomyOptions().SettlementBudgetSeconds);
-        Assert.Equal(TimeSpan.FromSeconds(5), new EconomyOptions().SettlementBudget);
-        Assert.Equal(5, new GameObjectOptions().LootSettlementBudgetSeconds);
-        Assert.Equal(TimeSpan.FromSeconds(5), new GameObjectOptions().LootSettlementBudget);
+        Assert.Equal(15, new EconomyOptions().SettlementBudgetSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(15), new EconomyOptions().SettlementBudget);
+        Assert.Equal(15, new GameObjectOptions().LootSettlementBudgetSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(15), new GameObjectOptions().LootSettlementBudget);
     }
 
     [Theory]

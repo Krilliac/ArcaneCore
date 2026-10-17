@@ -21,7 +21,8 @@ namespace ArcaneCore.World.Persistence;
 /// snapshot follows it. Settlement pre-reward saves and character barriers (<see cref="FlushCharacterAsync"/>) use a
 /// priority lane so they do not wait behind unrelated characters' autosaves; every eighth pick is an ordinary
 /// snapshot, so the priority lane cannot starve them. The priority lane also skips the pause a locked database imposes on
-/// ordinary snapshots, except for the character whose own write hit the lock. Ordering is per character only, as before.
+/// ordinary snapshots, except for the character whose own write hit the lock and except during a lock storm (the backoff at its
+/// top). Ordering is per character only, as before.
 /// Thread-safe; all state is guarded by one lock that is never held across an await or a store call.
 /// </summary>
 public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
@@ -389,9 +390,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 {
                     // A write just failed because another connection holds the database: starting another write now would wait out
                     // the whole write bound for nothing. Shutdown ignores the pause (it retries inline and must not sit idle). A
-                    // settlement or barrier is the exception: its caller is waiting on a budget (a quest settlement has 5 s, the
-                    // pause reaches 5 s), so it gets its one attempt now unless its own character is the one that hit the lock.
-                    slot = TakeFreshPriority();
+                    // settlement or barrier is the exception while the lock is short-lived: its caller is waiting on a budget, so it
+                    // gets its one attempt now unless its own character is the one that hit the lock. Once the backoff has reached its
+                    // top (BusyStormStreak locked writes in a row) the lock is held for long and every attempt would sit out the whole
+                    // write bound on the one consumer, holding the settlements behind it: then they wait out the pause like the rest.
+                    slot = _busyStreak < BusyStormStreak ? TakeFreshPriority() : null;
                     if (slot is null)
                     {
                         pauseTicks = _busyUntil - now;

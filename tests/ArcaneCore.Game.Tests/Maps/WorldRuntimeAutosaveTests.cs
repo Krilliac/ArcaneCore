@@ -25,21 +25,25 @@ public sealed class WorldRuntimeAutosaveTests
         saves.PendingIds.Add(2);
         world.RunTick(10);
         Assert.Empty(saves.Saved); // not due before half an interval
-        RunFor(world, 10, 190); // every character's first save falls inside the first interval
-        Assert.Equal(new[] { 1, 3 }, saves.Saved.Select(state => state.Id).Distinct().Order());
-        Assert.True(world.LastTickPhases.AutosaveMicros >= 0);
+        Assert.Equal(0, world.LastTickPhases.AutosaveSnapshots);
+        (int snapshots, int scansThatQueued) = RunFor(world, 10, 100); // every character's first save falls inside the first interval
+        Assert.Equal(new[] { 1, 3 }, saves.Saved.Select(state => state.Id).Order()); // once each; 2 is skipped
+        Assert.Equal(2, snapshots); // the tick stats count exactly the snapshots queued
+        Assert.True(scansThatQueued > 0, "no tick that queued a snapshot reported an autosave time");
 
         // The queue caught up: character 2 is saved on its next turn.
         saves.PendingIds.Clear();
-        RunFor(world, 10, 200);
-        Assert.Contains(saves.Saved, state => state.Id == 2);
+        saves.Saved.Clear();
+        (snapshots, _) = RunFor(world, 10, 100);
+        Assert.Equal(new[] { 1, 2, 3 }, saves.Saved.Select(state => state.Id).Order());
+        Assert.Equal(3, snapshots);
     }
 
     [Fact]
     public void AutosaveStaggersCharactersThatEnteredTheWorldTogether()
     {
-        // The live incident (2026-10-16 23:54Z): about 1000 bots entered together and every autosave queued all of them in one tick
-        // (a backlog of 1001), which then held the characters database's write lock back to back for tens of seconds.
+        // A whole-world pass snapshots every online character in one tick: with about 1000 bots online that is about 1000 writes queued
+        // at once. (The live log shows such a backlog, 1001 characters at 2026-10-16 23:54:29Z, but not which save path queued it.)
         const int count = 200;
         const int interval = 2000;
         const uint tick = 50;
@@ -99,11 +103,21 @@ public sealed class WorldRuntimeAutosaveTests
         Assert.Equal(new[] { 2, 2 }, saves.Saved.Select(state => state.Id)); // explicit saves are always handed to the (coalescing) queue
     }
 
-    private static void RunFor(WorldRuntime world, uint tick, uint total)
+    /// <summary>Run ticks for <paramref name="total"/> ms; the snapshots the tick stats report, and how many ticks that queued one also timed the autosave.</summary>
+    private static (int Snapshots, int TimedTicks) RunFor(WorldRuntime world, uint tick, uint total)
     {
+        int snapshots = 0;
+        int timed = 0;
         for (uint elapsed = 0; elapsed < total; elapsed += tick)
         {
             world.RunTick(tick);
+            snapshots += world.LastTickPhases.AutosaveSnapshots;
+            if (world.LastTickPhases.AutosaveSnapshots > 0 && world.LastTickPhases.AutosaveMicros > 0)
+            {
+                timed++;
+            }
         }
+
+        return (snapshots, timed);
     }
 }

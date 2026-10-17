@@ -35,9 +35,11 @@ public sealed class GameObjectOptions
     /// <summary>
     /// Seconds one dungeon chest loot settlement may take end to end (the taker's save, the instance write drain, the loot transaction)
     /// before it is abandoned: a take that never started is refused to the client as usual, one whose outcome cannot be read kicks the
-    /// taker. Operational, not a gameplay rule: 5 is the shipped value. Valid range 1-300.
+    /// taker. Operational, not a gameplay rule: 15 is the shipped value, three lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs
+    /// in a row (an unrelated character's write already in flight on the character save queue's one consumer, the taker's own save, the
+    /// loot transaction), so one locked write ahead of it cannot use up the budget. Valid range 1-300.
     /// </summary>
-    public int LootSettlementBudgetSeconds { get; set; } = 5;
+    public int LootSettlementBudgetSeconds { get; set; } = 15;
 
     /// <summary><see cref="LootSettlementBudgetSeconds"/> as a duration, never below one second.</summary>
     public TimeSpan LootSettlementBudget => TimeSpan.FromSeconds(Math.Max(1, LootSettlementBudgetSeconds));

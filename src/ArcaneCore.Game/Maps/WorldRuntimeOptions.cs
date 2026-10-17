@@ -45,7 +45,8 @@ public sealed class WorldRuntimeOptions
 
     /// <summary>
     /// The character save queue warns while its oldest waiting snapshot has waited this many milliseconds. 0 disables the age
-    /// check. Default 5000, the quest settlement budget (docs/areas/persistence.md).
+    /// check. Default 5000, the characters database's write bound (Database:SqliteWriteTimeoutMs): a snapshot that old has waited out at
+    /// least one locked write (docs/areas/persistence.md).
     /// </summary>
     public int SaveQueueWarnAgeMs { get; set; } = 5000;
 

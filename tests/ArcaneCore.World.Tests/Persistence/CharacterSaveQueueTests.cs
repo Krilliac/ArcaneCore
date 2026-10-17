@@ -978,9 +978,72 @@ public sealed class CharacterSaveQueueTests
     }
 
     /// <summary>
-    /// The live incident (2026-10-16 23:54Z): a bot's ordinary save found the characters database locked, the queue paused for its busy
-    /// backoff (1 s, 2 s, then 5 s), and a quest settlement that arrived meanwhile sat out the pause against its own 5 s budget. A
-    /// settlement or barrier whose own character did not just hit the lock gets its write at once; only the ordinary backlog pauses.
+    /// The live log of 2026-10-16 23:54:03-09Z: the save queue's one consumer was inside an ordinary write that sat in SQLite's busy
+    /// wait (the 5 s <c>Database:SqliteWriteTimeoutMs</c>), and a quest settlement (character 3262, quest 761) that arrived behind it
+    /// ran out of its 5 s budget at 23:54:09.424 before its own save was written ("saved at -1 ms"). The write failed "database is
+    /// locked" and the busy pause opened only after that (23:54:09.546), so the pause was not in effect while the settlement waited.
+    /// Replays that order with the shipped write bound and settlement budgets: the settlement has to finish within its budget.
+    /// </summary>
+    [Fact]
+    public async Task ASettlementBehindAnOrdinaryWriteStuckInTheBusyWaitStillFinishesWithinItsBudget()
+    {
+        TimeSpan writeBound = TimeSpan.FromMilliseconds(ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs);
+        TimeSpan budget = new ArcaneCore.Game.Npc.QuestNpcOptions().SettlementBudget;
+        await using var kit = new Kit();
+        var lockHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); // another connection's write lock
+        var ordinaryStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                // The bot's ordinary save: SQLite's busy wait is not cancellable, it runs out the whole write bound, then reports the lock.
+                ordinaryStarted.TrySetResult();
+                if (await Task.WhenAny(lockHeld.Task, Task.Delay(writeBound)) != lockHeld.Task)
+                {
+                    throw Busy();
+                }
+
+                return;
+            }
+
+            // The settlement's own save waits for the same lock, which is released a little after the ordinary write gave up (on the
+            // live server the lock was still held when that write failed).
+            if (await Task.WhenAny(lockHeld.Task, Task.Delay(writeBound)) != lockHeld.Task)
+            {
+                throw Busy();
+            }
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await ordinaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        _ = Task.Delay(writeBound + TimeSpan.FromMilliseconds(600)).ContinueWith(_ => lockHeld.TrySetResult(), TaskScheduler.Default);
+        await Task.Delay(100); // the settlement arrives while the ordinary write is in the busy wait
+
+        kit.Queue.HoldCharacter(2);
+        using var settlementBudget = new CancellationTokenSource(budget);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await kit.Queue.SaveForSettlementAsync(State(2, 77), settlementBudget.Token).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(clock.Elapsed < budget, $"the settlement's save took {clock.Elapsed.TotalMilliseconds:F0} ms of its {budget.TotalSeconds} s budget");
+        Assert.Equal(77u, Assert.Single(kit.Store.Saved, s => s.Id == 2).Money);
+    }
+
+    /// <summary>
+    /// The settlement budgets cover the lock waits a settlement can meet in sequence, each bounded by <c>Database:SqliteWriteTimeoutMs</c>:
+    /// an unrelated character's write already in flight on the save queue's one consumer, the settlement's own save, and the reward
+    /// transaction. A budget equal to one write bound (the shipped 5 s before) is used up by the first of them.
+    /// </summary>
+    [Fact]
+    public void TheShippedSettlementBudgetsOutlastThreeBoundedLockWaits()
+    {
+        TimeSpan threeWaits = TimeSpan.FromMilliseconds(3L * ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs);
+        Assert.True(new ArcaneCore.Game.Npc.QuestNpcOptions().SettlementBudget >= threeWaits, "Quests:SettlementBudgetSeconds");
+        Assert.True(new ArcaneCore.Game.Economy.EconomyOptions().SettlementBudget >= threeWaits, "Economy:SettlementBudgetSeconds");
+        Assert.True(new ArcaneCore.Game.GameObjects.GameObjectOptions().LootSettlementBudget >= threeWaits, "GameObjects:LootSettlementBudgetSeconds");
+    }
+
+    /// <summary>
+    /// A busy pause (1 s, 2 s, then 5 s after "database is locked") holds back the ordinary backlog only: a settlement or barrier whose
+    /// own character did not just hit the lock gets its write at once, so a pause cannot add to the wait a settlement already has.
     /// </summary>
     [Fact]
     public async Task ASettlementDoesNotWaitOutTheBusyPauseLeftByAnotherCharactersLockedSave()
@@ -1051,6 +1114,52 @@ public sealed class CharacterSaveQueueTests
         // That write succeeded, so the database is free again: the pause ends and the locked character's barrier completes too.
         await lockedBarrier.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(11u, Assert.Single(kit.Store.Saved, s => s.Id == 1).Money);
+    }
+
+    /// <summary>
+    /// During a lock storm (three locked writes in a row, the backoff at its 5 s top) a settlement does not skip the pause: every attempt
+    /// would sit out the whole write bound on the one consumer, and a burst of settlements would then queue behind each other's doomed writes.
+    /// </summary>
+    [Fact]
+    public async Task DuringALockStormASettlementWaitsOutThePauseInsteadOfTryingTheLockedDatabase()
+    {
+        await using var kit = new Kit();
+        var lockedFailures = 0;
+        var settlementAttempts = 0;
+        var unlocked = 0;
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (Volatile.Read(ref unlocked) == 1)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (state.Id == 9)
+            {
+                Interlocked.Increment(ref settlementAttempts);
+                return Task.CompletedTask;
+            }
+
+            Interlocked.Increment(ref lockedFailures);
+            return Task.FromException(Busy()); // the database stays locked for the ordinary saves
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Enqueue(State(2, 22));
+        kit.Queue.Enqueue(State(3, 33));
+        kit.Queue.Start();
+        Assert.True(await BecomesTrueAsync(() => Volatile.Read(ref lockedFailures) >= 3, seconds: 10), "the backoff never reached its top");
+
+        kit.Queue.HoldCharacter(9);
+        using var giveUp = new CancellationTokenSource();
+        Task settlement = kit.Queue.SaveForSettlementAsync(State(9, 99), giveUp.Token);
+        await Task.Delay(500);
+        Assert.Equal(0, Volatile.Read(ref settlementAttempts)); // the 5 s pause holds it like the ordinary backlog
+        giveUp.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => settlement.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // The lock is released: the retained snapshots are still written.
+        Volatile.Write(ref unlocked, 1);
+        await kit.Queue.FlushCharacterAsync(3).WaitAsync(TimeSpan.FromSeconds(15));
     }
 
     [Fact]

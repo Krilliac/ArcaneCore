@@ -53,7 +53,7 @@ public sealed class WorldConfigChecks : IConfigCheck
         Range(issues, configuration, "World:UpdateCompressionThreshold", 128, 0, int.MaxValue, "0 to disable, or a byte count (vmangos Compression.Update.Size 128)");
         foreach (string key in new[] { "Quests:SettlementBudgetSeconds", "Economy:SettlementBudgetSeconds", "GameObjects:LootSettlementBudgetSeconds" })
         {
-            Range(issues, configuration, key, 5, 1, 300, "1-300 seconds of wall time one settlement may take before it is refused (5 is the shipped value)");
+            Range(issues, configuration, key, 15, 1, 300, "1-300 seconds of wall time one settlement may take before it is refused (15 is the shipped value)");
         }
         foreach (string key in new[] { "SlowWorldUpdate", "SlowMapUpdate", "SlowPackets" })
         {

@@ -117,10 +117,12 @@ public sealed class EconomyOptions
     /// <summary>
     /// Seconds one economy settlement (auction, mail, trade) may take end to end, and one economy store read, before it is abandoned:
     /// an operation that did not commit is answered with its ordinary failure reply (auction DATABASE error, mail INTERNAL_ERROR,
-    /// trade cancelled), one whose outcome cannot be read kicks its actors. Operational, not a gameplay rule: 5 is the shipped value.
-    /// Valid range 1-300.
+    /// trade cancelled), one whose outcome cannot be read kicks its actors. Operational, not a gameplay rule: 15 is the shipped value,
+    /// three lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already in flight on the
+    /// character save queue's one consumer, the actors' own saves, the settlement transaction), so one locked write ahead of it cannot use
+    /// up the budget. Valid range 1-300.
     /// </summary>
-    public int SettlementBudgetSeconds { get; set; } = 5;
+    public int SettlementBudgetSeconds { get; set; } = 15;
 
     /// <summary><see cref="SettlementBudgetSeconds"/> as a duration, never below one second.</summary>
     public TimeSpan SettlementBudget => TimeSpan.FromSeconds(Math.Max(1, SettlementBudgetSeconds));
