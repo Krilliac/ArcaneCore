@@ -377,6 +377,39 @@ public sealed class PlayerbotCraftingSpellFocusTests
         }, manualClock: true);
     }
 
+    /// <summary>
+    /// On the live server 181 bots retried the same unreachable fire every ten minutes for days (14k craft-failed reports): each failure in a
+    /// row now doubles the wait (10, 20, 40 minutes ...), so a fire the planner never reaches is not walked to and reported again and again.
+    /// </summary>
+    [Fact]
+    public async Task AnUnreachableFire_BacksOffLongerEachTimeItFailsInARow()
+    {
+        await RunAsync(knowsCampfire: false, woodCount: 0, async (host, session, crafting, player) =>
+        {
+            await SummonVisibleAsync(host, player, 20f, 0f);
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+
+            await host.OnWorldAsync(() => Step(session, crafting, player));
+            Assert.Equal(1, capture.Count(CraftFailed));
+
+            await host.World.AdvanceClockAsync(600_000); // first backoff: ten minutes
+            await host.OnWorldAsync(() => Step(session, crafting, player));
+            Assert.Equal(2, capture.Count(CraftFailed));
+
+            await host.World.AdvanceClockAsync(600_000); // second backoff: twenty minutes, only ten have passed
+            await host.OnWorldAsync(() => Step(session, crafting, player));
+            Assert.Equal(2, capture.Count(CraftFailed));
+
+            await host.World.AdvanceClockAsync(600_500);
+            await host.OnWorldAsync(() => Step(session, crafting, player));
+            Assert.Equal(3, capture.Count(CraftFailed));
+
+            await host.World.AdvanceClockAsync(1_800_000); // third backoff: forty minutes, only thirty have passed
+            await host.OnWorldAsync(() => Step(session, crafting, player));
+            Assert.Equal(3, capture.Count(CraftFailed));
+        }, manualClock: true);
+    }
+
     private sealed class UnusedPathfinder : IPathfinder
     {
         public bool Enabled => true;

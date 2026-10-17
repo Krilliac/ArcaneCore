@@ -1388,6 +1388,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // A full log is refused by the server (SMSG_QUESTLOG_FULL): no walk to a giver (GitHub #786). At a giver in sight the
                 // quest goals make room by shedding a grey quest (PlayerbotQuestGoals.FindCandidate).
                 && PlayerbotQuestGoals.HasFreeLogSlot(state)
+                // A giver that hands over a source item the full bags cannot take has its accept refused by the server (see
+                // PlayerbotQuestGoals.SourceItemFits): no walk to it, and no 15 second stage that ends in an accept-refused anomaly.
+                && PlayerbotQuestGoals.SourceItemFits(player, quest)
                 && MayTakeQuest(player, services, state, content, loot, home, giverInHome, quest, _trip,
                     home is null ? _options.MaxDeliveryYards : 0)) { questId = id; return true; }
         }

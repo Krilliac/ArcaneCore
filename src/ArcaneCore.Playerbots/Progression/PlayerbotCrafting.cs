@@ -42,6 +42,9 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     /// <summary>A recipe (or a campfire) that cannot be done for want of a spell focus is set aside this long: the fire is not going to appear in a minute.</summary>
     private const uint FocusBackoffMs = 600_000;
 
+    /// <summary>The longest a recipe or fire is set aside after repeated failures to reach a spell focus (<see cref="SetFocusAside"/>).</summary>
+    private const uint MaxFocusBackoffMs = 4 * 3_600_000;
+
     /// <summary>SpellFocusObject.dbc id 4, the cooking fire (gameobject_template 29784 Basic Campfire carries data0 = 4, data1 = 10 yards).</summary>
     private const uint CookingFireFocus = 4;
 
@@ -70,6 +73,9 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly Dictionary<ulong, uint> _refusedUntil = [];
+
+    /// <summary>Failures in a row to reach a spell focus of this kind (<see cref="SetFocusAside"/>); it sets how long the next one backs off.</summary>
+    private readonly Dictionary<uint, int> _focusFailures = [];
     private readonly Queue<(WorldOpcode Opcode, byte[] Payload)> _pendingLoot = new();
 
     private TileWait _tileWait;
@@ -345,7 +351,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (bestSpell is null)
             return false;
 
-        if (bestSpell.RequiresSpellFocus != 0 && !HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, out GameObject? distantFocus))
+        if (bestSpell.RequiresSpellFocus != 0 && !HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, _refusedUntil, out GameObject? distantFocus))
         {
             if (distantFocus is null && bestSpell.RequiresSpellFocus == CookingFireFocus
                 && TryLightCampfire(player, store, spellbook, now, out bool campfireHandled))
@@ -370,7 +376,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                         return true;
                     if (planned == PlanOutcome.Refused || _route is null)
                     {
-                        _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + FocusBackoffMs);
+                        SetFocusAside(bestSpell, distantFocus, now);
                         if (!_session.IsInChaosProbe)
                             PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} spell focus {bestSpell.RequiresSpellFocus} unreachable");
                         return false;
@@ -382,14 +388,14 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                     return true;
 
                 // The walk is over: when it ended in reach of the focus the recipe is cast now, else the bot gives up on it for a while.
-                if (!HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, out _))
+                if (!HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, null, out _))
                 {
                     // A route that ran to its end and still leaves the bot outside the focus's reach is a planner or range fault; a hazard
                     // abort or a stale route ends the walk early and says nothing about the fire.
                     bool walkedToTheEnd = _route?.Complete == true;
                     _route = null;
                     _routeTarget = default;
-                    _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + FocusBackoffMs);
+                    SetFocusAside(bestSpell, distantFocus, now);
                     if (walkedToTheEnd && !_session.IsInChaosProbe)
                         PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} walked to spell focus {bestSpell.RequiresSpellFocus} but is still out of its range");
                     return false;
@@ -404,6 +410,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             }
         }
 
+        if (bestSpell.RequiresSpellFocus != 0)
+            _focusFailures.Remove(bestSpell.RequiresSpellFocus);
         _route = null;
         _routeTarget = default;
         if (!PlayerbotMovementControl.Stop(_session, player))
@@ -781,7 +789,23 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return true;
     }
 
-    private static bool HasNearbySpellFocus(Player player, uint spellFocusType, out GameObject? nearestOutOfRange)
+    /// <summary>
+    /// Sets aside a recipe whose spell focus <paramref name="focus"/> the bot could not get in reach, and that focus object with it, for a
+    /// backoff that doubles with every failure in a row for this kind of focus (<see cref="FocusBackoffMs"/> up to
+    /// <see cref="MaxFocusBackoffMs"/>): the live server showed 181 bots retrying the same unreachable fire every ten minutes for days
+    /// (14k craft-failed reports). A bot that stands in reach of a focus again starts over (<see cref="_focusFailures"/>); the next
+    /// think of another recipe walks to the next nearest fire instead (<see cref="HasNearbySpellFocus"/> skips the set-aside one).
+    /// </summary>
+    private void SetFocusAside(SpellInfo recipe, GameObject focus, uint now)
+    {
+        _focusFailures.TryGetValue(recipe.RequiresSpellFocus, out int failures);
+        _focusFailures[recipe.RequiresSpellFocus] = Math.Min(failures + 1, 16);
+        uint backoff = Math.Min(FocusBackoffMs << Math.Min(failures, 8), MaxFocusBackoffMs);
+        _refusedUntil[SpellKey(recipe.Id)] = unchecked(now + backoff);
+        _refusedUntil[focus.Guid.Value] = unchecked(now + backoff);
+    }
+
+    private static bool HasNearbySpellFocus(Player player, uint spellFocusType, Dictionary<ulong, uint>? refused, out GameObject? nearestOutOfRange)
     {
         nearestOutOfRange = null;
         if (player.Map is not { } map)
@@ -797,7 +821,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not GameObject { IsSpawned: true, Type: GameObjectType.SpellFocus } go
-                || go.Template.GetData(0) != spellFocusType)
+                || go.Template.GetData(0) != spellFocusType
+                || refused?.ContainsKey(go.Guid.Value) == true)
                 continue;
 
             float dist = go.DistanceTo(player);

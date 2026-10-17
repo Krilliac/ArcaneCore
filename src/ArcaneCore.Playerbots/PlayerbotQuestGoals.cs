@@ -287,6 +287,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         RefreshObjectiveEntry(player, services, state);
         if (NeedsBagSpaceForTurnIn && PlayerbotTownGoals.FreeBagSlots(player) > 0)
             NeedsBagSpaceForTurnIn = false;
+        if (_awaitingBagSpace.Count > 0 && PlayerbotTownGoals.FreeBagSlots(player) > 0)
+            _awaitingBagSpace.Clear();
         if (_stage == Stage.AcceptConfirmation)
         {
             if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
@@ -1106,10 +1108,27 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         => quest.RewChoiceItemsCount == 0 ? 0u : PlayerbotItemScore.ChooseQuestReward(player, quest.RewChoiceItemId, quest.RewChoiceItemCount,
             PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights);
 
+    /// <summary>
+    /// Whether the quest's source item (<c>SrcItemId</c>, given on accept) fits the bags: the server counts what the player already owns
+    /// (bank included) towards <c>SrcItemCount</c> and needs room for the rest (vmangos <c>Player::CanGiveQuestSourceItemIfNeed</c>,
+    /// Player.cpp:13643-13676), refusing the accept otherwise. A quest without a source item always fits.
+    /// </summary>
+    internal static bool SourceItemFits(Player player, Quest quest)
+    {
+        uint entry = quest.Template.SrcItemId;
+        if (entry == 0 || !player.Inventory.IsLoaded)
+            return true;
+        uint wanted = quest.Template.SrcItemCount == 0 ? 1u : quest.Template.SrcItemCount;
+        uint owned = player.Inventory.GetItemCount(entry, inBankAlso: true);
+        return owned >= wanted
+            || player.Inventory.CanStoreNewItem(entry, wanted - owned, [], out _) == ArcaneCore.Game.Items.InventoryResult.Ok;
+    }
+
     /// <summary>Whether the server refused this quest's exchange lately (<see cref="RefusedQuestMs"/>); travel to it is pointless too.</summary>
     internal bool IsRefused(uint questId)
     {
         if (Suspensions?.IsQuestSuspended(questId, _session.World.NowMs) == true) return true;
+        if (_awaitingBagSpace.Contains(questId)) return true;
         if (!_refused.TryGetValue(questId, out uint until)) return false;
         if (unchecked((int)(until - _session.World.NowMs)) > 0) return true;
         _refused.Remove(questId);
@@ -1195,6 +1214,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     {
         if (_session.IsInChaosProbe) return;
         (string code, string reason) = DiagnoseAcceptRefusal(player, services, state, giverGuid, questId, fallbackCode, fallbackReason);
+        // The bags have no room for the quest's source item: asking again, on the ten minute timer, would be refused again for as long as
+        // the bags stay full (10k accept-refused on the live server, the same quest per bot every ten minutes). It waits for a free slot.
+        if (code == "InventoryFull")
+            _awaitingBagSpace.Add(questId);
         PlayerbotAnomalies.Report(player, "quest", "accept-refused",
             $"quest={questId} giver={giverEntry} guid=0x{giverGuid.Value:X} code={code} reason={reason}");
     }
@@ -1257,6 +1280,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     }
 
     private readonly Dictionary<uint, GiverWait> _giverWaits = [];
+
+    /// <summary>Quests whose accept the server refused for want of bag room for the source item: set aside until a bag slot is free (<see cref="IsRefused"/>).</summary>
+    private readonly HashSet<uint> _awaitingBagSpace = [];
 
     /// <summary>The first look at a quest whose giver is dead and whose respawn is unknown, and the step by which later looks are spaced.</summary>
     internal const uint GiverRetryMinMs = 60_000;
