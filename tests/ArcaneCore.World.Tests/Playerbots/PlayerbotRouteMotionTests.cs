@@ -80,6 +80,55 @@ public sealed class PlayerbotRouteMotionTests
     }
 
     /// <summary>
+    /// A mesh route's corner is stored at the coarse polygon height, a chord 12 yd under the detail surface — further than the mesh
+    /// query's vertical window (5 yd), so a walk that starts at that corner is "no mesh". The bot is on the surface. One tick passes the
+    /// corner. The bot stays on the surface. Before, the step walked from the corner's stored height, the walk failed, the 4 yd floor
+    /// window around the chord found nothing, and the bot kept the chord (live bot-motion/under-map and airwalk, 8-30 yd off the ground,
+    /// the moment a heartbeat passes such a corner).
+    /// </summary>
+    [Fact]
+    public async Task AStepThatPassesACorner_KeepsTheMeshSurface_WhenTheCornerHeightIsAChord()
+    {
+        const float surface = Floor + 12f;
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Vector3 origin = await host.OnWorldAsync(() => new Vector3(session.Player!.X, session.Player.Y, surface));
+            Vector3 start = origin;
+            Vector3 corner = new(origin.X + 4f, origin.Y, Floor); // the chord, 12 yd under the surface
+            Vector3 end = new(corner.X, corner.Y - 20f, Floor);
+            var mesh = new SurfaceWithinFiveYards(surface);
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatModelFloor(surface), pathfinder: mesh);
+                session.Player!.Relocate(start.X, start.Y, start.Z, 0, host.World.NowMs);
+                return true;
+            });
+
+            var route = new PlayerbotRoute([start, corner, end], 24f, navigated: true);
+            bool started = await host.OnWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                return PlayerbotMotion.Follow(session, session.Player!, route, new PlayerbotOptions { Enabled = true }, host.World.NowMs);
+            });
+            Assert.True(started, "the route did not start");
+
+            // 1.5 s at 7 yd/s is 10.5 yd: past the corner 4 yd ahead, still inside the 2 s lease.
+            await host.World.AdvanceClockAsync(1500);
+            await host.OnWorldAsync(() => PlayerbotMotion.Pump(session, session.Player!, host.World.NowMs));
+            (float x, float y, float z, bool moving) = await host.OnWorldAsync(() =>
+                (session.Player!.X, session.Player!.Y, session.Player!.Z, (session.Player!.Movement.Flags & MovementFlags.Forward) != 0));
+            Assert.True(moving, "the tick stopped the bot");
+            Assert.True(y < origin.Y - 2f, $"the tick did not pass the corner (y {y}, start {origin.Y})");
+            Assert.InRange(z, surface - 0.5f, surface + 1f);
+            Assert.True(mesh.WalksFromOffTheSurface == 0, "a walk started at the corner's chord height, outside the mesh window");
+            _ = x;
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// A bot whose run speed is raised (a ghost runs faster) runs at it under the default cap, the base run speed; a cap below the
     /// base run speed still walks. Before, the cap was compared with the raised speed, so every ghost walked: Mirthblade's 359-yard
     /// corpse run took two minutes.
@@ -152,5 +201,55 @@ public sealed class PlayerbotRouteMotionTests
     private sealed class ManualClock : IWorldFeature
     {
         public void Attach(WorldRuntime world) => world.UseManualClock();
+    }
+
+    /// <summary>A model floor at one height, so the motion's height query does not invent a second storey.</summary>
+    private sealed class FlatModelFloor(float floor) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        { hit = to; return false; }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => floor;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        { info = default; return false; }
+    }
+
+    /// <summary>
+    /// A flat detail surface. A walk starts only within 5 yards of it, the navigation mesh's nearest-polygon window; a query from a
+    /// corner's chord does not find it and is counted.
+    /// </summary>
+    private sealed class SurfaceWithinFiveYards(float surface) : IPathfinder, IMeshPointQuery, IMeshFloorQuery
+    {
+        internal int WalksFromOffTheSurface { get; private set; }
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, [start, end]);
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        { point = center; return false; }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (MathF.Abs(start.Z - surface) > 5f)
+            {
+                WalksFromOffTheSurface++;
+                return MeshRaycastResult.Unavailable(end);
+            }
+
+            return new MeshRaycastResult(true, false, 1f, end with { Z = surface });
+        }
+
+        public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height)
+        {
+            height = surface;
+            return surface >= z - below && surface <= z + above;
+        }
     }
 }

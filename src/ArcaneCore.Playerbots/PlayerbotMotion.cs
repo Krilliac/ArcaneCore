@@ -707,21 +707,50 @@ internal static class PlayerbotMotion
     }
 
     /// <summary>
-    /// The mesh surface under a navigated walk at <paramref name="candidate"/>: walked along the mesh from the last position
-    /// <paramref name="from"/> when no corner was passed (the step follows the leg), else from the corner the current leg starts at (a
-    /// point of the mesh's own path), so the storey is the one the walk is on (<see cref="MapCollision.TryWalkMeshSurface"/>); a step
-    /// of any length (a world tick seconds long) is followed over the ground's rise and fall. When neither is on the mesh (a route
-    /// started off it), the surface straight under or over the leg's height within <see cref="MeshFloorToleranceYards"/>. Null: none.
+    /// The mesh surface under a navigated walk at <paramref name="candidate"/>: each leg is walked on the mesh from where the
+    /// previous one ended (<see cref="MapCollision.TryWalkMeshSurface"/>), so the storey is the one the walk is on and a step of any
+    /// length follows the ground's rise and fall. A corner's stored height is the coarse polygon's, a chord that can sit far off the
+    /// detail surface, outside the mesh query's vertical window: walking from that height is "no mesh", and the step would keep the
+    /// chord (live: 8-30 yd under the terrain and 6-10 yd above it the moment a heartbeat passes such a corner). The straight line
+    /// from the last position to <paramref name="candidate"/> is not used once a corner was passed — it cuts through the obstacle the
+    /// corner goes around. When no leg can be walked (a route started off the mesh), the surface straight under or over the leg's
+    /// height within <see cref="MeshFloorToleranceYards"/>. Null: none.
     /// </summary>
     private static float? MeshSurface(MapCollision collision, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
     {
-        if (toPoint <= fromPoint && collision.TryWalkMeshSurface(from, candidate, out float walked, PlayerbotMoveCheck.MeshOptions)) return walked;
-        int corner = Math.Clamp(toPoint - 1, 0, route.Points.Count - 1);
-        if (route.Points.Count > 0 && (toPoint > fromPoint || corner > 0)
-            && collision.TryWalkMeshSurface(route.Points[corner], candidate, out float alongLeg, PlayerbotMoveCheck.MeshOptions)) return alongLeg;
-        return collision.TryGetMeshFloor(candidate.X, candidate.Y, candidate.Z, MeshFloorToleranceYards, MeshFloorToleranceYards,
-            out float near) ? near : null;
+        PathOptions options = PlayerbotMoveCheck.MeshOptions;
+        if (toPoint <= fromPoint)
+        {
+            if (collision.TryWalkMeshSurface(from, candidate, out float walked, options)) return walked;
+            return WalkFromCorner(collision, route, toPoint, candidate, options) ?? NearFloor(collision, candidate);
+        }
+
+        Vector3 at = from;
+        int first = Math.Max(1, fromPoint);
+        int lastCorner = Math.Min(toPoint - 1, route.Points.Count - 1);
+        for (int point = first; point <= lastCorner; point++)
+        {
+            if (!collision.TryWalkMeshSurface(at, route.Points[point], out float surface, options))
+                return WalkFromCorner(collision, route, toPoint, candidate, options) ?? NearFloor(collision, candidate);
+            at = route.Points[point] with { Z = surface };
+        }
+
+        if (collision.TryWalkMeshSurface(at, candidate, out float end, options)) return end;
+        return WalkFromCorner(collision, route, toPoint, candidate, options) ?? NearFloor(collision, candidate);
     }
+
+    /// <summary>The surface walked from the corner the leg ending at <paramref name="toPoint"/> starts at, or null when that corner is not on the mesh.</summary>
+    private static float? WalkFromCorner(MapCollision collision, PlayerbotRoute route, int toPoint, Vector3 candidate, PathOptions options)
+    {
+        if (route.Points.Count == 0) return null;
+        int corner = Math.Clamp(toPoint - 1, 0, route.Points.Count - 1);
+        return collision.TryWalkMeshSurface(route.Points[corner], candidate, out float along, options) ? along : null;
+    }
+
+    /// <summary>The mesh surface within <see cref="MeshFloorToleranceYards"/> of the leg's own height, or null.</summary>
+    private static float? NearFloor(MapCollision collision, Vector3 candidate)
+        => collision.TryGetMeshFloor(candidate.X, candidate.Y, candidate.Z, MeshFloorToleranceYards, MeshFloorToleranceYards, out float near)
+            ? near : null;
 
     /// <summary>
     /// Resolve the walkable floor near <paramref name="z"/> without snapping onto overhead M2/WMO props (tree branches, bushes, fences,
