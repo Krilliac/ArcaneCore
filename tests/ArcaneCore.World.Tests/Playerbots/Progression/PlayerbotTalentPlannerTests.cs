@@ -4,6 +4,7 @@ using ArcaneCore.Game.Talents;
 using ArcaneCore.Kernel.Talents;
 using ArcaneCore.World.Playerbots.Progression;
 using Xunit;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Playerbots.Progression;
 

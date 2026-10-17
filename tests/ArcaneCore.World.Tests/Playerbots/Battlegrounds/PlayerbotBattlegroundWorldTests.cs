@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
 using Content = ArcaneCore.World.Tests.Playerbots.Battlegrounds.BattlegroundBotTestContent;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Battlegrounds;
 

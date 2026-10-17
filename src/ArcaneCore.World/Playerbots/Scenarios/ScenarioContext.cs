@@ -13,6 +13,7 @@ using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 

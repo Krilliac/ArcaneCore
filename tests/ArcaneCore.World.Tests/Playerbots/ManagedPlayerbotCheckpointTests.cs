@@ -6,6 +6,7 @@ using ArcaneCore.World.Tests.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 

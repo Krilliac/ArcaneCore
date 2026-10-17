@@ -8,6 +8,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Reload;
 

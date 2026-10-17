@@ -5,6 +5,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Talents;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots.Progression;
 

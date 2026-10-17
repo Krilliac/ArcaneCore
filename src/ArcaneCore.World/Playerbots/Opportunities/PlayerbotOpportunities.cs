@@ -19,6 +19,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots;
 

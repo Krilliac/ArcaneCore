@@ -24,6 +24,7 @@ using ArcaneCore.World.Progression;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using SpellFeature = ArcaneCore.World.Spells.SpellFeature;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Gm.Character;
 

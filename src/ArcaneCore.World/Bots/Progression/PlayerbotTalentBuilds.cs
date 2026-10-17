@@ -1,6 +1,6 @@
 using ArcaneCore.Game;
 
-namespace ArcaneCore.World.Playerbots.Progression;
+namespace ArcaneCore.World.Bots.Progression;
 
 /// <summary>
 /// One step of a premade build: <see cref="Ranks"/> ranks of the talent at (<see cref="Page"/>, <see cref="Row"/>,

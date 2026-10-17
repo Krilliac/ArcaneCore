@@ -1,6 +1,6 @@
 using ArcaneCore.Kernel.Characters;
 
-namespace ArcaneCore.World.Playerbots;
+namespace ArcaneCore.World.Bots;
 
 public sealed record PlayerbotOperationResult(bool Success, string Code, Guid? BotId = null, string? Name = null);
 public sealed record PlayerbotStatus(Guid BotId, string Name, ManagedPlayerbotState State, bool DesiredEnabled,

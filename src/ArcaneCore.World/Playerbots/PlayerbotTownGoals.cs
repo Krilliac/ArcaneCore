@@ -16,6 +16,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
 using Microsoft.Extensions.DependencyInjection;
 using System.Numerics;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots;
 

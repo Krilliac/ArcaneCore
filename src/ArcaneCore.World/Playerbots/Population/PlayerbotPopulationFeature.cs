@@ -25,6 +25,7 @@ using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.Population;
 
@@ -76,7 +77,7 @@ public sealed record PopulationStatus(
 /// </para>
 /// <para>Thread affinity: <c>Attach</c>, the event handlers and the capture run on the world thread; the pass runs on the thread pool, one at a time.</para>
 /// </summary>
-public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogger<PlayerbotPopulationFeature> logger) : IWorldFeature
+public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogger<PlayerbotPopulationFeature> logger) : IDetachableWorldFeature
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly WorldTickWindow _window = new();
@@ -223,24 +224,106 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// <summary>The live options (the same object <c>.reload config</c> mutates).</summary>
     internal PlayerbotPopulationOptions Options => _options.Population;
 
-    public void Attach(WorldRuntime world)
+    // --- lifecycle (docs/design/hot-reload-tiers.md, section 4.2) -------------------------------------------------------
+
+    /// <summary>
+    /// Handover: the creation rate limit (the creations of the last minute), when each bot was started or parked (the minimum run time
+    /// and the parking order) and the feature's clock carry over; a rush in progress is stopped (an operator starts it again), and the
+    /// atlas and the retry schedules are rebuilt.
+    /// </summary>
+    public DetachKind DetachKind => DetachKind.Handover;
+
+    private const string CreateTimesKey = "population.createTimes";
+    private const string StartedAtKey = "population.startedAt";
+    private const string ParkedAtKey = "population.parkedAt";
+    private const string ClockKey = "population.clockMs";
+    private FeatureSubscriptions? _subscriptions;
+    private volatile bool _quiesced;
+    private Task _locateTask = Task.CompletedTask;
+
+    public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotPopulationFeature)));
+
+    public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
     {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(subscriptions);
+        if (handover is not null)
+        {
+            if (handover.TryGet<long[]>(CreateTimesKey, out var created))
+                foreach (long at in created) _createTimes.Enqueue(at);
+            if (handover.TryGet<Dictionary<Guid, long>>(StartedAtKey, out var started))
+                foreach ((Guid bot, long at) in started) _startedAt[bot] = at;
+            if (handover.TryGet<Dictionary<Guid, long>>(ParkedAtKey, out var parked))
+                foreach ((Guid bot, long at) in parked) _parkedAt[bot] = at;
+            if (handover.TryGet(ClockKey, out long clock)) ClockMs = clock;
+        }
+
         _world = world;
-        world.Updated += OnUpdated;
-        world.TickCompleted += OnTickCompleted;
-        if (Managed is { } managed) managed.HomesClearedByOperator += OnHomesClearedByOperator;
+        _subscriptions = subscriptions;
+        subscriptions.OnUpdated(world, OnUpdated);
+        subscriptions.Subscribe<Action<long, long, TickPhases>>(OnTickCompleted, h => world.TickCompleted += h, h => world.TickCompleted -= h);
+        if (Managed is { } managed)
+            subscriptions.Subscribe<Action<IReadOnlyList<Guid>>>(OnHomesClearedByOperator, h => managed.HomesClearedByOperator += h, h => managed.HomesClearedByOperator -= h);
+        _quiesced = false;
+    }
+
+    /// <summary>Start no further pass, then wait for the pass and the terrain lookup still running (the pass is not cut short).</summary>
+    public async Task QuiesceAsync(CancellationToken cancellationToken)
+    {
+        _quiesced = true;
+        if (_world is not { } world) return;
+        // Read on the world thread, which writes them: after this hop no update starts another pass (it sees the flag).
+        (Task pass, Task locate) = world.IsStopped || world.IsWorldThread
+            ? (_pass, CancelLocating())
+            : await world.InvokeAsync(() => (_pass, CancelLocating())).WaitAsync(cancellationToken).ConfigureAwait(false);
+        await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { await locate.WaitAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { /* the lookup was cancelled */ }
+    }
+
+    public void Detach(FeatureHandover handover)
+    {
+        StopRush("the population feature was detached");
+        handover.Set(CreateTimesKey, _createTimes.ToArray());
+        handover.Set(StartedAtKey, new Dictionary<Guid, long>(_startedAt));
+        handover.Set(ParkedAtKey, new Dictionary<Guid, long>(_parkedAt));
+        handover.Set(ClockKey, ClockMs);
+        _createTimes.Clear();
+        _startedAt.Clear();
+        _parkedAt.Clear();
+        _pendingFailures.Clear();
+        _pendingRetryAt.Clear();
+        _bandDeficits.Clear();
+        _reportedParkedUnexpected.Clear();
+        _ = CancelLocating();
+        _atlas = PopulationZoneAtlas.Empty;
+        _atlasKey = string.Empty;
+        _atlasAreas = _atlasGraveyards = _atlasCreatures = null;
+        _atlasLocated = false;
+        _located = null;
+        _coverageChecked = null;
+        _pairs = null;
+        _pairsKey = string.Empty;
+        _pass = Task.CompletedTask;
+        _subscriptions = null;
+        _world = null;
+    }
+
+    /// <summary>World thread: stop the terrain lookup in flight (its late result is ignored); the task to wait for.</summary>
+    private Task CancelLocating()
+    {
+        _locating = null;
+        _locateRunning = false;
+        _locateCts?.Cancel();
+        _locateCts?.Dispose();
+        _locateCts = null;
+        return _locateTask;
     }
 
     public async Task StopAsync()
     {
         _stopping = true;
-        if (_world is { } world)
-        {
-            world.Updated -= OnUpdated;
-            world.TickCompleted -= OnTickCompleted;
-            if (Managed is { } managed) managed.HomesClearedByOperator -= OnHomesClearedByOperator;
-        }
-
+        _subscriptions?.Dispose(); // the feature is done: its handlers come off the world (the host never reuses the bag)
         await _stop.CancelAsync().ConfigureAwait(false);
         try { await _pass.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
         catch (Exception ex) when (ex is OperationCanceledException or TimeoutException) { /* a pass cut short by the shutdown */ }
@@ -254,7 +337,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         _clockMs += elapsedMs;
         _sinceMs += elapsedMs;
-        if (_stopping) return;
+        if (_stopping || _quiesced) return;
         // A fleet reset (.playerbot fleet reset) deletes every bot: the population stands still until it is done.
         if (Managed is { ResetInProgress: true })
         {
@@ -354,6 +437,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         // The host is stopping its bots: a pass would only see them stop and try to start or create more.
         if (Managed is { IsStopping: true }) return _pass = Task.CompletedTask;
+        // Quiescing for a detach, or the managed feature is (its operations would refuse): no new pass.
+        if (_quiesced || Managed is { IsDetaching: true }) return _pass = Task.CompletedTask;
         Interlocked.Increment(ref _passesStarted);
         PassInput? input;
         try { input = Capture(rushCount, shedOnly); }
@@ -563,7 +648,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         _locateHeldPasses = 0;
         _locateCts = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
         CancellationToken ct = _locateCts.Token;
-        _ = Task.Run(() =>
+        _locateTask = Task.Run(() =>
         {
             Dictionary<uint, (uint ZoneId, uint AreaId)> where = [];
             Dictionary<(uint LocationId, Team Team), int> creatures = [];

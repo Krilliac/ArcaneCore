@@ -11,6 +11,7 @@ using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -417,7 +418,7 @@ public sealed class PlayerbotEquipmentTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.False(helper.Update(player));
                 Assert.Null(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Finger2));
-                Assert.False(ArcaneCore.World.Playerbots.Progression.PlayerbotItemScore.BestUpgradeSlot(
+                Assert.False(ArcaneCore.World.Bots.Progression.PlayerbotItemScore.BestUpgradeSlot(
                     player, player.Inventory.Templates.Find(3101)!, out _, out _));
                 return true;
             });

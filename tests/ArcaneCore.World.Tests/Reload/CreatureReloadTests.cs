@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using ArcaneCore.World.Tests.Creatures;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Reload;
 

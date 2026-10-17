@@ -9,6 +9,7 @@ using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 

@@ -14,6 +14,7 @@ using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.GameObjects;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots;
 

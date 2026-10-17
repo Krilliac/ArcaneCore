@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots;
 

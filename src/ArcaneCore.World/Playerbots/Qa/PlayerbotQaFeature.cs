@@ -11,6 +11,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.Qa;
 
@@ -25,9 +26,9 @@ internal sealed record QaStatus(bool Running, string GitHubMode, string TokenVar
 /// the draining of the signal queue. It never works on the world thread and never throws into it; a failed pass is logged and leaves the state as it was. Inert (no task, no files) when
 /// QA is disabled or its services are not registered. Commands read the aggregator's immutable snapshots. Thread-safe by the aggregator's lock.
 /// </summary>
-public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeature
+public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableWorldFeature
 {
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts = new();
     private ILogger _log = NullLogger.Instance;
     private PlayerbotQaOptions _options = new();
     private PlayerbotQaSignalBus? _bus;
@@ -86,10 +87,54 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     /// <summary>The folder of the findings file, exports and dry-run issues (empty while inert).</summary>
     internal string Directory => _directory;
 
-    public void Attach(WorldRuntime world)
+    // --- lifecycle (docs/design/hot-reload-tiers.md, section 4.2) -------------------------------------------------------
+
+    /// <summary>
+    /// Stateless: the findings live in the store file, which the quiesce saves and the next attach loads, so a detach loses nothing
+    /// but the signals that arrive while it is detached (the log tap's bus keeps queueing them; the next attach drains them).
+    /// </summary>
+    public DetachKind DetachKind => DetachKind.Stateless;
+
+    public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotQaFeature)));
+
+    /// <summary>Save the findings and stop the background pass (the shutdown work; see <see cref="StopAsync"/>).</summary>
+    public Task QuiesceAsync(CancellationToken cancellationToken) => StopAsync();
+
+    /// <summary>Forget everything the attach built; the next attach starts from the store file again.</summary>
+    public void Detach(FeatureHandover handover)
     {
+        Aggregator = null;
+        SpellMonitor = null;
+        _store = null;
+        _publisher = null;
+        _bus = null;
+        _faultFeed = null;
+        _anomalyFeed = null;
+        _findingsMeter = null;
+        _facts = NoQaContentFacts.Instance;
+        _options = new();
+        _directory = string.Empty;
+        _loop = Task.CompletedTask;
+        _publishing = Task.CompletedTask;
+        _cts.Dispose();
+        _cts = new CancellationTokenSource();
+        _world = null;
+    }
+
+    public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
+    {
+        ArgumentNullException.ThrowIfNull(subscriptions);
         _world = world;
         _log = (ILogger?)services.GetService<ILogger<PlayerbotQaFeature>>() ?? NullLogger.Instance;
+        ManagedBotRegistry? registry = services.GetService<ManagedBotRegistry>();
+        // The tick watchdog reports a hang to bot QA through the registry's seam: whenever the sink is on, as before (it does not need
+        // the feature itself to be enabled, only the sink).
+        if (registry is not null && services.GetService<IPlayerbotQaSink>() is { Enabled: true } hangSink)
+        {
+            int warmupMinutes = services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.TickHangWarmupMinutes ?? 5;
+            subscriptions.Add(registry.UseHangSink(new QaHangSink(hangSink, TimeSpan.FromMinutes(warmupMinutes))));
+        }
+
         _bus = services.GetService<PlayerbotQaSignalBus>();
         if (services.GetService<IOptions<PlayerbotQaOptions>>()?.Value is not { } options || _bus is null) return;
         IReadOnlyList<string> problems = options.Validate();
@@ -101,7 +146,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
         if (!options.Enabled) return;
         _options = options;
-        StartedUtc = Now;
+        if (StartedUtc == DateTime.MaxValue) StartedUtc = Now; // an attach after a detach keeps the process's first
         _directory = Path.GetFullPath(Path.Combine(services.GetService<IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, options.Directory));
         _store = new PlayerbotQaStore(_directory, _log);
         QaStoreFile? saved = _store.Load();
@@ -155,7 +200,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             IPlayerbotQaSink sink = services.GetService<IPlayerbotQaSink>() ?? new PlayerbotQaSink(_bus);
             SpellMonitor = new PlayerbotQaSpellMonitor(sink, spells.System,
                 knows: (player, spell) => spells.Spellbook.GetSpells(player).Contains(spell));
-            spells.System.RegisterObserver(SpellMonitor);
+            subscriptions.Observe(spells.System, SpellMonitor);
+            if (registry is not null) subscriptions.Add(registry.UseCastRefusals(SpellMonitor));
         }
 
         _loop = Task.Run(() => RunAsync(_cts.Token));
@@ -458,5 +504,20 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         string temp = path + ".tmp";
         File.WriteAllText(temp, text);
         File.Move(temp, path, overwrite: true);
+    }
+
+    /// <summary>The tick watchdog's hang seam over the QA sink (watchdog thread; never throws past the sink's own contract).</summary>
+    private sealed class QaHangSink(IPlayerbotQaSink sink, TimeSpan warmup) : IBotTickHangSink
+    {
+        public TimeSpan Warmup => warmup;
+
+        public void ReportHang(string phase, string work, string message, long occurrences)
+        {
+            if (!sink.Enabled) return;
+            sink.Report(new QaSignal
+            {
+                Kind = QaSignalKind.TickHang, AtUtc = DateTime.UtcNow, Stage = phase, Reason = work, Message = message, Occurrences = occurrences,
+            });
+        }
     }
 }

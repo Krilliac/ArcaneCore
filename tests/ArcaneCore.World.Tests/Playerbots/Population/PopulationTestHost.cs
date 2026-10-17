@@ -13,6 +13,7 @@ using ArcaneCore.World.Playerbots.Population;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Population;
 

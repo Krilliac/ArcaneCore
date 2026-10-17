@@ -4,6 +4,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 

@@ -14,6 +14,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 

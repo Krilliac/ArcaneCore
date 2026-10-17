@@ -14,6 +14,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots;
 

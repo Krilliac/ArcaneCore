@@ -23,6 +23,7 @@ using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
 
@@ -157,7 +158,7 @@ internal sealed class PlayerbotSocialPass(
 /// bot is missing) and published with a volatile write; until the first read no guild is founded. No schema is involved: guilds, ranks and
 /// charters persist through the social system, and the state kept here is in memory or read back from it.
 /// </summary>
-public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<PlayerbotSocialFeature> logger) : IWorldFeature
+public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<PlayerbotSocialFeature> logger) : IDetachableWorldFeature
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly PlayerbotGuildMembership _membership = new(logger);
@@ -208,35 +209,74 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>The bot voice: wants and needs said in world, party and battleground chat (<see cref="ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice"/>).</summary>
     internal ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice Voice => _voice;
 
-    public void Attach(WorldRuntime world)
+    // --- lifecycle (docs/design/hot-reload-tiers.md, section 4.2) -------------------------------------------------------
+
+    /// <summary>
+    /// Stateless: a detach ends the conversations and channel chatter in flight and lets the voice go; guild membership, founding and
+    /// chat start over from the world as it stands at the next attach (the guilds themselves are core state).
+    /// </summary>
+    public DetachKind DetachKind => DetachKind.Stateless;
+
+    private FeatureSubscriptions? _subscriptions;
+    private Task _refresh = Task.CompletedTask;
+
+    public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotSocialFeature)));
+
+    public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
     {
         ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(subscriptions);
         _world = world;
-        world.Updated += Update;
-        world.MapCreated += OnMapCreated;
-        world.MapUnloading += OnMapUnloading;
+        _subscriptions = subscriptions;
+        subscriptions.OnUpdated(world, Update);
+        subscriptions.OnMapCreated(world, OnMapCreated);
+        subscriptions.OnMapUnloading(world, OnMapUnloading);
+        // The per-map kill handlers come and go with the maps; the bag undoes whichever are still on at detach.
+        subscriptions.Add(new Undo(UnsubscribeMaps));
         foreach (Map map in world.Maps) OnMapCreated(map);
     }
 
+    /// <summary>Wait for a bot registry read still running (the only background work).</summary>
+    public Task QuiesceAsync(CancellationToken cancellationToken) => Volatile.Read(ref _refresh).WaitAsync(cancellationToken);
+
+    public void Detach(FeatureHandover handover) => Release();
+
     public Task StopAsync()
     {
-        if (_world is { } world)
+        try
         {
-            world.Updated -= Update;
-            world.MapCreated -= OnMapCreated;
-            world.MapUnloading -= OnMapUnloading;
+            _subscriptions?.Dispose(); // the feature is done: its handlers come off the world (the host never reuses the bag)
+        }
+        finally
+        {
+            Release();
         }
 
-        foreach (Map map in _maps) map.Combat.UnitKilled -= OnUnitKilled;
-        _maps.Clear();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>End what is in flight and forget the world (the bag removes the subscriptions).</summary>
+    private void Release()
+    {
+        UnsubscribeMaps();
         _conversations.Stop();
         _worldChatter.Stop();
-        if (_subscribedGuilds is { } guilds) guilds.MemberJoined -= OnMemberJoined;
-        if (_subscribed && services.GetService<ProgressionFeature>() is { } progression) progression.Progression.LevelChanged -= OnLevelChanged;
         _voice.Unhook();
         _subscribedGuilds = null;
         _subscribed = false;
-        return Task.CompletedTask;
+        _subscriptions = null;
+        _world = null;
+    }
+
+    private void UnsubscribeMaps()
+    {
+        foreach (Map map in _maps) map.Combat.UnitKilled -= OnUnitKilled;
+        _maps.Clear();
+    }
+
+    private sealed class Undo(Action undo) : IDisposable
+    {
+        public void Dispose() => undo();
     }
 
     // --- the pass ----------------------------------------------------------------------------------------------------
@@ -365,7 +405,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
                 if (!registry!.Contains(bot.Player.Guid.Low)) { due = true; break; }
         if (!due || Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
         _registryAtMs = pass.NowMs;
-        _ = Task.Run(RefreshRegistryAsync);
+        Volatile.Write(ref _refresh, Task.Run(RefreshRegistryAsync));
     }
 
     private async Task RefreshRegistryAsync()
@@ -393,11 +433,13 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void EnsureSubscribed(SocialContext social)
     {
-        if (_subscribed) return;
+        if (_subscribed || _subscriptions is not { IsDisposed: false } bag) return;
         _subscribed = true;
         _subscribedGuilds = social.Guilds;
-        social.Guilds.MemberJoined += OnMemberJoined;
-        if (services.GetService<ProgressionFeature>() is { } progression) progression.Progression.LevelChanged += OnLevelChanged;
+        GuildManager guilds = social.Guilds;
+        bag.Subscribe<Action<Guild, uint, int>>(OnMemberJoined, h => guilds.MemberJoined += h, h => guilds.MemberJoined -= h);
+        if (services.GetService<ProgressionFeature>() is { } progression)
+            bag.Subscribe<Action<Player>>(OnLevelChanged, h => progression.Progression.LevelChanged += h, h => progression.Progression.LevelChanged -= h);
     }
 
     private bool ChatTopicsWanted => _options.Enabled && _options.Social.GuildChat.Enabled && _options.Social.GuildChat.MessagesPerHour > 0;

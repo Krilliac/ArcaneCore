@@ -110,8 +110,9 @@ public sealed class WorldHost(
             {
                 if (StartupWorkForTesting is { } startupWork)
                     await startupWork(cancellationToken).ConfigureAwait(false);
-                if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
-                    await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
+                // The features' after-start work (the playerbot restore), registered by the features themselves (docs/design/hot-reload-tiers.md, section 4).
+                if (scope.ServiceProvider.GetService<WorldLifecycleHooks>() is { } hooks)
+                    await RunLifecycleHooksAsync(hooks, WorldLifecycleStage.AfterWorldStart, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -210,6 +211,27 @@ public sealed class WorldHost(
         }
     }
 
+    /// <summary>
+    /// Run the hooks of <paramref name="stage"/> and throw what a direct call of the one hook would have thrown: a cancellation as an
+    /// <see cref="OperationCanceledException"/> (the start is then stopped in order), a single failure as itself, several together.
+    /// </summary>
+    internal static async Task RunLifecycleHooksAsync(WorldLifecycleHooks hooks, WorldLifecycleStage stage, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await hooks.RunAsync(stage, cancellationToken).ConfigureAwait(false);
+        }
+        catch (AggregateException aggregate)
+        {
+            IReadOnlyList<Exception> inner = aggregate.InnerExceptions;
+            if (cancellationToken.IsCancellationRequested && inner.All(e => e is OperationCanceledException))
+                throw new OperationCanceledException("the world start was cancelled", aggregate, cancellationToken);
+            if (inner.Count == 1)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(inner[0]).Throw();
+            throw;
+        }
+    }
+
     private async Task StopClaimWatchAsync()
     {
         if (_claimWatchStop is not { } watchStop) return;
@@ -250,8 +272,9 @@ public sealed class WorldHost(
         try
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
-                await playerbots.ShutdownBeforeWorldStopAsync().ConfigureAwait(false);
+            // The features' before-stop work (the playerbot shutdown, then the managed bots no attached feature stopped), newest first.
+            if (scope.ServiceProvider.GetService<WorldLifecycleHooks>() is { } hooks)
+                await RunLifecycleHooksAsync(hooks, WorldLifecycleStage.BeforeWorldStop, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

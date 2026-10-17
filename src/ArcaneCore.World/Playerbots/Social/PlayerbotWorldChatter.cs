@@ -6,6 +6,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Progression;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
 

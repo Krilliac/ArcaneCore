@@ -15,6 +15,7 @@ using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.Commands;
 

@@ -5,7 +5,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Crafting;
 using ArcaneCore.Kernel.Items;
 
-namespace ArcaneCore.World.Playerbots.Progression;
+namespace ArcaneCore.World.Bots.Progression;
 
 /// <summary>How a build holds its weapons; it decides how a main-hand candidate is compared with what the hands hold now.</summary>
 internal enum PlayerbotWeaponStyle

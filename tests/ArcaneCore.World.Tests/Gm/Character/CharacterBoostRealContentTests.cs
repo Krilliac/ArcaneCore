@@ -16,6 +16,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 using Xunit.Abstractions;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Gm.Character;
 

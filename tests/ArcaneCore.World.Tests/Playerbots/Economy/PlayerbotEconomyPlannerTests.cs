@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Progression;
 using Xunit;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Tests.Playerbots.Economy;
 

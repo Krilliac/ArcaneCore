@@ -21,6 +21,7 @@ using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots;
 

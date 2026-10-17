@@ -27,6 +27,7 @@ using ArcaneCore.World.Social;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Cluster.Tooling;
 

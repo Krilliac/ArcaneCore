@@ -4,7 +4,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
-using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Bots;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -104,7 +104,7 @@ public sealed partial class WorldSession
             || !handler.AllowsState(_state)
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
-        ArcaneCore.World.Playerbots.PlayerbotMount.DismountForAction(this, player, opcode);
+        BotPolicy?.BeforeAction(this, player, opcode);
         CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
         _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
@@ -124,12 +124,33 @@ public sealed partial class WorldSession
         return MovementHandlers.MoveManagedBot(this, player, opcode, movement) && _state == SessionState.InWorld && IsCurrentSession;
     }
 
-    private PlayerbotOptions? _botOptions;
+    private ManagedBotRegistry? _botRegistry;
+    private bool _botRegistryRead;
 
-    /// <summary>True when this is a playerbot session and <c>World:Playerbots:ClientFidelity</c> is Lean (read at start; the missing options object means the defaults).</summary>
-    private bool IsLeanBot => IsPlayerbot
-        && (_botOptions ??= Services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new PlayerbotOptions())
-            .ClientFidelity == PlayerbotClientFidelity.Lean;
+    /// <summary>
+    /// The playerbot pack's session policy (docs/design/hot-reload-tiers.md, section 4.1), or null for a real client, or while no
+    /// playerbot pack is attached. Read live from the core's registry on each use, so a detach or a pack swap takes effect at once.
+    /// </summary>
+    private IManagedBotSessionPolicy? BotPolicy
+    {
+        get
+        {
+            if (!_managed) return null;
+            if (!_botRegistryRead)
+            {
+                _botRegistry = Services.GetService<ManagedBotRegistry>();
+                _botRegistryRead = true;
+            }
+
+            return _botRegistry?.SessionPolicy;
+        }
+    }
+
+    /// <summary>
+    /// True when this is a playerbot session and the pack's policy says lean (<c>World:Playerbots:ClientFidelity</c> = Lean). With no
+    /// pack attached the session does the full client work: always correct, only dearer.
+    /// </summary>
+    private bool IsLeanBot => IsPlayerbot && BotPolicy is { Lean: true };
 
     /// <summary>A scenario tap, an outbound observer or a packet capture is attached: it must see every packet.</summary>
     private bool HasPacketObserver => ManagedPacketObserver is not null || _outboundPacketObserver is not null
@@ -145,7 +166,7 @@ public sealed partial class WorldSession
     {
         if (_state == SessionState.Closed) { NoteSendAfterClose(opcode); return; }
         // Lean bot: nothing reads this packet back, so it is neither copied nor queued (the ring is not read for other opcodes).
-        if (IsLeanBot && !PlayerbotPacketIntake.Contains(opcode) && !HasPacketObserver)
+        if (IsLeanBot && BotPolicy is { } policy && !policy.KeepsPacket(opcode) && !HasPacketObserver)
         {
             BotLeanStats.SkippedRingPacket(payload.Length);
             return;

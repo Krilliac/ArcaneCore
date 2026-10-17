@@ -56,10 +56,10 @@ public sealed partial class PlayerbotGroupCoordinator
     private void WatchLeaderChanges()
     {
         GroupManager? groups = GroupManagerOrNull();
-        if (ReferenceEquals(groups, _leadersWatched)) return;
-        if (_leadersWatched is not null) _leadersWatched.LeaderChanged -= OnLeaderChanged;
+        if (ReferenceEquals(groups, _leadersWatched) || _subscriptions is not { IsDisposed: false } bag) return;
+        if (_leadersWatched is not null) _leadersWatched.LeaderChanged -= OnLeaderChanged; // also undone by the bag at detach (a second -= does nothing)
         _leadersWatched = groups;
-        if (groups is not null) groups.LeaderChanged += OnLeaderChanged;
+        if (groups is not null) bag.Subscribe<Action<Group, ObjectGuid>>(OnLeaderChanged, h => groups.LeaderChanged += h, h => groups.LeaderChanged -= h);
     }
 
     /// <summary>GroupManager.LeaderChanged (world thread, inside the packet handler): queued, handled at the coordinator's next update.</summary>

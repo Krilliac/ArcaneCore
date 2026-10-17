@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots.Progression;
+using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Playerbots;
 

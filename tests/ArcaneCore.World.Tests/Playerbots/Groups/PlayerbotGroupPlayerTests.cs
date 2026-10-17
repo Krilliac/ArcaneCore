@@ -7,6 +7,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Groups;
 

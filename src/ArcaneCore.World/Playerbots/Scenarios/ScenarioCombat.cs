@@ -7,6 +7,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 

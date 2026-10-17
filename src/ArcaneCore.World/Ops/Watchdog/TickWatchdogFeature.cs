@@ -8,10 +8,11 @@ using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Persistence;
-using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+
+using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Ops.Watchdog;
 
@@ -49,7 +50,6 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
         _clock = services.GetService<WatchdogClock>() ?? WatchdogClock.System;
         _attachedMicros = _clock.NowMicros;
-        _warmupMicros = (services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.TickHangWarmupMinutes ?? 5) * 60_000_000L;
         _monitor = monitor;
         monitor.StartTicking(world.Options.TickIntervalMs);
         monitor.BodyStats = () =>
@@ -74,8 +74,10 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         }
 
         IOpsAnnouncer? announcer = services.GetService<IOpsAnnouncer>();
-        _qa = services.GetService<IPlayerbotQaSink>() is { Enabled: true } qa ? qa : null;
-        if (announcer is not null || _qa is not null)
+        // Bot QA's hang sink is read from the registry at report time: the bot QA feature registers it while it is attached (and
+        // the sink is on), so a detach or a pack swap of bot QA needs nothing from the watchdog.
+        _bots = services.GetService<ManagedBotRegistry>();
+        if (announcer is not null || _bots is not null)
         {
             // Staff only (World:Announce:Faults), one per kind per dedup window. A hang still running and the same hang completed have keys of
             // their own, so the final-duration line is not swallowed by the "is hung" line sent a moment before. Runs on the watchdog thread; a hung world thread delays only the delivery.
@@ -107,12 +109,11 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
     // Watchdog thread only (Describe, the alert handler and the report all run inside TickMonitor.Check): Describe leaves the hang's facts here just before the
     // monitor raises the alert, and the handler reads them. They are identity strings for bot QA's fingerprint (a phase name and a kind of work), never a duration.
-    private IPlayerbotQaSink? _qa;
+    private ManagedBotRegistry? _bots;
     private HangFacts _facts = HangFacts.Unknown;
     private string? _lastInProgress;
     private int _inProgressDistinct;
     private long _attachedMicros;
-    private long _warmupMicros;
     private volatile bool _stopping;
 
     /// <summary>What a hang is, for bot QA: the tick phase, the kind of work in it and whether the garbage collector took the tick.</summary>
@@ -153,13 +154,13 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
     /// <summary>
     /// Watchdog thread, once per hang alert (a rate-limited event, never per tick): report the hang to bot QA unless it was not the code's doing. Never reported:
-    /// after shutdown began, in the start-up warm-up (<see cref="PlayerbotQaOptions.TickHangWarmupMinutes"/>), when the host-load verdict blames the machine or
+    /// after shutdown began, in the start-up warm-up (<see cref="IBotTickHangSink.Warmup"/>, bot QA's <c>TickHangWarmupMinutes</c>), when the host-load verdict blames the machine or
     /// the GC, or when GC pauses took most of the tick. A hang still running is reported once per (phase, work); the completion alert reports only the hangs that
     /// no running report stood for (several can end between two checks). Never throws: the watchdog thread keeps checking whatever the sink does.
     /// </summary>
     internal void ReportHang(TickAlert alert, in HangFacts facts)
     {
-        if (_qa is not { } qa || alert.Kind != TickAlertKind.Hang) return;
+        if (_bots?.HangSink is not { } qa || alert.Kind != TickAlertKind.Hang) return;
         try
         {
             long occurrences = 1;
@@ -179,12 +180,9 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             }
 
             if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses || facts.GcDominated
-                || _clock.NowMicros - _attachedMicros < _warmupMicros) return;
+                || _clock.NowMicros - _attachedMicros < (long)qa.Warmup.TotalMicroseconds) return;
             string detail = alert.Detail.Length <= 400 ? alert.Detail : alert.Detail[..400];
-            qa.Report(new QaSignal
-            {
-                Kind = QaSignalKind.TickHang, AtUtc = DateTime.UtcNow, Stage = facts.Phase, Reason = facts.Item, Message = alert.Text + ": " + detail, Occurrences = occurrences,
-            });
+            qa.ReportHang(facts.Phase, facts.Item, alert.Text + ": " + detail, occurrences);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
