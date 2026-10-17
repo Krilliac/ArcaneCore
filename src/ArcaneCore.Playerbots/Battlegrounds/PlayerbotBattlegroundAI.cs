@@ -485,16 +485,18 @@ internal sealed partial class PlayerbotBattlegroundAI
             {
                 bool ready = wsg.FlagState(enemy) == WsgFlagState.OnBase
                     && wsg.IsActiveEvent(enemy == Team.Alliance ? WarsongGulch.EventFlagAlliance : WarsongGulch.EventFlagHorde, 0);
-                if (ready && !o.Target.IsEmpty && map.FindObject(o.Target) is GameObject { IsSpawned: true } stand)
+                GameObject? stand = ready && !o.Target.IsEmpty && map.FindObject(o.Target) is GameObject { IsSpawned: true } found ? found : null;
+                // The stand object exists only once its grid is loaded, so a flag the match calls ready often has nothing to click
+                // until the bot gets there. Going there is waiting-flag. no-flag (idle) is only once the bot has arrived and the
+                // stand is still missing: content that failed to load, not the walk across the field (bot QA #819).
+                Activity = PlayerbotWarsongTactics.EnemyStandActivity(ready, stand is not null,
+                    Vector3.Distance(Position(player), o.Goal), GuardYards);
+                if (stand is not null)
                 {
-                    Activity = "taking-flag";
                     UseObject(player, stand, interval);
                     return;
                 }
 
-                // The flag is away or respawning (its stand object is despawned meanwhile): wait at the stand's spawn for it. A flag the
-                // match calls ready whose stand is not on the map is missing content (reported as no-flag), not a respawn.
-                Activity = ready ? "no-flag" : "waiting-flag";
                 Guard(player, o.Goal, interval);
                 return;
             }

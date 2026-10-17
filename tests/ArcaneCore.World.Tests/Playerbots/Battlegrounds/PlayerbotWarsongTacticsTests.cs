@@ -173,6 +173,16 @@ public sealed class PlayerbotWarsongTacticsTests
     }
 
     [Theory]
+    [InlineData(true, true, 400f, "taking-flag")]  // the stand is in the world: click it
+    [InlineData(false, false, 400f, "waiting-flag")] // respawning: go wait at the stand
+    [InlineData(true, false, 400f, "waiting-flag")] // ready, but the stand's grid is not loaded yet: still go to the flag, do not idle
+    [InlineData(true, false, 60f, "waiting-flag")] // partway there (the live idle positions, ~60 yd out of the Horde base)
+    [InlineData(true, false, 8f, "no-flag")] // arrived, and the stand is still not there: missing content, idle
+    [InlineData(true, false, 8.1f, "waiting-flag")]
+    public void EnemyStandActivity_NoFlagOnlyOnceTheBotHasArrivedAtAMissingStand(bool ready, bool standFound, float yards, string activity)
+        => Assert.Equal(activity, PlayerbotWarsongTactics.EnemyStandActivity(ready, standFound, yards, arrivedYards: 8f));
+
+    [Theory]
     [InlineData(true, false, 15_000u, 50f, 10f, float.MaxValue, true)]   // still with somewhere to go
     [InlineData(true, false, 15_000u, 5f, 10f, 20f, true)]              // still beside an enemy, out of combat
     [InlineData(true, false, 15_000u, 5f, 10f, float.MaxValue, false)]  // a defender at its post, nobody near

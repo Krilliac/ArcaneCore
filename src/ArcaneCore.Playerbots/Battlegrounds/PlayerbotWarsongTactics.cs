@@ -215,6 +215,21 @@ internal static class PlayerbotWarsongTactics
         return orders;
     }
 
+    /// <summary>
+    /// What a bot sent to take the enemy flag is doing. <paramref name="ready"/> is the match calling the flag on its base with its
+    /// spawn event active; <paramref name="standFound"/> is the stand object being in the world to click. That object is created only
+    /// when its grid is loaded (<c>GameObjectMapSystem.RefreshSpawns</c> skips an unloaded grid), so a flag the match already calls
+    /// ready often has no object until someone walks there. A bot still short of the stand is going to the flag (<c>waiting-flag</c>),
+    /// not idle. Only a bot that has arrived (<paramref name="yardsFromStand"/> within <paramref name="arrivedYards"/>) and still has
+    /// nothing to click has no flag (<c>no-flag</c>): the stand is missing content, and standing there is idle.
+    /// </summary>
+    internal static string EnemyStandActivity(bool ready, bool standFound, float yardsFromStand, float arrivedYards)
+    {
+        if (standFound && ready) return "taking-flag";
+        if (ready && yardsFromStand <= arrivedYards) return "no-flag";
+        return "waiting-flag";
+    }
+
     /// <summary>The defenders a team of <paramref name="living"/> bots keeps at home without intruders: none below three, one, two from eight.</summary>
     internal static int DefenderCount(int living) => living < 3 ? 0 : living < 8 ? 1 : 2;
 
