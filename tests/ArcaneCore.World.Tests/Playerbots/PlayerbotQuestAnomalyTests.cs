@@ -345,6 +345,94 @@ public sealed class PlayerbotQuestAnomalyTests
         });
     }
 
+    // A quest whose source item the full bags cannot take is refused by the server (vmangos CanGiveQuestSourceItemIfNeed, Player.cpp:13643-13676).
+    // On the live server 256 bots asked for such a quest again every ten minutes (10k accept-refused reports): the refusal now holds until a
+    // bag slot is free, not for a fixed ten minutes.
+    [Fact]
+    public async Task AnAcceptRefusedForFullBags_IsNotAskedAgainAfterTheTenMinuteTimer_UntilASlotIsFree()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9501, Name = "Quest crate", Class = (uint)ItemClass.Quest, Stackable = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9502, Name = "Filler", Class = (uint)ItemClass.TradeGoods, Quality = 1, Stackable = 1 });
+        using IDisposable itemScope = items.Use();
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { SourceItem = 9501 }, manualClock: true);
+        WorldSession session = quest.Session;
+        int queries = 0;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+
+        using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
+            session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
+            AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
+            Think(session, goals, 4);
+            return c;
+        });
+
+        // Past the exchange's deadline: refused once, reported once.
+        for (int second = 0; second < 20; second++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1_000);
+            await quest.Host.OnWorldAsync(() => { Think(session, goals, 2); return true; });
+        }
+        Assert.Equal(1, queries);
+        Assert.Equal(1, capture.Count(AcceptRefused));
+
+        // Well past the ten minute timer with the bags still full: no walk, no second query, no second report.
+        for (int minute = 0; minute < 30; minute++)
+        {
+            await quest.Host.World.AdvanceClockAsync(60_000);
+            await quest.Host.OnWorldAsync(() => { Think(session, goals, 2); return true; });
+        }
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Assert.Equal(1, queries);
+            Assert.Equal(1, capture.Count(AcceptRefused));
+            Assert.False(goals.HasCandidate(session.Player!));
+            return true;
+        });
+
+        // A slot freed: the quest is asked for again.
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            Assert.Equal(1u, player.Inventory.DestroyItemCount(9502, 1));
+            Think(session, goals, 1);
+            Assert.True(goals.HasCandidate(player));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task SourceItemFits_IsFalseOnlyWhenTheItemHasNoRoomAndIsNotOwned()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9501, Name = "Quest crate", Class = (uint)ItemClass.Quest, Stackable = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9502, Name = "Filler", Class = (uint)ItemClass.TradeGoods, Quality = 1, Stackable = 1 });
+        using IDisposable itemScope = items.Use();
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { SourceItem = 9501 }, manualClock: true);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            ArcaneCore.Game.Quests.Quest template = quest.Feature.Services.Quests.Get(QuestInteractionFixture.QuestId)!;
+            Assert.True(PlayerbotQuestGoals.SourceItemFits(player, template));
+            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
+            Assert.False(PlayerbotQuestGoals.SourceItemFits(player, template));
+            Assert.Equal(1u, player.Inventory.DestroyItemCount(9502, 1));
+            Assert.True(PlayerbotQuestGoals.SourceItemFits(player, template));
+            return true;
+        });
+    }
+
+    private static void Think(WorldSession session, PlayerbotQuestGoals goals, int times)
+    {
+        for (int think = 0; think < times; think++)
+            Think(session, goals);
+    }
+
     private sealed class QuestHost : IAsyncDisposable
     {
         private QuestHost(WorldTestHost host, WorldSession session)
