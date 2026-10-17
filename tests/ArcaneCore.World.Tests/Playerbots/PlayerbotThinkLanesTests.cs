@@ -102,6 +102,83 @@ public sealed class PlayerbotThinkLanesTests
         Assert.All(Enumerable.Range(0, bots).Where(i => i % 5 == 0), i => Assert.True(run.Thinks[i] > 2, $"quiet bot {i} thought {run.Thinks[i]} times"));
     }
 
+    /// <summary>
+    /// The live crowd of 2026-10-17: 1000 bots, 230 of them always in the first lane (a fight, or dead), 59 ms ticks, the 8 ms floor budget, a
+    /// fight's think 0.16 ms and an ordinary bot's 0.75 ms. With <paramref name="feedback"/> the first lane's time share follows the longest
+    /// silence of last tick (<see cref="PlayerbotThinkStarvation.PriorityScale"/>), as the feature does; without, the old fixed split.
+    /// </summary>
+    private static (double QuietWorstMs, double QuietWorstAfterWarmupMs, double FightWorstMs, double FightMeanGapMs) SimulateStarvedCrowd(bool feedback)
+    {
+        const int bots = 1000;
+        const double tickMs = 59;
+        const uint bound = 10_000;
+        bool Fighter(int i) => i % 100 < 23;
+        var rotation = new PlayerbotThinkRotation();
+        var last = new double[bots];
+        var quietWorst = 0.0;
+        var quietAfterWarmup = 0.0;
+        var fightWorst = 0.0;
+        double fightGapSum = 0;
+        long fightGaps = 0;
+        uint oldest = 0;
+        for (int tick = 0; tick < 6000; tick++)
+        {
+            double now = tick * tickMs;
+            double spent = 0;
+            rotation.TickLanes(bots, 8, 0.7,
+                index => Fighter(index) && now - last[index] >= 300 ? PlayerbotThinkRotation.ThinkLane.Priority : PlayerbotThinkRotation.ThinkLane.Normal,
+                (index, _) =>
+                {
+                    spent += Fighter(index) ? 0.16 : 0.75;
+                    double gap = now - last[index];
+                    if (Fighter(index))
+                    {
+                        fightWorst = Math.Max(fightWorst, gap);
+                        if (tick > 1700) { fightGapSum += gap; fightGaps++; }
+                    }
+                    else
+                    {
+                        quietWorst = Math.Max(quietWorst, gap);
+                        if (tick > 1700) quietAfterWarmup = Math.Max(quietAfterWarmup, gap);
+                    }
+
+                    last[index] = now;
+                    return true;
+                },
+                () => spent,
+                feedback ? PlayerbotThinkStarvation.PriorityScale(oldest, bound) : 1);
+            double max = 0;
+            for (int i = 0; i < bots; i++) max = Math.Max(max, now + tickMs - last[i]);
+            oldest = (uint)max;
+        }
+
+        return (quietWorst, quietAfterWarmup, fightWorst, fightGaps == 0 ? 0 : fightGapSum / fightGaps);
+    }
+
+    [Fact]
+    public void AThousandBotsWithAFifthFighting_EveryBotThinksWithinTheStarvationBound_OnceTheFirstLaneYields()
+    {
+        var fixedSplit = SimulateStarvedCrowd(feedback: false);
+        var yielding = SimulateStarvedCrowd(feedback: true);
+
+        // The control (the shipped behaviour): the main lane thinks for 4 bots a tick and walks its 1000 in over 10 s (live p95 11 to 16 s).
+        Assert.True(fixedSplit.QuietWorstAfterWarmupMs > 10_000, $"the fixed split should starve the quiet bots, got {fixedSplit.QuietWorstAfterWarmupMs} ms");
+        // The fix: nobody waits past the 10 s bound, and the fights are still thought for about as often as the old lane allowed within a second.
+        Assert.True(yielding.QuietWorstAfterWarmupMs <= 10_000, $"a bot waited {yielding.QuietWorstAfterWarmupMs} ms (bound 10000 ms)");
+        Assert.True(yielding.FightMeanGapMs <= 1_000, $"a fighter waited {yielding.FightMeanGapMs} ms on average");
+    }
+
+    [Theory]
+    [InlineData(0u, 10_000u, 1.0)]
+    [InlineData(5_000u, 10_000u, 1.0)]
+    [InlineData(7_000u, 10_000u, 0.6)]
+    [InlineData(9_000u, 10_000u, PlayerbotThinkStarvation.MinPriorityScale)]
+    [InlineData(60_000u, 10_000u, PlayerbotThinkStarvation.MinPriorityScale)]
+    [InlineData(60_000u, 0u, 1.0)]
+    [InlineData(uint.MaxValue, 10_000u, 1.0)] // a clock that went backwards is no silence
+    public void ThePriorityScale_FallsFromOneToItsFloor_AsTheOldestSilenceNearsTheBound(uint oldestSilentMs, uint boundMs, double expected)
+        => Assert.Equal(expected, PlayerbotThinkStarvation.PriorityScale(oldestSilentMs, boundMs), 9);
+
     [Fact]
     public void WithRoomForEveryone_EveryBotThinksEveryTick_AsBefore()
     {
@@ -590,6 +667,48 @@ public sealed class PlayerbotThinkLanesTests
                     $"{name}: {count} reports for {thinksNow.GetValueOrDefault(name)} thinks (more than one per episode)");
             Assert.Contains("bound 1000 ms", capture.Notices.First().Detail, StringComparison.Ordinal);
             Assert.Equal(AnomalySeverity.Warning, capture.Notices.First().Severity);
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ABotSilentPastHalfTheBound_MakesTheFeatureShrinkTheFirstLanesShare()
+    {
+        // A zero budget thinks one bot per tick and each think takes 1.2 s: a bot waits about 3.6 s between thinks, past half of the 4 s bound.
+        // ReportStarvedBots records that silence and Update hands PriorityScale of it to TickLanes: the rotation must have run with a scale under 1.
+        var (host, feature, capture, _) = await StartAsync(budgetMs: 0, boundMs: 4000, burnMs: 1200, "Scalebot");
+        try
+        {
+            double scale = 1;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && (scale = await host.World.InvokeAsync(() => feature.LastPriorityScale)) >= 1) await Task.Delay(50);
+            Assert.True(scale < 1, $"a bot sat silent past half the bound but the first lane kept its whole share (scale {scale})");
+            Assert.True(scale >= PlayerbotThinkStarvation.MinPriorityScale, $"scale {scale} is under the floor");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WithTheBoundOff_TheFeatureNeverShrinksTheFirstLanesShare()
+    {
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 0, burnMs: 1200, "Noscalebot");
+        try
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => thinks.Values.Sum()) < 6) await Task.Delay(100);
+            (int total, double scale) = await host.World.InvokeAsync(() => (thinks.Values.Sum(), feature.LastPriorityScale));
+            Assert.True(total >= 6, "the bots did not think two cycles");
+            Assert.Equal(1.0, scale);
         }
         finally
         {

@@ -111,6 +111,9 @@ internal sealed class PlayerbotThinkRotation
     /// <summary>The first lane's visits in the last <see cref="TickLanes"/> (tests, metrics).</summary>
     internal int LastPriorityVisits { get; private set; }
 
+    /// <summary>The scale the last <see cref="TickLanes"/> applied to the first lane's time share, clamped to 0..1 (tests: proves the caller's feedback reaches the rotation).</summary>
+    internal double LastPriorityScale { get; private set; } = 1;
+
     /// <summary>The actions the main lane keeps of <c>MaxActionsPerTick</c>: at least one, whatever the share.</summary>
     internal static int ActionReserve(int maxActions, double priorityShare) => maxActions - PriorityActions(maxActions, priorityShare);
 
@@ -135,7 +138,14 @@ internal sealed class PlayerbotThinkRotation
     /// </para>
     /// Returns the thinks made; <see cref="LastTickTimeLimited"/> is set when either lane left bots because the time went by.
     /// </summary>
-    internal int TickLanes(int count, double budgetMs, double priorityShare, Func<int, ThinkLane> classify, Func<int, ThinkLane, bool> visit, Func<double> elapsedMs)
+    /// <param name="priorityScale">
+    /// 0..1, the fraction of the first lane's time share it may use this tick (<see cref="PlayerbotThinkStarvation.PriorityScale"/>): 1 normally;
+    /// lower while some bot is close to the starvation bound, which hands the first lane's time to the main lane. Live 2026-10-17 (1000 bots,
+    /// 8 ms budget, 230 bots in the first lane): the first lane took 5.6 of the 8 ms, the main lane thought for 4 bots a tick and walked
+    /// its 1000 in about 15 s, so every bot went over the 10 s bound, 3.7 million times. The action budgets are not scaled.
+    /// </param>
+    internal int TickLanes(int count, double budgetMs, double priorityShare, Func<int, ThinkLane> classify, Func<int, ThinkLane, bool> visit, Func<double> elapsedMs,
+        double priorityScale = 1)
     {
         LastTickTimeLimited = false;
         LastPriorityVisits = 0;
@@ -154,7 +164,8 @@ internal sealed class PlayerbotThinkRotation
         }
 
         int tick = _tickNumber;
-        double priorityMs = budgetMs * Math.Clamp(priorityShare, 0, 1);
+        LastPriorityScale = double.IsFinite(priorityScale) ? Math.Clamp(priorityScale, 0, 1) : 1;
+        double priorityMs = budgetMs * Math.Clamp(priorityShare, 0, 1) * LastPriorityScale;
         int thinks = 0;
         Walk(ref _priorityCursor, count, index =>
         {
