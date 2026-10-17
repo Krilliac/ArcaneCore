@@ -17,6 +17,7 @@ using ArcaneCore.World.Tests.Npc;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Npc;
@@ -759,6 +760,66 @@ public sealed class PlayerbotTownGoalsTests
         finally { FarRepairServices.Current.Value = null; }
     }
 
+    /// <summary>
+    /// A holiday vendor (Javnir Nashak 15012, Professor Thaddeus Paleo 14847) keeps a <c>creature</c> row all year and is in the world only
+    /// while its game event runs. Full bags must walk to the ordinary vendor farther off, not to the nearer empty spawn
+    /// (<c>town/service-npc-missing</c>: stood 0.2 yd from spawn 88829 and found nobody).
+    /// </summary>
+    [Fact]
+    public async Task FullBags_SkipAVendorWhoseEventIsOff_AndWalkToOneThatIsInTheWorld()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9301, Name = "White goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 7 });
+        using IDisposable itemScope = items.Use();
+        HolidayVendorServices.Current.Value = new HolidayVendorFixture();
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                float start = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    player.Map!.FindUpdater<CreatureMapSystem>()!.SpawnGate = new RefuseCreatureSpawn(HolidayVendorFixture.HolidaySpawn);
+                    while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9301, 1, out _));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 500));
+                    Assert.Equal(HolidayVendorFixture.PresentEntry, goals.TargetEntry);
+                    Assert.NotEqual(HolidayVendorFixture.HolidayEntry, goals.TargetEntry);
+                    Assert.Equal(PlayerbotGoalKind.Vendor, goals.Goal);
+                    return player.X;
+                });
+
+                float walked = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    float last = player.X;
+                    for (int think = 0; think < 2; think++)
+                    {
+                        PlayerbotMotion.ElapseForTests(player, 500);
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        Assert.True(goals.Update(player, 500), $"think {think}: the trip stopped at x {player.X:F1}");
+                        Assert.True(player.X > last, $"think {think}: no step east from x {last:F1}");
+                        Assert.Equal(HolidayVendorFixture.PresentEntry, goals.TargetEntry);
+                        last = player.X;
+                    }
+
+                    return player.X;
+                });
+                Assert.True(walked > start + 5f, $"the bot walked from x {start:F1} only to {walked:F1}");
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { HolidayVendorServices.Current.Value = null; }
+    }
+
     private static ItemTemplate Boots(uint entry, uint durability) => new()
     {
         Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
@@ -883,4 +944,56 @@ internal sealed class FarRepairServices : IWorldTestServices
         services.AddSingleton<IWorldDataStore>(new FarTrainerWorldData());
         services.AddSingleton(new FactionTemplateCatalog([new FactionTemplateRecord(1, 1, 0, 1, 0, 0), new FactionTemplateRecord(900011, 0, 0, 8, 0, 0)]));
     }
+}
+
+/// <summary>A nearer holiday vendor the spawn gate refuses, and an ordinary vendor farther east (both beyond visibility).</summary>
+internal sealed class HolidayVendorFixture : ICreatureDataStore, INpcContentStore
+{
+    public const uint HolidayEntry = 946;
+    public const uint HolidaySpawn = 94601;
+    public const uint PresentEntry = 945;
+    public const float PresentX = -8819.95f;
+
+    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken)
+        => Task.FromResult(NpcContent.Empty with
+        {
+            VendorItems =
+            [
+                new VendorItem { Entry = HolidayEntry, Item = 117, Slot = 0 },
+                new VendorItem { Entry = PresentEntry, Item = 117, Slot = 0 },
+            ],
+        });
+
+    Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
+        [
+            new CreatureTemplate { Entry = HolidayEntry, Name = "harvest hawker", Faction = 900011, NpcFlags = (uint)NpcFlags.Vendor, DisplayIds = [49] },
+            new CreatureTemplate { Entry = PresentEntry, Name = "town hawker", Faction = 900011, NpcFlags = (uint)NpcFlags.Vendor, DisplayIds = [49] },
+        ],
+        [
+            new CreatureSpawn { Guid = HolidaySpawn, Entry = HolidayEntry, MapId = 0, X = -8839.95f, Y = -132.49f, Z = 83.53f },
+            new CreatureSpawn { Guid = 94501, Entry = PresentEntry, MapId = 0, X = PresentX, Y = -132.49f, Z = 83.53f },
+        ], [], [], []));
+}
+
+internal sealed class HolidayVendorServices : IWorldTestServices
+{
+    public static readonly AsyncLocal<HolidayVendorFixture?> Current = new();
+
+    public void Register(IServiceCollection services)
+    {
+        if (Current.Value is not { } fixture) return;
+        services.AddSingleton<ICreatureDataStore>(fixture);
+        services.AddSingleton<INpcContentStore>(fixture);
+        services.AddSingleton<IWorldDataStore>(new FarTrainerWorldData());
+        services.AddSingleton(new FactionTemplateCatalog([new FactionTemplateRecord(1, 1, 0, 1, 0, 0), new FactionTemplateRecord(900011, 0, 0, 8, 0, 0)]));
+    }
+}
+
+/// <summary>A spawn gate that keeps one creature spawn out of the world (its game event is off).</summary>
+internal sealed class RefuseCreatureSpawn(uint spawnGuid) : ISpawnGate
+{
+    public bool AllowsCreature(uint guid) => guid != spawnGuid;
+    public bool AllowsGameObject(uint guid) => true;
+    public IEnumerable<uint> GatedCreatures => [spawnGuid];
+    public IEnumerable<uint> GatedGameObjects => [];
 }

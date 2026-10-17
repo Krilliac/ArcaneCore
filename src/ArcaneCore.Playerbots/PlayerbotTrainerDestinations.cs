@@ -32,6 +32,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     private Destination? _routeDestination;
     private uint _mapId;
     private int _contentVersion = -1;
+    private int _eventStamp = -1;
     private CreatureContent? _content;
     private NpcTemplateMetadataLookup? _metadata;
     private bool _metadataRead;
@@ -58,7 +59,8 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         // remote static hints that would justify this controller's movement.
         if (FindVisibleUsefulTrainer(player, services) is not null) return false;
         Refresh(player, player.Map!.MapId, services.Deps.Creatures as NpcTemplateMetadataLookup, services);
-        return _destinations.Any(destination => HasAffordableSpell(player, services, destination));
+        return _destinations.Any(destination => PlayerbotWorldDestinations.IsPresent(player, destination.Spawn)
+            && HasAffordableSpell(player, services, destination));
     }
 
     /// <summary>Returns true only when a normal managed movement step was attempted.</summary>
@@ -99,7 +101,8 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             if (_route.Complete) { ClearRoute(); }
             else
             {
-                if (_routeDestination is null || !HasAffordableSpell(player, services, _routeDestination))
+                if (_routeDestination is null || !HasAffordableSpell(player, services, _routeDestination)
+                    || !PlayerbotWorldDestinations.IsPresent(player, _routeDestination.Spawn))
                 {
                     ClearRoute();
                     TargetEntry = 0;
@@ -132,7 +135,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         }
 
         foreach (Destination destination in _destinations
-            .Where(d => !_blockedSpawns.Contains(d.Spawn.Guid))
+            .Where(d => !_blockedSpawns.Contains(d.Spawn.Guid) && PlayerbotWorldDestinations.IsPresent(player, d.Spawn))
             .OrderBy(d => DistanceSquared(player, d.Spawn)))
         {
             if (!HasAffordableSpell(player, services, destination)) continue;
@@ -182,10 +185,12 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         CreatureContent? content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
         if (content is null) { ClearRoute(); _destinations.Clear(); return; }
         if (_metadataRead && _mapId == mapId && ReferenceEquals(_content, content)
-            && _contentVersion == content.DefinitionsVersion && ReferenceEquals(_metadata, metadata)) return;
+            && _contentVersion == content.DefinitionsVersion && ReferenceEquals(_metadata, metadata)
+            && _eventStamp == PlayerbotTownGoals.ActiveEventStamp(_session.Services)) return;
 
         ClearRoute();
         _mapId = mapId; _content = content; _contentVersion = content.DefinitionsVersion; _metadata = metadata; _metadataRead = true;
+        _eventStamp = PlayerbotTownGoals.ActiveEventStamp(_session.Services);
         _destinations.Clear(); _blockedSpawns.Clear(); TargetEntry = 0;
         // The trainer fields are the imported creature_template columns (CreatureNpcMetadataDataModule), with a configured
         // NpcServices:NpcTemplates row replacing an entry's. Filter class compatibility before the bounded spawn cap; unrelated
@@ -199,7 +204,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             FactionTemplateCatalog? factions = _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
             if (factions?.Find(template.Faction) is null || factions.Find(player.FactionTemplate) is null)
                 continue;
-            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, row.Entry).Where(IsFinite).Take(MaxEntryScan - _destinations.Count))
+            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, row.Entry).Where(IsFinite).Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn)).Take(MaxEntryScan - _destinations.Count))
                 _destinations.Add(new(row.Entry, row.TrainerClass, factions!.Find(template.Faction)?.Faction ?? 0, template.Faction, spawn));
             if (_destinations.Count >= MaxEntryScan) break;
         }

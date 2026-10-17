@@ -42,6 +42,7 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
     private readonly PlayerbotEconomyWalker _walker = new(session, options);
     private uint _mapId = uint.MaxValue;
     private int _contentVersion = -1;
+    private int _eventStamp = -1;
     private CreatureContent? _content;
     private Team _team;
     private bool _loaded;
@@ -131,7 +132,8 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
         }
 
         Vector3 here = new(player.X, player.Y, player.Z);
-        Hint? hint = _hints.Where(candidate => !_blockedSpawns.Contains(candidate.Spawn.Guid))
+        Hint? hint = _hints.Where(candidate => !_blockedSpawns.Contains(candidate.Spawn.Guid)
+                && PlayerbotWorldDestinations.IsPresent(player, candidate.Spawn))
             .OrderBy(candidate => Vector3.DistanceSquared(here, candidate.Position)).FirstOrDefault();
         if (hint is null) return false;
         if (_hintSpawn != hint.Spawn.Guid)
@@ -167,10 +169,12 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
             return;
         }
 
-        if (_loaded && _mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion && _team == player.Team) return;
+        if (_loaded && _mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion && _team == player.Team
+            && _eventStamp == PlayerbotTownGoals.ActiveEventStamp(session.Services)) return;
         _mapId = mapId;
         _content = content;
         _contentVersion = content.DefinitionsVersion;
+        _eventStamp = PlayerbotTownGoals.ActiveEventStamp(session.Services);
         _team = player.Team;
         _loaded = true;
         _hints.Clear();
@@ -186,6 +190,7 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
             foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry).Where(IsFinite))
             {
+                if (!PlayerbotWorldDestinations.IsPresent(player, spawn)) continue;
                 var position = new Vector3(spawn.X, spawn.Y, spawn.Z);
                 if (Vector3.DistanceSquared(here, position) <= RadiusYards * RadiusYards)
                     _hints.Add(new Hint(template.Entry, spawn, position));

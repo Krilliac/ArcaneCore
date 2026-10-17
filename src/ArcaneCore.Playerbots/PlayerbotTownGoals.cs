@@ -2,7 +2,6 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
-using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -12,6 +11,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.WorldState;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
 using Microsoft.Extensions.DependencyInjection;
@@ -407,7 +407,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
-    private (uint MapId, CreatureContent? Content, int Version, NpcFlags Service) _repairIndex;
+    private (uint MapId, CreatureContent? Content, int Version, NpcFlags Service, int Events) _repairIndex;
     private PlayerbotRoute? _repairRoute;
     private uint _repairSpawn;
     private uint _repairMissReported;
@@ -515,7 +515,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // The spawn being walked to: closing on it resets the stuck clock; a route walked to its end (a route toward a far goal is
         // one leg of the way, PlayerbotNavigation.TryPlanToward) is planned again from here, and only no closing for
         // RepairTripStuckMs sets the spawn aside.
-        if (_repairSpawn != 0 && _repairSpawns.FirstOrDefault(s => s.Spawn.Guid == _repairSpawn) is { Spawn: not null } current)
+        if (_repairSpawn != 0 && _repairSpawns.FirstOrDefault(s => s.Spawn.Guid == _repairSpawn) is { Spawn: not null } current
+            && SpawnPresent(player, current.Spawn))
         {
             Vector3 at = new(current.Spawn.X, current.Spawn.Y, current.Spawn.Z);
             float left = Vector3.Distance(here, at);
@@ -563,12 +564,20 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             _blockedRepairSpawns.Add(_repairSpawn);
             ClearRepairTrip();
         }
+        else if (_repairSpawn != 0)
+        {
+            // The spawn left the world while the bot was walking (its event stopped). It is not missing: do not report it, and do not
+            // stand on the empty point.
+            _blockedRepairSpawns.Add(_repairSpawn);
+            ClearRepairTrip();
+        }
 
         // At most MaxRepairPlansPerThink new candidates are planned to in one think (however many Updates it makes), nearest first;
         // the rest wait for the next think, the blocked set keeping the refused ones out. A refused plan blocks its spawn as ever: a
         // start off the mesh still reaches some spawns (the steep-ground escape depends on the destination), so none is skipped.
         bool tilesPending = false;
-        foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid))
+        foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid)
+                     && SpawnPresent(player, s.Spawn))
                      .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
@@ -643,17 +652,39 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     }
 
     /// <summary>
+    /// Whether <paramref name="spawn"/> may be in the world now. A spawn listed in <c>game_event_creature</c> is there only while its
+    /// event says so (the map's spawn gate, the same rule as <see cref="PlayerbotWorldDestinations.IsPresent"/>). No gate means every
+    /// spawn is allowed.
+    /// </summary>
+    private static bool SpawnPresent(Player player, CreatureSpawn spawn) => PlayerbotWorldDestinations.IsPresent(player, spawn);
+
+    /// <summary>
+    /// A stamp of the events running now, so a service-spawn index built while an event was off is rebuilt when it starts (and the
+    /// reverse). Zero when the event feature is absent: nothing about events can change.
+    /// </summary>
+    internal static int ActiveEventStamp(IServiceProvider services)
+    {
+        IReadOnlyCollection<ushort> active = services.GetService<GameEventFeature>()?.ActiveEvents ?? [];
+        int stamp = active.Count;
+        foreach (ushort id in active) stamp = unchecked((stamp * 397) ^ id);
+        return stamp;
+    }
+
+    /// <summary>
     /// The spawns of the map's NPCs of <paramref name="service"/> the bot may approach (repair NPCs; or vendors with something on sale, so
-    /// that they buy too), kept until the map, the service or the creature content changes.
+    /// that they buy too), kept until the map, the service, the creature content or the running game events change. A spawn a game event
+    /// holds back is not in the world (<see cref="SpawnPresent"/>): Javnir Nashak (15012, Harvest Festival) and Professor Thaddeus Paleo
+    /// (14847, Darkmoon Faire) stay in <c>creature</c> all year, and walking to the empty point reports <c>town/service-npc-missing</c>.
     /// </summary>
     private void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services, NpcFlags service)
     {
         CreatureContent? content = session.Services.GetService<CreatureWorldFeature>()?.Content;
         if (content is null) { _repairSpawns.Clear(); return; }
+        int events = ActiveEventStamp(session.Services);
         if (_repairIndex.MapId == mapId && ReferenceEquals(_repairIndex.Content, content) && _repairIndex.Version == content.DefinitionsVersion
-            && _repairIndex.Service == service)
+            && _repairIndex.Service == service && _repairIndex.Events == events)
             return;
-        _repairIndex = (mapId, content, content.DefinitionsVersion, service);
+        _repairIndex = (mapId, content, content.DefinitionsVersion, service, events);
         _repairSpawns.Clear();
         _blockedRepairSpawns.Clear();
         ClearRepairTrip();
@@ -665,7 +696,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 || service == NpcFlags.Vendor && services.Npcs.VendorItems(template.Entry).Count == 0
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
             foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
-                if (float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z)) _repairSpawns.Add((template.Entry, spawn));
+                if (float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z) && SpawnPresent(player, spawn))
+                    _repairSpawns.Add((template.Entry, spawn));
         }
 
         // Bounded: the nearest of the map's repair NPCs from where the bot was when the index was built.
