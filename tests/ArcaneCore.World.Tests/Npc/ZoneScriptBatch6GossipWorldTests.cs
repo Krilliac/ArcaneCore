@@ -39,7 +39,14 @@ public sealed class ZoneScriptBatch6GossipWorldTests
     private static WorldTestHost Start(Batch6GossipFixture fixture)
     {
         Batch6GossipTestServices.Current.Value = fixture;
-        try { return WorldTestHost.Start(); }
+        try
+        {
+            // The spell store goes in through configureServices: it runs after every IWorldTestServices, and the shared SpellTestServices
+            // (Spells namespace, registered after this fixture's Npc services) registers an ISpellContentStore of its own that would win
+            // otherwise, leaving 18172 / 18377 unknown (CastSpell: NotFound). The shared spells stay in the store the host loads.
+            return WorldTestHost.Start(configureServices: services => services.AddSingleton<ISpellContentStore>(
+                new InMemorySkillSpellContentStore(Batch6GossipFixture.SpellsWith(global::ArcaneCore.World.Tests.Spells.SpellTestServices.Content()))));
+        }
         finally { Batch6GossipTestServices.Current.Value = null; }
     }
 
@@ -231,7 +238,6 @@ internal sealed class Batch6GossipTestServices : IWorldTestServices
         services.AddSingleton<IQuestContentStore>(fixture);
         services.AddSingleton<ICreatureDataStore>(fixture);
         services.AddSingleton<ICharacterQuestStore>(fixture.Characters);
-        services.AddSingleton<ISpellContentStore>(new InMemorySkillSpellContentStore(Batch6GossipFixture.Spells()));
         services.AddSingleton(new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(Batch6GossipFixture.Friendly, 0, 0, 8, 0, 0)]));
     }
 }
@@ -271,6 +277,18 @@ internal sealed class Batch6GossipFixture : IQuestContentStore, ICreatureDataSto
     /// reagents or cost; 18172 an APPLY_AURA dummy on TARGET_UNIT_FRIEND (21), 18377 an aura on the caster (1). 18377's aura is a dummy here
     /// (the DBC's periodic trigger of 18269, which this host does not know); only its presence is read.
     /// </summary>
+    public static SpellContent SpellsWith(SpellContent shared)
+    {
+        SpellContent own = Spells();
+        return shared with
+        {
+            Spells = [.. shared.Spells.Where(s => own.Spells.All(o => o.Id != s.Id)), .. own.Spells],
+            CastTimes = [.. shared.CastTimes.Where(s => own.CastTimes.All(o => o.Id != s.Id)), .. own.CastTimes],
+            Durations = [.. shared.Durations.Where(s => own.Durations.All(o => o.Id != s.Id)), .. own.Durations],
+            Ranges = [.. shared.Ranges.Where(s => own.Ranges.All(o => o.Id != s.Id)), .. own.Ranges],
+        };
+    }
+
     public static SpellContent Spells() => new(
         [
             new SpellTemplateRow
