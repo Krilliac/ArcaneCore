@@ -303,7 +303,9 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     /// The retreat once asked only for the straight one, every think: where that was a cliff edge, water or a wall, all
     /// <see cref="MaxExtensions"/> replans were refused alike within a few thinks and the bot gave up cornered where it stood, although
     /// the ground to either side was open (live 2026-10-16, Krezelou on Teldrassil: 14 of 16 directions round it plan, the two either
-    /// side of its retreat's own did not). One exact path query a turn, five at most a think.
+    /// side of its retreat's own did not). Cost of a think with no way: five plans and the nearest-point search; each plan the hazards
+    /// (not the mesh) refuse also runs the hazard detour search (held to the think's budget, PlayerbotThinkProbe.Fallback) and records
+    /// one refusal toward the boxed-in escape (PlayerbotRisk.Refused), up to five a think.
     /// </para>
     /// </summary>
     private PlayerbotRoute? PlanAway(Player player, out Vector3 goal)

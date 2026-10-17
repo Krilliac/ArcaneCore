@@ -111,7 +111,10 @@ The report then reads `fight ttk=9.4s ttd=28.2s decision=fight reason=winning`.
    place, straight away from the enemies past the farthest leash. A route that ends with the bot still pursued is extended 30
    yards further, up to 8 times. Each further run (and the first, when its own route was refused) asks for straight away from
    the enemies first, then 45 and 90 degrees to either side (never back toward them), each goal on the ground there, one exact
-   path query a turn; with none, the walkable point nearest the straight one (`PlayerbotRetreat.PlanAway`). It once asked for the
+   path query a turn; with none, the walkable point nearest the straight one (`PlayerbotRetreat.PlanAway`). A think that finds no
+   way asks up to five plans and the nearest-point search; each of the five that the danger memory refuses (rather than the mesh)
+   also runs the hazard detour search, held to the think's search budget, and counts as one refusal toward the boxed-in escape
+   (`PlayerbotRisk.Refused`), so such a think can add up to five. It once asked for the
    straight one only, every think: where that was a cliff edge, water or a wall, all 8 replans were refused alike within a few thinks
    and the bot gave up cornered where it stood (live 2026-10-16, about 200 `bot-risk/retreat-cornered` an hour, most after no
    escape; `PlayerbotRetreatReplanTests`).
@@ -252,13 +255,6 @@ detour keeps out of a hostile standing on its first waypoint).
 `ConfigReloadTests` checks every risk key is live and range-checked. The live snapshot replay
 (`PlayerbotLiveSnapshotReplayTests`) prints each bot's deaths.
 
-## Limits
-
-* Only EventAI casts are seen; spells cast by C# creature AIs or scripts are not in the estimate, and a creature's heals or
-  crowd control are not counted.
-* A hazard is known only once seen (visibility range) or after a death; the first walk into a creature out of sight is not avoided,
-  and a remembered creature is placed at its home until a look sees it (a wandering one may be elsewhere).
-
 ## Water
 
 The brain leaves water when its breath runs out (20 seconds left of the breath timer, `PlayerbotWater.BreathRunningOut`) whether it
@@ -266,6 +262,13 @@ fights or not: the breath timer runs whatever the fight (`LiquidEnvironment`), a
 surface once stood its ground until it drowned. It swims for the shore (`PlayerbotWater.FindExit`) with its attackers behind it and
 fights on once out; while no way out is known yet (the search waits 2 seconds between tries) it fights on where it is. With breath
 to spare a fight below the surface goes on; out of combat a still bot under water is taken out at once (`PlayerbotWaterTests`).
+
+## Limits
+
+* Only EventAI casts are seen; spells cast by C# creature AIs or scripts are not in the estimate, and a creature's heals or
+  crowd control are not counted.
+* A hazard is known only once seen (visibility range) or after a death; the first walk into a creature out of sight is not avoided,
+  and a remembered creature is placed at its home until a look sees it (a wandering one may be elsewhere).
 * A walk refused for hazards leaves the goal to choose again; there is no search for a long way round beyond the two corner offsets.
 * Linked aggro of creature groups (formations, `creature_linking`) is not predicted, only assistance and aggro radii.
 * Enrage is only seen in the observed rates, not predicted.
