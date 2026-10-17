@@ -509,6 +509,32 @@ public sealed class PlayerbotOpportunityTests
         Assert.True(await RunBrainAsync(rig, () => rig.Player.Inventory.GetItemCount(GreenItem) > 0), "the brain never took the loot");
     }
 
+    /// <summary>
+    /// A stall give-up on a chest used to leave the episode running (no creature to set aside). The same think took
+    /// Loot on that gameobject again (bot QA #962: target 19019, phase opportunities, goal still Loot after stall-giveup).
+    /// </summary>
+    [Fact]
+    public async Task TheBrain_GivesUpAStalledChest_AndDoesNotTakeItAgain()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        Assert.True(await RunBrainAsync(rig, () => rig.Bot.Brain.Goal == PlayerbotGoalKind.Loot && rig.Bot.Brain.Opportunities.ActiveKey == KeyOf(Free)),
+            "the brain never started on the chest");
+
+        await rig.World(() =>
+        {
+            uint now = rig.Host.World.NowMs;
+            rig.Bot.Brain.GiveUpStalledGoal(rig.Player, shareable: false);
+            Assert.Null(rig.Bot.Brain.Opportunities.ActiveKey);
+            Assert.True(rig.Bot.Brain.Opportunities.Ledger.IsDeferred(KeyOf(Free), now));
+            Assert.NotEqual(FreeChest, rig.Bot.Brain.TargetEntry);
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            rig.Bot.Brain.Update(500);
+            Assert.Null(rig.Bot.Brain.Opportunities.ActiveKey);
+            Assert.NotEqual(PlayerbotGoalKind.Loot, rig.Bot.Brain.Goal);
+            return true;
+        });
+    }
+
     [Fact]
     public async Task TheBrain_FightsTheChestsGuard_BeforeOpeningIt()
     {

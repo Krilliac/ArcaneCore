@@ -637,8 +637,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _recovery.Reset();
             RememberAttackers(player);
             // The fight with a find's guards is the brain's, not the goal's: its claim on the find is kept alive meanwhile (and an
-            // episode a higher goal has held for too long, or that ran past its limit, ends here).
-            if (_opportunities?.KeepClaim(player) is { } lapsed) ReleaseOpportunityGuard(player, lapsed);
+            // episode a higher goal has held for too long, or that ran past its limit, ends here). A chest the bot is still looting
+            // is not that: the next think is this goal's own, and a live think gap is longer than the claim (8 s), so lapsing it here
+            // dropped the chest and the same think began it again (bot QA #962).
+            bool lootingChest = _goal == PlayerbotGoalKind.Loot && _target is null && _opportunities?.ActiveKey is not null;
+            if (!lootingChest && _opportunities?.KeepClaim(player) is { } lapsed) ReleaseOpportunityGuard(player, lapsed);
             // Sickness may begin while a pull route or cast is pending. Retire that intent before a movement-order acknowledgement
             // can defer the ordinary goal decision, and before class upkeep can use PullTarget for an opener.
             if (!player.Combat.IsInCombat && player.Combat.Victim is null && _target is { IsAlive: true }
@@ -1677,6 +1680,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // The creature the bot stalled on is skipped for about a respawn (StalledTargetMs), not the 30 seconds of a refused chase:
                 // chosen again at once, it held the bot for the next stall (bot QA #697, #700, #862).
                 if (_target is { } target) MarkUnreachable(target, StalledTargetMs);
+                // A chest has no creature (the opportunity retires the combat target; TargetEntry is the gameobject). Giving the goal up
+                // without ending that episode lets the same think take the chest again, so the give-up never frees the bot
+                // (live 2026-10-17, bot QA #962: stall-giveup:Loot/19019, then phase opportunities with the goal still Loot/19019).
+                bool stalledChest = false;
+                if (_target is null && _goal == PlayerbotGoalKind.Loot && _opportunities?.ActiveKey is ulong chest)
+                {
+                    _opportunities.Ledger.Defer(chest, now);
+                    _opportunities.Update(player, 0, interrupting: false); // elapsed 0 ends the episode; the ledger keeps it from being begun again
+                    stalledChest = true;
+                }
                 // A grind walk with no creature in sight (the destinations' spawn walk) has no target to set aside: set the entry it
                 // was walking to aside, or the next decision plans the same camp again (live 2026-10-12, bot QA #368: 177 stalls
                 // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends. A camp that
@@ -1688,6 +1701,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     if (_suspensions.EntryStrikeCount(TargetEntry) > 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
                     else _suspensions.SuspendEntry(TargetEntry, now);
                 }
+                if (stalledChest) TargetEntry = 0;
                 break;
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);
