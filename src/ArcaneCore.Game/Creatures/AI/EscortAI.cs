@@ -105,6 +105,12 @@ public abstract class EscortAI : CreatureAI
     /// </summary>
     protected virtual bool HoldAtEndWhilePaused => false;
 
+    /// <summary>
+    /// mangos-classic npc_escortAI::SetEscortWaypoints(pathId) (escort_ai.cpp): the entry's <c>script_waypoint</c> path the next
+    /// <see cref="Start"/> loads when it is given no <c>waypoint_path</c>; <see cref="EscortPathId"/> (0) unless a script picks another.
+    /// </summary>
+    protected uint EscortWaypointPath { get; set; } = EscortPathId;
+
     public bool HasEscortState(EscortState state) => (State & state) != 0;
 
     protected void AddEscortState(EscortState state) => State |= state;
@@ -189,7 +195,7 @@ public abstract class EscortAI : CreatureAI
             }
             else
             {
-                _waypoints.AddRange(system.Content.GetScriptWaypoints(Me.Template.Entry, EscortPathId));
+                _waypoints.AddRange(system.Content.GetScriptWaypoints(Me.Template.Entry, EscortWaypointPath));
             }
         }
 
@@ -197,7 +203,7 @@ public abstract class EscortAI : CreatureAI
         {
             System?.ReportEscortWithoutPath(Me, waypointPath != 0
                 ? $"waypoint_path {waypointPath}"
-                : $"script_waypoint path 0 or creature_movement_template path {EscortPathId}");
+                : $"script_waypoint path {EscortWaypointPath} or creature_movement_template path {EscortWaypointPath}");
             return false;
         }
 

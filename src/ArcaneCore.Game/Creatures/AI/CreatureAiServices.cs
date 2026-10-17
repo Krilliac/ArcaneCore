@@ -288,6 +288,11 @@ public sealed class CreatureAiFactory
         [Scripts.AgedDyingAncientKodoAI.NpcDyingKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
         [Scripts.AgedDyingAncientKodoAI.NpcAncientKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
         [Scripts.AgedDyingAncientKodoAI.NpcTamedKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
+        [Scripts.ToogaAI.Entry] = E(static c => new Scripts.ToogaAI(c)),
+        [Scripts.KindalMoonweaverAI.Entry] = E(static c => new Scripts.KindalMoonweaverAI(c)),
+        [Scripts.CapturedSpriteDarterAI.Entry] = E(static c => new Scripts.CapturedSpriteDarterAI(c)),
+        [Scripts.TwiggyFlatheadAI.Entry] = E(static c => new Scripts.TwiggyFlatheadAI(c)),
+        [Scripts.WizzlecranksShredderAI.Entry] = E(static c => new Scripts.WizzlecranksShredderAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
@@ -326,6 +331,9 @@ public sealed class CreatureAiFactory
         Scripts.MorokkAI.QuestChallengeMorokk,
         Scripts.RingoAI.QuestALittleHelp,
         Scripts.KatranaPrestorGossip.QuestTrueMasters,
+        Scripts.ToogaAI.QuestTooga,
+        Scripts.KindalMoonweaverAI.QuestFreedomForAllCreatures,
+        Scripts.WizzlecranksShredderAI.QuestEscape,
         Instances.Scripts.BlackrockDepths.MarshalWindsorAI.QuestJailBreak];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>

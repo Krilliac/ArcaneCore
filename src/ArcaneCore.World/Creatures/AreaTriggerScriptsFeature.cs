@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
@@ -17,7 +18,8 @@ namespace ArcaneCore.World.Creatures;
 /// player summon. Bound by the cmangos <c>scripted_areatrigger</c> ids (scriptdev2.sql) rather than a table, since the imported world has none.
 /// Runs on CMSG_AREATRIGGER after the volume check (<see cref="IAreaTriggerListener"/>); like the smart trigger seam it cannot end the
 /// handler, which matches these scripts: each of them returns false in cmangos, or true only after it did nothing further.
-/// The other five scripts, which needed engine pieces first, are <see cref="AreaTriggerEngineScriptsFeature"/>.
+/// The other five scripts, which needed engine pieces first, are <see cref="AreaTriggerEngineScriptsFeature"/>. at_twiggy_flathead (the_barrens.cpp)
+/// hands the trigger to Twiggy's AI (<see cref="TwiggyFlatheadAI.OnAreaTrigger"/>).
 /// </summary>
 public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorldFeature, IAreaTriggerListener
 {
@@ -85,6 +87,8 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
             >= 3546 and <= 3552 => ChildrensWeekSpot(quests, player, triggerId),
             TriggerAncientLeaf => AncientLeaf(quests, player),
             TriggerTwilightGrove => TwilightGrove(quests, player),
+            TwiggyFlatheadAI.AreaTriggerAffray => Creatures(player) is { } creatures
+                && TwiggyFlatheadAI.OnAreaTrigger(creatures, player, (p, q) => StatusOf(quests, p, q) == QuestStatus.Incomplete),
             _ => false,
         };
     }

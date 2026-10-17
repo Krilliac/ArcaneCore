@@ -1,4 +1,7 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Creatures.Scripts;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 
 namespace ArcaneCore.Game.Instances.Scripts.World;
@@ -6,7 +9,9 @@ namespace ArcaneCore.Game.Instances.Scripts.World;
 /// <summary>
 /// cmangos <c>world_map_kalimdor</c> (AI/ScriptDevAI/scripts/kalimdor/world_kalimdor.cpp, world_kalimdor.h), the parts the area trigger
 /// scripts need: Wanted: Murkdeep (q4740: three Greymist Coastrunners, then two Warriors, then Murkdeep and a Hunter) and the Hive Tower
-/// drones timer (q1126, TYPE_HIVE). The other encounters (Omen, Freedom Creatures, the gong) keep their state without behaviour here.
+/// drones timer (q1126, TYPE_HIVE), and Freedom for All Creatures (q2969, TYPE_FREEDOM_CREATURES: the freed Captured Sprite Darters counted
+/// to six, and the cage door <c>go_cage_door</c>, feralas.cpp:400-437). The other encounters (Omen, the gong) keep their state without
+/// behaviour here.
 /// </summary>
 public sealed class KalimdorWorldMapData : WorldMapData
 {
@@ -22,6 +27,13 @@ public sealed class KalimdorWorldMapData : WorldMapData
 
     public const uint HiveDronesTimerMs = 5 * 60 * 1000;
 
+    /// <summary>feralas.cpp Freedom for All Creatures: the cage door, the Grimtotem Raider it brings and the six darters that must get away.</summary>
+    public const uint GoCageDoor = 143979, NpcGrimtotemRaider = 7725, FreedSpriteDartersNeeded = 6;
+    public const float CageDoorSearchRange = 20f;
+
+    /// <summary>feralas.cpp raiderSpawnPos.</summary>
+    public static readonly (float X, float Y, float Z, float O) RaiderSpawn = (-4515.35f, 811.36f, 62.99f, 3.60244f);
+
     /// <summary>world_kalimdor.h aSpawnLocations: POS_IDX_MURKDEEP_SPAWN, POS_IDX_MURKDEEP_MOVE (both guesswork in cmangos).</summary>
     public static readonly (float X, float Y, float Z, float O) MurkdeepSpawn = (4981.031f, 597.955f, -1.361f, 4.82f);
     public static readonly (float X, float Y, float Z) MurkdeepMove = (4988.970f, 547.002f, 5.379f);
@@ -34,6 +46,10 @@ public sealed class KalimdorWorldMapData : WorldMapData
 
     private int _murkdeepAddsKilled;
     private uint _dronesTimerMs;
+    private uint _freedSpriteDarters;
+
+    /// <summary>m_freedSpriteDarter, for tests.</summary>
+    public uint FreedSpriteDarters => _freedSpriteDarters;
 
     public KalimdorWorldMapData(Map map)
         : base(map, MaxEncounter)
@@ -48,6 +64,7 @@ public sealed class KalimdorWorldMapData : WorldMapData
         base.Initialize();
         _murkdeepAddsKilled = 0;
         _dronesTimerMs = 0;
+        _freedSpriteDarters = 0;
     }
 
     public override void OnCreatureCreate(Creature creature)
@@ -127,8 +144,62 @@ public sealed class KalimdorWorldMapData : WorldMapData
             _dronesTimerMs = HiveDronesTimerMs;
         }
 
+        if (type == TypeFreedomCreatures)
+        {
+            if (data == EncounterState.InProgress)
+            {
+                _freedSpriteDarters = 0;
+            }
+            else if (data == EncounterState.Special && ++_freedSpriteDarters >= FreedSpriteDartersNeeded)
+            {
+                data = EncounterState.Done;
+            }
+        }
+
         Encounters[type] = data;
     }
+
+    /// <summary>
+    /// go_cage_door (feralas.cpp:400-437): every use restarts the count (IN_PROGRESS), frees the Captured Sprite Darters within 20 yd of the
+    /// door (faction 495 until their respawn, the escort started at a run) and brings a Grimtotem Raider that attacks the player; Kindal
+    /// Moonweaver within 20 yd of the player calls it out and attacks it. The script takes the use.
+    /// </summary>
+    public override bool OnGameObjectUse(Player player, GameObject go)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(go);
+        if (go.Entry != GoCageDoor)
+        {
+            return false;
+        }
+
+        SetData(TypeFreedomCreatures, EncounterState.InProgress);
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return true;
+        }
+
+        foreach (Creature darter in creatures.CreaturesOfEntryInRange(go, CapturedSpriteDarterAI.Entry, CageDoorSearchRange))
+        {
+            darter.SetFactionTemporary(FactionEscortNeutralFriendActive, TemporaryFactionFlags.RestoreRespawn);
+            (darter.AI as CapturedSpriteDarterAI)?.StartFlight(player);
+        }
+
+        if (creatures.SummonDeadDespawnAt(NpcGrimtotemRaider, RaiderSpawn.X, RaiderSpawn.Y, RaiderSpawn.Z, RaiderSpawn.O) is { } raider)
+        {
+            raider.AI?.AttackStart(player);
+            if (creatures.CreaturesOfEntryInRange(player, KindalMoonweaverAI.Entry, CageDoorSearchRange)
+                    .FirstOrDefault(k => k.IsAlive) is { AI: KindalMoonweaverAI kindal })
+            {
+                kindal.AttackRaider(raider);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>FACTION_ESCORT_N_FRIEND_ACTIVE.</summary>
+    public const uint FactionEscortNeutralFriendActive = 495;
 
     public override void Update(uint diffMs)
     {
