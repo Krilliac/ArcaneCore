@@ -16,9 +16,18 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// for one, create their item from Warlock.CreateHealthstoneScript (vmangos spell_warlock.cpp:260-368).
 /// </para>
 /// Install once per <see cref="SpellSystem"/> (a second call throws).
+/// <para>
+/// Hot swap (<see cref="SpellScriptRegistry.CommitSwap"/>): every hook reads the registry's live snapshot when it fires, so added, replaced and
+/// removed scripts take effect from the next hook on. The only thing built at install is the set of chained effect handlers, so the dispatcher
+/// listens to <see cref="SpellScriptRegistry.ScriptsChanged"/> and chains any execute effect a newly added script declares (under the same rule as
+/// at install: only an effect the world handles). A chained effect stays chained after the script that declared it is removed, but then finds no
+/// script (<see cref="SpellScriptRegistry.FindForEffect"/>) and only calls the handler it wraps, which is what a restart without that script does.
+/// </para>
 /// </summary>
 public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
 {
+    private readonly HashSet<SpellEffectName> _chained = [];
+
     private SpellScriptDispatcher(SpellScriptRegistry registry) => Registry = registry;
 
     public SpellScriptRegistry Registry { get; }
@@ -47,16 +56,10 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
         var dispatcher = new SpellScriptDispatcher(registry);
         system.RegisterCastCheck(dispatcher);
         system.RegisterObserver(dispatcher);
-        Chain(system, SpellEffectName.Dummy, registry);
-        Chain(system, SpellEffectName.ScriptEffect, registry);
-        foreach (SpellEffectName effect in registry.ExecuteEffects)
-        {
-            // Only an effect the world handles is chained (an unhandled one must keep being reported as not implemented); Dispel has its own wrapper below.
-            if (effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect or SpellEffectName.Dispel) && system.HasEffectHandler(effect))
-            {
-                Chain(system, effect, registry);
-            }
-        }
+        dispatcher.Chain(system, SpellEffectName.Dummy);
+        dispatcher.Chain(system, SpellEffectName.ScriptEffect);
+        dispatcher.ChainExecuteEffects(system);
+        registry.ScriptsChanged += () => dispatcher.ChainExecuteEffects(system);
 
         SpellEffectHandler? dispel = system.GetEffectHandler(SpellEffectName.Dispel);
         system.RegisterEffect(SpellEffectName.Dispel, context =>
@@ -79,12 +82,31 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
         return dispatcher;
     }
 
-    private static void Chain(SpellSystem system, SpellEffectName effect, SpellScriptRegistry registry)
+    /// <summary>Chain every execute effect the registry's current scripts declare that is not chained yet (install, and after each swap).</summary>
+    private void ChainExecuteEffects(SpellSystem system)
     {
+        foreach (SpellEffectName effect in Registry.ExecuteEffects.Order())
+        {
+            // Only an effect the world handles is chained (an unhandled one must keep being reported as not implemented); Dispel has its own wrapper.
+            if (effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect or SpellEffectName.Dispel) && system.HasEffectHandler(effect))
+            {
+                Chain(system, effect);
+            }
+        }
+    }
+
+    private void Chain(SpellSystem system, SpellEffectName effect)
+    {
+        if (!_chained.Add(effect))
+        {
+            return;
+        }
+
+        SpellScriptRegistry registry = Registry;
         SpellEffectHandler? previous = system.GetEffectHandler(effect);
         system.RegisterEffect(effect, context =>
         {
-            registry.Find(context.Spell.Id)?.OnEffectExecute(context);
+            registry.FindForEffect(context.Spell.Id, effect)?.OnEffectExecute(context);
             previous?.Invoke(context);
         });
     }
