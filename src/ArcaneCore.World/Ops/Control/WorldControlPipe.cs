@@ -23,9 +23,12 @@ namespace ArcaneCore.World.Ops.Control;
 /// named pipe by a local tool (<c>tools/ops/live/redeploy.ps1</c>) instead of typed at the console window. Off by default
 /// (<see cref="WorldControlPipeOptions.Enabled"/>).
 /// <para>
-/// Security: one pipe instance for the life of the process, created with <c>FirstPipeInstance</c> (a name another process created
-/// first is refused, never shared), the descriptor of <see cref="ControlPipeSecurity.Create"/> (the daemon's account and SYSTEM only,
-/// NETWORK denied) and the runtime's remote-client rejection. Each line runs through <see cref="WorldConsoleExecutor"/> exactly like a
+/// Security: one pipe instance for the life of the process, created by <see cref="LocalPipeServer.Create"/> with
+/// <c>FILE_FLAG_FIRST_PIPE_INSTANCE</c> (a name another process created first is refused, never shared), the descriptor of
+/// <see cref="ControlPipeSecurity.Create"/> (the daemon's account and SYSTEM only, NETWORK denied) and <c>PIPE_REJECT_REMOTE_CLIENTS</c>
+/// (read back from the kernel after creation; the pipe is not served without it). Two independent remote barriers, then: the pipe file
+/// system refuses remote clients, and a network logon's token carries NETWORK, which the descriptor denies. The runtime's own
+/// constructors cannot set the remote rejection, hence the native creation. Each line runs through <see cref="WorldConsoleExecutor"/> exactly like a
 /// console line, so it has the console's authority (Administrator, no character), its GM audit entry (<c>Console</c>) and its
 /// redaction; the line is also logged here (<see cref="LogCategory"/>) with the client's process id.
 /// </para>
@@ -142,20 +145,33 @@ public sealed partial class WorldControlPipe : IHostedService
         {
             System.Security.Principal.SecurityIdentifier sid = ControlPipeSecurity.CurrentUser();
             user = sid.Value;
-            server = NamedPipeServerStreamAcl.Create(
-                name,
-                PipeDirection.InOut,
-                maxNumberOfServerInstances: 1,
-                PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
-                inBufferSize: 0,
-                outBufferSize: 0,
-                ControlPipeSecurity.Create(sid));
+            // Not NamedPipeServerStreamAcl: the runtime cannot pass PIPE_REJECT_REMOTE_CLIENTS (LocalPipeServer).
+            server = LocalPipeServer.Create(name, ControlPipeSecurity.Create(sid));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // FirstPipeInstance: a name some other process created first is never joined (it could read every command).
+            // FILE_FLAG_FIRST_PIPE_INSTANCE: a name some other process created first is never joined (it could read every command).
             _logger.LogError(ex, "control pipe off: could not create \\\\.\\pipe\\{Name} (does another process already hold the name?)", name);
+            return;
+        }
+
+        bool local;
+        try
+        {
+            local = LocalPipeServer.RejectsRemoteClients(server.SafePipeHandle);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "control pipe off: could not read back the mode of \\\\.\\pipe\\{Name}", name);
+            server.Dispose();
+            return;
+        }
+
+        if (!local)
+        {
+            // Never serve a pipe whose remote-client rejection did not take: the NETWORK deny entry would be the only barrier left.
+            _logger.LogError("control pipe off: \\\\.\\pipe\\{Name} was created without remote-client rejection", name);
+            server.Dispose();
             return;
         }
 
@@ -242,8 +258,7 @@ public sealed partial class WorldControlPipe : IHostedService
                     break;
                 }
 
-                await SubmitAsync(executor, read.line, client, token).ConfigureAwait(false);
-                replies.WriteRaw(DoneMarker);
+                await SubmitAsync(executor, replies, read.line, client, token).ConfigureAwait(false);
             }
         }
         finally
@@ -264,25 +279,55 @@ public sealed partial class WorldControlPipe : IHostedService
         }
     }
 
-    /// <summary>Log the line (redacted) and run it on the world thread like a console line; never throws for a command failure.</summary>
-    private async Task SubmitAsync(WorldConsoleExecutor executor, string line, string client, CancellationToken token)
+    /// <summary>
+    /// Log the line (redacted) and run it on the world thread like a console line, then send <see cref="DoneMarker"/>; never throws for
+    /// a command failure. The marker is queued on the world thread right after the command ran, so any result the command posts to a
+    /// later tick (<c>.reload</c>, <c>.hotmodule</c>) always follows it; when the world does not run the command in time, the marker
+    /// follows the timeout line instead (once: a command that runs later does not send a second one).
+    /// </summary>
+    private async Task SubmitAsync(WorldConsoleExecutor executor, ReplyQueue replies, string line, string client, CancellationToken token)
     {
         _logger.LogInformation("Control pipe command: {Line} ({Client})", ConsoleCommandRedactor.Redact(line), client);
+        int done = 0;
+        void Done()
+        {
+            if (Interlocked.Exchange(ref done, 1) == 0)
+            {
+                replies.WriteRaw(DoneMarker);
+            }
+        }
+
         try
         {
             await _world.InvokeAsync(() =>
             {
-                executor.Execute(line);
+                try
+                {
+                    executor.Execute(line);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Like the console window: a command that throws fails that command, not the connection.
+                    _logger.LogError(ex, "control pipe command could not be run ({Client})", client);
+                    executor.WriteLine("The command failed; see the server log.");
+                }
+                finally
+                {
+                    Done();
+                }
+
                 return 0;
             }, token).WaitAsync(WorldWait, token).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
             executor.WriteLine("the world did not run the command within " + (int)WorldWait.TotalSeconds + " s; it stays queued");
+            Done();
         }
         catch (OperationCanceledException)
         {
             executor.WriteLine("the world is stopping; command not run");
+            Done();
             throw;
         }
     }
@@ -357,6 +402,8 @@ public sealed partial class WorldControlPipe : IHostedService
                 await scope.DisposeAsync().ConfigureAwait(false);
             }
         }
+
+        _stopping.Dispose();
     }
 
     /// <summary>

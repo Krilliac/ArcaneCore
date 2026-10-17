@@ -58,10 +58,14 @@ Security:
 
 - **Who may connect.** The pipe's security descriptor is protected (nothing inherited), owned by the account the World runs as, and has
   three entries: deny NETWORK, allow that account full control, allow SYSTEM read and write. Administrators, other users and everyone else
-  have no entry. The runtime also rejects remote clients. Whoever can open it can already run code as that account.
-- **No squatting.** One pipe instance for the life of the process, created as the first instance of its name: if another process created
-  the name first, the World refuses it (an error is logged and the pipe stays off) instead of joining it. The client in
-  `tools/ops/live/RedeployPlan.ps1` checks that the process serving the pipe is the live World's PID before it sends a command.
+  have no entry. Whoever can open it can already run code as that account.
+- **Local only, two barriers.** The pipe is created with `PIPE_REJECT_REMOTE_CLIENTS` (native `CreateNamedPipeW` in
+  `Ops/Control/LocalPipeServer.cs`; the .NET pipe constructors cannot set it), and the World reads the mode back from the kernel and
+  leaves the pipe off if it did not take. Independently, a network logon's token carries NETWORK, which the descriptor denies. Neither
+  has been tried from a second machine yet.
+- **No squatting.** One pipe instance for the life of the process, created with `FILE_FLAG_FIRST_PIPE_INSTANCE`: if another process created
+  the name first (even one allowing any number of instances), the World refuses it (an error is logged and the pipe stays off) instead
+  of joining it. The client in `tools/ops/live/RedeployPlan.ps1` checks that the process serving the pipe is the live World's PID before it sends a command.
 - **Authority and audit.** A line runs through the same executor as a typed console line: Administrator authority, account 0, no
   character; GM audit entries under the name `Console`; secrets redacted. Each line is also logged under the category
   `ArcaneCore.Control` as `Control pipe command: <line> (client pid <pid> <process>)`, redacted the same way, with the connect and
@@ -71,7 +75,9 @@ Security:
 
 Protocol (UTF-8, newline-terminated lines): send a command line; the World answers with the reply lines (prefixed `[console] `) and then
 `#done` once the world thread has run the command. A command that finishes later (`.reload`, `.hotmodule`) sends its result after `#done`
-while the connection stays open. One client at a time; the next one is served after it disconnects.
+while the connection stays open: `#done` is queued on the world thread right after the command ran, so such a result always follows it. If the world
+does not run a command within 30 s the World answers that it stays queued and then sends `#done`; whatever that command replies when it does run
+comes later. One client at a time; the next one is served after it disconnects.
 
 ## Limits
 

@@ -252,7 +252,8 @@ function Get-ProfileConfiguration {
 function Get-ConfigFingerprint {
     <#
     .SYNOPSIS
-      A SHA-256 per configuration path of the profile's file configuration. Values are never stored, so the deploy record holds no secret.
+      A SHA-256 per configuration path of the profile's file configuration. Values are never stored, but the hashes are unsalted:
+      a weak secret (a database password) can be guessed offline from the deploy record, so keep <LiveHome>\bin as private as world.conf.
     #>
     param([Parameter(Mandatory)][hashtable]$Configuration)
     $sha = [Security.Cryptography.SHA256]::Create()

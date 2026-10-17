@@ -105,7 +105,15 @@ public sealed class WorldControlPipeTests
 
         public async ValueTask DisposeAsync()
         {
-            await _writer.DisposeAsync();
+            try
+            {
+                await _writer.DisposeAsync();
+            }
+            catch (IOException)
+            {
+                // The daemon already closed the connection (over-long line, idle): flushing the writer finds the pipe broken.
+            }
+
             _reader.Dispose();
             await _pipe.DisposeAsync();
         }
@@ -206,6 +214,114 @@ public sealed class WorldControlPipeTests
     }
 
     [WindowsFact]
+    public async Task Enabled_ThePipeItCreates_RejectsRemoteClients()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var host = WorldTestHost.Start();
+        using var loggers = LoggerFactory.Create(b => b.AddProvider(new CapturingLoggerProvider()));
+        WorldControlPipe pipe = NewPipe(host, new WorldControlPipeOptions { Enabled = true, Name = UniqueName() }, loggers);
+        await pipe.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.True(pipe.IsListening);
+            // Read back from the pipe file system, not from what was asked for.
+            Assert.True(LocalPipeServer.RejectsRemoteClients(pipe.Server!.SafePipeHandle), "the control pipe must carry PIPE_REJECT_REMOTE_CLIENTS");
+        }
+        finally
+        {
+            await pipe.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [WindowsFact]
+    public void ARuntimeCreatedPipe_DoesNotRejectRemoteClients_SoTheReadBackDistinguishes()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // The runtime's constructors cannot pass PIPE_REJECT_REMOTE_CLIENTS; the read-back must say so (it is not always true).
+        using NamedPipeServerStream plain = NamedPipeServerStreamAcl.Create(
+            UniqueName(), PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0,
+            ControlPipeSecurity.Create(ControlPipeSecurity.CurrentUser()));
+        Assert.False(LocalPipeServer.RejectsRemoteClients(plain.SafePipeHandle));
+    }
+
+    [WindowsFact]
+    public void LocalPipeServer_RefusesANameThatAlreadyExists_EvenOneThatAllowsMoreInstances()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        PipeSecurity security = ControlPipeSecurity.Create(ControlPipeSecurity.CurrentUser());
+
+        // A squatter of the current account that allows any number of instances, with a descriptor that lets this account in:
+        // only FILE_FLAG_FIRST_PIPE_INSTANCE stands between the daemon and becoming the squatter's second instance.
+        string squatted = UniqueName();
+        using (NamedPipeServerStream squatter = NamedPipeServerStreamAcl.Create(
+            squatted, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, security))
+        {
+            Assert.IsType<UnauthorizedAccessException>(CreateFails(squatted, security));
+        }
+
+        // Its own name, already held by a single-instance pipe: refused too (the instance limit answers first).
+        string held = UniqueName();
+        using NamedPipeServerStream first = LocalPipeServer.Create(held, security);
+        Assert.IsAssignableFrom<Exception>(CreateFails(held, security));
+
+        [SupportedOSPlatform("windows")]
+        static Exception? CreateFails(string name, PipeSecurity security)
+        {
+            try
+            {
+                using NamedPipeServerStream joined = LocalPipeServer.Create(name, security);
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return ex;
+            }
+        }
+    }
+
+    [WindowsFact]
+    public async Task ACommandsDoneMarker_PrecedesAnyResultThatCommandPostsToALaterTick()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var host = WorldTestHost.Start();
+        using var loggers = LoggerFactory.Create(b => b.AddProvider(new CapturingLoggerProvider()));
+        WorldControlPipe pipe = NewPipe(host, new WorldControlPipeOptions { Enabled = true, Name = UniqueName() }, loggers);
+        await pipe.StartAsync(CancellationToken.None);
+        try
+        {
+            await using Client client = await Client.ConnectAsync(pipe.PipeName!);
+            // ".reload config" answers "Re-loading config..." now and posts its result to a later world tick; the result line must
+            // come after the done marker, so a client that stops reading at the marker still sees the result as a later line.
+            List<string> now = await client.RunAsync(".reload config");
+            Assert.Contains(now, l => l.Contains("Re-loading config", StringComparison.Ordinal));
+            Assert.DoesNotContain(now, l => l.StartsWith(Prefix + "config", StringComparison.Ordinal));
+            string? later = await client.ReadLineAsync();
+            Assert.NotNull(later);
+            Assert.StartsWith(Prefix + "config", later, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await pipe.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [WindowsFact]
     public async Task ANameAnotherProcessCreatedFirst_IsRefused_NotJoined()
     {
         if (!OperatingSystem.IsWindows())
@@ -217,7 +333,7 @@ public sealed class WorldControlPipeTests
         var logs = new CapturingLoggerProvider();
         using var loggers = LoggerFactory.Create(b => b.AddProvider(logs));
         string name = UniqueName();
-        // A squatter that allows any number of instances: without FirstPipeInstance the daemon would become its second instance.
+        // A squatter that allows any number of instances: without FILE_FLAG_FIRST_PIPE_INSTANCE the daemon would become its second instance.
         using var squatter = new NamedPipeServerStream(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         WorldControlPipe pipe = NewPipe(host, new WorldControlPipeOptions { Enabled = true, Name = name }, loggers);
 

@@ -535,7 +535,8 @@ World configuration keys from the conf catalog, content tables `.reload` support
 any other key, no baseline, `-WorldDbSwap`, `-ForceRestart`), or `Blocked` (a changed module not built or not on the allowlist).
 `-Plan` / `-WhatIf` print the plan and stop. A hot plan is applied through a new **local-only World control pipe**
 (`World:Control:Pipe:*`, off by default; [server console](../areas/server-console.md#control-pipe)): a Windows named pipe with a
-protected DACL (deny NETWORK, allow the World's account and SYSTEM), created as the first instance of its name, whose lines run through
+protected DACL (deny NETWORK, allow the World's account and SYSTEM), created natively with `PIPE_REJECT_REMOTE_CLIENTS` (read back
+from the kernel; not served without it) and `FILE_FLAG_FIRST_PIPE_INSTANCE`, whose lines run through
 the console executor (Administrator, GM audit `Console`, redacted `Control pipe command:` log with the client PID). The client refuses a
 pipe served by any process other than the live World. An unavailable hot path falls back to the hard restart; a change the World
 rejects stops with exit 3 and no restart.
@@ -546,8 +547,20 @@ Evidence (built): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings, 0 errors; 
 six mutations): dropping the deny-NETWORK entry fails both descriptor tests; dropping the `Control pipe command:` log line fails the
 command test; treating `restart`/`start` keys as `live` fails the two fixtures for them; dropping the recorded dirty paths fails the
 changed-paths test; dropping the client's server-PID check fails the hot-step test at its refusal assertion. Dropping
-`PipeOptions.FirstPipeInstance` failed nothing: the squatter test still passes, likely because a pipe created with one maximum instance cannot
-join a name another process holds anyway (reasoning, not tested; the flag is kept as defence in depth; not load-bearing in this configuration).
+`PipeOptions.FirstPipeInstance` failed nothing then; the cause (found in review, from the dotnet/runtime source) is that the runtime adds
+`FILE_FLAG_FIRST_PIPE_INSTANCE` itself whenever `maxNumberOfServerInstances` is 1.
+
+Review fix cycle 1 (built): the first version's docs said the runtime also rejects remote clients. It does not: the .NET pipe
+constructors pass only the transmission-mode bits, never `PIPE_REJECT_REMOTE_CLIENTS`, so deny-NETWORK was the only remote barrier.
+The pipe is now created by `CreateNamedPipeW` (`Ops/Control/LocalPipeServer.cs`) with `PIPE_REJECT_REMOTE_CLIENTS` and an explicit
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, wrapped in `NamedPipeServerStream`; the World reads the reject bit back
+(`NtQueryInformationFile(FilePipeLocalInformation)`) and leaves the pipe off without it. `#done` is now queued on the world thread right
+after the command ran, so a result posted to a later tick can no longer precede it; a command that throws replies "The command failed"
+instead of ending the connection. Evidence: build 0 warnings, 0 errors; `WorldControlPipeTests` 19 passed, 0 failed. RED: before the
+switch, the new read-back test failed on the live pipe (and a runtime-created pipe reads back false, so the read-back is not constant);
+with the explicit first-instance flag removed, both squatter tests fail (now load-bearing: a squatter allowing many instances would
+otherwise be joined). The `#done` ordering test has no RED (the race needs a world tick to lose to a thread-pool hop); it guards the
+ordering. Not yet tried: a connection from a second machine.
 
 Planned, not built: a Realm-only restart (a restart is still World and Realm); detecting content changes (tables are declared with
 `-ContentTables`); applying `Logging:LogLevel:*` without a restart (planned as a restart today); checking that the core build matches the
