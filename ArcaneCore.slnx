@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/ArcaneCore.Cryptography/ArcaneCore.Cryptography.csproj" />
     <Project Path="src/ArcaneCore.Data/ArcaneCore.Data.csproj" />
+    <Project Path="src/ArcaneCore.Gateway/ArcaneCore.Gateway.csproj" />
     <Project Path="src/ArcaneCore.Game/ArcaneCore.Game.csproj" />
     <Project Path="src/ArcaneCore.Kernel/ArcaneCore.Kernel.csproj" />
     <Project Path="src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj" />
@@ -13,6 +14,7 @@
     <Project Path="tests/ArcaneCore.Data.ProcessRunner/ArcaneCore.Data.ProcessRunner.csproj" />
     <Project Path="tests/ArcaneCore.Data.Tests/ArcaneCore.Data.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Game.Tests/ArcaneCore.Game.Tests.csproj" />
+    <Project Path="tests/ArcaneCore.Gateway.Tests/ArcaneCore.Gateway.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Kernel.Tests/ArcaneCore.Kernel.Tests.csproj" />
     <Project Path="tests/ArcaneCore.MockClient.Tests/ArcaneCore.MockClient.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj" />

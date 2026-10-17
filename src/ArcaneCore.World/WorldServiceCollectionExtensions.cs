@@ -88,6 +88,7 @@ public static class WorldServiceCollectionExtensions
         // Order matters: the world starts before the listener and stops after it.
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
+        Cluster.Gateway.GatewayWorkerServiceCollectionExtensions.AddGatewayWorker(services, configuration); // Cluster:Worker (Tier 3a), off by default: registers nothing
 
         services.AddOpsAnnouncer(configuration); // staff notices / world messages (World:Announce); the hot swap lanes report through it
 
