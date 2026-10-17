@@ -31,8 +31,38 @@ public static class HotModuleCommands
         IReadOnlyList<ModuleInfo> modules = host.List();
         string lines = modules.Count == 0
             ? "No modules loaded."
-            : string.Join('\n', modules.Select(m => $"{m.Name}: {m.Opcodes} opcode handlers, commands [{string.Join(", ", m.CommandRoots.Select(r => "." + r))}], loaded {m.LoadedUtc:u}, sha256 {m.Sha256[..16]}..."));
-        return $"{lines}\nUnloaded modules not yet freed by the runtime: {host.RetiredStillReferenced}";
+            : string.Join('\n', modules.Select(m => $"{m.Name}: {m.Opcodes} opcode handlers, commands [{string.Join(", ", m.CommandRoots.Select(r => "." + r))}]{GameSummary(m)}, loaded {m.LoadedUtc:u}, sha256 {m.Sha256[..16]}..."));
+        string retired = $"{lines}\nUnloaded modules not yet freed by the runtime: {host.RetiredStillReferenced}";
+        // .hotmodule list runs on the world thread, where the game objects may be walked.
+        return host.RetiredGameReferences() is { } game && (game.InstanceMaps != 0 || game.EventAiCreatures != 0)
+            ? $"{retired} (still running retired code: {game.InstanceMaps} instance maps until they unload, {game.EventAiCreatures} EventAI creatures until they respawn)"
+            : retired;
+    }
+
+    private static string GameSummary(ModuleInfo m)
+    {
+        var parts = new List<string>();
+        if (m.CreatureAi != 0 || m.ScriptHooks != 0)
+        {
+            parts.Add($"{m.CreatureAi} creature AI, {m.ScriptHooks} script hooks");
+        }
+
+        if (m.SpellScripts != 0)
+        {
+            parts.Add($"{m.SpellScripts} spell scripts");
+        }
+
+        if (m.InstanceScripts != 0)
+        {
+            parts.Add($"{m.InstanceScripts} instance scripts");
+        }
+
+        if (m.EventAiHandlers != 0)
+        {
+            parts.Add($"{m.EventAiHandlers} EventAI handlers");
+        }
+
+        return parts.Count == 0 ? string.Empty : ", " + string.Join(", ", parts);
     }
 
     private static ChatCommand Verb(string verb, string help, ModuleHost host, HotCodeAudit audit, Func<string, HotSwapOrigin?, Task<ModuleResult>> run)

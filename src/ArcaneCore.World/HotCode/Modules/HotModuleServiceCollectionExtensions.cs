@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Commands;
@@ -77,12 +79,37 @@ public static class HotModuleServiceCollectionExtensions
             sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules"),
             reporter: sp.GetRequiredService<IHotSwapReporter>(),
             seams: new ModuleGameSeams(
-                () => sp.GetServices<ArcaneCore.World.Features.IWorldFeature>().OfType<ArcaneCore.World.Creatures.CreatureWorldFeature>().FirstOrDefault()?.AiServices.Factory,
+                () => Feature<ArcaneCore.World.Creatures.CreatureWorldFeature>(sp)?.AiServices.Factory,
                 () => sp.GetRequiredService<WorldRuntime>().Scripts,
                 () => sp.GetRequiredService<WorldRuntime>().Maps,
                 sp.GetRequiredService<WorldRuntime>().Post,
-                sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules"))));
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules"),
+                spellScripts: () => Feature<ArcaneCore.World.Spells.Utility.SpellScriptFeature>(sp)?.Registry,
+                instanceScripts: () => InstanceScripts(sp),
+                eventAi: () => EventAiRegistry.Default)));
         services.AddHostedService<HotModuleHost>();
         return services;
+    }
+
+    private static T? Feature<T>(IServiceProvider services)
+        where T : class, ArcaneCore.World.Features.IWorldFeature
+        => services.GetServices<ArcaneCore.World.Features.IWorldFeature>().OfType<T>().FirstOrDefault();
+
+    /// <summary>The registry the running instance manager creates instance data from; null (a module's instance scripts are refused) without one.</summary>
+    private static InstanceScriptRegistry? InstanceScripts(IServiceProvider services)
+    {
+        if (Feature<ArcaneCore.World.Instances.InstanceFeature>(services) is not { } feature)
+        {
+            return null;
+        }
+
+        try
+        {
+            return feature.Instances.Scripts;
+        }
+        catch (InvalidOperationException)
+        {
+            return null; // the instance feature is not attached
+        }
     }
 }

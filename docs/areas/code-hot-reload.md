@@ -295,7 +295,10 @@ private dependencies. It may contain public, non-abstract classes with a public 
 constructor implementing `IOpcodeHandlerGroup` and/or `ICommandGroup` (the interfaces the server's own
 features use), `ICreatureAiGroup` (creature AI by entry or by `AIName` / `ScriptName`, see "Creature AI and script hooks")
 and/or any global script hook interface (`IPlayerHooks`, `IWorldHooks`, ...), so a module is written like a built-in
-feature. Nothing else in the assembly is looked at. Build it against the server's `ArcaneCore.World` (and `ArcaneCore.Protocol`,
+feature. It may also contain spell scripts (`ISpellScript` with `[SpellScript(ids)]`), instance scripts (`InstanceData` with
+`[InstanceScript(mapId)]` and a constructor taking a `Map`) and EventAI handlers (`EventAiEventHandler` / `EventAiActionHandler`
+with a parameterless constructor), see "Spell scripts, instance scripts and EventAI handlers in a module"; those three are found
+the way the server finds its own (any concrete class, public or not). Nothing else in the assembly is looked at. Build it against the server's `ArcaneCore.World` (and `ArcaneCore.Protocol`,
 `ArcaneCore.Kernel`, ...); those, the framework and anything the server already has loaded are always
 resolved to the server's copy, so the interfaces are the same types on both sides. A module and the
 server must be built from compatible versions: a module compiled against a different `ArcaneCore.World`
@@ -411,13 +414,39 @@ module already registered, a hook class that overrides nothing) rejects the whol
   arrival relays the old AI had queued stay queued) and does not call `OnRespawn` on the new AI of a living creature (a dead one hears it
   when it respawns). A map-specific entry AI (and the built-in dungeon boss scripts) is consulted before the module's registration, so
   a module cannot shadow those entries.
-* If applying the creature AI or script hooks fails after validation (not expected), the reply is a failure ("only partly applied": the
-  opcode and command tables had already changed), the announcement is `Failed` and the audit log gets `module-failed`.
+* If applying the creature AI, script hooks, spell scripts, instance scripts or EventAI handlers fails after validation (not
+  expected), the reply is a failure ("only partly applied": the opcode and command tables had already changed), the announcement is
+  `Failed` and the audit log gets `module-failed`.
   **A module whose commit Failed stays recorded as loaded** (its opcode handlers and commands are live and `.hotmodule list`
-  shows it), even though its creature AI and script hooks may not be. There is no automatic clean-up: restart the server to clear
+  shows it), even though its game content may not be. There is no automatic clean-up: restart the server to clear
   it.
-* Not available to modules yet: spell scripts (their registry and effect chain are built once with the spell system),
-  map-specific entry AI, `IWorldFeature`s and tables.
+* Not available to modules yet: map-specific entry AI, `IWorldFeature`s and tables.
+
+### Spell scripts, instance scripts and EventAI handlers in a module
+
+Validated together with the creature AI and script hooks (all or nothing) and committed at the same tick boundary; a replace
+removes the old version's entries and adds the new ones in one step, an unload removes them. Each registry swaps its whole table
+by one reference write, so a reader sees the old entries or the new ones, never a mix. A module never overrides or removes a
+**built-in** entry (one the server discovered at startup): a spell id, map id or EventAI type id that has one rejects the whole
+module and nothing changes. Two modules cannot claim the same id either. The startup scan of all three is over the startup code
+set (`CodeAssemblies`, today the Game assembly; no pack is configured at startup).
+
+| Kind | Live registry the module swaps | When the change is seen |
+|---|---|---|
+| Spell script (`[SpellScript(ids)]`) | `SpellScriptFeature.Registry` (the one the spell script dispatcher uses) | The next hook of any cast, including a cast already under way: nothing caches a script. A newly declared `ExecuteEffects` effect is chained on commit. A spell script that schedules its own work (timer, event, closure) keeps running the old code until that work ends. |
+| Instance script (`[InstanceScript(mapId)]`) | The instance manager's `Scripts` (`InstanceScriptRegistry.Default`) | Instance maps created afterwards. A loaded instance keeps its `InstanceData` (it holds the instance's progress) until it unloads. |
+| EventAI action handler | `EventAiRegistry.Default` | The next action run (looked up per action). |
+| EventAI event handler | `EventAiRegistry.Default` | Creatures whose EventAI is built afterwards (spawn, respawn). A creature built before keeps the old handler until it respawns. |
+
+A server without one of these registries (the spell script feature, the instance feature or the creature systems not running)
+rejects a module that contributes that kind ("... are not available on this server"); a host built without game seams rejects it
+before anything is committed.
+
+**Retired code still running.** A loaded instance created from a replaced or removed instance script, and a creature whose EventAI
+still has a row bound to a replaced or removed event handler, keep the old module version alive. `.hotmodule list` names them after
+the `Unloaded modules not yet freed` count (`still running retired code: N instance maps until they unload, M EventAI creatures
+until they respawn`, shown only when either is above 0; `ModuleHost.RetiredGameReferences`). Spell scripts have no such count:
+only work a script scheduled itself can hold one, and no registry can see that.
 
 ### Announcements and the reason argument
 
@@ -480,6 +509,14 @@ clash with a handler the module does not own, a command that shadows an existing
 non-managed file, an assembly named wrongly, a junction, a name that is a path, and a commit the world
 thread never reaches all change nothing; readers never see a window where a handler present in both
 versions is missing during twelve reloads; every decision is audited; and the unload is collected.
+`ModuleScriptSwapTests` loads `tests/hotmodule-fixtures/HotScriptsV1` / `V2` (one spell script, one instance script, one EventAI
+event and one action handler) into a host whose seams use real spell script, instance script and EventAI registries and checks:
+load makes all of them active from the module's collectible context; reload replaces each with version 2 and version 1 is
+collected; unload removes them and the module is collected; a clash with a built-in spell script, instance script or EventAI
+event handler rejects the whole module with every registry unchanged; an instance still holding a replaced instance script is
+reported as retired code and keeps the old version loaded; a server without the registries or without game seams refuses the
+module. Not covered by a test: the EventAI retired-creature count (it needs an EventAI creature with a row of the module's event
+type) and the production wiring in `AddHotModules` (read, not run).
 `ModuleAllowlistTests` covers the allowlist logic (empty setting, case, comments and labels, unlisted hash, missing, empty, malformed, oversize and directory files, edit without restart) and `ModuleHostTests` proves a refusal changes nothing and is audited and that approving a new build lets the reload through. `ModuleLaneConfigTests` proves it is off by default (no service registered) and fails closed (including: a Production opt-in needs an allowlist). Not covered
 by a test: the `.hotmodule` handlers themselves (they need a logged-in session) and a real `WorldRuntime`
 tick loop; the swap is exercised through the same `IHotCodeWorld` seam the registry refresh tests use.
@@ -507,9 +544,16 @@ Be precise about what this page does not offer:
   assemblies*; the server assembly itself (a built-in handler, formula or feature) changes live only
   through the development runner (Debug, SDK), otherwise by restart. A module cannot replace a
   built-in handler or command (it is rejected), by design.
-* **Module contributions beyond opcode handler groups, chat command groups, creature AI and script hooks.** Map updaters,
-  `IWorldFeature`s, `IDataModule`s (tables), DI services, spell scripts and aura registrations are not
-  module extension points yet. A module that needs one needs a new, reviewed seam in the server first.
+* **Module contributions beyond opcode handler groups, chat command groups, creature AI, script hooks, spell scripts,
+  instance scripts and EventAI handlers.** Map updaters, `IWorldFeature`s, `IDataModule`s (tables), DI services, spell handler
+  modules and aura registrations are not module extension points yet. A module that needs one needs a new, reviewed seam in the
+  server first. (`CodeAssemblies` can already discover those kinds over built-ins plus pack assemblies, but nothing swaps their live
+  registries.)
+* **Moving a loaded instance or an existing EventAI creature onto a replaced script.** An instance keeps the instance script it was
+  created with until it unloads, and a creature keeps its bound EventAI event handlers until it respawns: their state belongs to
+  the old code, and nothing migrates it.
+* **Startup packs.** The startup discovery of spell scripts, instance scripts and EventAI handlers runs over a `CodeAssemblies`
+  set, but no configuration adds a pack assembly to it; extra code arrives only through the module lane.
 * **Automatic reload on file change** (a `FileSystemWatcher`). A reload is an explicit, audited
   Administrator command.
 * **A module that outlives a restart on its own.** `LoadOnStart` names modules to load again at start;

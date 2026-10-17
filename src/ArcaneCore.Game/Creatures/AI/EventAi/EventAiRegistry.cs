@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -43,8 +44,11 @@ public sealed class EventAiRegistry
         _table = new Table(events, actions, [], []);
     }
 
-    /// <summary>The handlers of the Game assembly; module swaps go through this instance so every EventAI creature sees them.</summary>
-    public static EventAiRegistry Default { get; } = Discover(typeof(EventAiRegistry).Assembly);
+    /// <summary>The code set whose handlers are built in: the Game assembly (no pack is configured at startup).</summary>
+    public static CodeAssemblies StartupAssemblies { get; } = CodeAssemblies.Of(typeof(EventAiRegistry).Assembly);
+
+    /// <summary>The handlers of the startup code set (<see cref="StartupAssemblies"/>); module swaps go through this instance so every EventAI creature sees them.</summary>
+    public static EventAiRegistry Default { get; } = Discover(StartupAssemblies.Assemblies);
 
     public IReadOnlyCollection<byte> EventTypes => _table.Events.Keys;
 

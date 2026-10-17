@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Instances.Scripts;
 
@@ -44,8 +45,11 @@ public sealed class InstanceScriptRegistry
     private volatile Dictionary<uint, Script> _scripts = [];
     private long _generation;
 
-    /// <summary>The scripts of the Game assembly; module swaps go through this instance so every holder of it sees them.</summary>
-    public static InstanceScriptRegistry Default { get; } = Discover(typeof(InstanceScriptRegistry).Assembly);
+    /// <summary>The code set whose instance scripts are built in: the Game assembly (no pack is configured at startup).</summary>
+    public static CodeAssemblies StartupAssemblies { get; } = CodeAssemblies.Of(typeof(InstanceScriptRegistry).Assembly);
+
+    /// <summary>The scripts of the startup code set (<see cref="StartupAssemblies"/>); module swaps go through this instance so every holder of it sees them.</summary>
+    public static InstanceScriptRegistry Default { get; } = Discover(StartupAssemblies.Assemblies);
 
     /// <summary>The maps with a script.</summary>
     public IReadOnlyCollection<uint> MapIds => _scripts.Keys;

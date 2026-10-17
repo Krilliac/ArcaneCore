@@ -2,8 +2,10 @@ using System.Runtime.Loader;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Scripting;
+using ArcaneCore.Game.Spells.Scripts;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.HotCode.Modules;
@@ -36,9 +38,30 @@ internal sealed record ModuleGameParts(
     IReadOnlyDictionary<string, Func<Creature, CreatureAI>> AiNames,
     IReadOnlyList<IScriptHooks> Hooks)
 {
+    private static readonly IReadOnlyDictionary<uint, Func<Map, InstanceData>> NoInstanceScripts = new Dictionary<uint, Func<Map, InstanceData>>();
+
     public static ModuleGameParts Empty { get; } = new(new Dictionary<uint, Func<Creature, CreatureAI>>(), new Dictionary<string, Func<Creature, CreatureAI>>(), []);
 
-    public bool IsEmpty => AiEntries.Count == 0 && AiNames.Count == 0 && Hooks.Count == 0;
+    /// <summary>
+    /// The module's spell script instances (<see cref="SpellScriptRegistry.CreateScripts"/>). The exact instances are kept: the registry removes by
+    /// reference, so a replace or unload hands these same objects back.
+    /// </summary>
+    public IReadOnlyList<ISpellScript> SpellScripts { get; init; } = [];
+
+    /// <summary>The module's instance script factories by map id (<see cref="InstanceScriptRegistry.DiscoverFactories"/>).</summary>
+    public IReadOnlyDictionary<uint, Func<Map, InstanceData>> InstanceScripts { get; init; } = NoInstanceScripts;
+
+    /// <summary>The module's EventAI event handlers (<see cref="EventAiRegistry.DiscoverHandlers"/>).</summary>
+    public IReadOnlyList<EventAiEventHandler> EventAiEvents { get; init; } = [];
+
+    /// <summary>The module's EventAI action handlers (<see cref="EventAiRegistry.DiscoverHandlers"/>).</summary>
+    public IReadOnlyList<EventAiActionHandler> EventAiActions { get; init; } = [];
+
+    public bool HasCreatureAi => AiEntries.Count != 0 || AiNames.Count != 0;
+
+    public bool HasEventAi => EventAiEvents.Count != 0 || EventAiActions.Count != 0;
+
+    public bool IsEmpty => !HasCreatureAi && Hooks.Count == 0 && SpellScripts.Count == 0 && InstanceScripts.Count == 0 && !HasEventAi;
 }
 
 internal sealed class CollectingAiRegistry : ICreatureAiRegistry
@@ -68,11 +91,19 @@ internal sealed class CollectingAiRegistry : ICreatureAiRegistry
 }
 
 /// <summary>
-/// The game systems a module can reach beyond the opcode and command tables: the creature AI factory and the global script hooks. Everything
-/// here runs on the world thread at a tick boundary (<see cref="WorldCommit"/>), before any map updates, so no creature is being updated while
-/// it changes.
+/// The game systems a module can reach beyond the opcode and command tables: the creature AI factory, the global script hooks, the spell script
+/// registry, the instance script registry and the EventAI handler registry. Everything here runs on the world thread at a tick boundary
+/// (<see cref="WorldCommit"/>), before any map updates, so no creature is being updated while it changes.
 /// <list type="bullet">
-/// <item><b>All or nothing.</b> <see cref="Validate"/> runs before anything live changes; <see cref="Commit"/> only does what it proved possible.</item>
+/// <item><b>All or nothing.</b> <see cref="Validate"/> checks every part (creature AI, hooks, spell scripts, instance scripts, EventAI) before
+/// anything live changes; <see cref="Commit"/> only does what it proved possible. A part whose system this server does not run (a null provider)
+/// rejects the module.</item>
+/// <item><b>Built-ins are never overridden.</b> A spell id, map id or EventAI type id that has a built-in script or handler rejects the module;
+/// a module replaces only what its previous version registered.</item>
+/// <item><b>Spell scripts</b> are looked up per hook, so the next hook of any cast runs the new script (<see cref="SpellScriptRegistry"/>).
+/// <b>Instance scripts</b> apply to instance maps created afterwards; a loaded instance keeps its <see cref="InstanceData"/> (its progress).
+/// <b>EventAI actions</b> apply from the next action run; <b>EventAI event handlers</b> are bound when a creature's EventAI is built, so a
+/// creature built before the swap keeps the old handler until it respawns. <see cref="CountRetired"/> counts what still runs retired code.</item>
 /// <item><b>Existing creatures.</b> A creature whose entry, <c>ScriptName</c> or <c>AIName</c> a module registers, or whose current AI is code of a
 /// module being replaced or unloaded, gets a new AI object at once, unless it is in combat (a new AI would not have seen the fight begin): those
 /// keep the old AI, are counted, and are retried every 5 seconds for up to 10 minutes. A creature still in combat after that keeps the old AI until
@@ -80,7 +111,7 @@ internal sealed class CollectingAiRegistry : ICreatureAiRegistry
 /// (<see cref="ModuleHost.RetiredStillReferenced"/> stays above 0).</item>
 /// <item>Script hooks are rebuilt in registration order with the module's hook objects removed and the new ones last. A hook running when the
 /// swap happens cannot exist: hooks run on the world thread.</item>
-/// <item>Not covered: spell scripts (their registry and effect chain are built once with the spell system) and map-specific entry AI.</item>
+/// <item>Not covered: map-specific entry AI.</item>
 /// </list>
 /// </summary>
 public sealed class ModuleGameSeams
@@ -96,7 +127,20 @@ public sealed class ModuleGameSeams
     private readonly ILogger _logger;
     private readonly TimeSpan _sweepInterval;
     private readonly Func<Task>? _waitBetweenAttempts;
+    private readonly Func<SpellScriptRegistry?> _spellScripts;
+    private readonly Func<InstanceScriptRegistry?> _instanceScripts;
+    private readonly Func<EventAiRegistry?> _eventAi;
 
+    /// <param name="creatureAi">The live creature AI factory (null: not running).</param>
+    /// <param name="hooks">The live script hook registry (null: not running).</param>
+    /// <param name="maps">The loaded maps (creature AI refresh and <see cref="CountRetired"/>).</param>
+    /// <param name="post">Queue work on the world thread.</param>
+    /// <param name="logger">Where failures after validation go.</param>
+    /// <param name="sweepInterval">How often deferred creatures are retried.</param>
+    /// <param name="waitBetweenAttempts">Replaces the retry delay (tests).</param>
+    /// <param name="spellScripts">The live spell script registry; omitted or returning null, a module with a spell script is rejected.</param>
+    /// <param name="instanceScripts">The instance script registry the instance manager creates instance data from; omitted or null rejects a module with an instance script.</param>
+    /// <param name="eventAi">The EventAI handler registry running creatures use; omitted or null rejects a module with an EventAI handler.</param>
     public ModuleGameSeams(
         Func<CreatureAiFactory?> creatureAi,
         Func<ScriptHookRegistry?> hooks,
@@ -104,8 +148,14 @@ public sealed class ModuleGameSeams
         Action<Action> post,
         ILogger logger,
         TimeSpan? sweepInterval = null,
-        Func<Task>? waitBetweenAttempts = null)
+        Func<Task>? waitBetweenAttempts = null,
+        Func<SpellScriptRegistry?>? spellScripts = null,
+        Func<InstanceScriptRegistry?>? instanceScripts = null,
+        Func<EventAiRegistry?>? eventAi = null)
     {
+        _spellScripts = spellScripts ?? (static () => null);
+        _instanceScripts = instanceScripts ?? (static () => null);
+        _eventAi = eventAi ?? (static () => null);
         _creatureAi = creatureAi ?? throw new ArgumentNullException(nameof(creatureAi));
         _hooks = hooks ?? throw new ArgumentNullException(nameof(hooks));
         _maps = maps ?? throw new ArgumentNullException(nameof(maps));
@@ -124,7 +174,7 @@ public sealed class ModuleGameSeams
             return null;
         }
 
-        if (!(old.AiEntries.Count == 0 && old.AiNames.Count == 0 && added.AiEntries.Count == 0 && added.AiNames.Count == 0))
+        if (old.HasCreatureAi || added.HasCreatureAi)
         {
             CreatureAiFactory? factory = _creatureAi();
             if (factory is null)
@@ -152,6 +202,52 @@ public sealed class ModuleGameSeams
             }
         }
 
+        if (old.SpellScripts.Count != 0 || added.SpellScripts.Count != 0)
+        {
+            SpellScriptRegistry? spells = _spellScripts();
+            if (spells is null)
+            {
+                return "spell scripts are not available on this server";
+            }
+
+            if (spells.ValidateSwap(old.SpellScripts, added.SpellScripts) is { } spellError)
+            {
+                return spellError;
+            }
+        }
+
+        if (old.InstanceScripts.Count != 0 || added.InstanceScripts.Count != 0)
+        {
+            InstanceScriptRegistry? instances = _instanceScripts();
+            if (instances is null)
+            {
+                return "instance scripts are not available on this server";
+            }
+
+            if (instances.ValidateSwap([.. old.InstanceScripts.Keys], added.InstanceScripts.Keys) is { } instanceError)
+            {
+                return instanceError;
+            }
+        }
+
+        if (old.HasEventAi || added.HasEventAi)
+        {
+            EventAiRegistry? eventAi = _eventAi();
+            if (eventAi is null)
+            {
+                return "EventAI handlers are not available on this server";
+            }
+
+            if (eventAi.ValidateSwap(
+                    [.. old.EventAiEvents.Select(h => h.EventType)],
+                    [.. old.EventAiActions.Select(h => h.ActionType)],
+                    added.EventAiEvents.Select(h => h.EventType),
+                    added.EventAiActions.Select(h => h.ActionType)) is { } eventAiError)
+            {
+                return eventAiError;
+            }
+        }
+
         return null;
     }
 
@@ -167,7 +263,7 @@ public sealed class ModuleGameSeams
 
         try
         {
-            if (old.AiEntries.Count != 0 || old.AiNames.Count != 0 || added.AiEntries.Count != 0 || added.AiNames.Count != 0)
+            if (old.HasCreatureAi || added.HasCreatureAi)
             {
                 _creatureAi()!.CommitSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries, added.AiNames);
             }
@@ -176,11 +272,30 @@ public sealed class ModuleGameSeams
             {
                 _hooks()!.CommitSwap(old.Hooks, added.Hooks);
             }
+
+            if (old.SpellScripts.Count != 0 || added.SpellScripts.Count != 0)
+            {
+                _spellScripts()!.CommitSwap(old.SpellScripts, added.SpellScripts);
+            }
+
+            if (old.InstanceScripts.Count != 0 || added.InstanceScripts.Count != 0)
+            {
+                _instanceScripts()!.CommitSwap([.. old.InstanceScripts.Keys], added.InstanceScripts);
+            }
+
+            if (old.HasEventAi || added.HasEventAi)
+            {
+                _eventAi()!.CommitSwap(
+                    [.. old.EventAiEvents.Select(h => h.EventType)],
+                    [.. old.EventAiActions.Select(h => h.ActionType)],
+                    added.EventAiEvents,
+                    added.EventAiActions);
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogError(ex, "applying a module's creature AI / script hooks failed after validation");
-            return new ModuleGameCommit(0, 0, 0, $"applying creature AI / script hooks failed: {ex.GetType().Name}: {ex.Message}");
+            _logger.LogError(ex, "applying a module's game content failed after validation");
+            return new ModuleGameCommit(0, 0, 0, $"applying creature AI / script hooks / spell scripts / instance scripts / EventAI failed: {ex.GetType().Name}: {ex.Message}");
         }
 
         HashSet<uint> entries = [.. old.AiEntries.Keys, .. added.AiEntries.Keys];
@@ -199,6 +314,46 @@ public sealed class ModuleGameSeams
         }
 
         return new ModuleGameCommit(changed, deferred, old.Hooks.Count + added.Hooks.Count);
+    }
+
+    /// <summary>
+    /// World thread: the live game objects that still run code a module swap retired. These keep a replaced or unloaded module's load context
+    /// alive (<see cref="ModuleHost.RetiredStillReferenced"/>) until they end; this says which kind holds it.
+    /// <list type="bullet">
+    /// <item><see cref="ModuleRetiredGame.InstanceMaps"/>: loaded instance maps whose <see cref="InstanceData"/> does not come from the current
+    /// script of its map (<see cref="InstanceScriptRegistry.RunsCurrentScript"/>); they keep it until the instance unloads.</item>
+    /// <item><see cref="ModuleRetiredGame.EventAiCreatures"/>: creatures whose EventAI has a row bound to an event handler that is no longer the
+    /// current one (<see cref="EventAiRegistry.IsCurrent"/>); they keep it until they respawn.</item>
+    /// </list>
+    /// Spell scripts have no such count: nothing caches a spell script (see <see cref="SpellScriptRegistry"/>); only work an old script
+    /// scheduled itself keeps it, which no registry can see.
+    /// </summary>
+    public ModuleRetiredGame CountRetired()
+    {
+        InstanceScriptRegistry? instances = _instanceScripts();
+        EventAiRegistry? eventAi = _eventAi();
+        int instanceMaps = 0;
+        int creatures = 0;
+        foreach (Map map in _maps())
+        {
+            if (instances is not null && map.FindUpdater<InstanceData>() is { } data && !instances.RunsCurrentScript(data))
+            {
+                instanceMaps++;
+            }
+
+            if (eventAi is not null && map.FindUpdater<CreatureMapSystem>() is { } system)
+            {
+                foreach (Creature creature in system.Creatures)
+                {
+                    if (creature.AI is CreatureEventAI ai && ai.Engine.Holders.Any(h => h.Handler is { } handler && !eventAi.IsCurrent(handler)))
+                    {
+                        creatures++;
+                    }
+                }
+            }
+        }
+
+        return new ModuleRetiredGame(instanceMaps, creatures);
     }
 
     /// <summary>One pass over the maps (world thread). <paramref name="only"/> limits it to creatures an earlier pass deferred; <paramref name="stillDeferred"/> collects the ones still in combat.</summary>
@@ -285,6 +440,11 @@ public sealed class ModuleGameSeams
         }
     }
 }
+
+/// <summary>What <see cref="ModuleGameSeams.CountRetired"/> found still running retired module code.</summary>
+/// <param name="InstanceMaps">Loaded instance maps whose instance data comes from a replaced or removed instance script.</param>
+/// <param name="EventAiCreatures">Creatures whose EventAI still has a row bound to a replaced or removed event handler.</param>
+public readonly record struct ModuleRetiredGame(int InstanceMaps, int EventAiCreatures);
 
 /// <summary>What <see cref="ModuleGameSeams.Commit"/> did.</summary>
 /// <param name="CreaturesSwitched">Creatures that got a new AI object now.</param>

@@ -5,7 +5,10 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Scripting;
+using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
@@ -16,7 +19,20 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.HotCode.Modules;
 
 /// <summary>One loaded module, as <c>.hotmodule list</c> shows it.</summary>
-public sealed record ModuleInfo(string Name, int Opcodes, IReadOnlyList<string> CommandRoots, DateTimeOffset LoadedUtc, string Sha256, int CreatureAi = 0, int ScriptHooks = 0);
+/// <param name="SpellScripts">Spell script objects the module registered (each may serve several spell ids).</param>
+/// <param name="InstanceScripts">Maps the module gave an instance script.</param>
+/// <param name="EventAiHandlers">EventAI event plus action handlers the module registered.</param>
+public sealed record ModuleInfo(
+    string Name,
+    int Opcodes,
+    IReadOnlyList<string> CommandRoots,
+    DateTimeOffset LoadedUtc,
+    string Sha256,
+    int CreatureAi = 0,
+    int ScriptHooks = 0,
+    int SpellScripts = 0,
+    int InstanceScripts = 0,
+    int EventAiHandlers = 0);
 
 /// <summary>What a load, reload or unload did.</summary>
 public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<AnnounceField>? Fields = null, bool Failed = false);
@@ -26,7 +42,13 @@ public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<Announce
 /// <c>&lt;Directory&gt;/&lt;name&gt;/&lt;name&gt;.dll</c> that is loaded into its own collectible
 /// <see cref="System.Runtime.Loader.AssemblyLoadContext"/>. Its public <see cref="IOpcodeHandlerGroup"/>
 /// and <see cref="ICommandGroup"/> types are instantiated and swapped into the live opcode and chat
-/// command tables at a tick boundary. Works in a Release build on a machine without the SDK.
+/// command tables at a tick boundary. With <see cref="ModuleGameSeams"/> a module can also contribute
+/// creature AI (<see cref="ICreatureAiGroup"/>), script hooks (<see cref="IScriptHooks"/>), spell scripts
+/// (<see cref="ISpellScript"/>), instance scripts (<see cref="InstanceData"/> with <see cref="InstanceScriptAttribute"/>)
+/// and EventAI handlers (<see cref="EventAiEventHandler"/>, <see cref="EventAiActionHandler"/>); the last three are
+/// found the way the server finds its own (any concrete class, as <see cref="SpellScriptRegistry.CreateScripts"/>,
+/// <see cref="InstanceScriptRegistry.DiscoverFactories"/> and <see cref="EventAiRegistry.DiscoverHandlers"/> do).
+/// Works in a Release build on a machine without the SDK.
 /// </summary>
 /// <remarks>
 /// <list type="bullet">
@@ -36,7 +58,8 @@ public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<Announce
 /// completely before touching the old one and swaps old for new in one step: on any failure the old
 /// version keeps serving.</item>
 /// <item><b>A module never replaces what it does not own.</b> Built-in handlers and roots, other
-/// modules' and the registry refresh's are never overwritten; a clash rejects the module.</item>
+/// modules' and the registry refresh's are never overwritten; a clash rejects the module. The same holds
+/// for built-in spell scripts, instance scripts and EventAI handlers.</item>
 /// <item><b>Unload is cooperative.</b> The module's handlers leave the tables at a tick boundary and
 /// the context is released; the runtime frees it once nothing references it. A handler already
 /// running, a thread or timer the module started, an event the module subscribed to on a server
@@ -119,6 +142,13 @@ public sealed class ModuleHost
             }
         }
     }
+
+    /// <summary>
+    /// World thread only: the instance maps and EventAI creatures still running code a module replace or unload retired
+    /// (<see cref="ModuleGameSeams.CountRetired"/>), i.e. which game objects keep <see cref="RetiredStillReferenced"/> above 0. Null when this
+    /// host has no game seams.
+    /// </summary>
+    public ModuleRetiredGame? RetiredGameReferences() => _seams?.CountRetired();
 
     /// <summary>Load <paramref name="name"/>. <paramref name="origin"/> (who and why) goes to the hot swap announcement; null is the console.</summary>
     public Task<ModuleResult> LoadAsync(string name, HotSwapOrigin? origin = null) => RunAsync("load", name, ModuleOperation.Load, origin);
@@ -273,10 +303,26 @@ public sealed class ModuleHost
             new("opcodes", prepared.Opcodes.Count.ToString(CultureInfo.InvariantCulture)),
             new("roots", string.Join(' ', prepared.RootNames.Select(r => "." + r))),
         };
-        if (!prepared.Game.IsEmpty)
+        ModuleGameParts game = prepared.Game;
+        if (game.HasCreatureAi || game.Hooks.Count != 0)
         {
-            fields.Add(new("creature_ai", $"{prepared.Game.AiEntries.Count} entries, {prepared.Game.AiNames.Count} named"));
-            fields.Add(new("script_hooks", prepared.Game.Hooks.Count.ToString(CultureInfo.InvariantCulture)));
+            fields.Add(new("creature_ai", $"{game.AiEntries.Count} entries, {game.AiNames.Count} named"));
+            fields.Add(new("script_hooks", game.Hooks.Count.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (game.SpellScripts.Count != 0)
+        {
+            fields.Add(new("spell_scripts", game.SpellScripts.Count.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (game.InstanceScripts.Count != 0)
+        {
+            fields.Add(new("instance_scripts", string.Join(' ', game.InstanceScripts.Keys.Order().Select(id => id.ToString(CultureInfo.InvariantCulture)))));
+        }
+
+        if (game.HasEventAi)
+        {
+            fields.Add(new("eventai", $"{game.EventAiEvents.Count} events, {game.EventAiActions.Count} actions"));
         }
         if (replaced is not null)
         {
@@ -495,9 +541,21 @@ public sealed class ModuleHost
                 }
             }
 
-            if (fresh.Count == 0 && roots.Count == 0 && aiRegistry.Entries.Count == 0 && aiRegistry.Names.Count == 0 && hooks.Count == 0)
+            ModuleGameParts game = new ModuleGameParts(aiRegistry.Entries, aiRegistry.Names, hooks) with
             {
-                throw new ModuleRejectedException("the module has no public IOpcodeHandlerGroup, ICommandGroup, ICreatureAiGroup or script hook class that registers anything");
+                SpellScripts = Discover("spell scripts", () => SpellScriptRegistry.CreateScripts(assembly)),
+                InstanceScripts = Discover("instance scripts", () => InstanceScriptRegistry.DiscoverFactories([assembly])),
+            };
+            EventAiHandlerSet eventAi = Discover("EventAI handlers", () => EventAiRegistry.DiscoverHandlers([assembly]));
+            game = game with { EventAiEvents = eventAi.Events, EventAiActions = eventAi.Actions };
+            if ((game.SpellScripts.Count != 0 || game.InstanceScripts.Count != 0 || game.HasEventAi) && _seams is null)
+            {
+                throw new ModuleRejectedException("this server does not offer spell scripts, instance scripts or EventAI handlers to modules");
+            }
+
+            if (fresh.Count == 0 && roots.Count == 0 && game.IsEmpty)
+            {
+                throw new ModuleRejectedException("the module has no public IOpcodeHandlerGroup, ICommandGroup, ICreatureAiGroup or script hook class, spell script, instance script or EventAI handler that registers anything");
             }
 
             if (CommandTableSource.Validate([], roots) is { } rootError)
@@ -505,7 +563,7 @@ public sealed class ModuleHost
                 throw new ModuleRejectedException(rootError);
             }
 
-            return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha, new ModuleGameParts(aiRegistry.Entries, aiRegistry.Names, hooks));
+            return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha, game);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -519,6 +577,23 @@ public sealed class ModuleHost
 
             throw ex as ModuleRejectedException
                 ?? new ModuleRejectedException($"the module could not be loaded: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Run one of the game registries' module discoveries (spell scripts, instance scripts, EventAI handlers). Their fail-closed refusals (two
+    /// scripts for one map, two handlers for one type id, a script without the constructor it needs) are rejections the operator is told about;
+    /// anything else (a script constructor that throws) stays unexpected and is reported as a fault by the caller.
+    /// </summary>
+    private static T Discover<T>(string what, Func<T> discover)
+    {
+        try
+        {
+            return discover();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ModuleRejectedException($"the module's {what} are invalid: {ex.Message}");
         }
     }
 
@@ -575,6 +650,16 @@ public sealed class ModuleHost
 
         public string[] RootNames { get; } = rootNames;
 
-        public ModuleInfo Info { get; } = new(name, opcodes.Count, rootNames, loadedUtc, sha256, game.AiEntries.Count + game.AiNames.Count, game.Hooks.Count);
+        public ModuleInfo Info { get; } = new(
+            name,
+            opcodes.Count,
+            rootNames,
+            loadedUtc,
+            sha256,
+            game.AiEntries.Count + game.AiNames.Count,
+            game.Hooks.Count,
+            game.SpellScripts.Count,
+            game.InstanceScripts.Count,
+            game.EventAiEvents.Count + game.EventAiActions.Count);
     }
 }
