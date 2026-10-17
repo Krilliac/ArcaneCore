@@ -9,6 +9,9 @@ Tier 2a part 2 (core `ManagedBotRegistry`, call-site inversion, the six bot feat
 architecture test, section 4.5) is **built** on `claude/hr2-bots`; the rest of Tier 2 (options into the contracts
 assembly, 2b to 2d) are planned. Tier 3 phase 3a (gateway passthrough) is **built and mock-client tested** on
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
+Phase 3b **groundwork** (fencing mandatory in worker mode, the durable decision store, standby mode, the drain protocol
+in process) is **built and tested** on `claude/hr3-standby` (section 5.5); the seamless reroute and the operator trigger
+are not.
 All three lanes are merged on `claude/hr2-integrate`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
@@ -43,7 +46,7 @@ listener, runtime upgrade).
 |---|---|---|---|
 | 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost`, with full rollback; T1-live not yet run |
 | 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | 2a parts 1 and 2 **built** (contracts assembly, lifecycle seams, `.feature`, bot registry, call-site inversion, detachable bot features; 4 allowlisted core types left, section 4.5); 2b to 2d planned |
-| 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | 3a passthrough **built** (mock client only, off by default); 3b/3c planned |
+| 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | 3a passthrough **built** (mock client only, off by default); 3b groundwork **built** in process (section 5.5; clients still re-login); 3c planned |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
 
 ## 3. Tier 1: widen the module lane
@@ -388,12 +391,12 @@ Source: Tier 3 research (static reading, no real client used).
 
 | Piece | Status |
 |---|---|
-| `PlayerTransferCoordinator` (6 stages, abort before commit, roll-forward after) | **Test-only**: no production `ITransferSourceWorker` / `ITransferTargetWorker` / `ITransferGatewayRouter` |
-| `ITransferDecisionStore` | In-memory only; no durable journal |
+| `PlayerTransferCoordinator` (6 stages, abort before commit, roll-forward after) | **Test-only**: no production `ITransferSourceWorker` / `ITransferTargetWorker` / `ITransferGatewayRouter` (per-player); `PrepareTransferAsync` (stages 1 to 4) added for a whole-World commit (section 5.5) |
+| `ITransferDecisionStore` | In-memory, plus the durable `EfTransferDecisionStore` in the characters database since `claude/hr3-standby` (section 5.5) |
 | `PlayerTransferBundle` | Record only; nothing captures or installs it; lacks group, pet, threat, cast, reputation, skills, talents, binds |
 | `GatewayWorkerTransport` (envelope with generation, epoch, sequence; loopback TCP) | Hosted only by tests; not connected to `OpcodeTable` or `WorldSession` |
 | `ClusterNodeBridgeFeature` | A monitor with a probe character; routes no traffic |
-| Character fencing (epoch compare-and-swap, save-time token check), durable ID ranges | **Production-wired, opt-in** (`Cluster:Fencing:Enabled`, off by default) |
+| Character fencing (epoch compare-and-swap, save-time token check), durable ID ranges | **Production-wired, opt-in** (`Cluster:Fencing:Enabled`, off by default); **mandatory in worker mode** since `claude/hr3-standby` |
 | `CharacterPersistenceBarrier.TryFlushCharacterAsync` | Production; the flush primitive for a handoff |
 | `ManagedWorldSession` | Production socketless session; the template for a gateway-backed session |
 
@@ -475,6 +478,40 @@ Differences from 5.2 and what is left of 3a:
 - The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
   coordinator is still test-only.
 
+### 5.5 Phase 3b groundwork as built (`claude/hr3-standby`)
+
+Built and covered by committed tests; everything runs in process (two synthetic Worlds on one set of SQLite databases,
+the real gateway, the mock client). Commits: `28b77434` (fencing), `ca7aa78d` (decision store), `a4cf1677` (standby),
+then the drain protocol.
+
+- **Fencing mandatory in worker mode.** `Cluster:Worker:Enabled = true` registers the characters write fence
+  (`DataServiceCollectionExtensions.IsCharacterWriteFenceRequired`) and the World refuses to start without
+  `Cluster:Fencing:Enabled = true` (`CharacterFencingOptions.RequiredByWorkerMode`). Combined mode is unchanged.
+  Tests: `WorkerModeWriteFenceTests` (10), `WorkerModeFencingTests` (9).
+- **Durable decision store.** Characters schema 62 (`ClusterTransferDataModule`): `cluster_transfer_decision`,
+  `cluster_transfer_owner` (the per-character in-flight claim, compare-and-swap) and `cluster_world_handoff` (at most one
+  unresolved). `EfTransferDecisionStore` implements `ITransferDecisionStore` and the new Kernel `IWorldHandoffStore`;
+  `CommitEpochTakeoverAsync` moves the world ownership row (epoch N, A's incarnation, to N + 1, B's) and commits every
+  transfer of the handoff in one transaction, or changes nothing. Tests: `TransferDecisionStoreTests` (6), and
+  `PlayerTransferCoordinatorTests` now run on both stores, including a restart between stages (16).
+- **Standby mode** (`Cluster:Worker:Standby`, off by default): see [gateway.md](../areas/gateway.md#standby-worker-tier-3b-groundwork).
+  Differs from 5.3: a standby does **not** load characters-backed state or attach features before promotion. The fence
+  refuses a non-owner's transactions, reads included, and that state would be stale at the handoff anyway; so the
+  warm-up covers the process, the container, schema validation and the gateway link, and promotion pays for the feature
+  attach. Tests: `StandbyWorkerTests` (7).
+- **Drain protocol.** `WorldHandoffCoordinator` with `LocalWorldHandoffSource` (A: close admission, park the simulation
+  thread at a tick boundary after capturing every online player's save through the settlement path, then flush every
+  per-character queue through `CharacterPersistenceBarrier`), `StandbyWorldHandoffTarget` (B: `WorldHost.PromoteAsync`)
+  and `GatewayWorldHandoffRouter` (`GatewayServer.RetargetWorkerAsync`). Abort before the takeover resumes A; after it,
+  roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (9).
+
+Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
+entities), gateway input buffering and PING answering during the freeze, one link per worker and a per-session reroute
+with synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` (clients on A are disconnected and log in again), the
+operator command (no remote trigger exists, so no new attack surface), a retire that stops A without attempting writes
+(its late writes are refused by the fence), Warden on the gateway, the forced spell-state save that only
+`PlayerLoggingOut` runs, and real-client or MariaDB/PostgreSQL runs. The freeze length is not measured.
+
 ## 6. Tier 4: edit and continue stays dev-only
 
 The `dotnet watch` runner patches a Debug process: no tick atomicity, no rollback, rude edits, unmeasured Debug tick
@@ -523,7 +560,7 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 | 2c | CI unload test green (old context collected after swap), cold swap on a dev server with hundreds of bots and no player disconnect |
 | Spike | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
 | 3a | Real client and mock client play through the gateway; per-IP guards see the client address; `Combined` unchanged |
-| 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it |
+| 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it (abort at every stage and roll-forward are **met in process** on `claude/hr3-standby`; no-disconnect, freeze time and the dev-server run are not) |
 
 ## 10. Open risks
 
@@ -539,7 +576,10 @@ into a production path. It remains the fastest loop for a developer, gated by `H
   in-place sequence, which is riskier).
 - **Freeze length** grows with players times flush latency (barrier default 15 s at the extreme); not measured.
 - **Process-wide caches** (spellbook cache, guilds, auctions) must be loaded by the standby World after the old one's
-  final flush, or reloaded at cutover.
+  final flush, or reloaded at cutover. As built (5.5) the standby attaches its features only at promotion, so they load
+  after the flush; the price is a longer cutover.
+- **A standby on SQLite runs without the writer file lock** (only the fence keeps it from writing before promotion), and
+  a parked A holds its process open until it is stopped. Measured nowhere yet.
 - **Interaction with M15 clustering.** Tier 3 reuses M15 contracts; the two plans must not diverge (one gateway, one
   transfer coordinator).
 - **Stale source docs.** `docs/integration/cluster-transfer-state.md` is partly stale (several "memory-only" rows now

@@ -24,7 +24,7 @@ namespace ArcaneCore.Gateway.Tests;
 /// </summary>
 public sealed class StandbyWorkerTests
 {
-    private const string Secret = "standby-link-secret-0123456789";
+    internal const string Secret = "standby-link-secret-0123456789";
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(120);
 
     [Theory]
@@ -151,7 +151,7 @@ public sealed class StandbyWorkerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => Host(active).PromoteAsync(handed, cts.Token));
     }
 
-    private static async Task<CharacterOwnershipToken> TakeOverAsync(SyntheticArcaneServer standby, CharacterOwnershipToken old, CancellationToken token)
+    internal static async Task<CharacterOwnershipToken> TakeOverAsync(SyntheticArcaneServer standby, CharacterOwnershipToken old, CancellationToken token)
     {
         WorldHost host = Host(standby);
         await using AsyncServiceScope scope = standby.Services.CreateAsyncScope();
@@ -197,17 +197,17 @@ public sealed class StandbyWorkerTests
         }
     }
 
-    private static WorldHost Host(SyntheticArcaneServer server)
+    internal static WorldHost Host(SyntheticArcaneServer server)
         => server.Services.GetServices<IHostedService>().OfType<WorldHost>().Single();
 
-    private static Task<SyntheticArcaneServer> StartActiveAsync(CancellationToken token) => SyntheticArcaneServer.StartAsync(
+    internal static Task<SyntheticArcaneServer> StartActiveAsync(CancellationToken token) => SyntheticArcaneServer.StartAsync(
         new SyntheticServerOptions
         {
             EnableFencing = true,
             Configuration = Worker(standby: false),
         }, configureServices: null, token);
 
-    private static Task<SyntheticArcaneServer> StartStandbyAsync(SyntheticArcaneServer active, CancellationToken token) => SyntheticArcaneServer.StartAsync(
+    internal static Task<SyntheticArcaneServer> StartStandbyAsync(SyntheticArcaneServer active, CancellationToken token) => SyntheticArcaneServer.StartAsync(
         new SyntheticServerOptions
         {
             EnableFencing = true,
@@ -223,14 +223,14 @@ public sealed class StandbyWorkerTests
         ["Cluster:Worker:LinkSecret"] = Secret,
     };
 
-    private static async Task<CharacterOwnershipRow> OwnershipAsync(SyntheticArcaneServer server)
+    internal static async Task<CharacterOwnershipRow> OwnershipAsync(SyntheticArcaneServer server)
     {
         await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<ArcaneCore.Data.Characters.CharacterDbContext>()
             .Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == "world");
     }
 
-    private static async Task<Linked> LinkAsync(SyntheticArcaneServer server, CancellationToken token, WorkerAdmission? admission = null)
+    internal static async Task<Linked> LinkAsync(SyntheticArcaneServer server, CancellationToken token, WorkerAdmission? admission = null)
     {
         IServiceProvider services = server.Services;
         // A worker-mode fixture registers its own endpoint (with its admission); otherwise build one by hand as GatewayEndToEndTests does.
@@ -263,7 +263,7 @@ public sealed class StandbyWorkerTests
         return new Linked(endpoint, gateway);
     }
 
-    private static byte[] CharacterCreate(string name)
+    internal static byte[] CharacterCreate(string name)
     {
         byte[] text = System.Text.Encoding.ASCII.GetBytes(name);
         byte[] payload = new byte[text.Length + 10];
@@ -273,7 +273,7 @@ public sealed class StandbyWorkerTests
         return payload;
     }
 
-    private static bool Contains<T>(Exception? error) where T : Exception
+    internal static bool Contains<T>(Exception? error) where T : Exception
     {
         for (Exception? e = error; e is not null; e = e.InnerException)
         {
@@ -284,7 +284,7 @@ public sealed class StandbyWorkerTests
         return false;
     }
 
-    private sealed record Linked(GatewayWorkerEndpoint Endpoint, GatewayServer Gateway) : IAsyncDisposable
+    internal sealed record Linked(GatewayWorkerEndpoint Endpoint, GatewayServer Gateway) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {

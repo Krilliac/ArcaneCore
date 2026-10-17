@@ -81,6 +81,34 @@ Cluster.Worker.LinkSecret = "<long random string>"
 The World's own client listener (`World:Port`) stays open in worker mode; point the realm list at the gateway's port to
 send clients through the gateway.
 
+Worker mode makes character fencing **mandatory** (Tier 3b groundwork): with `Cluster:Worker:Enabled = true` the
+characters write fence is registered whatever `Cluster:Fencing:Enabled` says, and the World refuses to start unless
+`Cluster:Fencing:Enabled = true` too. Combined mode (worker off) is unchanged.
+
+### Standby worker (Tier 3b groundwork)
+
+`Cluster:Worker:Standby = true` (needs `Enabled`) starts a second World on the same databases as a handoff target. It
+builds its services, validates the schema without DDL (`Database:Upgrade:ValidateOnly`), takes no characters writer lock,
+claims no ownership, registers no `World:Port` listener, and links to a gateway; but it attaches no feature and starts no
+simulation (features read the characters database, which the active World still owns: the fence refuses a non-owner's
+transactions, reads included), and it refuses every session open with `AUTH_UNAVAILABLE` (`WorkerAdmission`). It runs
+only after `WorldHost.PromoteAsync(token)`: the token must be the ownership the database holds, under this process's
+incarnation, as the handoff's epoch takeover leaves it. There is no operator command for it yet; the drain protocol
+below drives it in process.
+
+### Whole-World handoff (Tier 3b groundwork, in process only)
+
+`WorldHandoffCoordinator` (`src/ArcaneCore.World/Cluster/Handoff/`) runs the drain protocol of design section 5.3 over
+three participants and journals each stage in the characters database (`cluster_world_handoff`, schema 62):
+B warm, A stops admissions, A freezes at a tick boundary (`LocalWorldHandoffSource` parks the simulation thread after
+capturing every online player's save), the saves and every per-character queue flush (`CharacterPersistenceBarrier`),
+then the **epoch takeover** (one transaction: the ownership row moves from A at epoch N to B at N + 1). Any failure
+before the takeover aborts and resumes A; after it the handoff only rolls forward (`RecoverAsync` finishes a crashed
+one from the journal): promote B, reroute, retire A. The gateway reroute (`GatewayWorldHandoffRouter`,
+`GatewayServer.RetargetWorkerAsync`) moves the gateway's single worker link to B: **clients on A are disconnected and log
+in again** (no `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` carry-over, no input buffering during the freeze). A retired A
+stays frozen; when its process stops, every write it still attempts is refused by the fence.
+
 Gateway side: `gateway.json` next to the executable, then environment variables and the command line (generic host
 order). The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
 The build copies the World's `appsettings.json` into the gateway's output directory as a side effect of the project
@@ -118,7 +146,7 @@ source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `
 
 ## Tests
 
-`tests/ArcaneCore.Gateway.Tests` (22 tests, run with `--filter`):
+`tests/ArcaneCore.Gateway.Tests` (42 tests on `claude/hr3-standby`, run with `--filter`):
 
 - `GatewaySessionWireTests`: every frame round-trips; every truncation and an out-of-range length throw `InvalidDataException`; the HMAC proof.
 - `GatewaySessionLinkTests`: over loopback TCP, packets keep their order and nothing overtakes the open reply; replays, a
@@ -130,6 +158,13 @@ source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `
   worker is involved; a second login supersedes the first; no link answers `AUTH_UNAVAILABLE`; worker mode registers
   nothing unless enabled.
 
+Tier 3b groundwork (`claude/hr3-standby`): `StandbyWorkerTests` (7: standby registration, standby without worker mode
+refused, a closed worker refuses opens, a standby owns and admits nothing, refused and retried promotion, a promoted
+standby takes a session and writes while the old world is fenced) and `WorldHandoffTests` (9: a full handoff with a
+player in the world through the gateway and the re-login landing on B; an abort injected after each of the five
+pre-commit stages; a source that lost its ownership; a crash after the takeover rolled forward by recovery; a crash
+before it aborted by recovery).
+
 ## Not done yet (rest of 3a and beyond)
 
 - **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only.
@@ -137,6 +172,9 @@ source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway has no conf catalog entry, `.conf.dist`, `--check-config` or metrics; its link counters are only in-process.
-- A gateway or World restart still drops every client (handoff is phase 3b).
+- A gateway or World restart still drops every client. The 3b handoff above moves the ownership and the players' saved
+  state but still disconnects the clients (they log in again); a seamless reroute (one link per worker on the gateway,
+  per-session routing, synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, input buffered during the freeze) and an
+  authenticated operator trigger are not built.
 - The link protocol lives in `ArcaneCore.World`, so the gateway references the whole World assembly; a shared protocol
   assembly is still to be split out.
