@@ -31,9 +31,16 @@ public sealed class WorldHost(
     CharacterOwnershipContext? ownershipContext = null,
     WorldWriterGuard? writerGuard = null,
     IOptions<WorldOptions>? worldOptions = null,
-    IServiceProvider? rootServices = null) : IHostedService
+    IServiceProvider? rootServices = null,
+    IOptions<Cluster.Gateway.GatewayWorkerOptions>? workerOptions = null,
+    Cluster.Gateway.WorkerAdmission? admission = null) : IHostedService
 {
     private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
+    private readonly Cluster.Gateway.GatewayWorkerOptions? _worker = workerOptions?.Value;
+    private readonly Lock _promoteGate = new();
+    private volatile bool _standby = workerOptions?.Value is { Enabled: true, Standby: true };
+    private Task? _promotion;
+    private volatile bool _standbyStarted;
 
     /// <summary>Whether a listener will bind <c>World:Port</c> after this host (test seam); null looks for a registered <see cref="Net.WorldServer"/>.</summary>
     internal bool? ListenerExpected { get; init; }
@@ -53,18 +60,43 @@ public sealed class WorldHost(
     /// <summary>Runs where the playerbot restore runs, after the world and the save queue have started, with the start's token (test seam).</summary>
     internal Func<CancellationToken, Task>? StartupWorkForTesting { get; init; }
 
+    /// <summary>
+    /// True while this world is a standby (Cluster:Worker:Standby, Tier 3b) that was not promoted: the process is up, its container (content
+    /// catalogs, maps, caches, the features themselves) is built and its schema validated, and it is linked to the gateway; but it holds no characters
+    /// ownership, admits no session, and has not attached its features or started the simulation. Those read the characters database, which the
+    /// active world is still writing (state read now would be stale at the handoff) and whose fence refuses a non-owner's transactions, reads
+    /// included; <see cref="PromoteAsync"/> runs them under the taken-over ownership.
+    /// </summary>
+    public bool IsStandby => _standby;
+
+    /// <summary>This process's ownership incarnation: the one a handoff's epoch takeover hands the characters ownership to.</summary>
+    public Guid Incarnation => _incarnation;
+
+    /// <summary>The durable owner node name this world claims under (Cluster:Fencing:OwnerNode).</summary>
+    public string OwnerNode => _fencing.OwnerNode;
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _fencing.Validate();
+        if (_worker is { Enabled: false, Standby: true })
+            throw new InvalidOperationException("Cluster:Worker:Standby requires Cluster:Worker:Enabled = true: a standby world is a gateway worker");
         bool acquiredHere = false;
         try
         {
             // Before any database row is read or written: a second world on the same characters file, or on a taken port, must fail here
             // untouched (the 2026-10 incident restored 863 bots from a process that then failed to bind).
             // Normally already held since WorldStartup took it before the schema initializers (then this is a no-op and the lock stays Program's to release).
-            acquiredHere = writerGuard?.Acquire() == true;
-            ProbeListenPort();
-            await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
+            // A standby is not a writer: the active world holds the lock and the ownership, and the standby has no listener of its own.
+            if (!_standby)
+            {
+                acquiredHere = writerGuard?.Acquire() == true;
+                ProbeListenPort();
+                await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                logger.LogInformation("Standby world: no ownership claimed, no session admitted, after-start work deferred until promotion");
+            }
         }
         catch
         {
@@ -75,7 +107,19 @@ public sealed class WorldHost(
         }
 
         saveQueue.FatalFailure += OnFatalSaveFailure;
+        if (_standby)
+        {
+            await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+                _ = scope.ServiceProvider.GetServices<IWorldFeature>().Count(); // build the features (singletons) now: promotion only attaches them
+            _standbyStarted = true;
+            return;
+        }
 
+        await AttachAndStartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task AttachAndStartAsync(CancellationToken cancellationToken)
+    {
         // Started right after the startup claim check, so a claim that lands while the world is still starting (registry deletes, bot restore)
         // is seen within one interval. If the rest of start throws, the host never calls StopAsync, so the watch is stopped here.
         if (!_fencing.Enabled && _watchClaims)
@@ -111,6 +155,7 @@ public sealed class WorldHost(
                 if (StartupWorkForTesting is { } startupWork)
                     await startupWork(cancellationToken).ConfigureAwait(false);
                 // The features' after-start work (the playerbot restore), registered by the features themselves (docs/design/hot-reload-tiers.md, section 4).
+                // A standby runs all of this when it is promoted (PromoteAsync), once it owns the characters database.
                 if (scope.ServiceProvider.GetService<WorldLifecycleHooks>() is { } hooks)
                     await RunLifecycleHooksAsync(hooks, WorldLifecycleStage.AfterWorldStart, cancellationToken).ConfigureAwait(false);
             }
@@ -129,6 +174,56 @@ public sealed class WorldHost(
             if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Promote a standby world (Tier 3b) after a handoff's epoch takeover handed it the characters ownership: <paramref name="takenOver"/> must be the
+    /// ownership the database holds now, under this world's <see cref="Incarnation"/>, or nothing changes. Then the token becomes the world's and the
+    /// write fence's, new sessions are admitted, and the deferred after-start work (the playerbot restore) runs. Runs once; a second call returns the
+    /// first one's task, except that a refused promotion (the world is still a standby) may be retried. A world that is not a standby refuses.
+    /// </summary>
+    public Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(takenOver);
+        lock (_promoteGate)
+        {
+            // A refused promotion (wrong token, nothing changed: still a standby) does not use up the one promotion.
+            if (_promotion is { IsCompleted: true, IsCompletedSuccessfully: false } && _standby)
+                _promotion = null;
+            if (_promotion is null && !_standby)
+                throw new InvalidOperationException("this world is not a standby; only a standby world is promoted");
+            return _promotion ??= PromoteCoreAsync(takenOver, cancellationToken);
+        }
+    }
+
+    private async Task PromoteCoreAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
+    {
+        if (!_standbyStarted)
+            throw new InvalidOperationException("the standby world has not started; it cannot be promoted");
+        if (takenOver.Scope != "world" || takenOver.Incarnation != _incarnation)
+            throw new InvalidOperationException("the ownership to promote under was not handed to this world's incarnation");
+
+        await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+        {
+            ICharacterOwnershipStore store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>()
+                ?? throw new InvalidOperationException("no characters ownership store is registered; a standby cannot be promoted");
+            // Reads the row (no write when it is already this incarnation's): the token must be the database's current one.
+            CharacterOwnershipToken? current = await store.TryAcquireAsync("world", _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+            if (current != takenOver)
+                throw new InvalidOperationException("the characters database is not owned by this standby under the promoted token; refusing to promote");
+        }
+
+        _ownership = takenOver;
+        world.CharacterOwnership = takenOver;
+        if (ownershipContext is not null)
+            ownershipContext.Current = takenOver;
+        _standby = false;
+        logger.LogInformation("Standby world promoted at ownership epoch {Epoch}: attaching the features and starting the simulation", takenOver.Epoch);
+
+        // As an active world's start does after its ownership claim: load the characters, attach, start, run the after-start work. A failure here
+        // leaves a promoted world that owns the database but does not run: the host is stopped (as for a failed start), never re-opened as a standby.
+        await AttachAndStartAsync(cancellationToken).ConfigureAwait(false);
+        admission?.Open();
     }
 
     /// <summary>

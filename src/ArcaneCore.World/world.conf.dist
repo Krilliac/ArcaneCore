@@ -34,7 +34,7 @@
 #   BATTLEGROUND                8 keys
 #   CHARACTERCREATION           13 keys
 #   CLIENTDATA                  2 keys
-#   CLUSTER                     14 keys
+#   CLUSTER                     15 keys
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
@@ -1819,6 +1819,20 @@ Cluster.Worker.Port = 8095
 #        Docs: docs/reference/configuration.md#clusterworker
 #
 Cluster.Worker.RealmId = 1
+
+#
+#    Cluster.Worker.Standby
+#        Description: Standby (Tier 3b handoff target; needs Enabled): load content, maps and caches
+#                     and link to the gateway, but admit no session, claim no characters ownership,
+#                     run no schema DDL, take no writer lock and open no World:Port listener until
+#                     promoted by a handoff. false, the default, is an active worker.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworker
+#
+Cluster.Worker.Standby = false
 
 #
 #    Cluster.Worker.WorldSchemaVersion

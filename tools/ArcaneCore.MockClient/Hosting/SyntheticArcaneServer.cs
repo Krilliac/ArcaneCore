@@ -71,6 +71,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     private Task _worldAcceptLoop = Task.CompletedTask;
     private Task? _disposeTask;
     private Task? _worldStop;
+    private bool _seedContent = true;
 
     private SyntheticArcaneServer(
         OwnedFixtureDirectory directory, TcpListener realmListener, TcpListener worldListener, ServiceProvider services)
@@ -176,7 +177,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             services = CreateServices(directory.Path,
                 (IPEndPoint)realmListener.LocalEndpoint, (IPEndPoint)worldListener.LocalEndpoint, options, configureServices);
             cancellationToken.ThrowIfCancellationRequested();
-            server = new SyntheticArcaneServer(directory, realmListener, worldListener, services);
+            server = new SyntheticArcaneServer(directory, realmListener, worldListener, services) { _seedContent = options.SharedDatabaseDirectory is null };
             server._startupTask = server.InitializeAsync(cancellationToken);
             await server._startupTask.ConfigureAwait(false);
             // Transfer listener ownership from startup cancellation to server disposal.
@@ -349,9 +350,11 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             values[$"Database:{component}:Provider"] = nameof(DatabaseProvider.Sqlite);
             values[$"Database:{component}:ConnectionString"] = new SqliteConnectionStringBuilder
             {
-                DataSource = component == "Characters" && options.CharactersDatabasePath is { } shared
-                    ? shared
-                    : Path.Combine(directory, component.ToLowerInvariant() + ".db"),
+                DataSource = options.SharedDatabaseDirectory is { } sharedDirectory
+                    ? Path.Combine(sharedDirectory, component.ToLowerInvariant() + ".db")
+                    : component == "Characters" && options.CharactersDatabasePath is { } shared
+                        ? shared
+                        : Path.Combine(directory, component.ToLowerInvariant() + ".db"),
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 Cache = SqliteCacheMode.Private,
                 Pooling = false,
@@ -364,6 +367,11 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         if (options.EnableFencing)
         {
             values["Cluster:Fencing:Enabled"] = "true";
+        }
+
+        foreach ((string key, string? value) in options.Configuration ?? new Dictionary<string, string?>())
+        {
+            values[key] = value;
         }
 
         IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
@@ -391,9 +399,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         ]));
         // The daemon listener cannot expose its ephemeral endpoint or await all sessions.
         // Retain WorldHost and replace only that listener with this fixture's owned sockets.
-        ServiceDescriptor worldServer = services.Single(descriptor =>
+        ServiceDescriptor? worldServer = services.SingleOrDefault(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) && descriptor.ImplementationType == typeof(WorldServer));
-        services.Remove(worldServer);
+        if (worldServer is not null) services.Remove(worldServer); // a standby worker registers no listener at all
         configureServices?.Invoke(services);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -405,8 +413,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         await _services.GetRequiredService<AuthDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
         await _services.GetRequiredService<CharacterDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
         await _services.GetRequiredService<WorldDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
-        await using (AsyncServiceScope scope = _services.CreateAsyncScope())
+        if (_seedContent) // shared databases belong to another fixture, which seeded them
         {
+            await using AsyncServiceScope scope = _services.CreateAsyncScope();
             WorldDbContext content = scope.ServiceProvider.GetRequiredService<WorldDbContext>();
             await SyntheticQuestContent.SeedAsync(content, SyntheticQuestProfile.SelfTest, cancellationToken).ConfigureAwait(false);
         }
@@ -415,12 +424,21 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         // Social guild loading posts to the simulation thread. Complete it while the
         // simulation is running so that it cannot post its installation after shutdown.
-        _guildsLoaded = _services.GetRequiredService<SocialFeature>().GuildsLoaded;
-        await _guildsLoaded.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // A standby world (Cluster:Worker:Standby) attaches its features and starts its simulation only when it is promoted.
+        bool running = !_worldHost.IsStandby;
+        if (running)
+        {
+            _guildsLoaded = _services.GetRequiredService<SocialFeature>().GuildsLoaded;
+            await _guildsLoaded.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         _realmAcceptLoop = AcceptLoopAsync(_realmListener, isRealm: true);
         _worldAcceptLoop = AcceptLoopAsync(_worldListener, isRealm: false);
         // Confirm the simulation thread is processing commands before publishing endpoints.
-        await World.InvokeAsync(() => true).WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (running)
+        {
+            await World.InvokeAsync(() => true).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class SyntheticCombatRandom : ICombatRandom
@@ -605,4 +623,13 @@ public sealed class SyntheticServerOptions
     /// same file. The file belongs to the other fixture; this server never deletes it.
     /// </summary>
     public string? CharactersDatabasePath { get; init; }
+
+    /// <summary>
+    /// Another fixture's <see cref="SyntheticArcaneServer.DataDirectory"/>: use its auth, characters and world databases (already created and
+    /// seeded) instead of this fixture's own, as a second world process of the same realm would. Takes precedence over <see cref="CharactersDatabasePath"/>.
+    /// </summary>
+    public string? SharedDatabaseDirectory { get; init; }
+
+    /// <summary>Extra configuration values (for example <c>Cluster:Worker:*</c>), applied after the fixture's own.</summary>
+    public IReadOnlyDictionary<string, string?>? Configuration { get; init; }
 }

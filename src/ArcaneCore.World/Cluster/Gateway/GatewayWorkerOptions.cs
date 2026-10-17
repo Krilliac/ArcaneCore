@@ -15,6 +15,9 @@ public sealed class GatewayWorkerOptions
     /// <summary>`true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change.</summary>
     public bool Enabled { get; set; }
 
+    /// <summary>Standby (Tier 3b handoff target; needs Enabled): load content, maps and caches and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock and open no World:Port listener until promoted by a handoff. `false`, the default, is an active worker.</summary>
+    public bool Standby { get; set; }
+
     /// <summary>Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.</summary>
     public string BindAddress { get; set; } = "127.0.0.1";
 
