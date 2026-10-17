@@ -187,7 +187,6 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         t = Lap(t, out _timing.SpawnGroups);
         UpdatePendingAi();
         t = Lap(t, out _timing.PendingAi);
-        UpdateStrippedFlagSafeguard(diffMs);
         UpdateRelayScripts();
         t = Lap(t, out _timing.Relay);
         UpdateForcedDespawns();
