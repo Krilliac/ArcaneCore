@@ -524,6 +524,10 @@ powershell -File scripts\hotmodule-hash.ps1 -Name GmCommands -ModuleDirectory D:
 
 `scripts/hotmodule-hash.ps1` prints the SHA-256 of the exact file and appends it to the allowlist; it never loads anything.
 
+On the local live server, `tools/ops/live/redeploy.ps1` does the copy and the `.hotmodule load`/`reload` itself when a module
+project changed and nothing else needs a restart, through the World's control pipe; it never adds a hash, so approve the build first
+([Redeploy prefers hot reload](../ops/redeploy.md)).
+
 The allowlist covers `<name>.dll` only. A private dependency dll copied into the module folder is **not** hashed (and is loaded
 with the module), so keep the module directory writable only by the operator, or ship the module as one self-contained dll.
 

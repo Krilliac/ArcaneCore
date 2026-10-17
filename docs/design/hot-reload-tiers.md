@@ -13,6 +13,7 @@ Phase 3b **groundwork** (fencing mandatory in worker mode, the durable decision 
 in process) is **built and tested** on `claude/hr3-standby` (section 5.6); the seamless reroute and the operator trigger
 are not.
 All three lanes are merged on `claude/hr2-integrate`.
+"Redeploy prefers hot reload" (section 9.1) is **built and tested, not run on the live server** on `claude/hr3-redeploy-hot`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -625,6 +626,46 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 | Spike (server side **built**, `.worldport`, section 5.5) | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
 | 3a | Real client and mock client play through the gateway; per-IP guards see the client address; `Combined` unchanged |
 | 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it (abort at every stage and roll-forward are **met in process** on `claude/hr3-standby`; no-disconnect, freeze time and the dev-server run are not) |
+
+### 9.1 Redeploy prefers hot reload (built on `claude/hr3-redeploy-hot`)
+
+`tools/ops/live/redeploy.ps1` plans before it acts ([runbook](../ops/redeploy.md)). It compares the built worktree with the deploy
+record the previous redeploy wrote (`<LiveHome>\bin\arcanecore-deploy.json`: deployed SHA, paths dirty at the time, a SHA-256
+configuration fingerprint, module hashes) and classifies the change: `None` (nothing the daemons are built from), `Hot` (only `live`
+World configuration keys from the conf catalog, content tables `.reload` supports, allowlisted hot modules), `Restart` (server code,
+any other key, no baseline, `-WorldDbSwap`, `-ForceRestart`), or `Blocked` (a changed module not built or not on the allowlist).
+`-Plan` / `-WhatIf` print the plan and stop. A hot plan is applied through a new **local-only World control pipe**
+(`World:Control:Pipe:*`, off by default; [server console](../areas/server-console.md#control-pipe)): a Windows named pipe with a
+protected DACL (deny NETWORK, allow the World's account and SYSTEM), created natively with `PIPE_REJECT_REMOTE_CLIENTS` (read back
+from the kernel; not served without it) and `FILE_FLAG_FIRST_PIPE_INSTANCE`, whose lines run through
+the console executor (Administrator, GM audit `Console`, redacted `Control pipe command:` log with the client PID). The client refuses a
+pipe served by any process other than the live World. An unavailable hot path falls back to the hard restart; a change the World
+rejects stops with exit 3 and no restart.
+
+Evidence (built): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings, 0 errors; the lane filter
+(`WorldControlPipeTests|RedeployPlanTests|WiringAuditTests|WorldConsoleTests|LiveLogPathTests|Docs`) 196 passed, 0 failed, 0 skipped
+(trx: `WorldControlPipeTests` 15, `RedeployPlanTests` 42 of which 34 planner fixtures, `WiringAuditTests` 17). RED run (one build with
+six mutations): dropping the deny-NETWORK entry fails both descriptor tests; dropping the `Control pipe command:` log line fails the
+command test; treating `restart`/`start` keys as `live` fails the two fixtures for them; dropping the recorded dirty paths fails the
+changed-paths test; dropping the client's server-PID check fails the hot-step test at its refusal assertion. Dropping
+`PipeOptions.FirstPipeInstance` failed nothing then; the cause (found in review, from the dotnet/runtime source) is that the runtime adds
+`FILE_FLAG_FIRST_PIPE_INSTANCE` itself whenever `maxNumberOfServerInstances` is 1.
+
+Review fix cycle 1 (built): the first version's docs said the runtime also rejects remote clients. It does not: the .NET pipe
+constructors pass only the transmission-mode bits, never `PIPE_REJECT_REMOTE_CLIENTS`, so deny-NETWORK was the only remote barrier.
+The pipe is now created by `CreateNamedPipeW` (`Ops/Control/LocalPipeServer.cs`) with `PIPE_REJECT_REMOTE_CLIENTS` and an explicit
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, wrapped in `NamedPipeServerStream`; the World reads the reject bit back
+(`NtQueryInformationFile(FilePipeLocalInformation)`) and leaves the pipe off without it. `#done` is now queued on the world thread right
+after the command ran, so a result posted to a later tick can no longer precede it; a command that throws replies "The command failed"
+instead of ending the connection. Evidence: build 0 warnings, 0 errors; `WorldControlPipeTests` 19 passed, 0 failed. RED: before the
+switch, the new read-back test failed on the live pipe (and a runtime-created pipe reads back false, so the read-back is not constant);
+with the explicit first-instance flag removed, both squatter tests fail (now load-bearing: a squatter allowing many instances would
+otherwise be joined). The `#done` ordering test has no RED (the race needs a world tick to lose to a thread-pool hop); it guards the
+ordering. Not yet tried: a connection from a second machine.
+
+Planned, not built: a Realm-only restart (a restart is still World and Realm); detecting content changes (tables are declared with
+`-ContentTables`); applying `Logging:LogLevel:*` without a restart (planned as a restart today); checking that the core build matches the
+worktree (only module builds are checked); a run against the live server.
 
 ## 10. Open risks
 

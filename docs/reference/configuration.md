@@ -77,6 +77,7 @@ How to read the tables:
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
+- [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
 - [`World:Duel`](#worldduel)
 - [`World:Exploration`](#worldexploration)
@@ -1137,6 +1138,15 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `World:Console:Enabled` | `bool` | `true` | - | Accept typed GM commands at the daemon's console window when standard input is an interactive console. The commands run on the world thread with Administrator authority and no character. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
+
+## `World:Control:Pipe`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:Pipe:Enabled` | `bool` | `false` | - | Accept console commands on a local Windows named pipe. Each line runs exactly like a line typed at the console: on the world thread, Administrator authority, no character, logged and GM-audited as the console. The pipe admits only the account the daemon runs as and SYSTEM, refuses network clients, and is not created on other operating systems. Default off. |
+| `World:Control:Pipe:IdleTimeoutSeconds` | `int` | `120` | - | Seconds a connected client may stay silent before the daemon closes the connection (frees the single pipe instance). |
+| `World:Control:Pipe:MaxLineLength` | `int` | `4096` | - | The longest command line in bytes; a longer line closes the connection without running anything. |
+| `World:Control:Pipe:Name` | `string` | `"arcanecore-world-{pid}"` | - | The pipe name (without `\\.\pipe\`); `{pid}` is replaced by the world process id, so two daemons on one machine never share a name. The daemon refuses to serve a name another process already created. Letters, digits, '.', '_', '-' and the token only. |
 
 ## `World:Death`
 
