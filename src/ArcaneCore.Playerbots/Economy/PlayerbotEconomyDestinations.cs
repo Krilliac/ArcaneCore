@@ -188,7 +188,8 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
             AuctionHouseEntry? house = AuctionHouseRules.HouseFor(economy.Options, faction.Faction, player.Team);
             if (house is null || house.Id == AuctionHouseRules.NeutralHouse
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
-            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry).Where(IsFinite))
+            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry).Where(IsFinite)
+                         .Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn)))
             {
                 if (!PlayerbotWorldDestinations.IsPresent(player, spawn)) continue;
                 var position = new Vector3(spawn.X, spawn.Y, spawn.Z);

@@ -230,6 +230,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
 
     private bool HasAffordableSpell(Player player, QuestNpcServices services, Destination destination)
     {
+        if (!PlayerbotWorldDestinations.IsPresent(player, destination.Spawn)) return false;
         if (Suspensions?.IsEntrySuspended(destination.Entry, _session.World.NowMs) == true) return false;
         if (Suspensions?.IsTrainingSuspended(_session.World.NowMs) == true) return false;
         if (!CanApproachTrainer(player, services, _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates, destination.FactionTemplate)) return false;
