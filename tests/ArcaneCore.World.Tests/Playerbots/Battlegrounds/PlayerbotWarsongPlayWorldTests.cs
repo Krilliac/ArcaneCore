@@ -282,6 +282,69 @@ public sealed class PlayerbotWarsongPlayWorldTests
         });
     }
 
+    private const uint DrinkSpell = 993_401;
+    private const uint DrinkItem = 993_402;
+
+    /// <summary>
+    /// Bot QA #813 (Warsong Gulch, live 2026-10-17 03:18-04:41 UTC): priests below 10% mana for 45 s of one fight, the same priest again 85 s
+    /// later in its next fight (Flugeikund 04:04:53 and 04:06:18): between fights the battleground AI never ate or drank, so a caster went
+    /// from one fight into the next on empty. vmangos BattleBotAI::DrinkAndEat (BattleBotAI.cpp:173-229, called out of combat at :849-853)
+    /// drinks whenever the bot is out of combat with no victim. A priest at 5% mana with water in its bags and no enemy near sits and drinks,
+    /// and its mana comes back before it walks on.
+    /// </summary>
+    [Fact]
+    public async Task LowManaPriest_DrinksBetweenFights_InsteadOfGoingOnEmpty()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-wsg-drink", async context =>
+        {
+            (ScenarioBot ally, _, _) = await MatchAsync(context, "Bgdrinkpr", allyClass: 5);
+            await context.ReadAsync(() =>
+            {
+                ArcaneCore.Game.Spells.SpellSystem spells = context.Services.GetRequiredService<SpellFeature>().System;
+                spells.Store = new ArcaneCore.Game.Spells.SpellStore([.. spells.Store.All, DrinkAura()], [], []);
+                Player priest = ally.RequirePlayer();
+                // The scenario world's item content has no drink: this priest's bags know one more template.
+                var drink = new ArcaneCore.Kernel.Items.ItemTemplate
+                {
+                    Entry = DrinkItem, Name = "test water", Class = 0, InventoryType = 0, Stackable = 20,
+                    Spells = [new ArcaneCore.Kernel.Items.ItemSpell(DrinkSpell, 0, -1, 0, 0, 0, 0)],
+                };
+                priest.Inventory.Templates = new ArcaneCore.Game.Items.ItemTemplateStore(
+                    [.. (priest.Inventory.Templates as ArcaneCore.Game.Items.ItemTemplateStore)?.All ?? [], drink]);
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, priest.Inventory.AddItem(DrinkItem, 5, out _));
+                priest.SetUInt32(UpdateFields.UnitFieldMaxpower1, 1000);
+                ArcaneCore.Game.Spells.SpellSystem.SetPower(priest, PowerType.Mana, 50);
+                return true;
+            });
+
+            await context.StepAsync("the priest drinks within 10 s", () => WaitExplainedAsync(context, "drinking",
+                () => context.Services.GetRequiredService<SpellFeature>().System.HasAura(ally.RequirePlayer(), DrinkSpell),
+                TimeSpan.FromSeconds(10), ally));
+            await context.StepAsync("it keeps drinking until its mana is back over half", () => WaitExplainedAsync(context, "mana back",
+                () => ArcaneCore.Game.Spells.SpellSystem.GetPower(ally.RequirePlayer(), PowerType.Mana) >= 500,
+                TimeSpan.FromSeconds(30), ally));
+        });
+    }
+
+    /// <summary>A drink as the item consumables have it: sitting, standing cancels it, MOD_POWER_REGEN on mana (500 per 5 s here).</summary>
+    private static ArcaneCore.Game.Spells.SpellInfo DrinkAura() => new()
+    {
+        Id = DrinkSpell, Name = "Drink", Duration = new ArcaneCore.Game.Spells.SpellDuration(30_000, 0, 30_000),
+        Attributes = ArcaneCore.Game.Spells.SpellAttributes.AllowWhileSitting,
+        AuraInterruptFlags = ArcaneCore.Game.Spells.SpellAuraInterruptFlags.StandingCancels,
+        Effects =
+        [
+            new ArcaneCore.Game.Spells.SpellEffectInfo
+            {
+                Effect = ArcaneCore.Game.Spells.SpellEffectName.ApplyAura, AuraType = ArcaneCore.Game.Spells.AuraType.ModPowerRegen,
+                BasePoints = 499, BaseDice = 1, DieSides = 1, MiscValue = (int)PowerType.Mana,
+                TargetA = ArcaneCore.Game.Spells.SpellImplicitTarget.UnitCaster,
+            },
+            new(), new(),
+        ],
+    };
+
     private static float StartXOf() => ScenarioTestContent.StartX;
 
     private static float StartYOf() => ScenarioTestContent.StartY;

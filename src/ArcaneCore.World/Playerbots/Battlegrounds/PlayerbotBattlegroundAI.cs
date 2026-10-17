@@ -161,6 +161,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         _spells.Reset();
         _recovery.Reset();
         _buffs.Reset(player.Guid);
+        EndRest(player);
         Activity = "idle";
     }
 
@@ -226,6 +227,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             _route = null;
             _spells.Reset();
             _buffs.Reset(player.Guid);
+            _restUntilMs = -1;
             _deathRetired = true;
         }
 
@@ -291,6 +293,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         if (_buffs.Update(_session, player, match, team, enemy, carrier, Now) is { } buff)
         {
             // A speed, restoration or berserking buff worth the detour: walk onto it (the trap casts it; PlayerbotBattlegroundBuffs).
+            EndRest(player);
             Activity = "taking-buff";
             _inMatchIdleMs = 0;
             TargetEntry = buff.Entry;
@@ -300,6 +303,7 @@ internal sealed partial class PlayerbotBattlegroundAI
 
         if (enemy is not null)
         {
+            EndRest(player);
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
             Fight(player, enemy, interval);
@@ -309,11 +313,19 @@ internal sealed partial class PlayerbotBattlegroundAI
 
         if (_target is not null) ClearTarget(player);
         TargetEntry = 0;
+        // vmangos BattleBotAI::UpdateAI: DrinkAndEat (:852) before the out-of-combat spells (:870).
+        if (RestBetweenFights(player, carrier))
+        {
+            _inMatchIdleMs = 0;
+            return;
+        }
+
         if (!player.Combat.IsInCombat && _spells.UpdateOutOfCombat(player, interval))
         {
             _inMatchIdleMs = 0;
             return;
         }
+
         switch (match)
         {
             case WarsongGulch wsg:
