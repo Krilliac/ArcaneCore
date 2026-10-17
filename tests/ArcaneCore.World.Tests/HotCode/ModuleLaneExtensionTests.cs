@@ -200,7 +200,7 @@ public sealed class ModuleLaneExtensionTests : IDisposable
     }
 
     [Fact]
-    public async Task ACommitThatFailsAfterValidation_IsReportedFailed_AuditedModuleFailed_AndTheModuleStaysRecordedAsLoaded()
+    public async Task ACommitThatFailsAfterValidation_IsReportedFailed_AuditedModuleFailed_AndRolledBack()
     {
         Install("game1", "HotGame", "HotGame");
         int aiCalls = 0;
@@ -219,7 +219,7 @@ public sealed class ModuleLaneExtensionTests : IDisposable
 
         Assert.False(result.Ok);
         Assert.True(result.Failed);
-        Assert.Contains("only partly applied", result.Detail);
+        Assert.Contains("rolled back", result.Detail);
         Assert.Equal(2, aiCalls);
         HotSwapEvent evt = Assert.Single(_reporter.Events);
         Assert.Equal(HotSwapResult.Failed, evt.Result);
@@ -228,8 +228,11 @@ public sealed class ModuleLaneExtensionTests : IDisposable
         Assert.Contains("module-failed", audit);
         Assert.DoesNotContain("module-load", audit);
         Assert.DoesNotContain("module-rejected", audit);
-        // docs/areas/code-hot-reload.md: the module stays recorded as loaded; only a restart clears it.
-        Assert.Equal("HotGame", Assert.Single(host.List()).Name);
+        // Rolled back: the module is not loaded, nothing of it is registered, and it can be collected.
+        Assert.Empty(host.List());
         Assert.False(_ai.HasScript(990001, "HotGameAI"));
+        Assert.False(_hooks.Player.HasLogin);
+        Assert.Empty(_hooks.Registered);
+        Assert.True(await WaitForRetiredCount(host, 0), "a rolled-back module must not stay referenced");
     }
 }

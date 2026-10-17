@@ -83,6 +83,34 @@ public sealed class InstanceScriptSwapTests
     }
 
     [Fact]
+    public void Restore_PutsTheSavedScriptsBack_SoDataCreatedBeforeTheUndoneSwapIsCurrentAgain()
+    {
+        using var f = new InstanceFixture();
+        InstanceScriptRegistry registry = new InstanceScriptRegistry().Register(Dungeon, map => new BuiltIn(map));
+        f.Manager.Scripts = registry;
+        registry.CommitSwap([], Add(Raid, map => new ModuleV1(map)));
+        Player first = f.AddPlayer(1);
+        f.RaidGroup(first, f.AddPlayer(2));
+        Assert.True(f.EnterRaid(first));
+        InstanceData v1Data = InstanceManager.InstanceDataOf(first.Map!)!;
+        InstanceScriptRegistry.Checkpoint saved = registry.Save();
+        long generation = registry.Generation;
+
+        registry.CommitSwap([Raid], Add(Raid, map => new ModuleV2(map)));
+        Assert.False(registry.RunsCurrentScript(v1Data));
+        Assert.Equal(1, f.Manager.RetiredScriptInstanceCount);
+
+        registry.Restore(saved);
+
+        Assert.True(registry.RunsCurrentScript(v1Data)); // the same script entry, not an equal copy
+        Assert.Equal(0, f.Manager.RetiredScriptInstanceCount);
+        Assert.Equal([Raid], registry.ModuleMapIds);
+        Assert.True(registry.IsBuiltIn(Dungeon));
+        Assert.Equal(generation + 2, registry.Generation);
+        Assert.Throws<ArgumentException>(() => new InstanceScriptRegistry().Restore(saved));
+    }
+
+    [Fact]
     public void DataTheRegistryDidNotCreate_IsNotItsCurrentScript()
     {
         using var f = new InstanceFixture();

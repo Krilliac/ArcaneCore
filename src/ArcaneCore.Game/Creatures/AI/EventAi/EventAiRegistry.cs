@@ -29,7 +29,7 @@ public sealed record EventAiHandlerSet(IReadOnlyList<EventAiEventHandler> Events
 public sealed class EventAiRegistry
 {
     // One immutable table; a swap publishes a new one. Reads take the reference once, so a lookup never sees half a swap.
-    private sealed record Table(
+    internal sealed record Table(
         Dictionary<byte, EventAiEventHandler> Events,
         Dictionary<byte, EventAiActionHandler> Actions,
         HashSet<byte> ModuleEvents,
@@ -168,6 +168,53 @@ public sealed class EventAiRegistry
             _table = new Table(events, actions, moduleEvents, moduleActions);
             Interlocked.Increment(ref _generation);
         }
+    }
+
+    /// <summary>The registry's current table, to put back with <see cref="Restore"/> (the hot module lane's undo step when a later part of a swap fails).</summary>
+    public Checkpoint Save() => new(this, _table);
+
+    /// <summary>
+    /// Put back the table <paramref name="checkpoint"/> saved, exactly: the same handler objects, so a handler bound before the undone swap is
+    /// current again (<see cref="IsCurrent"/>). Bumps <see cref="Generation"/>. World thread at a tick boundary.
+    /// </summary>
+    public void Restore(Checkpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (!ReferenceEquals(checkpoint.Owner, this))
+        {
+            throw new ArgumentException("the checkpoint was saved by another EventAI registry", nameof(checkpoint));
+        }
+
+        lock (_writeLock)
+        {
+            _table = checkpoint.State;
+            Interlocked.Increment(ref _generation);
+        }
+    }
+
+    /// <summary>A saved table of one registry (<see cref="Save"/>); opaque to everyone else.</summary>
+    public sealed class Checkpoint
+    {
+        internal Checkpoint(EventAiRegistry owner, Table state)
+        {
+            Owner = owner;
+            State = state;
+        }
+
+        internal EventAiRegistry Owner { get; }
+
+        internal Table State { get; }
+    }
+
+    /// <summary>
+    /// A registry whose built-in handlers are exactly <paramref name="events"/> and <paramref name="actions"/>, without a discovery scan (tests that
+    /// need a built-in handler for a type the server does not have, without a parameterless handler class any scan of the test assembly would find).
+    /// </summary>
+    internal static EventAiRegistry FromHandlers(IEnumerable<EventAiEventHandler> events, IEnumerable<EventAiActionHandler> actions)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(actions);
+        return new EventAiRegistry(events.ToDictionary(h => h.EventType), actions.ToDictionary(h => h.ActionType));
     }
 
     /// <summary>Build a registry from the handlers declared in <paramref name="assembly"/>.</summary>

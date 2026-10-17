@@ -96,8 +96,9 @@ internal sealed class CollectingAiRegistry : ICreatureAiRegistry
 /// (<see cref="WorldCommit"/>), before any map updates, so no creature is being updated while it changes.
 /// <list type="bullet">
 /// <item><b>All or nothing.</b> <see cref="Validate"/> checks every part (creature AI, hooks, spell scripts, instance scripts, EventAI) before
-/// anything live changes; <see cref="Commit"/> only does what it proved possible. A part whose system this server does not run (a null provider)
-/// rejects the module.</item>
+/// anything live changes; <see cref="CommitSlots"/> records an undo step for every slot it changes, so a failure after validation (in any slot,
+/// or later in the host's command table) is rolled back to exactly the state before the swap. A part that adds to a system this server does not
+/// run (a null provider) rejects the module; a part that only removes from one is a no-op, so a module can always be unloaded.</item>
 /// <item><b>Built-ins are never overridden.</b> A spell id, map id or EventAI type id that has a built-in script or handler rejects the module;
 /// a module replaces only what its previous version registered.</item>
 /// <item><b>Spell scripts</b> are looked up per hook, so the next hook of any cast runs the new script (<see cref="SpellScriptRegistry"/>).
@@ -174,15 +175,19 @@ public sealed class ModuleGameSeams
             return null;
         }
 
+        // A system the server no longer runs (its provider answers null, e.g. a detached feature) cannot take additions, but the removals meant
+        // for it are no-ops: there is nothing left to remove them from, and refusing them would leave the module impossible to unload.
         if (old.HasCreatureAi || added.HasCreatureAi)
         {
             CreatureAiFactory? factory = _creatureAi();
             if (factory is null)
             {
-                return "the creature AI system is not running on this server";
+                if (added.HasCreatureAi)
+                {
+                    return "the creature AI system is not running on this server";
+                }
             }
-
-            if (factory.ValidateSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries.Keys, added.AiNames.Keys) is { } aiError)
+            else if (factory.ValidateSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries.Keys, added.AiNames.Keys) is { } aiError)
             {
                 return aiError;
             }
@@ -193,10 +198,12 @@ public sealed class ModuleGameSeams
             ScriptHookRegistry? hooks = _hooks();
             if (hooks is null)
             {
-                return "script hooks are not available on this server";
+                if (added.Hooks.Count != 0)
+                {
+                    return "script hooks are not available on this server";
+                }
             }
-
-            if (hooks.ValidateSwap(old.Hooks, added.Hooks) is { } hookError)
+            else if (hooks.ValidateSwap(old.Hooks, added.Hooks) is { } hookError)
             {
                 return hookError;
             }
@@ -207,10 +214,12 @@ public sealed class ModuleGameSeams
             SpellScriptRegistry? spells = _spellScripts();
             if (spells is null)
             {
-                return "spell scripts are not available on this server";
+                if (added.SpellScripts.Count != 0)
+                {
+                    return "spell scripts are not available on this server";
+                }
             }
-
-            if (spells.ValidateSwap(old.SpellScripts, added.SpellScripts) is { } spellError)
+            else if (spells.ValidateSwap(old.SpellScripts, added.SpellScripts) is { } spellError)
             {
                 return spellError;
             }
@@ -221,10 +230,12 @@ public sealed class ModuleGameSeams
             InstanceScriptRegistry? instances = _instanceScripts();
             if (instances is null)
             {
-                return "instance scripts are not available on this server";
+                if (added.InstanceScripts.Count != 0)
+                {
+                    return "instance scripts are not available on this server";
+                }
             }
-
-            if (instances.ValidateSwap([.. old.InstanceScripts.Keys], added.InstanceScripts.Keys) is { } instanceError)
+            else if (instances.ValidateSwap([.. old.InstanceScripts.Keys], added.InstanceScripts.Keys) is { } instanceError)
             {
                 return instanceError;
             }
@@ -235,10 +246,12 @@ public sealed class ModuleGameSeams
             EventAiRegistry? eventAi = _eventAi();
             if (eventAi is null)
             {
-                return "EventAI handlers are not available on this server";
+                if (added.HasEventAi)
+                {
+                    return "EventAI handlers are not available on this server";
+                }
             }
-
-            if (eventAi.ValidateSwap(
+            else if (eventAi.ValidateSwap(
                     [.. old.EventAiEvents.Select(h => h.EventType)],
                     [.. old.EventAiActions.Select(h => h.ActionType)],
                     added.EventAiEvents.Select(h => h.EventType),
@@ -251,51 +264,88 @@ public sealed class ModuleGameSeams
         return null;
     }
 
-    /// <summary>Apply what <see cref="Validate"/> accepted. Never throws.</summary>
-    internal ModuleGameCommit Commit(ModuleGameParts? old, ModuleGameParts? added, AssemblyLoadContext? oldContext)
+    /// <summary>
+    /// Apply the registry part of what <see cref="Validate"/> accepted, slot by slot (creature AI, script hooks, spell scripts, instance scripts,
+    /// EventAI), recording in <paramref name="undo"/> how to put each changed slot back exactly as it was. Throws on the first failure; the caller
+    /// rolls back <paramref name="undo"/>. A slot whose system is gone and that only removes is skipped; one that adds throws. Live creatures are
+    /// not touched here (<see cref="Complete"/> does that once every slot of the module, opcodes and commands included, is in).
+    /// <paramref name="inject"/> (tests) is called with each slot's name right after that slot changed.
+    /// </summary>
+    internal void CommitSlots(ModuleGameParts? old, ModuleGameParts? added, SwapUndo undo, Action<string>? inject = null)
+    {
+        ArgumentNullException.ThrowIfNull(undo);
+        old ??= ModuleGameParts.Empty;
+        added ??= ModuleGameParts.Empty;
+
+        if ((old.HasCreatureAi || added.HasCreatureAi) && Required(_creatureAi(), added.HasCreatureAi, "the creature AI system") is { } factory)
+        {
+            factory.CommitSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries, added.AiNames);
+            undo.Add(SwapSlots.CreatureAi, () => factory.CommitSwap([.. added.AiEntries.Keys], [.. added.AiNames.Keys], old.AiEntries, old.AiNames));
+        }
+
+        inject?.Invoke(SwapSlots.CreatureAi);
+
+        if ((old.Hooks.Count != 0 || added.Hooks.Count != 0) && Required(_hooks(), added.Hooks.Count != 0, "the script hook registry") is { } hooks)
+        {
+            IScriptHooks[] before = [.. hooks.Registered];
+            hooks.CommitSwap(old.Hooks, added.Hooks);
+
+            // Every hook object out, the saved list back in: the same objects in the same registration order as before the swap.
+            undo.Add(SwapSlots.ScriptHooks, () => hooks.CommitSwap([.. hooks.Registered], before));
+        }
+
+        inject?.Invoke(SwapSlots.ScriptHooks);
+
+        if ((old.SpellScripts.Count != 0 || added.SpellScripts.Count != 0)
+            && Required(_spellScripts(), added.SpellScripts.Count != 0, "the spell script registry") is { } spells)
+        {
+            SpellScriptRegistry.Checkpoint saved = spells.Save();
+            spells.CommitSwap(old.SpellScripts, added.SpellScripts); // undoes itself and throws when a ScriptsChanged handler fails
+            undo.Add(SwapSlots.SpellScripts, () => spells.Restore(saved));
+        }
+
+        inject?.Invoke(SwapSlots.SpellScripts);
+
+        if ((old.InstanceScripts.Count != 0 || added.InstanceScripts.Count != 0)
+            && Required(_instanceScripts(), added.InstanceScripts.Count != 0, "the instance script registry") is { } instances)
+        {
+            InstanceScriptRegistry.Checkpoint saved = instances.Save();
+            instances.CommitSwap([.. old.InstanceScripts.Keys], added.InstanceScripts);
+            undo.Add(SwapSlots.InstanceScripts, () => instances.Restore(saved));
+        }
+
+        inject?.Invoke(SwapSlots.InstanceScripts);
+
+        if ((old.HasEventAi || added.HasEventAi) && Required(_eventAi(), added.HasEventAi, "the EventAI registry") is { } eventAi)
+        {
+            EventAiRegistry.Checkpoint saved = eventAi.Save();
+            eventAi.CommitSwap(
+                [.. old.EventAiEvents.Select(h => h.EventType)],
+                [.. old.EventAiActions.Select(h => h.ActionType)],
+                added.EventAiEvents,
+                added.EventAiActions);
+            undo.Add(SwapSlots.EventAi, () => eventAi.Restore(saved));
+        }
+
+        inject?.Invoke(SwapSlots.EventAi);
+    }
+
+    /// <summary>The registry, or null when it is gone and the slot only removes; throws when it is gone and the slot adds.</summary>
+    private static T? Required<T>(T? registry, bool adds, string what)
+        where T : class
+        => registry is null && adds ? throw new InvalidOperationException($"{what} is no longer available on this server") : registry;
+
+    /// <summary>
+    /// After every slot of the swap committed: give live creatures the new AI (or the retry sweep for those in combat). Never throws; a failure is
+    /// logged and only means some creatures keep their previous AI until they are rebuilt.
+    /// </summary>
+    internal ModuleGameCommit Complete(ModuleGameParts? old, ModuleGameParts? added, AssemblyLoadContext? oldContext)
     {
         old ??= ModuleGameParts.Empty;
         added ??= ModuleGameParts.Empty;
         if (old.IsEmpty && added.IsEmpty)
         {
             return default;
-        }
-
-        try
-        {
-            if (old.HasCreatureAi || added.HasCreatureAi)
-            {
-                _creatureAi()!.CommitSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries, added.AiNames);
-            }
-
-            if (old.Hooks.Count != 0 || added.Hooks.Count != 0)
-            {
-                _hooks()!.CommitSwap(old.Hooks, added.Hooks);
-            }
-
-            if (old.SpellScripts.Count != 0 || added.SpellScripts.Count != 0)
-            {
-                _spellScripts()!.CommitSwap(old.SpellScripts, added.SpellScripts);
-            }
-
-            if (old.InstanceScripts.Count != 0 || added.InstanceScripts.Count != 0)
-            {
-                _instanceScripts()!.CommitSwap([.. old.InstanceScripts.Keys], added.InstanceScripts);
-            }
-
-            if (old.HasEventAi || added.HasEventAi)
-            {
-                _eventAi()!.CommitSwap(
-                    [.. old.EventAiEvents.Select(h => h.EventType)],
-                    [.. old.EventAiActions.Select(h => h.ActionType)],
-                    added.EventAiEvents,
-                    added.EventAiActions);
-            }
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _logger.LogError(ex, "applying a module's game content failed after validation");
-            return new ModuleGameCommit(0, 0, 0, $"applying creature AI / script hooks / spell scripts / instance scripts / EventAI failed: {ex.GetType().Name}: {ex.Message}");
         }
 
         HashSet<uint> entries = [.. old.AiEntries.Keys, .. added.AiEntries.Keys];
@@ -306,14 +356,22 @@ public sealed class ModuleGameSeams
             return new ModuleGameCommit(0, 0, old.Hooks.Count + added.Hooks.Count);
         }
 
-        HashSet<ObjectGuid> pending = [];
-        (int changed, int deferred) = Refresh(entries, names, retired, null, pending);
-        if (deferred > 0)
+        try
         {
-            _ = SweepAsync(entries, names, retired, pending);
-        }
+            HashSet<ObjectGuid> pending = [];
+            (int changed, int deferred) = Refresh(entries, names, retired, null, pending);
+            if (deferred > 0)
+            {
+                _ = SweepAsync(entries, names, retired, pending);
+            }
 
-        return new ModuleGameCommit(changed, deferred, old.Hooks.Count + added.Hooks.Count);
+            return new ModuleGameCommit(changed, deferred, old.Hooks.Count + added.Hooks.Count);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "giving live creatures the swapped module AI failed; creatures not yet switched keep their previous AI until rebuilt");
+            return new ModuleGameCommit(0, 0, old.Hooks.Count + added.Hooks.Count);
+        }
     }
 
     /// <summary>
@@ -450,5 +508,4 @@ public readonly record struct ModuleRetiredGame(int InstanceMaps, int EventAiCre
 /// <param name="CreaturesSwitched">Creatures that got a new AI object now.</param>
 /// <param name="CreaturesDeferred">Creatures in combat that keep the old AI for now.</param>
 /// <param name="HookObjects">Script hook objects removed plus added.</param>
-/// <param name="Error">Set when applying the creature AI or script hook changes failed (the opcode and command tables had already changed).</param>
-internal readonly record struct ModuleGameCommit(int CreaturesSwitched, int CreaturesDeferred, int HookObjects, string? Error = null);
+internal readonly record struct ModuleGameCommit(int CreaturesSwitched, int CreaturesDeferred, int HookObjects);

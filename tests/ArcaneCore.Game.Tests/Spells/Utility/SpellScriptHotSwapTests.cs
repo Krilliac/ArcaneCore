@@ -257,22 +257,52 @@ public sealed class SpellScriptHotSwapTests
     }
 
     [Fact]
-    public void ScriptsChanged_IsRaisedOnCommitOnly_AndAThrowingHandlerDoesNotUndoTheSwap()
+    public void ScriptsChanged_IsRaisedOnCommitOnly_AndAThrowingHandlerUndoesTheSwapAndFailsIt()
     {
         var registry = new SpellScriptRegistry([]);
+        var kept = new HotScriptV1(_log);
+        registry.CommitSwap([], [kept]);
         int raised = 0;
         registry.ScriptsChanged += () => throw new InvalidOperationException("handler fault");
         registry.ScriptsChanged += () => raised++;
 
-        Assert.Null(registry.ValidateSwap([], [new HotScriptV1(_log)]));
+        Assert.Null(registry.ValidateSwap([kept], [new HotScriptV2(_log)]));
         Assert.Equal(0, raised);
 
+        var v2 = new HotScriptV2(_log);
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => registry.CommitSwap([kept], [v2]));
+
+        Assert.Contains("handler fault", error.Message, StringComparison.Ordinal);
+        Assert.Contains("undone", error.Message, StringComparison.Ordinal);
+        Assert.Equal(2, raised); // every handler ran on the commit, then again on the undo
+        Assert.Same(kept, registry.Find(HotSpell));
+        Assert.Same(kept, Assert.Single(registry.HotScripts));
+        Assert.Contains(FaultLedger.Shared.Snapshot(), s => s.Site == "spell-script" && s.ExceptionType == typeof(InvalidOperationException).FullName);
+    }
+
+    [Fact]
+    public void Restore_PutsBackExactlyTheSavedState_AndRaisesScriptsChanged()
+    {
+        var registry = new SpellScriptRegistry([new BuiltInScript(_log)]);
         var v1 = new HotScriptV1(_log);
         registry.CommitSwap([], [v1]);
+        SpellScriptRegistry.Checkpoint saved = registry.Save();
+        int raised = 0;
+        registry.ScriptsChanged += () => raised++;
 
-        Assert.Equal(1, raised);
+        var heal = new HealScript(_log);
+        registry.CommitSwap([v1], [new HotScriptV2(_log), heal]);
+        Assert.Contains(SpellEffectName.Heal, registry.ExecuteEffects);
+
+        registry.Restore(saved);
+
+        Assert.Equal(2, raised);
         Assert.Same(v1, registry.Find(HotSpell));
-        Assert.Contains(FaultLedger.Shared.Snapshot(), s => s.Site == "spell-script" && s.ExceptionType == typeof(InvalidOperationException).FullName);
+        Assert.Same(v1, Assert.Single(registry.HotScripts));
+        Assert.Null(registry.Find(HealSpell));
+        Assert.DoesNotContain(SpellEffectName.Heal, registry.ExecuteEffects);
+        Assert.True(registry.IsBuiltIn(BuiltInSpell));
+        Assert.Throws<ArgumentException>(() => new SpellScriptRegistry([]).Restore(saved));
     }
 
     [Fact]

@@ -56,7 +56,8 @@ public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<Announce
 /// constructor that throws, an opcode or command that clashes with something the module does not own,
 /// a commit the world thread does not reach in time) changes nothing. A reload builds the new version
 /// completely before touching the old one and swaps old for new in one step: on any failure the old
-/// version keeps serving.</item>
+/// version keeps serving. A failure after validation, in any slot, is rolled back slot by slot to the
+/// state before the swap and reported as failed (<see cref="ModuleResult.Failed"/>).</item>
 /// <item><b>A module never replaces what it does not own.</b> Built-in handlers and roots, other
 /// modules' and the registry refresh's are never overwritten; a clash rejects the module. The same holds
 /// for built-in spell scripts, instance scripts and EventAI handlers.</item>
@@ -244,7 +245,15 @@ public sealed class ModuleHost
         {
             prepared?.Context.Unload();
             Retire(prepared?.Context);
-            return new ModuleResult(false, $"{error}; the tables are unchanged");
+            if (!swap.Failed)
+            {
+                return new ModuleResult(false, $"{error}; the tables are unchanged");
+            }
+
+            // A failure after validation: every slot was rolled back, so the module keeps its previous state (loaded as before, or not loaded).
+            return swap.RollbackError is null
+                ? new ModuleResult(false, $"{error}; every slot was rolled back, nothing changed", Failed: true)
+                : new ModuleResult(false, $"{error}; ROLLBACK INCOMPLETE, these slots could not be put back: {swap.RollbackError} (a restart restores a known state)", Failed: true);
         }
 
         lock (_gate)
@@ -284,12 +293,6 @@ public sealed class ModuleHost
                 Detail = $"{final.Detail}; {swap.Game.CreaturesSwitched} creatures switched AI, {swap.Game.CreaturesDeferred} in combat keep the old AI for now",
                 Fields = fields,
             };
-        }
-
-        if (swap.Game.Error is { } gameFailure)
-        {
-            // The opcode and command tables are already swapped, so the module's bookkeeping above stands; the result must not claim success.
-            final = new ModuleResult(false, $"{operation.ToString().ToLowerInvariant()} of '{name}' only partly applied: the opcode and command tables changed, but {gameFailure}", final.Fields, Failed: true);
         }
 
         return final;
@@ -352,12 +355,25 @@ public sealed class ModuleHost
         }
     }
 
-    /// <summary>World thread, start of a tick: swap the old version of the module (if any) for the new one (if any).</summary>
+    /// <summary>
+    /// Test seam: called on the world thread with each slot's name (<see cref="SwapSlots"/>) during a commit, right after that slot changed (for
+    /// <see cref="SwapSlots.Commands"/>, just before the command table is swapped, the last step). A throw is a failure after validation and must be
+    /// rolled back completely. Null in production.
+    /// </summary>
+    internal Action<string>? FaultInjection { get; set; }
+
+    /// <summary>
+    /// World thread, start of a tick: swap the old version of the module (if any) for the new one (if any). Every slot (opcodes, creature AI,
+    /// script hooks, spell scripts, instance scripts, EventAI, commands) is validated before any changes; the commit then records an undo step per
+    /// changed slot, and a failure in any slot rolls every slot back to the state before the swap (<see cref="PendingSwap.Failed"/>). Live
+    /// creatures are given the new AI only once every slot is in.
+    /// </summary>
     private string? Apply(PendingSwap swap)
     {
         (LoadedModule? old, Prepared? added) = swap.Take();
         IReadOnlyCollection<WorldOpcode> removeOpcodes = old?.Opcodes ?? [];
         IReadOnlyCollection<string> removeRoots = old?.RootNames ?? [];
+        IReadOnlyList<ChatCommand> addRoots = added?.Roots ?? [];
 
         OpcodeTable? swapped = _opcodes.TrySwap(removeOpcodes, added?.Fresh ?? new OpcodeTable(), out string? opcodeError);
         if (swapped is null)
@@ -365,23 +381,49 @@ public sealed class ModuleHost
             return opcodeError;
         }
 
-        // Creature AI and script hooks are checked before the command table is touched, so a clash there still changes nothing.
         if (_seams?.Validate(old?.Game, added?.Game) is { } gameError)
         {
             return gameError;
         }
 
-        CommandAddResult commands = _commands.TryReplace(removeRoots, added?.Roots ?? []);
-        if (!commands.Applied)
+        // The same check CommandTableSource.TryReplace makes, on the roots that remain: a clash is refused before anything changes.
+        ChatCommand[] remainingRoots = [.. _commands.Current.Roots.Where(c => !removeRoots.Contains(c.Name, StringComparer.OrdinalIgnoreCase))];
+        if (CommandTableSource.Validate(remainingRoots, addRoots) is { } commandError)
         {
-            return commands.Error;
+            return commandError;
         }
 
-        // Both checks passed: the remaining step is a pointer flip that cannot fail.
-        _opcodes.Replace(swapped);
+        Action<string>? inject = FaultInjection;
+        var undo = new SwapUndo();
+        try
+        {
+            OpcodeTable previous = _opcodes.Copy();
+            _opcodes.Replace(swapped);
+            undo.Add(SwapSlots.Opcodes, () => _opcodes.Replace(previous));
+            inject?.Invoke(SwapSlots.Opcodes);
+
+            _seams?.CommitSlots(old?.Game, added?.Game, undo, inject);
+
+            // Last, and the only step whose failure is a refusal that changed nothing: no undo step is needed for it.
+            inject?.Invoke(SwapSlots.Commands);
+            CommandAddResult commands = _commands.TryReplace(removeRoots, addRoots);
+            if (!commands.Applied)
+            {
+                throw new InvalidOperationException($"the command table refused the swap: {commands.Error}");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            IReadOnlyList<string> changed = undo.Slots;
+            _logger.LogError(ex, "Applying a hot module failed after validation; rolling back {Slots}", changed.Count == 0 ? "nothing" : string.Join(", ", changed));
+            swap.Failed = true;
+            swap.RollbackError = undo.RollBack((slot, rollbackEx) => _logger.LogFault("hotmodule-rollback", rollbackEx, "Rolling back the {Slot} slot of a hot module swap failed", slot));
+            return $"applying the module failed after validation ({ex.GetType().Name}: {ex.Message})";
+        }
+
         if (_seams is not null)
         {
-            swap.Game = _seams.Commit(old?.Game, added?.Game, old?.Context);
+            swap.Game = _seams.Complete(old?.Game, added?.Game, old?.Context);
         }
 
         return null;
@@ -602,6 +644,12 @@ public sealed class ModuleHost
     {
         /// <summary>What the creature AI / script hook part of the commit did (set on the world thread, read after the commit completed).</summary>
         public ModuleGameCommit Game { get; set; }
+
+        /// <summary>The commit failed after validation and was rolled back (set on the world thread, read after the commit completed).</summary>
+        public bool Failed { get; set; }
+
+        /// <summary>When <see cref="Failed"/>: the slots the rollback could not put back, or null when every slot was restored.</summary>
+        public string? RollbackError { get; set; }
 
         private LoadedModule? _old = old;
         private Prepared? _added = added;

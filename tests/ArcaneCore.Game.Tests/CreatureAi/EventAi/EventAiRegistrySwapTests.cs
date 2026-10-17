@@ -122,6 +122,44 @@ public sealed class EventAiRegistrySwapTests
     }
 
     [Fact]
+    public void Restore_PutsTheSavedHandlersBack_SoAHandlerBoundBeforeTheUndoneSwapIsCurrentAgain()
+    {
+        EventAiRegistry registry = Fresh();
+        var first = new ModuleEvent(ModuleType);
+        var action = new CountingAction(ModuleType);
+        registry.CommitSwap([], [], [first], [action]);
+        EventAiRegistry.Checkpoint saved = registry.Save();
+        long generation = registry.Generation;
+
+        registry.CommitSwap([ModuleType], [ModuleType], [new ModuleEvent(ModuleType)], []);
+        Assert.False(registry.IsCurrent(first));
+        Assert.Null(registry.FindAction(ModuleType));
+
+        registry.Restore(saved);
+
+        Assert.True(registry.IsCurrent(first));
+        Assert.Same(action, registry.FindAction(ModuleType));
+        Assert.Equal([ModuleType], registry.ModuleEventTypes);
+        Assert.Equal([ModuleType], registry.ModuleActionTypes);
+        Assert.Equal(generation + 2, registry.Generation);
+        Assert.Throws<ArgumentException>(() => Fresh().Restore(saved));
+    }
+
+    [Fact]
+    public void FromHandlers_MakesExactlyTheGivenHandlersBuiltIn()
+    {
+        EventAiHandlerSet builtIns = EventAiRegistry.DiscoverHandlers([typeof(EventAiRegistry).Assembly]);
+        var extra = new ModuleEvent(ModuleType);
+
+        EventAiRegistry registry = EventAiRegistry.FromHandlers([.. builtIns.Events, extra], builtIns.Actions);
+
+        Assert.Same(extra, registry.FindEvent(ModuleType));
+        Assert.True(registry.IsBuiltInEvent(ModuleType));
+        Assert.Contains("built in; a module cannot override it", registry.ValidateSwap([], [], [ModuleType], []), StringComparison.Ordinal);
+        Assert.Equal(EventAiRegistry.Default.ActionTypes.Order(), registry.ActionTypes.Order());
+    }
+
+    [Fact]
     public void TheDefaultRegistry_IsTheHolderEveryEventAiCreatureUses()
     {
         CreatureEventAI wolf = Wolf([Row(1, EventAiEventType.Aggro)], out WorldRuntime world, out _);
