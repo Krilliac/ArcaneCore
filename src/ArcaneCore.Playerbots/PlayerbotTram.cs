@@ -898,7 +898,7 @@ internal static class PlayerbotTram
         return null;
     }
 
-    /// <summary>The platform spots on both sides of a car at <paramref name="at"/>, where the floor is level with <paramref name="floorZ"/>.</summary>
+    /// <summary>The platform spots on both sides of a car at <paramref name="stop"/>, where the floor is level with <paramref name="floorZ"/>.</summary>
     // Out of Pump on purpose: a lambda there capturing 'trip' made the compiler allocate a closure on every Pump call for every
     // bot (~16 MB/min on live), tram rider or not. First nearest wins, as OrderBy's stable sort did.
     private static Vector3? NearestSide(Map map, GameObject car, Vector3 stop, float floorZ, Vector3 exitCentre)

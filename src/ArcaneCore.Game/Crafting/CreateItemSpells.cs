@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Crafting;
 /// <para>
 /// Effect (Spell::DoCreateItem, SpellEffects.cpp:1885-1990): <see cref="PlayerInventory.CreateItemFromSpell"/> stores the item (stack clamp,
 /// partial store, crafter signature, push result with created set), then <c>UpdateCraftSkill</c> runs when at least one item was
-/// stored and the spell is not a battleground mark (<paramref name="grantSkillUp"/> false, for the battlegrounds lane).
+/// stored and the spell is not a battleground mark (<c>grantSkillUp</c> false, for the battlegrounds lane).
 /// </para>
 /// </summary>
 public static class CreateItemSpells

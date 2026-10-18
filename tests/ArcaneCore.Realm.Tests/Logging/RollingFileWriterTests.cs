@@ -394,7 +394,7 @@ public sealed class RollingFileWriterTests : IDisposable
         Assert.Contains("line 003\nline 004\n", ReadShared(LogPath), StringComparison.Ordinal);
     }
 
-    /// <summary>Opens real files, but while <see cref="Full"/> every flush, including the one <see cref="FileStream.Dispose()"/> performs on a dirty buffer, fails with ENOSPC.</summary>
+    /// <summary>Opens real files, but while <see cref="Full"/> every flush, including the one <see cref="Stream.Dispose()"/> performs on a dirty buffer, fails with ENOSPC.</summary>
     private sealed class FailingDisk
     {
         public bool Full { get; set; } = true;

@@ -21,7 +21,7 @@ public sealed record SkippedNavTile(string File, int TileX, int TileY, Exception
 /// <summary>
 /// The coarse connectivity of one map's whole navigation mesh: every <c>.mmtile</c> of the map is read once, its polygons that pass a
 /// filter are split into regions (the parts of the tile its own polygon links join), and regions of adjacent tiles are joined where their
-/// border edges meet, by the same rule a path query crosses a tile border by (<see cref="NavMesh.Neighbours"/>). Each joint is a
+/// border edges meet, by the same rule a path query crosses a tile border by (<see cref="NavMesh.CollectNeighbours"/>). Each joint is a
 /// <em>portal</em>: a point on the shared border, one per stretch of at most <see cref="MaxPortalYards"/>.
 /// <para>
 /// A chain of regions is a chain of mesh polygons a path query could walk, so the graph knows exactly which places of a map are joined

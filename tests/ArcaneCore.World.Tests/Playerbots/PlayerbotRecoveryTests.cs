@@ -382,7 +382,7 @@ public sealed class PlayerbotRecoveryTests
     /// <summary>
     /// A battleground ghost with no spirit guide in sight whose every walk stalls (graveyard, body) is reported once and waits for the
     /// match; it never throws <see cref="PlayerbotRecovery.SpiritHealerFailed"/> (the world's fallback still does, see
-    /// <see cref="TrappedGhost_RelocatesToGraveyardAndSpiritHealer_BeforeFaulting"/>).
+    /// <see cref="TrappedGhost_RelocatesToGraveyardAndSpiritHealer_BeforeGivingUp"/>).
     /// </summary>
     [Fact]
     public async Task BattlegroundGhost_WithNoGuideAndEveryWalkStalled_WaitsInsteadOfFaulting()

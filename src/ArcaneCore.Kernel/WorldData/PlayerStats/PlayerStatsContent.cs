@@ -122,7 +122,7 @@ public sealed class PlayerStatsContent
     /// <summary>
     /// The startup integrity check the reference performs (and exits on): for every playable race/class
     /// pair level 1 stats exist, each class has level 1 health/mana, XP rows exist for levels 1 up to
-    /// <paramref name="maxLevel"/> - 1, and every class in <paramref name="classes"/> has a crit and a dodge
+    /// <paramref name="maxLevel"/> - 1, and every class in <paramref name="pairs"/> has a crit and a dodge
     /// per agility rate for level 1 and the last level (vmangos ObjectMgr.cpp:4876, 4988, 5011-5015, 5117-5129).
     /// Returns one message per problem; empty means valid. Level gaps are not problems (they are filled).
     /// </summary>

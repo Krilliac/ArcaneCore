@@ -257,14 +257,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>
     /// The opportunity controller drove the latest think (it walked, opened, waited or chose a guard to pull). The brain's goal is
     /// <see cref="PlayerbotGoalKind.Loot"/> for a chest and for a corpse alike, so the policy telemetry labels a decision
-    /// <see cref="PlayerbotPolicyGoal.Opportunity"/> from this and not from the goal kind.
+    /// <see cref="Policy.PlayerbotPolicyGoal.Opportunity"/> from this and not from the goal kind.
     /// </summary>
     internal bool OpportunityDriven { get; private set; }
 
     /// <summary>
     /// The quest destinations controller planned the latest think's trip (the ladder's quest-travel rung, or a promoted
-    /// <see cref="PlayerbotPolicyGoal.QuestTravel"/>). The trip's goal kind is <see cref="PlayerbotGoalKind.Quest"/>, the same as a quest
-    /// worked in sight, so the policy telemetry labels the decision <see cref="PlayerbotPolicyGoal.QuestTravel"/> from this.
+    /// <see cref="Policy.PlayerbotPolicyGoal.QuestTravel"/>). The trip's goal kind is <see cref="PlayerbotGoalKind.Quest"/>, the same as a quest
+    /// worked in sight, so the policy telemetry labels the decision <see cref="Policy.PlayerbotPolicyGoal.QuestTravel"/> from this.
     /// </summary>
     internal bool QuestTravelDriven { get; private set; }
 
@@ -490,7 +490,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     /// <summary>
     /// The bot's thinks in the world so far, every kind (combat, rest, the goal ladder): the goal policy tells the think right after a
-    /// snapshot's from one with other thinks in between by it (<see cref="PlayerbotPolicyAgent.Decide"/>).
+    /// snapshot's from one with other thinks in between by it (<see cref="Policy.PlayerbotPolicyAgent.Decide"/>).
     /// </summary>
     internal long ThinkCount { get; private set; }
     private bool _starvedReported;
@@ -2951,7 +2951,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// (vmangos <c>Player::TeleportToHomebind</c>). Any other reason uses the bot's own hearthstone when it is ready
     /// (<see cref="PlayerbotHearthstone.IsReady"/>: <see cref="PlayerbotTravelOptions.Hearthstone"/> on, the stone carried and off cooldown; the
     /// leg is driven by the next thinks, PlayerbotHearthstone.Drive), as a 1.12 player does; when it is not ready only a trip made for the bot's
-    /// safety (<paramref name="safety"/>: stranded on ground no route leaves, or among creatures too strong for it) falls back to the direct teleport, and any other reason sends the bot nowhere. True when the
+    /// safety (<c>safety</c>: stranded on ground no route leaves, or among creatures too strong for it) falls back to the direct teleport, and any other reason sends the bot nowhere. True when the
     /// bot was sent (or its hearthstone cast begun); its intent is dropped, a journey under way with it, and it explores from there.
     /// </summary>
     private bool TryTeleportToBindPoint(Player player, string why, bool urgent) => TryTeleportToBindPoint(player, why, urgent, safety: urgent);
@@ -3251,7 +3251,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             : PlayerbotStallWatch.ProgressYards + PlayerbotNavigation.WanderMaxShortfallYards;
 
     /// <summary>
-    /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
+    /// The end of the next wandering leg from <c>from</c>, facing <c>orientation</c>: roughly that facing (within
     /// +-60 degrees, golden-ratio spread so successive legs differ). After any refusal turn anywhere around the compass so the bot turns
     /// away from a cliff or canyon wall immediately instead of probing into the same wall again, and shorten the ray
     /// (<see cref="ExploreLegLength"/>): the full 48-yard ray is what <see cref="PlayerbotNavigation.PlanWander"/> keeps refusing.

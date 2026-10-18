@@ -251,7 +251,7 @@ internal static class PlayerbotCombatView
         return state;
     }
 
-    /// <summary>A snapshot of <paramref name="unit"/> as <paramref name="bot"/> sees it.</summary>
+    /// <summary>A snapshot of <c>unit</c> as <c>bot</c> sees it.</summary>
     private const float TameReach = 28f;
     private const uint TameScanIntervalMs = 5_000;
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, uint> s_lastTameScan = new();

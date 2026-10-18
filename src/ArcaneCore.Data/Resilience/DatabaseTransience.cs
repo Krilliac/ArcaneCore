@@ -81,7 +81,7 @@ public static class DatabaseTransience
 
     /// <summary>
     /// Inspects the exception chain (<see cref="SqliteException.SqliteErrorCode"/>, <see cref="SqliteException.SqliteExtendedErrorCode"/>,
-    /// <see cref="DbException.SqlState"/>, <see cref="DbException.ErrorCode"/>, <see cref="DbUpdateConcurrencyException"/>,
+    /// <see cref="DbException.SqlState"/>, <see cref="System.Runtime.InteropServices.ExternalException.ErrorCode"/>, <see cref="DbUpdateConcurrencyException"/>,
     /// <see cref="DbUpdateException"/>, <see cref="TimeoutException"/>, <see cref="OperationCanceledException"/>) and returns a
     /// structured, credential-safe diagnostic summary (<c>type=... code=... sqlState=... transient=... busy=...</c>).
     /// </summary>
@@ -141,7 +141,7 @@ public static class DatabaseTransience
 
     /// <summary>
     /// Formats the provider error code on <paramref name="exception"/> (<see cref="SqliteException.SqliteErrorCode"/>,
-    /// <see cref="SqliteException.SqliteExtendedErrorCode"/>, <see cref="DbException.SqlState"/>, <see cref="DbException.ErrorCode"/>),
+    /// <see cref="SqliteException.SqliteExtendedErrorCode"/>, <see cref="DbException.SqlState"/>, <see cref="System.Runtime.InteropServices.ExternalException.ErrorCode"/>),
     /// or null when the exception carries no provider code.
     /// </summary>
     public static string? FormatProviderCode(Exception? exception)

@@ -59,7 +59,7 @@ internal readonly record struct BotChatEvent(long AtMs, BotChatEventKind Kind, s
 /// A bot's recent events for its chat persona and the conversation director. Most are seen by comparing its state between looks
 /// (<see cref="Observe"/>, world thread, a handful of field reads): a level gained, a death, a return to life, money picked up, health
 /// falling low, a dungeon or battleground entered. Others are told (<see cref="Note"/>): a quest handed in, a boss kill. Notable loot is
-/// heard from the bot's inventory (<see cref="PlayerInventory.ItemCountChanged"/>, subscribed once per player object). At most
+/// heard from the bot's inventory (<see cref="ArcaneCore.Game.Items.PlayerInventory.ItemCountChanged"/>, subscribed once per player object). At most
 /// <see cref="MaxEvents"/>, each forgotten after <see cref="MaxAgeMs"/>.
 /// </summary>
 internal sealed class PlayerbotChatEvents

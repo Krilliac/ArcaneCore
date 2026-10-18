@@ -33,7 +33,7 @@ public readonly record struct EnvironmentalMitigation(uint Absorb, int Resist);
 /// <summary>
 /// Absorb, resist and immunity for environmental damage. The spell combat rules that compute them (vmangos
 /// <c>IsImmuneToDamage</c>, <c>CalculateDamageAbsorbAndResist</c>) belong to the spell-combat-rules lane and are not on
-/// this branch, so the default (<see cref="None"/>) mitigates nothing: lava is not reduced by fire resistance and fire
+/// this branch, so the default (<see cref="NoEnvironmentalMitigation.Instance"/>) mitigates nothing: lava is not reduced by fire resistance and fire
 /// immunity does not protect. Register the real implementation with <see cref="LocomotionEnvironment.RegisterMitigation"/>.
 /// Falling, drowning and fatigue are never absorbed (client 1.7.0 and later, Player.cpp:743-750); only their immunity
 /// is asked.

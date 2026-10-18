@@ -68,7 +68,7 @@ internal static class PartyTestHost
 
     /// <summary>
     /// A managed session in the world that is NOT one of the feature's bots (nothing ticks it), so a test can drive a
-    /// <see cref="Party.PlayerbotPartyAI"/> by hand, one think at a time.
+    /// <see cref="ArcaneCore.World.Playerbots.Party.PlayerbotPartyAI"/> by hand, one think at a time.
     /// </summary>
     public static async Task<WorldSession> EnterManagedAsync(WorldTestHost host, string account, string name)
     {

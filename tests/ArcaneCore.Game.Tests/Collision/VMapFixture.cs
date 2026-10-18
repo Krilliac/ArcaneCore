@@ -68,7 +68,7 @@ internal sealed class VMapFixture : IDisposable
 
     /// <summary>
     /// Write <c>NNN.vmtree</c> over every placed spawn and, for a tiled map, one <c>.vmtile</c> per
-    /// terrain tile listing the spawns whose origin lies in it (or <paramref name="global"/> for a
+    /// terrain tile listing the spawns whose origin lies in it (or <c>global</c> for a
     /// WMO-only map: spawns written into the tree).
     /// </summary>
     public void Write(uint mapId, bool tiled = true)

@@ -964,7 +964,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private readonly Dictionary<uint, uint> _heldAtLevel = [];
 
     /// <summary>
-    /// One more failed plan of the completed quest <paramref name="questId"/> (a single ender). A single failure proves nothing
+    /// One more failed plan of the completed quest <c>questId</c> (a single ender). A single failure proves nothing
     /// (<see cref="PlayerbotNavigation.TryPlanToward"/> also refuses a bot momentarily on a steep patch): only the
     /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed for a steep ascent or a hazard on a connected route,
     /// once per quest and spot; a bot that moved starts the count again. A confirmed refusal sets the quest and its
@@ -972,7 +972,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up). A completed quest refused for a hazard
     /// is held instead (<see cref="TeleportToBind"/> when the bind point is beside the ender), until <see cref="MaxHeldSetAsides"/>
     /// set-asides pass with no level gained. A death or retreat mark beside the road is not that hazard when
-    /// <paramref name="friendlyTownEnder"/>: it must not set a friendly town turn-in aside.
+    /// <c>friendlyTownEnder</c>: it must not set a friendly town turn-in aside.
     /// <para>
     /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
     /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map

@@ -822,7 +822,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         }
     }
 
-    /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
+    /// <summary>A scripted controller whose first <c>faults</c> ticks throw (an action fault in the bot's update).</summary>
     internal sealed class OneActionFaultMarkerException(string message) : InvalidOperationException(message);
 
     internal sealed class CommandFaultMarkerException(string message) : InvalidOperationException(message);

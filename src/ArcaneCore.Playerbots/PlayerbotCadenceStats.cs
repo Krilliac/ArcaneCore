@@ -1,7 +1,7 @@
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
-/// What the bots' think cadence looked like over a report window (<see cref="PlayerbotCadenceStats.Report"/>).
+/// What the bots' think cadence looked like over a report window (<see cref="PlayerbotCadenceStats.TryReport"/>).
 /// </summary>
 /// <param name="Bots">Bots running at the end of the window.</param>
 /// <param name="Thinks">Thinks made in the window.</param>
@@ -23,7 +23,7 @@ internal readonly record struct PlayerbotCadenceReport(int Bots, long Thinks, in
 
 /// <summary>
 /// The bots' think cadence, measured: the time between the thinks of one bot (a fixed histogram), the thinks per tick, and how often a
-/// tick ended on the time budget or on the action budget. One <see cref="Report"/> per <see cref="ReportIntervalMs"/>, then the window
+/// tick ended on the time budget or on the action budget. One <see cref="TryReport"/> per <see cref="ReportIntervalMs"/>, then the window
 /// starts again. Nothing in it names a bot. World thread only. Allocation-free after construction: the histogram is one array made once.
 /// </summary>
 internal sealed class PlayerbotCadenceStats

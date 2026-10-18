@@ -203,7 +203,6 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         }
     }
 
-    /// <summary>
     internal bool NeedsBotSnapshot(uint elapsedMs)
         => _tracked.Count > 0 || unchecked(_scanElapsed + elapsedMs) >= ScanMs;
 
@@ -883,7 +882,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction);
 
     /// <summary>
-    /// The nearest battlemaster of <paramref name="type"/> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
+    /// The nearest battlemaster of <c>type</c> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
     /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>).
     /// The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
     /// </summary>

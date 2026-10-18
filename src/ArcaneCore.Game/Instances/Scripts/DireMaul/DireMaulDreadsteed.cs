@@ -16,7 +16,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// <item>While IN_PROGRESS the ritual fails when the instance has no player but GMs while J'eevee is there, and once she is gone when the bell,
 /// the wheel and the candle are all deactivated.</item>
 /// <item>FAIL despawns the controller, the portals, the symbols, the three objects and the circle.</item>
-/// <item><see cref="DreadsteedRitualAI"/> runs the waves and ends with SPECIAL; event 8428 from a player while SPECIAL sets DONE and its DB
+/// <item><see cref="DireMaul.DreadsteedRitualAI"/> runs the waves and ends with SPECIAL; event 8428 from a player while SPECIAL sets DONE and its DB
 /// script summons the Xorothian Dreadsteed. Lord Hel'nurath's death also sets DONE.</item>
 /// </list>
 /// </summary>

@@ -57,8 +57,8 @@ public sealed class PlayerbotGrindCampTests
     }
 
     /// <summary>
-    /// The bot's own position is the first spawn of the camp (four spawns within 10 yards, <paramref name="respawnSeconds"/> each); a
-    /// fifth lies <see cref="FarYards"/> west when <paramref name="withFarSpawn"/>. No creature of the camp is left in sight.
+    /// The bot's own position is the first spawn of the camp (four spawns within 10 yards, <c>respawnSeconds</c> each); a
+    /// fifth lies <see cref="FarYards"/> west when <c>withFarSpawn</c>. No creature of the camp is left in sight.
     /// </summary>
     private sealed class Camp : IAsyncDisposable
     {

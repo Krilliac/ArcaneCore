@@ -118,7 +118,7 @@ public sealed class Quest
     /// <summary>vmangos Quest::IsAutoComplete: Method 0.</summary>
     public bool IsAutoComplete => Template.Method == 0;
 
-    /// <summary>vmangos Quest::IsRepeatable: SpecialFlags & QUEST_SPECIAL_FLAG_REPEATABLE.</summary>
+    /// <summary>vmangos Quest::IsRepeatable: SpecialFlags &amp; QUEST_SPECIAL_FLAG_REPEATABLE.</summary>
     public bool IsRepeatable => HasSpecialFlag(QuestSpecialFlags.Repeatable);
 
     public IReadOnlyList<uint> ReqItemId { get; }

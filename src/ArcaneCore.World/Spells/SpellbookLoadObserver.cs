@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Spells;
 /// everything that derives from the known spells follows; the skills area rebuilds a player's skills from them).
 /// <see cref="SpellFeature.OnPlayerLoadingAsync"/> awaits each observer in feature order after the book
 /// (with its defaults) is in <see cref="SpellFeature.Spellbook"/>. Session task: it may use the databases and
-/// fill <paramref name="player"/>, never touch world state. An exception fails the login (fail closed).
+/// fill <c>player</c>, never touch world state. An exception fails the login (fail closed).
 /// </summary>
 public interface ISpellbookLoadObserver
 {

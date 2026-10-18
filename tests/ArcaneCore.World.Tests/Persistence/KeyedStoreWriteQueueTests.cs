@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Tests.Persistence;
 /// <see cref="KeyedStoreWriteQueue{TStore}"/> directly, over a store that is not the GM audit one: the behaviour group
 /// persistence and the account last-address record rely on (newest value per key wins, a failed write is retained and
 /// carried, the stop drains and names what is not durable, no store means no-op). GmAuditUnitTests cover the same
-/// implementation through <see cref="Gm.Audit.GmAuditWriteQueue"/>.
+/// implementation through <see cref="ArcaneCore.World.Gm.Audit.GmAuditWriteQueue"/>.
 /// </summary>
 public sealed class KeyedStoreWriteQueueTests
 {

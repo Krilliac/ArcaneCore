@@ -84,10 +84,10 @@ internal sealed class PlayerbotRoute
     internal bool MeshEndedShort { get; set; }
 
     /// <summary>
-    /// <see cref="MeshEndedShort"/> for a query toward the goal of <see cref="PlanToward"/> itself (the goal, or a point of the straight line
+    /// <see cref="MeshEndedShort"/> for a query toward the goal of <see cref="PlayerbotNavigation.PlanToward"/> itself (the goal, or a point of the straight line
     /// to it): the mesh found no way and this is as near as it gets. A region leg, a chunk the mesh answered whole and a hop end short of the
     /// goal by design and never carry this. The one exception is the leg to the last portal of a region search that found no way
-    /// to the goal (<see cref="RegionLeg"/>): the graph's nearest ground to the goal, a dead end.
+    /// to the goal (<see cref="PlayerbotNavigation.RegionLeg"/>): the graph's nearest ground to the goal, a dead end.
     /// </summary>
     internal bool PartialToGoal { get; set; }
 
@@ -602,7 +602,7 @@ internal static class PlayerbotNavigation
     internal const int RegionSearchNodes = 20_000;
 
     /// <summary>
-    /// A leg of the way to a far <paramref name="goal"/> along the map's region graph (<see cref="NavRegionGraph"/>: which parts of the
+    /// A leg of the way to a far <c>goal</c> along the map's region graph (<see cref="NavRegionGraph"/>: which parts of the
     /// whole navigation mesh join which, built once per map off the world thread): the region search finds the way across the map coarsely,
     /// and the leg is the path query to its farthest portal within <see cref="RegionLegYards"/> (the goal itself when that near), or to
     /// its first portal. Without a way (the goal's region is not joined to the bot's) the search's way leads to the portal nearest the
@@ -1278,7 +1278,7 @@ internal static class PlayerbotNavigation
     /// stood there (issue #194).
     /// </para>
     /// <para>
-    /// Not in a dungeon, raid or battleground (<see cref="MapTemplate.IsDungeon"/>, <see cref="MapTemplate.IsBattleground"/>): there
+    /// Not in a dungeon, raid or battleground (<see cref="ArcaneCore.Kernel.WorldData.MapTemplate.IsDungeon"/>, <see cref="ArcaneCore.Kernel.WorldData.MapTemplate.IsBattleground"/>): there
     /// nearly every place is indoors, so the indoor test would not tell stairs from slopes, and no stall there is known to need it.
     /// </para>
     /// </summary>

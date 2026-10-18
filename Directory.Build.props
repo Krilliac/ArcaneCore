@@ -14,7 +14,16 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <InvariantGlobalization>true</InvariantGlobalization>
     <Deterministic>true</Deterministic>
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- XML documentation is generated so the compiler resolves every <see cref> and <paramref> in the doc comments: with it off, a cref to
+         a renamed or moved member rots silently. A cref that resolves to nothing (CS1574), badly formed XML (CS1570), a <param> or
+         <paramref> naming a parameter that is gone (CS1572, CS1734) and the like are then build errors under TreatWarningsAsErrors.
+         The .xml files are not shipped (PublishDocumentationFile=false) and nothing reads them. Three codes stay off because they are
+         noise, not rot: CS1591 (public member without a comment), CS1573 (some parameters documented, others not) and CS0419 (a cref to
+         an overloaded method written without a signature; the compiler picks one overload). The vendored tests/ThirdParty projects turn
+         generation off in their own csproj, as they do for warnings-as-errors and code style. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS0419</NoWarn>
     <!-- Supply chain: every project restores against its committed packages.lock.json (exact versions plus content hashes of the
          whole transitive graph). CI and the Dockerfile restore with locked mode, so a package graph that differs from the lock file
          fails the restore instead of silently resolving something new. Updating a package: docs/guide/contributing.md. -->

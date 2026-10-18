@@ -32,7 +32,7 @@ public sealed record DialectSignature(ContentDialect Dialect, IReadOnlyList<stri
 
 /// <summary>
 /// What the importers expect of one source table: its key, the columns they actually read
-/// (<see cref="Mapped"/>, every alias of every dialect) and the signatures that tell the dialects
+/// (<see cref="MappedColumns"/>, every alias of every dialect) and the signatures that tell the dialects
 /// apart. Tables without a spec are not read by any importer yet.
 /// </summary>
 public sealed class TableSpec

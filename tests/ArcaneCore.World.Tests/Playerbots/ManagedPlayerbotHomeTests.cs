@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 /// <summary>
 /// <c>.playerbot home</c> end to end: the command, <see cref="ManagedPlayerbotFeature"/>'s store and running brains, the status and
-/// inspection lines. The tele values come from the test map data (<see cref="InMemoryMapDataStore"/>: Stormwind map 0 at
+/// inspection lines. The tele values come from the test map data (<see cref="GridTerrain.InMemoryMapDataStore"/>: Stormwind map 0 at
 /// -8913.23, 554.633, 93.7944; Nowhere map 99); the reply texts are PlayerbotCommands' own. The test world has no terrain data, so
 /// the zone clip reads a fixture (<see cref="ManagedPlayerbotFeature.ZoneLookups"/>): zone 12 everywhere unless a test says otherwise.
 /// </summary>

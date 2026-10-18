@@ -19,7 +19,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Ship;
 /// A world with the synthetic ships of <see cref="TransportWorldContent"/> (with the Booty Bay boat, entry 20808, on the crossing path: a port
 /// on map 0 50 yards north of the human start, a port on map 1 at (1100, 0)), the manual clock, a flat floor at the start's height on every
 /// map (<see cref="FlatFloor"/>), straight-line paths (<see cref="OpenPathfinder"/>) and one real managed bot session (a warrior of
-/// <paramref name="race"/>: 1 human, 2 orc). Time moves only through <see cref="AdvanceAsync"/>; the motion and the worldport
+/// <c>race</c>: 1 human, 2 orc). Time moves only through <see cref="AdvanceAsync"/>; the motion and the worldport
 /// acknowledgement run as the managed-bot feature runs them (<see cref="PlayerbotMotion.Pump"/> every 50 ms tick).
 /// </summary>
 internal sealed class ShipTestWorld : IAsyncDisposable

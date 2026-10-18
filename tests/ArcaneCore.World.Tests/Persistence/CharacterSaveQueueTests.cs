@@ -1209,7 +1209,7 @@ public sealed class CharacterSaveQueueTests
         return true;
     }
 
-    /// <summary>Character <paramref name="lockedId"/> fails with SQLite BUSY until <see cref="Locked.Release"/>; every other character saves.</summary>
+    /// <summary>Character <c>lockedId</c> fails with SQLite BUSY until <see cref="Locked.Release"/>; every other character saves.</summary>
     private sealed class Locked
     {
         private int _attempts;

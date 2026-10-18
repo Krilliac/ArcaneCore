@@ -548,8 +548,8 @@ public sealed class PlayerbotChaosEngine
     }
 
     /// <summary>
-    /// True only when <paramref name="skillId"/> is a known primary profession skill (<see cref="SkillCategories.Profession"/>)
-    /// carrying <see cref="SkillRaceClassFlags.Unlearnable"/> for <paramref name="player"/>.
+    /// True only when <paramref name="skillId"/> is a known primary profession skill (<see cref="ArcaneCore.Kernel.Skills.SkillCategories.Profession"/>)
+    /// carrying <see cref="ArcaneCore.Kernel.Skills.SkillRaceClassFlags.Unlearnable"/> for <paramref name="player"/>.
     /// </summary>
     public static bool IsUnlearnablePrimaryProfessionSkill(Player player, uint skillId)
     {

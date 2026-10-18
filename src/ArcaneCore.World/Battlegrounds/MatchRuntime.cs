@@ -348,7 +348,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     /// see <see cref="OnBannerTriggered"/>.</item>
     /// </list>
     /// Anything else (a flag stand or dropped flag has its own use handler) is not a banner.
-    /// The bots decide whether they can play Arathi Basin with this rule (<see cref="Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator"/>).
+    /// The bots decide whether they can play Arathi Basin with this rule (<c>Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator</c>).
     /// </summary>
     internal static bool RoutesBannerUse(GameObjectTemplate template)
     {

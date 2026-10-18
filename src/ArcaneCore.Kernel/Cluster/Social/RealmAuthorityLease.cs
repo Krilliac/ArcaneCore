@@ -44,7 +44,7 @@ public sealed record AuthorityLeaseResult(AuthorityLeaseOutcome Outcome, RealmAu
 
 /// <summary>
 /// Store for realm-singleton authority leases (M15.2). Guarantees at most one active lease holder per
-/// <paramref name="scope"/> at any instant and issues strictly monotonic fencing tokens across takeovers.
+/// <c>scope</c> at any instant and issues strictly monotonic fencing tokens across takeovers.
 /// </summary>
 public interface IRealmAuthorityLeaseStore
 {

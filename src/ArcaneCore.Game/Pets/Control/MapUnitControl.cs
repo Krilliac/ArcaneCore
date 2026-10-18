@@ -113,8 +113,8 @@ public sealed class MapUnitControl : IMapUpdater
     internal void Untrack(Unit target) => _links.Remove(target);
 
     /// <summary>
-    /// vmangos <c>m_Events.AddLambdaEventAtOffset</c> for a unit of this map: <paramref name="action"/> runs in the map update once
-    /// <paramref name="delayMs"/> have passed (Spirit of Redemption's follow-up steps). Like vmangos's queue, which belongs to the unit, the
+    /// vmangos <c>m_Events.AddLambdaEventAtOffset</c> for a unit of this map: <c>action</c> runs in the map update once
+    /// <c>delayMs</c> have passed (Spirit of Redemption's follow-up steps). Like vmangos's queue, which belongs to the unit, the
     /// action of a player follows it to the next map it enters (<see cref="OnPlayerRemoved"/>, <see cref="OnPlayerAdding"/>); the
     /// action of another unit is dropped when the unit has left the map (despawned or unloaded).
     /// </summary>

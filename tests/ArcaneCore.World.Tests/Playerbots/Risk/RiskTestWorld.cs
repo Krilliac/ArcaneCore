@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Risk;
 
 /// <summary>
 /// A world on the manual clock with flat open ground, the monster faction hostile to the human bot, and a hand-driven brain
-/// (<see cref="Think"/>: one think, then the clock moves): time moves only when a test says so. Creatures are spawned into the
+/// (<see cref="ThinkAsync"/>: one think, then the clock moves): time moves only when a test says so. Creatures are spawned into the
 /// map's own creature system, so their aggro, assistance, chase and leash are the server's.
 /// </summary>
 internal sealed class RiskTestWorld : IAsyncDisposable

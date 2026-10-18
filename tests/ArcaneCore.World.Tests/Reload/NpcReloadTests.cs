@@ -30,7 +30,7 @@ public sealed class NpcReloadTests
 
     private static NpcText Text(string text) => new() { Id = TextId, Options = [new NpcTextOption(1, text, "", 0, 0, 0, 0, 0, 0, 0)] };
 
-    /// <summary>The state of every table, "old" until <see cref="Change"/>.</summary>
+    /// <summary>The state of every table, "old" until <see cref="Fill"/>.</summary>
     private static ReloadContentFixture Content()
     {
         var content = new ReloadContentFixture();

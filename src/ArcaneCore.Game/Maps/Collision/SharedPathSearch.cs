@@ -316,7 +316,7 @@ public sealed class NavJobSystem : IDisposable
     private static NavJobSystem? s_shared;
 
     /// <summary>
-    /// The process's creature path-job pool, started on first use with <paramref name="threads"/> workers (later calls get the same pool
+    /// The process's creature path-job pool, started on first use with <c>threads</c> workers (later calls get the same pool
     /// whatever they ask; the setting is read at start). Its threads are background threads and end with the process.
     /// </summary>
     /// <summary>The shared pool when something has started it (diagnostics: <c>.debug mt</c>); null before the first <see cref="Shared"/> call.</summary>

@@ -33,7 +33,7 @@ public sealed record ConnectedClusterNodeStatus(
 /// (<c>worker:EK</c> on 19081, <c>worker:Kalimdor</c> on 19082, <c>worker:instances</c> on 19083, <c>gateway</c> on 19084,
 /// <c>social</c> on 19085, <c>coordinator</c> on 19086, <c>supervisor</c> on 19087), logs node connection events and
 /// periodic topology heartbeats in the WorldServer console, and synchronizes live worker placement in
-/// <see cref="WorldRuntime.ClusterPlacement"/>.
+/// <see cref="Placement"/>.
 /// </summary>
 public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<ClusterNodeBridgeFeature> logger)
     : IWorldFeature, IDisposable
