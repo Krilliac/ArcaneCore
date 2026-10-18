@@ -117,6 +117,32 @@ public sealed class ModulesTests
             files.List("world/maps/azeroth/"));
     }
 
+    [Fact]
+    public void DirectoryClientFiles_IndexesTheTreeCaseInsensitively()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "atlas-client-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "World", "Maps", "Azeroth"));
+            Directory.CreateDirectory(Path.Combine(root, "DBFilesClient"));
+            File.WriteAllBytes(Path.Combine(root, "World", "Maps", "Azeroth", "Azeroth.wdt.bin"), [9, 8]);
+            File.WriteAllBytes(Path.Combine(root, "DBFilesClient", "Map.bin"), [7]);
+
+            var files = new DirectoryClientFiles(root);
+
+            Assert.True(DirectoryClientFiles.LooksExtracted(root));
+            Assert.Equal(new byte[] { 9, 8 }, files.Read("WORLD/maps/AZEROTH/azeroth.WDT.bin"));
+            Assert.Equal(new[] { "World\\Maps\\Azeroth\\Azeroth.wdt.bin" }, files.List("world\\maps\\"));
+            Assert.Empty(files.List("world\\mapsx"));
+            Assert.Null(files.Read("World\\Maps\\Kalimdor\\Kalimdor.wdt.bin"));
+            Assert.Equal(root, files.ArchiveOf("dbfilesclient\\map.bin"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class Disposable(string name, List<string> order) : IDisposable
     {
         public void Dispose() => order.Add(name);

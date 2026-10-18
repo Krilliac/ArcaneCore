@@ -78,6 +78,72 @@ public sealed class MemoryClientFiles : IClientFileSource
     public string? ArchiveOf(string path) => Exists(path) ? "memory" : null;
 }
 
+/// <summary>
+/// An <see cref="IClientFileSource"/> over a directory tree that mirrors the in-archive paths (an extracted client:
+/// <c>World\Maps\...</c>, <c>DBFilesClient\...</c>). The tree is indexed once at construction, so lookups are
+/// case-insensitive on every file system.
+/// </summary>
+public sealed class DirectoryClientFiles : IClientFileSource
+{
+    /// <summary>Environment variable naming an extracted client tree for real-data tests.</summary>
+    public const string TestEnvironmentVariable = "ARCANECORE_TEST_CLIENT_FILES_DIR";
+
+    private readonly Dictionary<string, (string Path, string FullPath)> _files = new(StringComparer.Ordinal);
+    private readonly string[] _sortedKeys;
+
+    public DirectoryClientFiles(string root)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        Root = Path.GetFullPath(root);
+        if (!Directory.Exists(Root))
+        {
+            throw new DirectoryNotFoundException($"Client file directory '{Root}' does not exist.");
+        }
+
+        foreach (string full in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(Root, full).Replace(Path.DirectorySeparatorChar, '\\').Replace('/', '\\');
+            _files.TryAdd(ClientPath.Key(relative), (relative, full));
+        }
+
+        _sortedKeys = [.. _files.Keys.Order(StringComparer.Ordinal)];
+    }
+
+    public string Root { get; }
+
+    public string Description => $"directory {Root} ({_files.Count} files)";
+
+    /// <summary>True when <paramref name="root"/> looks like an extracted client (has World or DBFilesClient).</summary>
+    public static bool LooksExtracted(string root)
+        => Directory.Exists(Path.Combine(root, "World")) || Directory.Exists(Path.Combine(root, "DBFilesClient"));
+
+    public bool Exists(string path) => _files.ContainsKey(ClientPath.Key(path));
+
+    public byte[]? Read(string path)
+        => _files.TryGetValue(ClientPath.Key(path), out (string Path, string FullPath) file) ? File.ReadAllBytes(file.FullPath) : null;
+
+    public IReadOnlyList<string> List(string prefix)
+    {
+        string key = ClientPath.Key(prefix);
+        int start = Array.BinarySearch(_sortedKeys, key, StringComparer.Ordinal);
+        if (start < 0)
+        {
+            start = ~start;
+        }
+
+        var result = new List<string>();
+        for (int i = start; i < _sortedKeys.Length && _sortedKeys[i].StartsWith(key, StringComparison.Ordinal); i++)
+        {
+            result.Add(_files[_sortedKeys[i]].Path);
+        }
+
+        result.Sort(StringComparer.Ordinal);
+        return result;
+    }
+
+    public string? ArchiveOf(string path) => Exists(path) ? Root : null;
+}
+
 /// <summary>One map from the client's Map.dbc.</summary>
 /// <param name="Directory">The map's folder under <c>World\Maps\</c> (for example <c>Azeroth</c>).</param>
 /// <param name="InstanceType">Map.dbc's instance type field (0 for open world in 1.12.1).</param>
