@@ -342,7 +342,10 @@ public interface ICollisionTileLifecycle
     /// <summary>A grid covering the tile was created (load what the tile needs).</summary>
     void OnTileLoaded(uint mapId, int tileX, int tileY);
 
-    /// <summary>The grid covering the tile was unloaded (release the tile).</summary>
+    /// <summary>
+    /// The last grid covering the tile was unloaded (release the tile): <see cref="MapCollision"/> calls it once no instance of the
+    /// map id has a grid there, since one service serves them all.
+    /// </summary>
     void OnTileUnloaded(uint mapId, int tileX, int tileY);
 }
 

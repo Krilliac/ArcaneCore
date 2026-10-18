@@ -14,7 +14,7 @@ Namespace `ArcaneCore.Game.Maps.Collision`:
 | `IPathfinder` | World-wide path queries (vmangos `PathFinder`): `FindPath(mapId, start, end, PathOptions?)` → `PathResult(PathType, Points)`. |
 | `OpenLineOfSight`, `StraightLinePathfinder` | Defaults without data: everything in sight; straight line flagged `Normal` + `NotUsingPath`. |
 | `WorldCollision.Of(world)` | Side table holding the world's two services; `Install(los, pathfinder)` replaces them. |
-| `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(a, b)` (eye height 2 yd), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`. |
+| `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(a, b)` (eye height 2 yd), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`; the services serve every instance of a map id, so an unload is forwarded only once no instance has a grid on the tile (the map id's terrain reference count, as vmangos `TerrainInfo::CleanUpGrids` decides). |
 | `unit.IsWithinLineOfSight(other)` | Extension for spells/AI/combat. |
 | `ICollisionTileLifecycle` | Optional: services that want grid create/unload forwarded as terrain tile indices. |
 | `SpellLineOfSight` | The cast-check hook (`SPELL_FAILED_LINE_OF_SIGHT`, honours `SPELL_ATTR_EX2_IGNORE_LOS` 0x4 and triggered casts). |
