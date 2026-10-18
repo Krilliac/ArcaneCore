@@ -113,4 +113,48 @@ public sealed class ChaseIntoWaterRealTerrainTests(ITestOutputHelper output)
         Assert.NotEqual(0, (int)(path.Type & PathType.Incomplete));
         Assert.True(Distance2D(path.End, target) < Distance2D(start, target), "the partial path does not lead towards the target");
     }
+
+    /// <summary>
+    /// Live path-failed chases after the wide end search (2026-10-18): the swimmer is past the 10 yd box, so even the chase options find
+    /// no polygon a walker may use (cmangos and vmangos answer NOPATH here too).
+    /// </summary>
+    public static TheoryData<float, float, float, float, float, float> FarWaterChases => new()
+    {
+        { -1344.8f, -5419.1f, -0.5f, -1359.4f, -5407.4f, -4.6f },
+        { -810.7f, -5398.9f, -0.6f, -815.4f, -5415.2f, -6.7f },
+    };
+
+    [RealTerrainTheory]
+    [MemberData(nameof(FarWaterChases))]
+    public void AWalkerWhoseTargetSwimsOutOfItsReach_IsNotAPathFailure(float sx, float sy, float sz, float tx, float ty, float tz)
+    {
+        const uint entry = 949202;
+        var spawn = new Vector3(sx, sy, sz);
+        var swimmer = new Vector3(tx, ty, tz);
+        NavMeshPathfinder nav = LoadNav(1, spawn.X, spawn.Y);
+        Assert.Equal(PathType.NoPath, nav.FindPath(1, spawn, swimmer, new PathOptions { Mover = PathMover.FromInhabit(1), WideEndSearch = true }).Type);
+
+        CreatureTemplate walker = Template(entry) with { InhabitType = 1 };
+        CreatureContent content = new([walker], [Spawn(1, entry, spawn.X, spawn.Y, spawn.Z, mapId: 1)], [], [], [], CreatureAiContent.Empty);
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.Options.Maps.DataDirectory = Root;
+        Map map = world.GetMap(1, 0);
+        var system = new CreatureMapSystem(map, content, null, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile() });
+        map.AddUpdater(system);
+        WorldCollision.Of(world).Install(pathfinder: nav);
+        Assert.NotEqual(LiquidStatus.NoWater, map.GetLiquidStatus(swimmer.X, swimmer.Y, swimmer.Z, LiquidTypeFlags.AllLiquids, out _) & (LiquidStatus.InWater | LiquidStatus.UnderWater));
+
+        Player player = TestWorld.CreatePlayer(1, swimmer.X, swimmer.Y, new FakeSession(1));
+        player.MapId = 1;
+        player.Relocate(swimmer.X, swimmer.Y, swimmer.Z, 0, 0);
+        map.AddPlayer(player);
+        world.RunTick(0);
+        Creature tiger = Assert.Single(system.Creatures);
+
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subject.StartsWith($"creature entry {entry} ", StringComparison.Ordinal));
+        map.Combat.DealDamage(player, tiger, 1, direct: false);
+        Run(world, 2_500);
+
+        Assert.DoesNotContain(capture.Notices, n => n.Key == "creature/path-failed");
+    }
 }

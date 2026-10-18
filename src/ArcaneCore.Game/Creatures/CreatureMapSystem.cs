@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Kernel.Diagnostics;
@@ -474,7 +475,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 CreatureAnomalies.ReportHomeUnreachable(creature, destination, "no mesh path to home");
             }
 
-            if (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType is not (MovementGeneratorType.Random or MovementGeneratorType.Fleeing or MovementGeneratorType.Confused))
+            if ((toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType is not (MovementGeneratorType.Random or MovementGeneratorType.Fleeing or MovementGeneratorType.Confused))
+                && (toSpawn || !InAMediumItCannotEnter(creature, destination)))
             {
                 CreatureAnomalies.ReportPathFailed(creature, start, destination, toSpawn ? "home" : creature.Motion.CurrentType.ToString());
             }
@@ -624,6 +626,26 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             : chase ? s_chaseOptions
             : IsWanderLeg(creature) ? s_wanderOptions
             : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+
+    /// <summary>
+    /// Whether <paramref name="destination"/> lies in a medium the creature cannot move in: in or under liquid for one that cannot swim, out of
+    /// it for one that only swims (<c>InhabitType</c>; a pet goes anywhere, a flier is never in this case). Its NoPath is then the expected
+    /// answer (vmangos PathInfo::BuildPolyPath: no polygon of the mover's filter at the end, PATHFIND_NOPATH) and the unreachable-target
+    /// timer ends the chase; it is not reported as <c>creature/path-failed</c>. Live 2026-10-18: most of the remaining reports were Durotar
+    /// Tigers and Bloodtalons whose target swam more than the wide end search's 10 yards off the coast.
+    /// </summary>
+    private bool InAMediumItCannotEnter(Creature creature, Vector3 destination)
+    {
+        uint inhabit = creature.Template.InhabitType;
+        if (creature.IsPet || (inhabit & 0x04) != 0 || (inhabit & 0x03) is 0 or 0x03)
+        {
+            return false; // a pet, a flier, or a creature that walks and swims (or has no InhabitType)
+        }
+
+        bool inLiquid = (Map.GetLiquidStatus(destination.X, destination.Y, destination.Z, LiquidTypeFlags.AllLiquids, out _)
+            & (LiquidStatus.InWater | LiquidStatus.UnderWater)) != 0;
+        return (inhabit & 0x02) == 0 ? inLiquid : !inLiquid;
+    }
 
     /// <summary>An out-of-combat random-movement leg (<see cref="WanderMaxSearchNodes"/>).</summary>
     private static bool IsWanderLeg(Creature creature)
