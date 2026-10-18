@@ -30,6 +30,21 @@ public sealed class ClientExtractFactAttribute : FactAttribute
     }
 }
 
+/// <summary>
+/// A fact that needs the real client's MPQs and the client DBC folder with its <c>SHA256SUMS</c>
+/// (<c>ARCANECORE_TEST_DBC_DIR</c>); skipped, visibly, without either.
+/// </summary>
+public sealed class ClientDbcFactAttribute : FactAttribute
+{
+    public ClientDbcFactAttribute()
+    {
+        if ((ClientArchiveData.SkipReason() ?? ClientArchiveData.DbcSkipReason()) is { } reason)
+        {
+            Skip = reason;
+        }
+    }
+}
+
 /// <summary>Where the real-data tests find the client, its StormLib extraction and the DBC checksum list.</summary>
 internal static class ClientArchiveData
 {
@@ -53,6 +68,16 @@ internal static class ClientArchiveData
         string? root = ExtractRoot;
         return root is null || !Directory.Exists(root)
             ? $"{DirectoryClientFiles.TestEnvironmentVariable} is not set to a StormLib extraction of the 1.12.1 client."
+            : null;
+    }
+
+    public static string? DbcDirectory => Normalize(Environment.GetEnvironmentVariable(DbcDirectoryVariable));
+
+    public static string? DbcSkipReason()
+    {
+        string? directory = DbcDirectory;
+        return directory is null || !File.Exists(Path.Combine(directory, "SHA256SUMS"))
+            ? $"{DbcDirectoryVariable} is not set to a client DBC folder holding SHA256SUMS."
             : null;
     }
 
