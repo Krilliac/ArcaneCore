@@ -443,7 +443,7 @@ public sealed class AdtFileTests
     }
 }
 
-/// <summary>A tiny deterministic generator for corruption tests (System.Random is not used in this codebase).</summary>
+/// <summary>A tiny deterministic generator for corruption tests (the codebase bans the framework PRNG).</summary>
 internal struct XorShift(ulong seed)
 {
     private ulong _state = seed == 0 ? 1 : seed;
