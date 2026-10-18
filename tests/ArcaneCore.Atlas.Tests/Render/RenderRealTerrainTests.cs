@@ -63,6 +63,7 @@ internal sealed class RealTerrainSource : ILayerSource
     public IReadOnlyCollection<TileKey> AvailableTiles(string layerId, uint mapId)
     {
         var tiles = new List<TileKey>();
+        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:215 (FileName): maps/%03u%02u%02u.map of map id, tile X, tile Y.
         foreach (string file in Directory.EnumerateFiles(RealTerrainData.MapsDirectory, string.Create(CultureInfo.InvariantCulture, $"{mapId:D3}*.map")))
         {
             string name = Path.GetFileNameWithoutExtension(file);
@@ -112,11 +113,13 @@ internal sealed class RealTerrainSource : ILayerSource
                 double y1 = origin.Y - ((col + 1) * square);
                 double cx = (x0 + x1) / 2;
                 double cy = (y0 + y1) / 2;
+                // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:399 (row index = 128 * (32 - x / 533.33), so rows advance toward -X and columns toward -Y, as WorldGrid.Origin states).
                 float centre = terrain.GetHeight((float)cx, (float)cy);
                 float a = terrain.GetHeight((float)(x0 - Nudge), (float)(y0 - Nudge));
                 float b = terrain.GetHeight((float)(x1 + Nudge), (float)(y0 - Nudge));
                 float c = terrain.GetHeight((float)(x1 + Nudge), (float)(y1 + Nudge));
                 float d = terrain.GetHeight((float)(x0 - Nudge), (float)(y1 + Nudge));
+                // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:36 (InvalidHeight): GetHeight answers InvalidHeightValue for a hole square, which is skipped.
                 if (Math.Min(Math.Min(centre, a), Math.Min(Math.Min(b, c), d)) <= TerrainTile.InvalidHeight)
                 {
                     continue;
