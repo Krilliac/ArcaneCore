@@ -624,6 +624,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         if (!IsGrey(player, quest)) _roomWanted = true;
                         continue;
                     }
+                    // A source item the full bags cannot take has the accept refused (vmangos CanGiveQuestSourceItemIfNeed; GitHub #786, ~180/h on
+                    // live): the giver is not asked until a slot frees, the same rule quest travel follows (PlayerbotWorldDestinations).
+                    if (!SourceItemFits(player, quest))
+                        continue;
                 }
                 else if (_stage != Stage.Accept && (services.CanTakeQuest(player, id) != true
                     || state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }))

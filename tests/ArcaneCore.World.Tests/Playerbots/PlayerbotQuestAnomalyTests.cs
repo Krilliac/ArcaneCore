@@ -54,11 +54,12 @@ public sealed class PlayerbotQuestAnomalyTests
         using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
-            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
-                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
             AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
             Assert.True(goals.HasCandidate(player));
-            for (int think = 0; think < 4; think++) Think(session, goals);
+            Think(session, goals); // the exchange starts with room in the bags; they fill before the accept
+            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
+            for (int think = 0; think < 3; think++) Think(session, goals);
             return c;
         });
 
@@ -345,6 +346,39 @@ public sealed class PlayerbotQuestAnomalyTests
         });
     }
 
+    // GitHub #786: with the bags already full the giver of a source-item quest is not asked at all (no query, no 15 s stage, no report).
+    [Fact]
+    public async Task ASourceItemQuest_IsNotAskedFor_WhenTheBagsAreAlreadyFull()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9501, Name = "Quest crate", Class = (uint)ItemClass.Quest, Stackable = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9502, Name = "Filler", Class = (uint)ItemClass.TradeGoods, Quality = 1, Stackable = 1 });
+        using IDisposable itemScope = items.Use();
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { SourceItem = 9501 }, manualClock: true);
+        WorldSession session = quest.Session;
+        int queries = 0;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
+            session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
+            AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
+            Assert.False(goals.HasCandidate(player));
+            Think(session, goals, 4);
+            return c;
+        });
+        for (int second = 0; second < 20; second++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1_000);
+            await quest.Host.OnWorldAsync(() => { Think(session, goals, 2); return true; });
+        }
+
+        Assert.Equal(0, queries);
+        Assert.False(capture.Any(AcceptRefused), capture.Describe());
+    }
+
     // A quest whose source item the full bags cannot take is refused by the server (vmangos CanGiveQuestSourceItemIfNeed, Player.cpp:13643-13676).
     // On the live server 256 bots asked for such a quest again every ten minutes (10k accept-refused reports): the refusal now holds until a
     // bag slot is free, not for a fixed ten minutes.
@@ -363,11 +397,12 @@ public sealed class PlayerbotQuestAnomalyTests
         using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
-            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
-                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
             AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
-            Think(session, goals, 4);
+            Think(session, goals, 1); // the exchange starts with room in the bags; they fill before the accept
+            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
+            Think(session, goals, 3);
             return c;
         });
 
