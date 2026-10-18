@@ -7,7 +7,7 @@ reference notes: `docs/areas/grid-terrain.md`.
 Everything new lives in owned folders:
 
 - `src/ArcaneCore.Game/Maps/Grid/`, `Maps/Terrain/`, `Maps/Templates/` (map registry,
-  instance bindings, per-world map services)
+  per-world map services)
 - `src/ArcaneCore.Game/Teleport/` (teleport state machine, packets, trigger geometry)
 - `src/ArcaneCore.World/Teleport/` (`TeleportFeature`, `TeleportHandlers`, `TeleportCommands`)
 - `src/ArcaneCore.Data/Content/Maps/` (`MapDataModule`, `EfMapDataStore`)
@@ -44,10 +44,12 @@ No edits to `WorldServiceCollectionExtensions.cs`, `ChatHandlers.cs`, `Character
 
 - Handlers: `MSG_MOVE_TELEPORT_ACK` (199), `MSG_MOVE_WORLDPORT_ACK` (220), `CMSG_AREATRIGGER` (180).
 - Sent: `SMSG_NEW_WORLD` (62), `SMSG_TRANSFER_PENDING` (63), `MSG_MOVE_TELEPORT` (197),
-  `MSG_MOVE_TELEPORT_ACK` (199), `SMSG_AREA_TRIGGER_MESSAGE` (696); builder for
-  `SMSG_TRANSFER_ABORTED` (64).
+  `MSG_MOVE_TELEPORT_ACK` (199), `SMSG_AREA_TRIGGER_MESSAGE` (696); the builder for
+  `SMSG_TRANSFER_ABORTED` (64), which the instances area's `InstanceManager` sends.
 - Command roots: `.tele`, `.go` (with `.go xyz`). Other `.go` sub-commands (`.go creature`,
-  `.go object`, …) belong under this root: add them to `TeleportCommands`, or ask to move the
+  `.go object`, `.go target`, `.go xy`, …) are added to this root by `ICommandExtension` classes
+  with `Path => "go"` (`src/ArcaneCore.World/Gm/Teleport/GmGoSpawnCommands.cs`, `GmGoMoreCommands.cs`,
+  `src/ArcaneCore.World/Commands/GoCommands.cs`); add new ones the same way, or ask to move the
   root if another area needs to own them.
 
 ## Public API for other areas
@@ -66,14 +68,18 @@ No edits to `WorldServiceCollectionExtensions.cs`, `ChatHandlers.cs`, `Character
   `map.RemoveObject(obj)`. Subscribe to `map.Grids.GridLoaded` to spawn a grid's content and
   `map.Grids.GridUnloading` to despawn it (objects still in a grid when it unloads are removed
   for you). Moving an object (setting X/Y or `SetPosition`) re-files it and schedules its
-  visibility pass for the end of the tick. `Player.VisibleObjects` is maintained by the map;
-  do not mutate it directly.
+  visibility pass for the end of the tick (a unit, creature or player, only once it is more
+  than `World:Maps:VisibilityRelocationLowerLimit`, 10 yards, from where its last one was
+  scheduled). `Player.VisibleObjects` is maintained by the map; do not mutate it directly.
 - **Movement:** vmangos ignores client movement while a teleport is pending
   (`HandleMovementOpcodes`: `IsBeingTeleported()`); `MovementHandlers.cs` is not this area's
-  file. `TeleportService.IsBeingTeleported(player)` is available if the owner wants the check.
+  file, but it makes the same check: `HandleMovement` drops client movement while
+  `TeleportService.IsBeingTeleported(player)` is true.
 - **Hearthstone / spells / GM `.recall` etc.:** call `TeleportService.TeleportTo` (or
   `TeleportToHomebind`); it picks near or far by itself and handles the whole transfer.
 - **Login of a character saved on an instance map:** the map must be in `map_template`
   (or be a continent); with an empty table only maps 0 and 1 exist.
-- **Zone updates:** `PlayerHandlers.HandleZoneUpdate` still trusts the client's zone; with terrain
-  data loaded, `map.GetZoneAndAreaId(x, y, z)` gives the server's answer.
+- **Zone updates:** `PlayerHandlers.HandleZoneUpdate` hands the client's zone to `ZoneAreaFeature`,
+  which derives the zone from terrain (`map.GetZoneAndAreaId(x, y, z)`) and uses the client value
+  only while `World:Zones:ClientZoneTrust` allows it (`Always`, or `Auto` without area data or
+  terrain files; docs/areas/world-state.md).

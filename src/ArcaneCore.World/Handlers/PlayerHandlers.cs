@@ -86,8 +86,10 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
 
     /// <summary>
     /// CMSG_ZONEUPDATE: u32 zone. vmangos ignores the value and derives the zone from terrain
-    /// data; until terrain is loaded (M8) the client's zone is accepted. A changed zone gets
-    /// its world states, as vmangos Player::UpdateZone → SendInitWorldStates does.
+    /// data; so does <see cref="WorldState.ZoneAreaFeature"/>, which uses the client's value only while
+    /// zones cannot be derived or with <c>World:Zones:ClientZoneTrust</c> = Always. Without that
+    /// feature the client's zone is accepted. A changed zone gets its world states, as vmangos
+    /// Player::UpdateZone → SendInitWorldStates does.
     /// </summary>
     private static void HandleZoneUpdate(WorldSession session, Player player, byte[] payload)
     {

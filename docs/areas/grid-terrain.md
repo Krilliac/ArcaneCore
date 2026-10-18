@@ -22,12 +22,12 @@ is listed in [Reference discrepancies](#reference-discrepancies).
   count and unload locks (`GridUnload = false` sets the explicit lock on every grid, as
   vmangos `setUnloadExplicitLock(!sWorld.getConfig(CONFIG_BOOL_GRID_UNLOAD))`).
 - `GridContainer`: the per-map cell index of every object.
-  - `Add(obj, active)`: active objects (players, objects made active with `SetActive`) load
-    their grid and every grid within `GridActivationDistance` (vmangos `Map::Add(Player*)` →
+  - `Add(obj, active)`: an active non-player object (made active with `SetActive`) loads only
+    its own grid; a player loads its grid and every grid within `GridActivationDistance` (vmangos `Map::Add(Player*)` →
     `EnsureGridLoadedAtEnter` + `LoadMapCellsAround`); other objects only create their grid
     (`EnsureGridCreated`).
   - `Relocate(obj)`: re-files an object whose X/Y changed; an active object entering a new
-    cell re-activates its grid (timer × 0.1) and loads ahead.
+    cell re-activates its grid (timer × 0.1); a player also loads the grids ahead.
   - `CollectObjects(x, y, r)`: the objects of the cells a circle touches in loaded grids
     (vmangos `Cell::Visit` with `dont_load`). Callers apply their exact distance test.
   - `CollectPlayers(x, y, r)`: the players of the same cells only. Each cell keeps its
@@ -52,7 +52,10 @@ pass unmodified). Internally:
 
 - Candidates for a player's visibility pass are the objects in the cells within
   `VisibilityRange + VisibilityGreyDistance + own radius + largest radius in the map`, plus
-  everything the player currently sees, plus every player that currently sees it. They are
+  everything the player currently sees, plus every player that currently sees it, plus the
+  map-wide objects (`AddMapWideObject`: the Deeprun Tram cars) and, when the player's camera
+  looks from another object (far sight, possession), the objects in the cells within that
+  radius of the camera. They are
   de-duplicated and processed in the order they entered the map, then judged with the same
   `IsWithinVisibilityDistance` as before — so the result is identical to the old full scan.
 - An observer index (`object GUID → players whose client has it`, the inverse of
@@ -70,20 +73,29 @@ pass unmodified). Internally:
   visibility phase went from a median of 16.4 ms (309,670 candidates a tick) to 0.4 ms (761
   candidates a tick) on the dev box, with identical visible sets. The slow-map warning now
   reports `visibility candidates` too.
-- `BroadcastInRange` visits only the players of the cells within range (range ≤ 0 still means
-  the whole map) and applies the same 3D test (vmangos `Map::MessageDistBroadcast` also visits
-  only the `WorldTypeMapContainer`).
-- Not adopted: vmangos' `Visibility.RelocationLowerLimit` (10 yards: `Unit::OnRelocated` only
-  queues a visibility update once a unit moved that far from where it was last notified) and
-  the visibility-update timeout (`MapUpdate.VisibilityUpdate.Timeout`, which defers the rest of
-  the relocated list to the next tick). Both change who sees whom at the edge of sight for a
-  tick or more, and with the players-only mover pass the phase no longer needs them. The AI
+- `BroadcastInRange` visits the players of the cells within range plus each player whose camera
+  (far sight, mind vision, a possessed unit) is one of the objects of those cells (range ≤ 0
+  still means the whole map), and applies the same 3D test from the listener's camera, not their
+  feet (vmangos `Map::MessageDistBroadcast` visits the `WorldTypeMapContainer`, cameras included,
+  and `MessageDistDeliverer` measures from `Camera::GetBody`).
+- Adopted: vmangos' `Visibility.RelocationLowerLimit` as `World:Maps:VisibilityRelocationLowerLimit`
+  (default 10 yards, 0 = a pass on every move). As in `Unit::OnRelocated`, a unit's move (a
+  creature's or a player's) queues a visibility update only once the unit is more than that far
+  (3D) from where the last one was queued; moves within it keep the last visible sets, and the
+  grey distance and the next pass cover the difference. A game object gets one on every move.
+  Not adopted: the visibility-update timeout (`MapUpdate.VisibilityUpdate.Timeout`, which defers
+  the rest of the relocated list to the next tick): it changes who sees whom at the edge of
+  sight for a tick or more, and with the players-only mover pass the phase does not need it. The AI
   relocation notify (`Visibility.AIRelocationNotifyDelay`) is the creature AI's
   (`AiRelocationNotifier`, docs/areas/creature-ai.md).
 - Non-player objects (`AddObject` / `RemoveObject` / `SetActive`) are the seam for creatures
-  and game objects: moving one schedules its visibility pass for the end of the tick.
+  and game objects: moving one schedules its visibility pass for the end of the tick (a creature
+  only once it is more than `World:Maps:VisibilityRelocationLowerLimit`, 10 yards, from where its
+  last pass was scheduled; a game object on every move).
 - `Update` order: packets → packets of players in transit from this map (only the world-port
-  ack is handled) → due logouts → visibility → values → flush → grid state machine and terrain
+  ack is handled) → due logouts → unit heartbeats → active-cell marking (continents, when
+  `World:Maps:UpdateActiveCellsOnly` is on) → the map updaters (`IMapUpdater`: creatures, game
+  objects, zones, …) → visibility → values → flush → grid state machine and terrain
   clean-up → actions scheduled with `RunAfterUpdate` (far teleports).
 
 ### Terrain (`src/ArcaneCore.Game/Maps/Terrain/`)
@@ -149,7 +161,8 @@ Hooks for other areas: `NearTeleportStarting(player, destination)` before the ne
 the new map. The pets use them to take the player's pet along (`PetTeleportFollow`, docs/integration/pets.md).
 
 `TeleportService.TeleportTo(player, map, x, y, z, o)` (vmangos `Player::TeleportTo`) refuses
-invalid coordinates, unknown maps, battleground maps (no battleground system yet), a player
+invalid coordinates, unknown maps, a battleground map the player is not bound to
+(`BattlegroundEntryAllowed`, answered by the battleground system: docs/integration/battlegrounds.md), a player
 in no map and a second far teleport while one is under way. It clears the moving/turning
 and transport flags and resets the client time stamp, then:
 
@@ -186,8 +199,10 @@ ids are ignored; the player must be in the trigger with 5 yards of tolerance
 `2π − box_orientation`, grown by 5 on every side); then the `areatrigger_teleport` row, whose
 target map must be registered. A player below `required_level` and not in GM mode gets
 `SMSG_AREA_TRIGGER_MESSAGE` (u32 length including the terminator, then the string): the row's
-message, or mangos_string 49 "You must be at least level %u to enter."; otherwise the player
-is teleported.
+message, or mangos_string 49 "You must be at least level %u to enter.". The ghost rules
+(`GhostEntryRules`), the key items, a required quest, the instance script and the
+conditions-table reference can refuse too (see [area triggers](area-triggers.md)); otherwise
+the player is teleported.
 
 **Commands** (`TeleportCommands`, an `ICommandGroup`; both SEC_MODERATOR as in the cmangos /
 vmangos command tables):
@@ -203,7 +218,7 @@ Both validate like vmangos `HandleGoHelper` and answer
 
 ### Data (`src/ArcaneCore.Data/Content/Maps/`)
 
-`MapDataModule` (`IDataModule`, world schema **version 2**) creates `map_template`,
+`MapDataModule` (`IDataModule`, world schema **version 3**) creates `map_template`,
 `area_template`, `areatrigger_template`, `areatrigger_teleport` and `game_tele` (vmangos world
 DB column meanings, PascalCase column names as elsewhere in ArcaneCore) and registers
 `EfMapDataStore` as `IMapDataStore`. A world database at version 1 is upgraded in place; its
@@ -218,23 +233,26 @@ and `import` the teleports (docs/areas/content-import.md).
 | `DataDirectory` | `""` | Extractor output holding `maps/` (`DataDir`). Empty = no terrain. |
 | `GridUnload` | `true` | Unload idle grids (`GridUnload`). |
 | `GridCleanUpDelayMs` | `300000` | Idle time before unloading, at least 60000 (`GridCleanUpDelay`, `MIN_GRID_DELAY`). |
-| `GridActivationDistance` | `100` | Radius whose grids active objects load and keep alive (`m_gridActivationDistance` = `Visibility.Distance.Continents`). |
+| `GridActivationDistance` | `100` | Radius around a player whose grids are loaded (`m_gridActivationDistance` = `Visibility.Distance.Continents`); an active non-player object loads only its own grid. A grid stays active while something active is within the visibility range of it (`ActiveObjectsNearGrid`). |
+| `VisibilityRelocationLowerLimit` | `10` | How far (3D) a unit must move from where its last movement-triggered visibility pass was scheduled before the next one is (`Visibility.RelocationLowerLimit`); 0 = a pass on every move. |
+| `UpdateActiveCellsOnly` | `true` | On continents, update creatures only in the cells within `GridActivationDistance` of a player or active object (`Map::UpdateCells` → `UpdateActiveCellsSynch`); false updates every creature of the loaded grids. |
+| `GridPrefetchDistance` | `200` | How far beyond `GridActivationDistance` a player looks for grids that do not exist yet, to read their terrain, vmap and navmesh tiles on the thread pool first; other objects look half this distance around themselves. 0 = off. ArcaneCore only. |
 
 ## Reference discrepancies
 
 | Topic | vmangos | cmangos-classic | gtker / others | ArcaneCore |
 |---|---|---|---|---|
 | Cells per grid side | 16 | 16 | TrinityCore uses 8 | 16 (the 1.12 servers) |
-| Grid/cell pair from (x, y) | `ComputeGridPair` returns `(x_val, y_val)`, used as `[x][y]` | same | — | same; `CellCoord.X` comes from world X |
-| Terrain tile index | `GetGrid` indexes `m_GridMaps[from y][from x]`, but grid load/unload ref `m_GridMaps[63 − gx][63 − gy]` with `gx` from X, i.e. the transposed slot | same pattern | — | Refs the tile that covers the grid (tile X from world X); lookups load on demand in all three, so only memory lifetime differs |
+| Grid/cell pair from (x, y) | `ComputeGridPair` returns `(y_val, x_val)`: the pair's `x_coord` comes from world Y (`GridDefines.h:154-163`) | returns `(x_val, y_val)`, used as `[x][y]` | — | as cmangos-classic; `CellCoord.X` comes from world X |
+| Terrain tile index | `GetGrid` and the grid load/unload both index `m_GridMaps[from Y][from X]` (`GridMap.cpp:1132-1141`, `Map.cpp:330-331`, the pair's `x_coord` being from Y) | both index `[from X][from Y]` | — | as cmangos-classic: a grid refs the tile that covers it (`TerrainTile`: `63 − grid.X`, `63 − grid.Y`, tile X from world X) |
 | MSG_MOVE_TELEPORT_ACK (client → server) GUID | u64 (`ObjectGuid >>`) | u64 | packed GUID | u64 |
 | MSG_MOVE_TELEPORT to observers on a near teleport | sent before and after the move | not sent | listed only for 2.4.3+ | sent (vmangos) |
-| SMSG_TRANSFER_ABORTED | u8 reason | u8 reason | u32 map + u8 reason + u8 argument | u8 reason (builder only; no 1.12 abort path is reachable yet) |
+| SMSG_TRANSFER_ABORTED | u8 reason | u8 reason | u32 map + u8 reason + u8 argument | u8 reason (sent by the instances area's `InstanceManager` when it refuses a teleport for the hourly limit, the player cap or a pending reset) |
 | `.go xyz` z argument | required | optional (terrain height) | — | optional (cmangos), so both forms work |
 | Liquid kind | remapped through LiquidType.dbc when loaded | same | — | the `.map` file's flags (no DBC stores in ArcaneCore) |
 | Area flag → area fallback | `GetFlagByMapId` path after `GetGrid` (never null there, so dead) | — | — | not implemented (unreachable in vmangos) |
 | Terrain clean-up first run | random 20–40 s, then every minute | — | — | every minute from start (deterministic) |
-| `areatrigger_teleport` / `map_template` columns | also `patch`, `build`, `required_condition`, `ghost_entrance_*` | `required_quest_*`, `required_item*`, … | — | the columns ArcaneCore uses; patch/build filtering, conditions and quest/item requirements need those systems first |
+| `areatrigger_teleport` / `map_template` columns | also `patch`, `build`, `required_condition`, `ghost_entrance_*` | `required_quest_*`, `required_item*`, … | — | the columns ArcaneCore uses, including `ghost_entrance_*`, `required_item`/`required_item2`, `required_quest_done` and the condition reference (docs/areas/area-triggers.md); the importer keeps the newest `patch` up to 10 and stores no patch column (docs/areas/content-import.md) |
 | Teleport observers set | `ObjectMessageDeliverer`: players in the cells within visibility distance | — | — | observers within visibility distance (clients without the mover ignore the packet anyway) |
 
 ## Tests
@@ -246,7 +264,7 @@ and `import` the teleports (docs/areas/content-import.md).
   truncated files, fail-soft manager, tile ref-counting), `TeleportServiceTests` (near and
   far flows tick by tick, invalid destinations, logout mid-transfer, instance binding).
 - `tests/ArcaneCore.Data.Tests/MapDataModuleTests.cs`: fresh world DB at the current
-  version, v1 → v2 upgrade keeping rows, store round trip — on SQLite, MariaDB and PostgreSQL.
+  version, v1 → current upgrade keeping rows, store round trip — on SQLite, MariaDB and PostgreSQL.
 - `tests/ArcaneCore.World.Tests/GridTerrain/`: end to end over sockets — `.go xyz` near
   teleport with the client ack and observers, `.tele` far teleport through the full transfer
   and login packets, packets dropped mid-transfer, command errors and security, area-trigger
@@ -258,10 +276,20 @@ and `import` the teleports (docs/areas/content-import.md).
 - Instance maps, resets, player limits and `SMSG_TRANSFER_ABORTED` paths are implemented by
   the instances area (see [instances](../integration/instances.md)); nothing instance-specific
   is left in this area.
-- vmaps (WMO/model heights, line of sight, indoor areas) and mmaps (pathfinding).
-- Server-side zone updates from terrain on movement (currently on teleport only; the client's
-  `CMSG_ZONEUPDATE` is still trusted).
-- Game object grid content loading. Creature spawns use `GridLoaded` / `GridUnloading`
-  in the integration candidate.
-- Transports, taxi flights, ghosts entering dungeons, battleground entrances, area-trigger
-  scripts/quests/taverns.
+- vmaps (WMO/model heights, line of sight, indoor areas) and mmaps (pathfinding) are implemented
+  by the collision and pathing area (`src/ArcaneCore.Game/Maps/Collision/`, see
+  [collision and pathing](collision-pathing.md), which lists what is left there).
+- Server-side zone updates from terrain on movement are implemented by the world-state area
+  (`ZoneAreaUpdater`, the 1 s zone timer; see [world state](world-state.md)); the client's
+  `CMSG_ZONEUPDATE` value is used only while zones cannot be derived or with
+  `World:Zones:ClientZoneTrust` = `Always`.
+- Grid content loading is done: creatures (`CreatureMapSystem`) and game objects
+  (`GameObjectMapSystem`) spawn on `GridLoaded` and despawn on `GridUnloading`.
+- Transports, taxi flights, ghosts entering dungeons and area-trigger scripts/quests/taverns are
+  implemented by their own areas (see [transports](transports.md), [taxi](taxi.md),
+  [graveyards and resurrection](graveyards-resurrection.md), [area triggers](area-triggers.md)
+  and [rested XP](rested-xp.md)); the area-trigger scripts are `AreaTriggerScriptsFeature` and
+  `SmartAreaTriggerFeature` in `src/ArcaneCore.World/Creatures/`.
+- Battleground entrance triggers (`areatrigger_bg_entrance`, the vmangos `HandleAreaTriggerOpcode`
+  branch for the portal join): the table is not imported (see [battlegrounds](battlegrounds.md));
+  battlegrounds are joined at a battlemaster.
