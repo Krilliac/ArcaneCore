@@ -1042,7 +1042,7 @@ public sealed partial class SpellSystem
 
         uint resisted = ApplyResist(caster, target, holder.Spell, ref amount, periodic: true);
         uint original = amount + resisted;
-        uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell);
+        uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell, periodic: true);
         amount -= absorbed;
         if (ResolveAuraCaster(holder) is { } procCaster)
         {

@@ -63,6 +63,35 @@ public sealed class PeriodicDamageCombatLinkTests
         }
     }
 
+    /// <summary>
+    /// vmangos Aura::PeriodicTick deals the tick through Unit::DealDamage alone (SpellAuras.cpp:5921), which pulses no PvP flag for
+    /// DOT damage: the out-of-combat flag (SetOutOfCombatWithVictim) belongs to the spell's hit (Spell.cpp:1260, 1684, 1692).
+    /// </summary>
+    [Fact]
+    public void ADotTick_DoesNotFlagItsCasterForPvp()
+    {
+        (SpellTestKit kit, Player caster, Player victim) = Setup();
+        using (kit)
+        {
+            victim.UnitFlags |= UnitFlags.Pvp;
+            kit.System.CastSpell(caster, PlainDot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
+            Assert.True(kit.System.HasAura(victim, PlainDot));
+
+            // The fight ended and the caster's PvP flag ran out; the poison is still on the flagged victim.
+            MapCombat.ClearInCombat(caster);
+            MapCombat.ClearInCombat(victim);
+            caster.UnitFlags &= ~UnitFlags.Pvp;
+            caster.Combat.PvpFlagTimer = 0;
+            MapCombat.UpdatePvpContested(caster, false, overriding: true);
+            uint before = victim.Health;
+
+            kit.Advance(3_000);
+            Assert.True(victim.Health < before); // the poison ticked
+            Assert.Equal(0u, (uint)(caster.UnitFlags & UnitFlags.Pvp));
+            Assert.Equal(0u, (uint)(caster.Flags & PlayerFlags.ContestedPvp));
+        }
+    }
+
     [Fact]
     public void AChanneledDotTick_StillLinksCombat()
     {
