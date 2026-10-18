@@ -19,8 +19,8 @@ namespace ArcaneCore.Game.Tests.Collision;
 /// <summary>
 /// The under-map detectors on real extracted data (<c>ARCANECORE_TEST_TERRAIN_DIR</c>, see <see cref="RealTerrainDataTests"/>): a creature
 /// or a player standing in a cave or a city is below the terrain surface on purpose and must not be reported. The same points were reported
-/// before the detectors consulted the vmap models (the terrain-only height chain: <c>MapCreatureHeightProvider</c> -> <c>Map.GetHeight</c> ->
-/// <c>TerrainInfo.GetHeight</c>). Expected positions are world-database positions.
+/// before the detectors consulted the vmap models (when the creature height chain was terrain-only: <c>MapCreatureHeightProvider</c> ->
+/// <c>Map.GetHeight</c> -> <c>TerrainInfo.GetHeight</c>). Expected positions are world-database positions.
 /// </summary>
 public sealed class UnderMapRealTerrainTests(ITestOutputHelper output)
 {

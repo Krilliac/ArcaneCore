@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 
@@ -10,8 +11,9 @@ namespace ArcaneCore.Game.Death.Travel;
 /// The MSG_CORPSE_QUERY reply (vmangos <c>WorldSession::HandleCorpseQueryOpcode</c>, QueryHandler.cpp:155-201): the place of the
 /// player's corpse for the client's map arrow. A corpse on another map than the player's, when that map is a dungeon with a ghost
 /// entrance, is shown at the entrance instead: the map and the x and y of the dungeon's <c>ghost_entrance</c> and the z of the ground
-/// there, and the last field is the corpse's real map. Otherwise it is the corpse's own place. The ground height comes from the
-/// terrain of the entrance map (<see cref="Map.GetHeight"/>); without terrain data that is the terrain's own "no height" value.
+/// there, and the last field is the corpse's real map. Otherwise it is the corpse's own place. The ground is the top floor of the
+/// entrance map there, terrain or a static model above it (vmangos <c>GetHeightStatic(x, y, MAX_HEIGHT)</c>, QueryHandler.cpp:187, with
+/// vmaps on by default, GridMap.h:152; <see cref="MapCollision.GetHeight"/>); without data that is the terrain's own "no height" value.
 /// </summary>
 public static class CorpseQuery
 {
@@ -36,7 +38,7 @@ public static class CorpseQuery
             mapId = dungeon.GhostEntranceMap;
             x = dungeon.GhostEntranceX;
             y = dungeon.GhostEntranceY;
-            z = world.GetMap((uint)mapId).GetHeight(x, y, GridDefines.MaxHeight);
+            z = world.GetMap((uint)mapId).Collision.GetHeight(x, y, GridDefines.MaxHeight);
         }
 
         return CombatPackets.CorpseQueryFound(mapId, x, y, z, corpseMap);

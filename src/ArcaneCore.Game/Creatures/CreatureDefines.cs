@@ -63,17 +63,26 @@ public enum MonsterMoveType : byte
 }
 
 /// <summary>
-/// Ground height lookup used to place random-movement points. This is a seam for the
-/// grid/map/terrain area: until a terrain provider is registered, creatures keep their spawn
-/// height (<see cref="NoTerrainHeight"/>).
+/// Ground height lookup used to place creature points (for example random, combat, confused and formation movement, path
+/// smoothing, guard and summon positions, and the under-map checks).
+/// Without one passed in, <see cref="CreatureMapSystem"/> uses <see cref="MapCreatureHeightProvider"/>, the map's
+/// floor height (terrain and static models, <see cref="Maps.Collision.MapCollision.GetHeight"/>); <c>CreatureWorldFeature</c>
+/// passes a registered service, and none is registered, so this lookup answers that floor height (path corners come from the
+/// navmesh). <see cref="NoTerrainHeight"/> answers unknown everywhere.
 /// </summary>
 public interface ICreatureHeightProvider
 {
     /// <summary>Ground height at (x, y) near <paramref name="z"/>, or null when unknown.</summary>
     float? GetHeight(uint mapId, float x, float y, float z);
+
+    /// <summary>
+    /// The terrain surface alone at (x, y), no model floor, or null when unknown: the under-map sample compares with it and lets the
+    /// models clear a conviction. A provider without a separate terrain answers <see cref="GetHeight"/>.
+    /// </summary>
+    float? GetTerrainHeight(uint mapId, float x, float y, float z) => GetHeight(mapId, x, y, z);
 }
 
-/// <summary>The default height provider: no terrain data, so heights are unknown.</summary>
+/// <summary>A height provider with no terrain data: every height is unknown (null). Not the default; see <see cref="ICreatureHeightProvider"/>.</summary>
 public sealed class NoTerrainHeight : ICreatureHeightProvider
 {
     public static readonly NoTerrainHeight Instance = new();

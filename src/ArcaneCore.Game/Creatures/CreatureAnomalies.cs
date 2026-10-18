@@ -703,8 +703,9 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// The height provider only knows the terrain surface, so a creature in a cave or a city sits "below" it. Before a conviction the
-    /// models are asked (<see cref="IUnderMapClassifier"/>): only <see cref="UnderMapKind.UnderMap"/> convicts, Ok and Unknown do not.
+    /// The under-map sample compares with the terrain surface alone (<see cref="ICreatureHeightProvider.GetTerrainHeight"/>), so a
+    /// creature in a cave or a city sits "below" it. A model floor as the surface would excuse a creature fallen through a cellar floor
+    /// (the floor is then over its head) and cost a model search on every sample. Before a conviction the models are asked (<see cref="IUnderMapClassifier"/>): only <see cref="UnderMapKind.UnderMap"/> convicts, Ok and Unknown do not.
     /// </summary>
     private bool ConfirmUnderMap(Creature creature)
     {
@@ -738,7 +739,7 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        float? localFloor = _height.GetHeight(Map.MapId, creature.X, creature.Y, creature.Z + 5f);
+        float? localFloor = _height.GetTerrainHeight(Map.MapId, creature.X, creature.Y, creature.Z + 5f);
         if (localFloor is { } validLocal && float.IsFinite(validLocal))
         {
             if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
@@ -757,7 +758,7 @@ public sealed partial class CreatureMapSystem
         }
 
         float probeZ = Math.Max(creature.Z + 100f, creature.Home.Z + 50f);
-        float? upperFloor = _height.GetHeight(Map.MapId, creature.X, creature.Y, probeZ);
+        float? upperFloor = _height.GetTerrainHeight(Map.MapId, creature.X, creature.Y, probeZ);
         if (upperFloor is { } validUpper && float.IsFinite(validUpper)
             && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
             && ConfirmUnderMap(creature))

@@ -2,7 +2,6 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Game.Maps.Terrain;
 
 namespace ArcaneCore.Game.Holidays;
 
@@ -141,7 +140,8 @@ public sealed class ElementalRiftAi(ElementalInvasionController invasion) : IGam
         }
     }
 
-    // DoSpawn: summoned on the rift for an hour (or until dead), then sent to wander 30 yards around a point 15-65 yards from the rift.
+    // DoSpawn: summoned on the rift for an hour (or until dead), then sent to wander 30 yards around a point 15-65 yards from the rift,
+    // on the floor there (terrain or a static model: elemental_invasions.cpp:69 GetWalkRandomPosition's vmap height, Map.cpp:3399-3401).
     private Creature? Spawn(Map map, CreatureMapSystem creatures, GameObject go, uint entry)
     {
         if (creatures.SummonInstanceCreatureTimedOocOrDead(entry, go.X, go.Y, go.Z, 0f, ElementalInvasionController.InvaderLifeMs) is not { } invader)
@@ -152,8 +152,7 @@ public sealed class ElementalRiftAi(ElementalInvasionController invasion) : IGam
             float angle = (float)(Random.NextDouble() * 2 * Math.PI), dist = (float)(Random.NextDouble() * 65);
             x = go.X + (dist * MathF.Cos(angle));
             y = go.Y + (dist * MathF.Sin(angle));
-            float floor = map.GetHeight(x, y, go.Z + 10f);
-            z = floor > TerrainTile.InvalidHeight ? floor : go.Z;
+            z = MapCreatureHeightProvider.Floor(map, x, y, go.Z + 10f) ?? go.Z;
             if (dist > 15f) break;
         }
 

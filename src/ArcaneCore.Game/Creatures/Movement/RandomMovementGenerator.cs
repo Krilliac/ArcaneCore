@@ -150,7 +150,8 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
         // vmangos Creature::GetRandomPoint with MOVE_PATHFINDING: a point on the navmesh within the wander distance, reachable from the
         // spawn point, then walked to along the mesh path. Without mesh data for the spot (no navmesh for the map, tile not loaded) the
-        // terrain-height point below stays, drawn exactly as before.
+        // point below stays: drawn around the spawn point, on the floor there (terrain or a static model, Map.cpp:3399-3401) when that
+        // is within MaxFallbackLegDropYards of the spawn height.
         bool onMesh = false;
         if (wander >= 0.1f && mover.TryGetRandomMeshPoint(creature, new Vector3(home.X, home.Y, home.Z), wander, out Vector3 meshPoint))
         {
@@ -177,7 +178,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
         bool run = _run ?? ShouldRun(creature, mover);
 
-        // The leg goes through the pathfinder whether or not the point came from the mesh: a terrain-height point on a map that has a mesh
+        // The leg goes through the pathfinder whether or not the point came from the mesh: a floor-height point on a map that has a mesh
         // but nothing at that spot (a house, a wall) has no path, and a wandering creature never walks a straight line through geometry.
         PlannedPath plan = mover.PlanPath(creature, new Vector3(destX, destY, destZ));
         if (plan.Outcome == PathOutcome.NoPath)
@@ -201,7 +202,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             && (plan.Corners[^1].Z < MathF.Min(creature.Z, home.Z) - MaxFallbackLegDropYards
                 || plan.Corners[^1].Z > MathF.Max(creature.Z, home.Z) + MaxFallbackLegDropYards))
         {
-            // A spawn off the mesh draws its point on the terrain (or at its own height where the terrain has a hole), and the search
+            // A spawn off the mesh draws its point on the floor (terrain or a static model; else at the spawn height), and the search
             // snaps that end to the nearest polygon in a 200 yd tall column (vmangos getPolyByLocation): live 2026-10-18 Lordaeron
             // Citizen 3617 spawn 156011 (ruins, z 70.8, a terrain hole over Undercity) got incomplete legs ending on the Undercity floor
             // at z -44 and walked down through the ground (seen at z 9-13, creature/under-map after every restart). In caves (Grizzled Den)

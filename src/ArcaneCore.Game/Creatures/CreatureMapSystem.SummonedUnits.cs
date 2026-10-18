@@ -50,8 +50,8 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// vmangos WorldObject::UpdateGroundPositionZ: the terrain height plus 0.05 when the map has
-    /// height data at (x, y), else null.
+    /// vmangos WorldObject::UpdateGroundPositionZ (Object.cpp:2079-2084): the floor height (terrain or a static
+    /// model, <see cref="MapCreatureHeightProvider"/>) plus 0.05 when the map has height data at (x, y), else null.
     /// </summary>
     public float? GroundZ(float x, float y, float z)
         => _height.GetHeight(Map.MapId, x, y, z) is { } height ? height + 0.05f : null;
