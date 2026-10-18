@@ -44,7 +44,7 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
             foreach (FaultSnapshot fault in snapshot)
             {
                 if (fault.Id == FaultLedger.OverflowId || string.Equals(fault.Site, BotSite, StringComparison.Ordinal) || IsConnectionNoise(fault)
-                    || EnvironmentSites.Contains(fault.Site))
+                    || IsWriteQueueRetryNoise(fault) || EnvironmentSites.Contains(fault.Site))
                 {
                     continue;
                 }
@@ -84,6 +84,17 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
         => string.Equals(fault.Site, "session", StringComparison.Ordinal)
             && fault.ExceptionType is "System.Net.Sockets.SocketException" or "System.IO.IOException" or "System.IO.EndOfStreamException"
                 or "System.ObjectDisposedException" or "System.OperationCanceledException" or "System.Threading.Tasks.TaskCanceledException";
+
+    /// <summary>
+    /// Inline retry attempts (<c>writequeue-*-attempt</c>), locked-database deferrals (<c>writequeue-*-busy</c>), and retained background sweep
+    /// retries (<c>writequeue-*-sweep</c>) are transient persistence retries counted in <c>.server faults</c>, not unhandled server bugs; terminal or
+    /// exhausted write-queue failures (<c>writequeue-*</c>, <c>writequeue-*-consume</c>, <c>writequeue-*-timer</c>) are still filed.
+    /// </summary>
+    internal static bool IsWriteQueueRetryNoise(FaultSnapshot fault)
+        => fault.Site.StartsWith("writequeue-", StringComparison.Ordinal)
+            && (fault.Site.EndsWith("-attempt", StringComparison.Ordinal)
+                || fault.Site.EndsWith("-busy", StringComparison.Ordinal)
+                || fault.Site.EndsWith("-sweep", StringComparison.Ordinal));
 
     private static QaSignal SignalOf(FaultSnapshot fault, DateTimeOffset at, long occurrences) => new()
     {

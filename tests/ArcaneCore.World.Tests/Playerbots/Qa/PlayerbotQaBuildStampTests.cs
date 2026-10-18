@@ -1100,4 +1100,34 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         Assert.Contains(new PlayerbotQaGitHubOptions { AutoCloseQuietMultiple = -1 }.Validate(), p => p.Contains("AutoCloseQuietMultiple", StringComparison.Ordinal));
         Assert.Contains(new PlayerbotQaGitHubOptions { AutoCloseMinQuietHours = 0 }.Validate(), p => p.Contains("AutoCloseMinQuietHours", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task AnUnpublishedFindingFromAnOlderBuild_WithZeroOccurrencesOnTheRunningBuild_DoesNotOpenANewIssueUntilSeenAgain()
+    {
+        var rig = new Rig(git => git.MaxIssuesPerHour = 1);
+        PlayerbotQaAggregator one = NewAggregator("build-1");
+        string first = Occurs(one, 5, quest: 1656);
+        string backlog = Occurs(one, 3, quest: 1657);
+        PlayerbotQaPublisher onOne = rig.Publisher(one, "build-1");
+        await rig.Run(onOne, one);
+        Assert.Equal(1, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Published, Of(one, first).Publication.State);
+        Assert.Equal(QaPublicationState.Pending, Of(one, backlog).Publication.State);
+
+        // Server restarts on build-2 an hour later; backlog has 0 occurrences on build-2 and must not open a new "0 on build build-2" issue.
+        rig.Time.Advance(TimeSpan.FromMinutes(65));
+        (PlayerbotQaAggregator two, QaLedgerState ledger) = Restart(one, onOne.Ledger.Export(), "build-2", at: rig.Time.GetUtcNow().UtcDateTime);
+        PlayerbotQaPublisher onTwo = rig.Publisher(two, "build-2", ledger);
+        await rig.Run(onTwo, two);
+
+        Assert.Equal(1, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Pending, Of(two, backlog).Publication.State);
+
+        // Once the finding actually occurs on build-2, it is eligible and opens its issue.
+        Occur(two, QaData.Bot1, quest: 1657, at: rig.Time.GetUtcNow().UtcDateTime);
+        await rig.Run(onTwo, two);
+
+        Assert.Equal(2, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Published, Of(two, backlog).Publication.State);
+    }
 }

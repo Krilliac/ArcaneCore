@@ -200,6 +200,51 @@ public sealed class CreatureRespawnQueueTests
     }
 
     [Fact]
+    public async Task ARetainedSweep_TriesEachWriteOnce_AndStopsAtTheFirstLockedDatabase()
+    {
+        var store = new FakeStore { Locked = true };
+        await using ServiceProvider sp = Build(store);
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        {
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+        };
+        queue.Start();
+
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 200);
+        queue.Save(0, 0, 3, Now + 300);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(3, store.Attempts);
+        Assert.Equal(3, queue.RetainedCount);
+
+        // While the database stays locked, a sweep tries only the first retained write (1 attempt, not 3) and stops so the rest do not wait out the lock.
+        Assert.True(queue.PostRetainedSweepForTest());
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (store.Attempts < 4)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained sweep did not run");
+            await Task.Delay(10);
+        }
+
+        queue.Save(0, 0, 99, Now + 900); // barrier behind the sweep
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(5, store.Attempts); // 3 initial + 1 from the sweep + 1 for spawn 99
+        Assert.Equal(4, queue.RetainedCount);
+
+        store.Locked = false;
+        Assert.True(queue.PostRetainedSweepForTest());
+        deadline = DateTime.UtcNow.AddSeconds(10);
+        while (queue.RetainedCount > 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained writes did not drain on the unlocked sweep");
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(4, store.Rows.Count);
+        await queue.StopAsync();
+    }
+
+    [Fact]
     public async Task AFailingWriteIsRetried_AndTheLaterWritesStillLand()
     {
         var store = new FakeStore(failFirst: 2);

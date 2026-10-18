@@ -28,7 +28,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     private const int MaxAttempts = 3;
 
     /// <summary>The marker the retry timer queues: not a store write, so the consumer sweeps the retained writes when it reaches it.</summary>
-    private static readonly Func<ICreatureRespawnStore, Task> RetrySweep = static _ => Task.CompletedTask;
+    private static readonly Op RetrySweep = new(default, 0, null, null, IsSweep: true);
 
     private readonly Dictionary<(uint Map, uint Instance), Dictionary<uint, long>> _times = [];
     private readonly Channel<Op> _channel = Channel.CreateUnbounded<Op>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -43,7 +43,28 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     private int _pending;
 
     /// <summary>One queued store write. A spawn write names its key; an instance delete has <see cref="OpKey.SpawnGuid"/> 0 and <see cref="OpKey.InstanceWide"/> set.</summary>
-    private sealed record Op(OpKey Key, long Sequence, Func<ICreatureRespawnStore, Task> Write);
+    private sealed record Op(OpKey Key, long Sequence, CreatureRespawnRecord? SaveRecord, CreatureRespawnKey? DeleteKey, bool IsSweep = false)
+    {
+        public Task ExecuteAsync(ICreatureRespawnStore store)
+        {
+            if (Key.InstanceWide)
+            {
+                return store.DeleteInstanceAsync(Key.InstanceId);
+            }
+
+            if (SaveRecord is { } record)
+            {
+                return store.SaveAsync([record], []);
+            }
+
+            if (DeleteKey is { } key)
+            {
+                return store.SaveAsync([], [key]);
+            }
+
+            return Task.CompletedTask;
+        }
+    }
 
     private readonly record struct OpKey(uint InstanceId, uint SpawnGuid, bool InstanceWide);
 
@@ -63,6 +84,10 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             }
         }
     }
+
+    /// <summary>Tests: queue one retained-write sweep now, as a timer tick would; false when one is already queued or the queue is not started.</summary>
+    internal bool PostRetainedSweepForTest()
+        => _consumer is not null && Interlocked.CompareExchange(ref _sweepQueued, 1, 0) == 0 && _channel.Writer.TryWrite(RetrySweep);
 
     /// <summary>Put the stored rows into the in-memory copy (before the world thread runs).</summary>
     public void LoadInitial(IEnumerable<CreatureRespawnRecord> records)
@@ -100,7 +125,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 if (RetainedCount > 0 && Interlocked.CompareExchange(ref _sweepQueued, 1, 0) == 0)
                 {
-                    _channel.Writer.TryWrite(new Op(default, 0, RetrySweep));
+                    _channel.Writer.TryWrite(RetrySweep);
                 }
             }
         }
@@ -115,7 +140,10 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    /// <summary>On the consumer: retry every retained write once, in the order <see cref="StopAsync"/> uses. A write superseded meanwhile (its key was rewritten or forgotten) is left alone.</summary>
+    /// <summary>
+    /// On the consumer: retry every retained write once, in the order <see cref="StopAsync"/> uses. Stops at the first locked database so the rest do not
+    /// each wait out the same lock; a write superseded meanwhile (its key was rewritten or forgotten) is left alone.
+    /// </summary>
     private async Task SweepRetainedAsync()
     {
         Op[] retry;
@@ -124,9 +152,12 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             retry = [.. _retained.Values.Select(r => r.Op).OrderByDescending(o => o.Key.InstanceWide).ThenBy(o => o.Key.InstanceId).ThenBy(o => o.Key.SpawnGuid)];
         }
 
+        int failed = 0;
+        bool locked = false;
+        Exception? firstFailure = null;
         foreach (Op op in retry)
         {
-            Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
+            Exception? failure = await TryWriteAsync(op, sweep: true).ConfigureAwait(false);
             lock (_gate)
             {
                 if (!_retained.TryGetValue(op.Key, out Retained? current) || !ReferenceEquals(current.Op, op))
@@ -141,8 +172,25 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 else
                 {
                     _retained[op.Key] = new Retained(op, failure);
+                    failed++;
+                    firstFailure ??= failure;
+                    if (DatabaseTransience.IsBusy(failure))
+                    {
+                        locked = true;
+                        break;
+                    }
                 }
             }
+        }
+
+        if (failed > 0 && firstFailure is not null)
+        {
+            logger.LogWarning(
+                "creature respawn retry: {Failed} of {Total} retained writes still failing{Locked}; first: {Reason}",
+                failed,
+                retry.Length,
+                locked ? " (the database is locked; the rest wait for the next sweep)" : "",
+                firstFailure.Message);
         }
     }
 
@@ -153,7 +201,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     {
         For(mapId, instanceId)[spawnGuid] = respawnUnixSeconds;
         var record = new CreatureRespawnRecord(mapId, instanceId, spawnGuid, respawnUnixSeconds);
-        Enqueue(new OpKey(instanceId, spawnGuid, false), store => store.SaveAsync([record], []));
+        Enqueue(new OpKey(instanceId, spawnGuid, false), record, null);
     }
 
     public void Delete(uint mapId, uint instanceId, uint spawnGuid)
@@ -164,7 +212,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
 
         var key = new CreatureRespawnKey(instanceId, spawnGuid);
-        Enqueue(new OpKey(instanceId, spawnGuid, false), store => store.SaveAsync([], [key]));
+        Enqueue(new OpKey(instanceId, spawnGuid, false), null, key);
     }
 
     /// <summary>
@@ -191,7 +239,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 _retained.Remove(key);
             }
 
-            EnqueueCore(new OpKey(instanceId, 0, true), store => store.DeleteInstanceAsync(instanceId), forgetsInstance: true);
+            EnqueueCore(new OpKey(instanceId, 0, true), null, null, forgetsInstance: true);
         }
     }
 
@@ -275,20 +323,20 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         return times;
     }
 
-    private void Enqueue(OpKey key, Func<ICreatureRespawnStore, Task> write)
+    private void Enqueue(OpKey key, CreatureRespawnRecord? saveRecord, CreatureRespawnKey? deleteKey)
     {
         lock (_gate)
         {
-            EnqueueCore(key, write, forgetsInstance: false);
+            EnqueueCore(key, saveRecord, deleteKey, forgetsInstance: false);
         }
     }
 
     /// <summary>Under <see cref="_gate"/>: number the write and queue it; a write numbered after an instance delete belongs to the instance's next life.</summary>
-    private void EnqueueCore(OpKey key, Func<ICreatureRespawnStore, Task> write, bool forgetsInstance)
+    private void EnqueueCore(OpKey key, CreatureRespawnRecord? saveRecord, CreatureRespawnKey? deleteKey, bool forgetsInstance)
     {
         long sequence = ++_sequence;
         Interlocked.Increment(ref _pending);
-        if (!_channel.Writer.TryWrite(new Op(key, sequence, write)))
+        if (!_channel.Writer.TryWrite(new Op(key, sequence, saveRecord, deleteKey)))
         {
             Interlocked.Decrement(ref _pending);
             logger.LogError("creature respawn queue closed; write lost");
@@ -301,9 +349,13 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    /// <summary>Attempt <paramref name="op"/> up to <see cref="MaxAttempts"/> times; null when it landed (or there is no store), else the last failure.</summary>
-    private async Task<Exception?> TryWriteAsync(Op op)
+    /// <summary>
+    /// Attempt <paramref name="op"/> up to <see cref="MaxAttempts"/> times (once on a retained <paramref name="sweep"/>); null when it landed (or there is
+    /// no store), else the last failure.
+    /// </summary>
+    private async Task<Exception?> TryWriteAsync(Op op, bool sweep = false)
     {
+        int attempts = sweep ? 1 : MaxAttempts;
         for (int attempt = 1; ; attempt++)
         {
             try
@@ -311,12 +363,12 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICreatureRespawnStore>() is { } store)
                 {
-                    await op.Write(store).ConfigureAwait(false);
+                    await op.ExecuteAsync(store).ConfigureAwait(false);
                 }
 
                 return null;
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException && attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
+            catch (Exception ex) when (ex is not OutOfMemoryException && attempt < attempts && !DatabaseTransience.IsBusy(ex))
             {
                 ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-attempt", ex);
                 logger.LogWarning(ex, "creature respawn write failed (attempt {Attempt}); retrying", attempt);
@@ -324,8 +376,21 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn", ex);
-                logger.LogError(ex, "creature respawn write failed; retained for retry");
+                if (sweep)
+                {
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-sweep", ex);
+                }
+                else if (DatabaseTransience.IsBusy(ex))
+                {
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-busy", ex);
+                    logger.LogWarning(ex, "creature respawn write failed: the database is locked by another writer; retained for retry");
+                }
+                else
+                {
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn", ex);
+                    logger.LogError(ex, "creature respawn write failed; retained for retry");
+                }
+
                 return ex;
             }
         }
@@ -337,7 +402,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         {
             await foreach (Op op in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                if (ReferenceEquals(op.Write, RetrySweep))
+                if (op.IsSweep)
                 {
                     try
                     {
