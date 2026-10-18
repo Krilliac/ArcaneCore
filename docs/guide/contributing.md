@@ -74,7 +74,7 @@ the repository SDK and commit every changed `packages.lock.json` in the same com
 
 The solution restore also covers the hot-module fixtures (`tests/hotmodule-fixtures`, reached through the World test project's
 references) and the projects under `tests/ThirdParty` (reached through the Game, World and MockClient test projects'
-references); each tool outside the solution that nothing in it references needs its own line, and `PackageLockFileTests` checks
+references); each tool with a lock file that is outside the solution and referenced by nothing in it needs its own line, and `PackageLockFileTests` checks
 that the recipe lists exactly those. A change in a library such as `ArcaneCore.Data` rewrites the lock file of every project that
 references it, so expect several files to change. The last line repeats CI's check. A new project gets its lock file from its
 first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.

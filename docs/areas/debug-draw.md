@@ -112,8 +112,8 @@ built-in ids exist with the model paths in the table above, and each model's `.m
   layout is byte-for-byte the one a real object gets), the look of each model and glow, the hover
   name and right-click on a goober marker, and how the client renders markers past its far clip. The fork's models were chosen in
   a client; the new ones (2971, 2770, 1268, 263, 1308, 5913, 6431, 363) were only checked to exist in the DBC.
-- Markers are solid only if their model has collision; the 3-yard gap around the GM is the fork's guard against standing inside
-  one.
+- Markers are solid only if their model has collision; the 3-yard gap that the line, ray and path dots and the path's
+  first corner keep from the GM is the fork's guard against standing inside one.
 - Line of sight is the vmap static-model test (doodads ignored), not dynamic game objects such as doors.
 - The path is computed for a walking, swimming player mover; a creature's own path (fliers, swimmers, the no-mmap terrain-step
   fallback the creature lane may install) can differ.

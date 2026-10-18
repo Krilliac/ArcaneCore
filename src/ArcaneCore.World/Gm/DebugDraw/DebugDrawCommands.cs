@@ -29,7 +29,10 @@ namespace ArcaneCore.World.Gm.DebugDraw;
 /// </summary>
 public sealed class DebugDrawCommands : ICommandGroup
 {
-    /// <summary>Markers nearer than this to the invoker are left out (they would stand inside the character).</summary>
+    /// <summary>
+    /// Line-of-sight and collision-ray dots short of the target or the hit, path dots and a path's first corner nearer than this to the
+    /// invoker are left out (they would stand inside the character); every other marker is placed where it falls.
+    /// </summary>
     public const float SkipNearInvoker = 3.0f;
 
     /// <summary>Largest <c>.debug vis cells</c> radius: (2·5+1)² = 121 corners.</summary>

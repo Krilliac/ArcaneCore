@@ -39,7 +39,7 @@ What substitutes for the data when `World:Maps:DataDirectory` is empty:
 
 - **Line of sight**: `OpenLineOfSight` — always clear (spells and melee through walls).
 - **Pathing**: `StraightLinePathfinder` — a straight line flagged `NotUsingPath`; creatures chase in
-  straight lines (`CreaturePathing`).
+  straight lines (`CreatureMapSystem.PlanPath` answers `Direct`, the straight line, where there is no mesh).
 - **Heights**: none. `GetHeight` returns `TerrainTile.InvalidHeightValue`; falling, under-map and
   liquid observers have nothing to compare against; the client's reported positions and zone are
   trusted.

@@ -120,7 +120,11 @@ per-address connection caps were reworked. Measurements and limits: [lane report
   restore, staggered autosave, the login queue and the optimisation slices were not started in this
   lane; no performance numbers are claimed by this lane. Delivered since by other lanes:
   [remote administration](../ops/remote-admin.md), [metrics](../ops/metrics.md) (`Ops:Metrics`, off
-  by default), the rolling log file ([logging](../ops/logging.md)) and staggered autosave
+  by default), the rolling log file ([logging](../ops/logging.md)), Docker packaging
+  ([Running in Docker](../guide/docker.md)), backup support
+  ([database upgrade tooling](../ops/database-upgrade.md#backups): `arcane-db backup-info` prints
+  the dump command for each database, and `arcane-db upgrade --backup-dir` writes a verified copy
+  of a SQLite database; there is no restore command) and staggered autosave
   ([persistence](persistence.md#autosave-one-timer-per-character)). There is no health endpoint;
   the liveness signal for a supervisor is the
   [watchdog heartbeat](../ops/watchdog.md#4-heartbeat-opswatchdogheartbeat).

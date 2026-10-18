@@ -47,7 +47,7 @@ the world thread.
 | `EnableLineOfSight` | `true` | vmangos `vmap.enableLOS`. |
 | `EnableHeight` | `true` | vmangos `vmap.enableHeight` (also gates area info). |
 | `EnablePathfinding` | `true` | vmangos `mmap.enabled`. |
-| `NavTileReadConcurrency` | `2` | The most `NNNXXYY.mmtile` files bots' path searches read at the same time, in the background. At least 1. |
+| `NavTileReadConcurrency` | `2` | The most `NNNXXYY.mmtile` files bots' path searches read at the same time, in the background. At least 1, at most 16 (`NavMeshPathfinder` clamps it). |
 
 A directory that does not exist keeps the default service (logged once at startup).
 

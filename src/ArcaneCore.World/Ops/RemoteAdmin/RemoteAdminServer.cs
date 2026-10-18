@@ -38,7 +38,8 @@ namespace ArcaneCore.World.Ops.RemoteAdmin;
 /// code); <c>@id TAG command</c> echoes TAG after <c>#done</c>. A command that holds itself open (<c>.botctl wait</c>/<c>run</c>) is done
 /// when its work is, or reported <c>#done error timeout</c> after <see cref="RemoteAdminOptions.CommandTimeoutSeconds"/> while it goes on.
 /// Lines starting <c>#event</c> are pushed asynchronously (<c>.botctl stream</c>). <c>@ping</c> answers <c>#pong</c>; <c>quit</c> closes.
-/// Commands of one connection run one at a time.
+/// Commands of one connection run one at a time, except that one still running after the command timeout (<c>#done error timeout</c> in
+/// automation mode) goes on while the next lines run.
 /// </para>
 /// </summary>
 public sealed class RemoteAdminServer : IHostedService

@@ -258,8 +258,7 @@ version with a re-run) in `AvailableProviders` theories: **only SQLite ran on th
 was written for their semantics (non-transactional MariaDB DDL: the step is one `CREATE TABLE`; PostgreSQL identifier folding: explicit
 lower-case names; no `REPLACE INTO`; no advisory locks), but nothing here proves it until CI runs.
 
-Limits: battleground maps are not excluded (vmangos never stores them, `MapPersistentStateMgr.cpp:86-88`; no battleground lane yet, the
-exclusion belongs in `CreatureRespawnQueue.Save`); creature pools/linking that share dormant state are not implemented; the instance reset
+Limits: creature pools/linking that share dormant state are not implemented; the instance reset
 path outside `EfInstanceStore.DeleteInstanceAsync` (an in-memory-only reset) is the instances area's; a crash between a death and its queued write
 loses that one write (same window as vmangos' asynchronous character-database queue).
 

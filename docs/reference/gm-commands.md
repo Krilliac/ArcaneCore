@@ -5,7 +5,7 @@
 
 Every chat command the world daemon registers, with the account level it needs. A message that starts with `.` or `!` is a command. A command word resolves to the first table entry it is a prefix of, then the account is checked, as vmangos does; `World:GmCommands:HideUnavailable` and `ExactNameFirst` (see the [configuration reference](configuration.md)) switch to the older ArcaneCore behaviour.
 
-Coverage: ArcaneCore implements a subset of the vmangos command table (the vmangos wiki documents several hundred commands). Commands are only listed here when they exist in this tree. The same commands also run without a character in the world: from the world daemon's [console](../areas/server-console.md) and its [control pipe](../areas/server-console.md#control-pipe) with Administrator authority, and over [remote administration](../ops/remote-admin.md) with the level of the account that logged in. There is no character behind them, so a command that acts on the invoker's own character or selection answers that it needs a player.
+Coverage: ArcaneCore implements a subset of the vmangos command table (the vmangos wiki documents several hundred commands). Commands are only listed here when they exist in this tree. The same commands also run without a character in the world: from the world daemon's [console](../areas/server-console.md) and its [control pipe](../areas/server-console.md#control-pipe) with Administrator authority, and over [remote administration](../ops/remote-admin.md) with the level of the account that logged in (Administrator for an `@token` login). There is no character behind them, so a command that acts on the invoker's own character or selection answers that it needs a player.
 
 ## Account levels
 

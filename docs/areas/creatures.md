@@ -100,7 +100,8 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
 
 ## What's left
 
-- Respawn times are not persisted (`creature_respawn`). They live in memory and survive grid unloads but not restarts.
+- Respawn times are persisted in `creature_respawn` (`Creatures:Respawn:Persist`, default on; battleground maps keep them in memory
+  only) and survive restarts; see [creature movement, spawns and respawn](creature-movement-spawns.md), "Durable respawn timers".
 - Creature point heights come from the `ICreatureHeightProvider` default, `MapCreatureHeightProvider`: the `.map` terrain
   height, without vmap floors. Paths come from the navmesh ([creature movement](creature-movement-spawns.md)) and line of
   sight from the vmaps ([collision and pathing](collision-pathing.md)).

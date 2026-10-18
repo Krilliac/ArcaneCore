@@ -27,7 +27,9 @@ is listed in [Reference discrepancies](#reference-discrepancies).
     `EnsureGridLoadedAtEnter` + `LoadMapCellsAround`); other objects only create their grid
     (`EnsureGridCreated`).
   - `Relocate(obj)`: re-files an object whose X/Y changed; an active object entering a new
-    cell re-activates its grid (timer × 0.1); a player also loads the grids ahead.
+    cell re-activates its grid (timer × 0.1); a player also loads every grid within
+    `GridActivationDistance` of its new position (grids up to `GridPrefetchDistance` beyond that,
+    which do not exist yet, only get their tiles prefetched).
   - `CollectObjects(x, y, r)`: the objects of the cells a circle touches in loaded grids
     (vmangos `Cell::Visit` with `dont_load`). Callers apply their exact distance test.
   - `CollectPlayers(x, y, r)`: the players of the same cells only. Each cell keeps its
@@ -57,7 +59,8 @@ pass unmodified). Internally:
   looks from another object (far sight, possession), the objects in the cells within that
   radius of the camera. They are
   de-duplicated and processed in the order they entered the map, then judged with the same
-  `IsWithinVisibilityDistance` as before — so the result is identical to the old full scan.
+  `IsWithinVisibilityDistance` as before, measured from the viewer's camera (a map-wide object and
+  the camera's own body are always in range) — so the result is identical to the old full scan.
 - An observer index (`object GUID → players whose client has it`, the inverse of
   `Player.VisibleObjects`) replaces scans in `BroadcastToObservers` and in non-player
   visibility updates.
@@ -163,8 +166,10 @@ the new map. The pets use them to take the player's pet along (`PetTeleportFollo
 `TeleportService.TeleportTo(player, map, x, y, z, o)` (vmangos `Player::TeleportTo`) refuses
 invalid coordinates, unknown maps, a battleground map the player is not bound to
 (`BattlegroundEntryAllowed`, answered by the battleground system: docs/integration/battlegrounds.md), a player
-in no map and a second far teleport while one is under way. It clears the moving/turning
-and transport flags and resets the client time stamp, then:
+in no map, a player whose quest settlement is pending (`IsQuestSettlementPending`), a second far
+teleport while one is under way, and a map change the instance rules refuse (`IMapResolver.CanEnter`,
+vmangos `MapManager::CanPlayerEnter` and `DungeonMap::CanEnter`: raid group, hourly limit, player
+cap, pending reset; docs/integration/instances.md). It clears the moving/turning and transport flags and resets the client time stamp, then:
 
 - **Same map (near):** stores the destination and sends `MSG_MOVE_TELEPORT_ACK` (packed
   GUID, u32 movement counter, movement block at the destination). The client's

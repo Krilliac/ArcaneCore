@@ -1139,7 +1139,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         PathType type = complete && !endFar ? PathType.Normal : PathType.Incomplete;
         if (forceDestination && ((type & PathType.Normal) == 0 || !InRange(end, points[^1], 1f, 1f)))
         {
-            // PathFinder.cpp:451-472: keep a partial subpath only when it already covers 70% of the way.
+            // PathFinder.cpp:451-472: keep a partial subpath only when its end is under about 55% of the way from the destination (squared distances against 0.3).
             if (Vector3.DistanceSquared(points[^1], end) < 0.3f * Vector3.DistanceSquared(start, end))
             {
                 points[^1] = end;

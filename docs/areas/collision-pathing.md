@@ -89,9 +89,9 @@ Kalimdor settles in under 1 ms, an unreachable goal's full search of the Eastern
 See the open questions of the lane report for the reasons. Not implemented: the `MapCollision` partial split,
 FindWalkPoly extents / `farFromPoly` rules for the start point (the end point has them when `PathOptions.EndTolerance`
 is set: return home, charge), swim/underwater paths, smooth path (`findSmoothPath`; `CreatureSplineSmoothing` only
-rounds the corners of creature splines), off-mesh links, vmap/mmap tile lifecycle shared across instances, the
+rounds the corners of creature and charge splines), off-mesh links, vmap/mmap tile lifecycle shared across instances, the
 fallback model searches of `GetHeightStatic` (unbounded, upward and near the terrain, `GridMap.cpp:840-850`), model
-floors in `Map.GetHeight` (`Map.cpp:3405-3409`; creature movement heights come from it), WMO liquids, the terrain test
+floors in `Map.GetHeight` (`Map.cpp:3407-3411`; creature movement heights come from it), WMO liquids, the terrain test
 of the indoor check (`GetAreaInfo`, `GridMap.cpp:894-907`), dynamic gameobject LOS, DBC-fed WMO areas, the unit's
 collision height in line of sight (`MapCollision.DefaultEyeHeight` at both ends; `Object.cpp:1766-1781`), the
 data-directory inspector. Paths on transports and boats (`PathFinder.cpp:77-84`), cMaNGOS mmaps (version 8) and WMO
