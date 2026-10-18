@@ -83,4 +83,4 @@ comes later. One client at a time; the next one is served after it disconnects.
 ## Limits
 
 - A blocked read cannot be interrupted, so stopping the daemon does not wait for the reader; it is a background thread and cannot keep the process alive.
-- The console is local to the window: there is no remote access, which keeps the authority tied to whoever can already operate the machine. The control pipe keeps that rule: local only, and only the World's own account (and SYSTEM).
+- The console is local to the window, which keeps the authority tied to whoever can already operate the machine. The control pipe keeps that rule: local only, and only the World's own account (and SYSTEM). The exception is [remote administration](../ops/remote-admin.md) (RA): the same commands over TCP, on by default and bound to 127.0.0.1:3443, each run with the security level of the account that logged in (at least `World:RemoteAdmin:MinSecurity`, Administrator by default), or as the console with the token the World writes to `World:RemoteAdmin:AgentLoginFile` (`ra-token.txt` next to the daemon by default).

@@ -59,6 +59,9 @@
   Overrides the arcane-account path (tests).
 .PARAMETER MockTool
   Overrides the arcane-mock path (tests).
+.PARAMETER LoginTimeoutSeconds
+  How long to wait for the character to be in the world once the session started (default 90, 5..600). When it is not in the world
+  by then the run fails with exit 1 before any command is sent.
 .PARAMETER CreateAccount
   Creates the account when it does not exist (with the random password; it is then restored to Player).
 .PARAMETER DryRun

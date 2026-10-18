@@ -110,12 +110,20 @@ per-address connection caps were reworked. Measurements and limits: [lane report
   run end to end; the countdown and `ExitCodes.Current` are tested, `Program.cs` returning it was
   verified only for the verb paths.
 - `.server exit`, `.server plimit`, `.server set motd`, the retail `.server info` text, and the
-  retail `.announce` and `.notify` strings (vmangos `ServerCommands.cpp:46-66, 302-316`) are not
-  changed: the first three need a console sender or the login queue, the rest sit in
-  `BuiltinCommands.cs`, which the gm-commands lane owns. Remote administration console, metrics and
-  health endpoint, file logging, packaging, backup and
-  restore, staggered autosave, the login queue and the optimisation slices were not started; no
-  performance numbers are claimed by this lane.
+  retail `.announce` and `.notify` strings (vmangos `ServerCommands.cpp:46-66, 302-316`) were not
+  changed in this lane: the first three needed a console sender or the login queue, the rest sit in
+  `BuiltinCommands.cs`, which the gm-commands lane owns. Since then the
+  [server console](server-console.md) runs commands without a character, `.server set motd` (GM
+  lane, `Gm/Server/ServerCommands.cs`) among them; `.server exit` and `.server plimit` still do not
+  exist (the console's `quit` and `exit` run `.server shutdown 0`).
+- Remote administration console, metrics and health endpoint, file logging, packaging, backup and
+  restore, staggered autosave, the login queue and the optimisation slices were not started in this
+  lane; no performance numbers are claimed by this lane. Delivered since by other lanes:
+  [remote administration](../ops/remote-admin.md), [metrics](../ops/metrics.md) (`Ops:Metrics`, off
+  by default), the rolling log file ([logging](../ops/logging.md)) and staggered autosave
+  ([persistence](persistence.md#autosave-one-timer-per-character)). There is no health endpoint;
+  the liveness signal for a supervisor is the
+  [watchdog heartbeat](../ops/watchdog.md#4-heartbeat-opswatchdogheartbeat).
 - Database reachability is not probed by `check-config`.
 - Real 1.12.1 client display of the countdown was not checked.
 
