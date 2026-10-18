@@ -248,6 +248,7 @@ public sealed partial class Creature
     private long _evadeWindowStartMs = -1;
     private int _evadeCountInWindow;
     private bool _evadeLoopReported;
+    private string? _evadeReasons;
 
     private long _leashWindowStartMs = -1;
     private int _leashCountInWindow;
@@ -291,7 +292,13 @@ public sealed partial class Creature
     }
 
     internal bool RecordEvadeForAnomaly(long clockMs, out int count, out long windowElapsedMs)
+        => RecordEvadeForAnomaly(clockMs, null, out count, out windowElapsedMs, out _);
+
+    /// <param name="reason">Why this evade happened (<see cref="CreatureMapSystem.EnterEvadeMode"/>); the window's reasons come back in
+    /// <paramref name="reasons"/>, oldest first, so a loop report says which path keeps sending the creature home.</param>
+    internal bool RecordEvadeForAnomaly(long clockMs, string? reason, out int count, out long windowElapsedMs, out string? reasons)
     {
+        reasons = null;
         if (!this.CharmerOrOwnerGuid.IsEmpty)
         {
             count = 0;
@@ -304,11 +311,18 @@ public sealed partial class Creature
             _evadeWindowStartMs = clockMs;
             _evadeCountInWindow = 1;
             _evadeLoopReported = false;
+            _evadeReasons = reason;
         }
         else
         {
             _evadeCountInWindow++;
+            if (reason is not null && _evadeCountInWindow <= CreatureAnomalies.LoopThreshold)
+            {
+                _evadeReasons = _evadeReasons is null ? reason : _evadeReasons + "; " + reason;
+            }
         }
+
+        reasons = _evadeReasons;
 
         count = _evadeCountInWindow;
         windowElapsedMs = clockMs - _evadeWindowStartMs;
@@ -565,16 +579,30 @@ public sealed partial class CreatureMapSystem
         CreatureAnomalies.ReportWaypointPathMissing(creature, pathId, source);
     }
 
-    internal void RecordEvadeAnomaly(Creature creature)
+    internal void RecordEvadeAnomaly(Creature creature, string? reason = null)
     {
-        if (creature.RecordEvadeForAnomaly(_clockMs, out int count, out long windowMs))
+        if (creature.RecordEvadeForAnomaly(_clockMs, string.IsNullOrEmpty(reason) ? null : DescribeEvade(creature, reason), out int count, out long windowMs, out string? reasons))
         {
             AnomalyLedger.Shared.Report(
                 CreatureAnomalies.CreatureSubsystem,
                 CreatureAnomalies.EvadeLoopCode,
                 CreatureAnomalies.Subject(creature),
-                $"Creature {creature.Guid} (entry {creature.Entry}) entered evade mode {count} times within {windowMs} ms at ({creature.X:F1}, {creature.Y:F1}, {creature.Z:F1}) on map {Map.MapId}");
+                $"Creature {creature.Guid} (entry {creature.Entry}) entered evade mode {count} times within {windowMs} ms at ({creature.X:F1}, {creature.Y:F1}, {creature.Z:F1}) on map {Map.MapId}"
+                    + (reasons is null ? "" : $"; evades: {reasons}"));
         }
+    }
+
+    /// <summary>One evade for the loop report: who asked, and the fight it ended (the victim, its state and distance, the attackers left).</summary>
+    private static string DescribeEvade(Creature creature, string reason)
+    {
+        UnitCombat combat = creature.Combat;
+        string victim = combat.Victim is not { } v
+            ? "no victim"
+            : (v is Player ? "player " : v is Creature ? "creature " : "unit ") + (v.IsAlive ? "alive" : "dead")
+              + (ReferenceEquals(v.Map, creature.Map)
+                  ? " " + Vector3.Distance(new(v.X, v.Y, v.Z), new(creature.X, creature.Y, creature.Z)).ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + "yd"
+                  : " off-map");
+        return $"{reason}({victim}, {combat.AttackersInternal.Count} att, {creature.Motion.CurrentType})";
     }
 
     internal void RecordLeashResetAnomaly(Creature creature, string reason)

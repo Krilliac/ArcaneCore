@@ -219,7 +219,8 @@ public abstract class CreatureAI
     protected bool UpdateVictim() => System?.SelectHostileTarget(Me) ?? false;
 
     /// <summary>Leave combat: reset health and threat, run home (vmangos EnterEvadeMode).</summary>
-    public void EnterEvadeMode() => System?.EnterEvadeMode(Me);
+    public void EnterEvadeMode([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => System?.EnterEvadeMode(Me, GetType().Name + "." + caller);
 
     /// <summary>Cast a spell through the world spell system (no-op result without one).</summary>
     protected CreatureCastResult DoCast(Unit? target, uint spellId, bool triggered = false)

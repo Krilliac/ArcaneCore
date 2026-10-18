@@ -29,7 +29,8 @@ public sealed partial class CreatureMapSystem
     /// as in the sources (<see cref="AI.CreatureAI.TakeOverEvadeRaisesEvadeEvents"/>). A script's own evade that replaces this one
     /// (<see cref="AI.CreatureAI.OnEnterEvadeMode"/> returning true) is not an engine evade and raises them only through a nested call.
     /// </summary>
-    public void EnterEvadeMode(Creature creature)
+    /// <param name="reason">Who asked (the calling member by default; a script names itself): kept with the evade-loop report.</param>
+    public void EnterEvadeMode(Creature creature, [System.Runtime.CompilerServices.CallerMemberName] string reason = "")
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (!creature.IsAlive || creature.IsEvading || _takeOverEvadeEvents.Contains(creature) || !_creatures.ContainsKey(creature.Guid))
@@ -54,7 +55,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
-        RecordEvadeAnomaly(creature); // report-only: the third engine evade inside the loop window is an anomaly
+        RecordEvadeAnomaly(creature, reason); // report-only: the third engine evade inside the loop window is an anomaly
 
         // The default generator's reset position (the last reached waypoint, where a wanderer stands inside its disc), else the spawn
         // point: vmangos HomeMovementGenerator::_setTargetLocation, HomeMovementGenerator.cpp:52-56.

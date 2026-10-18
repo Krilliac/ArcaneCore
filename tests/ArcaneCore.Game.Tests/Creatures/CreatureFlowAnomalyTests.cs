@@ -23,6 +23,7 @@ public sealed class CreatureFlowAnomalyTests
     private const uint SingleLeashEntry = 950004;
     private const uint NoPathEntry = 950005;
     private const uint PathEntry = 950006;
+    private const uint ReasonEvadeEntry = 950007;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -78,6 +79,25 @@ public sealed class CreatureFlowAnomalyTests
 
         EvadeOnce(f);
         Assert.Single(capture.Notices); // one report per episode
+    }
+
+    [Fact]
+    public void TheEvadeLoopReport_NamesWhoSentTheCreatureHome_AndTheFightEachEvadeEnded()
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", ReasonEvadeEntry);
+        using Fight f = Start(ReasonEvadeEntry);
+
+        EvadeOnce(f);
+        EvadeOnce(f);
+        // The third ends a real fight, the player its victim, and is asked by the AI.
+        f.Wolf.Relocate(25, 0, 83.5f, 0, 0);
+        f.Map.Combat.Attack(f.Wolf, f.Player, melee: false);
+        f.Wolf.AI!.EnterEvadeMode();
+
+        string detail = Assert.Single(capture.Notices).Detail;
+        Assert.Contains("; evades: EvadeOnce(no victim, 0 att, ", detail);
+        Assert.Contains("; EvadeOnce(", detail); // the second (the wolf, back home, had aggroed the player meanwhile)
+        Assert.True(detail.Contains("; " + f.Wolf.AI!.GetType().Name + ".TheEvade", StringComparison.Ordinal), detail); // the AI asked (the rest is past the ledger's text limit)
     }
 
     [Fact]
