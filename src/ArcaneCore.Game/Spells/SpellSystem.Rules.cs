@@ -43,6 +43,13 @@ public sealed partial class SpellSystem
     public List<ISpellApplicationRule> ApplicationRules { get; } = [];
 
     /// <summary>
+    /// Whether a hostile <c>spell</c> from <c>caster</c> would land fully diminished on <c>target</c> right now (its aura dropped with no miss,
+    /// vmangos Spell::DoSpellHitOnUnit at DIMINISHING_LEVEL_IMMUNE). Null while diminishing returns are off. Bot rotations and the bot QA spell monitor
+    /// read it so a fear or stun cast into immunity is neither repeated nor reported as a spell that does nothing.
+    /// </summary>
+    public Func<Unit, Unit, SpellInfo, bool>? IsFullyDiminished { get; set; }
+
+    /// <summary>
     /// Stacking rules that refuse a new aura holder before it is put on its target (vmangos RemoveNoStackAurasDueToAuraHolder returning false:
     /// "cannot remove higher rank"). They run after the same-spell refresh and stack branches; a rule that returns true refuses the holder,
     /// which is then marked removed without any handler, slot, packet or <see cref="HolderAdded"/>. Empty by default.

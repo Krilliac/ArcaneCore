@@ -142,7 +142,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
         int selected = outcome.EffectMask & facts.MeasurableMask;
         if (outcome.EffectMask != 0 && selected == 0) return; // nothing measurable aimed at this target (a self part of a mixed spell)
         var key = (cast.Caster.Guid.Value, cast.Spell.Id);
-        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected)))
+        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || FullyDiminished(cast, outcome, facts, selected)))
         {
             if (_noEffect.ContainsKey(key)) _noEffect[key] = 0;
             return;
@@ -162,6 +162,13 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
         Report(bot, cast.Spell, QaSignalKind.SpellNoEffect, string.Empty, ExpectText(facts.Expect), -1, string.Empty, 0, 0,
             string.Create(CultureInfo.InvariantCulture, $"{NoEffectRepeats} hits in a row of spell {cast.Spell.Id} by one bot dealt no damage, healing or aura{TargetIdentity(outcome.Target)}"));
     }
+
+    /// <summary>
+    /// An aura hit dropped by diminishing returns (vmangos Spell::DoSpellHitOnUnit: a fully diminished holder is not applied and no miss is sent) lands with
+    /// no aura by design: a warlock's fourth Fear on the same player within the reset window is the rule working, not a spell that does nothing.
+    /// </summary>
+    private bool FullyDiminished(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
+        => (selected & facts.AuraMask) != 0 && _gaps.System.IsFullyDiminished is { } diminished && diminished(cast.Caster, outcome.Target, cast.Spell);
 
     private bool Worked(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {

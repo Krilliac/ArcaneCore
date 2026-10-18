@@ -28,10 +28,29 @@ public sealed class DiminishingRule : ISpellApplicationRule
         system.HolderAdded += holder => OnHolder(holder, applied: true);
         system.HolderRemoved += holder => OnHolder(holder, applied: false);
         system.UnitDied += unit => GetTracker(unit).Clear();
+        system.IsFullyDiminished = WouldBeImmune;
     }
 
     /// <summary>The tracker of <paramref name="unit"/> (created on first use).</summary>
     public DiminishingTracker GetTracker(Unit unit) => _trackers.GetValue(unit, static _ => new DiminishingTracker());
+
+    /// <summary>
+    /// Whether <paramref name="spell"/> from <paramref name="caster"/> would be dropped as fully diminished on <paramref name="target"/> now: the
+    /// level <see cref="Begin"/> would read is Immune and <see cref="ScaleDuration"/> would scale it (group of type ALL, or PLAYER between player-like
+    /// units, hostile caster). Read-only: it raises no level.
+    /// </summary>
+    public bool WouldBeImmune(Unit caster, Unit target, SpellInfo spell)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(spell);
+        if (_system is null || !_trackers.TryGetValue(target, out DiminishingTracker? tracker)) return false;
+        DiminishingGroup group = DiminishingClassifier.GetGroup(spell, false);
+        if (group == DiminishingGroup.None || _system.Relations.IsFriendly(caster, target)) return false;
+        DiminishingType type = DiminishingGroups.TypeOf(group);
+        bool applies = type == DiminishingType.All || (type == DiminishingType.Player && target.IsLikePlayer() && caster.IsLikePlayer());
+        return applies && tracker.GetLevel(group, _system.NowMs, _resetMs) == DiminishingLevel.Immune;
+    }
 
     public void Begin(SpellApplication application)
     {

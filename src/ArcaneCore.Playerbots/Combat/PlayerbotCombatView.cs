@@ -164,6 +164,8 @@ internal static class PlayerbotCombatView
                 && unit.Guid != combo.GetComboTarget(player))
                 return false;
             if (spell.IsPositive && ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
+            // A crowd-control spell on a target at the immune diminishing level lands with no aura (vmangos Spell::DoSpellHitOnUnit): do not waste the cast.
+            if (!spell.IsPositive && !ReferenceEquals(unit, player) && system.IsFullyDiminished is { } diminished && diminished(player, unit, spell)) return false;
             if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;
             if (!HasPower(player, spell)) return false;
             if (spell.GetErrorAtShapeshiftedCast((uint)form, formFlags) != SpellCastResult.CastOk) return false;

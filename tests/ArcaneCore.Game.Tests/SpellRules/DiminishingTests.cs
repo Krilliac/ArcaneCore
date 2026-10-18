@@ -134,6 +134,25 @@ public sealed class DiminishingTests
         Assert.Equal([1.0f, 0.5f, 0.25f, 0.0f], new[] { DiminishingLevel.Level1, DiminishingLevel.Level2, DiminishingLevel.Level3, DiminishingLevel.Immune }.Select(DiminishingGroups.RateOf));
     }
 
+    [Fact]
+    public void FullyDiminishedQuery_TurnsTrueAtTheImmuneLevel_AndIsPublishedOnTheSystem()
+    {
+        SpellTestKit kit = Kit();
+        (Player caster, Player victim, DiminishingRule rule) = Setup(kit);
+        SpellInfo fear = kit.Store.Get(Fear)!;
+        Assert.Same(rule, kit.System.IsFullyDiminished!.Target);
+
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.False(rule.WouldBeImmune(caster, victim, fear));
+            Hit(kit, caster, victim, Fear);
+        }
+
+        Assert.True(rule.WouldBeImmune(caster, victim, fear));
+        Assert.True(kit.System.IsFullyDiminished(caster, victim, fear));
+        Assert.False(rule.WouldBeImmune(caster, caster, fear)); // no tracker hits on the caster
+    }
+
     // --- tracker ----------------------------------------------------------------------------------
 
     [Fact]
