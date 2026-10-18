@@ -188,6 +188,17 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
+        if (!onMesh && plan.Corners.Count > 0 && plan.Corners[^1].Z < MathF.Min(creature.Z, home.Z) - MaxFallbackLegDropYards)
+        {
+            // A spawn off the mesh draws its point on the terrain (or at its own height where the terrain has a hole), and the search
+            // snaps that end to the nearest polygon in a 200 yd tall column (vmangos getPolyByLocation): live 2026-10-18 Lordaeron
+            // Citizen 3617 spawn 156011 (ruins, z 70.8, a terrain hole over Undercity) got incomplete legs ending on the Undercity floor
+            // at z -44 and walked down through the ground (seen at z 9-13, creature/under-map after every restart). A wander leg never
+            // drops a floor: skip it like a leg without a path. A leg that climbs (back up to the mesh) still runs.
+            _nextMoveMs = NoPathRetryDelay(mover, ++_consecutiveNoPath);
+            return true;
+        }
+
         _consecutiveNoPath = 0;
         mover.MovePath(creature, plan.Corners, run, SplineFacing.None);
 
@@ -205,6 +216,12 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
         return true;
     }
+
+    /// <summary>
+    /// How far below both the creature and its wander centre a leg drawn off the mesh may end (vmangos PathFinder's farFromPoly bound,
+    /// 7 yd): deeper is a floor below (a cave, a city under the terrain), not a wander point.
+    /// </summary>
+    internal const float MaxFallbackLegDropYards = 7f;
 
     /// <summary>vmangos RandomMovementGenerator::GetResetPosition: the current position when within the wander distance of the spawn point, else the spawn point.</summary>
     public CreatureHome? GetResetPosition(Creature creature)

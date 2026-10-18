@@ -202,6 +202,50 @@ public sealed class RandomWanderTests
         Assert.Equal(0, generator.ConsecutiveNoPath);
     }
 
+    /// <summary>A pathfinder whose every path is incomplete and ends <see cref="Drop"/> yd below the start (a floor under the terrain).</summary>
+    private sealed class DivingPathfinder : ArcaneCore.Game.Maps.Collision.IPathfinder
+    {
+        public float Drop { get; set; } = 115f;
+
+        public int Calls { get; private set; }
+
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(
+            uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            Calls++;
+            ArcaneCore.Game.Maps.Collision.PathSearchCounters.RecordSearch(1, 1, capped: false);
+            return new ArcaneCore.Game.Maps.Collision.PathResult(
+                ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, new System.Numerics.Vector3(end.X, end.Y, start.Z - Drop)]);
+        }
+    }
+
+    [Fact]
+    public void AWanderLegOffTheMesh_ThatEndsAFloorBelow_IsSkipped_ButAShallowOneRuns()
+    {
+        // Live 2026-10-18: Lordaeron Citizen 3617 (spawn off the mesh over a terrain hole) took incomplete legs that ended on the
+        // Undercity floor 115 yd below and walked down through the ground.
+        (WorldRuntime w, _, Creature wolf, _) = Start(Template());
+        using WorldRuntime world = w;
+        var paths = new DivingPathfinder();
+        ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world).Install(pathfinder: paths);
+        var generator = Assert.IsType<RandomMovementGenerator>(wolf.Motion.Default);
+        float spawnZ = wolf.Z;
+
+        Run(world, 20_000, 50);
+
+        Assert.True(paths.Calls >= 2);
+        Assert.False(wolf.IsMoving);
+        Assert.Equal(spawnZ, wolf.Z, 0.01f);
+        Assert.True(generator.ConsecutiveNoPath >= 2);
+
+        paths.Drop = 3f; // a step down off a doodad onto the mesh is a leg
+        Run(world, 25_000, 50);
+        Assert.NotEqual(30f, wolf.X);
+        Assert.Equal(0, generator.ConsecutiveNoPath);
+    }
+
     [Fact]
     public void TheGeneratorTypeNumbers_AreVmangos()
     {
