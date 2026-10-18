@@ -413,11 +413,22 @@ internal static class FrameParser
             return false;
         }
 
-        if (!TryOptionalInteger(o["next"], 0, points.Count, 0, out long next))
+        bool cut = false;
+        if (o["cut"] is { } cutNode && !TryBool(cutNode, out cut))
+        {
+            problem = "route.cut is not a boolean";
+            return false;
+        }
+
+        // A cut route ships only its first points while next still indexes the full route (the daemon's capture does not rebase it), so a
+        // next past the shipped points is legitimate there and means "past every shipped corner"; on an uncut route it is a corrupt index.
+        if (!TryOptionalInteger(o["next"], 0, cut ? int.MaxValue : points.Count, 0, out long next))
         {
             problem = "route.next is not an index into route.pts";
             return false;
         }
+
+        next = Math.Min(next, points.Count);
 
         var flags = new List<string>();
         if (o["flags"] is { } flagsNode)
@@ -440,7 +451,7 @@ internal static class FrameParser
             }
         }
 
-        route = new LiveRoute(points, (int)next, flags);
+        route = new LiveRoute(points, (int)next, flags, cut);
         return true;
     }
 

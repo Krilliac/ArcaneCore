@@ -72,7 +72,7 @@ internal static class LiveCommands
                 new CommandArg("limit", ArgType.Integer, $"Most entities to return (default {DefaultEntityLimit}, at most {MaxEntityLimit}).", Default: JsonValue.Create(DefaultEntityLimit)),
                 new CommandArg("map", ArgType.Integer, "Only this map."),
                 new CommandArg("instance", ArgType.Integer, "Only this instance."),
-                new CommandArg("guid", ArgType.String, "Only this guid, in hex (a bare number is read as hex digits)."),
+                new CommandArg("guid", ArgType.String, "Only this guid, a quoted hex string."),
                 new CommandArg("trails", ArgType.Boolean, $"Include each entity's last {LiveStore.TrailLength} distinct positions, oldest first.", Default: JsonValue.Create(false)),
             ],
             (call, _) => Task.FromResult<JsonNode?>(Entities(feed, call))));
@@ -80,7 +80,7 @@ internal static class LiveCommands
         registry.Register(new CommandDefinition(
             "live.follow",
             "Follow an entity: sets the view's follow and moves the camera target to it with every frame that moves it. With no guid, stops following.",
-            [new CommandArg("guid", ArgType.String, "Entity guid in hex (a bare number is read as hex digits). Omit or null to stop following.")],
+            [new CommandArg("guid", ArgType.String, "Entity guid, a quoted hex string. Omit or null to stop following.")],
             (call, _) => Task.FromResult<JsonNode?>(Follow(feed, call))));
 
         registry.Register(new CommandDefinition(
@@ -229,25 +229,27 @@ internal static class LiveCommands
     }
 
     /// <summary>
-    /// A guid argument. A hex string is the normal form; a JSON number is read as hex digits too (the CLI turns <c>guid=1234</c> into a
-    /// number), so <c>1234</c> means 0x1234, never decimal. Absent or null gives null.
+    /// A guid argument, read as a string through the invocation's getter: hex digits with an optional 0x prefix, never decimal. A JSON
+    /// number is refused with a hint to quote it (its source text cannot be told from a decimal or exponent). Absent or null gives null.
     /// </summary>
     private static ulong? OptionalGuid(CommandInvocation call, string name)
     {
-        if (!call.Args.TryGetPropertyValue(name, out JsonNode? node) || node is null)
+        string? text;
+        try
+        {
+            text = call.OptionalString(name);
+        }
+        catch (CommandException)
+        {
+            throw Bad(call, $"argument '{name}' must be a guid string in hex; quote it, for example \"1A2B\" (a bare number is refused because it would be ambiguous).");
+        }
+
+        if (text is null)
         {
             return null;
         }
 
-        string? text = node is JsonValue value
-            ? value.GetValueKind() switch
-            {
-                JsonValueKind.String => value.GetValue<string>(),
-                JsonValueKind.Number => value.ToJsonString(),
-                _ => null,
-            }
-            : null;
-        if (text is null || !LiveGuid.TryParse(text, out ulong guid) || guid == 0)
+        if (!LiveGuid.TryParse(text, out ulong guid) || guid == 0)
         {
             throw Bad(call, $"argument '{name}' must be a non-zero guid in hex, for example \"1A2B\" or \"0x1A2B\".");
         }

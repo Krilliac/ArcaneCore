@@ -46,6 +46,20 @@ public sealed class ServerWireShapeTests
     }
 
     [Fact]
+    public void ACutRouteLine_WithNextPastTheShippedPoints_KeepsTheBot()
+    {
+        // MapFeedCapture ships min(total, room, 512) corners and "cut":true but writes next unchanged, so next can index past pts.
+        string line = """{"op":"frame","seq":1,"clockMs":1,"map":0,"instance":0,"grids":[],"entities":[{"g":"0000000000000003","k":"bot","n":"Botty","x":1,"y":2,"z":3,"o":0.0,"hp":50,"route":{"pts":[[1,2,3],[4,5,6]],"next":517,"flags":[],"cut":true}}]}""";
+
+        Assert.True(FrameParser.TryParseFrame(JsonNode.Parse(line)!.AsObject(), 1, out ParsedFrame? parsed, out string? problem), problem);
+
+        Assert.Equal(0, parsed.Rejected);
+        LiveEntity bot = Assert.Single(parsed.Frame.Entities);
+        Assert.Equal(2, bot.Route!.Next);
+        Assert.True(bot.Route.Cut);
+    }
+
+    [Fact]
     public void TheServersFrameLine_HasEveryEntityAccepted_WithTheFieldsItLeftOutDefaulted()
     {
         Assert.True(FrameParser.TryParseFrame(JsonNode.Parse(FrameLine)!.AsObject(), 1, out ParsedFrame? parsed, out string? problem), problem);

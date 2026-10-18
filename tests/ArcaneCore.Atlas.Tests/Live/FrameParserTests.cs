@@ -124,6 +124,9 @@ public sealed class FrameParserTests
     [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"sp":{"start":[0,0,0],"pts":[[1,2]]}}""", "sp.pts")]
     [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"sp":{"start":[0,0,0],"pts":[],"run":"yes"}}""", "sp has")]
     [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"route":{"pts":[[1,1,1]],"next":3}}""", "route.next")]
+    [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"route":{"pts":[[1,1,1]],"next":3,"cut":false}}""", "route.next")]
+    [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"route":{"pts":[[1,1,1]],"next":-1,"cut":true}}""", "route.next")]
+    [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"route":{"pts":[[1,1,1]],"cut":"yes"}}""", "route.cut")]
     [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"route":{"pts":[[1,1,1]],"flags":[1]}}""", "route.flags")]
     [InlineData("""{"g":"1","k":"creature","x":1,"y":2,"z":3,"route":"none"}""", "route is not")]
     public void ABadEntity_IsDroppedAndCounted_TheFrameStillLands(string entityJson, string reason)
@@ -139,6 +142,24 @@ public sealed class FrameParserTests
         Assert.Equal(1, parsed.Rejected);
         Assert.Contains(reason, parsed.FirstProblem, StringComparison.Ordinal);
         Assert.Equal(2, parsed.Json["entities"]!.AsArray().Count);
+    }
+
+    [Fact]
+    public void ACutRoute_WhoseNextIsBeyondTheShippedPoints_KeepsTheEntity_WithNextClamped()
+    {
+        // The daemon cuts a long route to its first points but leaves next indexing the full route.
+        JsonObject frame = Wire.Frame(0, 0, 1, Wire.Entity("3", "bot", 4, 5, 6));
+        frame["entities"]!.AsArray()[0]!.AsObject()["route"] = Raw("""{"pts":[[1,1,1],[2,2,2]],"next":300,"flags":["meshEndedShort"],"cut":true}""");
+
+        ParsedFrame parsed = Parse(frame);
+
+        Assert.Equal(0, parsed.Rejected);
+        LiveEntity bot = Assert.Single(parsed.Frame.Entities);
+        Assert.NotNull(bot.Route);
+        Assert.True(bot.Route.Cut);
+        Assert.Equal(2, bot.Route.Points.Count);
+        Assert.Equal(2, bot.Route.Next);
+        Assert.True(bot.Route.ToJson()["cut"]!.GetValue<bool>());
     }
 
     [Fact]

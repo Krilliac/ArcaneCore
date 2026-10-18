@@ -51,8 +51,11 @@ public sealed class LiveStore
     /// <summary>Entities kept per map/instance (the server caps a frame at 4096 by default); excess entities of a frame are dropped.</summary>
     public const int MaxEntitiesPerMap = 16_384;
 
-    /// <summary>Map/instances kept; the least recently updated is dropped beyond this.</summary>
-    public const int MaxMaps = 64;
+    /// <summary>
+    /// Map/instances kept; the least recently updated is dropped beyond this. A connection serves one subscription, so a handful is
+    /// ample; the cap also bounds the worst case (8 x 16384 entities x a 768-byte trail ring, about 100 MB) if a server sends unasked.
+    /// </summary>
+    public const int MaxMaps = 8;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<(uint Map, uint Instance), MapState> _maps = [];

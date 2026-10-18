@@ -299,7 +299,11 @@ internal sealed class FeedSession : IDisposable
         }
     }
 
-    /// <summary>Whether a pipe owned by <paramref name="owner"/> is one the current user created: the owner is the user's SID or the token's default owner.</summary>
+    /// <summary>
+    /// Whether a pipe owned by <paramref name="owner"/> is one the current user created: the owner is the user's SID or the token's default owner.
+    /// Caveat: for an elevated administrator the token's default owner is BUILTIN\Administrators, so any pipe owned by that group is trusted,
+    /// including one created by a different administrator account. That matches how Windows itself assigns ownership to elevated processes.
+    /// </summary>
     [SupportedOSPlatform("windows")]
     internal static bool IsTrustedOwner(SecurityIdentifier? owner, SecurityIdentifier? user, SecurityIdentifier? tokenOwner)
         => owner is not null && (owner == user || owner == tokenOwner);
@@ -551,7 +555,12 @@ internal sealed class FeedSession : IDisposable
     private void FailWaiters(string reason)
     {
         var hello = new CommandException(CommandException.Unavailable, $"the server closed the connection before answering hello ({reason}).");
-        _hello.TrySetException(hello);
+        if (_hello.TrySetException(hello))
+        {
+            // Nobody may be awaiting hello (the close can come before the handshake waits); reading Exception marks it observed.
+            _ = _hello.Task.Exception;
+        }
+
         foreach (long id in _pending.Keys)
         {
             if (_pending.TryRemove(id, out TaskCompletionSource<JsonObject>? waiter))

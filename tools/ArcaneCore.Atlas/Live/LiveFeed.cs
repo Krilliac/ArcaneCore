@@ -126,21 +126,9 @@ public sealed class LiveFeed : IDisposable
                     $"no map feed pipe '{pipeName}' exists: process {target.ToString(CultureInfo.InvariantCulture)} is not running, or its map feed is not enabled.");
             }
 
-            FeedSession? previous = Detach();
-            if (previous is not null)
-            {
-                Retire(previous.Id);
-                previous.Dispose();
-                PublishStatus(connected: false, previous, "reconnecting");
-            }
-
+            // The current connection stays up until the new pipe has answered hello: a failed live.connect must not cost a working one.
+            // Until the swap below the new connection's frames are ignored (its id is not the current one); the server sends none before subscribe.
             long id = Interlocked.Increment(ref _sessionCounter);
-            lock (_apply)
-            {
-                _currentId = id;
-                Store.Clear();
-            }
-
             FeedSession session;
             try
             {
@@ -148,17 +136,36 @@ public sealed class LiveFeed : IDisposable
             }
             catch (Exception e)
             {
-                Retire(id);
-                SetDetail(e is CommandException ? e.Message : "the connection attempt was cancelled");
+                lock (_state)
+                {
+                    if (_session is null)
+                    {
+                        _detail = e switch
+                        {
+                            CommandException => e.Message,
+                            OperationCanceledException => "the connection attempt was cancelled",
+                            _ => $"the connection attempt failed ({e.GetType().Name})",
+                        };
+                    }
+                }
+
                 throw;
             }
 
+            if (!session.IsOpen)
+            {
+                session.Dispose();
+                throw new CommandException(CommandException.Unavailable, "the server closed the connection right after hello.");
+            }
+
+            FeedSession? previous = null;
             bool disposedMeanwhile;
             lock (_state)
             {
                 disposedMeanwhile = _disposed;
                 if (!disposedMeanwhile)
                 {
+                    previous = _session;
                     _session = session;
                     _stats = session.Stats;
                     _connections++;
@@ -173,10 +180,16 @@ public sealed class LiveFeed : IDisposable
                 throw new ObjectDisposedException(nameof(LiveFeed));
             }
 
-            if (!session.IsOpen)
+            lock (_apply)
             {
-                OnClosed(session, "the server closed the connection right after hello");
-                throw new CommandException(CommandException.Unavailable, "the server closed the connection right after hello.");
+                _currentId = id;
+                Store.Clear();
+            }
+
+            if (previous is not null)
+            {
+                previous.Dispose();
+                PublishStatus(connected: false, previous, "reconnecting");
             }
 
             PublishStatus(connected: true, session, Detail());
@@ -366,13 +379,15 @@ public sealed class LiveFeed : IDisposable
     {
         ArgumentNullException.ThrowIfNull(filter);
         string? name = filter.Name;
-        IReadOnlyList<StoredEntity> found = Store.Snapshot(e =>
+        IReadOnlyList<StoredEntity> found = Store.Snapshot(
+            e =>
             (filter.Kind is null || e.Kind == filter.Kind)
             && (filter.Map is null || e.Map == filter.Map)
             && (filter.Instance is null || e.Instance == filter.Instance)
             && (filter.Guid is null || e.Id == filter.Guid)
             && (name is null || (e.Name is not null && e.Name.Contains(name, StringComparison.OrdinalIgnoreCase)))
-            && (filter.Near is not { } near || Distance(e.Position, near) <= filter.Radius));
+            && (filter.Near is not { } near || Distance(e.Position, near) <= filter.Radius),
+            filter.Trails);
 
         IEnumerable<StoredEntity> ordered = filter.Near is { } centre
             ? found.OrderBy(s => Distance(s.Entity.Position, centre)).ThenBy(s => s.Entity.Id)
@@ -380,7 +395,7 @@ public sealed class LiveFeed : IDisposable
         var entities = new JsonArray();
         foreach (StoredEntity stored in ordered.Take(filter.Limit))
         {
-            JsonObject json = stored.Entity.ToJson(filter.Trails ? Store.Trail(stored.Entity.Id) : null);
+            JsonObject json = stored.Entity.ToJson(stored.Trail);
             if (filter.Near is { } from)
             {
                 json["distance"] = Math.Round(Distance(stored.Entity.Position, from), 3);
@@ -731,6 +746,13 @@ public sealed class LiveFeed : IDisposable
 
         var patch = new JsonObject();
         AddCameraMove(patch, entity);
+
+        // Narrow the check-then-act window: a follow cleared while this frame was being applied must not get one more camera move.
+        if (_view.Current.FollowGuid is null)
+        {
+            return;
+        }
+
         try
         {
             _view.Patch(patch, ViewOrigin);

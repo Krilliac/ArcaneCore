@@ -105,15 +105,25 @@ public sealed record LiveSpline(uint Id, WorldPoint Start, IReadOnlyList<WorldPo
 /// <param name="Points">The route corners.</param>
 /// <param name="Next">Index of the corner the bot is walking to.</param>
 /// <param name="Flags">Server flags such as <c>meshEndedShort</c> (a partial route).</param>
-public sealed record LiveRoute(IReadOnlyList<WorldPoint> Points, int Next, IReadOnlyList<string> Flags)
+/// <param name="Cut">True when the server shipped only the first corners of a longer route; <paramref name="Next"/> is then clamped to the shipped corners.</param>
+public sealed record LiveRoute(IReadOnlyList<WorldPoint> Points, int Next, IReadOnlyList<string> Flags, bool Cut = false)
 {
     /// <summary>The route as JSON, with the wire's field names.</summary>
-    public JsonObject ToJson() => new()
+    public JsonObject ToJson()
     {
-        ["pts"] = LiveJson.Points(Points),
-        ["next"] = Next,
-        ["flags"] = new JsonArray([.. Flags.Select(f => (JsonNode?)JsonValue.Create(f))]),
-    };
+        var json = new JsonObject
+        {
+            ["pts"] = LiveJson.Points(Points),
+            ["next"] = Next,
+            ["flags"] = new JsonArray([.. Flags.Select(f => (JsonNode?)JsonValue.Create(f))]),
+        };
+        if (Cut)
+        {
+            json["cut"] = true;
+        }
+
+        return json;
+    }
 }
 
 /// <summary>One entity of a frame, validated: every coordinate is finite and within <see cref="FrameParser.MaxCoordinate"/>.</summary>
@@ -244,7 +254,7 @@ public sealed record LiveSubscription(uint Map, uint Instance, double Hz, IReadO
     /// <summary>The <c>subscribe</c> message.</summary>
     public JsonObject ToMessage() => new()
     {
-        ["op"] = "subscribe",
+        ["op"] = LiveProtocol.OpSubscribe,
         ["map"] = Map,
         ["instance"] = Instance,
         ["hz"] = Hz,
@@ -283,7 +293,7 @@ public sealed record LiveQuery(string Kind, uint Map, uint Instance, WorldPoint 
     {
         var json = new JsonObject
         {
-            ["op"] = "query",
+            ["op"] = LiveProtocol.OpQuery,
             ["kind"] = Kind,
             ["map"] = Map,
             ["instance"] = Instance,

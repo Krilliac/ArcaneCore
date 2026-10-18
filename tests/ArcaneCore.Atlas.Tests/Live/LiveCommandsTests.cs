@@ -109,16 +109,18 @@ public sealed class LiveCommandsTests
         Assert.Null(rig.View.Current.FollowGuid);
     }
 
-    [Fact]
-    public async Task Follow_ReadsABareNumberAsHexDigits_BecauseTheCommandLineTurnsGuid1234IntoANumber()
+    [Theory]
+    [InlineData("""{"guid":1234}""")]
+    [InlineData("""{"guid":1e3}""")]
+    public async Task Follow_RefusesABareNumber_WithAHintToQuoteIt(string args)
     {
         await using var rig = new LiveRig();
 
-        CommandResult result = await rig.RunAsync("live.follow", Obj("""{"guid":1234}"""));
+        CommandResult result = await RefusedAsync(rig, "live.follow", args);
 
-        Assert.True(result.Ok, result.ErrorMessage);
-        Assert.Equal("1234", result.Data!["following"]!.GetValue<string>());
-        Assert.Equal("1234", rig.View.Current.FollowGuid);
+        Assert.Equal(CommandException.BadArguments, result.ErrorCode);
+        Assert.Contains("quote", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.Null(rig.View.Current.FollowGuid);
     }
 
     [Theory]
@@ -206,7 +208,7 @@ public sealed class LiveCommandsTests
             Assert.Equal(new[] { "6" }, Guids(await rig.RunAsync("live.entities", Obj("""{"map":1}"""))));
             Assert.Empty(Guids(await rig.RunAsync("live.entities", Obj("""{"map":1,"instance":5}"""))));
             Assert.Equal(new[] { "3" }, Guids(await rig.RunAsync("live.entities", Obj("""{"guid":"0x3"}"""))));
-            Assert.Equal(new[] { "3" }, Guids(await rig.RunAsync("live.entities", Obj("""{"guid":3}"""))));
+            Assert.False((await rig.RunAsync("live.entities", Obj("""{"guid":3}"""))).Ok);
             Assert.Equal(new[] { "3", "4" }, Guids(await rig.RunAsync("live.entities", Obj("""{"kind":"creature","map":0}"""))));
             CommandResult none = await rig.RunAsync("live.entities", Obj("""{"name":"dragon"}"""));
             Assert.True(none.Ok);
