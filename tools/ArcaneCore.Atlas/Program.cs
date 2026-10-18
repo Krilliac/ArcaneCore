@@ -1,24 +1,40 @@
-using ArcaneCore.Atlas.Core;
+using System.Runtime.InteropServices;
+using ArcaneCore.Atlas.Host.Cli;
 
 namespace ArcaneCore.Atlas;
 
-/// <summary>Entry point: verb dispatch for serve, ctl, run, script and mcp (docs/areas/atlas.md).</summary>
+/// <summary>Entry point: verb dispatch for serve, ctl, run, script, mcp, layers and help (docs/areas/atlas.md, section 13).</summary>
 public static class Program
 {
-    public static int Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
-        if (args.Length == 1 && args[0] is "layers")
+        using var shutdown = new CancellationTokenSource();
+        int signals = 0;
+
+        // The first Ctrl+C / SIGTERM asks the verb to stop gracefully (serve deletes its discovery file); a second one is not
+        // intercepted, so a wedged shutdown can still be killed from the terminal.
+        void OnSignal(PosixSignalContext context)
         {
-            foreach (LayerInfo layer in LayerCatalog.All)
+            if (Interlocked.Increment(ref signals) > 1)
             {
-                Console.Out.WriteLine($"{layer.Id,-20} {layer.Group,-10} {layer.View,-10} {layer.Title}");
+                context.Cancel = false;
+                return;
             }
 
-            return 0;
+            context.Cancel = true;
+            try
+            {
+                shutdown.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Main already returned.
+            }
         }
 
-        Console.Error.WriteLine("usage: arcane-atlas layers");
-        return 2;
+        using PosixSignalRegistration interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal);
+        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal);
+        return await AtlasCli.RunAsync(args, CliEnvironment.ForProcess(), shutdown.Token).ConfigureAwait(false);
     }
 }
