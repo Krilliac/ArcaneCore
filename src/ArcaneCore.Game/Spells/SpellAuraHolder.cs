@@ -56,6 +56,18 @@ public sealed class SpellAura
 
     public AuraType Type { get; }
 
+    /// <summary>
+    /// vmangos Aura::IsApplied (m_applied): the type's handler has applied this aura and not yet taken it back. An exclusive aura that a
+    /// stronger one of its kind outranks stays in its holder without being applied (<see cref="ExclusiveAuras"/>).
+    /// </summary>
+    public bool IsApplied { get; internal set; }
+
+    /// <summary>vmangos Aura::IsInUse: its handler is running, so the exclusive rules neither switch it off nor on meanwhile.</summary>
+    internal bool InUse { get; set; }
+
+    /// <summary>vmangos Aura::m_exclusive, computed on first use (<see cref="ExclusiveAuras.IsExclusive"/>).</summary>
+    internal bool? Exclusive { get; set; }
+
     /// <summary>Modifier amount (vmangos Modifier::m_amount), from the effect value at application.</summary>
     public int Amount { get; internal set; }
 

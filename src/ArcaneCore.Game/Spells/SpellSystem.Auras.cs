@@ -149,10 +149,9 @@ public sealed partial class SpellSystem
             return;
         }
 
-        AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
-        handler?.Apply?.Invoke(this, holder, aura, false);
+        ApplyAuraModifier(holder, aura, false);
         aura.Amount = amount;
-        handler?.Apply?.Invoke(this, holder, aura, true);
+        ApplyAuraModifier(holder, aura, true);
         RaiseHolderAmountsChanged(holder);
     }
 
@@ -403,7 +402,7 @@ public sealed partial class SpellSystem
 
         foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
         {
-            AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, true);
+            ApplyAuraModifier(holder, aura, true);
         }
 
         RaiseHolderAdded(holder);
@@ -691,11 +690,10 @@ public sealed partial class SpellSystem
             aura.ElapsedWithoutTickMs = 0;
             if (source.Amount != aura.Amount)
             {
-                AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
-                handler?.Apply?.Invoke(this, existing, aura, false);
+                ApplyAuraModifier(existing, aura, false);
                 aura.Amount = source.Amount;
                 aura.UnitAmount = source.UnitAmount;
-                handler?.Apply?.Invoke(this, existing, aura, true);
+                ApplyAuraModifier(existing, aura, true);
                 amountsChanged = true;
             }
         }
@@ -754,10 +752,9 @@ public sealed partial class SpellSystem
                 int amount = aura.UnitAmount * stacks;
                 if (amount != aura.Amount)
                 {
-                    AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
-                    handler?.Apply?.Invoke(this, holder, aura, false);
+                    ApplyAuraModifier(holder, aura, false);
                     aura.Amount = amount;
-                    handler?.Apply?.Invoke(this, holder, aura, true);
+                    ApplyAuraModifier(holder, aura, true);
                     amountsChanged = true;
                 }
             }
@@ -820,7 +817,7 @@ public sealed partial class SpellSystem
 
         foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
         {
-            AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, false);
+            ApplyAuraModifier(holder, aura, false);
         }
 
         RaiseHolderRemoved(holder);
