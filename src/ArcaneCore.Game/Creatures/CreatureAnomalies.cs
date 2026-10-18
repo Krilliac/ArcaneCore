@@ -581,7 +581,18 @@ public sealed partial class CreatureMapSystem
 
     internal void RecordEvadeAnomaly(Creature creature, string? reason = null)
     {
-        if (creature.RecordEvadeForAnomaly(_clockMs, string.IsNullOrEmpty(reason) ? null : DescribeEvade(creature, reason), out int count, out long windowMs, out string? reasons))
+        // A fight the creature won (its victim, or the last unit it attacked, is dead) ends in an evade by design (vmangos
+        // SelectHostileTarget with an empty threat list) and is no loop: live 2026-10-18 the six Stockade guards at -8784,830 killed the
+        // four RP Defias Rioters of spawn group 19981 one by one every 10 min respawn, three evades in 5 s each time, ~36 reports an hour.
+        bool won = LastFightWasWon(creature);
+        string? described = string.IsNullOrEmpty(reason) || won ? null : DescribeEvade(creature, reason);
+        creature.Combat.LastVictimGuid = default; // the next fight starts without this one's victim
+        if (won)
+        {
+            return;
+        }
+
+        if (creature.RecordEvadeForAnomaly(_clockMs, described, out int count, out long windowMs, out string? reasons))
         {
             AnomalyLedger.Shared.Report(
                 CreatureAnomalies.CreatureSubsystem,
@@ -604,6 +615,15 @@ public sealed partial class CreatureMapSystem
         string threat = combat.HasThreatList ? $", threat {combat.Threat.Entries.Count}" : "";
         string last = combat.Victim is null && !combat.LastVictimGuid.IsEmpty ? ", last " + DescribeLastVictim(creature, combat.LastVictimGuid) : "";
         return $"{reason}({victim}, {combat.AttackersInternal.Count} att{threat}, {creature.Motion.CurrentType}{last})";
+    }
+
+    /// <summary>Whether the evading creature's victim, or else the last unit it attacked, is dead (the creature won the fight).</summary>
+    private bool LastFightWasWon(Creature creature)
+    {
+        UnitCombat combat = creature.Combat;
+        Unit? last = combat.Victim
+            ?? (combat.LastVictimGuid.IsEmpty ? null : Map.FindPlayer(combat.LastVictimGuid) as Unit ?? Map.FindObject(combat.LastVictimGuid) as Unit);
+        return last is not null && !last.IsAlive;
     }
 
     private static string DescribeEvadeTarget(Creature creature, Unit v)

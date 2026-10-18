@@ -25,6 +25,7 @@ public sealed class CreatureFlowAnomalyTests
     private const uint PathEntry = 950006;
     private const uint ReasonEvadeEntry = 950007;
     private const uint LastVictimEvadeEntry = 950008;
+    private const uint WonFightsEvadeEntry = 950009;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -103,24 +104,47 @@ public sealed class CreatureFlowAnomalyTests
 
     /// <summary>
     /// Live 2026-10-18: almost every loop read "SelectHostileTarget(no victim, 0 att, Chase)" three times. An evade without a victim now names
-    /// the last unit the creature attacked and its state (here a player it killed).
+    /// the last unit the creature attacked and its state (here a living player it stopped attacking).
     /// </summary>
     [Fact]
     public void AnEvadeWithoutAVictim_NamesTheLastVictim_AndItsState()
     {
         using AnomalyCapture capture = Capture("creature/evade-loop", LastVictimEvadeEntry);
         using Fight f = Start(LastVictimEvadeEntry);
-        f.Map.Combat.Attack(f.Wolf, f.Player, melee: false);
-        f.Map.Combat.Kill(f.Wolf, f.Player);
-        f.Map.Combat.AttackStop(f.Wolf);
 
-        EvadeOnce(f);
-        EvadeOnce(f);
-        EvadeOnce(f);
+        for (int i = 0; i < 3; i++)
+        {
+            f.Map.Combat.Attack(f.Wolf, f.Player, melee: false);
+            f.Map.Combat.AttackStop(f.Wolf);
+            EvadeOnce(f);
+        }
 
         string detail = Assert.Single(capture.Notices).Detail;
         Assert.Contains("; evades: EvadeOnce(no victim, 0 att, ", detail);
-        Assert.Contains(", last player dead ", detail);
+        Assert.Contains(", last player alive ", detail);
+    }
+
+    /// <summary>
+    /// Live 2026-10-18: six Stockade guards killed the four RP Defias Rioters one by one after each respawn, an evade after every kill (vmangos:
+    /// the threat list is empty), and that was reported as an evade loop ~36 times an hour. Fights the creature won are no loop.
+    /// </summary>
+    [Fact]
+    public void EvadesAfterKillingTheVictim_AreNoEvadeLoop()
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", WonFightsEvadeEntry);
+        using Fight f = Start(WonFightsEvadeEntry);
+        f.Map.Combat.Attack(f.Wolf, f.Player, melee: false);
+        f.Map.Combat.Kill(f.Wolf, f.Player);
+
+        EvadeOnce(f);
+        Assert.Empty(capture.Notices);
+        for (int i = 0; i < 3; i++)
+        {
+            f.Wolf.Combat.LastVictimGuid = f.Player.Guid; // as after each guard's next kill (Attack refuses a dead victim)
+            EvadeOnce(f);
+        }
+
+        Assert.Empty(capture.Notices);
     }
 
     [Fact]
