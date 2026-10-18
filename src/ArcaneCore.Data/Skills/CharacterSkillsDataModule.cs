@@ -131,9 +131,27 @@ public sealed class EfCharacterSkillStore(CharacterDbContext db) : ICharacterSki
             forgotten[row.Skill] = row;
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        // The new rows are tracked and change-detected before the transaction opens, so the characters.db write lock covers only the
+        // existence check, the two deletes and the inserts (this save held it seconds on a CPU-starved live host and hit 'database is
+        // locked', 2026-10-17). ExecuteDelete never touches the change tracker, so the order does not change what is written; the
+        // finally clears the tracker on every path, including a BEGIN or delete that throws.
+        db.Set<CharacterSkillEntity>().AddRange(skills.Values.Select(r => new CharacterSkillEntity
+        {
+            CharacterId = characterId,
+            Skill = r.Skill,
+            Value = r.Value,
+            Max = r.Max,
+        }));
+        db.Set<CharacterForgottenSkillEntity>().AddRange(forgotten.Values.Select(r => new CharacterForgottenSkillEntity
+        {
+            CharacterId = characterId,
+            Skill = r.Skill,
+            Value = r.Value,
+        }));
+        db.ChangeTracker.DetectChanges();
         try
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             if (!await db.Characters.AnyAsync(c => c.Id == characterId, cancellationToken).ConfigureAwait(false))
             {
                 await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
@@ -142,19 +160,6 @@ public sealed class EfCharacterSkillStore(CharacterDbContext db) : ICharacterSki
 
             await db.Set<CharacterSkillEntity>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await db.Set<CharacterForgottenSkillEntity>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            db.Set<CharacterSkillEntity>().AddRange(skills.Values.Select(r => new CharacterSkillEntity
-            {
-                CharacterId = characterId,
-                Skill = r.Skill,
-                Value = r.Value,
-                Max = r.Max,
-            }));
-            db.Set<CharacterForgottenSkillEntity>().AddRange(forgotten.Values.Select(r => new CharacterForgottenSkillEntity
-            {
-                CharacterId = characterId,
-                Skill = r.Skill,
-                Value = r.Value,
-            }));
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return true;
