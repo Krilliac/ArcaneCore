@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 277 |
-| `Administrator` | 6 | 403 |
+| `GameMaster` | 3 | 287 |
+| `Administrator` | 6 | 413 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -378,6 +378,17 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.fx weather` | 6 | Administrator | stored level through the map | Syntax: .fx weather #weathertype #status [zone\|map\|server] .wchange for your zone (default), every occupied zone of your map, or of every map. |
 | `.fx event` | 3 | GameMaster | stored level through the map | Syntax: .fx event [$preset] [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Fire a named set of effects at once; no preset lists them. |
 | `.fx lookup` | 3 | GameMaster | stored level through the map | Syntax: .fx lookup sound\|music\|cinematic\|visual\|worldstate #id\|$namepart Search the client tables of World:GmCommands:LiveFxDbcDirectory (at most 20 lines). |
+| `.inspect` ... | 3 | GameMaster | declared retail level | Syntax: .inspect $subcommand Read-only dumps of the selected unit (yourself without a selection), its map and spells. Type .inspect to see the list of possible subcommands. |
+| `.inspect unit` | 3 | GameMaster | declared retail level | Syntax: .inspect unit Show the selected unit: guid, entry, level, health and power, faction, display and scale, unit flags by name, stand state, speeds, movement flags, life and combat state, target, position, zone and area. |
+| `.inspect stats` | 3 | GameMaster | declared retail level | Syntax: .inspect stats Show the selected unit's primary stats, armor and resistances, attack power, weapon damage and attack times, base health and mana. |
+| `.inspect combat` | 3 | GameMaster | declared retail level | Syntax: .inspect combat Show the selected unit's combat state: victim, melee, attackers, combat and PvP timers, extra attacks, swing timers and the last swing error. |
+| `.inspect threat` | 3 | GameMaster | declared retail level | Syntax: .inspect threat List a selected creature's threat list (online and offline entries, temporary threat, the current victim), or the creatures that hold a selected player on theirs. |
+| `.inspect ai` | 3 | GameMaster | declared retail level | Syntax: .inspect ai Show the selected creature's AI: the AI type, ScriptName and AIName, react state, evade and pacify state, melee and combat movement, unreachable time, and its home. |
+| `.inspect motion` | 3 | GameMaster | declared retail level | Syntax: .inspect motion Show the selected creature's movement: the generator stack, the targeted unit, reachability, the running spline (points, progress, destination), waypoint progress, wander distance and home. |
+| `.inspect save` | 3 | GameMaster | declared retail level | Syntax: .inspect save [$player] Show the save state of the selected or named online player: the last save request, whether a snapshot is waiting, held or quarantined, and the save queue's backlog. |
+| `.inspect fields` | 3 | GameMaster | declared retail level | Syntax: .inspect fields [#first] [#count] Print raw update fields of the selected unit from index #first (default 0), #count of them (default 16, at most 25): index, hex, unsigned and float. |
+| `.inspect map` | 3 | GameMaster | declared retail level | Syntax: .inspect map Show your map: players (bots counted apart), objects, creatures by state (alive, dead, in combat, evading, moving), dormant respawns, map updaters (isolated ones named), objects in transit. |
+| `.inspect spell` | 3 | GameMaster | declared retail level | Syntax: .inspect spell #spellid Show a spell's data: name and rank, school, cast time, cooldowns, range, duration, power cost, attributes, and every effect with its targets, radius, aura, amounts and trigger spell. |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
