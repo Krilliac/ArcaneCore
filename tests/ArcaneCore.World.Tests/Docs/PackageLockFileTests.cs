@@ -20,9 +20,7 @@ public sealed class PackageLockFileTests
     public void EveryProjectUnderTheRepoProps_HasALockFileBesideIt()
     {
         string root = RepoRoot.Find();
-        string[] projects = [.. new[] { "src", "tests", "tools" }
-            .SelectMany(dir => Directory.EnumerateFiles(Path.Combine(root, dir), "*.csproj", SearchOption.AllDirectories))
-            .Where(p => !IsBuildOutput(root, p) && GovernedByRepoProps(root, p))];
+        string[] projects = RepoPropsProjects(root);
 
         // The solution alone has more than twenty projects; a handful means the walk is not looking where the projects are.
         Assert.True(projects.Length >= 20, "expected the repo's projects, found " + projects.Length);
@@ -49,6 +47,65 @@ public sealed class PackageLockFileTests
         Assert.Contains("packages.lock.json", guide, StringComparison.Ordinal);
         Assert.Contains("restore ArcaneCore.slnx --force-evaluate", guide, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The guide's refresh recipe restores exactly the locked projects that the solution restore does not reach (neither in
+    /// ArcaneCore.slnx nor referenced from it), so no lock file is left out and no line names a tool that moved or went away.
+    /// No CI job restores those projects, so the recipe is the only thing that refreshes their lock files.
+    /// </summary>
+    [Fact]
+    public void TheContributingGuide_RestoresEveryLockedProjectTheSolutionDoesNotReach()
+    {
+        string root = RepoRoot.Find();
+        HashSet<string> reached = SolutionClosure(root);
+
+        // The walk must follow references (the fixtures are not in the solution) and see the whole solution.
+        Assert.Contains("tests/hotmodule-fixtures/SampleGm/SampleGm.csproj", reached);
+        Assert.True(reached.Count >= 30, "expected the solution and the projects it references, found " + reached.Count);
+
+        string[] expected = [.. RepoPropsProjects(root).Select(p => Relative(root, p)).Where(p => !reached.Contains(p)).Order(StringComparer.Ordinal)];
+        Assert.NotEmpty(expected);
+
+        string guide = RepoRoot.ReadText("docs/guide/contributing.md").Replace("\r\n", "\n", StringComparison.Ordinal);
+        Match recipe = Regex.Match(guide, @"```powershell\n(?<body>[^`]*?restore ArcaneCore\.slnx --force-evaluate[^`]*?)```");
+        Assert.True(recipe.Success, "the guide's lock-file recipe (a powershell fence restoring ArcaneCore.slnx --force-evaluate) was not found");
+        string[] lines = recipe.Groups["body"].Value.TrimEnd('\n').Split('\n');
+        Assert.EndsWith("restore ArcaneCore.slnx --force-evaluate", lines[0], StringComparison.Ordinal);
+        Assert.EndsWith("restore ArcaneCore.slnx --locked-mode", lines[^1], StringComparison.Ordinal);
+        string[] restored = [.. lines.Select(l => Regex.Match(l, @"restore (\S+\.csproj) --force-evaluate")).Where(m => m.Success).Select(m => m.Groups[1].Value).Order(StringComparer.Ordinal)];
+
+        Assert.Equal(expected, restored);
+    }
+
+    private static string[] RepoPropsProjects(string root)
+        => [.. new[] { "src", "tests", "tools" }
+            .SelectMany(dir => Directory.EnumerateFiles(Path.Combine(root, dir), "*.csproj", SearchOption.AllDirectories))
+            .Where(p => !IsBuildOutput(root, p) && GovernedByRepoProps(root, p))];
+
+    /// <summary>The projects in ArcaneCore.slnx and every project they reference, transitively, as repo-relative '/' paths.</summary>
+    private static HashSet<string> SolutionClosure(string root)
+    {
+        var reached = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>(Regex.Matches(RepoRoot.ReadText("ArcaneCore.slnx"), @"Path=""([^""]+\.csproj)""").Select(m => m.Groups[1].Value));
+        while (pending.TryDequeue(out string? project))
+        {
+            if (!reached.Add(project))
+            {
+                continue;
+            }
+
+            string full = Path.Combine(root, project.Replace('/', Path.DirectorySeparatorChar));
+            foreach (Match m in Regex.Matches(File.ReadAllText(full), @"<ProjectReference\s+Include=""([^""]+)"""))
+            {
+                string reference = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(full)!, m.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)));
+                pending.Enqueue(Relative(root, reference));
+            }
+        }
+
+        return reached;
+    }
+
+    private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
 
     private static bool IsBuildOutput(string root, string path)
     {

@@ -61,13 +61,16 @@ the repository SDK and commit every changed `packages.lock.json` in the same com
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --force-evaluate
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/hotmodule-template/GmCommands/GmCommands.csproj --force-evaluate
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/ops/diag/exception-probe/ArcaneCore.ExceptionProbe.csproj --force-evaluate
+& "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/ops/diag/alloc-probe/ArcaneCore.AllocProbe.csproj --force-evaluate
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --locked-mode
 ```
 
 The solution restore also covers the hot-module fixtures (`tests/hotmodule-fixtures`, reached through the World test project's
-references); the two tools outside the solution need their own line. A change in a library such as `ArcaneCore.Data` rewrites the lock
-file of every project that references it, so expect several files to change. The last line repeats CI's check. A new project gets its
-lock file from its first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
+references) and the projects under `tests/ThirdParty` (reached through the Game, World and MockClient test projects'
+references); each tool outside the solution that nothing in it references needs its own line, and `PackageLockFileTests` checks
+that the recipe lists exactly those. A change in a library such as `ArcaneCore.Data` rewrites the lock file of every project that
+references it, so expect several files to change. The last line repeats CI's check. A new project gets its lock file from its
+first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
 `tools/hotcode-spike` opts out of the repository props (its own `Directory.Build.props`) and has no lock file.
 
 ### Other checks on a pull request
