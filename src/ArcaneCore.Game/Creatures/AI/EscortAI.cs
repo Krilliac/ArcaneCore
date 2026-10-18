@@ -235,6 +235,12 @@ public abstract class EscortAI : CreatureAI
         _escortQuestId = 0;
     }
 
+    /// <summary>
+    /// mangos-classic npc_escortAI::QuestEnd (base/escort_ai.cpp:306-309): the escort lets go of its quest, so a death from now on fails nothing;
+    /// the player and the walk stay.
+    /// </summary>
+    protected void QuestEnd() => _escortQuestId = 0;
+
     /// <summary>vmangos SetEscortPaused (only while escorting).</summary>
     public void SetEscortPaused(bool paused)
     {
