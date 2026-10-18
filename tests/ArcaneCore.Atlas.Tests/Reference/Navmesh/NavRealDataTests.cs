@@ -6,6 +6,7 @@ using ArcaneCore.Atlas.Reference.Navmesh;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Terrain;
+using DotRecast.Core.Numerics;
 using DotRecast.Detour;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -454,6 +455,41 @@ public sealed class NavRealDataTests(ITestOutputHelper output)
         Assert.True(outcomes.Count(o => o.Category == "Agree") * 2 > outcomes.Count, "fewer than half the paths agree");
     }
 
+    /// <summary>
+    /// Both engines' findNearestPoly score (Detour: over the polygon only the height beyond walkableClimb counts, else the squared
+    /// distance; D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:781-800) for the server's polygon
+    /// and the reference's, when both lie in one tile: which engine sees a different closest point.
+    /// </summary>
+    private static string ScoreBoth(ReferenceNavMap reference, TileKey[] tiles, NavPolyRef server, NavLocate dot, Vector3 queryRc)
+    {
+        if (dot.Poly.DetourX != server.Tile.X || dot.Poly.DetourY != server.Tile.Y)
+        {
+            return "(different tiles)";
+        }
+
+        static float Score(Vector3 closest, bool over, Vector3 query, float climb)
+        {
+            float excess = MathF.Max(0, MathF.Abs(closest.Y - query.Y) - climb);
+            return over ? excess * excess : Vector3.DistanceSquared(closest, query);
+        }
+
+        Vector3 sOwn = server.Tile.ClosestPointOnPoly(server.Poly, queryRc, out bool sOwnOver);
+        Vector3 sOther = server.Tile.ClosestPointOnPoly(dot.Poly.Poly, queryRc, out bool sOtherOver);
+        return reference.Read(tiles, view =>
+        {
+            DtMeshTile tile = view.Mesh.GetTileByRef(view.Mesh.GetTileRefAt(dot.Poly.DetourX, dot.Poly.DetourY, dot.Poly.Layer));
+            long baseRef = view.Mesh.GetPolyRefBase(tile);
+            var q = new RcVec3f(queryRc.X, queryRc.Y, queryRc.Z);
+            view.Mesh.ClosestPointOnPoly(baseRef | (uint)server.Poly, q, out RcVec3f dServer, out bool dServerOver);
+            view.Mesh.ClosestPointOnPoly(baseRef | (uint)dot.Poly.Poly, q, out RcVec3f dOwn, out bool dOwnOver);
+            float climb = tile.data.header.walkableClimb;
+            Vector3 dS = new(dServer.X, dServer.Y, dServer.Z), dO = new(dOwn.X, dOwn.Y, dOwn.Z);
+            return $"server engine: poly {server.Poly} {Score(sOwn, sOwnOver, queryRc, server.Tile.WalkableClimb):0.###} (over {sOwnOver}), poly {dot.Poly.Poly} "
+                + $"{Score(sOther, sOtherOver, queryRc, server.Tile.WalkableClimb):0.###} (over {sOtherOver}) at {NavMeshFormat.ToWorld(sOther)}; DotRecast: poly {server.Poly} "
+                + $"{Score(dS, dServerOver, queryRc, climb):0.###} (over {dServerOver}) at {NavMeshFormat.ToWorld(dS)}, poly {dot.Poly.Poly} {Score(dO, dOwnOver, queryRc, climb):0.###} (over {dOwnOver})";
+        });
+    }
+
     private static string Describe(NavLocate? located)
         => located is null ? "none" : $"{located.Poly.CorridorKey} at {located.Nearest}";
 
@@ -590,6 +626,15 @@ public sealed class NavRealDataTests(ITestOutputHelper output)
         {
             detail += $"; start server {(startOk ? $"{sp.Tile.X},{sp.Tile.Y},{sp.Poly} at {NavMeshFormat.ToWorld(sOn)}" : "none")} reference {Describe(strict.Start)}"
                 + $"; end server {(endOk ? $"{ep.Tile.X},{ep.Tile.Y},{ep.Poly} at {NavMeshFormat.ToWorld(eOn)}" : "none")} reference {Describe(strict.End)}";
+            if (!startAgrees && startOk && strict.Start is { } rs)
+            {
+                detail += "; start scores " + ScoreBoth(reference, tiles, sp, rs, sr);
+            }
+
+            if (!endAgrees && endOk && strict.End is { } re)
+            {
+                detail += "; end scores " + ScoreBoth(reference, tiles, ep, re, er);
+            }
         }
 
         if (sameType && samePoints)
@@ -615,6 +660,15 @@ public sealed class NavRealDataTests(ITestOutputHelper output)
         else
         {
             category = "StraightDiffers";
+        }
+
+        if (corridorCategory is "OneSidePartial" || category is "StraightDiffers")
+        {
+            // Where the two corridors part: the common prefix, and the step after it in each (a tile change shows as other x,y).
+            int common = serverCorridor.Zip(referenceCorridor).TakeWhile(pair => pair.First == pair.Second).Count();
+            detail += $"; corridors server {serverCorridor.Length} (complete {serverComplete}) reference {referenceCorridor.Length} (complete {strict.Complete}),"
+                + $" common prefix {common}, last common {(common > 0 ? referenceCorridor[common - 1] : "none")},"
+                + $" next server {(common < serverCorridor.Length ? serverCorridor[common] : "end")} reference {(common < referenceCorridor.Length ? referenceCorridor[common] : "end")}";
         }
 
         bool offMeshChanges = permissive.Result.Type != strict.Result.Type
