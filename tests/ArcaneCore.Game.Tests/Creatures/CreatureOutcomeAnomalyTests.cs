@@ -42,6 +42,7 @@ public sealed class CreatureOutcomeAnomalyTests
     private const uint MeshOkEntry = 949033;
     private const uint TeleportHomeEntry = 949034;
     private const uint RearmPathEntry = 949035;
+    private const uint AtHomeEntry = 949036;
     private const uint DuplicateEntry = 949040;
     private const uint DuplicateOtherEntry = 949041;
     private const uint DistinctEntry = 949042;
@@ -377,12 +378,31 @@ public sealed class CreatureOutcomeAnomalyTests
         using AnomalyCapture home = CaptureFor("creature/home-unreachable", HomeEntry);
         using AnomalyCapture failed = CaptureFor("creature/path-failed", HomeEntry);
         var spawnPoint = new Vector3(WolfX, 0, 83.5f);
+        s.Wolf.Relocate(WolfX - 10f, 0, 83.5f, 0, 0);
 
         s.System.PlanPath(s.Wolf, spawnPoint, toSpawn: true);
         s.System.PlanPath(s.Wolf, spawnPoint, toSpawn: true);
 
         Assert.Contains("no mesh path to home", Assert.Single(home.Notices).Detail);
         Assert.Contains("for home", Assert.Single(failed.Notices).Detail);
+    }
+
+    /// <summary>
+    /// Live: entry 1224 evaded while standing on its own off-mesh spawn point and reported "no mesh path to home" from 0.0 yd. A creature
+    /// already home gets the zero-length straight move, and nothing is reported.
+    /// </summary>
+    [Fact]
+    public void ACreatureAlreadyOnItsSpawnPoint_IsNotHomeUnreachable_WhenTheSpawnIsOffTheMesh()
+    {
+        using Scene s = Start(AtHomeEntry, pathfinder: new FixedPathfinder(route: false));
+        using AnomalyCapture capture = CaptureAny(AtHomeEntry);
+        var spawnPoint = new Vector3(WolfX, 0, 83.5f);
+
+        PlannedPath plan = s.System.PlanPath(s.Wolf, spawnPoint, toSpawn: true);
+
+        Assert.Equal(PathOutcome.Direct, plan.Outcome);
+        Assert.Equal(spawnPoint, Assert.Single(plan.Corners));
+        Assert.Empty(capture.Notices);
     }
 
     [Fact]

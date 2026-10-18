@@ -494,6 +494,15 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return PlannedPath.Of(PathOutcome.Deferred);
         }
 
+        if (!path.HasPath && toSpawn && Vector3.DistanceSquared(start, destination) <= AtHomeYards * AtHomeYards)
+        {
+            // Already standing on its spawn point: a spawn off the mesh (a mesh hole, a doodad top) has no path from itself to
+            // itself, and that is no unreachable home (live: entry 1224 reported "no mesh path to home" 0.0 yd from home). The walk
+            // home is the zero-length straight move, which still ends in the usual reached-home.
+            creature.ClearHomeUnreachableEpisode();
+            return new PlannedPath(PathOutcome.Direct, [destination]);
+        }
+
         if (!path.HasPath)
         {
             NoPathPaths++;
@@ -654,6 +663,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             : chase ? s_chaseOptions
             : IsWanderLeg(creature) ? s_wanderOptions
             : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+
+    /// <summary>How near its spawn point a creature counts as home already, so a failed search there is no unreachable home.</summary>
+    internal const float AtHomeYards = 0.5f;
 
     /// <summary>
     /// Whether <paramref name="destination"/> lies in a medium the creature cannot move in: in or under liquid for one that cannot swim, out of
