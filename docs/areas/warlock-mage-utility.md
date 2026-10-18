@@ -29,7 +29,7 @@ that replaces DUMMY, SCRIPT_EFFECT or DISPEL after it without chaining would dro
 `SpellFeature`, alphabetically).
 
 Limits: `OnEffectExecute` is raised for DUMMY, SCRIPT_EFFECT and the effects a script declares with `ExecuteEffects` (see wlm-08; vmangos raises it before every effect; no script of this lane
-needs the others). vmangos `OnSummon` is not provided because nothing here raises it yet. When the crafting lane's cost hook
+needs the others). `OnSummon` is raised only by SPELL_EFFECT_SUMMON_WILD (`Pets/SummonService.Guardians.cs`; vmangos also raises it from the pet, guardian, totem, critter and game object summons, SpellEffects.cpp:2432-5818). When the crafting lane's cost hook
 (`ISpellCostTaker`) merges, script `OnCast` must stay after it (a reagent failure must never fire a script); the integrator checks
 the observer order. No script ships in this slice: the scripts of later slices register their ids with the attribute.
 
