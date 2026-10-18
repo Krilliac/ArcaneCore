@@ -11227,7 +11227,7 @@ World.Playerbots.Budget.RefreshSeconds = 30
 #
 #    World.Playerbots.Chaos.ActiveChaosBots
 #        Description: How many running autonomous bots are automatically selected as chaos bots when
-#                     Enabled is on (0..1000, default 4). Bots explicitly assigned with .playerbot
+#                     Enabled is on (0..5000, default 4). Bots explicitly assigned with .playerbot
 #                     chaos assign always run probes while Enabled is on, even when this is 0. Live
 #                     through .reload config.
 #        Type: int
@@ -14219,8 +14219,8 @@ World.Playerbots.Population.LeaveHomeLevelMargin = 0
 
 #
 #    World.Playerbots.Population.MaxCreatePerMinute
-#        Description: The most new bot characters created per minute of world time (0..60; 0 creates
-#                     none and only restarts parked bots).
+#        Description: The most new bot characters created per minute of world time (0..600; 0
+#                     creates none and only restarts parked bots).
 #        Type: int
 #        Default: 4
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -14231,7 +14231,7 @@ World.Playerbots.Population.MaxCreatePerMinute = 4
 
 #
 #    World.Playerbots.Population.MaxParksPerInterval
-#        Description: The most bots parked in one pass (1..100).
+#        Description: The most bots parked in one pass (1..500).
 #        Type: int
 #        Default: 2
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -14253,7 +14253,7 @@ World.Playerbots.Population.MaxRelocationsPerInterval = 2
 
 #
 #    World.Playerbots.Population.MaxStartsPerInterval
-#        Description: The most bots started or created in one pass (1..100).
+#        Description: The most bots started or created in one pass (1..500).
 #        Type: int
 #        Default: 4
 #        Allowed: a whole number, -2147483648 to 2147483647

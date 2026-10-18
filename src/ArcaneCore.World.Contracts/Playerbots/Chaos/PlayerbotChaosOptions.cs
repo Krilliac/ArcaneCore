@@ -23,7 +23,7 @@ public sealed class PlayerbotChaosOptions
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// How many running autonomous bots are automatically selected as chaos bots when <see cref="Enabled"/> is on (0..1000, default 4).
+    /// How many running autonomous bots are automatically selected as chaos bots when <see cref="Enabled"/> is on (0..5000, default 4).
     /// Bots explicitly assigned with <c>.playerbot chaos assign</c> always run probes while <see cref="Enabled"/> is on, even when this
     /// is 0. Live through <c>.reload config</c>.
     /// </summary>
