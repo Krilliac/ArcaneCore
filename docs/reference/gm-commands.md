@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 269 |
-| `Administrator` | 6 | 395 |
+| `GameMaster` | 3 | 277 |
+| `Administrator` | 6 | 403 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -55,6 +55,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug script` | 3 | GameMaster | declared retail level | Syntax: .debug script $entry [$map] Say which AI the creature entry gets on the map (default: your map): the layer (map entry AI, dungeon boss AI, ScriptName, entry script, EventAI, SmartAI, built-in or default), the implementing type, and whether its ScriptName is implemented. From the console the map is required. |
 | `.debug scriptcoverage` | 3 | GameMaster | declared retail level | Syntax: .debug scriptcoverage [$map] Count the creatures spawned on the map (default: every dungeon) whose template names a ScriptName or an AIName, and how many ScriptNames have no implementation; the unresolved ones are listed. |
 | `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
+| `.debug tick` | 3 | GameMaster | declared retail level | Syntax: .debug tick Show the world tick: target interval, body p50/p99/max over the last minute, each phase (commands, world-tick handlers, features, maps, autosave) over the last minute, late and skipped starts, and what the world thread is doing right now. |
+| `.debug slowticks` | 3 | GameMaster | declared retail level | Syntax: .debug slowticks [#seconds] List the slowest recent world ticks kept for the hang log (within #seconds, default 60, at most 600): duration, phase split, GC and the slowest features of each. |
+| `.debug features` | 3 | GameMaster | declared retail level | Syntax: .debug features [#count] List the world features by their smoothed per-tick time (about the last 50 ticks) with their allocation per tick, slowest first (default 15 rows). The playerbot think pass is one of them. |
+| `.debug maps` | 3 | GameMaster | declared retail level | Syntax: .debug maps [#count\|reset] List the running maps by their smoothed update time with the last and largest update, players, creatures and objects (default 15 rows). 'reset' clears the maxima. |
+| `.debug latency` | 3 | GameMaster | declared retail level | Syntax: .debug latency [$prefix] [#count] List the recorded latency histograms (character saves, SQLite checkpoints, path queries, login, packet handlers...) by their last-15-minute p99, optionally only the names starting with $prefix (default 15 rows). |
+| `.debug sqlite` | 3 | GameMaster | declared retail level | Syntax: .debug sqlite Show every in-process SQLite write gate: acquisitions, timeouts, forced and dead releases since start, writers waiting now and the current holder with how long it has held the gate. |
+| `.debug threads` | 3 | GameMaster | declared retail level | Syntax: .debug threads Show the process threads, CPU use since start, the thread pool (busy workers and IO threads, queued work items, completed items, limits) and lock contention. |
+| `.debug mt` | 3 | GameMaster | declared retail level | Syntax: .debug mt Show the multithreading workers: parallel map update threads and counters (parallel ticks, serial-gate entries, contention, owner violations, barrier wait), and the shared path-job pool (threads, queue, completed, faulted, average compute and queue time). |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
 | `.debug invariants` | 3 | GameMaster | declared retail level | Syntax: .debug invariants Print the process-wide invariant failure count, policy, and up to 20 recorded invariant violation sites. |
