@@ -503,6 +503,9 @@ internal sealed class CountingFiles(IClientFileSource inner) : IClientFileSource
     /// <summary>Paths whose reads throw <see cref="IOException"/>.</summary>
     public HashSet<string> Failing { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Paths whose reads throw <see cref="UnauthorizedAccessException"/>.</summary>
+    public HashSet<string> Unauthorized { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Number of <see cref="Read"/> calls so far.</summary>
     public int Reads => Volatile.Read(ref _reads);
 
@@ -516,7 +519,17 @@ internal sealed class CountingFiles(IClientFileSource inner) : IClientFileSource
     public byte[]? Read(string path)
     {
         Interlocked.Increment(ref _reads);
-        return Failing.Contains(path) ? throw new IOException($"{path} is locked.") : inner.Read(path);
+        if (Failing.Contains(path))
+        {
+            throw new IOException($"{path} is locked.");
+        }
+
+        if (Unauthorized.Contains(path))
+        {
+            throw new UnauthorizedAccessException($"{path} is access-denied.");
+        }
+
+        return inner.Read(path);
     }
 
     /// <inheritdoc />

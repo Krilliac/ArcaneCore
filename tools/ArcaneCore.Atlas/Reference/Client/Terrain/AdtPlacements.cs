@@ -36,7 +36,7 @@ public sealed record AdtDoodad(
 /// <param name="UniqueId">Instance id.</param>
 /// <param name="Position">Raw position.</param>
 /// <param name="Rotation">Raw rotation in degrees.</param>
-/// <param name="BoundsMin">First stored extent vector (componentwise not above <paramref name="BoundsMax"/> in every 1.12.1 file).</param>
+/// <param name="BoundsMin">First stored extent vector, exactly as stored (the on-disk order is documented inconsistently in <c>terrain-adt.md</c> and no code here assumes it; <c>ClientTerrainRealDataTests.Placements_ResolveRealModelPaths</c> verifies <c>BoundsMin &lt;= BoundsMax</c> componentwise across all 4,871 MODF entries in the 1.12.1 WDT and ADT files).</param>
 /// <param name="BoundsMax">Second stored extent vector.</param>
 /// <param name="Flags">Raw flag word (bit 0 marks a destructible WMO).</param>
 /// <param name="DoodadSet">Doodad set index.</param>

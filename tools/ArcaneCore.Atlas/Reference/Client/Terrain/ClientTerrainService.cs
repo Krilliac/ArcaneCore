@@ -147,9 +147,10 @@ public sealed class ClientTerrainService
     }
 
     /// <summary>
-    /// The tiles of <paramref name="mapId"/> that have an ADT: those the WDT lists whose file the client files hold
-    /// (a directory-listing question, one existence check per listed tile). Empty when the map, its WDT or the client
-    /// files are unavailable. Not cached, so it follows the files.
+    /// The tiles of <paramref name="mapId"/> that have an ADT: reads (and caches) the map's WDT for its <c>MAIN</c>
+    /// table, then runs one <see cref="IClientFileSource.Exists"/> check per WDT-listed tile without parsing any ADT.
+    /// Empty when the map, its WDT or the client files are unavailable. The existence checks are not cached, so the
+    /// result follows the files.
     /// </summary>
     public IReadOnlyCollection<TileKey> AvailableTiles(uint mapId)
     {
@@ -175,7 +176,7 @@ public sealed class ClientTerrainService
         {
             bytes = files.Read(path);
         }
-        catch (Exception e) when (e is InvalidDataException or IOException)
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             _log.LogWarning("Client terrain: {Path} could not be read: {Message}", path, e.Message);
             return new WdtLoad(TileState.Rejected, $"{path} could not be read: {e.Message}", null, map, path);
@@ -210,7 +211,7 @@ public sealed class ClientTerrainService
         {
             bytes = files.Read(path);
         }
-        catch (Exception e) when (e is InvalidDataException or IOException)
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             _log.LogWarning("Client terrain: {Path} could not be read: {Message}", path, e.Message);
             return new AdtLoad(TileState.Rejected, $"{path} could not be read: {e.Message}", null, path, null);

@@ -23,7 +23,10 @@ public sealed class ClientTerrainLayerSource(ClientTerrainService service, ILogg
     /// <inheritdoc />
     public IReadOnlyList<string> Layers => Ids;
 
-    /// <summary>The tiles the map's WDT lists whose ADT the client files hold. Never includes the global tile (terrain has none).</summary>
+    /// <summary>
+    /// The tiles the map's cached WDT lists whose ADT passes an <see cref="IClientFileSource.Exists"/> check (no ADT is
+    /// parsed). Never includes the global tile (terrain has none).
+    /// </summary>
     public IReadOnlyCollection<TileKey> AvailableTiles(string layerId, uint mapId)
     {
         CheckLayer(layerId);

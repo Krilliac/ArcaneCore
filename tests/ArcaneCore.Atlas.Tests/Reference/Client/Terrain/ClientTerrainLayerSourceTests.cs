@@ -139,6 +139,22 @@ public sealed class ClientTerrainLayerSourceTests
     }
 
     [Fact]
+    public void Build_RejectsAnUnauthorizedFileWithoutThrowing()
+    {
+        var fixture = new TerrainFixture();
+        var counting = new CountingFiles(fixture.Files);
+        counting.Unauthorized.Add(ClientMapPaths.AdtPath("Azeroth", TerrainFixture.Flat));
+        var source = new ClientTerrainLayerSource(new ClientTerrainService(() => counting, () => fixture.Maps, fixture.Log), fixture.Log);
+
+        LayerBuild build = source.Build(LayerIds.RefTerrain, TerrainFixture.Flat, CancellationToken.None);
+
+        Assert.Equal(TileState.Rejected, build.Status.State);
+        Assert.Contains("access-denied", build.Status.Detail, StringComparison.Ordinal);
+        Assert.Empty(build.Chunks);
+        Assert.DoesNotContain(fixture.Log.Entries, e => e.Level >= LogLevel.Error);
+    }
+
+    [Fact]
     public void Build_RejectsAFileWhoseHeightsCannotBeDrawn()
     {
         var fixture = new TerrainFixture();

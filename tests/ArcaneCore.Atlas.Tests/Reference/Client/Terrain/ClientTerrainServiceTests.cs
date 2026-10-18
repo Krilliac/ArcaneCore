@@ -162,15 +162,28 @@ public sealed class ClientTerrainServiceTests
         var fixture = new TerrainFixture();
         var counting = new CountingFiles(fixture.Files);
         var service = new ClientTerrainService(() => counting, () => fixture.Maps, fixture.Log);
-        string path = ClientMapPaths.AdtPath("Azeroth", TerrainFixture.Goldshire);
-        counting.Failing.Add(path);
+        string wdtPath = ClientMapPaths.WdtPath("Azeroth");
+        string adtPath = ClientMapPaths.AdtPath("Azeroth", TerrainFixture.Goldshire);
+        counting.Unauthorized.Add(wdtPath);
 
+        WdtLoad deniedWdt = service.LoadWdt(0);
+        AdtLoad deniedAdtThroughWdt = service.LoadAdt(TerrainFixture.Goldshire);
+        counting.Unauthorized.Clear();
+        counting.Failing.Add(adtPath);
         AdtLoad failed = service.LoadAdt(TerrainFixture.Goldshire);
         counting.Failing.Clear();
+        counting.Unauthorized.Add(adtPath);
+        AdtLoad deniedAdt = service.LoadAdt(TerrainFixture.Goldshire);
+        counting.Unauthorized.Clear();
         AdtLoad retried = service.LoadAdt(TerrainFixture.Goldshire);
 
+        Assert.Equal(TileState.Rejected, deniedWdt.State);
+        Assert.Contains("access-denied", deniedWdt.Detail, StringComparison.Ordinal);
+        Assert.Equal(TileState.Rejected, deniedAdtThroughWdt.State);
         Assert.Equal(TileState.Rejected, failed.State);
         Assert.Contains("locked", failed.Detail, StringComparison.Ordinal);
+        Assert.Equal(TileState.Rejected, deniedAdt.State);
+        Assert.Contains("access-denied", deniedAdt.Detail, StringComparison.Ordinal);
         Assert.Equal(TileState.Ok, retried.State);
         Assert.Contains(fixture.Log.Entries, e => e.Level == LogLevel.Warning);
         AssertNothingAboveWarning(fixture.Log);
