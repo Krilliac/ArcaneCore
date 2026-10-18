@@ -3251,7 +3251,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             ? ExploreLegYards
             : PlayerbotStallWatch.ProgressYards + PlayerbotNavigation.WanderMaxShortfallYards;
 
-    /// <summary>The turns off the forward heading (degrees) <see cref="DeflectZoneBorderLeg"/> tries in order along a clipped home's zone border.</summary>
+    /// <summary>
+    /// The three +/- turn pairs off the forward heading (degrees) <see cref="DeflectZoneBorderLeg"/> tries along a clipped home's zone border,
+    /// starting at pair <c>refusals mod 3</c> and flipping each pair when <c>preferPositive</c> is false.
+    /// </summary>
     private static readonly float[] BorderDeflectDegrees = [45f, -45f, 90f, -90f, 135f, -135f];
 
     /// <summary>

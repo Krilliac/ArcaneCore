@@ -41,6 +41,27 @@ public sealed class DocCommentPlacementTests
             "    /// <summary>Pending actions.</summary>",
             "    public int PendingCount => 0;",
         ];
+        string[] withBlank =
+        [
+            "    /// <summary>Runs <paramref name=\"action\"/> later.</summary>",
+            "",
+            "    /// <summary>Pending actions.</summary>",
+            "    public int PendingCount => 0;",
+        ];
+        string[] withComment =
+        [
+            "    /// <summary>Runs <paramref name=\"action\"/> later.</summary>",
+            "    // A note between the two comments.",
+            "    /// <summary>Pending actions.</summary>",
+            "    public int PendingCount => 0;",
+        ];
+        string[] withAttribute =
+        [
+            "    /// <summary>Runs <paramref name=\"action\"/> later.</summary>",
+            "    [Fact]",
+            "    /// <summary>Pending actions.</summary>",
+            "    public void Test() { }",
+        ];
         string[] separate =
         [
             "    /// <summary>Pending actions.</summary>",
@@ -53,23 +74,33 @@ public sealed class DocCommentPlacementTests
         ];
 
         Assert.Equal(2, Assert.Single(StackedSummaryLines(stacked)));
+        Assert.Equal(3, Assert.Single(StackedSummaryLines(withBlank)));
+        Assert.Equal(3, Assert.Single(StackedSummaryLines(withComment)));
+        Assert.Equal(3, Assert.Single(StackedSummaryLines(withAttribute)));
         Assert.Empty(StackedSummaryLines(separate));
     }
 
-    /// <summary>The 1-based line of each <c>&lt;summary&gt;</c> after the first in one run of <c>///</c> lines.</summary>
+    /// <summary>
+    /// The 1-based line of each <c>&lt;summary&gt;</c> after the first before a member declaration (blank, <c>//</c> and <c>[...]</c>
+    /// attribute lines do not end the run).
+    /// </summary>
     private static IEnumerable<int> StackedSummaryLines(string[] lines)
     {
         int summaries = 0;
         for (int i = 0; i < lines.Length; i++)
         {
-            if (!lines[i].TrimStart().StartsWith("///", StringComparison.Ordinal))
+            string trimmed = lines[i].TrimStart();
+            if (trimmed.StartsWith("///", StringComparison.Ordinal))
             {
-                summaries = 0;
+                if (trimmed.Contains("<summary>", StringComparison.Ordinal) && ++summaries > 1)
+                    yield return i + 1;
                 continue;
             }
 
-            if (lines[i].Contains("<summary>", StringComparison.Ordinal) && ++summaries > 1)
-                yield return i + 1;
+            if (trimmed.Length == 0 || trimmed.StartsWith("//", StringComparison.Ordinal) || trimmed.StartsWith('['))
+                continue;
+
+            summaries = 0;
         }
     }
 }
