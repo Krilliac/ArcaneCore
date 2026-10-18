@@ -42,6 +42,36 @@ public sealed class SpellsSweepRound3Tests
     }
 
     [Theory]
+    [InlineData(28863u, 0.3f)]   // Void Zone: raised against falling under the ground
+    [InlineData(27810u, 0f)]     // Shadow Fissure
+    public void CasterTargetPosition_PutsTheDestinationAtTheExplicitTarget(uint spellId, float raise)
+    {
+        using var kit = new SpellTestKit(
+            Spell(spellId, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+            {
+                RangeIndex = 4, Range = new SpellRange(0, 40), StartRecoveryCategory = 0, StartRecoveryTime = 0,
+            },
+            Spell(18392, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+            {
+                RangeIndex = 4, Range = new SpellRange(0, 40), StartRecoveryCategory = 0, StartRecoveryTime = 0,
+            });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 12, 5);
+        SpellCastTargets? seen = null;
+        kit.System.RegisterEffect(SpellEffectName.Dummy, context => seen = context.Cast.Targets);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+        Assert.NotNull(seen);
+        Assert.True(seen!.HasDest);
+        Assert.Equal((target.X, target.Y, target.Z + raise), seen.Dest);
+
+        seen = null;
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, 18392u, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+        Assert.NotNull(seen);
+        Assert.False(seen!.HasDest); // Onyxia's Fireball keeps its original visual
+    }
+
+    [Theory]
     [InlineData(Class.Warlock, true)]
     [InlineData(Class.Mage, false)]
     public void ACancelledRitualOfDoom_ClearsTheWarlocksClientCooldown(Class cls, bool cleared)

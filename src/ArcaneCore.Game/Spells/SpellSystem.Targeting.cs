@@ -131,10 +131,12 @@ public sealed partial class SpellSystem
                 return [(caster, 1.0f)];
             case SpellImplicitTarget.None:
                 return [(unitTarget ?? caster, 1.0f)];
+            case SpellImplicitTarget.LocationCasterTargetPosition:
+                SetDestinationAtTarget(cast, unitTarget);
+                return [(caster, 1.0f)];
             case SpellImplicitTarget.LocationCasterHomeBind:
             case SpellImplicitTarget.LocationDatabase:
             case SpellImplicitTarget.LocationCasterSrc:
-            case SpellImplicitTarget.LocationCasterTargetPosition:
             case SpellImplicitTarget.LocationCasterFishingSpot: // vmangos Spell.cpp:2859: the caster
                 // A location-only effect (teleport, summon) acts on the caster.
                 return [(caster, 1.0f)];
@@ -260,6 +262,25 @@ public sealed partial class SpellSystem
                 // Class lanes register further targets (SpellSystem.TargetSelectors.cs); null = not implemented.
                 return TrySelectRegistered(cast, effect, effectIndex, selector, unitTarget);
         }
+    }
+
+    /// <summary>
+    /// TARGET_LOCATION_CASTER_TARGET_POSITION (53; vmangos Spell::SetTargetMap, Spell.cpp:2927-2939): the destination becomes the explicit unit's
+    /// position, so the boss summons that use it (Void Zone 28863, Shadow Fissure 27810, Might of Ragnaros 21154, Massive Geyser 22421, the C'Thun
+    /// tentacle teleport 26191) appear under the target instead of at the caster. Void Zone is raised 0.3 yd ("creature often end up below
+    /// ground"); Onyxia's Fireball (18392) keeps no destination so the client plays its original visual. The effect itself still acts on the
+    /// caster (a summon is the caster's; an immune target must not stop it). A destination the cast already has is kept.
+    /// </summary>
+    private static void SetDestinationAtTarget(SpellCast cast, Unit? unitTarget)
+    {
+        const uint voidZone = 28863, onyxiaFireball = 18392;
+        if (unitTarget is null || cast.Targets.HasDest || cast.Spell.Id == onyxiaFireball)
+        {
+            return;
+        }
+
+        cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;
+        cast.Targets.Dest = (unitTarget.X, unitTarget.Y, cast.Spell.Id == voidZone ? unitTarget.Z + 0.3f : unitTarget.Z);
     }
 
     /// <summary>Location-only implicit targets (no unit of their own).</summary>
