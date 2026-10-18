@@ -1,10 +1,14 @@
 // Tile and grid math. A port of tools/ArcaneCore.Atlas/Core/WorldGrid.cs, which itself delegates to the server:
-//   ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs  SizeOfGrids = 533.33333f, MaxNumberOfGrids = 64, MapResolution = 128,
-//        MaxNumberOfCells = 16
-//   ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs  TileOf(x, y): (int)(32 - x / GridSize), FileName,
-//        TileOf(GridCoord): tile = 63 - grid per axis, GetAreaFlag / GetHeightFromFloat cell and square arithmetic
-//   ref: src/ArcaneCore.Game/Maps/Collision/VMaps/VMapFormat.cs  TileFileName (tile Y first)
-//   ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs  TileFileName
+// ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:22  MaxNumberOfGrids = 64
+// ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:25  SizeOfGrids = 533.33333f
+// ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:34  MaxNumberOfCells = 16
+// ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:52  MapResolution = 128
+// ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:228  TileOf(x, y): (int)(32 - x / GridSize), likewise y
+// ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:215  FileName {map:D3}{x:D2}{y:D2}.map
+// ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:234  TileOf(GridCoord): tile = 63 - grid per axis; the cell and
+//      square arithmetic follows GetAreaFlag / GetHeightFromFloat in the same file
+// ref: src/ArcaneCore.Game/Maps/Collision/VMaps/VMapFormat.cs:44  TileFileName {map:D3}_{y:D2}_{x:D2}.vmtile (tile Y first)
+// ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:44  TileFileName {map:D3}{x:D2}{y:D2}.mmtile
 // The server computes in float32; Math.fround reproduces each intermediate so tile edges fall where the server's do.
 
 export const TILES_PER_SIDE = 64;
