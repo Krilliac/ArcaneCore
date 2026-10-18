@@ -263,6 +263,10 @@ public sealed class AntiCheatWorldTests
         await mover.StepAsync(100, 80f); // 50: kick
         Assert.True(await cheater.IsClosedByServerAsync());
 
+        // A duplicate staff line posted to a later world tick would only be queued after the barrier: two world round trips let
+        // any such line be queued first, so Assert.Single below still catches it.
+        await host.OnWorldAsync(() => { });
+        await host.OnWorldAsync(() => { });
         List<string> staffLines = await ChatLinesAsync(staff);
         Assert.Single(staffLines, l => l.Contains("Announced", StringComparison.Ordinal) && l.Contains("Teleport", StringComparison.Ordinal) && !l.Contains("Kicked", StringComparison.Ordinal));
         Assert.Single(staffLines, l => l.Contains("Kicked Announced", StringComparison.Ordinal)); // the feature sends its direct kick line once
