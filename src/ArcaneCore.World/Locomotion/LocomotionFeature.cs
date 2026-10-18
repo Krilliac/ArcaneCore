@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Locomotion;
 /// Binds the <c>Locomotion</c> configuration section into <see cref="LocomotionOptions"/> (a negative
 /// <c>RateDamageFall</c> falls back to 1, like vmangos setConfigPos) and registers the per-world
 /// <see cref="LocomotionEnvironment"/> with the teleport probe the pending-ack timeout needs. The rules themselves
-/// run in the map tick (<c>MapLocomotion</c>) and in the movement handlers (docs/areas/locomotion-foundation.md).
+/// run in the map tick (<c>MapLocomotion</c>) and in the movement handlers (docs/areas/locomotion.md).
 /// </summary>
 public sealed class LocomotionFeature(IServiceProvider services, ILogger<LocomotionFeature> logger) : IWorldFeature
 {

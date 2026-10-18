@@ -385,7 +385,7 @@ public sealed partial class Player : Unit
         IsRooted = rooted;
 
         // The order is also recorded in the pending-change ledger: the flag lands in Movement.Flags when the client
-        // acknowledges it or the ack times out (docs/areas/locomotion-foundation.md).
+        // acknowledges it or the ack times out (docs/areas/locomotion.md, "Slice 1: loco-foundation").
         global::ArcaneCore.Game.Locomotion.MovementControl.Order(this, global::ArcaneCore.Game.Locomotion.MovementChangeType.Root, rooted);
     }
 

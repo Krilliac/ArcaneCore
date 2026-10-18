@@ -11,7 +11,7 @@ namespace ArcaneCore.World.Spells.Utility;
 /// <summary>
 /// Installs the spell script dispatcher (<see cref="SpellScriptDispatcher"/>) with every <see cref="ISpellScript"/> of the startup code set
 /// (<see cref="StartupAssemblies"/>) on the world spell system (discovered <see cref="IWorldFeature"/>; attaches after <see cref="SpellFeature"/> by
-/// name, so the spell table is loaded and the unknown-id warning is meaningful). docs/integration/wlm-spell-scripts.md.
+/// name, so the spell table is loaded and the unknown-id warning is meaningful). docs/areas/warlock-mage-utility.md, wlm-02.
 /// <para>
 /// <see cref="Registry"/> is the live, swappable registry: the hot module lane (<c>ModuleGameSeams</c>) adds, replaces and removes a module's scripts
 /// on it at a tick boundary, and the dispatcher follows (<see cref="SpellScriptRegistry.ScriptsChanged"/>). The scripts discovered here are built in.

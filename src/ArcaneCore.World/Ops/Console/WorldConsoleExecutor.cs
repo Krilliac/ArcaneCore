@@ -53,7 +53,7 @@ public sealed class WorldConsoleExecutor
     }
 
     /// <summary>
-    /// An executor for a remote administration connection (RA, docs/operators/remote-admin.md): like <see cref="Create"/>, but every
+    /// An executor for a remote administration connection (RA, docs/ops/remote-admin.md): like <see cref="Create"/>, but every
     /// command runs with <paramref name="security"/> (the logged-in account's level), is audited as <paramref name="invokerName"/>,
     /// prints its lines without the console prefix and sees <paramref name="lifetime"/> (cancelled when the connection closes).
     /// </summary>

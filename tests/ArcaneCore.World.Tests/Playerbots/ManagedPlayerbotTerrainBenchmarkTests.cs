@@ -34,14 +34,14 @@ internal sealed class BotTerrainBenchmarkFactAttribute : FactAttribute
             || !Directory.Exists(Path.Combine(Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable) ?? "", "mmaps")))
         {
             Skip = $"{Variable}, {LiveSnapshotReplayFactAttribute.WorldVariable} and {RealTerrainBotFactAttribute.Variable} are not all set: "
-                + "the managed-bot terrain benchmark did NOT run (docs/integration/tick-scaling-20261009.md).";
+                + "the managed-bot terrain benchmark did NOT run (docs/integration/tick-perf-20261011.md).";
         }
         Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 
 /// <summary>
-/// The live stress shape in one process (docs/integration/tick-scaling-20261009.md): managed bots created and started through the
+/// The live stress shape in one process (docs/integration/perf-limits-20261008.md): managed bots created and started through the
 /// ordinary <c>CreateAsync</c>/<c>StartAsync</c> in the ten race/class pairs of the live stress script (both factions, six starting
 /// zones on maps 0 and 1), on the real terrain, models and navigation meshes, with the real content of a copied world database
 /// (creatures, game objects, quests, NPC services) and a fresh SQLite characters database, on the real-clock 50 ms world loop with

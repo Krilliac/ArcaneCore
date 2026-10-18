@@ -348,9 +348,9 @@ public interface ICollisionTileLifecycle
 
 /// <summary>
 /// Optional: a collision service that can read and parse a tile ahead of <see cref="ICollisionTileLifecycle.OnTileLoaded"/> on the
-/// thread pool, so that the grid creation itself does not wait for the files (docs/integration/tick-scaling-20261009.md). Called on
-/// the world thread when a grid that does not exist yet comes within reach of an object; it changes nothing but when the files
-/// are read.
+/// thread pool, so that the grid creation itself does not wait for the files (<c>World:Maps:GridPrefetchDistance</c>,
+/// docs/reference/configuration.md). Called on the world thread when a grid that does not exist yet comes within reach of an
+/// object; it changes nothing but when the files are read.
 /// </summary>
 public interface ICollisionTilePrefetch
 {

@@ -114,7 +114,7 @@ public sealed partial class MapCombat : IMapUpdater
     }
 
     /// <summary>
-    /// The equipment and ability answers of the player stat system (docs/integration/stats.md). Null
+    /// The equipment and ability answers of the player stat system (docs/areas/stats.md). Null
     /// keeps the <see cref="Hooks"/> defaults, which is what a map without the stats feature uses.
     /// </summary>
     public ICombatStatSource? Stats { get; set; }
