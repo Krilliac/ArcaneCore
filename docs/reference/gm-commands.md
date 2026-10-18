@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 320 |
-| `Administrator` | 6 | 447 |
+| `GameMaster` | 3 | 329 |
+| `Administrator` | 6 | 457 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -73,6 +73,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug sqlite` | 3 | GameMaster | declared retail level | Syntax: .debug sqlite Show every in-process SQLite write gate: acquisitions, timeouts, forced and dead releases since start, writers waiting now and the current holder with how long it has held the gate. |
 | `.debug threads` | 3 | GameMaster | declared retail level | Syntax: .debug threads Show the process threads, CPU use since start, the thread pool (busy workers and IO threads, queued work items, completed items, limits) and lock contention. |
 | `.debug mt` | 3 | GameMaster | declared retail level | Syntax: .debug mt Show the multithreading workers: parallel map update threads and counters (parallel ticks, serial-gate entries, contention, owner violations, barrier wait), and the shared path-job pool (threads, queue, completed, faulted, average compute and queue time). |
+| `.debug pathbench` | 3 | GameMaster | declared retail level | Syntax: .debug pathbench [#count] [#radius] Time #count path queries (default 20, at most 100) from you to evenly spread points #radius yards away (default 40, 5-200) on the world thread: min/p50/max/mean time, how many found a full, partial or no path, and the mean path length. |
+| `.debug gccollect` | 6 | Administrator | declared retail level | Syntax: .debug gccollect Force a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
 | `.debug invariants` | 3 | GameMaster | declared retail level | Syntax: .debug invariants Print the process-wide invariant failure count, policy, and up to 20 recorded invariant violation sites. |
@@ -231,6 +233,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.tele` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id). |
 | `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
 | `.tele del` | 5 | Administrator | declared retail level | Syntax: .tele del $name — delete an exact named location. |
+| `.tele group` | 2 | GameMaster | declared retail level | Syntax: .tele group $location Teleport the group of the selected player (or your own) to a location from the game_tele table. |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
 | `.bot` ... | 3 | GameMaster | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|anomalies\|gear\|summon\|party\|raid&gt; Shorthand for .playerbot commands. |
 | `.bot commands` | 3 | GameMaster | stored level through the map | Syntax: .bot commands List available playerbot chat/whisper commands and .bot subcommands. |
@@ -257,6 +260,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.notify` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .notify $MessageToBroadcast Send a global message to all players online in screen. |
 | `.goname` | 2 | GameMaster | declared retail level | Syntax: .goname [$charactername] Teleport to the given character, or the selected one. |
 | `.namego` | 2 | GameMaster | declared retail level | Syntax: .namego [$charactername] Teleport the given character, or the selected one, to you. |
+| `.groupgo` | 2 | GameMaster | declared retail level | Syntax: .groupgo [$charactername] Summon the group of the named or selected player to you (the player alone when not in a group). |
 | `.gocorpse` | 3 | GameMaster | stored level through the map | Syntax: .gocorpse [$playername] Teleport to the corpse of the selected player (or the named one, or yourself). |
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands [page \| text [page]] Display an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc). |
 | `.demorph` | 3 | GameMaster | declared retail level | Syntax: .demorph Restore the native model of the selected unit or yourself. |
@@ -402,6 +406,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.inspect fields` | 3 | GameMaster | declared retail level | Syntax: .inspect fields [#first] [#count] Print raw update fields of the selected unit from index #first (default 0), #count of them (default 16, at most 25): index, hex, unsigned and float. |
 | `.inspect map` | 3 | GameMaster | declared retail level | Syntax: .inspect map Show your map: players (bots counted apart), objects, creatures by state (alive, dead, in combat, evading, moving), dormant respawns, map updaters (isolated ones named), objects in transit. |
 | `.inspect spell` | 3 | GameMaster | declared retail level | Syntax: .inspect spell #spellid Show a spell's data: name and rank, school, cast time, cooldowns, range, duration, power cost, attributes, and every effect with its targets, radius, aura, amounts and trigger spell. |
+| `.inspect auras` | 3 | GameMaster | declared retail level | Syntax: .inspect auras [$filter] List the aura holders of the selected unit (or you): spell id and name, remaining/maximum time, stacks, slot, caster, positive or negative, and each effect's aura type and amount. $filter keeps the spells whose name contains it. |
+| `.inspect group` | 3 | GameMaster | declared retail level | Syntax: .inspect group Show the selected player's group (or yours): id, raid or party, leader, loot method, and every member with sub-group, assistant flag, online state, map and distance to you. |
+| `.inspect grid` | 3 | GameMaster | declared retail level | Syntax: .inspect grid Show the grid and cell the selected object (or you) is in, whether that grid is loaded and how many grids of the map are loaded, the active cells and the map's largest bounding radius. |
+| `.inspect visibility` | 3 | GameMaster | declared retail level | Syntax: .inspect visibility Show whether the selected object is in your client's visible set and in visibility range, whether you are in its visible set (a player), and the size of both visible sets. |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.ai` ... | 3 | GameMaster | declared retail level | Syntax: .ai $subcommand Force the selected creature's AI or movement. Type .ai to see the list of possible subcommands. |
 | `.ai evade` | 3 | GameMaster | declared retail level | Syntax: .ai evade Make the selected creature evade: leave combat, clear its threat and go home. |
@@ -427,6 +435,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.alter home` | 3 | GameMaster | declared retail level | Syntax: .alter home Make the selected creature's current position its home (where it evades and wanders back to; not saved). |
 | `.alter respawn` | 3 | GameMaster | declared retail level | Syntax: .alter respawn #seconds Set the delay of the selected creature's next respawn (once). |
 | `.alter field` | 6 | Administrator | declared retail level | Syntax: .alter field #index #value\|#hex\|#float f Write a raw update field of the selected unit (sent to the clients that see it). Debugging only: the server may overwrite it at any time. |
+| `.alter auraduration` | 3 | GameMaster | declared retail level | Syntax: .alter auraduration #spellid #seconds Set the remaining time of the selected unit's (or your) aura of #spellid (a spell link works) to #seconds (0 lets it expire now, at most 86400). Permanent auras are not changed. |
+| `.alter aurastacks` | 3 | GameMaster | declared retail level | Syntax: .alter aurastacks #spellid #stacks Set the stack count of the selected unit's (or your) aura of #spellid to #stacks (1 up to the spell's limit); the effect amounts scale with it and an increase refreshes the duration. |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |

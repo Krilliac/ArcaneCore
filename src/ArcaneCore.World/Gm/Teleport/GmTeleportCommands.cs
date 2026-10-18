@@ -126,7 +126,7 @@ public sealed class GmTeleportCommands : ICommandGroup
 /// <summary>
 /// <c>.tele name [$player] $location</c> (TeleportCommands.cpp:657-711, SEC_TICKETMASTER,
 /// Chat.cpp:1006). With only a location the selected player (or the caller) is moved.
-/// <c>.tele group</c>, <c>.tele add</c> and <c>.tele del</c> are not provided (see the lane doc).
+/// <c>.tele group</c> is in Gm/Extra/GroupTeleportCommands.cs; <c>.tele add</c> and <c>.tele del</c> are not provided here (see the lane doc).
 /// </summary>
 public sealed class TeleNameExtension : ICommandExtension
 {
