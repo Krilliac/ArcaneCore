@@ -43,53 +43,47 @@ public sealed class AuthDatabaseOutageTests
     }
 
     [Fact]
-    public async Task LockedSqliteFile_RefusesLogonWithDbBusy_WithinTheQueryTimeout_AndOpensTheCircuit()
-    {
-        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-locked-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        string file = Path.Combine(directory, "auth.db");
-        (string, string?)[] database = [("Database:Provider", "Sqlite"), ("Database:ConnectionString", $"Data Source={file}")];
-        try
+    public Task LockedSqliteFile_RefusesLogonWithDbBusy_WithinTheQueryTimeout_AndOpensTheCircuit()
+        => WithLockedSqliteFileAsync(async database =>
         {
-            // The schema exists, as after a normal start; then another connection takes the file for itself. The
-            // bootstrap leaves the file in WAL mode, where only exclusive locking mode stops readers as well as writers.
-            await using (ServiceProvider bootstrap = BuildAuthDatabase(database))
-            {
-                await bootstrap.GetRequiredService<AuthDbInitializer>().InitializeAsync();
-            }
-
-            await using var holder = new SqliteConnection($"Data Source={file}");
-            await holder.OpenAsync();
-            await ExecuteAsync(holder, "PRAGMA locking_mode=EXCLUSIVE");
-            await ExecuteAsync(holder, "BEGIN EXCLUSIVE");
-            await ExecuteAsync(holder, "SELECT count(*) FROM sqlite_master");
-
             // Without the pessimistic strategy each of these logons would wait SQLite's 30 s busy timeout, not 2 s.
             var watch = Stopwatch.StartNew();
             await RunOutageAsync(database);
             Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"the outage scenario took {watch.Elapsed}");
+        });
 
-            await ExecuteAsync(holder, "ROLLBACK");
-            await ExecuteAsync(holder, "PRAGMA locking_mode=NORMAL");
-            await ExecuteAsync(holder, "SELECT count(*) FROM sqlite_master");
-        }
-        finally
+    [Fact]
+    public Task LockedSqliteFile_AnAbandonedCallKeepsItsPooledContext_SoTheNextScopeIsRefusedToo()
+        => WithLockedSqliteFileAsync(async database =>
         {
-            using (var own = new SqliteConnection($"Data Source={file}")) SqliteConnection.ClearPool(own); // only this test's pool: a global clear checkpoints other tests' WAL files
-            for (int attempt = 0; ; attempt++)
+            // The deadline abandons the list load while it still runs inside its pooled AuthDbContext. Handed to the next
+            // scope, that context made EF refuse the row read (InvalidOperationException, a second operation on one
+            // context) instead of the database refusal: the logon connection closed without WOW_FAIL_DB_BUSY.
+            IConfiguration config = Config(
+            [
+                .. database,
+                ("Resilience:Database:QueryTimeoutMs", "500"),
+                ("Resilience:Database:Breaker:FailureThreshold", "10"),
+                ("Resilience:Database:Breaker:FailureRateThreshold", "0"),
+            ]);
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddAuthDatabase(config);
+            services.AddRealmResilience(config);
+            await using ServiceProvider provider = services.BuildServiceProvider();
+
+            await using (AsyncServiceScope first = provider.CreateAsyncScope())
             {
-                try
-                {
-                    Directory.Delete(directory, recursive: true);
-                    break;
-                }
-                catch (IOException) when (attempt < 100)
-                {
-                    await Task.Delay(100);
-                }
+                await Assert.ThrowsAsync<TimeoutRejectedException>(() => first.ServiceProvider.GetRequiredService<IBanStore>().ListIpBansAsync(string.Empty));
             }
-        }
-    }
+
+            await using (AsyncServiceScope next = provider.CreateAsyncScope())
+            {
+                await Assert.ThrowsAsync<TimeoutRejectedException>(() => next.ServiceProvider.GetRequiredService<IBanStore>().GetActiveIpBanAsync("127.0.0.1"));
+            }
+
+            Assert.Equal(2, provider.GetRequiredService<DatabaseCircuits>().For(DatabaseComponent.Auth).ConsecutiveFailures);
+        });
 
     [Fact]
     public async Task ClosedPort_RefusesLogonWithDbBusy_AndOpensTheCircuit()
@@ -125,6 +119,55 @@ public sealed class AuthDatabaseOutageTests
         OptionsValidationException ex = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<ResilienceOptions>>().Value);
         Assert.Contains(ex.Failures, f => f.StartsWith("Resilience:Database:QueryTimeoutMs", StringComparison.Ordinal));
         Assert.Contains(ex.Failures, f => f.StartsWith("Resilience:Database:Bootstrap:MaxAttempts", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> against a bootstrapped SQLite auth file that another connection holds exclusively,
+    /// then releases the lock and deletes the file.
+    /// </summary>
+    private static async Task WithLockedSqliteFileAsync(Func<(string Key, string? Value)[], Task> body)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-locked-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string file = Path.Combine(directory, "auth.db");
+        (string, string?)[] database = [("Database:Provider", "Sqlite"), ("Database:ConnectionString", $"Data Source={file}")];
+        try
+        {
+            // The schema exists, as after a normal start; then another connection takes the file for itself. The
+            // bootstrap leaves the file in WAL mode, where only exclusive locking mode stops readers as well as writers.
+            await using (ServiceProvider bootstrap = BuildAuthDatabase(database))
+            {
+                await bootstrap.GetRequiredService<AuthDbInitializer>().InitializeAsync();
+            }
+
+            await using var holder = new SqliteConnection($"Data Source={file}");
+            await holder.OpenAsync();
+            await ExecuteAsync(holder, "PRAGMA locking_mode=EXCLUSIVE");
+            await ExecuteAsync(holder, "BEGIN EXCLUSIVE");
+            await ExecuteAsync(holder, "SELECT count(*) FROM sqlite_master");
+
+            await body(database);
+
+            await ExecuteAsync(holder, "ROLLBACK");
+            await ExecuteAsync(holder, "PRAGMA locking_mode=NORMAL");
+            await ExecuteAsync(holder, "SELECT count(*) FROM sqlite_master");
+        }
+        finally
+        {
+            using (var own = new SqliteConnection($"Data Source={file}")) SqliteConnection.ClearPool(own); // only this test's pool: a global clear checkpoints other tests' WAL files
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 100)
+                {
+                    await Task.Delay(100);
+                }
+            }
+        }
     }
 
     private static async Task RunOutageAsync(params (string Key, string? Value)[] database)

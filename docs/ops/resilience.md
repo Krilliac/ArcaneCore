@@ -57,10 +57,14 @@ contain no `async` state machine).
   `BEGIN EXCLUSIVE`) blocked 30 082 ms under the cooperative strategy, SQLite's busy timeout, whatever `QueryTimeoutMs`
   said; with the pessimistic strategy the caller gets `TimeoutRejectedException` at the deadline. **Cost of the
   pessimistic strategy:** the abandoned call keeps its thread-pool thread until SQLite gives up (the connection's
-  `Default Timeout`, 30 s) or the lock is released, its result is discarded, and disposing the scope whose connection it
-  still uses may block until that statement returns (SQLite serialises the calls on one connection; measured only after
-  the lock release, where it took under 5 s, UNVERIFIED while the lock is still held). One parked thread per refused
-  call is the price of a bounded answer on the zero-setup engine; the network providers pay nothing extra.
+  `Default Timeout`, 30 s) or the lock is released, its result is discarded, and until then it still runs inside its
+  `DbContext` and connection. So a pessimistic call must run in a DI scope it owns and disposes itself when it ends:
+  the contexts are pooled (`AddDbContextPool`, `fbfc5d7fe` for `AuthDbContext`), and disposing the *caller's* scope
+  returns the busy context to the pool, where the next lease gets it and EF refuses the second operation
+  (`InvalidOperationException`, not a database error, so not a `WOW_FAIL_DB_BUSY` refusal). The logon daemon's
+  guarded stores do this (`GuardedCalls`, below); disposing the session's scope then no longer touches the abandoned
+  call's context or connection. One parked thread and one leased context per refused call is the price of a bounded
+  answer on the zero-setup engine; the network providers pay nothing extra.
 - `DatabaseStartup.InitializeAsync` (both daemons' start-up path) runs the initializers through `BootstrapAsync` when
   the guard is registered and turns a final transient failure into one scrubbed line,
   `database unreachable: MySqlException: Unable to connect to any of the specified MySQL hosts.`, and exit code **6**
@@ -75,8 +79,16 @@ contain no `async` state machine).
 - `AddRealmResilience` (`Net/RealmResilienceServiceCollectionExtensions.cs`) registers the guard and decorates
   `IAccountStore`, `IRealmStore` and `IBanStore` with `GuardedAccountStore` / `GuardedRealmStore` / `GuardedBanStore`
   (`Resilience/GuardedAuthStores.cs`). The EF store is resolved *inside* the guarded call, because with MariaDB the
-  `DbContext` constructor already connects (`ServerVersion.AutoDetect`) and that failure has to count too. The call
-  must follow `AddAuthDatabase`; it throws a clear `InvalidOperationException` otherwise rather than guarding nothing.
+  `DbContext` constructor already connects (`ServerVersion.AutoDetect`) and that failure has to count too, and from a
+  DI scope of that call's own (`GuardedCalls<TStore>`), created and disposed inside the guarded operation, so a call
+  the SQLite deadline abandons keeps its pooled `AuthDbContext` until it ends instead of handing it to the next call
+  (before this, the IP-ban list load that ran out of the query budget passed its busy context to the single-row read,
+  and a locked auth file closed the logon connection without an answer). Separate calls of one session do not share
+  a change tracker, and a guarded call never joins a transaction its caller holds: the start-up purge of expired bans
+  (`AuthDbInitializer`), which runs inside the schema lock's SQLite write transaction, therefore purges through an
+  `EfBanStore` on the bootstrap's own context, not through the guarded `IBanStore` (whose connection would wait for
+  that transaction until the query timeout). The call must follow `AddAuthDatabase`; it throws a clear
+  `InvalidOperationException` otherwise rather than guarding nothing.
 - `LogonSession` catches `ResilienceException` around each command: the SRP state is dropped, the client gets
   `WOW_FAIL_DB_BUSY` (`AuthResult.FailDbBusy` = 0x08, vmangos `AuthCodes.h`; the client shows a "try again later"
   style message instead of a silent disconnect) on a challenge or proof, the connection closes, and one WARNING line
@@ -196,7 +208,12 @@ pessimistic for the `Sqlite` provider (see above), so a queue that runs a multi-
   MariaDB connection string to a closed loopback port; two real challenge packets are answered `WOW_FAIL_DB_BUSY` each
   within the 2 s query timeout (the locked file would otherwise take 30 s each), the Auth circuit is open afterwards,
   the third client is refused in under 2 s with `Rejected` incremented and no database attempt, the three log lines are
-  present and no `session error` or password appears in the log.
+  present and no `session error` or password appears in the log. Against the locked file, an IP-ban list load the
+  500 ms deadline abandons in one scope and a row read in the next scope are both refused with
+  `TimeoutRejectedException` and counted; before the per-call scopes (`GuardedCalls`) the row read leased the
+  abandoned load's pooled context and EF threw `InvalidOperationException`, and the locked-file logon closed the
+  connection without an answer. `GuardedStartupPurgeTests`: under the same composition a second start purges an
+  expired IP ban and keeps a permanent one, inside the schema lock, without waiting for the query timeout.
 - `tests/ArcaneCore.Data.Tests/Resilience`: `DatabaseTransienceTests` (SQLite codes, Npgsql `IsTransient`, EF wrapping),
   `DatabaseStartupResilienceTests` (closed port: three attempts logged, exit 6, password scrubbed; unopenable SQLite
   file: exit 6; schema refusal not retried; a reachable SQLite bootstraps and serves guarded calls; the guard translates

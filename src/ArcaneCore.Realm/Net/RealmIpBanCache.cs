@@ -29,6 +29,8 @@ namespace ArcaneCore.Realm.Net;
 /// With <paramref name="scopes"/> (the listener passes its own) the list is loaded through an <see cref="IBanStore"/> of a
 /// scope of the cache's own, never through the calling session's store: a load that ran out of the query budget is
 /// abandoned while still running, and the session's store (and its database context) must stay free for the row read.
+/// The context is pooled, so disposing this scope alone would not keep it from the row read; the guarded realm stores
+/// give each call a scope of its own that the abandoned load holds until it ends (<see cref="Resilience.GuardedCalls{TStore}"/>).
 /// Without it the caller's store is used for both (tests over an in-memory store).
 /// </para>
 /// </summary>
