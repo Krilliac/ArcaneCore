@@ -85,4 +85,22 @@ public sealed class PetHappinessTests
         Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetBroken);
         Assert.True(hunter.PetGuid.IsEmpty);
     }
+
+    [Fact]
+    public void GmLoyalty_AddsPoints_AndARebelliousPetPushedBelowZeroRunsAway()
+    {
+        using PetTestKit kit = Kit();
+        (Player hunter, FakeSession session, Creature pet) = Tame(kit);
+        Assert.True(SummonService.IsPet(pet));
+        PetLoyalty.Restore(pet, 2, 5000, 0);
+
+        Assert.True(kit.Service.ModifyLoyaltyByCommand(pet, hunter, 250));
+        Assert.Equal(5250, pet.Summon!.Charm!.LoyaltyPoints);
+
+        PetLoyalty.Restore(pet, PetLoyalty.Rebellious, 10, 0);
+        session.Clear();
+        Assert.False(kit.Service.ModifyLoyaltyByCommand(pet, hunter, -100));
+        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetBroken);
+        Assert.True(hunter.PetGuid.IsEmpty);
+    }
 }

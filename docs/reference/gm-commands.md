@@ -14,9 +14,9 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
 | `Player` | 0 | 8 |
-| `Moderator` | 1 | 26 |
-| `GameMaster` | 3 | 248 |
-| `Administrator` | 6 | 370 |
+| `Moderator` | 1 | 27 |
+| `GameMaster` | 3 | 251 |
+| `Administrator` | 6 | 373 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -305,6 +305,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.anticheat delete` | 6 | Administrator | stored level through the map | Syntax: .anticheat delete [$name] Forget the character's live score and delete its violation log rows. |
 | `.anticheat score` | 3 | GameMaster | stored level through the map | Syntax: .anticheat score [$name] [#value] Show the character's live score; with a value (administrators) set it and apply what it warrants. |
 | `.anticheat rubberband` | 3 | GameMaster | stored level through the map | Syntax: .anticheat rubberband [$name] Move the online character back to its last validated position. |
+| `.pet` ... | 3 | GameMaster | declared retail level | Syntax: .pet $subcommand Type .pet to see the list of possible subcommands or .help pet $subcommand to see info on subcommands. |
+| `.pet list` | 3 | GameMaster | declared retail level | Syntax: .pet list $playername List the stored pets of a character, current and stabled. |
+| `.pet loyalty` | 3 | GameMaster | declared retail level | Syntax: .pet loyalty #points Add (or with a negative number take) loyalty points of the selected hunter pet. |
+| `.pet info` | 1 | Moderator | declared retail level | Syntax: .pet info Show the state of the selected pet. |
 | `.cluster` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
 | `.cluster status` | 3 | GameMaster | stored level through the map | Syntax: .cluster status Show the cluster node identity, durable ownership fence, map routing summary, and authority leases. |
 | `.cluster node` | 3 | GameMaster | stored level through the map | Syntax: .cluster node [$player] Show which cluster node and map worker host the selected or named player (or this daemon at the console), along with their ownership token and map coordinates. |
