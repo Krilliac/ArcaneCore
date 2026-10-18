@@ -849,6 +849,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>).
     /// The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
     /// </summary>
+    /// <summary>The distance within which a battlemaster's absence from the map is trusted (well inside the visibility range).</summary>
+    internal const float MasterPresenceYards = 60f;
+
     private Battlemaster? FindMaster(Player player, BattlegroundType type)
     {
         if (player.Map is not { } map || services.GetService<QuestNpcFeature>() is not { } npcs) return null;
@@ -864,6 +867,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (gate is not null && !gate.AllowsCreature(master.SpawnGuid)) continue;
             if (IsMasterRefused(master.Guid, player.ZoneId)) continue;
             float distance = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At);
+            // Within sight of the spawn point the map says whether the master is there: an emissary whose event the gate still allows but
+            // that is not in the world (or is dead) had bots walk up, hold 5 s and report 'no living battlemaster' (live: 15105 Undercity, 15102 Ironforge).
+            if (distance <= MasterPresenceYards && map.FindObject(master.Guid) is not Creature { IsAlive: true }) continue;
             if (distance > nearest
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
                 || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
