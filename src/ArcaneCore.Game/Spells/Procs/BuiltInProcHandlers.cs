@@ -158,6 +158,33 @@ internal static class BuiltInProcHandlers
                 }
 
                 break;
+            case 23551: // Lightning Shield (The Ten Storms set, UnitAuraProcHandler.cpp:1537-1542): the healed target gets a free Lightning Shield.
+                triggerSpellId = 23552;
+                target = c.Target;
+                break;
+            case 23552: // Damage from Lightning Shield (The Ten Storms set, :1543-1545).
+                triggerSpellId = 27635;
+                break;
+            case 23572: // Mana Surge (The Earthfury set, :1546-1554): 35% of the healing spell's mana cost back.
+                if (c.ProcSpell is not { } surged)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                basePoints0 = (int)(surged.ManaCost * 35 / 100);
+                triggerSpellId = 23571;
+                target = c.Owner;
+                break;
+            case 28845: // Cheat Death (:1263-1269): only the hit that takes the owner from 20% health or more to under it.
+            {
+                int health20 = (int)c.Owner.MaxHealth / 5;
+                if ((int)c.Owner.Health - (int)c.Amount >= health20 || (int)c.Owner.Health < health20)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                break;
+            }
             case 26467: // Persistent Shield (Scarab Brooch): 15% of the heal as a shield on the healed unit.
                 basePoints0 = (int)(c.Amount * 15 / 100);
                 target = c.Target;
