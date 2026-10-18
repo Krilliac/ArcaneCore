@@ -7,8 +7,8 @@ namespace ArcaneCore.Game.Creatures;
 
 /// <summary>
 /// Creature path searches on the path-job pool (multithreading plan W5, <c>Creatures:Movement:PathJobs</c>). An eligible request
-/// (an out-of-combat wander, waypoint, point or scripted move, or an evade/home return of a walker; never a chase, follow, flee,
-/// confused, formation, pet or flier search) is queued on <see cref="NavJobSystem"/> and answers <see cref="PathOutcome.Deferred"/>,
+/// (an out-of-combat wander, waypoint, point or scripted move, an evade/home return of a walker, a chase, or with <c>PathJobsFollow</c>
+/// an out-of-combat follow or formation move; never a flee, confused or flier search) is queued on <see cref="NavJobSystem"/> and answers <see cref="PathOutcome.Deferred"/>,
 /// exactly as a spent per-update budget does: every motion already waits and asks again. When it asks again and the job has finished,
 /// the answer is used if it still fits (the creature has not moved off the job's start, the same destination and options; a wander leg
 /// takes its finished leg whatever new point it drew, since the point is random anyway). Anything that no longer fits is dropped and
@@ -30,7 +30,7 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     internal const int PathJobsMaxInFlightPerMap = 512;
 
-    /// <summary>How far (yd) a re-asked follow point may lie from the job's for the job's path to still apply (<c>PathJobsFollow</c>).</summary>
+    /// <summary>How far (yd) a re-asked follow, formation or chase point may lie from the job's for the job's path to still apply.</summary>
     internal const float PathJobFollowTolerance = 1f;
 
     /// <summary>A finished job nobody asked for within this long (ms) is dropped by the sweep.</summary>
@@ -112,16 +112,21 @@ public sealed partial class CreatureMapSystem
     private bool TryPlanPathByJob(Creature creature, Vector3 destination, bool toSpawn, bool chase, out PlannedPath plan, ISharedPathSearch? known = null)
     {
         plan = default;
-        // An out-of-combat follow (a pet behind its owner, an escort behind its leader) may go to the pool with PathJobsFollow; a chase never.
-        bool follow = chase && !toSpawn && _options.Movement.PathJobsFollow && creature.Motion.CurrentType == MovementGeneratorType.Follow
+        MovementGeneratorType motion = creature.Motion.CurrentType;
+        // An out-of-combat follow (a pet behind its owner, an escort behind its leader) or formation slot move may go to the pool with
+        // PathJobsFollow; a chase goes to the pool whenever PathJobs is active.
+        bool follow = chase && !toSpawn && _options.Movement.PathJobsFollow && motion == MovementGeneratorType.Follow
             && !creature.Combat.IsInCombat;
+        bool formation = !chase && !toSpawn && _options.Movement.PathJobsFollow && motion == MovementGeneratorType.Formation
+            && !creature.Combat.IsInCombat;
+        bool chasing = chase && !toSpawn && motion == MovementGeneratorType.Chase;
         if (PathJobs is not { } jobs
-            || (chase && !follow)
-            || (creature.IsPet && !follow)
-            || (creature.Combat.IsInCombat && !toSpawn)
-            || (!follow && creature.Motion.CurrentType is MovementGeneratorType.Follow)
-            || creature.Motion.CurrentType is MovementGeneratorType.Chase or MovementGeneratorType.Fleeing
-                or MovementGeneratorType.Confused or MovementGeneratorType.Formation
+            || (chase && !follow && !chasing)
+            || (creature.IsPet && !follow && !chasing)
+            || (creature.Combat.IsInCombat && !toSpawn && !chasing)
+            || (!follow && motion is MovementGeneratorType.Follow)
+            || (!formation && motion is MovementGeneratorType.Formation)
+            || motion is MovementGeneratorType.Fleeing or MovementGeneratorType.Confused
             || (known ?? Map.Collision.PathfinderForMap as ISharedPathSearch) is not { } shared)
         {
             return false;
@@ -135,7 +140,7 @@ public sealed partial class CreatureMapSystem
 
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         bool anyDestination = !toSpawn && IsWanderLeg(creature);
-        float destinationTolerance = follow ? PathJobFollowTolerance : PathJobDestinationTolerance;
+        float destinationTolerance = (follow || formation || chasing) ? PathJobFollowTolerance : PathJobDestinationTolerance;
         if (_creaturePathJobs.TryGetValue(creature, out NavJob? job))
         {
             var key = (PathJobKey)job.Tag!;

@@ -192,7 +192,8 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             return;
         }
 
-        if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
+        if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted
+            && (!budgeted.CanQueuePathJob || (Type == MovementGeneratorType.Follow && (!mover.MovementOptions.PathJobsFollow || creature.Combat.IsInCombat))))
         {
             // Over this update's search budget: keep the current spline (or standing), and re-path on the next update.
             budgeted.NoteDeferred(creature);
@@ -208,9 +209,10 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             : mover.FindPath(creature, destination);
         if (path.Count == 0 && mover is ICreaturePathQuery { LastPlanQueued: true })
         {
-            // The search went to the path-job pool (Creatures:Movement:PathJobsFollow): keep the current spline and come back for the
-            // answer on the next update. Not aimed yet, so the next update asks again rather than waiting for the target to move.
+            // The search went to the path-job pool (Creatures:Movement:PathJobs / PathJobsFollow): keep the current spline and come back
+            // for the answer on the next update. Not aimed yet, so the next update asks again rather than waiting for the target to move.
             _recheckMs = 0;
+            _deferred = true;
             return;
         }
 

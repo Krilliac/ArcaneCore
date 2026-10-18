@@ -220,6 +220,73 @@ public sealed class CreaturePathJobTests
     }
 
     [Fact]
+    public void AChaseSearchesOnAWorker_AndTheChaserSetsOff()
+    {
+        using Scene s = Start(movementType: 0);
+        int worldThread = Environment.CurrentManagedThreadId;
+        s.Player.Relocate(25, 0, s.Player.Z, 0, 0);
+        s.Wolf.Motion.MoveChase(s.Player);
+
+        for (int i = 0; i < 200 && s.System.PathJobsApplied == 0; i++)
+        {
+            s.World.RunTick(50);
+            Thread.Sleep(1);
+        }
+
+        Assert.True(s.System.PathJobsApplied >= 1, "no chase answer from the pool was applied");
+        Assert.NotEmpty(s.Paths.SharedThreads);
+        Assert.DoesNotContain(worldThread, s.Paths.SharedThreads);
+        Assert.Equal(0, s.Paths.SyncCalls);
+        Assert.True(s.Wolf.IsMoving, "the chaser did not set off on the pool's path");
+    }
+
+    [Fact]
+    public void WithPathJobsFollow_AFormationFollowerSearchesOnAWorker_AndSetsOff()
+    {
+        var group = new ArcaneCore.Kernel.WorldData.SpawnGroups.SpawnGroupDefinition
+        {
+            Id = 1,
+            Name = "TestFormation",
+            Type = ArcaneCore.Kernel.WorldData.SpawnGroups.SpawnGroupType.Creature,
+            Members = [new(1, 0, 0), new(2, 1, 0)],
+            Formation = new ArcaneCore.Kernel.WorldData.SpawnGroups.SpawnGroupFormation(1, 4, 0, 0, 0, "TestFormation"),
+        };
+        var content = new CreatureContent(
+            [Template()],
+            [Spawn(1, WolfEntry, 0, 0) with { Orientation = 0f }, Spawn(2, WolfEntry, -4, 0) with { Orientation = 0f }],
+            [], [], [])
+        {
+            SpawnGroups = new ArcaneCore.Kernel.WorldData.SpawnGroups.SpawnGroupCatalog([group]),
+        };
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
+        var paths = new RecordingPathfinder();
+        WorldCollision.Of(world).Install(pathfinder: paths);
+        using var pool = new NavJobSystem(threads: 2);
+        system.PathJobs = pool;
+        system.Options.Movement.PathJobsFollow = true;
+        using (world)
+        {
+            AddPlayer(world, 1, 0, 0);
+            Creature leader = system.FindBySpawnGuid(1)!;
+            Creature follower = system.FindBySpawnGuid(2)!;
+            int worldThread = Environment.CurrentManagedThreadId;
+
+            system.MoveTo(leader, 20, 0, leader.Z, run: false, finalOrientation: null);
+            for (int i = 0; i < 200 && (!follower.IsMoving || system.PathJobsApplied < 2); i++)
+            {
+                world.RunTick(50);
+                Thread.Sleep(1);
+            }
+
+            Assert.True(follower.IsMoving, "the formation follower did not set off on the pool's path");
+            Assert.True(system.PathJobsApplied >= 2, $"expected both leader and follower jobs to apply, got {system.PathJobsApplied}");
+            Assert.NotEmpty(paths.SharedThreads);
+            Assert.DoesNotContain(worldThread, paths.SharedThreads);
+            Assert.Equal(0, paths.SyncCalls);
+        }
+    }
+
+    [Fact]
     public void ADespawnedCreaturesJob_IsSweptAway()
     {
         using Scene s = Start(movementType: 0);

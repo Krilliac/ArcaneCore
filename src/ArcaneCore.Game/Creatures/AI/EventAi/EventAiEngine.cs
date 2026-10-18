@@ -202,22 +202,36 @@ public sealed class EventAiEngine
     /// </summary>
     public void MoveInLineOfSight(Unit who)
     {
-        if (Context.Victim is not null)
+        if (Context.Victim is not null || _holders.Count == 0)
         {
             return;
         }
 
-        DispatchWhere(EventAiTrigger.OutOfCombatLineOfSight, holder => holder.Handler!.MatchesUnit(Context, holder, who), who, null);
+        EnsureDepth();
+        bool anyReady = false;
+        foreach (EventAiHolder holder in _holders)
+        {
+            if (holder.Handler is { Trigger: EventAiTrigger.OutOfCombatLineOfSight } handler && handler.MatchesUnit(Context, holder, who))
+            {
+                CheckAndReady(holder, who, null);
+                anyReady = true;
+            }
+        }
+
+        if (anyReady)
+        {
+            ProcessEvents(who, null);
+        }
     }
 
     /// <summary>cmangos JustSummoned (the EVENT_T_SUMMONED_UNIT rows; the summoned creature is the invoker).</summary>
-    public void JustSummoned(Creature summoned) => DispatchWhere(EventAiTrigger.Summoned, static _ => true, summoned, null);
+    public void JustSummoned(Creature summoned) => DispatchAll(EventAiTrigger.Summoned, summoned, null);
 
     /// <summary>cmangos SummonedCreatureJustDied (:1540-1549).</summary>
-    public void SummonedJustDied(Creature summoned) => DispatchWhere(EventAiTrigger.SummonedDied, static _ => true, summoned, null);
+    public void SummonedJustDied(Creature summoned) => DispatchAll(EventAiTrigger.SummonedDied, summoned, null);
 
     /// <summary>cmangos SummonedCreatureDespawn (:1551-1560).</summary>
-    public void SummonedDespawned(Creature summoned) => DispatchWhere(EventAiTrigger.SummonedDespawned, static _ => true, summoned, null);
+    public void SummonedDespawned(Creature summoned) => DispatchAll(EventAiTrigger.SummonedDespawned, summoned, null);
 
     /// <summary>
     /// cmangos CreatureEventAI::ReceiveAIEvent (AI/EventAI/CreatureEventAI.cpp:1563-1575): the EVENT_T_RECEIVE_AI_EVENT rows of
@@ -228,19 +242,39 @@ public sealed class EventAiEngine
     public void ReceiveAiEvent(uint eventType, Unit sender, Unit? invoker)
     {
         ArgumentNullException.ThrowIfNull(sender);
-        DispatchWhere(EventAiTrigger.AiEvent, holder => holder.Handler!.MatchesAiEvent(holder.Event, eventType, sender), invoker, sender);
+        EnsureDepth();
+        foreach (EventAiHolder holder in _holders)
+        {
+            if (holder.Handler is { Trigger: EventAiTrigger.AiEvent } handler && handler.MatchesAiEvent(holder.Event, eventType, sender))
+            {
+                CheckAndReady(holder, invoker, sender);
+            }
+        }
+
+        ProcessEvents(invoker, sender);
     }
 
     /// <summary>cmangos SpellHitTarget (:1680-1691): the EVENT_T_SPELLHIT_TARGET rows whose spell id and school mask match.</summary>
     public void SpellHitTarget(Unit target, SpellInfo spell)
-        => DispatchWhere(EventAiTrigger.SpellHitTarget, holder => holder.Handler!.MatchesSpell(holder.Event, spell), target, null);
-
-    private void DispatchWhere(EventAiTrigger trigger, Func<EventAiHolder, bool> match, Unit? invoker, Unit? sender)
     {
         EnsureDepth();
         foreach (EventAiHolder holder in _holders)
         {
-            if (holder.Handler is { } handler && handler.Trigger == trigger && match(holder))
+            if (holder.Handler is { Trigger: EventAiTrigger.SpellHitTarget } handler && handler.MatchesSpell(holder.Event, spell))
+            {
+                CheckAndReady(holder, target, null);
+            }
+        }
+
+        ProcessEvents(target, null);
+    }
+
+    private void DispatchAll(EventAiTrigger trigger, Unit? invoker, Unit? sender)
+    {
+        EnsureDepth();
+        foreach (EventAiHolder holder in _holders)
+        {
+            if (holder.Handler is { } handler && handler.Trigger == trigger)
             {
                 CheckAndReady(holder, invoker, sender);
             }
@@ -324,14 +358,24 @@ public sealed class EventAiEngine
     private void ProcessEvents(Unit? invoker, Unit? sender)
     {
         int current = _depth;
-        EnsureDepth();
-        _depth++;
-        foreach (EventAiHolder holder in _ready[current].ToArray())
+        if (current >= _ready.Count)
         {
-            ProcessEvent(holder, invoker, sender);
+            return;
         }
 
-        _ready[_depth - 1].Clear();
+        List<EventAiHolder> ready = _ready[current];
+        if (ready.Count == 0)
+        {
+            return;
+        }
+
+        _depth++;
+        for (int i = 0; i < ready.Count; i++)
+        {
+            ProcessEvent(ready[i], invoker, sender);
+        }
+
+        ready.Clear();
         _depth--;
     }
 

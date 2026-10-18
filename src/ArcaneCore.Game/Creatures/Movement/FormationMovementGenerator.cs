@@ -28,6 +28,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
 
     private uint _leaderSplineId = uint.MaxValue;
     private bool _leaderWasMoving;
+    private bool _waitingForPath;
     private int _recheckMs;
     private CreatureHome? _resetPoint;
     private bool _following;
@@ -39,6 +40,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _leaderSplineId = uint.MaxValue;
+        _waitingForPath = false;
         _recheckMs = 0;
         _resetPoint = null;
         _following = true;
@@ -48,6 +50,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
     public void Resume(Creature creature, ICreatureMover mover)
     {
         _leaderSplineId = uint.MaxValue;
+        _waitingForPath = false;
         _recheckMs = 0;
         _following = true;
         Step(creature, mover, force: true);
@@ -88,8 +91,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
         bool leaderMoving = spline is not null;
         bool newLeg = leaderMoving && spline!.Id != _leaderSplineId;
         bool leaderStopped = !leaderMoving && _leaderWasMoving;
-        _leaderWasMoving = leaderMoving;
-        if (!force && !newLeg && !leaderStopped && (_recheckMs > 0 || creature.IsMoving))
+        if (!force && !newLeg && !leaderStopped && !_waitingForPath && (_recheckMs > 0 || creature.IsMoving))
         {
             return;
         }
@@ -102,10 +104,13 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
             IReadOnlyList<Vector3> toLeader = mover.FindPath(creature, leaderAt);
             if (toLeader.Count == 0)
             {
-                _recheckMs = 0; // the search budget is spent: ask again on the next update
+                _waitingForPath = true;
+                _recheckMs = 0; // the search budget is spent (or the path job is running): ask again on the next update
                 return;
             }
 
+            _waitingForPath = false;
+            _leaderWasMoving = leaderMoving;
             mover.MovePath(creature, toLeader, run: true, SplineFacing.None); // HandleMasterDistanceCheck
             return;
         }
@@ -115,8 +120,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
         bool run;
         if (leaderMoving)
         {
-            _leaderSplineId = spline!.Id;
-            IReadOnlyList<Vector3> points = spline.Points;
+            IReadOnlyList<Vector3> points = spline!.Points;
             Vector3 end = points[^1];
             Vector3 before = points.Count > 1 ? points[^2] : new Vector3(spline.StartX, spline.StartY, spline.StartZ);
             heading = Vector2.DistanceSquared(new Vector2(end.X, end.Y), new Vector2(before.X, before.Y)) > 0.0001f
@@ -133,6 +137,8 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
             run = false;
             if (Vector2.Distance(new Vector2(here.X, here.Y), new Vector2(destination.X, destination.Y)) <= Leeway)
             {
+                _waitingForPath = false;
+                _leaderWasMoving = false;
                 if (creature.IsMoving)
                 {
                     mover.StopMoving(creature);
@@ -155,8 +161,16 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
         IReadOnlyList<Vector3> path = mover.FindPath(creature, destination);
         if (path.Count == 0)
         {
-            _recheckMs = 0; // the search budget is spent: ask again on the next update
+            _waitingForPath = true;
+            _recheckMs = 0; // the search budget is spent (or the path job is running): ask again on the next update
             return;
+        }
+
+        _waitingForPath = false;
+        _leaderWasMoving = leaderMoving;
+        if (leaderMoving)
+        {
+            _leaderSplineId = spline!.Id;
         }
 
         if (Vector3.DistanceSquared(path[^1], here) > 0.01f)

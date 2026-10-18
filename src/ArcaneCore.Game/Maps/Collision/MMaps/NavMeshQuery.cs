@@ -311,6 +311,72 @@ public static class NavMeshQuery
         ArgumentNullException.ThrowIfNull(mesh);
         ArgumentNullException.ThrowIfNull(options);
         options.CancellationToken.ThrowIfCancellationRequested();
+        SearchScratch scratch = AcquireScratch(options);
+        scratch.Begin();
+        try
+        {
+            bool complete = Search(mesh, start, startPos, end, endPos, options, scratch);
+            return ([.. scratch.Corridor], complete);
+        }
+        finally
+        {
+            scratch.End();
+        }
+    }
+
+    /// <summary>
+    /// Runs <see cref="FindCorridor"/> and <see cref="StringPull"/> inside the per-thread <see cref="SearchScratch"/> buffers and
+    /// answers the resulting world-space waypoints (or <c>null</c> when the corridor is incomplete and partial paths are not allowed),
+    /// avoiding per-query corridor, LINQ portal-slice, and Recast corner list allocations.
+    /// </summary>
+    internal static List<Vector3>? FindWorldPath(
+        NavMesh mesh,
+        Vector3 worldStart,
+        NavPolyRef start,
+        Vector3 startPos,
+        NavPolyRef end,
+        Vector3 endPos,
+        Vector3 endRc,
+        PathOptions options,
+        out bool complete)
+    {
+        options.CancellationToken.ThrowIfCancellationRequested();
+        SearchScratch scratch = AcquireScratch(options);
+        scratch.Begin();
+        try
+        {
+            complete = Search(mesh, start, startPos, end, endPos, options, scratch);
+            if (!complete && !options.AllowPartial)
+            {
+                return null;
+            }
+
+            List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> corridor = scratch.Corridor;
+            Vector3 goal = complete ? endPos : corridor[^1].Poly.Tile.ClosestPointOnPoly(corridor[^1].Poly.Poly, endRc);
+            List<Vector3> corners = scratch.Corners;
+            StringPullCorridor(startPos, corridor, goal, corners);
+
+            var points = new List<Vector3>(Math.Max(2, corners.Count)) { worldStart };
+            for (int i = 1; i < corners.Count; i++)
+            {
+                points.Add(NavMeshFormat.ToWorld(corners[i]));
+            }
+
+            if (points.Count == 1)
+            {
+                points.Add(NavMeshFormat.ToWorld(goal));
+            }
+
+            return points;
+        }
+        finally
+        {
+            scratch.End();
+        }
+    }
+
+    private static SearchScratch AcquireScratch(PathOptions options)
+    {
         // The node list, index, closed flags, open queue and neighbour buffer are reused across queries on this thread (a bot query
         // grows them to up to 32 768 nodes); a nested query (a tile loader that paths) gets fresh ones.
         // A search with a large node pool (a far bot query) grows its index to tens of thousands of entries, and clearing a dictionary
@@ -328,15 +394,7 @@ public static class NavMeshQuery
             t_scratch ??= scratch;
         }
 
-        scratch.Begin();
-        try
-        {
-            return Search(mesh, start, startPos, end, endPos, options, scratch);
-        }
-        finally
-        {
-            scratch.End();
-        }
+        return scratch;
     }
 
     [ThreadStatic]
@@ -363,6 +421,8 @@ public static class NavMeshQuery
         public readonly Dictionary<long, int> Index = [];
         public readonly PriorityQueue<int, float> Open = new();
         public readonly List<NavNeighbour> Neighbours = [];
+        public readonly List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> Corridor = [];
+        public readonly List<Vector3> Corners = [];
         public bool InUse;
 
         public void Begin()
@@ -372,6 +432,8 @@ public static class NavMeshQuery
             Index.Clear();
             Open.Clear();
             Neighbours.Clear();
+            Corridor.Clear();
+            Corners.Clear();
         }
 
         public void End()
@@ -382,6 +444,8 @@ public static class NavMeshQuery
             Count = 0;
             Index.Clear();
             Neighbours.Clear();
+            Corridor.Clear();
+            Corners.Clear();
         }
 
         /// <summary>Appends a node (open, not closed) and answers its index.</summary>
@@ -403,7 +467,7 @@ public static class NavMeshQuery
     private static long NodeKey(NavMeshTile tile, int poly, byte crossSide)
         => ((long)tile.SearchId << 32) | ((long)(uint)poly << 8) | crossSide;
 
-    private static (List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> Corridor, bool Complete) Search(
+    private static bool Search(
         NavMesh mesh, NavPolyRef start, Vector3 startPos, NavPolyRef end, Vector3 endPos, PathOptions options, SearchScratch scratch)
     {
         Dictionary<long, int> index = scratch.Index;
@@ -530,7 +594,8 @@ public static class NavMeshQuery
         bool complete = goal >= 0;
         int count = scratch.Count;
         PathSearchCounters.RecordSearch(count, expansions, capped);
-        var corridor = new List<(NavPolyRef, Vector3, Vector3)>();
+        List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> corridor = scratch.Corridor;
+        corridor.Clear();
         Node[] nodes = scratch.Nodes;
         // A reopened node can leave a stale parent chain; never walk more links than there are nodes.
         for (int i = complete ? goal : best; i >= 0 && corridor.Count < count; i = nodes[i].Parent)
@@ -539,7 +604,7 @@ public static class NavMeshQuery
         }
 
         corridor.Reverse();
-        return (corridor, complete);
+        return complete;
     }
 
     /// <summary>The most polygons a random-point query gathers (a wander circle of a few yards touches a handful).</summary>
@@ -788,15 +853,13 @@ public static class NavMeshQuery
     public static List<Vector3> StringPull(Vector3 start, IReadOnlyList<(Vector3 Left, Vector3 Right)> portals, Vector3 end)
     {
         ArgumentNullException.ThrowIfNull(portals);
-        var all = new List<(Vector3 Left, Vector3 Right)>(portals.Count + 1);
-        all.AddRange(portals);
-        all.Add((end, end));
         var points = new List<Vector3> { start };
         Vector3 apex = start, left = start, right = start;
         int leftIndex = -1, rightIndex = -1;
-        for (int i = 0; i < all.Count; i++)
+        int portalCount = portals.Count;
+        for (int i = 0; i <= portalCount; i++)
         {
-            (Vector3 nl, Vector3 nr) = all[i];
+            (Vector3 nl, Vector3 nr) = i < portalCount ? portals[i] : (end, end);
 
             // Right side: tighten when the new right point moves inwards (counter-clockwise).
             if (NavMesh.Cross(apex, right, nr) >= 0)
@@ -837,6 +900,61 @@ public static class NavMeshQuery
 
         AddCorner(points, end);
         return points;
+    }
+
+    private static void StringPullCorridor(
+        Vector3 start,
+        List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> corridor,
+        Vector3 end,
+        List<Vector3> points)
+    {
+        points.Clear();
+        points.Add(start);
+        Vector3 apex = start, left = start, right = start;
+        int leftIndex = -1, rightIndex = -1;
+        int portalCount = Math.Max(0, corridor.Count - 1);
+        for (int i = 0; i <= portalCount; i++)
+        {
+            (Vector3 nl, Vector3 nr) = i < portalCount ? (corridor[i + 1].Left, corridor[i + 1].Right) : (end, end);
+
+            // Right side: tighten when the new right point moves inwards (counter-clockwise).
+            if (NavMesh.Cross(apex, right, nr) >= 0)
+            {
+                if (apex == right || NavMesh.Cross(apex, left, nr) < 0)
+                {
+                    right = nr;
+                    rightIndex = i;
+                }
+                else
+                {
+                    AddCorner(points, left);
+                    apex = right = left;
+                    rightIndex = leftIndex;
+                    i = leftIndex;
+                    continue;
+                }
+            }
+
+            // Left side: tighten when the new left point moves inwards (clockwise).
+            if (NavMesh.Cross(apex, left, nl) <= 0)
+            {
+                if (apex == left || NavMesh.Cross(apex, right, nl) > 0)
+                {
+                    left = nl;
+                    leftIndex = i;
+                }
+                else
+                {
+                    AddCorner(points, right);
+                    apex = left = right;
+                    leftIndex = rightIndex;
+                    i = rightIndex;
+                    continue;
+                }
+            }
+        }
+
+        AddCorner(points, end);
     }
 
     private static void AddCorner(List<Vector3> points, Vector3 point)

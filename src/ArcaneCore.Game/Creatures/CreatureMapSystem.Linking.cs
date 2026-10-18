@@ -20,16 +20,34 @@ public sealed partial class CreatureMapSystem
     /// <summary>The later creatures that share a spawn guid with the one in <see cref="_bySpawnGuid"/>, in the order added. Normally empty.</summary>
     private readonly Dictionary<uint, List<Creature>> _spawnGuidDuplicates = [];
 
+    /// <summary>The creatures in <see cref="_bySpawnGuid"/> grouped by their current <see cref="Creature.Entry"/>.</summary>
+    private readonly Dictionary<uint, List<Creature>> _byEntry = [];
+
+    /// <summary>The entry under which a creature in <see cref="_bySpawnGuid"/> is currently bucketed in <see cref="_byEntry"/>.</summary>
+    private readonly Dictionary<Creature, uint> _indexedEntry = [];
+
     /// <summary>The creatures whose link (own or by entry) carries FLAG_FOLLOW; stays empty unless the content has a follow link at all.</summary>
     private readonly HashSet<Creature> _followSlaves = [];
 
     /// <summary>
-    /// <see cref="FindTemplateMaster"/>'s answer per template-linked slave, null included. The answer depends only on which creatures stand
-    /// for which spawn guid and on their entries, so it holds until <see cref="IndexCreature"/>, <see cref="UnindexCreature"/> or
-    /// <see cref="RefreshFollowSlave"/> (an entry rewrite) runs, and each of them clears it. A slave whose master is dead or not loaded
-    /// rescanned every spawn of the map each tick before (6% of map work on live).
+    /// <see cref="FindTemplateMaster"/>'s answer per template-linked slave, null included, paired with the <c>MasterEntry</c> it searched for.
+    /// The answer for a given <c>MasterEntry</c> depends only on which creatures in <see cref="_bySpawnGuid"/> currently have that entry, so only
+    /// changes to that entry in <see cref="_byEntry"/> invalidate it. A slave whose master is dead or not loaded rescanned every spawn of the map
+    /// each tick before (6% of map work on live).
     /// </summary>
-    private readonly Dictionary<Creature, Creature?> _templateMasterCache = [];
+    private readonly TemplateMasterCache _templateMasterCache = new();
+    private readonly List<Creature> _templateCacheInvalidateScratch = [];
+
+    private sealed class TemplateMasterCache : Dictionary<Creature, (uint MasterEntry, Creature? Master)>
+    {
+        public bool NeedsEntrySync { get; set; }
+
+        public new void Clear()
+        {
+            base.Clear();
+            NeedsEntrySync = true;
+        }
+    }
 
     /// <summary>The creature_linking flags of a creature: its spawn's own link first, then its entry's on this map (CreatureLinkingMgr.cpp:310-326).</summary>
     private uint LinkFlags(Creature creature, out CreatureLink? link, out CreatureTemplateLink? template)
@@ -55,13 +73,105 @@ public sealed partial class CreatureMapSystem
 
     internal int SpawnDuplicateCount => _spawnGuidDuplicates.Count;
 
+    private void AddByEntry(Creature creature)
+    {
+        uint entry = creature.Entry;
+        _indexedEntry[creature] = entry;
+        if (!_byEntry.TryGetValue(entry, out List<Creature>? list))
+        {
+            _byEntry[entry] = list = [];
+        }
+
+        list.Add(creature);
+        InvalidateTemplateMasterCacheForMasterEntry(entry);
+    }
+
+    private void RemoveByEntry(Creature creature)
+    {
+        if (!_indexedEntry.Remove(creature, out uint entry))
+        {
+            return;
+        }
+
+        if (_byEntry.TryGetValue(entry, out List<Creature>? list))
+        {
+            list.Remove(creature);
+            if (list.Count == 0)
+            {
+                _byEntry.Remove(entry);
+            }
+        }
+
+        InvalidateTemplateMasterCacheForMasterEntry(entry);
+    }
+
+    private void SyncByEntry(Creature creature)
+    {
+        if (!_indexedEntry.TryGetValue(creature, out uint oldEntry))
+        {
+            return;
+        }
+
+        uint newEntry = creature.Entry;
+        if (oldEntry == newEntry)
+        {
+            return;
+        }
+
+        if (_byEntry.TryGetValue(oldEntry, out List<Creature>? oldList))
+        {
+            oldList.Remove(creature);
+            if (oldList.Count == 0)
+            {
+                _byEntry.Remove(oldEntry);
+            }
+        }
+
+        _indexedEntry[creature] = newEntry;
+        if (!_byEntry.TryGetValue(newEntry, out List<Creature>? newList))
+        {
+            _byEntry[newEntry] = newList = [];
+        }
+
+        newList.Add(creature);
+        InvalidateTemplateMasterCacheForMasterEntry(oldEntry);
+        InvalidateTemplateMasterCacheForMasterEntry(newEntry);
+    }
+
+    private void InvalidateTemplateMasterCacheForMasterEntry(uint masterEntry)
+    {
+        if (_templateMasterCache.Count == 0)
+        {
+            return;
+        }
+
+        _templateCacheInvalidateScratch.Clear();
+        foreach ((Creature slave, (uint cachedMasterEntry, _)) in _templateMasterCache)
+        {
+            if (cachedMasterEntry == masterEntry)
+            {
+                _templateCacheInvalidateScratch.Add(slave);
+            }
+        }
+
+        foreach (Creature slave in _templateCacheInvalidateScratch)
+        {
+            _templateMasterCache.Remove(slave);
+        }
+
+        _templateCacheInvalidateScratch.Clear();
+    }
+
     /// <summary>Record a creature that has just entered <c>_creatures</c> in the spawn-guid index and, when it follows, the follower set.</summary>
     internal void IndexCreature(Creature creature)
     {
-        _templateMasterCache.Clear();
         if (creature.Spawn is { } spawn)
         {
-            if (!_bySpawnGuid.TryAdd(spawn.Guid, creature) && !ReferenceEquals(_bySpawnGuid[spawn.Guid], creature))
+            if (_bySpawnGuid.TryAdd(spawn.Guid, creature))
+            {
+                AddByEntry(creature);
+            }
+            else if (!ReferenceEquals(_bySpawnGuid[spawn.Guid], creature))
             {
                 if (!_spawnGuidDuplicates.TryGetValue(spawn.Guid, out List<Creature>? later))
                     _spawnGuidDuplicates[spawn.Guid] = later = [];
@@ -83,17 +193,20 @@ public sealed partial class CreatureMapSystem
     /// <summary>Drop a creature that is leaving <c>_creatures</c> from the indexes; a later creature of the same spawn guid takes its place.</summary>
     internal void UnindexCreature(Creature creature)
     {
-        _templateMasterCache.Clear();
+        _templateMasterCache.Remove(creature);
         _followSlaves.Remove(creature);
         _linkedFollowerMaster.Remove(creature.Guid);
         if (creature.Spawn is not { } spawn) return;
         if (_bySpawnGuid.TryGetValue(spawn.Guid, out Creature? indexed) && ReferenceEquals(indexed, creature))
         {
+            RemoveByEntry(creature);
             if (_spawnGuidDuplicates.TryGetValue(spawn.Guid, out List<Creature>? later))
             {
-                _bySpawnGuid[spawn.Guid] = later[0];
+                Creature promoted = later[0];
+                _bySpawnGuid[spawn.Guid] = promoted;
                 later.RemoveAt(0);
                 if (later.Count == 0) _spawnGuidDuplicates.Remove(spawn.Guid);
+                AddByEntry(promoted);
             }
             else
             {
@@ -112,7 +225,8 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     internal void RefreshFollowSlave(Creature creature)
     {
-        _templateMasterCache.Clear();
+        _templateMasterCache.Remove(creature);
+        SyncByEntry(creature);
         if (!_content.HasFollowLinks || !_creatures.TryGetValue(creature.Guid, out Creature? member) || !ReferenceEquals(member, creature)) return;
         if ((LinkFlags(creature, out _, out _) & LinkFollow) != 0) _followSlaves.Add(creature);
         else _followSlaves.Remove(creature);
@@ -123,7 +237,7 @@ public sealed partial class CreatureMapSystem
     /// make a living, out-of-combat slave follow its master at the distance and angle of their spawn points; vmangos does it when the master
     /// respawns and when the slave goes home after an evade (MotionMaster::MoveTargetedHome). ArcaneCore checks on each map tick instead:
     /// a slave without a follow generator re-follows, and one whose master is gone or dead is released.
-    /// Allocation-free: it walks only the follow slaves and finds masters through the spawn-guid index.
+    /// Allocation-free: it walks only the follow slaves and finds masters through the spawn-guid and entry indexes.
     /// </summary>
     internal void UpdateLinkedFollowers()
     {
@@ -150,10 +264,16 @@ public sealed partial class CreatureMapSystem
             }
             else
             {
-                if (!_templateMasterCache.TryGetValue(slave, out master))
+                if (!_templateMasterCache.TryGetValue(slave, out (uint MasterEntry, Creature? Master) cached)
+                    || cached.MasterEntry != template!.MasterEntry
+                    || (cached.Master is { } prev && prev.Entry != template.MasterEntry))
                 {
                     master = FindTemplateMaster(slave, spawn, template!);
-                    _templateMasterCache[slave] = master;
+                    _templateMasterCache[slave] = (template!.MasterEntry, master);
+                }
+                else
+                {
+                    master = cached.Master;
                 }
             }
 
@@ -182,19 +302,44 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// The master of a template-linked slave among the creatures standing for a spawn guid: one of the master entry within the search range.
     /// vmangos LoadFromDB requires it to be unique when search_range is zero (CreatureLinkingMgr.cpp:233-250); otherwise the nearest wins
-    /// (equal distances: the one met first, in <see cref="_bySpawnGuid"/> slot order, which is not insertion order once entries were removed).
+    /// (equal distances: the one met first, in <see cref="_byEntry"/> slot order).
     /// Deviations from vmangos that predate the spawn-guid index and are kept: vmangos TryFollowMaster takes the first registered master in
     /// range, not the nearest (CreatureLinkingMgr.cpp:720-729), and it checks the range-0 uniqueness once at load, over the database rows,
     /// where this counts the creatures currently loaded on the map.
     /// </summary>
     private Creature? FindTemplateMaster(Creature slave, CreatureSpawn spawn, CreatureTemplateLink template)
     {
+        if (_templateMasterCache.NeedsEntrySync)
+        {
+            _templateMasterCache.NeedsEntrySync = false;
+            foreach (Creature indexed in _bySpawnGuid.Values)
+            {
+                SyncByEntry(indexed);
+            }
+        }
+        else
+        {
+            SyncByEntry(slave);
+        }
+
+        if (!_byEntry.TryGetValue(template.MasterEntry, out List<Creature>? candidates) || candidates.Count == 0)
+        {
+            return null;
+        }
+
         Creature? best = null;
         float bestDistance = 0;
-        foreach (Creature candidate in _bySpawnGuid.Values)
+        for (int i = 0; i < candidates.Count; i++)
         {
-            if (ReferenceEquals(candidate, slave) || candidate.Entry != template.MasterEntry
-                || !InSearchRange(spawn, candidate.Spawn!, template.SearchRange)) continue;
+            Creature candidate = candidates[i];
+            if (candidate.Entry != template.MasterEntry)
+            {
+                SyncByEntry(candidate);
+                i--;
+                continue;
+            }
+
+            if (ReferenceEquals(candidate, slave) || !InSearchRange(spawn, candidate.Spawn!, template.SearchRange)) continue;
             if (template.SearchRange <= 0)
             {
                 if (best is not null) return null; // not unique

@@ -1100,25 +1100,10 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return PathResult.StraightLine(start, end, flier ? PathType.Normal | PathType.NotUsingPath | PathType.FlyPath : PathType.NoPath);
         }
 
-        (List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> corridor, bool complete) =
-            NavMeshQuery.FindCorridor(mesh, startPoly, startOnMesh, endPoly, endOnMesh, options);
-        if (!complete && !options.AllowPartial)
+        List<Vector3>? points = NavMeshQuery.FindWorldPath(mesh, start, startPoly, startOnMesh, endPoly, endOnMesh, endRc, options, out bool complete);
+        if (points is null)
         {
             return PathResult.StraightLine(start, end, PathType.NoPath);
-        }
-
-        Vector3 goal = complete ? endOnMesh : corridor[^1].Poly.Tile.ClosestPointOnPoly(corridor[^1].Poly.Poly, endRc);
-        List<Vector3> corners = NavMeshQuery.StringPull(startOnMesh, [.. corridor.Skip(1).Select(c => (c.Left, c.Right))], goal);
-
-        var points = new List<Vector3>(corners.Count) { start };
-        for (int i = 1; i < corners.Count; i++)
-        {
-            points.Add(NavMeshFormat.ToWorld(corners[i]));
-        }
-
-        if (points.Count == 1)
-        {
-            points.Add(NavMeshFormat.ToWorld(goal));
         }
 
         PathType type = complete && !endFar ? PathType.Normal : PathType.Incomplete;
