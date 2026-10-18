@@ -62,16 +62,19 @@ public sealed class ScourgeNecropolisCommuniqueTargetTests
     }
 
     [Fact]
-    public void TargetEightOfTheRealCommuniqueSelectsNoProxyTodayEngineGap()
+    public void TargetEightOfTheRealCommunique_HitsTheListedProxiesAroundTheDestination_AndNotAnUnlistedCreature()
     {
-        (PetTestKit kit, List<Unit> hit, Player caster, _, _, _) =
+        (PetTestKit kit, List<Unit> hit, Player caster, Creature near, Creature other, Creature unlisted) =
             Setup(SpellImplicitTarget.LocationCasterDest, (SpellImplicitTarget)ScriptAoeAtDestLoc);
         using (kit)
         {
             Assert.Equal(SpellCastResult.CastOk, kit.Cast(caster, ScourgeInvasionCatalog.CommuniqueNecropolisToProxies));
 
-            // UNVERIFIED-in-engine / GAP: TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC (8) has no selector, so the 28373 hit never reaches a proxy's AI.
-            Assert.Empty(hit);
+            // TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC (8) selects the spell_script_target creatures in the radius at the destination
+            // (16c93a7d; this test asserted the old gap, no hit at all).
+            Assert.Contains(near, hit);
+            Assert.Contains(other, hit);
+            Assert.DoesNotContain(unlisted, hit);
         }
     }
 }
