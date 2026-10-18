@@ -111,12 +111,39 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return 0;
-        return state.Quests.Statuses.OrderBy(row => row.Key)
-            .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
-                && services.IsRewardable(row.Key) && !IsRefused(row.Key) && !IsGiverWait(row.Key))
-            .Where(row => services.Quests.CreatureEndersOf(row.Key)
-                .Any(entry => content.GetSpawns(player.MapId, entry).Any(spawn => CanReturnToEnder(player, spawn))))
-            .Select(row => row.Key).FirstOrDefault();
+        // Called on every brain update: gather the completed, unrewarded quests first (usually none), so the sort and the
+        // ender search only run when there is something to return. Same answer as the former OrderBy chain (lowest id first).
+        List<uint>? candidates = null;
+        foreach (KeyValuePair<uint, QuestStatusData> row in state.Quests.Statuses)
+        {
+            if (row.Value is { Status: QuestStatus.Complete, Rewarded: false })
+            {
+                (candidates ??= []).Add(row.Key);
+            }
+        }
+
+        if (candidates is null) return 0;
+        candidates.Sort();
+        foreach (uint questId in candidates)
+        {
+            if (services.IsRewardable(questId) && !IsRefused(questId) && !IsGiverWait(questId) && HasReachableEnder(player, services, content, questId))
+                return questId;
+        }
+
+        return 0;
+    }
+
+    private bool HasReachableEnder(Player player, QuestNpcServices services, CreatureContent content, uint questId)
+    {
+        foreach (uint entry in services.Quests.CreatureEndersOf(questId))
+        {
+            foreach (CreatureSpawn spawn in content.GetSpawns(player.MapId, entry))
+            {
+                if (CanReturnToEnder(player, spawn)) return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

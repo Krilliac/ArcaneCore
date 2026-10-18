@@ -77,9 +77,31 @@ public sealed class AuraStateService
             return;
         }
 
-        foreach (SpellAuraHolder holder in _spells.GetAuras(unit).Where(h => !h.IsRemoved && h.Spell.CasterAuraState == state).ToArray())
+        RemoveCasterStateAuras(unit, state);
+    }
+
+    // Kept out of ModifyAuraState: a lambda capturing 'state' there makes the compiler allocate its closure on every call, and
+    // UpdateHealthState calls it every tick for every targetable unit (~25 MB/min on live). Here it allocates only when the
+    // state is actually removed.
+    private void RemoveCasterStateAuras(Unit unit, AuraState state)
+    {
+        List<uint>? remove = null;
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
         {
-            _spells.RemoveAuras(unit, holder.Spell.Id);
+            if (!holder.IsRemoved && holder.Spell.CasterAuraState == state)
+            {
+                (remove ??= []).Add(holder.Spell.Id);
+            }
+        }
+
+        if (remove is null)
+        {
+            return;
+        }
+
+        foreach (uint spellId in remove)
+        {
+            _spells.RemoveAuras(unit, spellId);
         }
     }
 

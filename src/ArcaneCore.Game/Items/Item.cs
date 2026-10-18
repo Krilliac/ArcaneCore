@@ -385,6 +385,9 @@ public sealed class Container : Item
         }
     }
 
+    /// <summary>The item in bag slot <paramref name="index"/> (0..<see cref="Size"/>-1), for allocation-free walks.</summary>
+    internal Item? SlotAt(int index) => _slots[index];
+
     public IEnumerable<Item> Items
     {
         get

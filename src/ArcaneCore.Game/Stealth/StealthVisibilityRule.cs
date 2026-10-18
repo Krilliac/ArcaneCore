@@ -69,8 +69,7 @@ public sealed class StealthVisibilityRule : IVisibilityRule
         }
 
         // Hunter's Mark makes the target always visible to its caster.
-        if (_spells.GetAuras(unit).Any(h => !h.IsRemoved && h.CasterGuid == viewer.Guid
-            && h.Auras.Any(a => a is not null && a.Type == AuraType.ModStalked)))
+        if (IsStalkedBy(unit, viewer))
         {
             return true;
         }
@@ -120,5 +119,28 @@ public sealed class StealthVisibilityRule : IVisibilityRule
         }
 
         return viewer.Map is not { } map || map.Collision.IsWithinLineOfSight(eye, unit);
+    }
+
+    // No lambdas here: capturing 'viewer' in CanSee made the compiler allocate a closure on every visibility check (~19 MB/min on live).
+    private bool IsStalkedBy(Unit unit, Player viewer)
+    {
+        ObjectGuid guid = viewer.Guid;
+        foreach (SpellAuraHolder h in _spells.GetAuras(unit))
+        {
+            if (h.IsRemoved || h.CasterGuid != guid)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? a in h.Auras)
+            {
+                if (a is not null && a.Type == AuraType.ModStalked)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

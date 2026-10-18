@@ -74,6 +74,7 @@ public sealed class NavMeshTile
     private readonly Vector3[] _polyCenter;
     private readonly Vector3[] _polyHigh;
     private readonly BvNode[]? _bv;
+    private readonly int _bvCount; // nodes of _bv in use: the generator writes 2n slots for a 2n-1 node tree, kept rather than copied (LOH)
     private readonly float _bvQuantFactor;
     private readonly int _bvSlack;
     // Lazily built caches. A search fills them, and searches may run on several threads at once (path jobs beside the world thread), so
@@ -118,7 +119,8 @@ public sealed class NavMeshTile
 
         if (TryVerifyBvTree(bvNodes, bvQuantFactor, out int slack, out int used))
         {
-            _bv = used == bvNodes.Length ? bvNodes : bvNodes[..used];
+            _bv = bvNodes;
+            _bvCount = used;
             _bvQuantFactor = bvQuantFactor;
             _bvSlack = slack;
         }
@@ -132,7 +134,7 @@ public sealed class NavMeshTile
     internal bool HasBvTree => _bv is not null;
 
     /// <summary>Bytes the BV tree adds to this tile (16 per node), 0 when it is not kept.</summary>
-    internal int BvTreeBytes => (_bv?.Length ?? 0) * 16;
+    internal int BvTreeBytes => (_bv is null ? 0 : _bvCount) * 16;
 
     /// <summary>Detour tile coordinates (header x, y): the key neighbours are found by.</summary>
     public int X { get; }
@@ -488,7 +490,8 @@ public sealed class NavMeshTile
             int minY = (Quantize(low.Y, BoundLow.Y, BoundHigh.Y, f) & ~1) - s, maxY = (Quantize(high.Y, BoundLow.Y, BoundHigh.Y, f) | 1) + s;
             int minZ = (Quantize(low.Z, BoundLow.Z, BoundHigh.Z, f) & ~1) - s, maxZ = (Quantize(high.Z, BoundLow.Z, BoundHigh.Z, f) | 1) + s;
             int node = 0;
-            while (node < bv.Length)
+            int count = _bvCount;
+            while (node < count)
             {
                 ref readonly BvNode n = ref bv[node];
                 bool overlap = minX <= n.MaxX && maxX >= n.MinX && minY <= n.MaxY && maxY >= n.MinY && minZ <= n.MaxZ && maxZ >= n.MinZ;

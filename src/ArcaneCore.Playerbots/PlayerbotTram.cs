@@ -532,9 +532,7 @@ internal static class PlayerbotTram
 
                 if (Standing(system, car, 0) is { } stop && AtEnd(stop, trip.To, here) && trip.LeftPlatform)
                 {
-                    Vector3? off = Sides(map, car, stop, trip.To.Landing.Z)
-                        .OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(trip.To.ExitCentre)))
-                        .Select(s => (Vector3?)s).FirstOrDefault();
+                    Vector3? off = NearestSide(map, car, stop, trip.To.Landing.Z, trip.To.ExitCentre);
                     if (off is { } ground && PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation))
                     {
                         Enter(trip, TramStage.ToExit, now);
@@ -901,6 +899,26 @@ internal static class PlayerbotTram
     }
 
     /// <summary>The platform spots on both sides of a car at <paramref name="at"/>, where the floor is level with <paramref name="floorZ"/>.</summary>
+    // Out of Pump on purpose: a lambda there capturing 'trip' made the compiler allocate a closure on every Pump call for every
+    // bot (~16 MB/min on live), tram rider or not. First nearest wins, as OrderBy's stable sort did.
+    private static Vector3? NearestSide(Map map, GameObject car, Vector3 stop, float floorZ, Vector3 exitCentre)
+    {
+        Vector3? best = null;
+        float bestDistance = float.MaxValue;
+        Vector2 target = TramNetwork.Flat(exitCentre);
+        foreach (Vector3 side in Sides(map, car, stop, floorZ))
+        {
+            float d = Vector2.DistanceSquared(TramNetwork.Flat(side), target);
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                best = side;
+            }
+        }
+
+        return best;
+    }
+
     private static IEnumerable<Vector3> Sides(Map map, GameObject car, Vector3 at, float floorZ)
     {
         // The car's length runs along its local x axis (TransportAnimation moves it along x); its sides are along local y.

@@ -76,9 +76,13 @@ internal static class PlayerbotAreaTriggers
     }
 
     /// <summary>The grid of the area triggers on <paramref name="mapId"/> (cached like <see cref="OnMap"/>).</summary>
+    // Separate so Index allocates nothing on a cache hit: a lambda capturing 'mapId' in Index cost a closure per call (~11 MB/min on live).
+    private static PlayerbotTriggerIndex BuildIndex(IReadOnlyCollection<AreaTriggerTemplate> source, uint mapId)
+        => new(source.Where(t => t.MapId == mapId));
+
     internal static PlayerbotTriggerIndex Index(WorldMaps maps, uint mapId)
     {
-        MapCache cache = Caches.GetValue(maps, _ => new MapCache());
+        MapCache cache = Caches.GetValue(maps, static _ => new MapCache());
         IReadOnlyCollection<AreaTriggerTemplate> source = maps.AreaTriggers;
         if (!ReferenceEquals(cache.Source, source))
         {
@@ -89,7 +93,7 @@ internal static class PlayerbotAreaTriggers
 
         if (!cache.ByMap.TryGetValue(mapId, out PlayerbotTriggerIndex? index))
         {
-            index = new PlayerbotTriggerIndex(source.Where(t => t.MapId == mapId));
+            index = BuildIndex(source, mapId);
             cache.ByMap[mapId] = index;
         }
 

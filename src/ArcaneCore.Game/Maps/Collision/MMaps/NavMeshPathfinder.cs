@@ -361,9 +361,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
 
     /// <summary>
     /// The most navigation tiles kept loaded per map for queries with <see cref="PathOptions.LoadTiles"/> beyond those the grids
-    /// hold; the one used longest ago is released first. A tile is about a megabyte on disk.
+    /// hold; the one used longest ago is released first. A tile is about a megabyte on disk. 56 rather than 32: with hundreds of
+    /// bots pathing across a continent 32 thrashed (live: ~30 tile re-parses a minute, each a few large-object-heap arrays, which
+    /// fragmented the LOH; LS-001). It stays under 64 so a single row of a map's tile grid can still exceed it in tests.
     /// </summary>
-    public const int MaxOnDemandTiles = 32;
+    public const int MaxOnDemandTiles = 56;
 
     /// <summary>The most tiles one query may read (<see cref="PathOptions.LoadTiles"/>).</summary>
     public const int MaxTilesPerQuery = 12;

@@ -101,28 +101,83 @@ public sealed partial class PlayerInventory
     }
 
     /// <summary>Every item in the player's own slots (buyback excluded, as vmangos GetItemByGuid/GetItemCount), then every item inside bags.</summary>
-    public IEnumerable<Item> AllItems
-    {
-        get
-        {
-            for (int slot = 0; slot < _items.Length; slot++)
-            {
-                if (_items[slot] is { } item && !IsBuybackSlot((byte)slot))
-                {
-                    yield return item;
-                }
-            }
+    public AllItemsView AllItems => new(this);
 
-            foreach (Item? item in _items)
+    /// <summary>
+    /// Every stored item (inventory slots except buyback, then each bag's contents), as <see cref="AllItems"/> walks it. A struct
+    /// so a foreach over it allocates nothing: the former iterator was one heap object per walk, and bots walk it constantly
+    /// (GetItemCount, item maintenance). LINQ over it still works through <see cref="IEnumerable{T}"/>.
+    /// </summary>
+    public readonly struct AllItemsView(PlayerInventory inventory) : IEnumerable<Item>
+    {
+        public Enumerator GetEnumerator() => new(inventory._items);
+
+        IEnumerator<Item> IEnumerable<Item>.GetEnumerator() => GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>The <see cref="AllItemsView"/> walk: phase 1 the slots, phase 2 each bag's slots in slot order.</summary>
+    public struct Enumerator(Item?[] items) : IEnumerator<Item>
+    {
+        private int _slot = -1;
+        private int _inner = -1;
+        private bool _bags;
+
+        public Item Current { get; private set; } = null!;
+
+        readonly object System.Collections.IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            if (!_bags)
             {
-                if (item is Container bag)
+                while (++_slot < items.Length)
                 {
-                    foreach (Item inner in bag.Items)
+                    if (items[_slot] is { } item && !IsBuybackSlot((byte)_slot))
                     {
-                        yield return inner;
+                        Current = item;
+                        return true;
                     }
                 }
+
+                _bags = true;
+                _slot = -1;
             }
+
+            while (true)
+            {
+                if (_slot >= 0 && items[_slot] is Container bag)
+                {
+                    while (++_inner < bag.Size)
+                    {
+                        if (bag.SlotAt(_inner) is { } inner)
+                        {
+                            Current = inner;
+                            return true;
+                        }
+                    }
+                }
+
+                if (++_slot >= items.Length)
+                {
+                    _slot = items.Length;
+                    return false;
+                }
+
+                _inner = -1;
+            }
+        }
+
+        public void Reset()
+        {
+            _slot = -1;
+            _inner = -1;
+            _bags = false;
+        }
+
+        public readonly void Dispose()
+        {
         }
     }
 
