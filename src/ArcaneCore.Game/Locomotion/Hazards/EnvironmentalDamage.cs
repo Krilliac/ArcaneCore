@@ -77,21 +77,32 @@ public static class EnvironmentalDamage
     /// <summary>
     /// Hurt the player. Nothing happens to a dead player or a game master. Immunity ends it without a packet; fire/lava
     /// and slime are reduced by the mitigation (vmangos subtracts absorb, and resist when it is positive; a negative
-    /// resist adds to the damage). The log goes to the player and the observers, the damage is dealt as self damage (no
-    /// combat, threat or PvP flag), and a player who dies loses 10% durability on the worn items, followed by the empty
-    /// SMSG_DURABILITY_DAMAGE_DEATH ("Confirmed on classic that dying from lava, fatigue and drowning causes durability
-    /// loss"). Returns the damage dealt.
+    /// resist adds to the damage). A player on a taxi flight, or a priest in the Spirit of Redemption, then takes none of
+    /// it and the log shows it absorbed (<see cref="MapCombat.DealDamageMods"/>, Player.cpp:756). The log goes to the player
+    /// and the observers, the damage is dealt as self damage (no combat, threat or PvP flag), and a player who dies loses 10%
+    /// durability on the worn items, followed by the empty SMSG_DURABILITY_DAMAGE_DEATH ("Confirmed on classic that dying from
+    /// lava, fatigue and drowning causes durability loss"). The mitigation is the one registered for <paramref name="world"/>.
+    /// Returns the damage dealt.
     /// </summary>
     public static uint Apply(WorldRuntime world, Player player, EnvironmentalDamageType type, uint damage)
     {
         ArgumentNullException.ThrowIfNull(world);
+        return Apply(player, type, damage, LocomotionEnvironment.MitigationFor(world));
+    }
+
+    /// <summary>
+    /// <see cref="Apply(WorldRuntime, Player, EnvironmentalDamageType, uint)"/> with the immunity, absorb and resist of
+    /// <paramref name="mitigation"/>: the spell system's SPELL_EFFECT_ENVIRONMENTAL_DAMAGE passes its own.
+    /// </summary>
+    public static uint Apply(Player player, EnvironmentalDamageType type, uint damage, IEnvironmentalDamageMitigation mitigation)
+    {
         ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(mitigation);
         if (!player.IsAlive || player.IsGameMaster || player.Map is not { } map)
         {
             return 0;
         }
 
-        IEnvironmentalDamageMitigation mitigation = LocomotionEnvironment.MitigationFor(world);
         EnvironmentalSchool? school = type switch
         {
             EnvironmentalDamageType.Lava or EnvironmentalDamageType.Fire => EnvironmentalSchool.Fire,
@@ -121,6 +132,9 @@ public static class EnvironmentalDamage
         damage += bonus;
         uint malus = resist > 0 ? absorb + (uint)resist : absorb;
         damage = damage <= malus ? 0 : damage - malus;
+
+        // DealDamageMods(this, damage, &absorb) before the log (Player.cpp:756-758).
+        map.Combat.DealDamageMods(player, player, ref damage, ref absorb);
 
         CombatPackets.SendToSet(player, WorldOpcode.SmsgEnvironmentaldamagelog, BuildLog(player.Guid.Value, type, damage, absorb, resist));
 

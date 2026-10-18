@@ -172,8 +172,22 @@ immune to the school by any school immunity absorbs all of it (`:1929-1933`); ot
 resist (`:1938-1953`, `SpellCaster.cpp:882-925`: no level difference, its own MOD_TARGET_RESISTANCE auras count, a
 vulnerability adds damage; `ISchoolResistRoll` on `VanillaSpellCombatRules`, the chance and outcome of a direct spell
 hit), and `SpellSystem.AbsorbDamage` (school absorbs, mana shields, damage splitting) takes the rest. A world with no
-registration keeps `NoEnvironmentalMitigation`, which mitigates nothing. `DealDamageMods` (`:763`) is not ported: it
-only changes damage for GM-like invulnerability states and game masters are excluded already.
+registration keeps `NoEnvironmentalMitigation`, which mitigates nothing. After the mitigation and before the log,
+`MapCombat.DealDamageMods` (`Combat/MapCombat.DamageMods.cs`; vmangos `SpellCaster::DealDamageMods`,
+`SpellCaster.cpp:1774-1787`, called at `Player.cpp:756` with the player on both sides) zeroes the damage of a player on a
+taxi flight (`UnitFlags.TaxiFlight`) or of a priest under Spirit of Redemption (aura 27827, asked of the map's spell
+system) and adds it to the absorb, so the log shows 0 damage and the whole hit absorbed. Its other clauses (a dead
+victim, an evading creature) cannot apply to a living player. Only environmental damage calls it so far: vmangos also
+runs it for melee, spell, periodic, damage-shield, split and proc damage, which do not here.
+
+**The spell effect:** `SPELL_EFFECT_ENVIRONMENTAL_DAMAGE` (`SpellSystem.EffectEnvironmentalDamage`,
+`Spells/SpellSystem.Combat.cs`; vmangos `Spell::EffectEnvironmentalDMG`, `SpellEffects.cpp:286-304`) sends a player target
+through `EnvironmentalDamage.Apply` as `DAMAGE_FIRE`, whatever the spell's school (`:292-295`), with the spell system's own
+`SpellEnvironmentalMitigation`: fire immunity, resist and absorbs, `SMSG_ENVIRONMENTAL_DAMAGE_LOG` (no
+`SMSG_SPELLNONMELEEDAMAGELOG`), self damage that never crits, and a death that costs 10% durability even when another
+player cast the spell. Any other unit takes no damage: the spell's school is resisted and absorbed with the spell
+(shields are spent) and the caster's set gets `SMSG_SPELLNONMELEEDAMAGELOG` with what is left (`:296-303`,
+`SpellCaster.cpp:1098-1104`).
 ## Slice 4: fall-damage (delivered)
 
 `FallObserver` (`Locomotion/Falling/FallObserver.cs`, `[MovementObserver(Order = 20)]`, a `Before` observer because

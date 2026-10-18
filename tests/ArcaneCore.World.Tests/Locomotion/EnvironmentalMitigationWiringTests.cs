@@ -20,6 +20,7 @@ public sealed class EnvironmentalMitigationWiringTests
     private const uint FireWard = 990_603;
     private const uint PhysicalTakenMinus50 = 990_604;
     private const uint FireTakenMinus50 = 990_605;
+    private const uint NatureFlames = 990_606;
 
     private static SpellInfo SelfAura(uint id, AuraType type, int amount, uint misc) => new()
     {
@@ -32,7 +33,20 @@ public sealed class EnvironmentalMitigationWiringTests
         }],
     };
 
-    /// <summary>The online player and the daemon's spell system, whose store now also holds the test auras.</summary>
+    /// <summary>A nature-school SPELL_EFFECT_ENVIRONMENTAL_DAMAGE of 100 on the caster.</summary>
+    private static SpellInfo SelfFlames(uint id) => new()
+    {
+        Id = id, Name = $"Spell {id}", RangeIndex = SpellConstants.RangeIndexSelfOnly, Range = new SpellRange(0, 0), School = SpellSchool.Nature,
+        Effects = [new SpellEffectInfo
+        {
+            Effect = SpellEffectName.EnvironmentalDamage, BasePoints = 99, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitCaster,
+        }],
+    };
+
+    /// <summary>
+    /// The online player and the daemon's spell system, whose store now also holds the test auras, the nature flames and a Spirit of
+    /// Redemption reduced to a dummy aura (the rule only asks for the aura, SpellCaster.cpp:1781).
+    /// </summary>
     private static async Task<(Player Player, SpellSystem Spells)> PrepareAsync(WorldTestHost host)
     {
         Player player = await host.PlayerAsync("Lavawalker");
@@ -41,7 +55,9 @@ public sealed class EnvironmentalMitigationWiringTests
         uint physical = SpellSchoolMasks.Of(SpellSchool.Normal);
         await host.OnWorldAsync(() => spells.Store = new SpellStore(
             [
-                .. spells.Store.All,
+                .. spells.Store.All.Where(s => s.Id != SpellSystem.SpiritOfRedemptionSpell),
+                SelfAura(SpellSystem.SpiritOfRedemptionSpell, AuraType.Dummy, 0, 0),
+                SelfFlames(NatureFlames),
                 SelfAura(FireImmunity, AuraType.SchoolImmunity, 0, fire),
                 SelfAura(PhysicalImmunity, AuraType.SchoolImmunity, 0, physical),
                 SelfAura(FireWard, AuraType.SchoolAbsorb, 30, fire),
@@ -153,6 +169,42 @@ public sealed class EnvironmentalMitigationWiringTests
         });
 
         Assert.Equal((1.0f, 0.5f), multiplier); // GetTotalAuraMultiplierByMiscMask(MOD_DAMAGE_PERCENT_TAKEN, NORMAL), Player.cpp:20854
+    }
+
+    [Fact]
+    public async Task AnEnvironmentalDamageSpell_HurtsThePlayerAsFire_WhateverItsSchool()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("LAVA", "Lavawalker");
+        (Player player, SpellSystem spells) = await PrepareAsync(host);
+
+        (uint Health, bool WardLeft) result = await host.OnWorldAsync(() =>
+        {
+            Grant(spells, player, FireWard);
+            Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, NatureFlames, SpellCastTargets.ForSelf(), triggered: true));
+            return (player.Health, spells.HasAura(player, FireWard));
+        });
+
+        // Spell::EffectEnvironmentalDMG sends a player through EnvironmentalDamage(DAMAGE_FIRE) (SpellEffects.cpp:292-295): the fire ward absorbs 30.
+        Assert.Equal((930u, false), result);
+    }
+
+    [Fact]
+    public async Task ASpiritOfRedemptionPriest_TakesNoLava()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("LAVA", "Lavawalker");
+        (Player player, SpellSystem spells) = await PrepareAsync(host);
+
+        (uint Lava, uint Health) result = await host.OnWorldAsync(() =>
+        {
+            Grant(spells, player, SpellSystem.SpiritOfRedemptionSpell);
+            player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Priest);
+            return (EnvironmentalDamage.Apply(host.World, player, EnvironmentalDamageType.Lava, 100), player.Health);
+        });
+
+        // DealDamageMods (Player.cpp:756; SpellCaster.cpp:1781-1785) needs the daemon's spell system on the map's combat.
+        Assert.Equal((0u, 1000u), result);
     }
 
     [Fact]
