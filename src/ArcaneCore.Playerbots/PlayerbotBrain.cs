@@ -3506,7 +3506,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             BlockExploreCell(chosen);
             AbandonRoute();
             PlayerbotMovementControl.Stop(_session, player);
-            return true; // One path query this think. The next think tries another cell.
+            // The refused cell is blocked and the next think tries another, but this think walks a short wander leg (taken even when the
+            // optional path budget is spent). Returning true here left the bot standing: one refused cell per think, a think every ~13 s,
+            // until the stall watch gave Explore up (live 2026-10-17 on the 20:08 pack: ~140 Explore stalls/h, phase explore-plan, moving:no).
+            return false;
         }
         _goal = PlayerbotGoalKind.Explore;
         TargetEntry = chosen.Spawn.Entry;
