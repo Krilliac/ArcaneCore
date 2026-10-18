@@ -77,6 +77,7 @@ How to read the tables:
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
+- [`World:Control:MapFeed`](#worldcontrolmapfeed)
 - [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
 - [`World:Duel`](#worldduel)
@@ -1150,6 +1151,15 @@ How to read the tables:
 |---|---|---|---|---|
 | `World:Console:Enabled` | `bool` | `true` | - | Accept typed GM commands at the daemon's console window when standard input is an interactive console. The commands run on the world thread with Administrator authority and no character. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
 
+## `World:Control:MapFeed`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:MapFeed:Enabled` | `bool` | `false` | - | Serve the map feed on a local Windows named pipe. A connected tool may watch one map at a time (players, bots, creatures, game objects, creature splines, bot routes, loaded grids) and ask for line of sight, ground height, a navigation path or an under-map verdict between two points of a map; nothing it sends changes the world, and a question never loads a tile. The pipe admits only the account the daemon runs as and SYSTEM, refuses network clients, and is not created on other operating systems. While nobody is subscribed the feed does no work on the world thread. Default off. |
+| `World:Control:MapFeed:MaxConnections` | `int` | `2` | - | The most tools connected at once: one pipe instance each, all created at start. A tool beyond the limit finds the pipe busy and is not served. 1 to 16. |
+| `World:Control:MapFeed:MaxEntitiesPerFrame` | `int` | `4096` | - | The most entities one frame carries. Players and bots come first, then creatures (moving ones before idle ones) and game objects; the rest are counted as truncated in the frame. 16 to 65536. |
+| `World:Control:MapFeed:MaxHz` | `int` | `5` | - | The most frames per second any subscription gets; a tool asking for more is given this rate. 1 to 60. |
+
 ## `World:Control:Pipe`
 
 | Key | Type | Default | Reload | Meaning |
@@ -1488,8 +1498,8 @@ How to read the tables:
 | `World:Playerbots:Home:DangerLevelMargin` | `int` | `5` | live | Auto mode: the straight line from the bot to the centre crossing an area whose AreaTable level (`AreaLevel`, the 1.12.1 AreaTable.dbc exploration level) is more than this many levels above the bot's counts as unsafe, and the bot teleports (0..60). |
 | `World:Playerbots:Home:ReturnMode` | `PlayerbotHomeReturnMode` | `Auto` | live | Walk, teleport, or teleport only when the walk is long or unsafe (`PlayerbotHomeReturnMode.Auto` by default). Values: `Walk`, `Teleport`, `Auto`. |
 | `World:Playerbots:Home:TeleportDistanceYards` | `float` | `1500` | live | Auto mode: a bot on the home map farther than this many yards from the centre teleports instead of walking (100..20000). The default 1500 is twice a 750-yard home (the Sentinel Hill homes of the QA Westfall fleet): the Darkshire road stray stood about 2000 yards from Sentinel Hill. |
-| `World:Playerbots:MaxActionsPerTick` | `int` | `48` | - | The most managed client actions all bots may send in one world tick (1..64). The tick's think time is bounded separately, by `ThinkBudgetMinMs`..`ThinkBudgetMaxMs` (`PlayerbotThinkBudget`): with about 1000 bots the action budget must not be the first limit a tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks. |
-| `World:Playerbots:MaxBots` | `int` | `8` | live | The most managed bots running at once (0..1000, `MaxBotsCeiling`). Only running bots take a slot: a stopped, faulted or quarantined bot does not, and a start beyond the cap is refused with "playerbot-capacity" (a quarantine retry or startup restore that finds no slot waits for one). Live through `.reload config`: raising it lets more bots start at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped. |
+| `World:Playerbots:MaxActionsPerTick` | `int` | `48` | - | The most managed client actions all bots may send in one world tick (1..512). The tick's think time is bounded separately, by `ThinkBudgetMinMs`..`ThinkBudgetMaxMs` (`PlayerbotThinkBudget`): with about 1000 bots the action budget must not be the first limit a tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks. |
+| `World:Playerbots:MaxBots` | `int` | `8` | live | The most managed bots running at once (0..5000, `MaxBotsCeiling`). Only running bots take a slot: a stopped, faulted or quarantined bot does not, and a start beyond the cap is refused with "playerbot-capacity" (a quarantine retry or startup restore that finds no slot waits for one). Live through `.reload config`: raising it lets more bots start at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped. |
 | `World:Playerbots:MaxBulkCommand` | `int` | `50` | live | The most bots one bulk command (`.playerbot summon\|send\|start\|stop ... all` or a prefix) moves or starts without `force` (1..`MaxBotsCeiling`). A selection larger than this, with no smaller count, is refused. Live through `.reload config`. |
 | `World:Playerbots:MaxDeliveryYards` | `float` | `1200` | - | Maximum same-map straight-line trip from a quest giver to its nearest present ender for an unhomed bot (0 disables the distance limit; 0..100000). |
 | `World:Playerbots:MaxFaults` | `int` | `3` | - | The faults within `FaultWindowSeconds` that disable a bot for good (DesiredEnabled off; 1..100). |
@@ -1569,7 +1579,7 @@ How to read the tables:
 | `World:Playerbots:Population:RushBrakeWindows` | `int` | `3` | live | The consecutive windows over the RushBrakeP95Ms ceiling that pause a rush, and under the resume line that lift the pause (1..20). |
 | `World:Playerbots:Population:SecondaryStayMaxMinutes` | `int` | `90` | live | The longest time in minutes (5..1440; at least SecondaryStayMinMinutes) a bot stays at its level-band town. |
 | `World:Playerbots:Population:SecondaryStayMinMinutes` | `int` | `30` | live | The shortest time in minutes (5..1440) a bot stays at its level-band town before it heads to the capital. Each bot's stay is fixed per bot (by its id) between this and SecondaryStayMaxMinutes, so a fleet does not move in step. |
-| `World:Playerbots:Population:TargetOnline` | `int` | `0` | live | The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns. |
+| `World:Playerbots:Population:TargetOnline` | `int` | `0` | live | The number of managed bots to keep running (0..5000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns. |
 | `World:Playerbots:Population:TickP95BudgetMs` | `int` | `60` | live | The world tick time budget in milliseconds (5..1000): the 95th percentile of the tick body duration over the last WindowTicks ticks. Above it the population stops adding bots and, with ParkWhenOverBudget, parks some. |
 | `World:Playerbots:Population:TownBandMargin` | `int` | `0` | live | Levels a bot stays at its level-band town past the maximum level of the town's band before the next town takes it (0..10; the hysteresis margin of the band change). 0: it moves when its level reaches the maximum. |
 | `World:Playerbots:Population:TownCap` | `int` | `60` | live | The most bots one level-band town (secondary) may hold (0..1000; 0 = no cap). Bots spread over the towns of their band, least populated first; when every town of the band is at the cap the least populated still takes the bot. |
