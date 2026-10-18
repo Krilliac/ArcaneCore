@@ -189,6 +189,13 @@ public sealed partial class SpellSystem
         return value;
     }
 
+    /// <summary>
+    /// What <paramref name="caster"/>'s own stun, confusion, fear, silence or pacify prevents for <paramref name="spell"/> right now
+    /// (the CheckCast caster-aura step, <see cref="Rules.Gating.CasterAuraGate"/>), for a caller that decides before it casts.
+    /// </summary>
+    public SpellCastResult CheckCasterState(Unit caster, SpellInfo spell)
+        => Rules.Gating.CasterAuraGate.Check(this, caster, spell, CastTimeFor(caster, spell));
+
     /// <summary>The cast time in ms with the registered cast-time modifiers, the auto-repeat flag and the ranged haste (vmangos SpellEntry::GetCastTime).</summary>
     private int CastTimeFor(Unit caster, SpellInfo spell)
         => spell.GetCastTime(caster.Level, CastSpeed(caster), RangedSpellFacts.IsAutoRepeatRanged(spell), RangedAttackSpeedPct(caster),

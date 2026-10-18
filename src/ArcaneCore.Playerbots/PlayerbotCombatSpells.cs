@@ -130,7 +130,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         }
 
         SpellInfo? spell = Select(feature, player, target);
-        if (spell is null)
+        if (spell is null || feature.System.CheckCasterState(player, spell) != SpellCastResult.CastOk)
         {
             return false;
         }
@@ -551,6 +551,9 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     private bool Cast(Player player, SpellFeature feature, SpellInfo spell, SpellCastTargets targets)
     {
+        // The server would refuse it (CastResult Stunned / Confused / Fleeing / Silenced / Pacified): send nothing.
+        if (feature.System.CheckCasterState(player, spell) != SpellCastResult.CastOk) return false;
+
         if (player.StandState != StandState.Stand && !spell.HasAttribute(SpellAttributes.AllowWhileSitting))
         {
             session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));

@@ -155,6 +155,9 @@ internal static class PlayerbotCombatView
         bool CanCast(SpellInfo spell, RotationUnit target)
         {
             if (blocked(spell) || !units.TryGetValue(target.Guid, out Unit? unit)) return false;
+            // A stunned, feared or confused bot sent its rotation anyway and the server answered CastResult Stunned at every think
+            // (S-8); a spell that breaks the state (the PvP trinket, Will of the Forsaken) still passes.
+            if (system.CheckCasterState(player, spell) != SpellCastResult.CastOk) return false;
             if (cooldownSpells.Contains(spell.Id) || spell.Category != 0 && cooldownCategories.Contains(spell.Category)) return false;
             if (spell.StartRecoveryTime > 0 && !system.IsGlobalCooldownReady(player, spell.StartRecoveryCategory)) return false;
             if (spell.CasterAuraState != AuraState.None && !HasAuraState(player, spell.CasterAuraState)) return false;

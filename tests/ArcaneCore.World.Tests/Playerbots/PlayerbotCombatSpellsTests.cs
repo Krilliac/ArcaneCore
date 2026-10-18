@@ -612,6 +612,79 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    /// <summary>
+    /// S-8: a stunned bot kept choosing its rotation and the server answered CastResult Stunned at every think. The view now asks the
+    /// caster-aura gate, so a stunned bot chooses nothing but a spell that breaks the stun (the PvP trinket shape).
+    /// </summary>
+    [Fact]
+    public async Task AStunnedBot_ChoosesNoSpellTheStunForbids_ButStillTheOneThatBreaksIt()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 10, 589);
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                var pain = new SpellInfo
+                {
+                    Id = 589,
+                    Name = "Shadow Word: Pain",
+                    RangeIndex = 4,
+                    Range = new SpellRange(0, 30),
+                    Effects =
+                    [
+                        new SpellEffectInfo
+                        {
+                            Effect = SpellEffectName.ApplyAura,
+                            AuraType = AuraType.PeriodicDamage,
+                            TargetA = SpellImplicitTarget.UnitEnemy,
+                            Amplitude = 3000,
+                        },
+                    ],
+                };
+                var trinket = new SpellInfo
+                {
+                    Id = 900_801,
+                    Name = "stun breaker",
+                    AttributesEx = (SpellAttributesEx)ArcaneCore.Game.Spells.Rules.SpellRuleFlags.ExImmunityPurgesEffect,
+                    Effects =
+                    [
+                        new SpellEffectInfo
+                        {
+                            Effect = SpellEffectName.ApplyAura,
+                            AuraType = AuraType.MechanicImmunity,
+                            MiscValue = (int)ArcaneCore.Game.Spells.Rules.SpellMechanic.Stun,
+                            TargetA = SpellImplicitTarget.UnitCaster,
+                        },
+                    ],
+                };
+
+                RotationState free = PlayerbotCombatView.Build(session, feature, player, target,
+                    PlayerbotAbilities.Empty, PlayerbotRole.Healer, static _ => false);
+                Assert.True(free.CanCast(pain, free.Victim!));
+
+                player.UnitFlags |= UnitFlags.Stunned;
+                Assert.Equal(SpellCastResult.Stunned, feature.System.CheckCasterState(player, pain));
+                RotationState stunned = PlayerbotCombatView.Build(session, feature, player, target,
+                    PlayerbotAbilities.Empty, PlayerbotRole.Healer, static _ => false);
+                Assert.False(stunned.CanCast(pain, stunned.Victim!));
+                Assert.Equal(SpellCastResult.CastOk, feature.System.CheckCasterState(player, trinket));
+                Assert.True(stunned.CanCast(trinket, stunned.Self));
+
+                player.UnitFlags &= ~UnitFlags.Stunned;
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     private static async Task<Creature> AddTargetAsync(WorldTestHost host, WorldSession session, float xOffset, uint low)
     {
         Creature target = null!;
