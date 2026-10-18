@@ -45,6 +45,37 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.CalledAssistance = true;
+
+        // The cells around the caller, not every creature of the map (vmangos Cell::VisitGridObjects with the call radius): a scan of all
+        // ~9,000 creatures of a continent per aggro was 6% of the live world thread (Oct 17). The exact radius test stays in CanAssist.
+        List<WorldObject> near = _assistCandidates;
+        List<WorldObject> extras = _assistExtras;
+        near.Clear();
+        extras.Clear();
+        float reach = radius + creature.BoundingRadius + Map.Grids.MaxBoundingRadius;
+        try
+        {
+            if (Map.Grids.TryCollectObjectsInJoinOrder(creature.X, creature.Y, reach, near, extras, out _))
+            {
+                near.AddRange(extras);
+                foreach (WorldObject obj in near)
+                {
+                    if (obj is Creature helper && _creatures.TryGetValue(helper.Guid, out Creature? own) && ReferenceEquals(own, helper)
+                        && CanAssist(helper, creature, enemy, radius))
+                    {
+                        _pendingAssists.Add(new PendingAssist(helper, enemy, creature, _clockMs + _options.AssistanceDelayMs));
+                    }
+                }
+
+                return;
+            }
+        }
+        finally
+        {
+            near.Clear();
+            extras.Clear();
+        }
+
         foreach (Creature helper in _creatures.Values)
         {
             if (CanAssist(helper, creature, enemy, radius))
@@ -53,6 +84,9 @@ public sealed partial class CreatureMapSystem
             }
         }
     }
+
+    private readonly List<WorldObject> _assistCandidates = [];
+    private readonly List<WorldObject> _assistExtras = [];
 
     /// <summary>
     /// The radius of a template's assistance call, by the dialect its rows came from. vmangos (Creature.cpp:2522-2526): a
