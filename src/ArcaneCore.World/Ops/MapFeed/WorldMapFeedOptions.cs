@@ -10,6 +10,7 @@ namespace ArcaneCore.World.Ops.MapFeed;
 /// </summary>
 public sealed class WorldMapFeedOptions
 {
+    /// <summary>The configuration section.</summary>
     public const string SectionName = "World:Control:MapFeed";
 
     /// <summary>The pipe name (without <c>\\.\pipe\</c>); <c>{pid}</c> is the world process id. Fixed, not a configuration key.</summary>

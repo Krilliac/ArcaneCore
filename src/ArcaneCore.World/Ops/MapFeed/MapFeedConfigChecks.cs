@@ -15,6 +15,7 @@ public sealed class MapFeedConfigChecks : IConfigCheck
 {
     private const string Root = WorldMapFeedOptions.SectionName;
 
+    /// <inheritdoc />
     public IEnumerable<ConfigIssue> Check(IConfiguration configuration)
     {
         var issues = new List<ConfigIssue>();

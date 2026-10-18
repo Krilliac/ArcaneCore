@@ -10,6 +10,7 @@ namespace ArcaneCore.World.Bots;
 [Flags]
 public enum BotRouteFlags : byte
 {
+    /// <summary>Planned without any of the marks below.</summary>
     None = 0,
 
     /// <summary>The navigation mesh's own answer ended short of the destination: the route is the part of the way the mesh knows.</summary>

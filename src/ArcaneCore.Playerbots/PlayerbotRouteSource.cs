@@ -12,6 +12,7 @@ namespace ArcaneCore.World.Playerbots;
 /// </summary>
 internal sealed class PlayerbotRouteSource : IBotRouteSource
 {
+    /// <inheritdoc />
     public int CopyRoute(Player bot, Span<Vector3> destination, out BotRouteInfo info)
     {
         ArgumentNullException.ThrowIfNull(bot);
@@ -36,11 +37,31 @@ internal sealed class PlayerbotRouteSource : IBotRouteSource
     private static BotRouteFlags FlagsOf(PlayerbotRoute route)
     {
         BotRouteFlags flags = BotRouteFlags.None;
-        if (route.MeshEndedShort) flags |= BotRouteFlags.MeshEndedShort;
-        if (route.PartialToGoal) flags |= BotRouteFlags.PartialToGoal;
-        if (route.Chase) flags |= BotRouteFlags.Chase;
-        if (route.Navigated) flags |= BotRouteFlags.Navigated;
-        if (route.CompletedQuestReturn) flags |= BotRouteFlags.QuestReturn;
+        if (route.MeshEndedShort)
+        {
+            flags |= BotRouteFlags.MeshEndedShort;
+        }
+
+        if (route.PartialToGoal)
+        {
+            flags |= BotRouteFlags.PartialToGoal;
+        }
+
+        if (route.Chase)
+        {
+            flags |= BotRouteFlags.Chase;
+        }
+
+        if (route.Navigated)
+        {
+            flags |= BotRouteFlags.Navigated;
+        }
+
+        if (route.CompletedQuestReturn)
+        {
+            flags |= BotRouteFlags.QuestReturn;
+        }
+
         return flags;
     }
 }

@@ -51,7 +51,7 @@ public sealed class WorldMapFeed : IHostedService
     private readonly IServiceProvider _services;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopping = new();
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<NamedPipeServerStream> _servers = [];
     private readonly List<Task> _loops = [];
     private readonly FramePool _pool;
@@ -71,6 +71,7 @@ public sealed class WorldMapFeed : IHostedService
     private long _connections;
     private int _active;
 
+    /// <summary>Build the feed from its options and the world it reads; nothing is created until <see cref="StartAsync"/>.</summary>
     public WorldMapFeed(IOptions<WorldMapFeedOptions> options, WorldRuntime world, IServiceProvider services, ILoggerFactory loggerFactory)
     {
         _options = options.Value;
@@ -149,6 +150,7 @@ public sealed class WorldMapFeed : IHostedService
     /// <summary>The frame pool (tests).</summary>
     internal FramePool Pool => _pool;
 
+    /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled)
@@ -548,6 +550,7 @@ public sealed class WorldMapFeed : IHostedService
         return sha.Length > 64 ? sha[..64] : sha;
     }
 
+    /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
