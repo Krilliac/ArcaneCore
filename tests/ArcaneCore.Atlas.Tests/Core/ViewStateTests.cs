@@ -116,18 +116,6 @@ public sealed class ViewStateTests
     }
 
     [Fact]
-    public void Camera_EyeSitsBehindAndAboveTheTarget()
-    {
-        var camera = new CameraState(new WorldPoint(100, 200, 10), 10, 0, 30, 55, CameraMode.Orbit);
-        WorldPoint eye = camera.Eye;
-
-        // Yaw 0 looks along +X, so the eye is on the -X side; pitch 30 puts it 5 yd up (10 * sin 30).
-        Assert.True(eye.X < 100);
-        Assert.Equal(200, eye.Y, 6);
-        Assert.Equal(15, eye.Z, 6);
-    }
-
-    [Fact]
     public void Catalog_IdsAreUnique_ColoursValid_AndEveryIdConstantIsListed()
     {
         Assert.Equal(LayerCatalog.All.Count, LayerCatalog.All.Select(l => l.Id).Distinct(StringComparer.Ordinal).Count());

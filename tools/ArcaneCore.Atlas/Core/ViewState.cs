@@ -55,7 +55,8 @@ public enum Theme
 /// <summary>
 /// Camera. <see cref="Yaw"/> is degrees in [0, 360), measured like a WoW orientation: 0 looks along +X (north),
 /// 90 along +Y (west). <see cref="Pitch"/> is degrees below the horizon, in [-89, 89]. <see cref="Distance"/> is the
-/// orbit radius in yards (and the half-height of the view in <see cref="CameraMode.Top"/>).
+/// orbit radius in yards (and the half-height of the view in <see cref="CameraMode.Top"/>). Eye, matrices and pick
+/// rays come from <see cref="CameraMath"/>.
 /// </summary>
 public sealed record CameraState(WorldPoint Target, double Distance, double Yaw, double Pitch, double Fov, CameraMode Mode)
 {
@@ -64,21 +65,6 @@ public sealed record CameraState(WorldPoint Target, double Distance, double Yaw,
     public const double MinFov = 15;
     public const double MaxFov = 110;
     public const double MaxPitch = 89;
-
-    /// <summary>The eye position (orbit and top modes look at <see cref="Target"/> from here).</summary>
-    public WorldPoint Eye
-    {
-        get
-        {
-            double yaw = Yaw * Math.PI / 180;
-            double pitch = (Mode == CameraMode.Top ? MaxPitch : Pitch) * Math.PI / 180;
-            double horizontal = Distance * Math.Cos(pitch);
-            return new WorldPoint(
-                Target.X - (horizontal * Math.Cos(yaw)),
-                Target.Y - (horizontal * Math.Sin(yaw)),
-                Target.Z + (Distance * Math.Sin(pitch)));
-        }
-    }
 }
 
 /// <summary>One layer's look. <see cref="ColorByAttribute"/> colours primitives by their attribute's <c>colorKey</c>.</summary>
