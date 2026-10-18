@@ -21,7 +21,13 @@ public sealed class SpellCommands : ICommandGroup
         new ChatCommand("unlearn", AccountSecurity.GameMaster, "Syntax: .unlearn #spell — make the selected player or yourself forget a spell.", Unlearn),
         new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself.", Cast),
         new ChatCommand("unaura", AccountSecurity.GameMaster, "Syntax: .unaura #spell|all — remove auras from the selected player or yourself.", Unaura),
-        new ChatCommand("cooldown", AccountSecurity.Administrator, "Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself.", Cooldown),
+        new ChatCommand("cooldown", AccountSecurity.Administrator, "Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself.", Cooldown, Children:
+        [
+            // vmangos cooldownCommandTable (Chat.cpp:281-286): list, clear and clearclientside, SEC_GAMEMASTER.
+            new ChatCommand("list", AccountSecurity.GameMaster, "Syntax: .cooldown list\nList the running cooldowns of the selected player or yourself.", CooldownList, RetailLevel: 3),
+            new ChatCommand("clear", AccountSecurity.GameMaster, "Syntax: .cooldown clear [#spell]\nClear one or every spell cooldown of the selected player or yourself.", Cooldown, RetailLevel: 3),
+            new ChatCommand("clearclientside", AccountSecurity.GameMaster, "Syntax: .cooldown clearclientside\nClear every spell cooldown of the selected player or yourself and tell its client.", CooldownClearAll, RetailLevel: 3),
+        ]),
     ];
 
     private static SpellFeature Feature(CommandContext context) => context.Session.Services.GetRequiredService<SpellFeature>();
@@ -184,5 +190,52 @@ public sealed class SpellCommands : ICommandGroup
 
         context.Reply(spellId != 0 ? $"Cleared the cooldown of spell {spellId} for {target.Name}." : $"Cleared {spells.Length} cooldowns for {target.Name}.");
         return true;
+    }
+
+    // vmangos SpellCaster::PrintCooldownList (SpellCaster.cpp:2567): one line per running spell and category cooldown.
+    private static bool CooldownList(CommandContext context, string args)
+    {
+        if (args.Trim().Length > 0)
+        {
+            return false;
+        }
+
+        Player? target = Target(context);
+        if (target is null)
+        {
+            return true;
+        }
+
+        SpellSystem system = Feature(context).System;
+        IReadOnlyList<InitialSpellCooldown> cooldowns = system.GetActiveCooldowns(target);
+        foreach (InitialSpellCooldown cooldown in cooldowns.OrderBy(c => c.SpellId))
+        {
+            string name = system.Store.Get(cooldown.SpellId)?.Name ?? "?";
+            string line = string.Create(CultureInfo.InvariantCulture, $"Spell {cooldown.SpellId} ({name}) has {Duration(cooldown.CooldownMs)} cd");
+            if (cooldown.Category != 0 && cooldown.CategoryCooldownMs > 0)
+            {
+                line += string.Create(CultureInfo.InvariantCulture, $", category {cooldown.Category} has {Duration(cooldown.CategoryCooldownMs)} cd");
+            }
+
+            context.Reply(line);
+        }
+
+        context.Reply(string.Create(CultureInfo.InvariantCulture, $"{target.Name} has {cooldowns.Count} cooldowns."));
+        return true;
+    }
+
+    private static bool CooldownClearAll(CommandContext context, string args)
+        => args.Trim().Length == 0 && Cooldown(context, string.Empty);
+
+    // vmangos ConvertMillisecondToStr: hours, minutes, seconds and milliseconds, leading zero parts left out.
+    internal static string Duration(uint ms)
+    {
+        var time = TimeSpan.FromMilliseconds(ms);
+        var parts = new List<string>();
+        if (time.Hours + (time.Days * 24) > 0) parts.Add(string.Create(CultureInfo.InvariantCulture, $"{time.Hours + (time.Days * 24)}h"));
+        if (time.Minutes > 0) parts.Add(string.Create(CultureInfo.InvariantCulture, $"{time.Minutes}m"));
+        if (time.Seconds > 0) parts.Add(string.Create(CultureInfo.InvariantCulture, $"{time.Seconds}s"));
+        if (time.Milliseconds > 0 || parts.Count == 0) parts.Add(string.Create(CultureInfo.InvariantCulture, $"{time.Milliseconds}ms"));
+        return string.Join(' ', parts);
     }
 }

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 251 |
-| `Administrator` | 6 | 373 |
+| `GameMaster` | 3 | 254 |
+| `Administrator` | 6 | 376 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -232,7 +232,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
 | `.guid` | 2 | GameMaster | declared retail level | Syntax: .guid Show the GUID of the selected object. |
 | `.help` | 0 | Player | stored level through the map | Syntax: .help [command [page]] Display usage instructions for the given command or group (a group lists its subcommands, paged); without a command, an overview of the commands you can use. |
-| `.cooldown` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
+| `.cooldown` ... | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
+| `.cooldown list` | 3 | GameMaster | declared retail level | Syntax: .cooldown list List the running cooldowns of the selected player or yourself. |
+| `.cooldown clear` | 3 | GameMaster | declared retail level | Syntax: .cooldown clear [#spell] Clear one or every spell cooldown of the selected player or yourself. |
+| `.cooldown clearclientside` | 3 | GameMaster | declared retail level | Syntax: .cooldown clearclientside Clear every spell cooldown of the selected player or yourself and tell its client. |
 | `.unlearn` ... | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unlearn #spell — make the selected player or yourself forget a spell. |
 | `.unlearn all_gm` | 3 | GameMaster | declared retail level | Forget the reference GM spell list. |
 | `.unlearn all_crafts` | 3 | GameMaster | declared retail level | Forget profession and secondary recipes. |
