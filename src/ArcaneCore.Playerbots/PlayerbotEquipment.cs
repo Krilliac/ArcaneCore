@@ -353,7 +353,7 @@ internal sealed class PlayerbotEquipment(WorldSession session)
         if (_brokenReported || elapsed < BrokenGearMs || elapsed > int.MaxValue) return;
         _brokenReported = true;
         PlayerbotAnomalies.Report(player, "gear", "broken-unrepaired",
-            string.Create(CultureInfo.InvariantCulture, $"item {broken.Entry} in slot {broken.Slot} at zero durability for {elapsed} ms of world time"),
+            string.Create(CultureInfo.InvariantCulture, $"item {broken.Entry} in slot {broken.Slot} at zero durability for {elapsed} ms of world time (money {player.Money}c, level {player.Level}, repair trip due {PlayerbotTownGoals.NeedsRepairTrip(player)})"),
             ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info);
     }
 
