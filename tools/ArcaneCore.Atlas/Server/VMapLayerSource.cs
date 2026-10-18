@@ -251,6 +251,7 @@ public sealed class VMapLayerSource : ServerLayerSource
                     o["group"] = groupIndex;
                     o["groupWmoId"] = group.GroupWmoId;
                     o["mogpFlags"] = Hex(group.MogpFlags);
+                    // ref: src/ArcaneCore.Game/Maps/Collision/CollisionContracts.cs:62 MogpExterior 0x8000; D:/refs/vmangos/src/game/Maps/GridMap.cpp:875-878 IsOutdoorWMO
                     o["outdoors"] = (group.MogpFlags & ModelAreaInfo.MogpExterior) != 0;
                     o["colorKey"] = GroupColorKey(group);
                     o["triangles"] = group.Triangles.Count;
@@ -468,6 +469,8 @@ public sealed class VMapLayerSource : ServerLayerSource
             low = high = VMapFormat.ToWorld(spawn.Position);
         }
 
+        // ref: src/ArcaneCore.Game/Maps/Collision/VMaps/VMapFormat.cs:28-34 internal = (MapMid - x, MapMid - y, z), its own inverse
+        // ref: D:/refs/vmangos/src/game/vmap/VMapManager2.cpp:51-56 convertPositionToInternalRep
         Vector3 centre = (low + high) * 0.5f;
         if (WorldGrid.TileOf(tile.MapId, centre.X, centre.Y) is { } owner)
         {

@@ -423,10 +423,18 @@ public sealed record ServerStatus(
             caches[name] = new JsonObject { ["entries"] = s.Entries, ["bytes"] = s.Cost, ["hits"] = s.Hits, ["loads"] = s.Loads };
         }
 
+        var paths = new ArcaneCore.Atlas.Core.AtlasPaths(DataDirectory, null);
         return new JsonObject
         {
             ["engineStarted"] = EngineStarted,
             ["dataDirectory"] = DataDirectory,
+            ["directories"] = new JsonObject
+            {
+                ["maps"] = paths.MapsDirectory,
+                ["vmaps"] = paths.VMapsDirectory,
+                ["mmaps"] = paths.MMapsDirectory,
+            },
+            ["readers"] = Readers(),
             ["terrainAvailable"] = TerrainAvailable,
             ["modelsAvailable"] = ModelsAvailable,
             ["meshAvailable"] = MeshAvailable,
@@ -450,4 +458,34 @@ public sealed record ServerStatus(
             ["parsedFileCaches"] = caches,
         };
     }
+
+    /// <summary>The file versions the server's readers accept: what a data directory must hold for the engine to read it.</summary>
+    public static JsonObject Readers()
+    {
+        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:38-39 "MAPS" + "z1.4" (vmangos D:\refs\vmangos\src\game\Maps\GridMap.cpp:35-36)
+        // ref: src/ArcaneCore.Game/Maps/Collision/VMaps/VMapFormat.cs:13 "VMAP_7.0"
+        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:17-26 MMAP magic, Detour version 7, mmap version 6, DNAV
+        return new JsonObject
+        {
+            ["map"] = new JsonObject { ["reader"] = nameof(TerrainTile), ["magic"] = Ascii(TerrainTile.MapMagic), ["version"] = Ascii(TerrainTile.MapVersionMagic) },
+            ["vmap"] = new JsonObject { ["reader"] = "VMapManager", ["magic"] = ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.Magic },
+            ["mmap"] = new JsonObject
+            {
+                ["reader"] = "NavMeshTile",
+                ["magic"] = $"0x{ArcaneCore.Game.Maps.Collision.MMaps.NavMeshFormat.MmapMagic:X8}",
+                ["mmapVersion"] = ArcaneCore.Game.Maps.Collision.MMaps.NavMeshFormat.MmapVersion,
+                ["detourVersion"] = ArcaneCore.Game.Maps.Collision.MMaps.NavMeshFormat.DetourVersion,
+            },
+        };
+    }
+
+    // The magics are four ASCII bytes read as a little-endian u32.
+    private static string Ascii(uint value)
+        => string.Create(4, value, static (span, v) =>
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                span[i] = (char)((v >> (8 * i)) & 0xFF);
+            }
+        });
 }

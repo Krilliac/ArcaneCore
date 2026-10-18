@@ -31,6 +31,8 @@ public sealed class NavLayerSource : ServerLayerSource
     }
 
     /// <summary>The colour key of a polygon's flags (precedence magma, slime, water, steep slopes, ground), or null for flags with none of them.</summary>
+    // ref: src/ArcaneCore.Game/Maps/Collision/CollisionContracts.cs:205-214 NavTerrain ground 0x01, magma 0x02, slime 0x04, water 0x08, steep 0x10
+    // ref: D:/refs/vmangos/src/game/Maps/MoveMapSharedDefines.h:43-47 NAV_GROUND/NAV_MAGMA/NAV_SLIME/NAV_WATER/NAV_STEEP_SLOPES
     public static string? NavColorKey(ushort flags)
     {
         var terrain = (NavTerrain)flags;
@@ -128,6 +130,7 @@ public sealed class NavLayerSource : ServerLayerSource
         };
     }
 
+    // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:47-50 Recast = (y, z, x); D:/refs/vmangos/src/game/Maps/PathFinder.cpp:164-165 {y, z, x}
     private static Vector3 World(Vector3 recast) => NavMeshFormat.ToWorld(recast);
 
     /// <summary>Twice the signed area of a polygon seen from above in world X/Y (positive: counter-clockwise, facing up).</summary>
@@ -152,6 +155,7 @@ public sealed class NavLayerSource : ServerLayerSource
         var counts = new SortedDictionary<uint, int>();
         int offMesh = 0;
         int degenerate = 0;
+        int flatPolygons = 0;
         int wallEdges = 0;
         int linkedEdges = 0;
         int externalEdges = 0;
@@ -195,14 +199,22 @@ public sealed class NavLayerSource : ServerLayerSource
             }
 
             double area2 = SignedArea(world);
-            if (n < 3 || area2 == 0)
+            if (n < 2)
             {
                 degenerate++;
                 continue;
             }
 
+            // A polygon with no area seen from above (vertical, or fewer than three corners) is still a polygon the server walks:
+            // its outline is drawn, only the fill is left out.
+            bool flat = n < 3 || area2 == 0;
+            if (flat)
+            {
+                flatPolygons++;
+            }
+
             // Recast's winding is clockwise in its own x/z plane, which is not a fixed handedness in world X/Y: order each polygon to face up.
-            int step = area2 > 0 ? 1 : -1;
+            int step = area2 >= 0 ? 1 : -1;
             uint attribute = PolyAttribute(poly.Flags, poly.Area);
             ushort flags = poly.Flags;
             byte polyArea = poly.Area;
@@ -217,7 +229,7 @@ public sealed class NavLayerSource : ServerLayerSource
             counts[attribute] = counts.GetValueOrDefault(attribute) + 1;
             int first = step > 0 ? 0 : n - 1;
             uint v0 = Vertex(poly.Vertices[first]);
-            for (int i = 1; i + 1 < n; i++)
+            for (int i = 1; !flat && i + 1 < n; i++)
             {
                 uint v1 = Vertex(poly.Vertices[first + (step * i)]);
                 uint v2 = Vertex(poly.Vertices[first + (step * (i + 1))]);
@@ -248,6 +260,7 @@ public sealed class NavLayerSource : ServerLayerSource
         parts.Stats["polygons"] = counts.Values.Sum();
         parts.Stats["offMeshPolygonsSkipped"] = offMesh;
         parts.Stats["degeneratePolygonsSkipped"] = degenerate;
+        parts.Stats["flatPolygonsOutlinedOnly"] = flatPolygons;
         parts.Stats["headerPolyCount"] = data.HeaderPolyCount;
         parts.Stats["headerOffMeshConnections"] = data.HeaderOffMeshCount;
         parts.Stats["vertices"] = mesh.Vertices.Length;
@@ -450,6 +463,7 @@ public sealed class NavLayerSource : ServerLayerSource
                     continue;
                 }
 
+                // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:686 GetCrossPortals; D:/refs/vmangos/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:300-415 findConnectingPolys (slab overlap)
                 CrossPortal[] found = mesh.GetCrossPortals(p, e, other);
                 if (found.Length == 0)
                 {
@@ -558,6 +572,7 @@ public sealed class NavLayerSource : ServerLayerSource
     private static LayerBuild BuildBvBox(TileKey tile, NavTileData data, string file)
     {
         NavMeshTile mesh = data.Tile;
+        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:125-139 the BV tree is used only when TryVerifyBvTree (:331) accepts it
         if (mesh.HasBvTree)
         {
             return LayerBuild.Empty(LayerIds.NavBvRejected, tile, $"{file}: the BV tree passed the server's verification ({data.HeaderBvNodeCount} header nodes)");
