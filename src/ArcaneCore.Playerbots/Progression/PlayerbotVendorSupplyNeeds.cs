@@ -38,15 +38,18 @@ internal sealed class PlayerbotVendorSupplyNeeds
 
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
         IReadOnlyList<uint> spells = spellbook.GetSpells(player);
+        bool knowsCampfire = false, wantsFireRecipe = false;
         for (int s = 0; s < spells.Count; s++)
         {
             if (store.Get(spells[s]) is not { } spell)
                 continue;
             if (spell.Totems.Count > 0) _tools.Add(spell.Totems[0]);
             if (spell.Totems.Count > 1) _tools.Add(spell.Totems[1]);
+            if (spells[s] == PlayerbotCrafting.BasicCampfireSpell) knowsCampfire = true;
             if (!PlayerbotCrafting.WantsToCraftSpell(player, spell, weights, store, spellbook)
                 && !PlayerbotCrafting.WantsToEnchantSpell(player, spell))
                 continue;
+            if (spell.RequiresSpellFocus == PlayerbotCrafting.CookingFireFocus) wantsFireRecipe = true;
             for (int r = 0; r < spell.Reagents.Count; r++)
             {
                 SpellReagent reagent = spell.Reagents[r];
@@ -56,6 +59,17 @@ internal sealed class PlayerbotVendorSupplyNeeds
                     _reagents[reagent.ItemId] = reagent.Count;
             }
         }
+
+        // The campfire's wood for a cook who would need a fire (PlayerbotCrafting.CampfireReagentShort).
+        if (knowsCampfire && wantsFireRecipe && store.Get(PlayerbotCrafting.BasicCampfireSpell) is { } campfire)
+            for (int r = 0; r < campfire.Reagents.Count; r++)
+            {
+                SpellReagent reagent = campfire.Reagents[r];
+                if (reagent.ItemId == 0 || reagent.Count == 0)
+                    continue;
+                if (!_reagents.TryGetValue(reagent.ItemId, out uint most) || reagent.Count > most)
+                    _reagents[reagent.ItemId] = reagent.Count;
+            }
     }
 
     /// <summary>

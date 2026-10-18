@@ -46,10 +46,10 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     private const uint MaxFocusBackoffMs = 4 * 3_600_000;
 
     /// <summary>SpellFocusObject.dbc id 4, the cooking fire (gameobject_template 29784 Basic Campfire carries data0 = 4, data1 = 10 yards).</summary>
-    private const uint CookingFireFocus = 4;
+    internal const uint CookingFireFocus = 4;
 
     /// <summary>Basic Campfire (a Cooking spell, Spell.dbc: effect TRANS_DOOR of gameobject 29784, tool Flint and Tinder 4471, reagent Simple Wood 4470).</summary>
-    private const uint BasicCampfireSpell = 818;
+    internal const uint BasicCampfireSpell = 818;
 
     private const uint SimpleWoodItem = 4470;
 
@@ -199,6 +199,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
 
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        bool knowsCampfire = false, wantsFireRecipe = false;
         foreach (uint spellId in spellbook.GetSpells(player))
         {
             if (store.Get(spellId) is not { } spell)
@@ -211,16 +212,36 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 return true;
             }
 
+            if (spellId == BasicCampfireSpell) knowsCampfire = true;
             if (!WantsToCraftSpell(player, spell, weights, store, spellbook)
                 && !WantsToEnchantSpell(player, spell))
                 continue;
 
+            if (spell.RequiresSpellFocus == CookingFireFocus) wantsFireRecipe = true;
             for (int r = 0; r < spell.Reagents.Count; r++)
             {
                 SpellReagent reagent = spell.Reagents[r];
                 if (reagent.ItemId == itemId && reagent.Count > 0 && have < reagent.Count)
                     return true;
             }
+        }
+
+        return knowsCampfire && wantsFireRecipe && CampfireReagentShort(store, itemId, have);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="itemId"/> is a reagent of Basic Campfire (<see cref="BasicCampfireSpell"/>: Simple Wood 4470) the bot carries
+    /// fewer of than one fire uses. A cook that knows the campfire and wants a recipe that needs a cooking fire keeps the wood for one:
+    /// the fallback for a fire it cannot reach (<see cref="TryLightCampfire"/>) needs it, and no recipe asked the vendor for wood, so the
+    /// fallback almost never fired (bot QA #774: ~90/h craft-failed 'spell focus 4 unreachable' on live 2026-10-17 after it landed).
+    /// </summary>
+    internal static bool CampfireReagentShort(SpellStore store, uint itemId, uint have)
+    {
+        if (store.Get(BasicCampfireSpell) is not { } campfire) return false;
+        for (int r = 0; r < campfire.Reagents.Count; r++)
+        {
+            SpellReagent reagent = campfire.Reagents[r];
+            if (reagent.ItemId == itemId && reagent.Count > 0 && have < reagent.Count) return true;
         }
 
         return false;

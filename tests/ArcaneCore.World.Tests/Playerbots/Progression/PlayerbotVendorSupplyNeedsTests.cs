@@ -113,6 +113,58 @@ public sealed class PlayerbotVendorSupplyNeedsTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// A cook that knows Basic Campfire (818) and wants a recipe that needs a cooking fire (spell focus 4) needs one Simple Wood (4470),
+    /// the campfire's reagent, from a vendor, in both answers; without such a recipe, or without the campfire, it does not; with the
+    /// wood carried it does not (bot QA #774: the campfire fallback for an unreachable fire never had wood).
+    /// </summary>
+    [Fact]
+    public async Task ACookWithBasicCampfire_NeedsTheCampfiresWood_OnlyForAFireRecipe()
+    {
+        const uint Wood = 4470, Meat = 9631, Steak = 9632, FireRecipe = 996011;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = Steak, Name = "steak", Class = (uint)ItemClass.Consumable, FoodType = 1,
+            InventoryType = (uint)InventoryType.NonEquip, Stackable = 20, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
+        foreach (uint entry in new[] { Wood, Meat })
+            items.Templates.Templates.Add(new ItemTemplate { Entry = entry, Name = $"supply {entry}", Class = (uint)ItemClass.TradeGoods,
+                InventoryType = (uint)InventoryType.NonEquip, Stackable = 20, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                SpellStore store = feature.System.Store = new SpellStore([
+                    new SpellInfo { Id = PlayerbotCrafting.BasicCampfireSpell, Name = "Basic Campfire",
+                        Effects = [new SpellEffectInfo { Effect = SpellEffectName.TransDoor }, new(), new()],
+                        Reagents = [new SpellReagent(Wood, 1)], Totems = [4471, 0] },
+                    Recipe(FireRecipe, Steak, [new SpellReagent(Meat, 1)], [0, 0]) with { RequiresSpellFocus = PlayerbotCrafting.CookingFireFocus },
+                ], [], []);
+                SpellbookCache book = feature.Spellbook;
+                var needs = new PlayerbotVendorSupplyNeeds();
+                bool Both()
+                {
+                    needs.Refresh(player, store, book);
+                    bool walk = PlayerbotCrafting.NeedsVendorSupply(player, Wood, store, book);
+                    Assert.Equal(walk, needs.Needs(player, Wood));
+                    return walk;
+                }
+
+                book.LearnSpell(player, PlayerbotCrafting.BasicCampfireSpell);
+                Assert.False(Both()); // the campfire alone: no fire recipe to light it for
+                book.LearnSpell(player, FireRecipe);
+                Assert.True(Both()); // a wanted food recipe at a cooking fire (the bot carries none of the steak)
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(Wood, 1, out _));
+                Assert.False(Both());
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     private static SpellInfo Recipe(uint id, uint product, SpellReagent[] reagents, uint[] tools) => new()
     {
         Id = id,
