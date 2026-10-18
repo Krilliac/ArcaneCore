@@ -12,7 +12,13 @@ namespace ArcaneCore.World.Playerbots;
 /// </summary>
 internal sealed class PlayerbotRetreatStats
 {
-    private long _safe, _cornered, _died, _refused;
+    private long _safe, _cornered, _died, _refused, _refusedDied, _refusedSurvived;
+
+    /// <summary>The upper bounds of the predicted-share bands (<see cref="PlayerbotRiskModel.RetreatDamage"/> over the bot's health).</summary>
+    private static readonly float[] BandTops = [0.3f, 0.6f, float.PositiveInfinity];
+
+    // [band, 0] ended, [band, 1] died; the last band is the retreats not weighed (lethal, a party wipe).
+    private readonly long[] _bands = new long[(BandTops.Length + 1) * 2];
 
     /// <summary>The fleet's counters.</summary>
     internal static PlayerbotRetreatStats Shared { get; } = new();
@@ -29,24 +35,59 @@ internal sealed class PlayerbotRetreatStats
     /// <summary>Retreats that ended.</summary>
     internal long Ended => Safe + Cornered + Died;
 
-    /// <summary>Count a retreat's outcome ("safe", "cornered" or "died"; anything else is ignored).</summary>
-    internal void Record(string? outcome)
+    /// <summary>Fights in which a retreat was refused and no retreat followed, by how they ended.</summary>
+    internal long RefusedDied => Interlocked.Read(ref _refusedDied);
+
+    internal long RefusedSurvived => Interlocked.Read(ref _refusedSurvived);
+
+    /// <summary>
+    /// Count a retreat's outcome ("safe", "cornered" or "died"; anything else is ignored), and in the band of the damage share the
+    /// estimate predicted for it (<paramref name="predictedShare"/>; null: not weighed), so the log shows whether the estimate is calibrated.
+    /// </summary>
+    internal void Record(string? outcome, float? predictedShare = null)
     {
         switch (outcome)
         {
             case "safe": Interlocked.Increment(ref _safe); break;
             case "cornered": Interlocked.Increment(ref _cornered); break;
             case "died": Interlocked.Increment(ref _died); break;
+            default: return;
         }
+
+        int band = BandTops.Length;
+        if (predictedShare is { } share)
+        {
+            band = 0;
+            while (band < BandTops.Length - 1 && !(share < BandTops[band])) band++;
+        }
+
+        Interlocked.Increment(ref _bands[band * 2]);
+        if (outcome == "died") Interlocked.Increment(ref _bands[(band * 2) + 1]);
     }
 
     internal void RecordRefused() => Interlocked.Increment(ref _refused);
 
-    /// <summary>The counters as one line, e.g. <c>Retreats: 12 ended (safe 3, cornered 2, died 7), 5 refused as cornered-no-escape.</c></summary>
+    /// <summary>A fight in which the retreat was refused (and none began) ended: the bot <paramref name="died"/> or got out of combat alive.</summary>
+    internal void RecordRefusedEnd(bool died)
+    {
+        if (died) Interlocked.Increment(ref _refusedDied);
+        else Interlocked.Increment(ref _refusedSurvived);
+    }
+
+    /// <summary>Retreats ended and died in a band (0: predicted share under 0.3, 1: under 0.6, 2: higher, 3: not weighed).</summary>
+    internal (long Ended, long Died) Band(int band) => (Interlocked.Read(ref _bands[band * 2]), Interlocked.Read(ref _bands[(band * 2) + 1]));
+
+    /// <summary>The counters as one line, e.g. <c>Retreats: 12 ended (safe 3, cornered 2, died 7), 5 refused as cornered-no-escape (fights fought on: ...). Died by predicted loss: ...</c></summary>
     internal string Describe()
     {
         long safe = Safe, cornered = Cornered, died = Died, refused = Refused;
+        (long lowEnded, long lowDied) = Band(0);
+        (long midEnded, long midDied) = Band(1);
+        (long highEnded, long highDied) = Band(2);
+        (long unweighedEnded, long unweighedDied) = Band(3);
         return string.Create(CultureInfo.InvariantCulture,
-            $"Retreats: {safe + cornered + died} ended (safe {safe}, cornered {cornered}, died {died}), {refused} refused as {PlayerbotRiskModel.CorneredReason}.");
+            $"Retreats: {safe + cornered + died} ended (safe {safe}, cornered {cornered}, died {died}), {refused} refused as {PlayerbotRiskModel.CorneredReason} "
+            + $"(fights fought on: died {RefusedDied}, survived {RefusedSurvived}). Died by predicted loss: <0.3 {lowDied}/{lowEnded}, 0.3-0.6 {midDied}/{midEnded}, "
+            + $">=0.6 {highDied}/{highEnded}, not weighed {unweighedDied}/{unweighedEnded}.");
     }
 }

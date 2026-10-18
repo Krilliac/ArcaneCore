@@ -79,6 +79,9 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
 
     internal bool Active { get; private set; }
 
+    /// <summary>When the current (or last) retreat began (world clock ms; 0: never).</summary>
+    internal uint StartedMs => _startedMs;
+
     /// <summary>Why the current (or last) retreat began.</summary>
     internal string? Reason { get; private set; }
 
@@ -149,8 +152,10 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     /// speed (<see cref="Unit.RunSpeed"/>: snares and speed auras are in it), each living enemy's current run speed and damage per
     /// second nearest first, and the escapes ready. <paramref name="damagePerSecond"/> gives an enemy's damage per second against the bot.
     /// </summary>
+    /// <param name="fightSeconds">How long the bot has been in this fight (null: unknown, no leash floor): the pursuers' leash clocks
+    /// started about then (<see cref="PlayerbotPursuit.MinContactSeconds"/>).</param>
     internal PlayerbotPursuit Assess(Player player, IReadOnlyList<Creature> enemies, IReadOnlyDictionary<ObjectGuid, Vector3> anchors,
-        IReadOnlyList<Vector3> crumbs, Func<Creature, float> damagePerSecond)
+        IReadOnlyList<Vector3> crumbs, Func<Creature, float> damagePerSecond, float? fightSeconds = null)
     {
         Creature[] chasing = [.. enemies.Where(e => e.IsAlive && ReferenceEquals(e.Map, player.Map)).OrderBy(e => Distance(player, e))];
         List<(Vector3 Anchor, float Safe)> zones = BuildZones(player, chasing, anchors);
@@ -173,7 +178,18 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         var pursuers = new List<RiskPursuer>(chasing.Length);
         foreach (Creature enemy in chasing) pursuers.Add(new RiskPursuer(enemy.RunSpeed, damagePerSecond(enemy)));
         PlayerbotEscapeKit kit = PlayerbotEscapes.Kit(ReadyEscapes(player, chasing, ignoreUsed: true));
-        return new PlayerbotPursuit(yards, player.RunSpeed, pursuers, kit);
+        // The leash clock counts whole seconds and must be more than LeashExtensionSeconds old (CreatureMapSystem.IsOutOfThreatArea): one
+        // second more than the bare difference.
+        float leash = 0f;
+        if (fightSeconds is { } fought && float.IsFinite(fought) && chasing.Length > 0)
+        {
+            uint extension = player.Map?.FindUpdater<CreatureMapSystem>()?.Options.LeashExtensionSeconds ?? 12u;
+            leash = MathF.Max(0f, extension + 1f - MathF.Max(0f, fought));
+        }
+
+        float flee = PlayerbotRiskModel.FleeDamageFactor(player.GetFloat(UpdateFields.PlayerDodgePercentage),
+            player.GetFloat(UpdateFields.PlayerParryPercentage), player.GetFloat(UpdateFields.PlayerBlockPercentage));
+        return new PlayerbotPursuit(yards, player.RunSpeed, pursuers, kit, leash, flee);
     }
 
     internal void Stop(string outcome)

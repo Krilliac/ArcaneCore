@@ -117,7 +117,13 @@ internal readonly record struct PlayerbotEscapeKit(float AllFreeSeconds, float V
 /// What a retreat from this fight would face (a plain snapshot): the yards to run to the retreat goal, the bot's current run speed
 /// (snares and speed auras included), the chasers nearest first, and the escapes ready. See <see cref="PlayerbotRiskModel.RetreatSucceeds"/>.
 /// </summary>
-internal sealed record PlayerbotPursuit(float EscapeYards, float BotRunSpeed, IReadOnlyList<RiskPursuer> Pursuers, PlayerbotEscapeKit Kit);
+/// <param name="MinContactSeconds">The seconds a pursuer in contact cannot leash yet, however soon the bot is out of its threat area:
+/// vmangos Creature::IsOutOfThreatArea lets a creature give up only once its leash clock (started at the fight's first check) is more
+/// than 12 whole seconds old, so a bot that turns to run early in a fight is hit until then.</param>
+/// <param name="FleeDamageFactor">How much more of the pursuers' blows land on a bot that shows them its back: a blow from behind
+/// cannot be dodged by a player, nor parried or blocked (vmangos Unit::RollMeleeOutcomeAgainst, <c>MeleeHitTable</c>).</param>
+internal sealed record PlayerbotPursuit(float EscapeYards, float BotRunSpeed, IReadOnlyList<RiskPursuer> Pursuers, PlayerbotEscapeKit Kit,
+    float MinContactSeconds = 0f, float FleeDamageFactor = 1f);
 
 /// <summary>Everything one in-combat estimate reads.</summary>
 /// <param name="Pursuit">What a retreat would face; null when the caller does not know (the retreat is then never refused).</param>
@@ -418,15 +424,25 @@ internal static class PlayerbotRiskModel
     /// one after another, the way <see cref="PlayerbotRetreat"/> casts them (each once), which flatters a pair of the same kind.
     /// </summary>
     internal static bool RetreatSucceeds(PlayerbotPursuit pursuit, uint botHealth, float dpsIn)
+        => RetreatDamage(pursuit, dpsIn) < botHealth * RetreatHealthBudget;
+
+    /// <summary>
+    /// The damage <see cref="RetreatSucceeds"/> predicts the bot takes on the run (0 when nothing would hit it). A pursuer at least as
+    /// fast as the bot stays in contact for the run, and at least <see cref="PlayerbotPursuit.MinContactSeconds"/> (its leash clock); the
+    /// blows land <see cref="PlayerbotPursuit.FleeDamageFactor"/> times as often as in the fight the rate was observed in.
+    /// </summary>
+    internal static float RetreatDamage(PlayerbotPursuit pursuit, float dpsIn)
     {
         ArgumentNullException.ThrowIfNull(pursuit);
-        if (!(pursuit.EscapeYards > 0f) || !(dpsIn > 0.01f)) return true;
+        if (!(pursuit.EscapeYards > 0f) || !(dpsIn > 0.01f)) return 0f;
         PlayerbotEscapeKit kit = pursuit.Kit;
         float botSpeed = MathF.Max(0.1f, pursuit.BotRunSpeed * kit.SelfSpeed);
         float run = pursuit.EscapeYards / botSpeed;
+        float leash = float.IsFinite(pursuit.MinContactSeconds) ? MathF.Max(0f, pursuit.MinContactSeconds) : 0f;
+        float flee = float.IsFinite(pursuit.FleeDamageFactor) ? Math.Clamp(pursuit.FleeDamageFactor, 1f, 2.5f) : 1f;
         float totalDps = 0f;
         foreach (RiskPursuer pursuer in pursuit.Pursuers) totalDps += MathF.Max(0f, pursuer.Dps);
-        if (!(totalDps > 0f)) return true;
+        if (!(totalDps > 0f)) return 0f;
         float damage = 0f;
         for (int index = 0; index < pursuit.Pursuers.Count; index++)
         {
@@ -435,12 +451,25 @@ internal static class PlayerbotRiskModel
             float speed = (float.IsFinite(pursuer.RunSpeed) && pursuer.RunSpeed > 0f ? pursuer.RunSpeed : float.PositiveInfinity)
                 * (nearest ? kit.VictimSpeed : 1f);
             // A pursuer starts in melee contact. One as fast as the bot stays there and keeps hitting the whole run (live 2026-10-17: 74% of
-            // 'losing' retreats died when equal speed counted as an escape); a slower one hits until the gap opens past its reach.
-            float contact = speed >= botSpeed ? run : MathF.Min(run, PursuerReachYards / (botSpeed - speed));
+            // 'losing' retreats died when equal speed counted as an escape), and past the run's end until its leash clock lets it give up
+            // (live 2026-10-17: still 51% died with the run alone counted); a slower one hits until the gap opens past its reach.
+            float contact = speed >= botSpeed ? MathF.Max(run, leash) : MathF.Min(run, PursuerReachYards / (botSpeed - speed));
             float exposed = MathF.Max(0f, contact - (kit.AllFreeSeconds + (nearest ? kit.VictimFreeSeconds : 0f)));
-            damage += dpsIn * (MathF.Max(0f, pursuer.Dps) / totalDps) * exposed;
+            damage += dpsIn * flee * (MathF.Max(0f, pursuer.Dps) / totalDps) * exposed;
         }
 
-        return damage < botHealth * RetreatHealthBudget;
+        return damage;
+    }
+
+    /// <summary>
+    /// <see cref="PlayerbotPursuit.FleeDamageFactor"/> from the bot's avoidance in percent: the dodge, parry and block that a blow from
+    /// behind cannot roll come out of the table and become hits, so a share <c>a</c> of avoided blows makes the rest land <c>1 / (1 - a)</c>
+    /// times as often (held to 60% avoidance).
+    /// </summary>
+    internal static float FleeDamageFactor(float dodgePct, float parryPct, float blockPct)
+    {
+        static float Pct(float value) => float.IsFinite(value) ? Math.Clamp(value, 0f, 100f) : 0f;
+        float avoided = MathF.Min(60f, Pct(dodgePct) + Pct(parryPct) + Pct(blockPct)) / 100f;
+        return 1f / (1f - avoided);
     }
 }

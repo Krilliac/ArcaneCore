@@ -1,3 +1,4 @@
+using System.Globalization;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Playerbots.Combat;
 using System.Numerics;
@@ -224,6 +225,11 @@ internal sealed class PlayerbotRisk
         _fightSinceMs = 0;
         _cornered = false;
         _refusalCounted = false;
+        if (_refusedPending)
+        {
+            _refusedPending = false;
+            if (Enabled) RetreatStats.RecordRefusedEnd(died: false);
+        }
         if (Tracker.Active) Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
     }
 
@@ -247,6 +253,8 @@ internal sealed class PlayerbotRisk
                 _options.Risk.DangerMemorySeconds, "death");
         // A death on the way out of a retreat is the retreat's end: the place where the fight turned is remembered as for any other.
         if (Retreat.Active) NoteRetreatEnd(player, "died");
+        else if (_refusedPending && Enabled) RetreatStats.RecordRefusedEnd(died: true);
+        _refusedPending = false;
 
         Retreat.Stop("died");
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
@@ -1133,14 +1141,22 @@ internal sealed class PlayerbotRisk
         if (verdict.Retreat && !facts.Lethal)
         {
             // The bot would run: can it get away before it dies? Looked at only now (it plans the goal and asks the spellbook).
-            PlayerbotPursuit pursuit = Retreat.Assess(player, enemies, Tracker.Anchors, Breadcrumbs.Points, e => Enemy(e, RiskJoin.Target, player).Dps);
+            float? fought = _fightSinceMs == 0 ? null : unchecked(_session.World.NowMs - _fightSinceMs) / 1000f;
+            PlayerbotPursuit pursuit = Retreat.Assess(player, enemies, Tracker.Anchors, Breadcrumbs.Points, e => Enemy(e, RiskJoin.Target, player).Dps, fought);
             verdict = PlayerbotRiskModel.Judge(facts with { Pursuit = pursuit }, _options.Risk);
+            _retreatPlan = new RetreatPlan(facts.BotMaxHealth == 0 ? 0f : facts.BotHealth * 100f / facts.BotMaxHealth,
+                facts.BotHealth == 0 ? float.PositiveInfinity : PlayerbotRiskModel.RetreatDamage(pursuit, facts.DpsIn) / facts.BotHealth,
+                pursuit.EscapeYards / MathF.Max(0.1f, pursuit.BotRunSpeed * pursuit.Kit.SelfSpeed), pursuit.MinContactSeconds,
+                pursuit.FleeDamageFactor, fought ?? 0f);
             if (!verdict.Retreat && !_refusalCounted)
             {
                 _refusalCounted = true;
+                _refusedPending = true;
                 RetreatStats.RecordRefused();
             }
         }
+
+        else _retreatPlan = null;
 
         Tracker.Record(verdict);
         try { CombatSink?.Judged(player, facts, verdict, _session.World.NowMs); }
@@ -1153,6 +1169,20 @@ internal sealed class PlayerbotRisk
     /// <summary>The refusal of a retreat is counted once per fight (<see cref="Track"/> clears it out of combat).</summary>
     private bool _refusalCounted;
 
+    /// <summary>
+    /// What the estimate said of the retreat about to begin (or begun): the bot's health in percent, the predicted damage on the run as
+    /// a share of its health, the seconds of the run, the leash floor, the from-behind factor and the seconds fought. Null for a retreat
+    /// not weighed (lethal, a party wipe). For the outcome counts by predicted share and the retreat-died line.
+    /// </summary>
+    private readonly record struct RetreatPlan(float HealthPct, float PredictedShare, float RunSeconds, float LeashSeconds, float FleeFactor, float FoughtSeconds);
+
+    private RetreatPlan? _retreatPlan;
+
+    /// <summary>A retreat was refused in this fight and no retreat began since: the fight's end is counted against the refusal.</summary>
+    private bool _refusedPending;
+    private RetreatPlan? _activePlan;
+    private Vector3 _retreatFrom;
+
     /// <summary>A retreat ended (by <see cref="UpdateRetreat"/> or by the bot's death in <see cref="OnDeath"/>): remember the flight and count the outcome. Gated on <see cref="Enabled"/> in one place.</summary>
     private void NoteRetreatEnd(Player player, string? outcome)
     {
@@ -1161,11 +1191,25 @@ internal sealed class PlayerbotRisk
         {
             _retreatDiedMs = Math.Max(1u, _session.World.NowMs);
             PlayerbotAnomalies.Report(player, "risk", "retreat-died",
-                $"died during a retreat begun for '{Retreat.Reason}' after escapes [{string.Join('+', Retreat.UsedEscapes)}]", AnomalySeverity.Info);
+                $"died during a retreat begun for '{Retreat.Reason}' after escapes [{string.Join('+', Retreat.UsedEscapes)}]; {DescribePlan(player)}",
+                AnomalySeverity.Info);
         }
 
         RememberFlight(player);
-        RetreatStats.Record(outcome);
+        RetreatStats.Record(outcome, _activePlan?.PredictedShare);
+        _activePlan = null;
+    }
+
+    /// <summary>The retreat's estimate against what happened, for the retreat-died line (QA-13: which part of the estimate was wrong).</summary>
+    private string DescribePlan(Player player)
+    {
+        uint elapsed = Retreat.StartedMs == 0 ? 0 : unchecked(_session.World.NowMs - Retreat.StartedMs);
+        float ran = Vector3.Distance(_retreatFrom, new Vector3(player.X, player.Y, player.Z));
+        string actual = string.Create(CultureInfo.InvariantCulture, $"died after {elapsed / 1000f:F1} s, {ran:F0} yd from the start");
+        return _activePlan is not { } plan
+            ? $"not weighed; {actual}"
+            : string.Create(CultureInfo.InvariantCulture,
+                $"began at {plan.HealthPct:F0}% health after {plan.FoughtSeconds:F1} s of fight, predicted {plan.PredictedShare:F2} of health lost over a {plan.RunSeconds:F1} s run (leash floor {plan.LeashSeconds:F1} s, from-behind x{plan.FleeFactor:F2}); {actual}");
     }
 
     /// <summary>
@@ -1287,6 +1331,10 @@ internal sealed class PlayerbotRisk
             _verdicts.Remove((enemy.Guid, true));
         }
         Detour = null;
+        _refusedPending = false;
+        _activePlan = _retreatPlan;
+        _retreatPlan = null;
+        _retreatFrom = new Vector3(player.X, player.Y, player.Z);
         Retreat.Start(player, enemies, Tracker.Anchors, Breadcrumbs.Points, reason);
         _retreatLoop.Started(player, _session.World.NowMs, reason);
     }

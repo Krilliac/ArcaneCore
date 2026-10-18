@@ -50,6 +50,34 @@ public sealed class PlayerbotRetreatFeasibilityTests
     }
 
     [Fact]
+    public void AShortRun_EarlyInTheFight_IsHitUntilThePursuersLeashClockRunsOut()
+    {
+        // 14 yards from safety at 7 yd/s is 2 s under a fast creature's blows (120 of a 270 budget): a retreat.
+        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Fast, yards: 14f)), Options).Retreat);
+        // Six seconds into the fight the creature cannot leash for another 7 s (vmangos IsOutOfThreatArea, 12 whole seconds):
+        // 7 s at 60 a second is 420, more than the bot has.
+        var early = new PlayerbotPursuit(14f, Unit.BaseRunSpeed, [new RiskPursuer(Fast, 60f)], PlayerbotEscapeKit.None, MinContactSeconds: 7f);
+        Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(early), Options).Reason);
+        Assert.Equal(420f, PlayerbotRiskModel.RetreatDamage(early, 60f), 3);
+        // A slower creature is left behind whatever its clock says.
+        var slow = new PlayerbotPursuit(14f, Unit.BaseRunSpeed, [new RiskPursuer(Unit.BaseRunSpeed * 0.5f, 60f)], PlayerbotEscapeKit.None, MinContactSeconds: 7f);
+        Assert.True(PlayerbotRiskModel.Judge(Losing(slow), Options).Retreat);
+    }
+
+    [Fact]
+    public void BlowsFromBehind_LandMoreOften_ByTheBotsAvoidance()
+    {
+        Assert.Equal(1f, PlayerbotRiskModel.FleeDamageFactor(0f, 0f, 0f), 3);
+        // A shield warrior with 10% dodge, 8% parry and 7% block: a quarter of the blows it turned aside now land (x1.33).
+        Assert.Equal(1f / 0.75f, PlayerbotRiskModel.FleeDamageFactor(10f, 8f, 7f), 3);
+        Assert.Equal(2.5f, PlayerbotRiskModel.FleeDamageFactor(50f, 50f, 50f), 3); // held to 60% avoidance
+        Assert.Equal(1f, PlayerbotRiskModel.FleeDamageFactor(float.NaN, -5f, 0f), 3);
+        // 14 yards (2 s, 120 damage) becomes 160 from behind at x1.33.
+        var shielded = new PlayerbotPursuit(14f, Unit.BaseRunSpeed, [new RiskPursuer(Fast, 60f)], PlayerbotEscapeKit.None, FleeDamageFactor: 1f / 0.75f);
+        Assert.Equal(160f, PlayerbotRiskModel.RetreatDamage(shielded, 60f), 2);
+    }
+
+    [Fact]
     public void ASnaredBot_CannotOutrunACreatureThatWouldHaveBeenSlower()
     {
         // 4.2 yards a second (a 40% snare) against a creature of 6.3 (speed_run 0.9): the retreat is a chase the bot loses.
@@ -162,15 +190,23 @@ public sealed class PlayerbotRetreatFeasibilityTests
     public void TheRetreatStats_CountOutcomesAndRefusals_AndDescribeThem()
     {
         var stats = new PlayerbotRetreatStats();
-        stats.Record("safe");
+        stats.Record("safe", 0.1f);
         stats.Record("cornered");
-        stats.Record("died");
-        stats.Record("died");
-        stats.Record("bogus");
+        stats.Record("died", 0.45f);
+        stats.Record("died", 1.2f);
+        stats.Record("bogus", 0.1f);
         stats.Record(null);
         stats.RecordRefused();
+        stats.RecordRefusedEnd(died: true);
+        stats.RecordRefusedEnd(died: false);
+        stats.RecordRefusedEnd(died: false);
         Assert.Equal((1, 1, 2, 1), (stats.Safe, stats.Cornered, stats.Died, stats.Refused));
         Assert.Equal(4, stats.Ended);
-        Assert.Equal("Retreats: 4 ended (safe 1, cornered 1, died 2), 1 refused as cornered-no-escape.", stats.Describe());
+        Assert.Equal((1L, 0L), stats.Band(0));
+        Assert.Equal((1L, 1L), stats.Band(1));
+        Assert.Equal((1L, 1L), stats.Band(2));
+        Assert.Equal((1L, 0L), stats.Band(3));
+        Assert.Equal("Retreats: 4 ended (safe 1, cornered 1, died 2), 1 refused as cornered-no-escape (fights fought on: died 1, survived 2). "
+            + "Died by predicted loss: <0.3 0/1, 0.3-0.6 1/1, >=0.6 1/1, not weighed 0/1.", stats.Describe());
     }
 }

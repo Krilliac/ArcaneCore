@@ -103,7 +103,7 @@ public sealed class PlayerbotQaCommandsTests : IDisposable
 
         string[] lines = await RunAsync(host, ".playerbot qa");
 
-        Assert.Matches(@"Retreats: \d+ ended \(safe \d+, cornered \d+, died \d+\), [1-9]\d* refused as cornered-no-escape\.", lines[0]);
+        Assert.Matches(@"Retreats: \d+ ended \(safe \d+, cornered \d+, died \d+\), [1-9]\d* refused as cornered-no-escape \(fights fought on: died \d+, survived \d+\)\. Died by predicted loss: ", lines[0]);
     }
 
     [Fact]
