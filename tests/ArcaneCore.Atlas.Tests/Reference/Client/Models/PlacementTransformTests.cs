@@ -6,7 +6,7 @@ using Xunit;
 
 namespace ArcaneCore.Atlas.Tests.Reference.Client.Models;
 
-/// <summary>A small deterministic generator (SplitMix64) so tests do not depend on System.Random.</summary>
+/// <summary>A small deterministic generator (SplitMix64) so tests do not depend on a platform pseudo-random generator.</summary>
 internal sealed class SplitMix(ulong seed)
 {
     private ulong _state = seed;
