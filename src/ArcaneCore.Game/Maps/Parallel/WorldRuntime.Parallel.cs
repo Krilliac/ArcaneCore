@@ -21,6 +21,10 @@ public sealed partial class WorldRuntime
     private long _gateWaitMicros;
     private long _gateEntries;
     private long _gateContended;
+
+    /// <summary>This thread's time spent waiting for the serial gate (micros, running total); a map run subtracts its start value.</summary>
+    [ThreadStatic]
+    private static long t_gateWaitMicros;
     private long _parallelTicks;
     private long _phaseWallMicros;
     private long _phaseMapMicros;
@@ -57,8 +61,10 @@ public sealed partial class WorldRuntime
         {
             long start = Stopwatch.GetTimestamp();
             Monitor.Enter(_serialGate);
+            long waited = (Stopwatch.GetTimestamp() - start) * 1_000_000 / Stopwatch.Frequency;
             Interlocked.Increment(ref _gateContended);
-            Interlocked.Add(ref _gateWaitMicros, (Stopwatch.GetTimestamp() - start) * 1_000_000 / Stopwatch.Frequency);
+            Interlocked.Add(ref _gateWaitMicros, waited);
+            t_gateWaitMicros += waited;
         }
 
         return new SerialScope(_serialGate);
@@ -149,7 +155,9 @@ public sealed partial class WorldRuntime
     }
 
     private string ParallelText(Map map)
-        => _mapScheduler is { } scheduler ? $"; map threads {scheduler.Threads}, last {map.LastUpdateMicros / 1000} ms" : string.Empty;
+        => _mapScheduler is { } scheduler
+            ? $"; map threads {scheduler.Threads}, own work {map.LastUpdateMicros / 1000} ms, serial gate wait {map.LastGateWaitMicros / 1000} ms"
+            : string.Empty;
 
     private void DisposeMapScheduler()
     {
@@ -162,6 +170,7 @@ public sealed partial class WorldRuntime
         public Map Map;
         public long Start;
         public long Micros;
+        public long GateWaitMicros;
         public long Bytes;
         public bool OnCaller;
         public MapUpdateDiagnostics? Diagnostics;
@@ -211,6 +220,7 @@ public sealed partial class WorldRuntime
                 map.ParallelOwnerThreadId = Environment.CurrentManagedThreadId;
                 using TickOwner.Scope owner = TickOwner.Enter(this, map);
                 long bytesBefore = GC.GetAllocatedBytesForCurrentThread();
+                long waitBefore = t_gateWaitMicros;
                 run.GcBefore = run.Diagnostics is not null ? GcSource() : default;
                 run.Start = Stopwatch.GetTimestamp();
                 try
@@ -226,9 +236,13 @@ public sealed partial class WorldRuntime
                 finally
                 {
                     run.Micros = Micros(Stopwatch.GetTimestamp() - run.Start);
+                    run.GateWaitMicros = Math.Min(run.Micros, t_gateWaitMicros - waitBefore);
                     run.Bytes = GC.GetAllocatedBytesForCurrentThread() - bytesBefore;
                     run.OnCaller = Environment.CurrentManagedThreadId == callerThread;
-                    map.LastUpdateMicros = run.Micros;
+                    // The map's own cost (its wall time less the time it queued behind other maps' gated work): the longest-first order
+                    // and the slow-update lines are about this map, not about the gate.
+                    map.LastUpdateMicros = run.Micros - run.GateWaitMicros;
+                    map.LastGateWaitMicros = run.GateWaitMicros;
                 }
             });
         }
@@ -257,7 +271,7 @@ public sealed partial class WorldRuntime
             {
                 try
                 {
-                    mapUpdated(map, run.Micros);
+                    mapUpdated(map, run.Micros - run.GateWaitMicros);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -265,7 +279,9 @@ public sealed partial class WorldRuntime
                 }
             }
 
-            LogIfSlowMicros(Options.Perf.SlowMapUpdate, run.Micros, "Slow map update", map, run.Diagnostics, run.GcBefore);
+            // Judged on the map's own work: with every unaudited stage in the serial gate, an empty map that waited 50 ms for the gate
+            // behind map 0 is not slow (live, redeploy #5: slow-map lines went from ~5 to ~100 a minute, most of them gate waits).
+            LogIfSlowMicros(Options.Perf.SlowMapUpdate, run.Micros - run.GateWaitMicros, "Slow map update", map, run.Diagnostics, run.GcBefore);
             if (run.Diagnostics is { } diagnostics && observeMap is not null)
             {
                 try
@@ -278,7 +294,7 @@ public sealed partial class WorldRuntime
                 }
             }
 
-            _phaseMapMicros += run.Micros;
+            _phaseMapMicros += run.Micros - run.GateWaitMicros;
             run = default;
         }
 
@@ -309,7 +325,7 @@ public sealed partial class WorldRuntime
         long wall = _phaseWallMicros - _summaryWallBase;
         long mapsMicros = _phaseMapMicros - _summaryMapBase;
         _logger.LogInformation(
-            "Parallel maps phase ({Seconds} s): {Ticks} ticks on {Threads} map threads, map updates {MapMs} ms in {WallMs} ms wall (overlap x{Overlap:0.00}); "
+            "Parallel maps phase ({Seconds} s): {Ticks} ticks on {Threads} map threads, map work {MapMs} ms (serial gate waits excluded) in {WallMs} ms wall (overlap x{Overlap:0.00}); "
             + "serial gate {Entries} entries, {Contended} contended, {GateWaitMs} ms waiting; barrier wait {BarrierMs} ms; owner violations {Violations}",
             (now - _summaryAt) / Stopwatch.Frequency, c.ParallelTicks - b.ParallelTicks, c.Threads, mapsMicros / 1000, wall / 1000,
             wall > 0 ? (double)mapsMicros / wall : 0, c.GateEntries - b.GateEntries, c.GateContended - b.GateContended,

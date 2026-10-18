@@ -220,6 +220,9 @@ public sealed class Map
     /// <summary>How long this map's last update took (microseconds): the longest-first order of the parallel maps phase.</summary>
     internal long LastUpdateMicros { get; set; }
 
+    /// <summary>How long this map's last parallel update waited for the world's serial gate (micros; 0 in the serial maps phase).</summary>
+    internal long LastGateWaitMicros { get; set; }
+
     /// <summary>The world this map belongs to (its serial gate and parallel options, for map systems).</summary>
     internal WorldRuntime Runtime => _world;
 
