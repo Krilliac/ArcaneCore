@@ -485,6 +485,23 @@ public sealed class ManagedPlayerbotCheckpointTests
         Assert.NotEmpty(setAsides.RowsOf(ids[0]));
     }
 
+    /// <summary>Live 2026-10-18: every bot stop was a session/kick-no-reason (~300 per restart); the stop now kicks with a reason.</summary>
+    [Fact]
+    public async Task AStop_KicksTheBotSessionWithAReason()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = await StartBotsAsync(feature, 1);
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture kicks = ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(
+            n => n.Detail.Contains("StopCoreAsync", StringComparison.Ordinal));
+
+        Assert.True((await feature.StopAsync(ids[0].ToString())).Success);
+
+        Assert.False(kicks.Any("session/kick-no-reason"), kicks.Describe());
+    }
+
     [Fact]
     public async Task TheSplitBrainGauge_IsOneWhileLatched_AndZeroAfterAClear()
     {

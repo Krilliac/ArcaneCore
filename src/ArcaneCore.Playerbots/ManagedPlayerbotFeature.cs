@@ -1705,7 +1705,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
 
                 Quiesce();
-                active.Session.Kick();
+                // A reason, so the stop is no session/kick-no-reason (live: ~300 per restart and a steady trickle from the rotation).
+                active.Session.Kick(faultCode is null ? "playerbot stopped" : "playerbot faulted: " + faultCode);
                 await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
                 await FlushBoundedAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
                 // Read on the world thread, queued behind this bot's own Forget: other bots' Forgets mutate the coordinators' collections.
@@ -2628,7 +2629,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             FaultLedger.Shared.Record("playerbot.checkpoint", ex);
             logger.LogWarning(ex, "Playerbot {BotId} controller detach failed ({Type})", botId, ex.GetType().Name);
         }
-        active.Session.Kick();
+        active.Session.Kick("playerbot dropped from the active set");
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
         BotRegistry.TryRemove(active.Entry);
         if (row is not null)
@@ -2873,7 +2874,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);
-        active.Session.Kick();
+        active.Session.Kick("playerbot fault: " + what);
     }
 
     /// <summary>Log and count an exception a fire-and-forget operator command caught (<c>.playerbot</c> subcommands answer the GM with the type only).</summary>
