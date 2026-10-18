@@ -7,8 +7,9 @@
   Ships `git archive <commit>` to the node, then runs a locked restore, Release build (warnings are errors via Directory.Build.props),
   each suite (tests/ci/<Suite>.slnf, -m:1) and the Rest-only MockClient self-test. Suites run one after another in one job,
   not as a matrix. Each suite's summary lines and exit codes are printed, and the full logs stay on the node under
-  /root/ci/<sha>/logs. One-time node setup (mariadb-server, postgresql-16, .NET 10 SDK in /opt/dotnet, root/arcane and arcane/arcane
-  logins) was done 2026-10-10. If the services are not running, this script starts them.
+  /root/ci/<sha>/logs. One-time node setup (mariadb-server, postgresql-16, root/arcane and arcane/arcane logins) was done
+  2026-10-10. /opt/dotnet holds the 10.0.401 and 11.0.100-rc.2 SDKs; the repository's global.json pins 11, so the run uses 11.
+  If the services are not running, this script starts them.
 
 .EXAMPLE
   pwsh tools/ops/ci/node-ci.ps1 -Repo . -Commit d0e3606f
@@ -85,6 +86,9 @@ done
 echo "CI RESULT: `$( [ `$fail -eq 0 ] && echo PASS || echo FAIL )"
 exit `$fail
 "@
+# A here-string keeps the script file's line ends: from a Windows (CRLF) checkout every payload line ends in CR, Linux bash rejects
+# the first line ("set: -\r: invalid option") and every later word ending a line carries the CR. Send LF only.
+$bash = $bash -replace "`r", ''
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bash))
 & $ssh @opts $NodeHost "wsl -d Ubuntu-24.04 -u root -e bash -c `"echo $b64 | base64 -d | bash`"" 2>&1 | ForEach-Object { $_ -replace "`0", '' }
 exit $LASTEXITCODE
