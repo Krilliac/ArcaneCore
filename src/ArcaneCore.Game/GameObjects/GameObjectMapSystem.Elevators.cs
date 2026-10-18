@@ -152,13 +152,9 @@ public sealed partial class GameObjectMapSystem
 
     private void UpdateElevators()
     {
-        foreach (GameObject go in _objects.Values)
+        // The transports among the objects (cached until the object set changes; validating one is read-only).
+        foreach (GameObject go in Transports())
         {
-            if (go.Type != GameObjectType.Transport)
-            {
-                continue;
-            }
-
             ValidateElevatorObject(go);
             if (ElevatorAnimations.TotalTime(go.Entry) is var total and not 0)
             {

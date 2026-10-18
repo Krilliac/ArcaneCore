@@ -219,39 +219,58 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _clockMs += diffMs;
-        UpdateAis(diffMs);
-        UpdateElevators();
-        // A snapshot (respawns and despawns change the map while it runs) into a reused list, not a new array every tick.
-        bool ownsScratch = !_updateScratchInUse;
-        List<GameObject> snapshot = ownsScratch ? _updateScratch : new List<GameObject>(_objects.Count);
+        // World:Parallel:Ungated=GameObjectMapSystem: only the quiet-object scan (ScanObjects: reads of this map's own objects) runs outside
+        // the world's serial gate; scripts, respawns, despawns, traps and spawn groups reach shared services and hold it. Outside the parallel
+        // maps phase, or when the map gates this updater, Serial() is a no-op or a reentrant entry.
+        bool reentrant = _updateScratchInUse;
+        List<GameObject> walk;
+        using (Serial())
+        {
+            UpdateAis(diffMs);
+            UpdateElevators();
+            // The walk's snapshot (respawns and despawns change the map while it runs): the object list, rebuilt only when the object set
+            // changed (same order as _objects), so no copy of every object every tick. A reentrant update walks a copy of its own.
+            walk = reentrant ? new List<GameObject>(_objects.Values) : WalkList();
+        }
+
         _updateScratchInUse = true;
-        snapshot.AddRange(_objects.Values);
         try
         {
-            UpdateObjects(snapshot);
+            int[] needing = reentrant ? new int[walk.Count] : NeedingBuffer(walk.Count);
+            int count = ScanObjects(walk, needing);
+            using (Serial())
+            {
+                UpdateObjects(walk, needing, count);
+                UpdateRest();
+            }
         }
         finally
         {
-            snapshot.Clear();
-            if (ownsScratch)
+            if (!reentrant)
             {
                 _updateScratchInUse = false;
             }
         }
+    }
 
+    private void UpdateRest()
+    {
         UpdateSpawnGroups();
-        foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
+        if (_despawnAt.Count > 0)
         {
-            try
+            foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
             {
-                if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
+                try
                 {
-                    Remove(expired);
+                    if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
+                    {
+                        Remove(expired);
+                    }
                 }
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map-gameobject", ex);
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("map-gameobject", ex);
+                }
             }
         }
 
@@ -262,11 +281,92 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
     }
 
-    private void UpdateObjects(List<GameObject> snapshot)
+    /// <summary>The world's serial gate (a no-op outside the parallel maps phase, reentrant when the map already gates this updater).</summary>
+    private WorldRuntime.SerialScope Serial() => Map.EnterSerialAndFlush();
+
+    private bool _walkListStale = true;
+    private bool _transportsStale = true;
+    private readonly List<GameObject> _transports = [];
+    private int[] _needing = [];
+
+    /// <summary>Every tracked object in <c>_objects</c> order, rebuilt when the object set changed (only by a non-reentrant update).</summary>
+    private List<GameObject> WalkList()
     {
-        for (int i = 0; i < snapshot.Count; i++)
+        if (_walkListStale)
         {
-            GameObject go = snapshot[i];
+            _updateScratch.Clear();
+            _updateScratch.AddRange(_objects.Values);
+            _walkListStale = false;
+        }
+
+        return _updateScratch;
+    }
+
+    private int[] NeedingBuffer(int count)
+        => _needing.Length >= count ? _needing : _needing = new int[Math.Max(count, _needing.Length * 2)];
+
+    /// <summary>The transports among the tracked objects in <c>_objects</c> order, rebuilt when the object set changed.</summary>
+    private List<GameObject> Transports()
+    {
+        if (_transportsStale)
+        {
+            _transports.Clear();
+            foreach (GameObject go in _objects.Values)
+            {
+                if (go.Type == GameObjectType.Transport)
+                {
+                    _transports.Add(go);
+                }
+            }
+
+            _transportsStale = false;
+        }
+
+        return _transports;
+    }
+
+    /// <summary>
+    /// The indexes in <paramref name="walk"/> of the objects this update has work for (<see cref="UpdateObjects"/>), into <paramref name="needing"/>;
+    /// the count. A quiet object (spawned, no loot reset, activation or restock due, not a trap, spell caster or door) would only be read by the
+    /// walk. Reads this map's own objects only, so it may run outside the serial gate. An object another object's work changes later in the same
+    /// walk is seen on the next update.
+    /// </summary>
+    private int ScanObjects(List<GameObject> walk, int[] needing)
+    {
+        long clockSeconds = ClockSeconds;
+        int count = 0;
+        for (int i = 0; i < walk.Count; i++)
+        {
+            GameObject go = walk[i];
+            bool needs;
+            if (!go.IsSpawned)
+            {
+                needs = go.RespawnAtMs > 0 && go.RespawnAtMs <= _clockMs;
+            }
+            else
+            {
+                GameObjectLootState loot = go.LootState;
+                GameObjectType type = go.Type;
+                needs = loot == GameObjectLootState.JustDeactivated
+                    || (go.ResetAfterSecond is { } resetAfter && resetAfter < clockSeconds)
+                    || (loot == GameObjectLootState.NotReady && go.RestockAfterSecond is { } after && after <= clockSeconds)
+                    || type is GameObjectType.Trap or GameObjectType.SpellCaster or GameObjectType.Door;
+            }
+
+            if (needs)
+            {
+                needing[count++] = i;
+            }
+        }
+
+        return count;
+    }
+
+    private void UpdateObjects(List<GameObject> walk, int[] needing, int count)
+    {
+        for (int n = 0; n < count; n++)
+        {
+            GameObject go = walk[needing[n]];
             try
             {
                 if (!go.IsSpawned)

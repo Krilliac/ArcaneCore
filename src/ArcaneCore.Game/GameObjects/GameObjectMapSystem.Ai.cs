@@ -119,7 +119,12 @@ public sealed partial class GameObjectMapSystem
     private object? _aiObjectsKey;
 
     /// <summary>The object set changed: the scripted objects are found again on the next update.</summary>
-    private void ObjectsChanged() => _aiObjectsStale = true;
+    private void ObjectsChanged()
+    {
+        _aiObjectsStale = true;
+        _walkListStale = true;
+        _transportsStale = true;
+    }
 
     private IGameObjectAi? AiOf(GameObject go)
         => _ais.GetValueOrDefault(go.Entry) ?? (_fallbackAi?.Handles(go) == true ? _fallbackAi : null);
