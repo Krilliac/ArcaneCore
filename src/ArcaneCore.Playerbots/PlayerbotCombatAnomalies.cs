@@ -48,7 +48,7 @@ internal sealed class PlayerbotCombatWatch
     private bool _lowManaReported;
 
     /// <summary>A rotation or fallback spell was submitted and the server did not take it.</summary>
-    internal void Refused(Player player, SpellInfo spell, uint nowMs)
+    internal void Refused(Player player, SpellInfo spell, uint nowMs, string? reason = null)
     {
         if (_refused.Count >= MaxTracked && !_refused.ContainsKey(spell.Id)) _refused.Clear();
         (int count, uint last, bool reported) = _refused.TryGetValue(spell.Id, out var entry) ? entry : (0, 0u, false);
@@ -59,7 +59,7 @@ internal sealed class PlayerbotCombatWatch
             reported = true;
             PlayerbotAnomalies.Report(player, "combat", "cast-refused-repeatedly",
                 string.Create(CultureInfo.InvariantCulture,
-                    $"spell {spell.Id} '{spell.Name}' chosen and submitted {count} times in a row, the server never started it"));
+                    $"spell {spell.Id} '{spell.Name}' chosen and submitted {count} times in a row, the server never started it (last result {reason ?? "none sent"})"));
         }
 
         _refused[spell.Id] = (count, nowMs, reported);

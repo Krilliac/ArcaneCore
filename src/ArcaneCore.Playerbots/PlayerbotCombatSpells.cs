@@ -171,7 +171,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         {
             _failureBackoffMs = FailureBackoffMs;
             _lastRefusedSpell = spell.Id;
-            _watch.Refused(player, spell, session.World.NowMs);
+            _watch.Refused(player, spell, session.World.NowMs, _lastRefusalReason);
         }
         else
         {
@@ -587,7 +587,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         // A refusal leaves that spell out for a while; the rest of the rotation goes on at the next decision.
         if (_refusedUntil.Count >= 64) _refusedUntil.Clear();
         _refusedUntil[spell.Id] = unchecked(session.World.NowMs + RefusalBackoffMs);
-        _watch.Refused(player, spell, session.World.NowMs);
+        _watch.Refused(player, spell, session.World.NowMs, _lastRefusalReason);
         return false;
     }
 
@@ -596,6 +596,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         or SpellImplicitTarget.UnitFriendChainHeal or SpellImplicitTarget.UnitCasterPet;
 
     /// <summary>The server took the request: its SMSG_SPELL_START / GO, or the cast, next-swing or auto-repeat slot now holds it.</summary>
+    private string? _lastRefusalReason;
+
     private bool Accepted(SpellFeature feature, Player player, SpellInfo spell)
     {
         IReadOnlyList<ManagedSessionPacket> packets = session.DrainManagedPackets(
@@ -605,6 +607,14 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             WorldOpcode.SmsgSpellFailedOther,
             WorldOpcode.SmsgCastResult);
         UnitSpellState? state = feature.System.GetState(player.Guid);
+        // The refusal's reason (SMSG_CAST_RESULT: u32 spell, u8 status, u8 SpellCastResult) for the cast-refused-repeatedly report (GitHub #827).
+        _lastRefusalReason = null;
+        foreach (ManagedSessionPacket packet in packets)
+        {
+            if (packet.Opcode == WorldOpcode.SmsgCastResult && packet.Payload.Length >= 6 && BitConverter.ToUInt32(packet.Payload, 0) == spell.Id
+                && packet.Payload[4] != 0)
+                _lastRefusalReason = ((SpellCastResult)packet.Payload[5]).ToString();
+        }
         return packets.Any(packet =>
             (packet.Opcode is WorldOpcode.SmsgSpellStart or WorldOpcode.SmsgSpellGo)
             && SpellIdOf(packet.Payload) == spell.Id)
