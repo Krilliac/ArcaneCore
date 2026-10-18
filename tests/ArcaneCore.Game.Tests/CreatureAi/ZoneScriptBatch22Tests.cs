@@ -20,7 +20,8 @@ public sealed class ZoneScriptBatch22Tests
         public List<uint> TalkedTo { get; } = [];
         public void AreaExploredOrEventHappens(Player player, uint questId) { }
         public void FailQuest(Player player, uint questId) { }
-        public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) { }
+        public List<uint> Killed { get; } = [];
+        public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) => Killed.Add(creatureEntry);
         public void GroupEventFailHappens(Player player, uint questId) { }
         public IReadOnlyList<Player> GroupMembersOf(Player player) => [];
         public bool IsQuestIncomplete(Player player, uint questId) => Incomplete.Contains(questId);
@@ -60,32 +61,31 @@ public sealed class ZoneScriptBatch22Tests
     }
 
     [Fact]
-    public void RedemptionTarget_SymbolOfLife_RevivesHim_ThenHeOffersQuests_AndLiesDownAfterTwoMinutes()
+    public void RestlessSoul_TaggedByEgansBlaster_GivesCredit_DiesAfterFiveSeconds_AndLeavesAFreedSoul()
     {
-        CreatureContent content = new([Template(RedemptionTargetAI.NpcHenzeFaulk, b => { b.Name = "Henze Faulk"; b.Faction = 12; b.NpcFlags = (uint)NpcFlags.QuestGiver; })],
-            [Spawn(1, RedemptionTargetAI.NpcHenzeFaulk, 0f, 0f, 0f)], [], [], []);
-        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content);
+        CreatureContent content = new(
+            [Template(RestlessSoulAI.Entry, b => { b.Name = "Restless Soul"; b.Faction = 21; }), Template(RestlessSoulAI.NpcFreedSoul, b => { b.Name = "Freed Soul"; b.Faction = 35; })],
+            [Spawn(1, RestlessSoulAI.Entry, 0f, 0f, 0f)], [], [], []);
+        var quests = new Quests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = quests });
         using (world)
         {
             (Player player, _) = AddPlayer(world, 1, 2f, 0f);
-            Creature henze = Assert.Single(system.Creatures);
-            var ai = Assert.IsType<RedemptionTargetAI>(henze.AI);
-            ai.OnRespawn();
-            Assert.Equal(StandState.Dead, henze.StandState);
-            Assert.Equal(0u, henze.NpcFlags & (uint)NpcFlags.QuestGiver);
+            Creature soul = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<RestlessSoulAI>(soul.AI);
+            ai.OnSpellHit(player, new SpellInfo { Id = RestlessSoulAI.SpellEganBlaster });
+            Assert.False(ai.Tagged); // not on the quest
 
-            ai.OnSpellHit(player, new SpellInfo { Id = 1 });
-            Assert.False(ai.Revived);
-            ai.OnSpellHit(player, new SpellInfo { Id = RedemptionTargetAI.SpellSymbolOfLife });
-            Assert.True(ai.Revived);
-            Assert.Equal(StandState.Stand, henze.StandState);
-            Run(world, 4500);
-            Assert.NotEqual(0u, henze.NpcFlags & (uint)NpcFlags.QuestGiver);
-
-            Run(world, 120_000, step: 1000);
-            Assert.False(ai.Revived);
-            Assert.Equal(StandState.Dead, henze.StandState);
-            Assert.Equal(0u, henze.NpcFlags & (uint)NpcFlags.QuestGiver);
+            quests.Incomplete.Add(RestlessSoulAI.QuestRestlessSoul);
+            ai.OnSpellHit(player, new SpellInfo { Id = RestlessSoulAI.SpellEganBlaster });
+            Assert.True(ai.Tagged);
+            Run(world, 4000);
+            Assert.True(soul.IsAlive);
+            Run(world, 1500);
+            Assert.False(soul.IsAlive);
+            Assert.Equal([RestlessSoulAI.Entry], quests.Killed);
+            Assert.NotNull(ai.FreedSoul);
+            Assert.Equal(RestlessSoulAI.NpcFreedSoul, ai.FreedSoul!.Entry);
         }
     }
 }
