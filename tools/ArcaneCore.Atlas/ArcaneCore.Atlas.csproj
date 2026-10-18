@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- arcane-atlas: map, vmap, mmap, line-of-sight and live-entity visualizer (docs/areas/atlas.md).
+       The server view runs the real ArcaneCore.Game readers; the reference view reads the 1.12.1 client MPQs
+       and re-reads navmesh tiles with DotRecast; the UI is a loopback-only web app with no third-party scripts. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>arcane-atlas</AssemblyName>
+    <RootNamespace>ArcaneCore.Atlas</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.Atlas.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/ArcaneCore.Game/ArcaneCore.Game.csproj" />
+    <ProjectReference Include="../../tests/ThirdParty/DotRecast/DotRecast.Detour/DotRecast.Detour.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Web/**/*" LogicalName="web/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
