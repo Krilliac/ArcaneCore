@@ -5,6 +5,7 @@ using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Ops.Control;
 using ArcaneCore.World.Ops.Diagnostics;
+using ArcaneCore.World.Ops.RemoteAdmin;
 using ArcaneCore.World.Ops.ServerConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,6 +44,7 @@ public static class WorldProductionServices
         services.AddWorldDaemon(configuration);
         services.AddWorldConsole(configuration); // typed GM commands at the console window, off when stdin is redirected (docs/areas/server-console.md); after the listener so it stops first
         services.AddWorldControlPipe(configuration); // the console commands over a local, ACL'd named pipe; off by default (docs/areas/server-console.md, "Control pipe")
+        services.AddRemoteAdmin(configuration); // GM commands over TCP (RA), loopback only, on by default (docs/operators/remote-admin.md)
         services.AddNetProtection(configuration);
         services.AddWorldWatchdog(configuration);
         services.AddWorldMetrics(configuration); // Ops:Metrics, off by default (docs/ops/metrics.md)

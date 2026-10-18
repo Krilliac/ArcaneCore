@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 349 |
-| `Administrator` | 6 | 479 |
+| `GameMaster` | 3 | 363 |
+| `Administrator` | 6 | 532 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -472,6 +472,60 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.movement` ... | 6 | Administrator | stored level through the map | Player movement rates. Syntax: .movement $subcommand |
 | `.movement rates` | 6 | Administrator | stored level through the map | Syntax: .movement rates Show the player speed rates in force (1 is retail). |
 | `.movement set` | 6 | Administrator | stored level through the map | Syntax: .movement set $field $value Change a player speed rate for every online player until the next .reload config or restart. $field: speedrate (all speeds), run, runback, swim, swimback, walk or turn. $value: a multiplier from 0.1 to 10 (1 is retail). |
+| `.botctl` ... | 3 | GameMaster | stored level through the map | Syntax: .botctl &lt;verb&gt; &lt;bots&gt; [args] [--json] Directly control playerbots (headless testing): take/release, move/follow/tele, target/attack/cast/use, interact/gossip/quest/loot, buy/sell/train/equip, chat/emote, group, battlegrounds, state/quests/inventory/auras/events/errors, wait-for conditions, run sequences, stream events. &lt;bots&gt;: a name, bot id, Prefix*, all, controlled, @alias, where:key=value&... or a comma list. See .botctl help and docs/ops/botctl.md. |
+| `.botctl help` | 3 | GameMaster | stored level through the map | Syntax: .botctl help [verb] List the verbs, or show one verb's syntax. |
+| `.botctl list` | 3 | GameMaster | stored level through the map | Syntax: .botctl list [bots] List playerbots (all, or the selection): running, controlled, owner, map, level. |
+| `.botctl take` | 6 | Administrator | stored level through the map | Syntax: .botctl take &lt;bots&gt; [passive\|defensive] [--start] [--force] Take the bots over: their own AI pauses and they do only what .botctl tells them. --start starts a stopped bot scripted; --force takes a bot another controller (a scenario) drives. |
+| `.botctl release` | 6 | Administrator | stored level through the map | Syntax: .botctl release &lt;bots&gt; Hand the bots back to their own AI. |
+| `.botctl mode` | 6 | Administrator | stored level through the map | Syntax: .botctl mode &lt;bots&gt; passive\|defensive How a controlled bot reacts on its own: passive (nothing) or defensive (attacks back whatever attacks it). |
+| `.botctl stop` | 6 | Administrator | stored level through the map | Syntax: .botctl stop &lt;bots&gt; End the motion task (move/follow) and stop where the bot stands. |
+| `.botctl move` | 6 | Administrator | stored level through the map | Syntax: .botctl move &lt;bots&gt; &lt;x&gt; &lt;y&gt; &lt;z&gt; [tolerance] \| &lt;bots&gt; &lt;unit&gt; [tolerance] Walk to a point (or to a unit's position) on the bot's map with its own navigation. Then: .botctl wait &lt;bots&gt; arrived. |
+| `.botctl tele` | 6 | Administrator | stored level through the map | Syntax: .botctl tele &lt;bots&gt; &lt;map&gt; &lt;x&gt; &lt;y&gt; &lt;z&gt; [o] \| &lt;bots&gt; &lt;unit\|player&gt; Teleport the bots (like .tele / .summon). |
+| `.botctl follow` | 6 | Administrator | stored level through the map | Syntax: .botctl follow &lt;bots&gt; &lt;unit&gt; [distance] Follow a unit (player, bot, creature) with its own navigation until stopped. |
+| `.botctl target` | 6 | Administrator | stored level through the map | Syntax: .botctl target &lt;bots&gt; &lt;unit&gt;\|clear Select a unit (CMSG_SET_SELECTION). |
+| `.botctl attack` | 6 | Administrator | stored level through the map | Syntax: .botctl attack &lt;bots&gt; [unit] Auto-attack the unit (default: the current target). |
+| `.botctl stopattack` | 6 | Administrator | stored level through the map | Syntax: .botctl stopattack &lt;bots&gt; Stop auto-attacking. |
+| `.botctl cast` | 6 | Administrator | stored level through the map | Syntax: .botctl cast &lt;bots&gt; &lt;spell&gt; [unit\|self\|at &lt;x&gt; &lt;y&gt; &lt;z&gt;] Cast a spell (CMSG_CAST_SPELL) at a unit, the bot itself (default when no target) or a point. The server's refusal is the result. |
+| `.botctl cancelaura` | 6 | Administrator | stored level through the map | Syntax: .botctl cancelaura &lt;bots&gt; &lt;spell&gt; Remove one of the bot's own auras (right-click a buff). |
+| `.botctl use` | 6 | Administrator | stored level through the map | Syntax: .botctl use &lt;bots&gt; &lt;item entry&gt; [unit\|self] Use a carried item (CMSG_USE_ITEM). |
+| `.botctl equip` | 6 | Administrator | stored level through the map | Syntax: .botctl equip &lt;bots&gt; &lt;item entry&gt; Equip a carried item (CMSG_AUTOEQUIP_ITEM). |
+| `.botctl interact` | 6 | Administrator | stored level through the map | Syntax: .botctl interact &lt;bots&gt; &lt;unit\|object&gt; Right-click: gossip / quest giver hello for a creature (vendor and trainer windows too), use for a game object. |
+| `.botctl gossip` | 6 | Administrator | stored level through the map | Syntax: .botctl gossip &lt;bots&gt; &lt;npc&gt; &lt;option index&gt; [code] Pick a gossip option (index as listed by .botctl menu / the gossip event). |
+| `.botctl menu` | 3 | GameMaster | stored level through the map | Syntax: .botctl menu &lt;bots&gt; The gossip menu the server holds open for the bot (options and quests). |
+| `.botctl quest` | 6 | Administrator | stored level through the map | Syntax: .botctl quest &lt;bots&gt; accept\|complete\|reward\|query\|hello &lt;npc&gt; [quest] [choice] \| abandon &lt;quest&gt; Quest giver actions: accept, complete (request the reward), reward (choose a reward), query, hello; abandon from the log. |
+| `.botctl loot` | 6 | Administrator | stored level through the map | Syntax: .botctl loot &lt;bots&gt; [unit\|corpse] [--keep-open] Open a loot window, take the money and every item, close it. |
+| `.botctl buy` | 6 | Administrator | stored level through the map | Syntax: .botctl buy &lt;bots&gt; &lt;vendor&gt; &lt;item entry&gt; [count] Buy from a vendor (CMSG_BUY_ITEM). |
+| `.botctl sell` | 6 | Administrator | stored level through the map | Syntax: .botctl sell &lt;bots&gt; &lt;vendor&gt; &lt;item entry&gt; [count] Sell a carried item to a vendor (CMSG_SELL_ITEM). |
+| `.botctl train` | 6 | Administrator | stored level through the map | Syntax: .botctl train &lt;bots&gt; &lt;trainer&gt; &lt;spell&gt; Learn a spell from a trainer (CMSG_TRAINER_BUY_SPELL; the trainer's spell id). |
+| `.botctl say` | 6 | Administrator | stored level through the map | Syntax: .botctl say &lt;bots&gt; &lt;text&gt; Say (the bot's own language). |
+| `.botctl yell` | 6 | Administrator | stored level through the map | Syntax: .botctl yell &lt;bots&gt; &lt;text&gt; Yell. |
+| `.botctl party` | 6 | Administrator | stored level through the map | Syntax: .botctl party &lt;bots&gt; &lt;text&gt; Party chat. |
+| `.botctl guild` | 6 | Administrator | stored level through the map | Syntax: .botctl guild &lt;bots&gt; &lt;text&gt; Guild chat. |
+| `.botctl whisper` | 6 | Administrator | stored level through the map | Syntax: .botctl whisper &lt;bots&gt; &lt;player&gt; &lt;text&gt; Whisper a player. |
+| `.botctl emote` | 6 | Administrator | stored level through the map | Syntax: .botctl emote &lt;bots&gt; &lt;text emote id&gt; [unit] A text emote (EmotesText.dbc id, e.g. 101 wave). |
+| `.botctl invite` | 6 | Administrator | stored level through the map | Syntax: .botctl invite &lt;bots&gt; &lt;player&gt; Invite a player into the bot's group. |
+| `.botctl accept` | 6 | Administrator | stored level through the map | Syntax: .botctl accept &lt;bots&gt; Accept a pending group invite. |
+| `.botctl decline` | 6 | Administrator | stored level through the map | Syntax: .botctl decline &lt;bots&gt; Decline a pending group invite. |
+| `.botctl leave` | 6 | Administrator | stored level through the map | Syntax: .botctl leave &lt;bots&gt; Leave the group. |
+| `.botctl bg` | 6 | Administrator | stored level through the map | Syntax: .botctl bg &lt;bots&gt; join &lt;battlemaster&gt; &lt;map&gt; [group] \| port &lt;map&gt; enter\|leave \| leave &lt;map&gt; \| status Battleground queue: join at a battlemaster, enter or leave when invited, leave the battleground. |
+| `.botctl repop` | 6 | Administrator | stored level through the map | Syntax: .botctl repop &lt;bots&gt; Release the spirit (CMSG_REPOP_REQUEST). |
+| `.botctl reclaim` | 6 | Administrator | stored level through the map | Syntax: .botctl reclaim &lt;bots&gt; Resurrect at the corpse (CMSG_RECLAIM_CORPSE; the ghost must be near it). |
+| `.botctl sit` | 6 | Administrator | stored level through the map | Syntax: .botctl sit &lt;bots&gt; Sit down. |
+| `.botctl stand` | 6 | Administrator | stored level through the map | Syntax: .botctl stand &lt;bots&gt; Stand up. |
+| `.botctl raw` | 6 | Administrator | stored level through the map | Syntax: .botctl raw &lt;bots&gt; &lt;CMSG_NAME\|opcode&gt; [hex payload] Send any client opcode with a raw payload (debugging; the server's handler validates it). |
+| `.botctl state` | 3 | GameMaster | stored level through the map | Syntax: .botctl state &lt;bots&gt; [--full] Position, health/power, combat, target, casting, motion task, last errors (--full: auras, quests, inventory). |
+| `.botctl quests` | 3 | GameMaster | stored level through the map | Syntax: .botctl quests &lt;bots&gt; The quest log: id, title, status, objective counts. |
+| `.botctl inventory` | 3 | GameMaster | stored level through the map | Syntax: .botctl inventory &lt;bots&gt; Every carried and equipped item: entry, name, count, bag, slot, guid. |
+| `.botctl auras` | 3 | GameMaster | stored level through the map | Syntax: .botctl auras &lt;bots&gt; The bot's auras: spell, stacks, duration, positive, caster. |
+| `.botctl path` | 3 | GameMaster | stored level through the map | Syntax: .botctl path &lt;bots&gt; The motion task: kind, state, destination, distance, plan failures. |
+| `.botctl errors` | 3 | GameMaster | stored level through the map | Syntax: .botctl errors &lt;bots&gt; [count] The last errors the server sent the bot (refused casts, attacks, purchases, quests ...). |
+| `.botctl events` | 3 | GameMaster | stored level through the map | Syntax: .botctl events &lt;bots&gt; [since &lt;seq&gt;] [limit &lt;n&gt;] [kind &lt;prefix&gt;] What the server sent and the bot did, newest last (seq numbers are global; pass the last one as since). |
+| `.botctl stream` | 3 | GameMaster | stored level through the map | Syntax: .botctl stream &lt;bots&gt; on\|off [--errors] Push the bots' events to this console/RA connection as '#event' lines until off (or the connection closes). |
+| `.botctl alias` | 6 | Administrator | stored level through the map | Syntax: .botctl alias &lt;name&gt; &lt;bots&gt; \| &lt;name&gt; clear \| list Name a selection: '@name' then selects it. |
+| `.botctl format` | 3 | GameMaster | stored level through the map | Syntax: .botctl format json\|text The default output of this connection's .botctl commands (per session). |
+| `.botctl wait` | 3 | GameMaster | stored level through the map | Syntax: .botctl wait &lt;bots&gt; &lt;condition&gt; [timeout &lt;s&gt;] [--any] [--failonerror] Wait until a condition holds for every bot (--any: one). Conditions: arrived, idle, following, combat, nocombat, alive, dead, dead &lt;unit&gt;, targetdead, hp\|power &lt;op&gt; &lt;pct&gt;, quest &lt;id&gt; &lt;status&gt;, item &lt;entry&gt; [&lt;op&gt;] &lt;n&gt;, aura &lt;spell&gt;, noaura &lt;spell&gt;, level &lt;op&gt; &lt;n&gt;, map &lt;id&gt;, near &lt;x&gt; &lt;y&gt; &lt;z&gt; [r] \| near &lt;unit&gt; [r], casting, notcasting, event &lt;kind&gt;, invited. Default timeout 30 s. |
+| `.botctl sleep` | 3 | GameMaster | stored level through the map | Syntax: .botctl sleep &lt;milliseconds&gt; Pause (in .botctl run sequences). |
+| `.botctl run` | 6 | Administrator | stored level through the map | Syntax: .botctl run &lt;bots&gt; &lt;step&gt; ; &lt;step&gt; ; ... [--continue] Run verbs one after another for the same bots ('take ; move 1 2 3 ; wait arrived timeout 60 ; cast 133 target'); stops at the first failure unless --continue. |
 | `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|splitbrain\|list\|inspect\|invite\|home\|chat\|groups\|battlegrounds\|travel\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive\|fleet\|population\|qa\|chaos&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name\|$prefix*\|all [force] Start a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Core;
@@ -28,6 +29,10 @@ public sealed class WorldConsoleExecutor
     private readonly CommandTableSource _commands;
     private readonly TextWriter _output;
     private readonly ILogger _logger;
+    private readonly string _prefix = Prefix;
+    private readonly AccountSecurity? _remoteSecurity;
+    private readonly string? _remoteName;
+    private readonly CancellationToken _lifetime;
 
     internal WorldConsoleExecutor(WorldSession consoleSession, CommandTableSource commands, TextWriter output, ILogger logger)
     {
@@ -35,6 +40,31 @@ public sealed class WorldConsoleExecutor
         _commands = commands;
         _output = output;
         _logger = logger;
+    }
+
+    private WorldConsoleExecutor(WorldSession consoleSession, CommandTableSource commands, TextWriter output, ILogger logger,
+        AccountSecurity security, string invokerName, CancellationToken lifetime)
+        : this(consoleSession, commands, output, logger)
+    {
+        _prefix = string.Empty;
+        _remoteSecurity = security;
+        _remoteName = invokerName;
+        _lifetime = lifetime;
+    }
+
+    /// <summary>
+    /// An executor for a remote administration connection (RA, docs/operators/remote-admin.md): like <see cref="Create"/>, but every
+    /// command runs with <paramref name="security"/> (the logged-in account's level), is audited as <paramref name="invokerName"/>,
+    /// prints its lines without the console prefix and sees <paramref name="lifetime"/> (cancelled when the connection closes).
+    /// </summary>
+    internal static WorldConsoleExecutor CreateRemote(
+        IServiceProvider scopeServices, OpcodeTable opcodes, WorldRuntime world, SessionRegistry registry,
+        WorldSessionOptions sessionOptions, ILogger logger, TextWriter output, AccountSecurity security, string invokerName,
+        CancellationToken lifetime)
+    {
+        WorldSession session = WorldSession.CreateConsole(scopeServices, opcodes, world, registry, sessionOptions, logger);
+        return new WorldConsoleExecutor(session, scopeServices.GetRequiredService<CommandTableSource>(), output, logger,
+            security, invokerName, lifetime);
     }
 
     /// <summary>
@@ -50,7 +80,7 @@ public sealed class WorldConsoleExecutor
     }
 
     /// <summary>Print one reply line.</summary>
-    public void WriteLine(string line) => _output.WriteLine(Prefix + line);
+    public void WriteLine(string line) => _output.WriteLine(_prefix + line);
 
     /// <summary>
     /// Rewrite the console built-ins (<c>quit</c>, <c>exit</c>, <c>shutdown [n|cancel]</c>) to the <c>.server shutdown</c> command, so
@@ -82,28 +112,45 @@ public sealed class WorldConsoleExecutor
     }
 
     /// <summary>Run <paramref name="line"/> as the console. World thread only; never throws (a failure prints a message).</summary>
-    public void Execute(string line)
+    public void Execute(string line) => Run(line);
+
+    /// <summary>
+    /// Run <paramref name="line"/> like <see cref="Execute"/> and return its context: <see cref="CommandContext.Failure"/> says whether it
+    /// failed and <see cref="CommandContext.WhenSettled"/> completes once its asynchronous work (a <c>.botctl wait</c>) ended. Null for
+    /// an empty line. World thread only; never throws.
+    /// </summary>
+    public CommandContext? Run(string line)
     {
         Invariant.Assert(_session.World.IsWorldThread, "console commands run on the world thread");
         string text = Normalize(line);
         if (text.Length == 0)
         {
-            return;
+            return null;
         }
 
-        var context = CommandContext.ForConsole(_session, _commands.Current, WriteLine);
+        CommandContext context = _remoteName is { } name
+            ? CommandContext.ForRemote(_session, _commands.Current, WriteLine, _remoteSecurity ?? AccountSecurity.Player, name, _lifetime)
+            : CommandContext.ForConsole(_session, _commands.Current, WriteLine);
         try
         {
             context.Commands.Execute(context, text);
         }
         catch (ConsoleInvokerException)
         {
+            context.Fail("needs-player");
             WriteLine(GmStrings.ConsoleNeedsPlayer);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            context.Fail("exception");
             _logger.LogError(ex, "console command failed: {Command}", ArcaneCore.Kernel.Ops.ServerConsole.ConsoleCommandRedactor.Redact(text));
             WriteLine("The command failed; see the server log.");
         }
+        finally
+        {
+            context.Complete();
+        }
+
+        return context;
     }
 }

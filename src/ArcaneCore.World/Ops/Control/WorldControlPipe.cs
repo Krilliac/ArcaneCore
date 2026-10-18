@@ -55,6 +55,9 @@ public sealed partial class WorldControlPipe : IHostedService
     /// <summary>How long a session waits for the world thread to run a command.</summary>
     public static readonly TimeSpan WorldWait = TimeSpan.FromSeconds(30);
 
+    /// <summary>How long a session waits for a command that holds itself open (<see cref="Commands.CommandContext.Defer"/>) before it sends the marker anyway.</summary>
+    public static readonly TimeSpan DeferredWait = TimeSpan.FromMinutes(15);
+
     /// <summary>How long a finished session's DI scope is kept for replies of commands that finish later.</summary>
     internal static readonly TimeSpan ScopeGrace = TimeSpan.FromMinutes(2);
 
@@ -299,11 +302,12 @@ public sealed partial class WorldControlPipe : IHostedService
 
         try
         {
-            await _world.InvokeAsync(() =>
+            Task settled = await _world.InvokeAsync(() =>
             {
+                Task held = Task.CompletedTask;
                 try
                 {
-                    executor.Execute(line);
+                    held = executor.Run(line)?.WhenSettled ?? Task.CompletedTask;
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -313,11 +317,27 @@ public sealed partial class WorldControlPipe : IHostedService
                 }
                 finally
                 {
-                    Done();
+                    // A command that holds itself open (CommandContext.Defer: .botctl wait/run) is done when its work is.
+                    if (held.IsCompleted) Done();
                 }
 
-                return 0;
+                return held;
             }, token).WaitAsync(WorldWait, token).ConfigureAwait(false);
+            if (!settled.IsCompleted)
+            {
+                try
+                {
+                    await settled.WaitAsync(DeferredWait, token).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    executor.WriteLine("the command still runs after " + (int)DeferredWait.TotalSeconds + " s; its later lines follow");
+                }
+                finally
+                {
+                    Done();
+                }
+            }
         }
         catch (TimeoutException)
         {

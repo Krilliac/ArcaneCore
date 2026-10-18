@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       597 keys
+#   WORLD                       609 keys
 #
 ###############################################################################
 
@@ -15560,6 +15560,154 @@ World.Playerbots.Qa.StaleHours = 24
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.TickHangWarmupMinutes = 5
+
+#----------------------------------------------------------------------------
+# World:RemoteAdmin
+#----------------------------------------------------------------------------
+
+#
+#    World.RemoteAdmin.AgentLoginFile
+#        Description: A file the daemon writes a fresh random token to at start; @token
+#                     &lt;token&gt; logs in as the console (Administrator) without an account, for
+#                     automation running as the same OS user (the file is readable by whoever can
+#                     read the daemon's directory). Relative paths are under the daemon's base
+#                     directory. Empty: token login off.
+#        Type: string
+#        Default: "ra-token.txt"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.AgentLoginFile = "ra-token.txt"
+
+#
+#    World.RemoteAdmin.BindAddress
+#        Description: The address to listen on. Default 127.0.0.1: only this machine can connect.
+#                     Any other address exposes a clear-text protocol (passwords included) to the
+#                     network; the daemon logs a warning when it is not a loopback address.
+#        Type: string
+#        Default: "127.0.0.1"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.BindAddress = "127.0.0.1"
+
+#
+#    World.RemoteAdmin.CommandTimeoutSeconds
+#        Description: Seconds a command that holds itself open (.botctl wait, .botctl run) may run
+#                     before RA reports #done error timeout and reads the next line (the command
+#                     itself goes on).
+#        Type: int
+#        Default: 1800
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.CommandTimeoutSeconds = 1800
+
+#
+#    World.RemoteAdmin.Enabled
+#        Description: Listen for RA connections. Default on (loopback only, see BindAddress).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.Enabled = true
+
+#
+#    World.RemoteAdmin.FailedLoginDelayMs
+#        Description: The delay before answering a wrong login.
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.FailedLoginDelayMs = 1000
+
+#
+#    World.RemoteAdmin.IdleTimeoutSeconds
+#        Description: Seconds a logged-in connection may stay silent (no command, no running
+#                     command) before it is closed. 0: never.
+#        Type: int
+#        Default: 3600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.IdleTimeoutSeconds = 3600
+
+#
+#    World.RemoteAdmin.LoginTimeoutSeconds
+#        Description: Seconds a connection has to log in.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.LoginTimeoutSeconds = 60
+
+#
+#    World.RemoteAdmin.MaxConnections
+#        Description: Concurrent connections; one more is refused with a message.
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.MaxConnections = 8
+
+#
+#    World.RemoteAdmin.MaxFailedLogins
+#        Description: Wrong logins a connection may make before it is closed (each one delayed by
+#                     FailedLoginDelayMs).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.MaxFailedLogins = 3
+
+#
+#    World.RemoteAdmin.MaxLineLength
+#        Description: The longest command line in bytes; a longer line closes the connection without
+#                     running anything.
+#        Type: int
+#        Default: 16384
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.MaxLineLength = 16384
+
+#
+#    World.RemoteAdmin.MinSecurity
+#        Description: The lowest account security that may log in (mangosd Ra.MinLevel, default
+#                     Administrator). Values: Player, Moderator, GameMaster, Administrator.
+#        Type: AccountSecurity
+#        Default: Administrator
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.MinSecurity = Administrator
+
+#
+#    World.RemoteAdmin.Port
+#        Description: The TCP port (mangosd Ra.Port default 3443).
+#        Type: int
+#        Default: 3443
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldremoteadmin
+#
+World.RemoteAdmin.Port = 3443
 
 #----------------------------------------------------------------------------
 # World:Social

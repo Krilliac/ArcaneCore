@@ -57,6 +57,11 @@ public sealed class CommandContext
 
     private readonly Player? _player;
     private readonly Action<string>? _output;
+    private readonly AccountSecurity? _remoteSecurity;
+    private readonly string? _remoteName;
+    private readonly object _settleGate = new();
+    private int _pending = 1; // the handler itself until Complete
+    private TaskCompletionSource? _settled;
 
     public CommandContext(WorldSession session, Player player, CommandTable commands)
     {
@@ -84,6 +89,98 @@ public sealed class CommandContext
         return new CommandContext(consoleSession, commands, output);
     }
 
+    /// <summary>
+    /// A remote administration invoker (RA, docs/operators/remote-admin.md): console-like (no player, replies to
+    /// <paramref name="output"/>, which must be thread-safe) but with the logged-in account's <paramref name="security"/>, audited as
+    /// <paramref name="invokerName"/>. <paramref name="lifetime"/> is cancelled when the connection closes, so long-running commands
+    /// (waits, scripts, event streams) stop with it.
+    /// </summary>
+    public static CommandContext ForRemote(WorldSession consoleSession, CommandTable commands, Action<string> output,
+        AccountSecurity security, string invokerName, CancellationToken lifetime)
+    {
+        ArgumentNullException.ThrowIfNull(consoleSession);
+        ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentException.ThrowIfNullOrWhiteSpace(invokerName);
+        return new CommandContext(consoleSession, commands, output, security, invokerName, lifetime);
+    }
+
+    private CommandContext(WorldSession session, CommandTable commands, Action<string> output, AccountSecurity security,
+        string invokerName, CancellationToken lifetime)
+        : this(session, commands, output)
+    {
+        _remoteSecurity = security;
+        _remoteName = invokerName;
+        Lifetime = lifetime;
+    }
+
+    /// <summary>Whether the invoker is a remote administration (RA) connection (console-like, with its account's security).</summary>
+    public bool IsRemote => _remoteName is not null;
+
+    /// <summary>
+    /// Cancelled when the invoker can no longer receive replies (an RA connection closed). <see cref="CancellationToken.None"/> for
+    /// the console and for players (use <see cref="CanReplyLater"/>).
+    /// </summary>
+    public CancellationToken Lifetime { get; } = CancellationToken.None;
+
+    /// <summary>
+    /// Why the command failed, for machine callers (RA's <c>#done error &lt;reason&gt;</c>), or null when it succeeded. Set by the
+    /// table (unknown command, security, syntax) and by handlers that report a machine-readable outcome (<see cref="Fail"/>).
+    /// </summary>
+    public string? Failure { get; private set; }
+
+    /// <summary>Mark the command failed (the first reason wins); the reply text is still the handler's.</summary>
+    public void Fail(string reason) => Failure ??= string.IsNullOrWhiteSpace(reason) ? "failed" : reason.Trim();
+
+    /// <summary>
+    /// Hold the command open while asynchronous work runs (waits, scripts): the caller that tracks completion
+    /// (<see cref="WhenSettled"/>, RA and the control pipe) waits until every hold is disposed before it reports the command done.
+    /// Any thread.
+    /// </summary>
+    public IDisposable Defer()
+    {
+        lock (_settleGate) _pending++;
+        return new Hold(this);
+    }
+
+    /// <summary>Completes once the handler returned (<see cref="Complete"/>) and every <see cref="Defer"/> hold was released.</summary>
+    public Task WhenSettled
+    {
+        get
+        {
+            lock (_settleGate)
+            {
+                if (_pending == 0) return Task.CompletedTask;
+                return (_settled ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            }
+        }
+    }
+
+    /// <summary>The handler returned (called once by the executor that ran it).</summary>
+    public void Complete() => Release();
+
+    private void Release()
+    {
+        TaskCompletionSource? done = null;
+        lock (_settleGate)
+        {
+            if (_pending == 0) return;
+            if (--_pending == 0) done = _settled;
+        }
+
+        done?.TrySetResult();
+    }
+
+    private sealed class Hold(CommandContext owner) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) owner.Release();
+        }
+    }
+
     public WorldSession Session { get; }
 
     /// <summary>Whether the invoker is the server console.</summary>
@@ -93,7 +190,7 @@ public sealed class CommandContext
     public Player Player => _player ?? throw new ConsoleInvokerException();
 
     /// <summary>The invoker's name for audit lines and authorship: the player, or <see cref="ConsoleName"/>.</summary>
-    public string InvokerName => _player?.Name ?? ConsoleName;
+    public string InvokerName => _player?.Name ?? _remoteName ?? ConsoleName;
 
     /// <summary>Whether a reply sent later (after an asynchronous step) still has a recipient: the console always, a player while in the world.</summary>
     public bool CanReplyLater => _player is null || _player.IsInWorld;
@@ -105,7 +202,7 @@ public sealed class CommandContext
 
     public WorldRuntime World => Session.World;
 
-    public AccountSecurity Security => IsConsole ? AccountSecurity.Administrator : Session.Security;
+    public AccountSecurity Security => IsConsole ? _remoteSecurity ?? AccountSecurity.Administrator : Session.Security;
 
     /// <summary>Send CHAT_MSG_SYSTEM lines to the invoker ('\n' separates lines); the console prints them.</summary>
     public void Reply(string text)
@@ -140,7 +237,7 @@ public sealed class CommandContext
     /// </summary>
     public bool CanActOn(Player target, bool strong = false)
     {
-        if (IsConsole || IsInvoker(target) || !GmSecurity.HasLowerSecurity(Security, target.Security, strong, Commands.Gm))
+        if ((IsConsole && !IsRemote) || IsInvoker(target) || !GmSecurity.HasLowerSecurity(Security, target.Security, strong, Commands.Gm))
         {
             return true;
         }
@@ -247,9 +344,11 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
         switch (found.Result)
         {
             case CommandLookupResult.Unknown:
+                context.Fail("unknown-command");
                 context.Reply(GmStrings.NoSuchCommand);
                 return;
             case CommandLookupResult.UnknownSubcommand:
+                context.Fail("unknown-subcommand");
                 context.Reply(GmStrings.NoSuchSubcommand);
                 ShowHelpForCommand(context, found.Table, found.Rest, 1, found.Path);
                 return;
@@ -258,6 +357,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
         ChatCommand command = found.Command!;
         if (!found.Available)
         {
+            context.Fail("security");
             context.Reply(GmStrings.CommandUnavailable);
             return;
         }
@@ -271,8 +371,9 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
             {
                 commandLine = ConsoleCommandRedactor.Redact(commandLine);
                 line = GmCommandLog.DescribeConsole(commandLine);
+                if (context.IsRemote) line += " [RA " + context.InvokerName + "]";
                 log.LogInformation("{Line}", line);
-                context.Session.Services.GetService<GmAuditFeature>()?.RecordCommand(0, CommandContext.ConsoleName, commandLine, line);
+                context.Session.Services.GetService<GmAuditFeature>()?.RecordCommand(0, context.InvokerName, commandLine, line);
             }
             else
             {
@@ -286,6 +387,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
 
         if (!command.Handler!(context, found.Rest))
         {
+            context.Fail("syntax");
             // Chat.cpp:1941-1950: the command's help text (or the generic syntax line), then its sub-commands.
             context.Reply(command.Help.Length > 0 ? command.Help : GmStrings.CmdSyntax);
             if (command.SubCommands.Count > 0)

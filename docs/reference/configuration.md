@@ -92,6 +92,7 @@ How to read the tables:
 - [`World:Instances`](#worldinstances)
 - [`World:Playerbots`](#worldplayerbots)
 - [`World:Playerbots:Qa`](#worldplayerbotsqa)
+- [`World:RemoteAdmin`](#worldremoteadmin)
 - [`World:Social`](#worldsocial)
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
 - [`World:Stealth`](#worldstealth)
@@ -1661,6 +1662,23 @@ How to read the tables:
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 | `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 | `World:Playerbots:Qa:TickHangWarmupMinutes` | `int` | `5` | - | Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5). |
+
+## `World:RemoteAdmin`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:RemoteAdmin:AgentLoginFile` | `string` | `"ra-token.txt"` | - | A file the daemon writes a fresh random token to at start; `@token &lt;token&gt;` logs in as the console (Administrator) without an account, for automation running as the same OS user (the file is readable by whoever can read the daemon's directory). Relative paths are under the daemon's base directory. Empty: token login off. |
+| `World:RemoteAdmin:BindAddress` | `string` | `"127.0.0.1"` | - | The address to listen on. Default 127.0.0.1: only this machine can connect. Any other address exposes a clear-text protocol (passwords included) to the network; the daemon logs a warning when it is not a loopback address. |
+| `World:RemoteAdmin:CommandTimeoutSeconds` | `int` | `1800` | - | Seconds a command that holds itself open (`.botctl wait`, `.botctl run`) may run before RA reports `#done error timeout` and reads the next line (the command itself goes on). |
+| `World:RemoteAdmin:Enabled` | `bool` | `true` | - | Listen for RA connections. Default on (loopback only, see `BindAddress`). |
+| `World:RemoteAdmin:FailedLoginDelayMs` | `int` | `1000` | - | The delay before answering a wrong login. |
+| `World:RemoteAdmin:IdleTimeoutSeconds` | `int` | `3600` | - | Seconds a logged-in connection may stay silent (no command, no running command) before it is closed. 0: never. |
+| `World:RemoteAdmin:LoginTimeoutSeconds` | `int` | `60` | - | Seconds a connection has to log in. |
+| `World:RemoteAdmin:MaxConnections` | `int` | `8` | - | Concurrent connections; one more is refused with a message. |
+| `World:RemoteAdmin:MaxFailedLogins` | `int` | `3` | - | Wrong logins a connection may make before it is closed (each one delayed by `FailedLoginDelayMs`). |
+| `World:RemoteAdmin:MaxLineLength` | `int` | `16384` | - | The longest command line in bytes; a longer line closes the connection without running anything. |
+| `World:RemoteAdmin:MinSecurity` | `AccountSecurity` | `Administrator` | - | The lowest account security that may log in (mangosd Ra.MinLevel, default Administrator). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:RemoteAdmin:Port` | `int` | `3443` | - | The TCP port (mangosd Ra.Port default 3443). |
 
 ## `World:Social`
 
