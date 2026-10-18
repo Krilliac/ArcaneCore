@@ -366,6 +366,9 @@ public sealed class Map
     /// <summary>Ground height under a position (<see cref="TerrainInfo.GetHeight"/>).</summary>
     public float GetHeight(float x, float y, float z) => _terrain.GetHeight(x, y, z);
 
+    /// <summary><see cref="GetHeight"/> from a terrain tile already in memory (any thread; false when the tile would have to be loaded).</summary>
+    internal bool TryGetLoadedHeight(float x, float y, out float height) => _terrain.TryGetLoadedHeight(x, y, out height);
+
     /// <summary>Zone and area at a position (<see cref="TerrainInfo.GetZoneAndAreaId"/>); (0, 0) when unknown.</summary>
     public (uint ZoneId, uint AreaId) GetZoneAndAreaId(float x, float y, float z) => _terrain.GetZoneAndAreaId(x, y, z);
 
@@ -585,6 +588,15 @@ public sealed class Map
             return;
         }
 
+        if (_world.IsParallelPhase && !_world.HoldsSerialGate)
+        {
+            // Map work outside the serial gate (an ungated creature pass): a session may also be sent to by another map's gated work
+            // (a whisper, a group update), so the packets wait in this map's outbox until the map next takes the gate (FlushOutbox),
+            // in the order they were made.
+            _outbox.Add(new OutboxPacket(source, opcode, payload.ToArray(), except));
+            return;
+        }
+
         foreach (Player other in observers)
         {
             if (!ReferenceEquals(other, source) && !ReferenceEquals(other, except))
@@ -592,6 +604,52 @@ public sealed class Map
                 other.Session.Send(opcode, payload);
             }
         }
+    }
+
+    private readonly record struct OutboxPacket(WorldObject Source, WorldOpcode Opcode, byte[] Payload, Player? Except);
+
+    private readonly List<OutboxPacket> _outbox = [];
+
+    /// <summary>Packets made outside the serial gate during the parallel maps phase and not sent yet (diagnostics, tests).</summary>
+    internal int OutboxCount => _outbox.Count;
+
+    /// <summary>
+    /// Send the packets <see cref="BroadcastToObservers(WorldObject, WorldOpcode, ReadOnlySpan{byte}, Player?)"/> held back while this map
+    /// ran outside the serial gate, in order, to the source's observers as they are now (nothing in between can change them: only this
+    /// map's own update could, and it was making the packets). The caller holds the gate. Cheap when empty.
+    /// </summary>
+    internal void FlushOutbox()
+    {
+        if (_outbox.Count == 0)
+        {
+            return;
+        }
+
+        foreach (OutboxPacket packet in _outbox)
+        {
+            if (_observers.TryGetValue(packet.Source.Guid, out HashSet<Player>? observers))
+            {
+                foreach (Player other in observers)
+                {
+                    if (!ReferenceEquals(other, packet.Source) && !ReferenceEquals(other, packet.Except))
+                    {
+                        other.Session.Send(packet.Opcode, packet.Payload);
+                    }
+                }
+            }
+        }
+
+        _outbox.Clear();
+    }
+
+    /// <summary>
+    /// The world's serial gate for map work (a no-op outside the parallel maps phase), with this map's held-back packets sent first.
+    /// </summary>
+    internal WorldRuntime.SerialScope EnterSerialAndFlush()
+    {
+        WorldRuntime.SerialScope scope = _world.EnterSerial();
+        FlushOutbox();
+        return scope;
     }
 
     /// <summary>
@@ -766,15 +824,21 @@ public sealed class Map
             diagnostics?.EndUpdater(updater);
         }
 
+        if (_outbox.Count > 0)
+        {
+            // Packets an ungated stage held back go out before this map's output stage, as they would have in the serial maps phase.
+            using WorldRuntime.SerialScope flush = EnterSerialAndFlush();
+        }
+
         UpdateOutput(diffMs, diagnostics, gridsBefore);
     }
 
     /// <summary>The serial gate for one stage of this map's update (a no-op scope outside the parallel maps phase).</summary>
     private WorldRuntime.SerialScope Gate(MapStage stage)
-        => _world.IsParallelPhase && _world.StageGates.IsGated(stage) ? _world.EnterSerial() : default;
+        => _world.IsParallelPhase && _world.StageGates.IsGated(stage) ? EnterSerialAndFlush() : default;
 
     private WorldRuntime.SerialScope GateUpdater(IMapUpdater updater)
-        => _world.IsParallelPhase && _world.StageGates.IsGated(updater) ? _world.EnterSerial() : default;
+        => _world.IsParallelPhase && _world.StageGates.IsGated(updater) ? EnterSerialAndFlush() : default;
 
     /// <summary>Stage (1): in-world packets, players in transit, logout timers.</summary>
     private void UpdatePacketsAndTimers()

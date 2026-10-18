@@ -218,7 +218,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
     /// <summary>The world's serial gate (a no-op outside the parallel maps phase, reentrant when the map already gates this updater).</summary>
-    private WorldRuntime.SerialScope Serial() => Map.Runtime.EnterSerial();
+    private WorldRuntime.SerialScope Serial() => Map.EnterSerialAndFlush();
 
     /// <summary>One stage's duration in <see cref="Stopwatch"/> ticks, and the timestamp the next stage starts from.</summary>
     private static long Lap(long since, out long ticks)
@@ -238,6 +238,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
         /// <summary>The spline pass of World:Parallel:CreatureSplinePass (inside <see cref="Creatures"/>; 0 when the pass is off).</summary>
         public long SplinePass;
+        public int UngatedWanderers;
 
         public int Walked, Updated, Searches;
         public long SlowestCreatureTicks;
@@ -269,7 +270,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     string IMapUpdateBreakdown.DescribeLastUpdate()
     {
         UpdateTiming t = _timing;
-        string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}{(t.SplinePass > 0 ? $", spline pass {TickMs(t.SplinePass)}" : "")}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
+        string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}{(t.SplinePass > 0 ? $", spline pass {TickMs(t.SplinePass)}" : "")}{(t.UngatedWanderers > 0 ? $", {t.UngatedWanderers} wanderers outside the gate" : "")}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
             + $"catch-up moves {TickMs(t.CatchUp)}, linked followers {TickMs(t.Linked)}, spawn groups {TickMs(t.SpawnGroups)}, pending ai {TickMs(t.PendingAi)}, "
             + $"relay scripts {TickMs(t.Relay)}, forced despawns {TickMs(t.Despawns)}, observers {TickMs(t.AfterUpdate)}, "
             + $"path outcomes so far: {NoPathPaths} no-path, {DirectFallbackPaths} straight authored routes, {DeferredPathSearches} deferred, {HomePathTeleports} home teleports";
@@ -319,7 +320,23 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     IReadOnlyList<Vector3> ICreatureMover.FindPath(Creature creature, Vector3 destination) => FindPath(creature, destination);
 
-    bool ICreatureMover.IsCasting(Creature creature) => _ai.Spells?.IsCasting(creature) ?? false;
+    bool ICreatureMover.IsCasting(Creature creature)
+    {
+        if (_ungatedMotion)
+        {
+            if (ReferenceEquals(creature, _ungatedSubject))
+            {
+                return _ungatedSubjectCasting;
+            }
+
+            using (Serial())
+            {
+                return _ai.Spells?.IsCasting(creature) ?? false;
+            }
+        }
+
+        return _ai.Spells?.IsCasting(creature) ?? false;
+    }
 
     CreatureMovementOptions ICreatureMover.MovementOptions => _options.Movement;
 
@@ -334,7 +351,23 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     int ICreatureMover.URand(int min, int max) => min >= max ? min : _random.Next(min, max + 1);
 
-    float? ICreatureMover.GetHeight(uint mapId, float x, float y, float z) => _height.GetHeight(mapId, x, y, z);
+    float? ICreatureMover.GetHeight(uint mapId, float x, float y, float z)
+    {
+        if (_ungatedMotion)
+        {
+            if (_height is MapCreatureHeightProvider && mapId == Map.MapId && Map.TryGetLoadedHeight(x, y, out float height))
+            {
+                return float.IsFinite(height) && height > TerrainTile.InvalidHeight ? height : null; // MapCreatureHeightProvider's answer
+            }
+
+            using (Serial())
+            {
+                return _height.GetHeight(mapId, x, y, z);
+            }
+        }
+
+        return _height.GetHeight(mapId, x, y, z);
+    }
 
     /// <summary>Wander, flee and fear choose their points with steep slopes excluded (vmangos RandomMovementGenerator.cpp:52, FleeingMovementGenerator.cpp:54).</summary>
     private static readonly PathOptions MeshPointOptions = new() { ExcludeFlags = NavTerrain.SteepSlopes };
@@ -342,6 +375,24 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     bool ICreatureMover.TryGetRandomMeshPoint(Creature creature, Vector3 center, float radius, out Vector3 point)
     {
         point = center;
+        if (_ungatedMotion)
+        {
+            if (_ungatedNoMesh)
+            {
+                return false;
+            }
+
+            if (_ungatedMeshPoints?.TryGetRandomPointAroundShared(creature.MapId, center, radius, _random, MeshPointOptions, out point) is { } answered)
+            {
+                return answered;
+            }
+
+            using (Serial())
+            {
+                return Map.Collision.MeshPoints is { } owned && owned.TryGetRandomPointAround(creature.MapId, center, radius, _random, MeshPointOptions, out point);
+            }
+        }
+
         return Map.Collision.MeshPoints is { } mesh && mesh.TryGetRandomPointAround(creature.MapId, center, radius, _random, MeshPointOptions, out point);
     }
 
@@ -490,12 +541,36 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _lastPlanQueued = false;
         if (_options.Movement.PathJobs || _pathJobsResolved)
         {
-            if (TryPlanPathByJob(creature, destination, toSpawn, chase, out PlannedPath queued))
+            if ((!_ungatedMotion || _ungatedCanSearch)
+                && TryPlanPathByJob(creature, destination, toSpawn, chase, out PlannedPath queued, _ungatedMotion ? _ungatedPathSearch : null))
             {
                 return queued;
             }
         }
 
+        if (_ungatedMotion)
+        {
+            // A search on this thread uses the pathfinder's owner path (it may read tiles): in the gate, as the owner.
+            using (Serial())
+            {
+                _ungatedMotion = false;
+                try
+                {
+                    return PlanPathOnThisThread(creature, destination, toSpawn, chase);
+                }
+                finally
+                {
+                    _ungatedMotion = true;
+                }
+            }
+        }
+
+        return PlanPathOnThisThread(creature, destination, toSpawn, chase);
+    }
+
+    /// <summary><see cref="PlanPath"/>'s synchronous search on the calling (owner) thread, within the update's search budget.</summary>
+    private PlannedPath PlanPathOnThisThread(Creature creature, Vector3 destination, bool toSpawn, bool chase)
+    {
         if (!HasPathBudget)
         {
             NoteDeferredPath(creature);
@@ -565,8 +640,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             }
         }
 
-        if (outcome == PathOutcome.Mesh && corners.Count >= 2 && Map.Collision.MeshPoints is { } mesh
-            && (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType != MovementGeneratorType.Random))
+        if (outcome == PathOutcome.Mesh && corners.Count >= 2
+            && (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType != MovementGeneratorType.Random)
+            && Map.Collision.MeshPoints is { } mesh)
         {
             corners = CreatureSplineSmoothing.VaryAndSmooth(
                 creature, start, corners, mesh, _height.GetHeight, pathOptions, allowVariation: !toSpawn && !creature.Combat.IsInCombat);
@@ -918,17 +994,129 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _timing.SplinePass = Stopwatch.GetTimestamp() - splineStart;
         using (Serial())
         {
-            UpdateCreatures(diffMs, _splineMarks);
+            UpdateCreatures(diffMs, _splineMarks, splitRandomMotion: true);
+            PrepareUngatedMotion();
+        }
+
+        // The wander legs of plain spawn wanderers run outside the gate (map-local: this map's RNG, path budget and job queue, the
+        // creature's spline; shared reads go through ICreatureMover with the rare owner-only cases in the gate, and packets wait in the
+        // map's outbox), then every other Random motion of the walk inside it. Same order at any thread count.
+        _ungatedMotion = true;
+        try
+        {
+            for (int i = 0; i < _ungatedRandom.Count; i++)
+            {
+                _ungatedSubject = _ungatedRandom[i];
+                _ungatedSubjectCasting = _ungatedRandomCasting[i];
+                UpdateRandomMotion(_ungatedSubject, diffMs);
+            }
+        }
+        finally
+        {
+            _ungatedMotion = false;
+            _ungatedSubject = null;
+            _timing.UngatedWanderers += _ungatedRandom.Count;
+            _ungatedRandom.Clear();
+            _ungatedRandomCasting.Clear();
+        }
+
+        using (Serial())
+        {
+            try
+            {
+                foreach (Creature creature in _randomMotionScratch)
+                {
+                    UpdateRandomMotion(creature, diffMs);
+                }
+            }
+            finally
+            {
+                _inCrowdedRandomPass = false;
+                _randomMotionScratch.Clear();
+            }
         }
     }
 
-    private void UpdateCreatures(uint diffMs) => UpdateCreatures(diffMs, null);
+    // --- Random motion outside the serial gate (World:Parallel:CreatureSplinePass with Ungated=CreatureMapSystem) ------------------
+
+    private readonly List<Creature> _ungatedRandom = [];
+    private readonly List<bool> _ungatedRandomCasting = [];
+    private bool _ungatedMotion;
+    private Creature? _ungatedSubject;
+    private bool _ungatedSubjectCasting;
+    private ISharedMeshPointQuery? _ungatedMeshPoints;
+    private bool _ungatedNoMesh;
+    private ISharedPathSearch? _ungatedPathSearch;
+    private bool _ungatedCanSearch;
+
+    /// <summary>
+    /// Whether the creature's Random motion may run outside the gate: a plain wander (no expiry, so its update never pops the generator
+    /// and runs no finish hook).
+    /// </summary>
+    private static bool CanMoveUngated(Creature creature)
+        => creature.Motion.Top is RandomMovementGenerator { Expires: false };
+
+    /// <summary>
+    /// In the gate, before the ungated wander pass: the owner-only lookups it needs are made here (the map's pathfinder, whether its
+    /// navmesh is known, the path-job pool), so the pass itself never reads the navmesh table or a terrain file.
+    /// </summary>
+    private void PrepareUngatedMotion()
+    {
+        IMeshPointQuery? meshPoints = Map.Collision.MeshPoints;
+        _ungatedNoMesh = meshPoints is null;
+        _ungatedMeshPoints = meshPoints as ISharedMeshPointQuery;
+        _ungatedPathSearch = Map.Collision.PathfinderForMap as ISharedPathSearch;
+        _ungatedCanSearch = (_options.Movement.PathJobs || _pathJobsResolved) && PathJobs is not null
+            && _ungatedPathSearch is { } shared && shared.CanSearchShared(Map.MapId);
+    }
+
+    /// <summary>One Random motion update of the walk's second pass (a creature that died or left meanwhile is skipped).</summary>
+    private void UpdateRandomMotion(Creature creature, uint diffMs)
+    {
+        if (creature.DeathState != CreatureDeathState.Alive
+            || !_creatures.ContainsKey(creature.Guid)
+            || (creature.Combat.IsInCombat && ReferenceEquals(creature.Motion.Top, creature.Motion.Default)))
+        {
+            return;
+        }
+
+        long motionStart = Stopwatch.GetTimestamp();
+        try
+        {
+            creature.Motion.Update(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault(
+                "CreatureMapSystem.UpdateCreatureMotion",
+                ex,
+                "Creature random motion update fault for {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}))",
+                creature.Guid,
+                creature.Entry,
+                creature.Template.Name,
+                Map.MapId,
+                creature.X,
+                creature.Y,
+                creature.Z);
+        }
+
+        long motionTicks = Stopwatch.GetTimestamp() - motionStart;
+        _timing.Motion += motionTicks;
+        if (motionTicks > _timing.SlowestCreatureTicks)
+        {
+            _timing.SlowestCreatureTicks = motionTicks;
+            _timing.SlowestEntry = creature.Entry;
+            _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+        }
+    }
+
+    private void UpdateCreatures(uint diffMs) => UpdateCreatures(diffMs, null, splitRandomMotion: false);
 
     /// <summary>
     /// The creature walk. With <paramref name="marks"/> (the spline pass ran), the scratch list is the pass's, each creature's active
     /// verdict is the pass's and a creature the pass advanced is not advanced again.
     /// </summary>
-    private void UpdateCreatures(uint diffMs, SplinePassMark[]? marks)
+    private void UpdateCreatures(uint diffMs, SplinePassMark[]? marks, bool splitRandomMotion)
     {
         uint now = _serverTime();
         if (marks is null)
@@ -1097,6 +1285,29 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         {
             _inCrowdedRandomPass = true;
             _randomPassSearchLimit = Math.Min(PathBudget.MaxSearches, _pathSearchesThisTick + 8);
+        }
+
+        if (splitRandomMotion)
+        {
+            // The caller runs the Random motions in two passes (UpdateCreaturesInPasses): the plain wanderers, with their casting state
+            // read now (the spell system's state table is world-wide), and the rest left in _randomMotionScratch.
+            int kept = 0;
+            for (int i = 0; i < _randomMotionScratch.Count; i++)
+            {
+                Creature creature = _randomMotionScratch[i];
+                if (CanMoveUngated(creature))
+                {
+                    _ungatedRandom.Add(creature);
+                    _ungatedRandomCasting.Add(_ai.Spells?.IsCasting(creature) ?? false);
+                }
+                else
+                {
+                    _randomMotionScratch[kept++] = creature;
+                }
+            }
+
+            _randomMotionScratch.RemoveRange(kept, _randomMotionScratch.Count - kept);
+            return;
         }
 
         try

@@ -28,6 +28,20 @@ public interface ISharedPathSearch
     PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options);
 }
 
+/// <summary>
+/// Mesh point queries a map thread may make outside the world's serial gate (parallel maps phase: creature wander legs). They read only
+/// what is loaded, under the pathfinder's shared read lock, like <see cref="ISharedPathSearch.FindPathShared"/>.
+/// </summary>
+public interface ISharedMeshPointQuery
+{
+    /// <summary>
+    /// <see cref="IMeshPointQuery.TryGetRandomPointAround"/> from any thread, with the same answer and the same draws from
+    /// <paramref name="random"/>; null (nothing drawn) when the owner has not looked the map's mesh up yet, so the caller must ask the
+    /// owner instead.
+    /// </summary>
+    bool? TryGetRandomPointAroundShared(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point);
+}
+
 /// <summary>How a <see cref="NavJob"/> ended.</summary>
 public enum NavJobStatus
 {

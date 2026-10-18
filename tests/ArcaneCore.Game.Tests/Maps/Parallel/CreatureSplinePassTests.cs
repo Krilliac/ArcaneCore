@@ -85,6 +85,37 @@ public sealed class CreatureSplinePassTests
         Assert.Contains(", spline pass ", ((IMapUpdateBreakdown)system).DescribeLastUpdate());
     }
 
+    [Fact]
+    public void WithCreatureMapSystemUngated_PlainWanderersMoveOutsideTheGate_AndTheirPacketsLeaveTheOutbox()
+    {
+        using WorldRuntime world = CreateRuntime(4, "CreatureMapSystem", splinePass: true);
+        world.UseManualClockFrom(0);
+        CreatureContent content = SeededContent();
+        var systems = new List<(Map Map, CreatureMapSystem System)>();
+        foreach ((uint mapId, uint instanceId) in Maps)
+        {
+            Map map = world.GetMap(mapId, instanceId);
+            var system = new CreatureMapSystem(map, content, random: new Random((int)(mapId * 7919 + instanceId)));
+            map.AddUpdater(system);
+            map.AddPlayer(TestWorld.CreatePlayer(20_000 + mapId * 10 + instanceId, 0, 0, new FakeSession((int)(20_000 + mapId * 10 + instanceId)), mapId));
+            systems.Add((map, system));
+        }
+
+        bool sawUngated = false;
+        for (int tick = 0; tick < 60; tick++)
+        {
+            world.RunTick(50);
+            foreach ((Map map, CreatureMapSystem system) in systems)
+            {
+                Assert.Equal(0, map.OutboxCount); // every held-back packet went out within the map's own update
+                sawUngated |= ((IMapUpdateBreakdown)system).DescribeLastUpdate().Contains(" wanderers outside the gate", StringComparison.Ordinal);
+            }
+        }
+
+        Assert.True(sawUngated, "no wanderer ran outside the gate");
+        Assert.Equal(0, world.ParallelCounters.OwnerViolations);
+    }
+
     private static (string Digest, int Moved, long Packets) RunScripted(int threads, string ungated, bool splinePass)
     {
         using WorldRuntime world = CreateRuntime(threads, ungated, splinePass);

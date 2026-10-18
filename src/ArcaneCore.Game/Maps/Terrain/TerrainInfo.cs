@@ -47,6 +47,30 @@ public sealed class TerrainInfo
         return _tiles[index] ??= _manager.LoadTile(MapId, tileX, tileY);
     }
 
+    /// <summary>
+    /// The ground height at (x, y) from a tile already in memory, never loading one (a map thread outside the serial gate: tiles are
+    /// shared by the instances of a map id and loaded and freed by the gated owner). The slot is read once, so a tile freed meanwhile is
+    /// still a whole tile. False when the tile is not loaded (the caller asks the owner).
+    /// </summary>
+    public bool TryGetLoadedHeight(float x, float y, out float height)
+    {
+        height = 0f;
+        if (TerrainTile.TileOf(x, y) is not { } index)
+        {
+            height = TerrainTile.Empty.GetHeight(x, y);
+            return true;
+        }
+
+        TerrainTile? tile = Volatile.Read(ref _tiles[(index.X * Size) + index.Y]);
+        if (tile is null)
+        {
+            return false;
+        }
+
+        height = tile.GetHeight(x, y);
+        return true;
+    }
+
     /// <summary>Whether a tile is in memory.</summary>
     public bool IsTileLoaded(int tileX, int tileY) => _tiles[(tileX * Size) + tileY] is not null;
 

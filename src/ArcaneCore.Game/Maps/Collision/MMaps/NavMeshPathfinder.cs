@@ -24,7 +24,8 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// </para>
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
-public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch
+public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch,
+    ISharedMeshPointQuery
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -659,6 +660,41 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return false;
         }
 
+        return RandomPointAround(mesh, center, radius, random, options, out point);
+    }
+
+    /// <inheritdoc />
+    public bool? TryGetRandomPointAroundShared(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+    {
+        point = center;
+        _sharedLock.EnterReadLock();
+        try
+        {
+            if (!_meshes.TryGetValue(mapId, out NavMesh? mesh))
+            {
+                return null; // the owner reads the map's navmesh parameters on first use; a shared query never does
+            }
+
+            if (random is null
+                || !Invariant.Check(IsFinite(center) && float.IsFinite(radius),
+                    $"NavMeshPathfinder.TryGetRandomPointAroundShared called with non-finite center={center} or radius={radius} on map {mapId}")
+                || radius <= 0
+                || mesh is null)
+            {
+                return false;
+            }
+
+            return RandomPointAround(mesh, center, radius, random, options, out point);
+        }
+        finally
+        {
+            _sharedLock.ExitReadLock();
+        }
+    }
+
+    private static bool RandomPointAround(NavMesh mesh, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+    {
+        point = center;
         options ??= PathOptions.Default;
         Vector3 centerRc = NavMeshFormat.ToRecast(center);
         if (!mesh.HaveTileAt(centerRc) || !mesh.TryFindNearestPoly(centerRc, NearExtents, options, out NavPolyRef startPoly, out Vector3 onMesh))

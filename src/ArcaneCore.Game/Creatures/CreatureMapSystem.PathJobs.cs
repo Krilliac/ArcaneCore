@@ -103,7 +103,7 @@ public sealed partial class CreatureMapSystem
 
     bool ICreaturePathQuery.LastPlanQueued => _lastPlanQueued;
 
-    private bool TryPlanPathByJob(Creature creature, Vector3 destination, bool toSpawn, bool chase, out PlannedPath plan)
+    private bool TryPlanPathByJob(Creature creature, Vector3 destination, bool toSpawn, bool chase, out PlannedPath plan, ISharedPathSearch? known = null)
     {
         plan = default;
         // An out-of-combat follow (a pet behind its owner, an escort behind its leader) may go to the pool with PathJobsFollow; a chase never.
@@ -116,13 +116,13 @@ public sealed partial class CreatureMapSystem
             || (!follow && creature.Motion.CurrentType is MovementGeneratorType.Follow)
             || creature.Motion.CurrentType is MovementGeneratorType.Chase or MovementGeneratorType.Fleeing
                 or MovementGeneratorType.Confused or MovementGeneratorType.Formation
-            || Map.Collision.PathfinderForMap is not ISharedPathSearch shared)
+            || (known ?? Map.Collision.PathfinderForMap as ISharedPathSearch) is not { } shared)
         {
             return false;
         }
 
         PathOptions options = PathOptionsFor(creature, toSpawn, chase);
-        if (options.Mover is { CanFly: true } || options.LoadTiles || options.NonBlockingTiles || !shared.CanSearchShared(Map.MapId))
+        if (options.Mover is { CanFly: true } || options.LoadTiles || options.NonBlockingTiles || (known is null && !shared.CanSearchShared(Map.MapId)))
         {
             return false;
         }

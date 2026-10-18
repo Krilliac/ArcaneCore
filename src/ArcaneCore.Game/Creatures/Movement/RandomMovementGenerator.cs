@@ -76,6 +76,9 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
     public MovementGeneratorType Type => MovementGeneratorType.Random;
 
+    /// <summary>Whether the wander ends by itself (a relay's timed wander: its update returns false and the generator is popped).</summary>
+    internal bool Expires => _expiryMs != 0;
+
     public int NextMoveMs => _nextMoveMs;
 
     /// <summary>Legs in a row that had no path (the back-off of <see cref="NoPathRetryDelay"/>; reset by a leg that moves).</summary>
