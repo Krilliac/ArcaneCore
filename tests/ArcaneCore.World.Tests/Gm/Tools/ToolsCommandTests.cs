@@ -132,3 +132,79 @@ public sealed class ToolsCommandTests
         return await client.CollectChatLinesAsync();
     }
 }
+
+/// <summary><c>.inspect quests/instance/weather/worldstates</c>, <c>.quest objective</c> and <c>.alter instancedata</c>.</summary>
+public sealed class WorldToolsCommandTests
+{
+    [Fact]
+    public void NewCommandsHaveTheirSecurityLevels()
+    {
+        CommandTable table = ChatCommands.CreateTable();
+        foreach (string path in new[] { "inspect quests", "inspect instance", "inspect weather", "inspect worldstates" })
+        {
+            Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
+            Assert.NotNull(table.Resolve(path, AccountSecurity.GameMaster));
+        }
+
+        foreach (string path in new[] { "quest objective", "alter instancedata" })
+        {
+            Assert.Null(table.Resolve(path, AccountSecurity.GameMaster));
+            Assert.NotNull(table.Resolve(path, AccountSecurity.Administrator));
+        }
+    }
+
+    [Fact]
+    public async Task QuestObjectivesAreListedAndSet()
+    {
+        var fixture = new ArcaneCore.World.Tests.Gm.Quest.QuestCommandFixture();
+        ArcaneCore.World.Tests.Gm.Quest.QuestCommandTestServices.Current.Value = fixture;
+        WorldTestHost started;
+        try
+        {
+            started = WorldTestHost.Start();
+        }
+        finally
+        {
+            ArcaneCore.World.Tests.Gm.Quest.QuestCommandTestServices.Current.Value = null;
+        }
+
+        await using WorldTestHost host = started;
+        await using WorldTestClient admin = await host.EnterWorldAsync("TOOLSQ", "Toolsq", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        const uint kill = ArcaneCore.World.Tests.Gm.Quest.QuestCommandFixture.KillQuest;
+        await admin.SendChatAsync(ChatType.Say, Language.Common, $".quest add {kill}"); // answers nothing on success
+
+        string[] log = await RunAsync(admin, ".inspect quests cull");
+        Assert.Contains(log, l => l.StartsWith("Toolsq: 1 logged quest(s) matching 'cull'", StringComparison.Ordinal));
+        Assert.Contains(log, l => l.Contains($"{kill} [Cull the test] Incomplete: o0 npc 90 0/2", StringComparison.Ordinal));
+
+        Assert.Contains(await RunAsync(admin, $".quest objective {kill} 0 5"), l => l.EndsWith("objective 0 now 2/2; quest Complete.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".inspect quests"), l => l.Contains("Complete: o0 npc 90 2/2", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, $".quest objective {kill} 0 1"), l => l.EndsWith("objective 0 now 1/2; quest Incomplete.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, $".quest objective {kill} 2 1"), l => l.EndsWith($"Quest {kill} has no objective 2.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, $".quest objective {ArcaneCore.World.Tests.Gm.Quest.QuestCommandFixture.ItemQuest} 0 1"), l => l.EndsWith("does not have quest 910002 in progress.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".quest objective 1"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WorldViewsAnswer()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("TOOLSW", "Toolsw", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+
+        string[] instance = await RunAsync(admin, ".inspect instance");
+        Assert.Contains(instance, l => l.StartsWith("map 0/0 [", StringComparison.Ordinal) && l.Contains(": script ", StringComparison.Ordinal));
+        Assert.Contains(instance, l => l.StartsWith("  data: ", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".alter instancedata 1"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".inspect weather"), l => l.StartsWith("Your zone ", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".inspect worldstates"), l => l.Contains("world state(s) for map 0 zone", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".inspect worldstates x"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+    }
+
+    private static async Task<string[]> RunAsync(WorldTestClient client, string command)
+    {
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        return await client.CollectChatLinesAsync();
+    }
+}

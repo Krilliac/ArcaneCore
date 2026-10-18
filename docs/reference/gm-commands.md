@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 345 |
-| `Administrator` | 6 | 473 |
+| `GameMaster` | 3 | 349 |
+| `Administrator` | 6 | 479 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -207,6 +207,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.quest complete` | 6 | Administrator | declared retail level | Syntax: .quest complete #quest_id\|[$quest_title]\|#shift-click-quest-link Mark every objective of the quest done for the selected player (or yourself): the required items, kills, reputation and money are given. |
 | `.quest remove` | 6 | Administrator | declared retail level | Syntax: .quest remove #quest_id\|[$quest_title]\|#shift-click-quest-link Take the quest out of the log of the selected player (or yourself), source item included, and forget that it was rewarded. |
 | `.quest status` | 3 | GameMaster | declared retail level | Syntax: .quest status [#quest_id\|[$quest_title]\|#shift-click-quest-link] Show the quest log of the selected player (or yourself), or the progress of one quest. |
+| `.quest objective` | 4 | Administrator | declared retail level | Syntax: .quest objective #quest #index #count Set the kill or use-object progress of objective #index (0-3) of a quest in the selected player's (or your) log to #count (clamped to the required count); completion is re-checked both ways. Item objectives follow the bags: use .additem/.deleteitem. |
 | `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name [reason] \| all [reason] \| status — reload configuration or content without a restart (config, spell_template, …). The optional free-text reason is announced to staff with the result (World:Announce:HotSwap). |
 | `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all [reason] — reload every content table (not the config). |
 | `.reload status` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload status — what can be reloaded and how each reload last ended. |
@@ -417,6 +418,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.inspect loot` | 3 | GameMaster | declared retail level | Syntax: .inspect loot Show the selected creature's loot: owner, permission, recipients, gold and every item with count, quest/per-player flags, looted and roll state. |
 | `.inspect gobject` | 3 | GameMaster | declared retail level | Syntax: .inspect gobject [#guid] Show a game object (the nearest within 30 yards without #guid): template, type, state, loot state, flags, dynamic flags, faction, user, owner, summoning spell, use count, cooldown, auto-close and respawn timers, skill-ups granted, non-zero data fields and its open loot. |
 | `.inspect cooldowns` | 3 | GameMaster | declared retail level | Syntax: .inspect cooldowns List the running spell and category cooldowns of the selected unit (creature or player, yourself without a selection) with the time left. |
+| `.inspect quests` | 3 | GameMaster | declared retail level | Syntax: .inspect quests [$filter] List the quest log of the selected player (or yours): slot, id, title, status, each kill/object and item objective's progress and the timer; $filter keeps the titles containing it. Also counts the rewarded quests. |
+| `.inspect instance` | 3 | GameMaster | declared retail level | Syntax: .inspect instance Show the instance script of your map: its class, whether an encounter is in progress, the non-zero data slots (GetData 0-63) and the save string. |
+| `.inspect weather` | 3 | GameMaster | declared retail level | Syntax: .inspect weather Show the weather of your zone and of every zone of your map that has weather: type, grade, permanent flag and whether the zone has a chance table. |
+| `.inspect worldstates` | 3 | GameMaster | declared retail level | Syntax: .inspect worldstates [#state] List the world state pairs SMSG_INIT_WORLD_STATES would send you in your zone now (defaults plus every provider: battlegrounds, events...), or only #state. |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.ai` ... | 3 | GameMaster | declared retail level | Syntax: .ai $subcommand Force the selected creature's AI or movement. Type .ai to see the list of possible subcommands. |
 | `.ai evade` | 3 | GameMaster | declared retail level | Syntax: .ai evade Make the selected creature evade: leave combat, clear its threat and go home. |
@@ -448,6 +453,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.alter field` | 6 | Administrator | declared retail level | Syntax: .alter field #index #value\|#hex\|#float f Write a raw update field of the selected unit (sent to the clients that see it). Debugging only: the server may overwrite it at any time. |
 | `.alter auraduration` | 3 | GameMaster | declared retail level | Syntax: .alter auraduration #spellid #seconds Set the remaining time of the selected unit's (or your) aura of #spellid (a spell link works) to #seconds (0 lets it expire now, at most 86400). Permanent auras are not changed. |
 | `.alter aurastacks` | 3 | GameMaster | declared retail level | Syntax: .alter aurastacks #spellid #stacks Set the stack count of the selected unit's (or your) aura of #spellid to #stacks (1 up to the spell's limit); the effect amounts scale with it and an increase refreshes the duration. |
+| `.alter instancedata` | 4 | Administrator | declared retail level | Syntax: .alter instancedata #slot #value Call SetData(#slot, #value) on your map's instance script (encounter states: 0 not started, 1 in progress, 2 failed, 3 done, as the script defines) and show GetData before and after. The script may save it. |
 | `.alter dynflag` | 3 | GameMaster | declared retail level | Syntax: .alter dynflag $flag\|#hex on\|off Set or clear one dynamic flag of the selected unit: Lootable, TrackUnit, Tapped, TappedByPlayer, SpecialInfo, Dead or a hex bit. |
 | `.alter combatreach` | 3 | GameMaster | declared retail level | Syntax: .alter combatreach #yards Set the combat reach of the selected unit (0-50 yards; melee range is built from it). A creature gets its model's value back when it respawns. |
 | `.alter boundingradius` | 3 | GameMaster | declared retail level | Syntax: .alter boundingradius #yards Set the bounding radius of the selected unit (0-50 yards; distances and spell ranges subtract it). |
