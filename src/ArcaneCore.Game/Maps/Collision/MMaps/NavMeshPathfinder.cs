@@ -1123,7 +1123,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         }
 
         // vmangos PathFinder.cpp:172-186: a flier goes straight through the air unless a collision
-        // model is in the way; then it follows the mesh and the destination is forced afterwards.
+        // model is in the way; then it follows the mesh and the destination is forced afterwards, unless a query with an end
+        // tolerance finds either endpoint far from its polygon, which goes straight (farFromPoly below).
         bool flier = options.Mover is { CanFly: true };
         bool forceDestination = false;
         if (flier)
