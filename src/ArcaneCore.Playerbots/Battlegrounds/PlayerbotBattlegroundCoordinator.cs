@@ -806,13 +806,16 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (t.Phase != PlayerbotBattlegroundPhase.InMatch || t.InstanceId != wsg.InstanceId || t.Team != team
                 || !_bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot bot) || bot.Session.Player is not { IsInWorld: true } p
                 || !ReferenceEquals(p.Map, map) || wsg.PlayerTeam(p.Guid) != team) continue;
-            bots.Add(new PlayerbotWsgMember(p.Guid, new Vector3(p.X, p.Y, p.Z), p.IsAlive && (p.Flags & PlayerFlags.Ghost) == 0, t.Healer));
+            // A walking bot sends a movement heartbeat every 500 ms, while a route change flushes its packet position at once; reading
+            // the live route position keeps two bots that left a fight together from leapfrogging each other in the team plan and trading
+            // TakeEnemyFlag and Midfield back and forth until the loop watch blacklists both objectives.
+            bots.Add(new PlayerbotWsgMember(p.Guid, PlayerbotMotion.CurrentPosition(p), p.IsAlive && (p.Flags & PlayerFlags.Ghost) == 0, t.Healer));
         }
 
         var enemies = new List<PlayerbotWsgEnemy>();
         foreach ((ObjectGuid guid, Team side) in wsg.Participants())
             if (side == enemy && _world.FindOnlinePlayer(guid) is { IsInWorld: true, IsAlive: true } e && (e.Flags & PlayerFlags.Ghost) == 0 && ReferenceEquals(e.Map, map))
-                enemies.Add(new PlayerbotWsgEnemy(guid, new Vector3(e.X, e.Y, e.Z)));
+                enemies.Add(new PlayerbotWsgEnemy(guid, PlayerbotMotion.CurrentPosition(e)));
 
         Vector3? At(ObjectGuid guid) => guid.IsEmpty ? null : map.FindObject(guid) is WorldObject o && ReferenceEquals(o.Map, map) ? new Vector3(o.X, o.Y, o.Z) : null;
         uint enemyStandEntry = enemy == Team.Alliance ? WarsongGulch.AllianceFlagBaseEntry : WarsongGulch.HordeFlagBaseEntry;
@@ -849,9 +852,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             EnemyStandObject = standObject,
             EnemyFlagDropped = wsg.FlagState(enemy) == WsgFlagState.OnGround ? At(wsg.DroppedFlagGuid(enemy)) : null,
             EnemyCarrier = enemyCarrier,
-            EnemyCarrierAt = enemyCarrier.IsEmpty ? null : _world.FindOnlinePlayer(enemyCarrier) is { IsInWorld: true } ec && ReferenceEquals(ec.Map, map) ? new Vector3(ec.X, ec.Y, ec.Z) : null,
+            EnemyCarrierAt = enemyCarrier.IsEmpty ? null : _world.FindOnlinePlayer(enemyCarrier) is { IsInWorld: true } ec && ReferenceEquals(ec.Map, map) ? PlayerbotMotion.CurrentPosition(ec) : null,
             OwnCarrier = ownCarrier,
-            OwnCarrierAt = ownCarrier.IsEmpty ? null : _world.FindOnlinePlayer(ownCarrier) is { IsInWorld: true } oc && ReferenceEquals(oc.Map, map) ? new Vector3(oc.X, oc.Y, oc.Z) : null,
+            OwnCarrierAt = ownCarrier.IsEmpty ? null : _world.FindOnlinePlayer(ownCarrier) is { IsInWorld: true } oc && ReferenceEquals(oc.Map, map) ? PlayerbotMotion.CurrentPosition(oc) : null,
             OwnRoom = ownRoom,
             EnemyStand = enemyStand,
             Midfield = middle,

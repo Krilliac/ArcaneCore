@@ -191,4 +191,26 @@ public sealed class PlayerbotWarsongTacticsTests
     [InlineData(true, false, 14_000u, 50f, 10f, 5f, false)]             // not long enough
     public void IsIdle_AliveOutOfCombatStillWithAGoalOrAnEnemy(bool alive, bool inCombat, uint stillMs, float goal, float arrived, float enemy, bool idle)
         => Assert.Equal(idle, PlayerbotWarsongTactics.IsIdle(alive, inCombat, stillMs, goal, arrived, enemy));
+
+    [Fact]
+    public void BotsAtTheSamePlace_KeepGuidOrderedDuties_WhenStaggeredByAHeartbeatOrThinkStep()
+    {
+        Vector3 dir = Vector3.Normalize(AllianceRoom - HordeRoom);
+        // Four bots leaving the gate or a fight in the flag room together, staggered by up to one 500 ms heartbeat (3.5 yd at 7 yd/s).
+        List<PlayerbotWsgMember> together = [Bot(1, HordeRoom), Bot(2, HordeRoom), Bot(3, HordeRoom), Bot(4, HordeRoom)];
+        List<PlayerbotWsgMember> staggered =
+        [
+            Bot(1, HordeRoom),
+            Bot(2, HordeRoom + (dir * 1.4f)),
+            Bot(3, HordeRoom + (dir * 2.1f)),
+            Bot(4, HordeRoom + (dir * 3.5f)),
+        ];
+        Dictionary<ObjectGuid, PlayerbotWsgOrder> baseline = PlayerbotWarsongTactics.Plan(Horde(together));
+        Dictionary<ObjectGuid, PlayerbotWsgOrder> afterStep = PlayerbotWarsongTactics.Plan(Horde(staggered));
+        Assert.Equal(baseline, afterStep);
+        Assert.Equal(PlayerbotWsgDuty.DefendFlagRoom, afterStep[G(1)].Duty);
+        Assert.Equal(PlayerbotWsgDuty.TakeEnemyFlag, afterStep[G(2)].Duty);
+        Assert.Equal(PlayerbotWsgDuty.TakeEnemyFlag, afterStep[G(3)].Duty);
+        Assert.Equal(PlayerbotWsgDuty.Midfield, afterStep[G(4)].Duty);
+    }
 }
