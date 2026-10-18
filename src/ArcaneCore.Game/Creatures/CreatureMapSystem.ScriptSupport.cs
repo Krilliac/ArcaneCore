@@ -22,6 +22,21 @@ public sealed partial class CreatureMapSystem
             creature.RespawnDelayOnceSeconds = seconds;
     }
 
+    /// <summary>
+    /// cmangos <c>SetRespawnDelay(d); SetRespawnTime(d); SaveRespawnTime()</c> on a database creature that is already dead (a script moving the
+    /// respawn of a corpse it despawned earlier): it now respawns <paramref name="seconds"/> from now. False for a living or temporary creature.
+    /// </summary>
+    public bool SetRespawnIn(Creature creature, uint seconds)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (creature.Spawn is null || creature.DeathState == CreatureDeathState.Alive || !ReferenceEquals(FindCreature(creature.Guid), creature))
+            return false;
+
+        creature.RespawnAtMs = _clockMs + (seconds * 1000L);
+        SaveRespawnOnDeath(creature);
+        return true;
+    }
+
     /// <summary>The creature that summoned a creature of this map (cmangos GetSpawnerGuid), by the summoned creature's GUID.</summary>
     private readonly Dictionary<ObjectGuid, ObjectGuid> _summoners = [];
 

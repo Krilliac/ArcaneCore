@@ -140,7 +140,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             // Zone scripts batch 9: the friendly forms of the Stave of the Ancients demons.
             var staveGossip = new ArcaneCore.Game.Creatures.Scripts.StaveDemonGossip(questIncomplete);
             foreach (uint demon in (uint[])[ArcaneCore.Game.Creatures.Scripts.KlinfranAI.NpcFranklin,
-                ArcaneCore.Game.Creatures.Scripts.SolenorAI.NpcNelson, ArcaneCore.Game.Creatures.Scripts.ArtoriusAI.NpcAmiable])
+                ArcaneCore.Game.Creatures.Scripts.SolenorAI.NpcNelson, ArcaneCore.Game.Creatures.Scripts.ArtoriusAI.NpcAmiable,
+                ArcaneCore.Game.Creatures.Scripts.SimoneTheInconspicuousAI.Entry])
             {
                 Services.RegisterGossipScript(demon, staveGossip);
             }

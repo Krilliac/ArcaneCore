@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// fight whoever was on its threat list. Left alone 20 minutes out of combat it vanishes the same way without The Cleaner. Its death sets a
 /// two-hour respawn. Each demon adds its spells and its answer to one hunter sting or clip.
 /// </summary>
-public abstract class StaveDemonAI(Creature creature) : ScriptedAI(creature)
+public abstract class StaveDemonAI(Creature creature) : ScriptedAI(creature), IStaveFriendlyForm
 {
     public const uint QuestStaveOfTheAncients = 7636, NpcTheCleaner = 14503;
     public const uint TransformMs = 10_000, TransformEmoteMs = 5000, DemonLifetimeMs = 20 * 60 * 1000;
@@ -495,8 +495,14 @@ public sealed class TheCleanerAI(Creature creature) : ScriptedAI(creature)
     }
 }
 
+/// <summary>The friendly form of a Stave of the Ancients demon: the gossip choice begins its transformation.</summary>
+public interface IStaveFriendlyForm
+{
+    void BeginEvent(Player player);
+}
+
 /// <summary>
-/// GossipHello / GossipSelect of the three Stave demons: "Show me your real face, demon." while The Stave of the Ancients (7636) is incomplete,
+/// GossipHello / GossipSelect of the four Stave demons: "Show me your real face, demon." while The Stave of the Ancients (7636) is incomplete,
 /// over the creature's own gossip text; choosing it closes the menu and begins the transformation.
 /// </summary>
 public sealed class StaveDemonGossip(Func<Player, uint, bool> questIncomplete) : INpcGossipScript
@@ -525,7 +531,7 @@ public sealed class StaveDemonGossip(Func<Player, uint, bool> questIncomplete) :
             return default;
         }
 
-        if (player.Map?.FindUpdater<CreatureMapSystem>()?.FindCreature(npc.Guid)?.AI is StaveDemonAI demon)
+        if (player.Map?.FindUpdater<CreatureMapSystem>()?.FindCreature(npc.Guid)?.AI is IStaveFriendlyForm demon)
         {
             demon.BeginEvent(player);
         }
