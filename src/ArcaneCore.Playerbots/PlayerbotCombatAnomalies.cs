@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.Game.Spells;
@@ -104,7 +105,9 @@ internal sealed class PlayerbotCombatWatch
         bool gap = _lastFightMs != 0 && unchecked(nowMs - _lastFightMs) > FightGapMs;
         _lastFightMs = Math.Max(1u, nowMs);
         uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
-        bool low = player.PowerType == PowerType.Mana && maxMana > 0
+        // A battleground fight never ends: vmangos BattleBotAI keeps a caster below 10% mana in the fight, meleeing (CombatBotBaseAI::BeginChasing),
+        // and drinks only once the fighting stops (PlayerbotBattlegroundAI.Rest). A dry caster there is the reference behaviour, not a loop (#813).
+        bool low = player.PowerType == PowerType.Mana && maxMana > 0 && player.Map?.Template is not { IsBattleground: true }
             && SpellSystemPower(player) * 100UL < maxMana * (ulong)LowManaPct;
         if (!low || gap)
         {
@@ -169,7 +172,7 @@ internal sealed class PlayerbotPhantomCombatWatch
         _reported = true;
         PlayerbotAnomalies.Report(player, "combat", "phantom-combat",
             string.Create(CultureInfo.InvariantCulture,
-                $"in combat for {elapsed} ms with no attacker, no threat-list holder and no victim"));
+                $"in combat for {elapsed} ms with no attacker, no threat-list holder and no victim; {Holders(player)}"));
     }
 
     private static bool HasLiveOpponent(Player player)
@@ -178,7 +181,28 @@ internal sealed class PlayerbotPhantomCombatWatch
             if (attacker.IsAlive && ReferenceEquals(attacker.Map, player.Map)) return true;
         foreach (Unit holder in player.Combat.ThreatenedBy)
             if (holder.IsAlive && ReferenceEquals(holder.Map, player.Map)) return true;
+        // vmangos Unit::Update "Pet in combat ?" (Unit.cpp:264-266): the owner stays in combat while its pet is held on a threat list, a pet
+        // tanking a creature out of the owner's sight included (#834).
+        if (player.PetGuid is { IsEmpty: false } petGuid && player.Map?.FindObject(petGuid) is Unit { IsInWorld: true } pet
+            && ReferenceEquals(pet.Map, player.Map))
+        {
+            foreach (Unit holder in pet.Combat.ThreatenedBy)
+                if (holder.IsAlive && ReferenceEquals(holder.Map, player.Map)) return true;
+        }
         return false;
+    }
+
+    /// <summary>What still holds the flag up, for the report: holders the look skipped (dead, another map) keep the server's timer from ending it.</summary>
+    private static string Holders(Player player)
+    {
+        int dead = 0, elsewhere = 0, total = 0;
+        foreach (Unit holder in player.Combat.ThreatenedBy)
+        {
+            total++;
+            if (!holder.IsAlive) dead++;
+            else if (!ReferenceEquals(holder.Map, player.Map)) elsewhere++;
+        }
+        return string.Create(CultureInfo.InvariantCulture, $"threatened-by {total} (dead {dead}, other map {elsewhere}), attackers {player.Combat.Attackers.Count}, pet {(player.PetGuid.IsEmpty ? "none" : "yes")}");
     }
 }
 
