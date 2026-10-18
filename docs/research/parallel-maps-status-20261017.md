@@ -27,6 +27,25 @@ Tests:
 
 S-16, the determinism flake under load, was not a race. `UseManualClock` starts at the wall-clock reading, and create blocks carry NowMs+1000, so tick 0 differed by the set-up time. Whole-run comparisons now use `UseManualClockFrom(0)`.
 
+## Live log (Oct 17-18, CT)
+
+- 21:11 redeploy #5: stage 1 (`MapUpdateThreads=4`). 30 min clean: 0 owner violations, 0 map-update faults on map threads, 0
+  TickHang. Serial gate about 1.1M entries a minute (about 16 per map per tick), half contended, 85-90 s of waiting a minute over the
+  4 threads; map work about 30 s of each minute's wall, so no real overlap yet (every creature stage gated). Tick body p50 46-68 ms,
+  p99 126-143 ms in the TickOverrun lines (redeploy #4, same hour: p50 ~80, p99 ~154; a fresh server, so not a like-for-like gain).
+- Unbiased tick numbers come from the 5-minute TickSummary lines ('last 1 min'), not TickOverrun lines (those fire only on overruns).
+  Single-threaded with the current Playerbots pack (#4, 20:38-21:08): p50 66-98 / p99 92-168. Stage 1 (#5, 21:17-21:32): p50 59-68 /
+  p99 119-143. #2 (p50 50-72) ran the 11:46 AM Playerbots pack (LS-016) and is not a baseline. Since #6 the minute line reports map
+  work without gate waits: ~31 s of map work in ~30 s of maps-phase wall a minute (overlap x1.0), i.e. the maps phase is about half
+  of each ~62 ms tick.
+- Fixed after stage 1 (no settings): df2e68f5 slow-map lines, the longest-first order and the minute summary count a map's own work,
+  not its gate wait (slow-map lines had gone from ~5 to ~100 a minute, mostly empty maps waiting for the gate); 6a569c79 one gate
+  entry per run of gated stages in a map update (the gate is held from the first gated stage until an ungated updater or the end).
+- d3bdea02: with stage 2 keys, plain spawn wanderers (RandomMovementGenerator without expiry) run their motion outside the gate:
+  casting state snapshotted in the gated walk, random mesh points through `ISharedMeshPointQuery` (pathfinder read lock), ground
+  height from loaded terrain tiles only, paths through the path-job pool, and packets held in the map's outbox
+  (`Map.BroadcastToObservers` outside the gate) until the map next takes the gate. Anything owner-only goes into the gate.
+
 ## What blocks real overlap (measured on live, Debug)
 
 Each continent's update is about 45-50 ms, and CreatureMapSystem accounts for about 90% of it. A world-thread CPU sample (mt-jobs, 20:15 CT) shows the world thread busy about 41% of wall time. Of that busy time, playerbot think is 54% (bot A* is 29%) and creature AI is 12.7%.
@@ -40,6 +59,8 @@ CreatureMapSystem cannot leave the gate as a whole. It reaches the following wor
 Next steps, in order:
 - Stage 1 on live: `MapUpdateThreads=4`.
 - Stage 2: `CreatureSplinePass=true`, `Ungated=CreatureMapSystem`.
-- Then ungate creature motion for the Random wanderers, once items 1 and 2 are thread-safe.
+- Done (d3bdea02): Random wanderers' motion outside the gate. Next: the rest of the creature walk for creatures with no AI work this
+  tick (leash/unreachable checks, crowd-control sync, anomaly checks), then Waypoint motion between nodes (its arrival runs scripts:
+  gated).
 
 W4 (bot think per map) runs into the same wall. Bot thinks handle packets inline and share the action and time budgets, the probe and the coordinators. Splitting them per map gains nothing until the packet handlers they reach are out of the gate. A cheaper win is moving bot A* to the thread-safe `FindPathShared` (AsyncNavigation, which mt-jobs owns).
