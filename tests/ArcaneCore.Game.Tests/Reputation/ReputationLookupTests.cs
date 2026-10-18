@@ -56,7 +56,7 @@ public sealed class ReputationLookupTests : IDisposable
     {
         _creature.FactionTemplate = ContestedGuard.Id;
         Assert.False(_lookup.Find(_player, _creature.Guid)!.IsHostile);
-        _player.Flags |= PlayerFlags.ContestedPvp;
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(_player, true);
         Assert.True(_lookup.Find(_player, _creature.Guid)!.IsHostile);
     }
 

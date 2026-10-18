@@ -129,6 +129,9 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             }
             if (factionTemplates is not null)
                 System.IsContestedGuard = unit => factionTemplates.Find(unit.FactionTemplate)?.IsContestedGuard == true;
+            ArcaneCore.World.WorldState.GameEventFeature? gameEvents = scope.ServiceProvider.GetService<ArcaneCore.World.WorldState.GameEventFeature>();
+            if (gameEvents is not null)
+                System.IsGameEventActive = id => gameEvents.IsActiveEvent(id);
             System.IsInTransit = unit => unit is Player player && world.IsOnline(player.Guid)
                 && teleports.Teleports.IsBeingTeleportedFar(player);
             ISpellContentStore? content = scope.ServiceProvider.GetService<ISpellContentStore>();

@@ -64,7 +64,7 @@ public sealed class ReputationNpcInteractionTests
         kit.Creature.FactionTemplate = factionTemplate;
         if (contested)
         {
-            kit.Player.Flags |= PlayerFlags.ContestedPvp;
+            ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(kit.Player, true);
         }
 
         Assert.Equal(eligible, kit.Services.InteractableNpc(kit.Player, kit.Creature.Guid, NpcFlags.QuestGiver) is not null);

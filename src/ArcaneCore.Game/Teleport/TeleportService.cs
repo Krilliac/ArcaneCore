@@ -350,8 +350,12 @@ public sealed class TeleportService
     }
 
     /// <summary>Teleport the player to its hearthstone bind point (vmangos <c>Player::TeleportToHomebind</c>).</summary>
-    public bool TeleportToHomebind(Player player) =>
-        TeleportTo(player, player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
+    public bool TeleportToHomebind(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Combat.MapCombat.UpdatePvpContested(player, false, overriding: true); // vmangos Player.cpp:21048
+        return TeleportTo(player, player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
+    }
 
     /// <summary>
     /// The client acknowledged a same-map teleport (vmangos <c>HandleMoveTeleportAckOpcode</c> →

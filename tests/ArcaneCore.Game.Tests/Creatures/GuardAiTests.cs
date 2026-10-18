@@ -91,7 +91,7 @@ public sealed class GuardAiTests
     {
         using Town flagged = Start(GuardTemplate(ContestedGuardFaction));
         (Player contested, _) = AddPlayer(flagged.World, 1, 10, 0);
-        contested.Flags |= PlayerFlags.ContestedPvp; // before the relocation notify of joining the map runs
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(contested, true); // 30 s flag, before the relocation notify of joining the map runs
         Run(flagged.World, 1100);
         Assert.Same(contested, flagged.Guard.Combat.Victim);
 
@@ -107,7 +107,7 @@ public sealed class GuardAiTests
     {
         using Town t = Start();
         (Player player, _) = AddPlayer(t.World, 1, 8, 0);
-        player.Flags |= PlayerFlags.ContestedPvp; // not a contested guard: the flag means nothing to it
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(player, true); // not a contested guard: the flag means nothing to it
 
         Run(t.World, 1100);
 
@@ -218,7 +218,7 @@ public sealed class GuardAiTests
         (Player player, _) = AddPlayer(t.World, 1, 25, 0);
         Assert.False(t.System.CanGuardAggroOnSight(t.Guard, player));
 
-        player.Flags |= PlayerFlags.ContestedPvp;
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(player, true);
 
         Assert.True(t.System.CanGuardAggroOnSight(t.Guard, player));
     }
@@ -230,7 +230,7 @@ public sealed class GuardAiTests
         using Town t = Start(GuardTemplate(NeutralGuardFaction));
         (Player player, _) = AddPlayer(t.World, 1, 6, 0);
         player.Relocate(6, 0, 83.5f + 6f, 0, 0);
-        player.Flags |= PlayerFlags.ContestedPvp;
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(player, true);
 
         Assert.True(t.System.CanGuardAggroOnSight(t.Guard, player));
     }

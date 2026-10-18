@@ -149,6 +149,9 @@ public sealed class UnitCombat
     /// <summary>Remaining PvP flag linger (vmangos pvpInfo.timerPvPRemaining).</summary>
     public uint PvpFlagTimer { get; internal set; }
 
+    /// <summary>Remaining contested-PvP flag linger (vmangos pvpInfo.timerPvPContestedRemaining, 30 s from the last refresh).</summary>
+    public uint PvpContestedTimer { get; internal set; }
+
     internal MapCombat? Tracker { get; set; }
 
     /// <summary>The swing timer for one hand (vmangos Unit::getAttackTimer).</summary>

@@ -435,6 +435,7 @@ public sealed partial class MapCombat
             RestoreFraction(player, restorePercent);
         }
 
+        UpdatePvpContested(player, false, overriding: true); // vmangos Player::SetDeathState: alive again clears contested PvP (Player.cpp:1576)
         player.Combat.DeathTimer = 0;
         player.Combat.ResurrectedUnflushed = true;
         player.NeedsVisibilityUpdate = true;
@@ -669,6 +670,62 @@ public sealed partial class MapCombat
         {
             attacker.Combat.InPvpCombat = attacker.Combat.InPvpCombat || !touchOnly;
             UpdatePvp(attacker, true);
+
+            // Attacking another player (or a player's pet) marks the attacker contested: neutral-town guards attack it (Unit.cpp:6052-6053).
+            if (DuelRules.ControllingPlayer(victim) is { } victimOwner && !ReferenceEquals(victimOwner, attacker))
+            {
+                UpdatePvpContested(attacker, true);
+            }
         }
+    }
+
+    /// <summary>
+    /// vmangos Player::UpdatePvPContested(state, overriding): on sets PLAYER_FLAGS_CONTESTED_PVP and refreshes the 30-second timer; off drops
+    /// the flag once the timer is over, or at once when <paramref name="overriding"/> (resurrection, hearth, Silithus flag drop).
+    /// </summary>
+    public static void UpdatePvpContested(Player player, bool state, bool overriding = false)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        bool flagged = (player.Flags & PlayerFlags.ContestedPvp) != 0;
+        if (!state || overriding)
+        {
+            if (player.Combat.PvpContestedTimer == 0 || overriding)
+            {
+                if (flagged != state)
+                {
+                    player.Flags = state ? player.Flags | PlayerFlags.ContestedPvp : player.Flags & ~PlayerFlags.ContestedPvp;
+                    player.NeedsVisibilityUpdate = true;
+                }
+
+                player.Combat.PvpContestedTimer = 0;
+            }
+
+            return;
+        }
+
+        if (!flagged)
+        {
+            player.Flags |= PlayerFlags.ContestedPvp;
+            player.NeedsVisibilityUpdate = true; // nearby contested guards re-check it (vmangos UpdateVisibilityAndView)
+        }
+
+        player.Combat.PvpContestedTimer = CombatConstants.PvpContestedTimerMs;
+    }
+
+    /// <summary>vmangos Player::UpdatePvPContestedFlagTimer (Player.cpp:17209-17217): frozen while in PvP combat, then drops the flag.</summary>
+    private static void UpdatePvpContestedFlagTimer(Player player, uint diff)
+    {
+        UnitCombat c = player.Combat;
+        if ((player.Flags & PlayerFlags.ContestedPvp) == 0)
+        {
+            return;
+        }
+
+        if (!c.InPvpCombat)
+        {
+            c.PvpContestedTimer = c.PvpContestedTimer > diff ? c.PvpContestedTimer - diff : 0;
+        }
+
+        UpdatePvpContested(player, false);
     }
 }

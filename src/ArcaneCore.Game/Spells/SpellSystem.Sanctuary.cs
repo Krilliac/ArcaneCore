@@ -10,6 +10,12 @@ public sealed partial class SpellSystem
     /// <summary>Contested guard classification supplied from the world faction catalog.</summary>
     public Func<Unit, bool> IsContestedGuard { get; set; } = static _ => false;
 
+    /// <summary>
+    /// sGameEventMgr.IsActiveEvent for spell scripts (Valentine End Check 27657), supplied by the world's game event feature. Without one every
+    /// event counts as running, so no script tears an event's auras down.
+    /// </summary>
+    public Func<ushort, bool> IsGameEventActive { get; set; } = static _ => true;
+
     internal void SuppressCreatureDetection(Player player, uint durationMs)
         => _cannotBeDetectedUntil.AddOrUpdate(player, new StrongBox<uint>(unchecked(NowMs + durationMs)));
 

@@ -134,7 +134,7 @@ public sealed class ReputationCombatHooksTests
         Assert.False(rig.Hooks.IsHostileTo(guard, rig.Player));
         Assert.False(rig.Hooks.CanAttack(rig.Player, guard));
 
-        rig.Player.Flags |= PlayerFlags.ContestedPvp;
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(rig.Player, true);
         Assert.True(rig.Hooks.IsHostileTo(guard, rig.Player));
         Assert.True(rig.Hooks.IsHostileTo(rig.Player, guard));
         Assert.True(rig.Hooks.CanAttack(rig.Player, guard));

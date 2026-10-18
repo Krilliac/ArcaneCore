@@ -40,7 +40,7 @@ public sealed class ReputationReactionTests
     {
         Assert.Equal(ReputationRank.Neutral, Npc(ContestedGuard));
         Assert.Equal(ReputationRank.Friendly, Pc(StormwindContestedGuard));
-        _player.Flags |= PlayerFlags.ContestedPvp;
+        ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(_player, true);
         Assert.Equal(ReputationRank.Hostile, Npc(ContestedGuard));
         Assert.Equal(ReputationRank.Hostile, Npc(StormwindContestedGuard));
         Assert.Equal(ReputationRank.Hostile, Pc(StormwindContestedGuard));

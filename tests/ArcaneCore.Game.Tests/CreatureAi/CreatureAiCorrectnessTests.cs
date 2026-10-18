@@ -205,7 +205,7 @@ public sealed class CreatureAiCorrectnessTests
 
         if (contestedPvp)
         {
-            player.Flags |= PlayerFlags.ContestedPvp;
+            ArcaneCore.Game.Combat.MapCombat.UpdatePvpContested(player, true);
         }
 
         Creature guard = Assert.Single(system.Creatures);

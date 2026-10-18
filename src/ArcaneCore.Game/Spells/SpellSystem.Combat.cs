@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -383,6 +385,21 @@ public sealed partial class SpellSystem
         {
             ReportUnsupported("summon", entry, context.Spell.Id);
             return;
+        }
+
+        // vmangos Spell::EffectSummon (SpellEffects.cpp:2339-2340): a caster that already has a pet summons nothing, silently (an NPC warlock
+        // recasting Summon Imp 11939 while its imp lives is not a failure). A pet GUID naming nothing on the caster's map is stale and is dropped.
+        if (!context.Caster.PetGuid.IsEmpty)
+        {
+            if (context.Caster.Map?.FindObject(context.Caster.PetGuid) is Unit)
+            {
+                return;
+            }
+
+            AnomalyLedger.Shared.Report("spell", "summon-stale-pet", FormatSpellSubject(context.Spell.Id),
+                $"caster={FormatUnitSubject(context.Caster)} petGuid={context.Caster.PetGuid} not on map; cleared before summoning {entry}",
+                AnomalySeverity.Warning);
+            context.Caster.SetPetGuid(ObjectGuid.Empty);
         }
 
         SpellCastTargets targets = context.Cast.Targets;

@@ -153,7 +153,10 @@ public sealed class AleMugAttractScript : ISpellScript
     }
 }
 
-/// <summary>Silithus Flag Click (DND) 29518 (vmangos SpellEffects.cpp:1404-1411): the clicker takes the Silithyst flag aura 29519.</summary>
+/// <summary>
+/// Silithus Flag Click (DND) 29518 (vmangos SpellEffects.cpp:1404-1411): the clicker takes the Silithyst flag aura 29519 and is marked
+/// contested PvP (neutral guards attack it).
+/// </summary>
 [SpellScript(29518)]
 public sealed class SilithusFlagClickScript : ISpellScript
 {
@@ -161,6 +164,10 @@ public sealed class SilithusFlagClickScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         GadgetCasts.Cast(context, context.Target, context.Target, 29519);
+        if (context.Target is Player player)
+        {
+            MapCombat.UpdatePvpContested(player, true);
+        }
     }
 }
 

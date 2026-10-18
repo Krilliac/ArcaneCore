@@ -169,6 +169,43 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// vmangos Player::AddCooldown(spellInfo, itemProto) from a script (Jubling Cooldown 23853 starts Hatch Egg 23851 as the Unhatched Jubling Egg
+    /// 19462 would): the item template's cooldown, category and category cooldown for that spell, or the Spell.dbc values where the item has
+    /// none (-1). Sends SMSG_SPELL_COOLDOWN to a player. Without the template the spell's own times are used.
+    /// </summary>
+    public void StartItemSpellCooldown(Unit unit, uint spellId, uint itemId)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (Store.Get(spellId) is not { } spell)
+        {
+            return;
+        }
+
+        Kernel.Items.ItemSpell? itemSpell = null;
+        if (unit is Player player && player.Inventory.Templates.Find(itemId) is { } template)
+        {
+            foreach (Kernel.Items.ItemSpell candidate in template.Spells)
+            {
+                if (candidate.SpellId == spellId)
+                {
+                    itemSpell = candidate;
+                    break;
+                }
+            }
+        }
+
+        if (itemSpell is { } s)
+        {
+            AddCooldown(GetOrCreateState(unit), spell, triggered: true, itemCooldownMs: s.Cooldown, itemCategoryCooldownMs: s.CategoryCooldown,
+                itemCategory: s.Category != 0 ? s.Category : null, itemId: itemId);
+        }
+        else
+        {
+            AddCooldown(GetOrCreateState(unit), spell, triggered: true, itemId: itemId);
+        }
+    }
+
+    /// <summary>
     /// The relations of a cast an object makes through its stand-in: the stand-in judges others as the object would (<see cref="GameObjectReactions"/>,
     /// with the map's combat hooks for the faction templates and reputations).
     /// </summary>

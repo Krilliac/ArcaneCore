@@ -297,6 +297,24 @@ public sealed partial class ShadowfangKeepInstance
         }
     }
 
+    /// <summary>
+    /// Dimensional Portal 6700 (vmangos SpellEffects.cpp:453-462, "Teleports Arugal to his lair") landed on <paramref name="creature"/>: the
+    /// intro is done (SetData(TYPE_INTRO, DONE)) and the creature leaves sight. The courtyard Arugal (10000) ends the intro as step 12 does.
+    /// </summary>
+    public void OnDimensionalPortal(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        SetData(TypeIntro, EncounterState.Done);
+        if (creature.Entry == 10000)
+        {
+            _introVisible = false;
+            _introStep = -1;
+            Instance.RefreshVisibility(creature);
+        }
+
+        Instance.FindUpdater<CreatureMapSystem>()?.ForcedDespawn(creature, 0);
+    }
+
     private sealed class ArugalEventVisibility(ShadowfangKeepInstance instance) : IVisibilityRule
     {
         public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)

@@ -72,6 +72,9 @@ public static class CombatConstants
     /// <summary>PvP flag lingers this long after it stops being wanted (vmangos Player::UpdatePvP: timerPvPRemaining = 300000).</summary>
     public const uint PvpFlagTimerMs = 300_000;
 
+    /// <summary>The contested-PvP flag (neutral guards attack) lingers this long after the last PvP pulse (vmangos Player::UpdatePvPContested: 30000).</summary>
+    public const uint PvpContestedTimerMs = 30_000;
+
     /// <summary>Fallback max damage when a unit has none (vmangos Unit::CalculateDamage: max_damage == 0 → 5).</summary>
     public const float FallbackMaxDamage = 5.0f;
 

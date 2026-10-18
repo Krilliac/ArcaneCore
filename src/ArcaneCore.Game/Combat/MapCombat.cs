@@ -304,6 +304,7 @@ public sealed partial class MapCombat : IMapUpdater
             }
 
             UpdatePvpFlagTimer(player, diff);
+            UpdatePvpContestedFlagTimer(player, diff);
             UpdatePlayerRegen(player, diff);
 
             if (c.DeathState == DeathState.JustDied)
