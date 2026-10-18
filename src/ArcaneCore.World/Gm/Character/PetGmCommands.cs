@@ -18,7 +18,9 @@ namespace ArcaneCore.World.Gm.Character;
 /// <summary>
 /// The <c>.pet</c> root (vmangos petCommandTable, Chat.cpp; the root is SEC_GAMEMASTER, :1308) with <c>.pet info</c> (SEC_MODERATOR),
 /// <c>.pet list</c> and <c>.pet loyalty</c> (SEC_GAMEMASTER): CharacterCommands.cpp HandlePetInfoCommand, HandlePetListCommand and
-/// HandlePetLoyaltyCommand. <c>rename</c>, <c>delete</c>, <c>learnspell</c> and <c>unlearnspell</c> are not provided.
+/// HandlePetLoyaltyCommand, and <c>.pet rename</c> / <c>.pet delete</c> (SEC_GAMEMASTER, by stored pet number, owner offline) and <c>.pet learnspell</c> /
+/// <c>.pet unlearnspell</c> (SEC_DEVELOPER, the selected live pet): HandlePetRenameCommand, HandlePetDeleteCommand, HandlePetLearnSpellCommand and
+/// HandlePetUnlearnSpellCommand (CharacterCommands.cpp:5258-5345).
 /// </summary>
 public sealed class PetGmCommands : ICommandGroup
 {
@@ -34,6 +36,14 @@ public sealed class PetGmCommands : ICommandGroup
 
     public const string PetsUnavailable = "The pet store is unavailable; nothing was read. See the server log.";
 
+    public const string PetStoreFailed = "The pet store failed; nothing was changed. See the server log.";
+
+    internal static string PetNotFound(uint number) => string.Create(CultureInfo.InvariantCulture, $"Pet #{number} not found");
+
+    internal static string InvalidPetName(string name) => $"\"{name}\" is not a valid pet name";
+
+    internal static string OwnerOnline(uint number, string owner) => string.Create(CultureInfo.InvariantCulture, $"Pet #{number} belongs to {owner}, who is online; log them out first.");
+
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("pet", AccountSecurity.GameMaster, "Syntax: .pet $subcommand\nType .pet to see the list of possible subcommands or .help pet $subcommand to see info on subcommands.", Children:
@@ -44,6 +54,14 @@ public sealed class PetGmCommands : ICommandGroup
                 Loyalty, RetailLevel: 3),
             new ChatCommand("info", AccountSecurity.Moderator, "Syntax: .pet info\nShow the state of the selected pet.",
                 Info, RetailLevel: 1),
+            new ChatCommand("rename", AccountSecurity.GameMaster, "Syntax: .pet rename #petnumber $newname\nRename a stored pet (see .pet list). Its owner must be offline.",
+                Rename, RetailLevel: 3),
+            new ChatCommand("delete", AccountSecurity.GameMaster, "Syntax: .pet delete #petnumber\nDelete a stored pet, current or stabled (see .pet list). Its owner must be offline.",
+                Delete, RetailLevel: 3),
+            new ChatCommand("learnspell", AccountSecurity.Administrator, "Syntax: .pet learnspell #spellid\nTeach the selected pet a spell.",
+                LearnSpell, RetailLevel: 5),
+            new ChatCommand("unlearnspell", AccountSecurity.Administrator, "Syntax: .pet unlearnspell #spellid\nMake the selected pet forget a spell.",
+                UnlearnSpell, RetailLevel: 5),
         ], RetailLevel: 3),
     ];
 
@@ -164,5 +182,121 @@ public sealed class PetGmCommands : ICommandGroup
         }
 
         return lines;
+    }
+
+    private static bool LearnSpell(CommandContext context, string text) => ChangeSpell(context, text, learn: true);
+
+    private static bool UnlearnSpell(CommandContext context, string text) => ChangeSpell(context, text, learn: false);
+
+    private static bool ChangeSpell(CommandContext context, string text, bool learn)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractUInt32KeyFromLink("Hspell", out uint spellId) || spellId == 0 || !args.IsEmpty)
+        {
+            return false;
+        }
+
+        if (SelectedPet(context) is not { } pet || context.Session.Services.GetService<PetsFeature>()?.Service is not { } summons)
+        {
+            context.Reply(NoPetSelected);
+            return true;
+        }
+
+        string name = SummonService.PetNameOf(pet);
+        string reply = learn
+            ? summons.LearnSpellByCommand(pet, spellId) ? $"Added spell {spellId} to pet {name}." : $"Failed to add spell {spellId} to pet {name}."
+            : summons.UnlearnSpellByCommand(pet, spellId) ? $"Removed spell {spellId} from pet {name}." : $"Failed to remove spell {spellId} from pet {name}.";
+        context.Reply(string.Create(CultureInfo.InvariantCulture, $"{reply}"));
+        return true;
+    }
+
+    private static bool Rename(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractUInt32(out uint petNumber))
+        {
+            return false;
+        }
+
+        string raw = args.Rest.Trim();
+        PetNameRules rules = context.Session.Services.GetService<PetNamingFeature>()?.Rules ?? new PetNameRules();
+        if (rules.NormalizeAndValidate(raw) is not { } name)
+        {
+            context.Reply(InvalidPetName(raw));
+            return true;
+        }
+
+        RunOnStoredPet(context, petNumber, async (store, found) =>
+        {
+            await store.RenameAsync(petNumber, name).ConfigureAwait(false);
+            return string.Create(CultureInfo.InvariantCulture, $"Pet #{petNumber} (\"{found.Name}\", owner #{found.CharacterId}) renamed to \"{name}\"");
+        });
+        return true;
+    }
+
+    private static bool Delete(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractUInt32(out uint petNumber) || !args.IsEmpty)
+        {
+            return false;
+        }
+
+        RunOnStoredPet(context, petNumber, async (store, found) =>
+        {
+            await store.DeleteAsync(petNumber).ConfigureAwait(false);
+            return string.Create(CultureInfo.InvariantCulture, $"Pet #{petNumber} (\"{found.Name}\", owner #{found.CharacterId}) deleted.");
+        });
+        return true;
+    }
+
+    /// <summary>
+    /// Find the stored pet off the world thread, refuse it while its owner is online (the live pet and the login cache would write the old
+    /// row back), drain the owner's queued pet saves, run <paramref name="change"/>, then drop the owner's cached pet so the next login reads
+    /// the database.
+    /// </summary>
+    private static void RunOnStoredPet(CommandContext context, uint petNumber, Func<IPetAdminStore, StoredPetLocation, Task<string>> change)
+    {
+        IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
+        SummonService? summons = context.Session.Services.GetService<PetsFeature>()?.Service;
+        ILogger log = context.Session.Logger;
+        _ = Task.Run(async () =>
+        {
+            string reply;
+            try
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                if (scope.ServiceProvider.GetService<IPetAdminStore>() is not { } store)
+                {
+                    reply = PetsUnavailable;
+                }
+                else if (await store.FindAsync(petNumber).ConfigureAwait(false) is not { } found)
+                {
+                    reply = PetNotFound(petNumber);
+                }
+                else if (await context.World.InvokeAsync(() => context.World.OnlinePlayers.FirstOrDefault(p => p.Guid.Low == (uint)found.CharacterId)?.Name)
+                             .ConfigureAwait(false) is { } online)
+                {
+                    reply = OwnerOnline(petNumber, online);
+                }
+                else
+                {
+                    if (summons is not null)
+                    {
+                        await summons.FlushCharacterAsync(found.CharacterId).ConfigureAwait(false);
+                    }
+
+                    reply = await change(store, found).ConfigureAwait(false);
+                    summons?.ForgetCharacter(found.CharacterId);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                log.LogError(ex, "GM change of stored pet #{PetNumber} failed", petNumber);
+                reply = PetStoreFailed;
+            }
+
+            context.World.Post(() => context.Reply(reply));
+        });
     }
 }

@@ -64,7 +64,11 @@ public sealed class PetStableDataModule : IDataModule, ICharacterDataCleanup
         });
     }
 
-    public void AddServices(IServiceCollection services) => services.AddScoped<IPetStableStore, EfPetStableStore>();
+    public void AddServices(IServiceCollection services)
+    {
+        services.AddScoped<IPetStableStore, EfPetStableStore>();
+        services.AddScoped<IPetAdminStore, EfPetAdminStore>();
+    }
 
     public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
     {

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 267 |
-| `Administrator` | 6 | 391 |
+| `GameMaster` | 3 | 269 |
+| `Administrator` | 6 | 395 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -327,6 +327,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.pet list` | 3 | GameMaster | declared retail level | Syntax: .pet list $playername List the stored pets of a character, current and stabled. |
 | `.pet loyalty` | 3 | GameMaster | declared retail level | Syntax: .pet loyalty #points Add (or with a negative number take) loyalty points of the selected hunter pet. |
 | `.pet info` | 1 | Moderator | declared retail level | Syntax: .pet info Show the state of the selected pet. |
+| `.pet rename` | 3 | GameMaster | declared retail level | Syntax: .pet rename #petnumber $newname Rename a stored pet (see .pet list). Its owner must be offline. |
+| `.pet delete` | 3 | GameMaster | declared retail level | Syntax: .pet delete #petnumber Delete a stored pet, current or stabled (see .pet list). Its owner must be offline. |
+| `.pet learnspell` | 5 | Administrator | declared retail level | Syntax: .pet learnspell #spellid Teach the selected pet a spell. |
+| `.pet unlearnspell` | 5 | Administrator | declared retail level | Syntax: .pet unlearnspell #spellid Make the selected pet forget a spell. |
 | `.cluster` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
 | `.cluster status` | 3 | GameMaster | stored level through the map | Syntax: .cluster status Show the cluster node identity, durable ownership fence, map routing summary, and authority leases. |
 | `.cluster node` | 3 | GameMaster | stored level through the map | Syntax: .cluster node [$player] Show which cluster node and map worker host the selected or named player (or this daemon at the console), along with their ownership token and map coordinates. |
