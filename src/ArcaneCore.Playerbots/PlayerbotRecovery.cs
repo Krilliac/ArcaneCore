@@ -1691,10 +1691,22 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (player.Map is not { } map) return [];
         if (map.FindUpdater<CreatureMapSystem>() is not { } system) return Threats(player);
-        float radiusSq = radius * radius;
-        return Threats(player, map, system.Creatures.Where(c =>
-            ((c.X - at.X) * (c.X - at.X)) + ((c.Y - at.Y) * (c.Y - at.Y)) <= radiusSq));
+        // The grid cells round the place, not every creature of the continent (a per-bot scan of ~10,000 creatures; Oct 17 live sample).
+        List<Creature> near = t_threatCandidates ??= [];
+        near.Clear();
+        try
+        {
+            system.CollectCreaturesNear(at.X, at.Y, radius, near);
+            return Threats(player, map, near);
+        }
+        finally
+        {
+            near.Clear();
+        }
     }
+
+    [ThreadStatic]
+    private static List<Creature>? t_threatCandidates;
 
     private static List<PlayerbotThreat> Threats(Player player, Map map, IEnumerable<Creature> candidates)
     {
