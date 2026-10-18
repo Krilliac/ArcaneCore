@@ -385,7 +385,7 @@ added under the `.playerbot` root.
 | `enable` / `disable` | Sets `World:Playerbots:Population:Enabled` on the live options. `disable` stops the loop; bots it started keep running. |
 | `adopt` | Takes over the homes an operator set (for example the `.playerbot send ... SentinelHill` fleet) for the bots of the population, over the next home sweeps, until none is left: a level 1 bot goes back onto the start-area flow, a graduate gets its town homes (see "Town progression"). Bots an operator created and homes an operator cleared are left alone. `AdoptOperatorHomes` does the same permanently. |
 | `rush $count [$perSecond]` / `rush stop` | Create and start `count` new bots at a rate, with a tick-p95 brake (see "Fresh launch, rush and fleet reset"). |
-| `target #count` | Sets `World:Playerbots:Population:TargetOnline` (0..1000, `PlayerbotOptions.MaxBotsCeiling`); a value out of range is refused and nothing changes. A malformed argument answers with the syntax. |
+| `target #count` | Sets `World:Playerbots:Population:TargetOnline` (0..5000, `PlayerbotOptions.MaxBotsCeiling`); a value out of range is refused and nothing changes. A malformed argument answers with the syntax. |
 
 A value set by command lasts until the next `.reload config` (which re-applies the file) or a restart: the permanent value
 belongs in the configuration file. While `Enabled` is false (or `World:Playerbots:Enabled` is), nothing is created, started,
@@ -418,7 +418,7 @@ faction, race and class first). The level bands and the zone atlas are bypassed,
 moves a fresh bot out of its starting zone; the status says `fresh launch`.
 
 **`.playerbot population rush <count> [perSecond]`** and **`rush stop`** (Administrator; default 5 per second, at most 50; count
-1..1000). Creates and starts `count` new population bots at that rate, bypassing the add-budget confirmation windows and the
+1..5000, `PlayerbotOptions.MaxBotsCeiling`). Creates and starts `count` new population bots at that rate, bypassing the add-budget confirmation windows and the
 `MaxCreatePerMinute` limit, with the same account creation as `.playerbot create` and the existing `MaxBots` and
 `MaxRegisteredBots` limits (a cap ends the rush as `halted` with the reason). One rush at a time. The brake runs in real time: a window is
 `RushBrakeWindowSeconds` (5) seconds, and if the tick p95 of a window is over the ceiling in `RushBrakeWindows` (3) consecutive
@@ -439,7 +439,7 @@ and swapped as one value on reload.
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Run the manager. |
-| `TargetOnline` | `0` | Managed bots to keep running (0..1000; capped by `MaxBots`); operator bots running take their places off the top, the rest is split over the bands. |
+| `TargetOnline` | `0` | Managed bots to keep running (0..5000; capped by `MaxBots`); operator bots running take their places off the top, the rest is split over the bands. |
 | `IntervalSeconds` | `10` | World seconds between passes (2..600). |
 | `TickP95BudgetMs` | `60` | The p95 tick budget (5..1000). |
 | `ResumeBelowPct` | `80` | Add only below this percent of the budget (10..99). |
@@ -448,8 +448,8 @@ and swapped as one value on reload.
 | `ConfirmWindows` | `2` | Consecutive fresh windows over the budget before a park, or under the resume line before an add (1..20). |
 | `MinRunSeconds` | `300` | A bot the population started is not parked for the budget before this many world seconds (0..3600). |
 | `ActionLogSeconds` | `60` | At most one information line per this many world seconds for the passes that changed something (0..3600; 0 = every one). |
-| `MaxCreatePerMinute` | `4` | New characters per minute of world time (0..60). |
-| `MaxStartsPerInterval` / `MaxParksPerInterval` | `4` / `2` | Starts plus creations, and parks, per pass (1..100). |
+| `MaxCreatePerMinute` | `4` | New characters per minute of world time (0..600). |
+| `MaxStartsPerInterval` / `MaxParksPerInterval` | `4` / `2` | Starts plus creations, and parks, per pass (1..500). |
 | `Factions` / `AllianceSharePct` | `Both` / `50` | Which factions; the Alliance share with `Both`. |
 | `Classes` | all nine | The 1.12 class ids new bots may have. |
 | `Bands` | six of ten levels | `MinLevel`, `MaxLevel`, `Weight` per band. |

@@ -137,13 +137,13 @@ public sealed class PlayerbotPopulationOptions
     /// </summary>
     public int ActionLogSeconds { get; set; } = 60;
 
-    /// <summary>The most new bot characters created per minute of world time (0..60; 0 creates none and only restarts parked bots).</summary>
+    /// <summary>The most new bot characters created per minute of world time (0..600; 0 creates none and only restarts parked bots).</summary>
     public int MaxCreatePerMinute { get; set; } = 4;
 
-    /// <summary>The most bots started or created in one pass (1..100).</summary>
+    /// <summary>The most bots started or created in one pass (1..500).</summary>
     public int MaxStartsPerInterval { get; set; } = 4;
 
-    /// <summary>The most bots parked in one pass (1..100).</summary>
+    /// <summary>The most bots parked in one pass (1..500).</summary>
     public int MaxParksPerInterval { get; set; } = 2;
 
     /// <summary>The factions bots are created for (Both by default).</summary>

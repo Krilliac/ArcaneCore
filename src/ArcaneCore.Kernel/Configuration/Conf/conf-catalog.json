@@ -13762,7 +13762,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "How many running autonomous bots are automatically selected as chaos bots when `Enabled` is on (0..1000, default 4). Bots explicitly assigned with `.playerbot chaos assign` always run probes while `Enabled` is on, even when this is 0. Live through `.reload config`.",
+      "meaning": "How many running autonomous bots are automatically selected as chaos bots when `Enabled` is on (0..5000, default 4). Bots explicitly assigned with `.playerbot chaos assign` always run probes while `Enabled` is on, even when this is 0. Live through `.reload config`.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -17684,7 +17684,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The most new bot characters created per minute of world time (0..60; 0 creates none and only restarts parked bots).",
+      "meaning": "The most new bot characters created per minute of world time (0..600; 0 creates none and only restarts parked bots).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -17700,7 +17700,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The most bots parked in one pass (1..100).",
+      "meaning": "The most bots parked in one pass (1..500).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -17732,7 +17732,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The most bots started or created in one pass (1..100).",
+      "meaning": "The most bots started or created in one pass (1..500).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

@@ -34,7 +34,7 @@ every tick. `.playerbot cadence` prints the last minute's think gap p50/p95/p99/
 the budget and the share of ticks that ended on the time or action budget (the same line is logged once a minute). A bot silent for
 longer than `ThinkStarvedGapMs` (10 s, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly.
 
-**Caps.** `MaxBots` (0..1000) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
+**Caps.** `MaxBots` (0..5000, `PlayerbotOptions.MaxBotsCeiling`) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
 start beyond it is refused with `playerbot-capacity` (a startup restore or quarantine retry waits for a slot). `MaxRegisteredBots`
 (0..10000) bounds `.playerbot create` (`playerbot-registry-full`); every registered bot is a real account and character. Both
 are live through `.reload config`: a raise admits more starts at once; lowering `MaxBots` below the running count stops nobody,
@@ -1933,7 +1933,7 @@ step: a live run has no socket master to give it.
 ### Chaos bots
 
 `World:Playerbots:Chaos` (every key live through `.reload config` and `.playerbot chaos`) designates a bounded slice of running
-autonomous playerbots (`ActiveChaosBots`, default 4, `0..1000`, plus any bot explicitly assigned with `.playerbot chaos assign`) as
+autonomous playerbots (`ActiveChaosBots`, default 4, `0..5000`, plus any bot explicitly assigned with `.playerbot chaos assign`) as
 adversarial server-breakers (`PlayerbotChaosEngine`, `PlayerbotChaosOptions`, `PlayerbotChaosCommands`).
 
 * **Execution.** Each active chaos bot continues its ordinary autonomous gameplay so it visits real world states (combat, quests,
