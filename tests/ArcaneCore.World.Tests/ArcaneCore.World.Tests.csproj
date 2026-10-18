@@ -34,6 +34,11 @@
     <Compile Include="..\ArcaneCore.Game.Tests\Collision\NavMeshFixture.cs" Link="Playerbots\NavMeshFixture.cs" />
   </ItemGroup>
 
+  <!-- Repository-authored vmaps (.vmtree/.vmtile/.vmo writer) for the playerbot lift-stop tile tests, shared with ArcaneCore.Game.Tests. -->
+  <ItemGroup>
+    <Compile Include="..\ArcaneCore.Game.Tests\Collision\VMapFixture.cs" Link="Playerbots\VMapFixture.cs" />
+  </ItemGroup>
+
   <!-- The original loot generator: the oracle of the loot plan equivalence tests on the real world.db, shared with ArcaneCore.Game.Tests. -->
   <ItemGroup>
     <Compile Include="..\ArcaneCore.Game.Tests\Memo\ReferenceLootGenerator.cs" Link="Memo\ReferenceLootGenerator.cs" />

@@ -17,6 +17,7 @@ Namespace `ArcaneCore.Game.Maps.Collision`:
 | `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(a, b)` (eye height 2 yd), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`. |
 | `unit.IsWithinLineOfSight(other)` | Extension for spells/AI/combat. |
 | `ICollisionTileLifecycle` | Optional: services that want grid create/unload forwarded as terrain tile indices. |
+| `ICollisionTileDemand` | Optional: services that load a tile for a question about a place no grid covers (`MapCollision.LoadTilesOnDemand(x, y)`: a bot choosing the landing beside a lift far from it). Each holds such tiles among a bounded number per map (`VMapManager.MaxOnDemandTiles` 16, `NavMeshPathfinder.MaxOnDemandTiles` 56, shared with path queries that load tiles), releases the one asked for longest ago to make room, and leaves a tile a grid holds to the grid; a grid created on one takes it over. Never the grid hooks, which would hold the tile until a grid on it unloads. vmangos has no such call: any terrain lookup loads the tile's vmap and mmap (`TerrainInfo::GetGrid`, GridMap.cpp:1132-1144), and the minute's clean-up unloads them while no grid references the tile (`CleanUpGrids`, GridMap.cpp:759-790). |
 | `SpellLineOfSight` | The cast-check hook (`SPELL_FAILED_LINE_OF_SIGHT`, honours `SPELL_ATTR_EX2_IGNORE_LOS` 0x4 and triggered casts). |
 | `CreaturePathing.MoveTowards(system, creature, destination, run)` | Optional creature hook: asks `map.Collision.FindPath` and launches the spline to the next corner. |
 | `CollisionServices.Install` | Builds the services from `CollisionOptions` and the data on disk (called by `World/Collision/CollisionFeature`). |
@@ -52,7 +53,8 @@ A directory that does not exist keeps the default service (logged once at startu
 ## vmaps (`Maps/Collision/VMaps`)
 
 Reader for the cMaNGOS / vmangos `VMAP_7.0` files written by `vmap_assembler`. Tiles load and
-unload with the map grids; queries see only loaded tiles (vmangos semantics). vmap internal
+unload with the map grids, or load on demand where no grid stands (`ICollisionTileDemand`, at most 16 per map); queries
+see only loaded tiles (vmangos semantics). vmap internal
 coordinates are the world rotated half a turn about the map centre (`x' = 17066.67 − x`, same for
 y; z unchanged).
 
@@ -68,7 +70,7 @@ y; z unchanged).
 Pieces: `BihTree` (reader, builder for fixtures, bounds-checked ray/point traversal), `WorldModel`
 / `GroupModel` (Möller–Trumbore ray/triangle, enclosing-group floor), `ModelInstance` (rotation
 Rz(rot.y)·Ry(rot.x)·Rx(rot.z), scale), `VMapTree` (per-map slots, refcounted tiles),
-`VMapManager` (`ILineOfSight` + `ICollisionTileLifecycle`). M2 doodads do not break line of
+`VMapManager` (`ILineOfSight` + `ICollisionTileLifecycle` + `ICollisionTileDemand`). M2 doodads do not break line of
 sight but count for heights and object hits. Model names must be plain file names.
 
 ## mmaps (`Maps/Collision/MMaps`) — managed Detour-compatible reader (not the grid fallback)

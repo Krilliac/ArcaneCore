@@ -1895,10 +1895,12 @@ internal static class PlayerbotElevator
     /// The floor beside a car standing at <paramref name="stop"/> (<see cref="LandingRadii"/> from its centre, or
     /// <see cref="VaultLandingRadii"/> outside the enclosed shaft doors on Undercity's vault lifts; 16 directions, within
     /// <see cref="LandingFloorYards"/> of its level and in line of sight from the shaft), nearest <paramref name="toward"/>; null when there is none.
+    /// The stop may lie where no grid is loaded (a lift far from the bot): its model and navigation tiles are loaded on demand
+    /// (<see cref="MapCollision.LoadTilesOnDemand"/>), never as a grid's.
     /// </summary>
     internal static Vector3? LandingBeside(Map map, Vector3 stop, Vector3 toward)
     {
-        EnsureStopTileLoaded(map, stop);
+        map.Collision.LoadTilesOnDemand(stop.X, stop.Y);
         if (ElevatorRegions.IsVaultLift(map.MapId, stop) && FindOnRings(map, stop, toward, VaultLandingRadii) is { } vaultLanding)
         {
             return vaultLanding;
@@ -1990,15 +1992,6 @@ internal static class PlayerbotElevator
 
             return null;
         }
-    }
-
-    private static void EnsureStopTileLoaded(Map map, Vector3 stop)
-    {
-        if (TerrainTile.TileOf(stop.X, stop.Y) is not { } tile) return;
-        if (map.Collision.LineOfSight is ICollisionTileLifecycle losTile)
-            losTile.OnTileLoaded(map.MapId, tile.X, tile.Y);
-        if (map.Collision.Pathfinder is ICollisionTileLifecycle meshTile && !ReferenceEquals(meshTile, map.Collision.LineOfSight))
-            meshTile.OnTileLoaded(map.MapId, tile.X, tile.Y);
     }
 
     private static bool TryLandingFloor(Map map, Vector3 stop, float x, float y, out float floor)
