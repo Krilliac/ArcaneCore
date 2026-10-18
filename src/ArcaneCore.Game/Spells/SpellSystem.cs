@@ -1746,6 +1746,11 @@ public sealed partial class SpellSystem
     /// <summary>vmangos Player::AddGCD (see <see cref="SpellConstants.GlobalCooldownCategory"/>).</summary>
     private void AddGlobalCooldown(UnitSpellState state, SpellInfo spell)
     {
+        if (state.Unit is Player { Cheats: not PlayerCheats.None } cheater && cheater.HasCheat(PlayerCheats.NoCooldown))
+        {
+            return; // vmangos Spell::prepare (Spell.cpp:3492): no GCD under the no-cooldown cheat
+        }
+
         int duration = (int)spell.StartRecoveryTime;
         if (spell.StartRecoveryCategory == 0 && duration == 0)
         {
@@ -1785,6 +1790,11 @@ public sealed partial class SpellSystem
         if (spell.IsPassive || (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && !onEvent))
         {
             return;
+        }
+
+        if (state.Unit is Player { Cheats: not PlayerCheats.None } cheater && cheater.HasCheat(PlayerCheats.NoCooldown))
+        {
+            return; // vmangos Spell::SendSpellCooldown (Spell.cpp:3993-3995): the no-cooldown cheat starts none
         }
 
         if (itemCooldownMs is < -1 || itemCategoryCooldownMs is < -1)

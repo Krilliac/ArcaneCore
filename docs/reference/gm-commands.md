@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 287 |
-| `Administrator` | 6 | 413 |
+| `GameMaster` | 3 | 298 |
+| `Administrator` | 6 | 424 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -39,6 +39,16 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.character boost` | 6 | Administrator | stored level through the map | Syntax: .character boost [$playername] #level Bring the named online player, the selected player or yourself to the level: class trainer spells, a level-appropriate equipped gear kit, filled action bars and some money. |
 | `.character rename` | 3 | GameMaster | declared retail level | Syntax: .character rename [$name] Request a rename of the selected character, or the named one (online or not); the player is asked for a new name at the character screen. |
+| `.cheat` ... | 3 | GameMaster | declared retail level | Syntax: .cheat $subcommand GM cheats on the selected player or yourself. Type .cheat to see the list. |
+| `.cheat god` | 3 | GameMaster | declared retail level | Syntax: .cheat god on\|off [$name] The player takes damage but cannot drop below 1 health. |
+| `.cheat cooldown` | 3 | GameMaster | declared retail level | Syntax: .cheat cooldown on\|off [$name] No spell, category or global cooldowns. |
+| `.cheat casttime` | 3 | GameMaster | declared retail level | Syntax: .cheat casttime on\|off [$name] Every spell casts instantly. |
+| `.cheat power` | 3 | GameMaster | declared retail level | Syntax: .cheat power on\|off [$name] Spells cost no mana, rage or energy. |
+| `.cheat waterwalk` | 3 | GameMaster | declared retail level | Syntax: .cheat waterwalk on\|off The selected player or you walk on water. |
+| `.cheat immunepc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunepc on\|off [$name] Players cannot attack the player. |
+| `.cheat immunenpc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunenpc on\|off [$name] Creatures cannot attack the player. |
+| `.cheat untargetable` | 3 | GameMaster | declared retail level | Syntax: .cheat untargetable on\|off [$name] Nobody can select the player. |
+| `.cheat status` | 3 | GameMaster | declared retail level | Syntax: .cheat status [$name] List the cheats active on the player. |
 | `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
 | `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
 | `.debug vis los` | 3 | GameMaster | declared retail level | Syntax: .debug vis los Draw the line of sight from you to the selected unit through the vmap collision (green clear; red up to the hit, a reticle at the hit, small red dots for the hidden rest). |
@@ -83,6 +93,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.gm chat` | 1 | Moderator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .gm chat [on/off] Enable or disable the GM badge on your chat, or show the current state. |
 | `.gm ingame` | 1 | Moderator | stored level through the map | Syntax: .gm ingame List the game masters online with their GM mode on, and whether they accept whispers. |
 | `.gm list` | 6 | Administrator | stored level through the map | Syntax: .gm list List every staff member online with their security level. |
+| `.gm visible` | 3 | GameMaster | declared retail level | Syntax: .gm visible [on/off] Show or hide yourself from players of a lower security level, or show the current state. |
 | `.honor` ... | 3 | GameMaster | declared retail level | Syntax: .honor $subcommand Type .honor to see the list of possible subcommands or .help honor $subcommand to see info on subcommands. |
 | `.honor add` | 4 | Administrator | declared retail level | Syntax: .honor add #amount Add honor points to the selected player (or yourself). |
 | `.honor addkill` | 4 | Administrator | declared retail level | Syntax: .honor addkill Give yourself the honor of killing the selected creature (a civilian, a racial leader). |
@@ -289,6 +300,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.unstuck` | 0 | Player | declared retail level | Syntax: .unstuck If you are stuck: alive, you die once Undying Soul expires; as a ghost, you are sent to the nearest graveyard. |
 | `.neargrave` | 3 | GameMaster | stored level through the map | Syntax: .neargrave [alliance\|horde] Find the graveyard nearest to you that serves your zone (for the given team, or any). |
 | `.explorecheat` | 1 | Moderator | stored level through the map | Syntax: .explorecheat #flag - 1 reveals every zone, 0 hides them (vmangos: the effect lands on you). |
+| `.hover` | 2 | GameMaster | declared retail level | Syntax: .hover [0\|1] Enable (default) or disable hover mode on yourself. |
 | `.levelup` | 3 | GameMaster | declared retail level | Syntax: .levelup [$playername] [#numberoflevels] Increase/decrease the level of the selected player or the named one (default +1); the experience of the level is reset. |
 | `.showarea` | 1 | Moderator | stored level through the map | Syntax: .showarea #areaid - reveal an area on the selected player. |
 | `.hidearea` | 1 | Moderator | stored level through the map | Syntax: .hidearea #areaid - toggle an area's explored bit on the selected player (vmangos XORs it). |
