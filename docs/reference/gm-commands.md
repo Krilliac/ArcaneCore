@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 298 |
-| `Administrator` | 6 | 424 |
+| `GameMaster` | 3 | 320 |
+| `Administrator` | 6 | 447 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -365,6 +365,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.creature kill` | 3 | GameMaster | stored level through the map | Syntax: .creature kill — kill the selected creature (corpse, then respawn timer). |
 | `.creature respawn` | 3 | GameMaster | stored level through the map | Syntax: .creature respawn — respawn the selected dead creature now. |
 | `.creature delete` | 3 | GameMaster | stored level through the map | Syntax: .creature delete — remove the selected temporary creature. |
+| `.creature clone` | 3 | GameMaster | declared retail level | Syntax: .creature clone [#count] Place #count (default 1, at most 25) temporary copies of the selected creature's template around you. They are not saved and do not respawn. |
 | `.arcane` ... | 3 | GameMaster | stored level through the map | ArcaneCore operator commands (read-only). Syntax: .arcane $subcommand |
 | `.arcane bancheck` | 3 | GameMaster | stored level through the map | Syntax: .arcane bancheck account\|character\|ip $value Show whether an account (by name), the account of a character, or an IP address is blocked from logging in right now. |
 | `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
@@ -402,6 +403,30 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.inspect map` | 3 | GameMaster | declared retail level | Syntax: .inspect map Show your map: players (bots counted apart), objects, creatures by state (alive, dead, in combat, evading, moving), dormant respawns, map updaters (isolated ones named), objects in transit. |
 | `.inspect spell` | 3 | GameMaster | declared retail level | Syntax: .inspect spell #spellid Show a spell's data: name and rank, school, cast time, cooldowns, range, duration, power cost, attributes, and every effect with its targets, radius, aura, amounts and trigger spell. |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
+| `.ai` ... | 3 | GameMaster | declared retail level | Syntax: .ai $subcommand Force the selected creature's AI or movement. Type .ai to see the list of possible subcommands. |
+| `.ai evade` | 3 | GameMaster | declared retail level | Syntax: .ai evade Make the selected creature evade: leave combat, clear its threat and go home. |
+| `.ai attack` | 3 | GameMaster | declared retail level | Syntax: .ai attack [$player] Make the selected creature attack you or the named online player on the same map. |
+| `.ai stop` | 3 | GameMaster | declared retail level | Syntax: .ai stop Stop the selected creature's combat where it stands (no evade, no return home). |
+| `.ai home` | 3 | GameMaster | declared retail level | Syntax: .ai home Send the selected creature back to its home position. |
+| `.ai idle` | 3 | GameMaster | declared retail level | Syntax: .ai idle Stop the selected creature's movement and keep it idle (its default movement resumes after an evade or respawn). |
+| `.ai come` | 3 | GameMaster | declared retail level | Syntax: .ai come [run] Make the selected creature walk (or run) to where you stand. |
+| `.ai follow` | 3 | GameMaster | declared retail level | Syntax: .ai follow [#distance] Make the selected creature follow you (default 2 yards). |
+| `.ai flee` | 3 | GameMaster | declared retail level | Syntax: .ai flee [#seconds] Make the selected creature flee from you (default 5 seconds, at most 60). |
+| `.ai cast` | 3 | GameMaster | declared retail level | Syntax: .ai cast #spellid [self] Make the selected creature cast a spell (triggered) on you, or on itself with 'self'. |
+| `.ai event` | 3 | GameMaster | declared retail level | Syntax: .ai event #eventtype [#misc] Send an AI event (the EventAI/SmartAI custom event types) to the selected creature, with you as the invoker. |
+| `.ai callhelp` | 3 | GameMaster | declared retail level | Syntax: .ai callhelp [#radius] Make the selected creature call for help within #radius yards (default 10, at most 100); prints how many answered. |
+| `.ai reset` | 3 | GameMaster | declared retail level | Syntax: .ai reset Kill and respawn the selected creature at once, which rebuilds its AI from its template. |
+| `.alter` ... | 3 | GameMaster | declared retail level | Syntax: .alter $subcommand Change live state of the selected unit (yourself without a selection). Type .alter to see the list of possible subcommands. |
+| `.alter health` | 3 | GameMaster | declared retail level | Syntax: .alter health #value\|#percent% Set the current health of the selected unit (1 to its maximum; use .die to kill). |
+| `.alter power` | 3 | GameMaster | declared retail level | Syntax: .alter power #value\|#percent% Set the current mana, rage or energy (its own power type) of the selected unit, up to its maximum. |
+| `.alter unitflag` | 3 | GameMaster | declared retail level | Syntax: .alter unitflag $flag\|#hex on\|off Set or clear one unit flag (by name, e.g. Stunned, Pacified, NotSelectable, ImmuneToPlayer, or as a hex bit) on the selected unit. |
+| `.alter standstate` | 3 | GameMaster | declared retail level | Syntax: .alter standstate $state\|#state Set the stand state of the selected unit: Stand, Sit, SitChair, Sleep, Kneel, Dead (0-9). |
+| `.alter level` | 3 | GameMaster | declared retail level | Syntax: .alter level #level Set the level of the selected creature (1-255; not saved). For players use .levelup or .reset level. |
+| `.alter react` | 3 | GameMaster | declared retail level | Syntax: .alter react passive\|defensive\|aggressive Set the react state of the selected creature (until it respawns or a script changes it). |
+| `.alter threat` | 3 | GameMaster | declared retail level | Syntax: .alter threat #amount Set your threat on the selected creature's threat list (it attacks you when it was not fighting); 0 removes you from the list. |
+| `.alter home` | 3 | GameMaster | declared retail level | Syntax: .alter home Make the selected creature's current position its home (where it evades and wanders back to; not saved). |
+| `.alter respawn` | 3 | GameMaster | declared retail level | Syntax: .alter respawn #seconds Set the delay of the selected creature's next respawn (once). |
+| `.alter field` | 6 | Administrator | declared retail level | Syntax: .alter field #index #value\|#hex\|#float f Write a raw update field of the selected unit (sent to the clients that see it). Debugging only: the server may overwrite it at any time. |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
