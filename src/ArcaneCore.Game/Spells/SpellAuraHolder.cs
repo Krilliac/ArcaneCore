@@ -222,6 +222,24 @@ public sealed class SpellAuraHolder
 
     public int MaxDuration { get; internal set; }
 
+    /// <summary>vmangos m_AuraDRLevel as its rate (GetDiminishingRate: 1, 1/2, 1/4), set by the diminishing-returns rule; scales the PvP heartbeat curve.</summary>
+    internal float DiminishingRate { get; set; } = 1f;
+
+    /// <summary>
+    /// <see cref="MaxDuration"/> before diminishing returns scaled it (0 when unscaled): vmangos CalculateHeartBeat runs in Aura::Aura, before
+    /// Spell::DoSpellHitOnUnit applies the diminishing, so its 10 s test reads the undiminished duration.
+    /// </summary>
+    internal int UndiminishedMaxDuration { get; set; }
+
+    /// <summary>vmangos _heartBeatRandValue: the PvP heartbeat's draw in (0, 100), 0 when the holder has none.</summary>
+    internal float HeartbeatRandValue { get; set; }
+
+    /// <summary>vmangos _pveHeartBeatData->timer: ms to the next PvE heartbeat roll, -1 when the holder has none.</summary>
+    internal int PveHeartbeatTimer { get; set; } = -1;
+
+    /// <summary>vmangos _pveHeartBeatData->hitChance: the caster's spell hit chance against the target in 0-10000.</summary>
+    internal int PveHeartbeatHitChance { get; set; }
+
     /// <summary>ms to the next per-second power cost (vmangos SpellAuraHolder::m_timeCla, 1000 at construction); see <c>SpellSystem.ChargePerSecondCost</c>.</summary>
     internal int PerSecondTimer { get; set; } = 1000;
 

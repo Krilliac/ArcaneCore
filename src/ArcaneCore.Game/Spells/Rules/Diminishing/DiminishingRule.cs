@@ -83,6 +83,7 @@ public sealed class DiminishingRule : ISpellApplicationRule
         if (hit.Group != DiminishingGroup.None)
         {
             _holderGroups.AddOrUpdate(holder, new GroupBox(hit.Group));
+            holder.DiminishingRate = DiminishingGroups.RateOf(hit.Level); // vmangos setDiminishLevel (Spell.cpp:1749)
         }
 
         int duration = holder.MaxDuration;
@@ -107,6 +108,7 @@ public sealed class DiminishingRule : ISpellApplicationRule
 
         if (scaled != duration)
         {
+            holder.UndiminishedMaxDuration = duration;
             holder.MaxDuration = scaled;
             holder.Duration = scaled;
         }

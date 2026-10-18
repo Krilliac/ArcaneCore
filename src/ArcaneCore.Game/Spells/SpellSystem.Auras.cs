@@ -398,6 +398,7 @@ public sealed partial class SpellSystem
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
         holder.AppliedInProcEvent = CurrentProcEvent;
         holder.ApplyOrder = ++_auraApplyOrder;
+        CalculateHeartbeat(holder);
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
         SitDownForStandingCancelsAura(holder);
@@ -571,6 +572,11 @@ public sealed partial class SpellSystem
             && holder.Target.StandState is StandState.Stand or StandState.Dead)
         {
             RemoveHolder(state, holder);
+            return;
+        }
+
+        if (UpdateHeartbeat(state, holder, diffMs))
+        {
             return;
         }
 

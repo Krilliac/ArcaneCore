@@ -38,4 +38,10 @@ public sealed class AuraOptions
     /// Wyvern Sting keeps going through the damage.
     /// </summary>
     public bool DamageProcCancelsAura { get; set; }
-}
+
+    /// <summary>
+    /// Crowd control of over 10 s breaks early on a heartbeat roll (vmangos SpellAuraHolder::CalculateHeartBeat and Update, SpellAuras.cpp:7252-7295,
+    /// 8114-8143): a player escapes on a curve that reaches 50% at 12 s and 99% at 15 s, a creature resists every 5 s at the caster's spell miss chance.
+    /// Default true, the vmangos rule. False keeps every such aura for its full duration (the engine's behaviour before).
+    /// </summary>
+    public bool HeartbeatResist { get; set; } = true;}
