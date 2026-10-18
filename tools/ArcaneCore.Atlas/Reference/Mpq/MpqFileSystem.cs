@@ -222,6 +222,9 @@ public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
             result.Add(index.Names[i]);
         }
 
+        // IClientFileSource.List promises ordinal order of the returned names; the index is ordered by upper-cased key.
+        // ref: tools/ArcaneCore.Atlas/Core/ClientFiles.cs:18
+        result.Sort(StringComparer.Ordinal);
         return result;
     }
 
@@ -233,22 +236,20 @@ public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
     /// <param name="cancellationToken">Observed between files.</param>
     public IReadOnlyList<MpqScanReport> Scan(bool sectors, CancellationToken cancellationToken = default)
     {
+        // One scan at a time: a second caller waits for the first and then takes its cached result instead of rescanning.
         lock (_scanGate)
         {
             if ((sectors ? _deepScan : _cheapScan) is { } cached)
             {
                 return cached;
             }
-        }
 
-        var reports = new MpqScanReport[_archives.Length];
-        Parallel.For(
-            0,
-            _archives.Length,
-            new ParallelOptions { MaxDegreeOfParallelism = sectors ? Math.Min(4, Environment.ProcessorCount) : 1, CancellationToken = cancellationToken },
-            i => reports[i] = MpqScanner.Scan(_archives[i], sectors, cancellationToken));
-        lock (_scanGate)
-        {
+            var reports = new MpqScanReport[_archives.Length];
+            Parallel.For(
+                0,
+                _archives.Length,
+                new ParallelOptions { MaxDegreeOfParallelism = sectors ? Math.Min(4, Environment.ProcessorCount) : 1, CancellationToken = cancellationToken },
+                i => reports[i] = MpqScanner.Scan(_archives[i], sectors, cancellationToken));
             if (sectors)
             {
                 _deepScan = reports;
@@ -257,9 +258,9 @@ public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
             {
                 _cheapScan = reports;
             }
-        }
 
-        return reports;
+            return reports;
+        }
     }
 
     /// <inheritdoc />

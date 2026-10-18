@@ -22,13 +22,25 @@ public static class MpqCompression
         MpqCompressionMask.Sparse,
     ];
 
+    // Archives of format version 1 and newer use SCompDecompress2's fixed method set instead of the format-0 table. Masks:
+    // zlib 0x02, pkware 0x08, bzip2 0x10, lzma 0x12, sparse 0x20, sparse+zlib 0x22, sparse+bzip2 0x30, huffman+adpcm-mono 0x41,
+    // huffman+adpcm-stereo 0x81.
+    // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:1066-1115 (the switch) and :1155-1161 (SCompDecompressX picks it
+    // for wFormatVersion >= MPQ_FORMAT_VERSION_2, which StormLib.h:304 defines as 1)
+    private const byte LzmaMask = 0x12;
+
+    private static bool IsFormat1Mask(byte mask) => mask is 0x02 or 0x08 or 0x10 or LzmaMask or 0x20 or 0x22 or 0x30 or 0x41 or 0x81;
+
     /// <summary>
     /// Expands <paramref name="stored"/> into exactly <paramref name="output"/>. Stored data exactly as long as the output
     /// was never compressed and is copied.
     /// </summary>
+    /// <param name="stored">The stored sector or unit, starting with the method-mask byte unless it is not compressed.</param>
+    /// <param name="output">Receives the expanded bytes; its length is the expected size.</param>
+    /// <param name="formatVersion">The archive header's raw format version (0 uses the original method table, 1 and newer the fixed set).</param>
     /// <exception cref="InvalidDataException">The data is corrupt or does not expand to <c>output.Length</c> bytes.</exception>
     /// <exception cref="NotSupportedException">A method in the mask is not implemented; the message names it.</exception>
-    public static void Decompress(ReadOnlyMemory<byte> stored, Span<byte> output)
+    public static void Decompress(ReadOnlyMemory<byte> stored, Span<byte> output, int formatVersion = 0)
     {
         // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:945-955 (equal sizes mean stored as is; empty or larger input is an error)
         if (stored.Length == output.Length)
@@ -43,6 +55,19 @@ public static class MpqCompression
         }
 
         byte mask = stored.Span[0];
+        if (formatVersion >= 1)
+        {
+            if (mask == LzmaMask)
+            {
+                throw new NotSupportedException($"MPQ compression method lzma (sector mask 0x12) is not implemented in this reader.");
+            }
+
+            if (!IsFormat1Mask(mask))
+            {
+                throw new NotSupportedException($"MPQ compression mask {MpqCompressionMask.Describe(mask)} is not in the method set of format version {formatVersion} archives (StormLib treats it as corrupt).");
+            }
+        }
+
         int stages = 0;
         byte known = 0;
         foreach (byte bit in UndoOrder)

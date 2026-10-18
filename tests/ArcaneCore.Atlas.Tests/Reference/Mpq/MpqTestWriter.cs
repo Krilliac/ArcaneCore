@@ -54,6 +54,9 @@ internal sealed class TestMpqFile(string name, byte[] data)
     /// <summary>Hash entry locale.</summary>
     public ushort Locale { get; init; }
 
+    /// <summary>Hash entry platform byte.</summary>
+    public byte Platform { get; init; }
+
     /// <summary>
     /// Exact stored bytes per sector, used as is (no compression is applied). With <see cref="ImplodeFlag"/> they are PKWARE
     /// streams; otherwise they begin with a method-mask byte.
@@ -477,7 +480,7 @@ internal static class MpqTestWriter
             BinaryPrimitives.WriteUInt32LittleEndian(e, MpqCrypto.HashString(p.File.Name, MpqCrypto.HashNameA));
             BinaryPrimitives.WriteUInt32LittleEndian(e[4..], MpqCrypto.HashString(p.File.Name, MpqCrypto.HashNameB));
             BinaryPrimitives.WriteUInt16LittleEndian(e[8..], p.File.Locale);
-            e[10] = 0;
+            e[10] = p.File.Platform;
             e[11] = 0;
             BinaryPrimitives.WriteUInt32LittleEndian(e[12..], p.BlockIndex);
         }

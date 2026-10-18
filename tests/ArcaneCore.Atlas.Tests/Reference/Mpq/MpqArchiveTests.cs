@@ -78,11 +78,14 @@ public sealed class MpqArchiveTests : IDisposable
     }
 
     [Fact]
-    public void Lookup_PrefersNeutralThenEnUS_ThenAnyOtherLocale()
+    public void Lookup_FollowsStormLibsLocaleRule_ForPreferredEnUS()
     {
+        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:811-850 (GetHashEntryLocale): an exact enUS entry wins at once,
+        // otherwise the last neutral-or-enUS entry; any other locale or platform is never returned.
         byte[] neutral = Text(50, "neutral ");
         byte[] english = Text(50, "english ");
         byte[] german = Text(50, "deutsch ");
+        byte[] console = Text(50, "console ");
         TestMpqFile Neutral() => new("L.txt", neutral) { Locale = 0 };
         TestMpqFile English() => new("L.txt", english) { Locale = 0x0409 };
         TestMpqFile German() => new("L.txt", german) { Locale = 0x0407 };
@@ -95,17 +98,20 @@ public sealed class MpqArchiveTests : IDisposable
         })
         {
             using MpqArchive all = Open(MpqTestWriter.Build(order));
-            Assert.Equal(neutral, all.Read("L.txt"));
+            Assert.Equal(english, all.Read("L.txt"));
         }
 
-        foreach (TestMpqFile[] order in new[] { new[] { German(), English() }, new[] { English(), German() } })
-        {
-            using MpqArchive noNeutral = Open(MpqTestWriter.Build(order));
-            Assert.Equal(english, noNeutral.Read("L.txt"));
-        }
+        using MpqArchive neutralAndGerman = Open(MpqTestWriter.Build([German(), Neutral()]));
+        Assert.Equal(neutral, neutralAndGerman.Read("L.txt"));
 
         using MpqArchive onlyGerman = Open(MpqTestWriter.Build([German()]));
-        Assert.Equal(german, onlyGerman.Read("L.txt"));
+        Assert.False(onlyGerman.TryFind("L.txt", out _));
+
+        // A non-zero platform byte matches neither the neutral nor the enUS rule (SBaseFileTable.cpp:836-841).
+        using MpqArchive otherPlatform = Open(MpqTestWriter.Build([new TestMpqFile("L.txt", console) { Locale = 0x0409, Platform = 1 }]));
+        Assert.False(otherPlatform.TryFind("L.txt", out _));
+        using MpqArchive platformAndNeutral = Open(MpqTestWriter.Build([new TestMpqFile("L.txt", console) { Locale = 0x0409, Platform = 1 }, Neutral()]));
+        Assert.Equal(neutral, platformAndNeutral.Read("L.txt"));
     }
 
     // ---- file kinds ---------------------------------------------------------------------------------------------

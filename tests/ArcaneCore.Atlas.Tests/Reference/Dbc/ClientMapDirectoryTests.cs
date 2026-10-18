@@ -108,26 +108,48 @@ public sealed class ClientMapDirectoryTests(ITestOutputHelper output)
         Assert.Equal("Kalimdor", kalimdor.Directory);
         Assert.All(directory.Maps, m => Assert.False(string.IsNullOrEmpty(m.Name), $"map {m.Id} has no enUS name"));
 
+        // Names read from the enUS column of each table; ids and names cross-checked with a separate C reader of the extracted
+        // DBCs (AreaTable column 11, Map column 4).
+        Assert.Equal("Eastern Kingdoms", azeroth.Name);
+        Assert.Equal("Kalimdor", kalimdor.Name);
+        Assert.Equal("Dun Morogh", directory.AreaName(1));
+    }
+
+    [ClientAndTerrainFact]
+    public void EveryMapTheVmangosExtractorWrote_IsInMapDbc_WithAWdt()
+    {
+        using MpqFileSystem files = MpqFileSystem.Open(Path.Combine(ClientArchiveData.ClientRoot!, "Data"));
+        ClientMapDirectory directory = ClientMapDirectory.Load(files);
+        string terrain = Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable)!;
         // Every map the vmangos extractor wrote .map tiles for (it read Map.dbc with its own reader) is listed here, and the
         // directory column names a folder holding that map's WDT in the archives.
-        if (Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable) is { Length: > 0 } terrain
-            && Directory.Exists(Path.Combine(terrain, "maps")))
+        uint[] extracted = [.. Directory.EnumerateFiles(Path.Combine(terrain, "maps"), "*.map")
+            .Select(f => uint.Parse(Path.GetFileName(f)[..3], System.Globalization.CultureInfo.InvariantCulture))
+            .Distinct()
+            .Order()];
+        output.WriteLine($"server-extracted map ids: {string.Join(' ', extracted)}");
+        Assert.True(extracted.Length > 10, $"only {extracted.Length} extracted maps");
+        foreach (uint id in extracted)
         {
-            uint[] extracted = [.. Directory.EnumerateFiles(Path.Combine(terrain, "maps"), "*.map")
-                .Select(f => uint.Parse(Path.GetFileName(f)[..3], System.Globalization.CultureInfo.InvariantCulture))
-                .Distinct()
-                .Order()];
-            output.WriteLine($"server-extracted map ids: {string.Join(' ', extracted)}");
-            Assert.True(extracted.Length > 10, $"only {extracted.Length} extracted maps");
-            foreach (uint id in extracted)
-            {
-                Assert.True(directory.TryGetMap(id, out ClientMap map), $"extracted map {id} is not in Map.dbc");
-                Assert.True(files.Exists($"World\\Maps\\{map.Directory}\\{map.Directory}.wdt"), $"no WDT for map {id} ({map.Directory})");
-            }
+            Assert.True(directory.TryGetMap(id, out ClientMap map), $"extracted map {id} is not in Map.dbc");
+            Assert.True(files.Exists($"World\\Maps\\{map.Directory}\\{map.Directory}.wdt"), $"no WDT for map {id} ({map.Directory})");
         }
-        else
+    }
+}
+
+/// <summary>A fact that needs the real client's MPQs and the server-extracted terrain folder; skipped, visibly, without either.</summary>
+public sealed class ClientAndTerrainFactAttribute : FactAttribute
+{
+    public ClientAndTerrainFactAttribute()
+    {
+        if (ClientArchiveData.SkipReason() is { } reason)
         {
-            output.WriteLine($"{AtlasPaths.TerrainEnvironmentVariable} unset: the extracted-map cross-check did not run.");
+            Skip = reason;
+        }
+        else if (Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable) is not { Length: > 0 } terrain
+            || !Directory.Exists(Path.Combine(terrain, "maps")))
+        {
+            Skip = $"{AtlasPaths.TerrainEnvironmentVariable} is unset or has no maps folder.";
         }
     }
 }

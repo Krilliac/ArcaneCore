@@ -274,6 +274,45 @@ public sealed class MpqCodecTests
     }
 
     [Fact]
+    public void Compression_Format1_RefusesLzmaByName()
+    {
+        // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:1066-1115 (0x12 is LZMA in SCompDecompress2) and :1155-1161
+        byte[] stored = [0x12, 1, 2, 3, 4, 5, 6, 7, 8];
+        NotSupportedException e = Assert.Throws<NotSupportedException>(() => MpqCompression.Decompress(stored, new byte[100], formatVersion: 1));
+        Assert.Contains("lzma", e.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("bzip2", e.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0x0A)]
+    [InlineData(0x40)]
+    [InlineData(0x03)]
+    [InlineData(0x42)]
+    public void Compression_Format1_RefusesCombinationsSCompDecompress2Rejects(int mask)
+    {
+        byte[] stored = [(byte)mask, 1, 2, 3, 4, 5, 6, 7, 8];
+        NotSupportedException e = Assert.Throws<NotSupportedException>(() => MpqCompression.Decompress(stored, new byte[100], formatVersion: 1));
+        Assert.Contains("format version 1", e.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compression_Format1_Accepts0x22_AndFormat0StillAcceptsItsOwnCombinations()
+    {
+        byte[] plain = new byte[3000];
+        plain.AsSpan(0, 40).Fill(7);
+        byte[] stored = [0x22, .. ZlibBytes(MpqTestWriter.SparseEncode(plain))];
+        var output = new byte[plain.Length];
+        MpqCompression.Decompress(stored, output, formatVersion: 1);
+        Assert.Equal(plain, output);
+
+        // Format 0 has no such restriction: zlib+pkware (0x0A) passes the mask check and fails only on the payload.
+        byte[] odd = [0x0A, 1, 2, 3, 4, 5, 6, 7, 8];
+        Exception? failure = Record.Exception(() => MpqCompression.Decompress(odd, new byte[100], formatVersion: 0));
+        Assert.NotNull(failure);
+        Assert.DoesNotContain("method set", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compression_RefusesImpossibleSizes()
     {
         Assert.Throws<InvalidDataException>(() => MpqCompression.Decompress(new byte[200], new byte[100]));

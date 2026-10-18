@@ -55,6 +55,18 @@ public sealed class MpqFileSystemTests : IDisposable
     }
 
     [Fact]
+    public void List_IsInOrdinalOrder_ForMixedCaseNames()
+    {
+        // IClientFileSource.List promises ordinal order of the returned names (Core/ClientFiles.cs:18); the index is ordered by
+        // upper-cased key, which differs from it for mixed case and for '_' against letters.
+        Archive("dbc.MPQ", new TestMpqFile("abc", Bytes("1")), new TestMpqFile("Bcd", Bytes("2")), new TestMpqFile("_x", Bytes("3")), new TestMpqFile("Zed", Bytes("4")));
+        using MpqFileSystem files = MpqFileSystem.Open(Data);
+        IReadOnlyList<string> listed = files.List(string.Empty);
+        Assert.Equal(4, listed.Count);
+        Assert.Equal(listed.Order(StringComparer.Ordinal), listed);
+    }
+
+    [Fact]
     public void ADeletionEntryInAPatch_HidesTheEarlierCopy()
     {
         Archive("dbc.MPQ", new TestMpqFile("DBFilesClient\\SpellAuraNames.dbc", Bytes("older copy")), new TestMpqFile("DBFilesClient\\Kept.dbc", Bytes("kept")));

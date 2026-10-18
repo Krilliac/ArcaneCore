@@ -238,20 +238,28 @@ public sealed class MpqArchive : IDisposable
         uint nameA = hash.NameA;
         uint nameB = hash.NameB;
 
-        int bestRank = int.MaxValue;
+        // Locale policy: StormLib's GetHashEntryLocale with the preferred locale enUS (0x0409) and platform 0. An entry that is
+        // exactly enUS wins at once; otherwise the last entry whose locale is neutral or enUS and whose platform is 0 wins;
+        // an entry of any other locale or platform is never returned. The 1.12.1 client's own Storm.dll is not disassembled
+        // here, so this is StormLib's documented behaviour (lane policy), not a verified client fact; the client's archives
+        // hold locale 0 and platform 0 only.
+        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:811-850 (GetHashEntryLocale)
+        bool found = false;
         uint index = start;
         do
         {
             MpqHashEntry h = _hashes[index];
             if (h.NameA == nameA && h.NameB == nameB && IsValidBlock(h.BlockIndex))
             {
-                // Neutral first, then enUS, then any other locale; among equals the later slot wins, as in StormLib.
-                // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:811-851,858-879
-                int rank = h.Locale == 0 ? 0 : h.Locale == 0x0409 ? 1 : 2;
-                if (rank <= bestRank)
+                bool exact = h.Locale == PreferredLocale && h.Platform == 0;
+                if (exact || ((h.Locale == 0 || h.Locale == PreferredLocale) && h.Platform == 0))
                 {
-                    bestRank = rank;
                     entry = new MpqEntry((int)index, h.BlockIndex & BlockIndexMask, h.Locale, _blocks[h.BlockIndex & BlockIndexMask]);
+                    found = true;
+                    if (exact)
+                    {
+                        return true;
+                    }
                 }
             }
             else if (h.BlockIndex == HashEntryFree)
@@ -263,7 +271,7 @@ public sealed class MpqArchive : IDisposable
         }
         while (index != start);
 
-        return bestRank != int.MaxValue;
+        return found;
     }
 
     /// <summary>True when <paramref name="path"/> resolves to a file of this archive.</summary>
@@ -352,7 +360,11 @@ public sealed class MpqArchive : IDisposable
     /// <inheritdoc />
     public void Dispose() => _handle.Dispose();
 
+    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:271 (BLOCK_INDEX_MASK)
     private const uint BlockIndexMask = 0x0FFFFFFF;
+
+    // en-US LANGID; ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:816-850 (the locale a lookup prefers)
+    private const ushort PreferredLocale = 0x0409;
 
     private bool IsValidBlock(uint blockIndex)
     {
@@ -553,8 +565,8 @@ public sealed class MpqArchive : IDisposable
     /// <param name="path">For messages.</param>
     internal uint[]? LoadChecksums(MpqBlock block, ReadOnlySpan<uint> offsets, int sectorCount, string path)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1405-1450 (the table is zlib-compressed when shorter than
-        // sectorCount * 4 bytes, otherwise plain; it is never encrypted)
+        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1073-1079,1405-1450 (the table is run through the multi-method
+        // SCompDecompress2 when shorter than sectorCount * 4 bytes, otherwise plain; it is never encrypted)
         if (!MpqSectorTable.TryLocateChecksums(offsets, sectorCount, SectorSize, out uint at, out uint storedSize))
         {
             return null;
@@ -569,7 +581,7 @@ public sealed class MpqArchive : IDisposable
             table = new byte[tableBytes];
             try
             {
-                MpqCompression.Decompress(raw, table);
+                MpqCompression.Decompress(raw, table, Header.FormatVersion);
             }
             catch (InvalidDataException e)
             {
@@ -602,7 +614,7 @@ public sealed class MpqArchive : IDisposable
             else if ((block.Flags & MpqFileFlags.Compress) != 0)
             {
                 // ref: SFileReadFile.cpp:174-183
-                MpqCompression.Decompress(stored, output);
+                MpqCompression.Decompress(stored, output, Header.FormatVersion);
             }
             else if ((block.Flags & MpqFileFlags.Implode) != 0)
             {

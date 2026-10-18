@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ArcaneCore.Atlas.Core.Commands;
 
 namespace ArcaneCore.Atlas.Reference.Mpq;
@@ -6,7 +7,7 @@ namespace ArcaneCore.Atlas.Reference.Mpq;
 /// Decides where <c>client.read</c> may write. Client data must never end up in a git working tree (it is not ours to
 /// commit) or inside the client installation itself (which stays read-only). Stateless and thread-safe.
 /// </summary>
-public static class ClientOutputPath
+public static partial class ClientOutputPath
 {
     /// <summary>
     /// Validates <paramref name="requested"/> and returns the full path to write to.
@@ -14,7 +15,7 @@ public static class ClientOutputPath
     /// <param name="requested">The caller's <c>out</c> argument; must be absolute.</param>
     /// <param name="overwrite">Whether an existing file may be replaced.</param>
     /// <param name="protectedRoots">Folders the output must not be inside of (for example the client root).</param>
-    /// <exception cref="CommandException">The path is relative, a directory, inside a git working tree or a protected folder, or already exists without <paramref name="overwrite"/>.</exception>
+    /// <exception cref="CommandException">The path is relative, a directory, inside a git working tree or a protected folder, already exists without <paramref name="overwrite"/>, or (on Windows) a device, network, stream or 8.3 short-name path.</exception>
     public static string Check(string requested, bool overwrite, IEnumerable<string> protectedRoots)
     {
         ArgumentNullException.ThrowIfNull(requested);
@@ -22,6 +23,11 @@ public static class ClientOutputPath
         if (string.IsNullOrWhiteSpace(requested) || !Path.IsPathFullyQualified(requested))
         {
             throw Refuse($"'out' must be an absolute path; '{requested}' is not.");
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            RefuseWindowsSpecials(requested);
         }
 
         string full = Path.GetFullPath(requested);
@@ -96,6 +102,32 @@ public static class ClientOutputPath
 
         return current;
     }
+
+    // Device paths (backslash-backslash-dot or -question-mark prefixes), network shares, NTFS alternate data streams and 8.3 short names (which defeat the
+    // string-prefix test against the protected folders) are refused outright.
+    private static void RefuseWindowsSpecials(string requested)
+    {
+        if (requested.StartsWith(@"\\", StringComparison.Ordinal) || requested.StartsWith("//", StringComparison.Ordinal))
+        {
+            throw Refuse($"'out' is a device or network path ('{requested}'); give a local drive path such as D:/folder/file.");
+        }
+
+        if (requested.IndexOf(':', 2) >= 0)
+        {
+            throw Refuse($"'out' contains a ':' after the drive letter (an NTFS stream or device name): '{requested}'.");
+        }
+
+        foreach (string part in requested.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]))
+        {
+            if (ShortName().IsMatch(part))
+            {
+                throw Refuse($"'out' contains the 8.3 short name '{part}'; spell the folder out in full.");
+            }
+        }
+    }
+
+    [GeneratedRegex(@"^[^~]{1,6}~[0-9]+(\.[^.]{0,3})?$", RegexOptions.CultureInvariant)]
+    private static partial Regex ShortName();
 
     private static bool IsInside(string path, string folder)
     {
