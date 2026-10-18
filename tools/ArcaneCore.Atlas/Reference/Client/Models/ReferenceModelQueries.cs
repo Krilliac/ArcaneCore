@@ -3,17 +3,21 @@ using System.Numerics;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
+using ArcaneCore.Atlas.Reference.Client.Terrain;
 
 namespace ArcaneCore.Atlas.Reference.Client.Models;
 
 /// <summary>
-/// The reference model queries behind <c>ref.model.info</c> and <c>ref.query.los</c>: they read the client's own WMO and
-/// M2 files through <see cref="AtlasServices"/> and never touch the server's vmap data. Thread-safe.
+/// The reference model queries behind <c>ref.model.info</c>, <c>ref.query.los</c> and <c>ref.query.floorstack</c>: they read the client's own
+/// ADT, WMO and M2 files through <see cref="AtlasServices"/> and never touch the server's vmap data. Thread-safe.
 /// </summary>
 public sealed class ReferenceModelQueries(AtlasServices services, ClientModelCache cache)
 {
     /// <summary>Most tiles one line-of-sight segment may cross (it loads every model those tiles place).</summary>
     public const int MaxTiles = 64;
+
+    /// <summary>Most surfaces one floor-stack column reports.</summary>
+    public const int MaxFloorSurfaces = 64;
 
     /// <summary>The nearest crossing of a segment with a triangle.</summary>
     internal sealed record RayHit(double T, WorldPoint Point, string Kind, string Model, uint UniqueId, int Group, string? GroupName, int Triangle, int? MopyFlags, string? Class, string Source, int DoodadIndex);
@@ -143,6 +147,174 @@ public sealed class ReferenceModelQueries(AtlasServices services, ClientModelCac
             ["overlay"] = Overlay(a, b, spell, movement),
         };
         return result;
+    }
+
+    /// <summary>
+    /// Samples every client terrain, liquid, WMO and M2 surface across the vertical column at <c>(x, y)</c> between
+    /// <paramref name="zMin"/> and <paramref name="zMax"/>, sorted by <c>z</c> ascending.
+    /// </summary>
+    public JsonObject FloorStack(uint mapId, double x, double y, double zMin, double zMax, bool includeExtractorSkipped, CancellationToken cancellationToken)
+    {
+        IClientFileSource? files = services.Get<IClientFileSource>();
+        IClientPlacementSource? placements = services.Get<IClientPlacementSource>();
+        ClientTerrainService? terrain = services.Get<ClientTerrainService>();
+        if (files is null && terrain is null)
+        {
+            throw new CommandException(CommandException.Unavailable, "ref.query.floorstack needs client files, which are not configured.");
+        }
+
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(zMin) || !double.IsFinite(zMax))
+        {
+            throw new CommandException(CommandException.BadArguments, "ref.query.floorstack: coordinates must be finite.");
+        }
+
+        if (zMin >= zMax)
+        {
+            throw new CommandException(CommandException.BadArguments, "ref.query.floorstack: zMin must be below zMax.");
+        }
+
+        TileKey tile = WorldGrid.TileOf(mapId, x, y)
+            ?? throw new CommandException(CommandException.BadArguments, "ref.query.floorstack: coordinates are outside the 64 x 64 tile grid.");
+        var surfaces = new List<(double Z, JsonObject Surface, string Label, string? Color, string? ColorKey)>();
+        var filesInfo = new JsonObject();
+        if (terrain is not null)
+        {
+            AdtLoad adtLoad = terrain.LoadAdt(tile);
+            filesInfo["adt"] = new JsonObject { ["state"] = adtLoad.State.ToString(), ["path"] = adtLoad.Path, ["detail"] = adtLoad.Detail };
+            if (adtLoad.File is { } adt)
+            {
+                if (AdtGeometry.SampleAt(adt, tile, x, y) is { IsHole: false } sample && sample.Z >= zMin && sample.Z <= zMax)
+                {
+                    AdtChunk chunk = adt.Chunk(sample.ChunkRow, sample.ChunkColumn);
+                    surfaces.Add((
+                        sample.Z,
+                        new JsonObject
+                        {
+                            ["kind"] = "terrain",
+                            ["z"] = sample.Z,
+                            ["areaId"] = chunk.AreaId,
+                            ["area"] = terrain.AreaName(chunk.AreaId),
+                            ["chunk"] = new JsonArray(sample.ChunkRow, sample.ChunkColumn),
+                            ["square"] = new JsonArray(sample.SquareRow, sample.SquareColumn),
+                        },
+                        "terrain",
+                        LayerCatalog.Get(LayerIds.RefTerrain).DefaultColor,
+                        null));
+                }
+
+                foreach (LiquidSample l in AdtGeometry.LiquidAt(adt, tile, x, y) ?? [])
+                {
+                    if (l.Level >= zMin && l.Level <= zMax)
+                    {
+                        string kindName = ClientTerrainGeometry.KindName(l.Kind);
+                        surfaces.Add((
+                            l.Level,
+                            new JsonObject
+                            {
+                                ["kind"] = "liquid",
+                                ["z"] = l.Level,
+                                ["liquid"] = kindName,
+                                ["darkWater"] = l.IsDarkWater,
+                                ["flags"] = l.SquareFlags,
+                            },
+                            $"liquid ({kindName})",
+                            LayerCatalog.Get(LayerIds.RefLiquid).DefaultColor,
+                            ClientTerrainGeometry.LiquidColorKey(l.Kind, l.IsDarkWater)));
+                    }
+                }
+            }
+        }
+
+        if (files is not null && placements is not null)
+        {
+            IReadOnlyList<ClientPlacement>? list = null;
+            string placementState;
+            try
+            {
+                list = placements.Placements(tile) ?? placements.Placements(TileKey.Global(mapId));
+                placementState = list is null ? "Missing" : "Ok";
+            }
+            catch (InvalidDataException e)
+            {
+                placementState = "Rejected: " + e.Message;
+            }
+
+            filesInfo["placements"] = new JsonObject { ["state"] = placementState, ["count"] = list?.Count ?? 0 };
+            if (list is { Count: > 0 })
+            {
+                TilePlan plan = ModelPlanner.Plan(mapId, null, list, PlanScope.All, files, cache, cancellationToken);
+                var colTop = new WorldPoint(x, y, zMax);
+                var colBottom = new WorldPoint(x, y, zMin);
+                string wmoColor = LayerCatalog.Get(LayerIds.RefWmo).AttributeColors![ColorKeys.Collidable];
+                string m2Color = LayerCatalog.Get(LayerIds.RefM2Collision).DefaultColor;
+                foreach (PlannedWmo wmo in plan.Wmos)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (wmo.SkipReason is not null && !includeExtractorSkipped)
+                    {
+                        continue;
+                    }
+
+                    CollectWmoSurfaces(wmo, colTop, colBottom, includeExtractorSkipped, wmoColor, surfaces);
+                }
+
+                foreach (PlannedM2 m2 in plan.M2s)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!m2.Model.HasCollisionHull || (m2.SkipReason is not null && !includeExtractorSkipped))
+                    {
+                        continue;
+                    }
+
+                    CollectM2Surfaces(m2, colTop, colBottom, m2Color, surfaces);
+                }
+            }
+        }
+
+        surfaces.Sort((a, b) => a.Z.CompareTo(b.Z));
+        bool truncated = surfaces.Count > MaxFloorSurfaces;
+        var surfaceArray = new JsonArray();
+        var points = new JsonArray();
+        foreach ((double z, JsonObject surface, string label, string? color, string? colorKey) in surfaces.Take(MaxFloorSurfaces))
+        {
+            surfaceArray.Add(surface);
+            var pt = new JsonObject { ["at"] = Point(new WorldPoint(x, y, z)), ["label"] = label };
+            if (color is not null)
+            {
+                pt["color"] = color;
+            }
+
+            if (colorKey is not null)
+            {
+                pt["colorKey"] = colorKey;
+            }
+
+            points.Add(pt);
+        }
+
+        var segments = new JsonArray
+        {
+            new JsonObject
+            {
+                ["from"] = Point(new WorldPoint(x, y, zMin)),
+                ["to"] = Point(new WorldPoint(x, y, zMax)),
+                ["label"] = "column",
+                ["color"] = "#9AA5B1",
+                ["dashed"] = true,
+            },
+        };
+        return new JsonObject
+        {
+            ["map"] = mapId,
+            ["x"] = x,
+            ["y"] = y,
+            ["zMin"] = zMin,
+            ["zMax"] = zMax,
+            ["truncated"] = truncated,
+            ["surfaces"] = surfaceArray,
+            ["files"] = filesInfo,
+            ["overlay"] = new JsonObject { ["points"] = points, ["segments"] = segments },
+        };
     }
 
     /// <summary>The tiles a world-space segment passes through, in order from <paramref name="a"/>, inside the map grid.</summary>
@@ -427,6 +599,123 @@ public sealed class ReferenceModelQueries(AtlasServices services, ClientModelCac
         }
 
         return best;
+    }
+
+    private static void CollectWmoSurfaces(
+        PlannedWmo wmo,
+        WorldPoint colTop,
+        WorldPoint colBottom,
+        bool includeSkipped,
+        string wmoColor,
+        List<(double Z, JsonObject Surface, string Label, string? Color, string? ColorKey)> surfaces)
+    {
+        (Vec3d p0, Vec3d p1) = ToModel(wmo.Transform, colTop, colBottom);
+        WmoModel model = wmo.Model;
+        var groupZs = new List<double>();
+        for (int g = 0; g < model.Groups.Count; g++)
+        {
+            if (!includeSkipped && model.SkipReason(g) is not null)
+            {
+                continue;
+            }
+
+            WmoGroupFile group = model.Groups[g];
+            if (group.TriangleCount == 0 || !SegmentHitsBox(p0, p1, Vec3d.From(group.VertexBoundsMin), Vec3d.From(group.VertexBoundsMax)))
+            {
+                continue;
+            }
+
+            groupZs.Clear();
+            for (int t = 0; t < group.TriangleCount; t++)
+            {
+                if (SegmentTriangle(
+                        p0,
+                        p1,
+                        Vec3d.From(group.Vertices[group.Indices[3 * t]]),
+                        Vec3d.From(group.Vertices[group.Indices[(3 * t) + 1]]),
+                        Vec3d.From(group.Vertices[group.Indices[(3 * t) + 2]])) is { } time)
+                {
+                    double z = colTop.Z + ((colBottom.Z - colTop.Z) * time);
+                    if (groupZs.Any(existing => Math.Abs(existing - z) <= 1e-3))
+                    {
+                        continue;
+                    }
+
+                    groupZs.Add(z);
+                    byte flags = group.TriangleFlags[t];
+                    bool collide = WmoMaterialFlags.IsCollidable(flags);
+                    surfaces.Add((
+                        z,
+                        new JsonObject
+                        {
+                            ["kind"] = "model",
+                            ["modelKind"] = "wmo",
+                            ["z"] = z,
+                            ["model"] = model.Path,
+                            ["uniqueId"] = wmo.Placement.UniqueId,
+                            ["group"] = g,
+                            ["groupId"] = group.GroupId,
+                            ["groupName"] = model.GroupName(g),
+                            ["outdoors"] = (group.Flags & 0x8u) != 0,
+                            ["class"] = collide ? "collide" : "render-only",
+                            ["mopyFlags"] = (int)flags,
+                        },
+                        $"model ({ClientModelNames.PlainName(model.Path)})",
+                        wmoColor,
+                        collide ? ColorKeys.Collidable : ColorKeys.RenderOnly));
+                }
+            }
+        }
+    }
+
+    private static void CollectM2Surfaces(
+        PlannedM2 m2,
+        WorldPoint colTop,
+        WorldPoint colBottom,
+        string m2Color,
+        List<(double Z, JsonObject Surface, string Label, string? Color, string? ColorKey)> surfaces)
+    {
+        (Vec3d p0, Vec3d p1) = ToModel(m2.Transform, colTop, colBottom);
+        M2ModelFile model = m2.Model;
+        (Vector3 min, Vector3 max) = model.BoundingBox;
+        if (!SegmentHitsBox(p0, p1, Vec3d.From(min), Vec3d.From(max)))
+        {
+            return;
+        }
+
+        var instanceZs = new List<double>();
+        for (int t = 0; t < model.BoundingTriangleCount; t++)
+        {
+            if (SegmentTriangle(
+                    p0,
+                    p1,
+                    Vec3d.From(model.BoundingVertices[model.BoundingIndices[3 * t]]),
+                    Vec3d.From(model.BoundingVertices[model.BoundingIndices[(3 * t) + 1]]),
+                    Vec3d.From(model.BoundingVertices[model.BoundingIndices[(3 * t) + 2]])) is { } time)
+            {
+                double z = colTop.Z + ((colBottom.Z - colTop.Z) * time);
+                if (instanceZs.Any(existing => Math.Abs(existing - z) <= 1e-3))
+                {
+                    continue;
+                }
+
+                instanceZs.Add(z);
+                surfaces.Add((
+                    z,
+                    new JsonObject
+                    {
+                        ["kind"] = "model",
+                        ["modelKind"] = "m2",
+                        ["z"] = z,
+                        ["model"] = m2.ModelPath,
+                        ["uniqueId"] = m2.UniqueId,
+                        ["source"] = m2.IsWmoDoodad ? "wmo-doodad" : "mddf",
+                    },
+                    $"model ({ClientModelNames.PlainName(m2.ModelPath)})",
+                    m2Color,
+                    null));
+            }
+        }
     }
 
     private static (Vec3d P0, Vec3d P1) ToModel(InstanceTransform transform, WorldPoint a, WorldPoint b)

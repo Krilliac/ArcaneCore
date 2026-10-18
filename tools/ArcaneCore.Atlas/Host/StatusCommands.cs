@@ -53,7 +53,7 @@ internal static class StatusCommands
             problems.Add(bookmarkProblem);
         }
 
-        return new JsonObject
+        var status = new JsonObject
         {
             ["version"] = AtlasVersion.Current,
             ["mode"] = context.Headless ? "headless" : "serve",
@@ -64,6 +64,12 @@ internal static class StatusCommands
             ["cacheBytes"] = context.Cache.Bytes,
             ["ui"] = new JsonObject { ["connections"] = context.Services.Get<UiHub>()?.ConnectionCount ?? 0 },
         };
+        if (context.Services.Get<Live.LiveFeed>() is { } live)
+        {
+            status["live"] = live.Status();
+        }
+
+        return status;
     }
 
     /// <summary>The <c>layers.list</c> data.</summary>

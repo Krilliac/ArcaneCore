@@ -420,6 +420,6 @@ public static class AtlasCli
             });
 
             // Standard output carries command results and MCP messages only: every log line goes to standard error.
-            builder.Services.Configure<ConsoleLoggerOptions>(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+            builder.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
         });
 }

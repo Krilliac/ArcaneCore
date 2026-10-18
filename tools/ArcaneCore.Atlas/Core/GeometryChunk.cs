@@ -102,7 +102,7 @@ public sealed class GeometryBuilder(string layerId, TileKey tile, WorldPoint ori
     private readonly List<uint> _lineAttributes = [];
     private readonly List<uint> _points = [];
     private readonly List<uint> _pointAttributes = [];
-    private readonly HashSet<ulong> _edges = [];
+    private readonly HashSet<ulong> _edges = new(EdgeKeyComparer.Instance);
     private readonly Dictionary<uint, JsonObject> _attributes = [];
 
     public string LayerId { get; } = layerId;
@@ -215,6 +215,15 @@ public sealed class GeometryBuilder(string layerId, TileKey tile, WorldPoint ori
         };
         chunk.Validate();
         return chunk;
+    }
+
+    private sealed class EdgeKeyComparer : IEqualityComparer<ulong>
+    {
+        public static readonly EdgeKeyComparer Instance = new();
+
+        public bool Equals(ulong x, ulong y) => x == y;
+
+        public int GetHashCode(ulong key) => unchecked((int)(((key ^ (key >> 30)) * 0xBF58476D1CE4E5B9UL) >> 32));
     }
 }
 

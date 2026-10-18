@@ -60,7 +60,7 @@ public sealed record ServerDataLimits(long TerrainBytes = 192L << 20, long NavBy
 /// <para>
 /// Why the readers are safe off the server's owner thread: each one is a static function over a byte array that allocates its
 /// result and touches no shared mutable state other than the process-wide counters named below, which are updated with
-/// <see cref="Interlocked"/> (NavMeshTile.cs line 71 <c>s_nextSearchId</c>, and line 137 <c>PathSearchCounters.NoteBvTreeRejected</c>). <see cref="TerrainTile.Parse"/> returns an object that is immutable after parsing
+/// <see cref="Interlocked"/> (NavMeshTile.cs line 71 <c>s_nextSearchId</c>, and line 134 <c>PathSearchCounters.NoteBvTreeRejected</c>). <see cref="TerrainTile.Parse"/> returns an object that is immutable after parsing
 /// (TerrainTile.cs, class remarks). <see cref="VMapTree.ParseTile"/> and <see cref="VMapTree.Parse"/> build locals only
 /// (VMapTree.cs lines 44-76). <see cref="WorldModel.Parse"/> builds locals only (WorldModel.cs lines 391-413) and the
 /// model, group and instance types expose read-only data. <see cref="NavMeshTile.ParseFile"/> takes a process-unique id with

@@ -82,6 +82,11 @@ public sealed class MemoryClientFiles : IClientFileSource
 /// An <see cref="IClientFileSource"/> over a directory tree that mirrors the in-archive paths (an extracted client:
 /// <c>World\Maps\...</c>, <c>DBFilesClient\...</c>). The tree is indexed once at construction, so lookups are
 /// case-insensitive on every file system.
+/// <para>
+/// An extracted directory produced by <c>mpqcli</c> may contain 0-byte files for paths deleted by <c>patch.MPQ</c>
+/// (whereas <c>MpqFileSystem</c> reports deleted entries as absent); callers reading extracted directories should check
+/// for 0-byte files where appropriate.
+/// </para>
 /// </summary>
 public sealed class DirectoryClientFiles : IClientFileSource
 {

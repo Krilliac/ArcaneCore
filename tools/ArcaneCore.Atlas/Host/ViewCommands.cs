@@ -201,7 +201,30 @@ internal static class ViewCommands
         if (invocation.Has("guid"))
         {
             string guid = ArgReader.RequiredText(invocation, "guid");
-            return await Changed(invocation, new JsonObject { ["follow"] = guid }, new JsonObject { ["following"] = guid }).ConfigureAwait(false);
+            string normalizedGuid = Live.LiveGuid.TryParse(guid, out ulong entityId) && entityId != 0
+                ? Live.LiveGuid.Format(entityId)
+                : guid;
+            string patchGuid = guid.AsSpan().Trim().StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? normalizedGuid : guid;
+            var followPatch = new JsonObject { ["follow"] = patchGuid };
+            var followExtra = new JsonObject { ["following"] = patchGuid };
+            Live.LiveFeed? live = context.Services.Get<Live.LiveFeed>();
+            if (live is not null
+                && entityId != 0
+                && live.Store.TryGetEntity(entityId, out Live.LiveEntity? entity)
+                && entity is not null)
+            {
+                followPatch["camera"] = new JsonObject { ["target"] = HostJson.Point(entity.Position) };
+                if (current.MapId != entity.Map)
+                {
+                    followPatch["map"] = entity.Map;
+                }
+
+                followExtra["found"] = true;
+                followExtra["map"] = entity.Map;
+                followExtra["at"] = HostJson.Point(entity.Position);
+            }
+
+            return await Changed(invocation, followPatch, followExtra).ConfigureAwait(false);
         }
 
         uint map = ArgReader.Map(invocation, current);

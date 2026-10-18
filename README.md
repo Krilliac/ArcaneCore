@@ -56,10 +56,12 @@ src/
   ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, chat commands, save queue
 tools/
   ArcaneCore.AccountTool    account create / set-password / set-gmlevel / list CLI (`db ...` forwards to arcane-db)
+  ArcaneCore.Atlas          arcane-atlas: 3D map, collision, navmesh, diff and live world visualizer (Web UI / CLI / MCP)
   ArcaneCore.DbUpgrade      arcane-db: database upgrade tool (status / plan / check / upgrade / backup-info)
   ArcaneCore.MockClient     owned-loopback realm/world protocol acceptance CLI
   codegen/                  generates WorldOpcode.g.cs + UpdateFields.g.cs from the references
 tests/
+  ArcaneCore.Atlas.Tests          Atlas visualizer, reference readers, diff, headless renderer and live feed tests
   ArcaneCore.Cryptography.Tests   SRP6 known-answer + round-trip tests
   ArcaneCore.Realm.Tests          logon loopback handshake tests
   ArcaneCore.Game.Tests           update pipeline, maps, world runtime (no sockets)
@@ -67,6 +69,8 @@ tests/
   ArcaneCore.World.Tests          end-to-end world daemon over loopback
   ArcaneCore.MockClient.Tests     independent client vectors and realm/world lifecycle
 ```
+
+The standalone 3D map, collision, navigation mesh, client-versus-server diff, and live world visualizer (`arcane-atlas`) is documented in [`docs/areas/atlas.md`](docs/areas/atlas.md).
 
 ## Databases
 

@@ -73,5 +73,28 @@ public sealed class ClientModelsModule : IAtlasModule
                 invocation.GetPoint("b"),
                 invocation.GetBool("includeSkipped", false),
                 cancellationToken))),
+        new CommandDefinition(
+            "ref.query.floorstack",
+            "List every client terrain, liquid, WMO and M2 surface across a vertical column (x, y) between zMin and zMax, sorted by z.",
+            [
+                new CommandArg("map", ArgType.Integer, "Map id.", Required: true),
+                new CommandArg("x", ArgType.Number, "World X coordinate.", Required: true),
+                new CommandArg("y", ArgType.Number, "World Y coordinate.", Required: true),
+                new CommandArg("zMin", ArgType.Number, "Bottom of the column.", Default: JsonValue.Create(-500.0)),
+                new CommandArg("zMax", ArgType.Number, "Top of the column.", Default: JsonValue.Create(2000.0)),
+                new CommandArg(
+                    "includeSkipped",
+                    ArgType.Boolean,
+                    "Also test triangles the vmap extractor drops.",
+                    Default: JsonValue.Create(false)),
+            ],
+            (invocation, cancellationToken) => Task.FromResult<JsonNode?>(queries.FloorStack(
+                invocation.GetMapId(),
+                invocation.GetNumber("x"),
+                invocation.GetNumber("y"),
+                invocation.OptionalNumber("zMin") ?? -500.0,
+                invocation.OptionalNumber("zMax") ?? 2000.0,
+                invocation.GetBool("includeSkipped", false),
+                cancellationToken))),
     ];
 }
