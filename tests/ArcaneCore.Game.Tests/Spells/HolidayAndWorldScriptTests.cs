@@ -116,7 +116,7 @@ public sealed class HolidayAndWorldScriptTests
     [Fact]
     public void SymbolOfLife_StandsUpHenzeFaulk()
     {
-        using var kit = new PetTestKit([AtUnit(FaulkAI.SymbolOfLife, SpellEffectName.Dummy)], creatureSpells: true, extraTemplates:
+        using var kit = new PetTestKit([AtUnit(FaulkAI.SymbolOfLife, SpellEffectName.Dummy), Self(FaulkAI.QuestSelfHealing, SpellEffectName.Dummy)], creatureSpells: true, extraTemplates:
         [
             CreatureTestSupport.Template(FaulkAI.HenzeEntry, b =>
             {
@@ -125,6 +125,7 @@ public sealed class HolidayAndWorldScriptTests
                 b.MinLevelHealth = 100;
                 b.MaxLevelHealth = 100;
                 b.Faction = 12;
+                b.NpcFlags = 2;
             }),
         ]);
         SpellScriptDispatcher.Install(kit.Spells.System, SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly));
@@ -139,6 +140,12 @@ public sealed class HolidayAndWorldScriptTests
 
         Assert.True(ai.IsRevived);
         Assert.Equal(StandState.Stand, henze.StandState);
+        Assert.Equal(0u, henze.NpcFlags & FaulkAI.NpcFlagQuestGiver);
+        kit.Run(4_000);
+        Assert.Equal(FaulkAI.NpcFlagQuestGiver, henze.NpcFlags & FaulkAI.NpcFlagQuestGiver);
+        kit.Run(FaulkAI.EvadeMs);
+        Assert.False(ai.IsRevived);
+        Assert.Equal(StandState.Dead, henze.StandState);
     }
 
     [Fact]
