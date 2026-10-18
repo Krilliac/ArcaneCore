@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
@@ -24,20 +25,61 @@ namespace ArcaneCore.Game.Npc;
 /// <param name="skills">The skill catalog while the skill system is active (null: the stand-in behaviour).</param>
 public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbilityCatalog abilities, Func<SkillCatalog?>? skills = null) : ISpellLearner
 {
+    /// <summary>
+    /// Answers of <see cref="DescribeTrainerSpell"/> for one spell store and skill catalog. The answer depends on static data only, and
+    /// bots ask it for every trainer row they consider: on live (Oct 17, ~980 bots) it was 57% of all allocation (1.3 GB per 30 s, LINQ
+    /// iterators and records) through PlayerbotTrainerDestinations. A new store or catalog (a reload) starts a new cache.
+    /// </summary>
+    private sealed class DescribeCache(SpellStore store, SkillCatalog? catalog)
+    {
+        public SpellStore Store { get; } = store;
+
+        public SkillCatalog? Catalog { get; } = catalog;
+
+        public ConcurrentDictionary<uint, TrainerSpellInfo?> Entries { get; } = new();
+    }
+
+    private DescribeCache? _describeCache;
+
     public TrainerSpellInfo? DescribeTrainerSpell(uint teachingSpell)
     {
-        if (spells()?.Store is not { } store || store.Get(teachingSpell) is not { } teaching)
+        if (spells()?.Store is not { } store)
         {
             return null;
         }
 
-        uint learned = LearnedSpells(teaching).FirstOrDefault();
+        SkillCatalog? catalog = skills?.Invoke();
+        DescribeCache? cache = Volatile.Read(ref _describeCache);
+        if (cache is null || !ReferenceEquals(cache.Store, store) || !ReferenceEquals(cache.Catalog, catalog))
+        {
+            cache = new DescribeCache(store, catalog);
+            Volatile.Write(ref _describeCache, cache);
+        }
+
+        if (cache.Entries.TryGetValue(teachingSpell, out TrainerSpellInfo? known))
+        {
+            return known;
+        }
+
+        TrainerSpellInfo? info = Describe(store, catalog, teachingSpell);
+        cache.Entries.TryAdd(teachingSpell, info);
+        return info;
+    }
+
+    private TrainerSpellInfo? Describe(SpellStore store, SkillCatalog? catalog, uint teachingSpell)
+    {
+        if (store.Get(teachingSpell) is not { } teaching)
+        {
+            return null;
+        }
+
+        uint learned = FirstLearnedSpell(teaching);
         if (learned == 0 || store.Get(learned) is not { } learnedInfo)
         {
             return null;
         }
 
-        if (skills?.Invoke() is not { } catalog)
+        if (catalog is null)
         {
             return new TrainerSpellInfo(learned, learnedInfo.SpellLevel, abilities.PreviousRank(learned), 0, false, false, false);
         }
@@ -47,9 +89,9 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
         SpellEffectInfo second = teaching.Effects[1];
         bool professionLearn = second.Effect == SpellEffectName.Skill;
         bool firstRank = catalog.IsPrimaryProfessionFirstRankSpell(teaching.Id);
-        foreach (SpellEffectInfo effect in teaching.Effects.Where(e => e.Effect == SpellEffectName.LearnSpell))
+        foreach (SpellEffectInfo effect in teaching.Effects)
         {
-            if (professionLearn || store.Get(effect.TriggerSpell) is not { } taught)
+            if (effect.Effect != SpellEffectName.LearnSpell || professionLearn || store.Get(effect.TriggerSpell) is not { } taught)
             {
                 continue;
             }
@@ -86,15 +128,19 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
             return true;
         }
 
-        foreach (SkillLineAbilityRecord ability in list)
+        // Indexed loops: a foreach over IReadOnlyList boxes an enumerator per call (228 MB per 30 s on live through the bots' trainer scan).
+        for (int a = 0; a < list.Count; a++)
         {
+            SkillLineAbilityRecord ability = list[a];
             if ((ability.RaceMask != 0 && (ability.RaceMask & raceMask) == 0) || (ability.ClassMask != 0 && (ability.ClassMask & classMask) == 0))
             {
                 continue;
             }
 
-            foreach (SkillRaceClassInfoRecord row in catalog.RaceClassInfos(ability.SkillId))
+            IReadOnlyList<SkillRaceClassInfoRecord> rows = catalog.RaceClassInfos(ability.SkillId);
+            for (int r = 0; r < rows.Count; r++)
             {
+                SkillRaceClassInfoRecord row = rows[r];
                 if ((row.RaceMask & raceMask) == 0 || (row.ClassMask & classMask) == 0)
                 {
                     continue;
@@ -161,6 +207,20 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
             .Select(e => e.TriggerSpell)
             .ToArray();
         return learned.Length > 0 ? learned : [teaching.Id];
+    }
+
+    /// <summary>The first spell <paramref name="teaching"/> teaches (<see cref="LearnedSpells"/>'s first), without building the list.</summary>
+    private static uint FirstLearnedSpell(SpellInfo teaching)
+    {
+        foreach (SpellEffectInfo effect in teaching.Effects)
+        {
+            if (effect.Effect == SpellEffectName.LearnSpell && effect.TriggerSpell != 0)
+            {
+                return effect.TriggerSpell;
+            }
+        }
+
+        return teaching.Id;
     }
 
     private static uint Mask(byte id) => id is > 0 and <= 32 ? 1u << (id - 1) : 0;
