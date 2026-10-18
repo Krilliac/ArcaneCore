@@ -21,9 +21,9 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// projected and the path is <see cref="PathType.Incomplete"/>. Corrupt files are logged and read
 /// as missing; nothing here throws into the world thread.
 /// </para>
-/// <para>Thread affinity: world thread.</para>
+/// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
-public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -42,6 +42,96 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
     public NavMeshDatasetDescriptor Dataset { get; }
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
     private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
+
+    /// <summary>
+    /// Held for reading by every <see cref="FindPathShared"/> search (path-job workers) and for writing by every change of the loaded
+    /// tiles or the mesh table (<see cref="EnterMeshWrite"/>). The owner thread's own queries take nothing: it is the only writer, and the
+    /// lazily built per-tile caches a search fills are safe for concurrent readers (<see cref="NavMeshTile.GetCrossPortals"/>).
+    /// </summary>
+    private readonly ReaderWriterLockSlim _sharedLock = new(LockRecursionPolicy.SupportsRecursion);
+
+    /// <summary>Cancelled when the owner needs the write lock while shared searches hold it for reading, so they stop at their next check.</summary>
+    private CancellationTokenSource _sharedCancel = new();
+
+    private long _sharedSearchesCanceled;
+
+    /// <summary>Shared searches stopped because the owner changed the loaded tiles under them (diagnostics, tests).</summary>
+    public long SharedSearchesCanceled => Interlocked.Read(ref _sharedSearchesCanceled);
+
+    /// <summary>
+    /// Take the write lock for a change of the loaded tiles or the mesh table. Shared searches in progress are asked to stop first, so the
+    /// owner waits for one cancellation check, not for whole searches.
+    /// </summary>
+    private void EnterMeshWrite()
+    {
+        if (!_sharedLock.IsWriteLockHeld && _sharedLock.CurrentReadCount > 0)
+        {
+            CancellationTokenSource previous = Interlocked.Exchange(ref _sharedCancel, new CancellationTokenSource());
+            previous.Cancel(); // not disposed: a worker may still read its token
+            Interlocked.Increment(ref _sharedSearchesCanceled);
+        }
+
+        _sharedLock.EnterWriteLock();
+    }
+
+    private void ExitMeshWrite() => _sharedLock.ExitWriteLock();
+
+    private bool AddTileLocked(NavMesh mesh, int tileX, int tileY, NavMeshTile tile)
+    {
+        EnterMeshWrite();
+        try
+        {
+            return mesh.AddTile(tileX, tileY, tile);
+        }
+        finally
+        {
+            ExitMeshWrite();
+        }
+    }
+
+    /// <inheritdoc />
+    public bool CanSearchShared(uint mapId) => GetNavMesh(mapId) is not null;
+
+    /// <inheritdoc />
+    public PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.LoadTiles || options.NonBlockingTiles)
+        {
+            throw new ArgumentException("a shared search reads no tiles", nameof(options));
+        }
+
+        if (options.Mover is { CanFly: true })
+        {
+            throw new ArgumentException("a flier's search consults the collision models, which are the owner's", nameof(options));
+        }
+
+        if (!IsFinite(start) || !IsFinite(end))
+        {
+            return PathResult.None(start);
+        }
+
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        _sharedLock.EnterReadLock();
+        try
+        {
+            if (!_meshes.TryGetValue(mapId, out NavMesh? mesh) || mesh is null)
+            {
+                return PathResult.StraightLine(start, end, PathType.Normal | PathType.NotUsingPath);
+            }
+
+            CancellationToken cancel = Volatile.Read(ref _sharedCancel).Token;
+            PathOptions shared = options.CancellationToken.CanBeCanceled ? options : options with { CancellationToken = cancel };
+            cancel.ThrowIfCancellationRequested();
+            PathResult result = FindPath(mesh, mapId, start, end, shared);
+            QueryLatency.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).Ticks / (TimeSpan.TicksPerMillisecond / 1000));
+            return result;
+        }
+        finally
+        {
+            _sharedLock.ExitReadLock();
+        }
+    }
 
     public NavMeshPathfinder(string directory, ILogger? logger = null, int maxConcurrentTileReads = DefaultConcurrentTileReads)
         : this(directory, logger, Guid.NewGuid(), maxConcurrentTileReads)
@@ -107,7 +197,16 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             }
         }
 
-        _meshes[mapId] = mesh;
+        EnterMeshWrite();
+        try
+        {
+            _meshes[mapId] = mesh;
+        }
+        finally
+        {
+            ExitMeshWrite();
+        }
+
         return mesh;
     }
 
@@ -136,7 +235,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         if (_prefetch.TryTake(mapId, tileX, tileY, out NavMeshTile? prefetched))
         {
             prefetchHit = true;
-            if (mesh.AddTile(tileX, tileY, prefetched))
+            if (AddTileLocked(mesh, tileX, tileY, prefetched))
             {
                 return true;
             }
@@ -153,7 +252,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (mesh.AddTile(tileX, tileY, tile))
+            if (AddTileLocked(mesh, tileX, tileY, tile))
             {
                 return true;
             }
@@ -195,7 +294,15 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
     {
         if (_meshes.GetValueOrDefault(mapId) is { } mesh)
         {
-            mesh.RemoveTile(tileX, tileY);
+            EnterMeshWrite();
+            try
+            {
+                mesh.RemoveTile(tileX, tileY);
+            }
+            finally
+            {
+                ExitMeshWrite();
+            }
         }
     }
 
@@ -885,7 +992,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
     private bool InstallReadTile(uint mapId, int tileX, int tileY, NavMeshTile tile)
     {
         _async.Remove((mapId, tileX, tileY));
-        if (GetNavMesh(mapId) is { } mesh && mesh.AddTile(tileX, tileY, tile))
+        if (GetNavMesh(mapId) is { } mesh && AddTileLocked(mesh, tileX, tileY, tile))
         {
             return true;
         }

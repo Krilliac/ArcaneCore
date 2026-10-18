@@ -29,7 +29,25 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     /// While set (one query with <see cref="PathOptions.LoadTiles"/>), asked for a Detour tile a search crosses into that is not
     /// loaded; it loads the tile when it can (<see cref="NavMeshPathfinder"/>) and answers it, or null.
     /// </summary>
-    internal Func<int, int, NavMeshTile?>? TileLoader { get; set; }
+    internal Func<int, int, NavMeshTile?>? TileLoader
+    {
+        get => _tileLoader;
+        set
+        {
+            _tileLoaderThread = value is null ? 0 : Environment.CurrentManagedThreadId;
+            _tileLoader = value;
+        }
+    }
+
+    private Func<int, int, NavMeshTile?>? _tileLoader;
+    private int _tileLoaderThread;
+
+    /// <summary>
+    /// <see cref="TileLoader"/> for the thread that set it, else null: a shared search (<see cref="NavMeshPathfinder.FindPathShared"/>) on
+    /// another thread crossing into an unloaded tile treats it as unloaded, as its own options ask, and never runs the owner's loader.
+    /// </summary>
+    internal Func<int, int, NavMeshTile?>? TileLoaderForCurrentThread
+        => _tileLoader is { } loader && _tileLoaderThread == Environment.CurrentManagedThreadId ? loader : null;
 
     /// <summary>The centre of Detour tile (<paramref name="x"/>, <paramref name="y"/>) in Recast space (y 0).</summary>
     internal Vector3 TileCenter(int x, int y)
@@ -142,7 +160,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
             int side = nei & 0xff;
             if (NavMeshFormat.SideOffset(side) is not { } offset
-                || (GetTile(tile.X + offset.Dx, tile.Y + offset.Dy) ?? TileLoader?.Invoke(tile.X + offset.Dx, tile.Y + offset.Dy)) is not { } other)
+                || (GetTile(tile.X + offset.Dx, tile.Y + offset.Dy) ?? TileLoaderForCurrentThread?.Invoke(tile.X + offset.Dx, tile.Y + offset.Dy)) is not { } other)
             {
                 continue;
             }

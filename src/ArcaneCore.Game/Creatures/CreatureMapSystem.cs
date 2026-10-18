@@ -176,6 +176,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _pathTicksThisTick = 0;
         _timing = default;
         long t = Stopwatch.GetTimestamp();
+        SweepPathJobs();
         RunDeferredMoves();
         SendCatchUpMoves();
         t = Lap(t, out _timing.CatchUp);
@@ -220,6 +221,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         /// <summary>The update's slowest A* search (<see cref="SearchPath"/>): its time, who asked, the endpoints and the work it did.</summary>
         public long SlowestSearchTicks;
         public SlowSearch SlowestSearch;
+
+        /// <summary>Path-job answers applied this update (<see cref="TryPlanPathByJob"/>): count, worker time, slowest (not on this thread).</summary>
+        public int JobSearches;
+        public long JobSearchTicks, SlowestJobSearchTicks;
     }
 
     /// <summary>
@@ -245,6 +250,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         if (t.SlowestCreatureTicks > 0)
         {
             text += $"; slowest creature entry {t.SlowestEntry} {TickMs(t.SlowestCreatureTicks)} ms, top generator {t.SlowestGenerator?.Name ?? "none"}";
+        }
+
+        if (t.JobSearches > 0 || _creaturePathJobs.Count > 0)
+        {
+            text += $"; path jobs applied {t.JobSearches} (worker time {TickMs(t.JobSearchTicks)} ms, slowest {TickMs(t.SlowestJobSearchTicks)} ms), in flight {_creaturePathJobs.Count}";
         }
 
         if (t.SlowestSearchTicks > 0)
@@ -451,6 +461,14 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 $"Creature {creature.Guid} (entry {creature.Entry}) requested path to non-finite destination ({destination.X}, {destination.Y}, {destination.Z}) on map {Map.MapId}");
         }
 
+        if (_options.Movement.PathJobs || _pathJobsResolved)
+        {
+            if (TryPlanPathByJob(creature, destination, toSpawn, chase, out PlannedPath queued))
+            {
+                return queued;
+            }
+        }
+
         if (!HasPathBudget)
         {
             NoteDeferredPath(creature);
@@ -460,6 +478,15 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         PathOptions pathOptions = PathOptionsFor(creature, toSpawn, chase);
         PathResult path = SearchPath(creature, start, destination, pathOptions);
+        return FinishPlannedPath(creature, start, destination, toSpawn, pathOptions, path);
+    }
+
+    /// <summary>
+    /// The outcome of a finished search (this thread's or a path job's, <see cref="TryPlanPathByJob"/>): pending tiles defer, no path
+    /// is reported, and a found path becomes the corner list (smoothed and varied as before).
+    /// </summary>
+    private PlannedPath FinishPlannedPath(Creature creature, Vector3 start, Vector3 destination, bool toSpawn, PathOptions pathOptions, PathResult path)
+    {
         if ((path.Type & PathType.TilesPending) != 0)
         {
             NoteDeferredPath(creature);

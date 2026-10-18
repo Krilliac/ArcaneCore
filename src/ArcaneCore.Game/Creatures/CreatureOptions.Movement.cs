@@ -61,6 +61,27 @@ public sealed class CreatureMovementOptions
     /// gap does not leave a patrol frozen in place. The content audit reports such spawns once at load either way.
     /// </summary>
     public MissingWaypointPathFallback MissingWaypointPathFallback { get; set; } = MissingWaypointPathFallback.Random;
+
+    /// <summary>
+    /// <c>Creatures:Movement:PathJobs</c>: run the navmesh searches of out-of-combat creature moves (wander, waypoint, point and scripted
+    /// moves, evade/home returns of walkers) on a pool of path-job threads instead of the map's update (multithreading plan W5). The
+    /// answer is the same search over the same loaded tiles; the creature starts the move on a later update, as it does today when the
+    /// per-update search budget is spent. Chase, follow, flee, confused, formation, pet and flier searches stay synchronous. Off by
+    /// default; read when the map's creature system starts.
+    /// </summary>
+    public bool PathJobs { get; set; }
+
+    /// <summary>
+    /// <c>Creatures:Movement:PathJobThreads</c>: the path-job threads (<see cref="PathJobs"/>), shared by every map; 1-64. They run
+    /// below normal priority. Read once, when the first map starts the pool.
+    /// </summary>
+    public int PathJobThreads { get; set; } = 4;
+
+    /// <summary>
+    /// <c>Creatures:Movement:PathJobsMaxInFlightPerMap</c>: the most outstanding path jobs one map may have (<see cref="PathJobs"/>);
+    /// past it a request is searched synchronously under the per-update budget, as without jobs.
+    /// </summary>
+    public int PathJobsMaxInFlightPerMap { get; set; } = 512;
 }
 
 /// <summary>The default movement of a waypoint creature without a path (<see cref="CreatureMovementOptions.MissingWaypointPathFallback"/>).</summary>

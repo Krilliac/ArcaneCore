@@ -32,9 +32,10 @@ public sealed class NavMeshTile
     private readonly BvNode[]? _bv;
     private readonly float _bvQuantFactor;
     private readonly int _bvSlack;
-    private Dictionary<int, List<BorderEdge>>? _borderEdges;
-    private int[]? _externalEdgeKeys;
-    private CrossPortals?[]? _crossPortals;
+    // Lazily built caches. A search fills them, and searches may run on several threads at once (path jobs beside the world thread), so
+    // each is published whole: a racing reader builds its own copy and one of them wins; nothing is ever seen half built.
+    private readonly List<BorderEdge>?[] _borderEdges = new List<BorderEdge>?[8];
+    private ExternalEdges? _externalEdges;
 
     private NavMeshTile(int x, int y, int layer, Vector3 low, Vector3 high, float walkableClimb, Vector3[] vertices, NavPoly[] polys, NavPolyDetail[] details, Vector3[] detailVertices, byte[] detailTriangles, BvNode[] bvNodes, float bvQuantFactor)
     {
@@ -607,8 +608,8 @@ public sealed class NavMeshTile
     /// <summary>The edges of this tile's polygons that lie on a border side, for joining with the neighbour tile.</summary>
     internal List<BorderEdge> GetBorderEdges(int side)
     {
-        _borderEdges ??= [];
-        if (!_borderEdges.TryGetValue(side, out List<BorderEdge>? edges))
+        List<BorderEdge>? edges = Volatile.Read(ref _borderEdges[side & 7]);
+        if (edges is null)
         {
             edges = [];
             for (int i = 0; i < Polys.Length; i++)
@@ -624,7 +625,7 @@ public sealed class NavMeshTile
                 }
             }
 
-            _borderEdges[side] = edges;
+            edges = Interlocked.CompareExchange(ref _borderEdges[side & 7], edges, null) ?? edges;
         }
 
         return edges;
@@ -639,18 +640,18 @@ public sealed class NavMeshTile
     /// </summary>
     internal CrossPortal[] GetCrossPortals(int poly, int edge, NavMeshTile other)
     {
-        int[] keys = _externalEdgeKeys ?? BuildExternalEdgeKeys();
-        int slot = Array.BinarySearch(keys, (poly << 3) | edge);
+        ExternalEdges table = Volatile.Read(ref _externalEdges) ?? BuildExternalEdgeKeys();
+        int slot = Array.BinarySearch(table.Keys, (poly << 3) | edge);
         if (slot < 0)
         {
             return [];
         }
 
-        CrossPortals? cached = _crossPortals![slot];
+        CrossPortals? cached = Volatile.Read(ref table.Slots[slot]);
         if (cached is null || !ReferenceEquals(cached.Other, other))
         {
             cached = new CrossPortals(other, BuildCrossPortals(poly, edge, other));
-            _crossPortals[slot] = cached;
+            Volatile.Write(ref table.Slots[slot], cached); // immutable entry: a racing builder writes an equal one
         }
 
         return cached.Items;
@@ -659,7 +660,7 @@ public sealed class NavMeshTile
     /// <summary>Forget the portals built against <paramref name="other"/> (it was unloaded), so this tile does not keep it alive.</summary>
     internal void DropCrossPortalsTo(NavMeshTile other)
     {
-        if (_crossPortals is not { } portals)
+        if (Volatile.Read(ref _externalEdges)?.Slots is not { } portals)
         {
             return;
         }
@@ -678,8 +679,9 @@ public sealed class NavMeshTile
     {
         get
         {
-            long bytes = (_externalEdgeKeys?.Length ?? 0) * 4L + (_crossPortals?.Length ?? 0) * 8L;
-            foreach (CrossPortals? p in _crossPortals ?? [])
+            ExternalEdges? table = Volatile.Read(ref _externalEdges);
+            long bytes = (table?.Keys.Length ?? 0) * 4L + (table?.Slots.Length ?? 0) * 8L;
+            foreach (CrossPortals? p in table?.Slots ?? [])
             {
                 bytes += p is null ? 0 : 32 + (p.Items.Length * 28L);
             }
@@ -688,7 +690,7 @@ public sealed class NavMeshTile
         }
     }
 
-    private int[] BuildExternalEdgeKeys()
+    private ExternalEdges BuildExternalEdgeKeys()
     {
         var keys = new List<int>();
         for (int i = 0; i < Polys.Length; i++)
@@ -703,9 +705,8 @@ public sealed class NavMeshTile
             }
         }
 
-        _crossPortals = new CrossPortals?[keys.Count];
-        _externalEdgeKeys = [.. keys];
-        return _externalEdgeKeys;
+        var built = new ExternalEdges([.. keys], new CrossPortals?[keys.Count]);
+        return Interlocked.CompareExchange(ref _externalEdges, built, null) ?? built;
     }
 
     private CrossPortal[] BuildCrossPortals(int poly, int edge, NavMeshTile other)
@@ -821,6 +822,14 @@ internal readonly record struct BvNode(ushort MinX, ushort MinY, ushort MinZ, us
 
 /// <summary>The part of a polygon edge shared with a polygon across a tile border: the neighbour's polygon and the overlap segment (Recast space).</summary>
 internal readonly record struct CrossPortal(int Poly, Vector3 A, Vector3 B);
+
+/// <summary>A tile's external (tile-border) edges, sorted (polygon &lt;&lt; 3 | edge), and the portal table built for each.</summary>
+internal sealed class ExternalEdges(int[] keys, CrossPortals?[] slots)
+{
+    public int[] Keys { get; } = keys;
+
+    public readonly CrossPortals?[] Slots = slots;
+}
 
 /// <summary>The portals of one tile-border edge against one neighbour tile.</summary>
 internal sealed class CrossPortals(NavMeshTile other, CrossPortal[] items)

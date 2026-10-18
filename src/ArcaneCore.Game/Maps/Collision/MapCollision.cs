@@ -68,6 +68,9 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     /// <summary>The world's pathfinder.</summary>
     public IPathfinder Pathfinder => _services.Pathfinder;
 
+    /// <summary>The pathfinder that answers <see cref="FindPath"/> for this map (navigation data for it, else the world's fallback).</summary>
+    public IPathfinder PathfinderForMap => _services.PathfinderFor(Map.MapId);
+
     /// <summary>Whether a static model blocks the segment (no data: always in sight).</summary>
     public bool IsInLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2)
     {
