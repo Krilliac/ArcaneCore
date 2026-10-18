@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 254 |
-| `Administrator` | 6 | 378 |
+| `GameMaster` | 3 | 260 |
+| `Administrator` | 6 | 384 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -138,6 +138,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.lookup event` | 2 | GameMaster | declared retail level | Syntax: .lookup event $namepart List the events whose description contains the text. |
 | `.modify` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify $subcommand |
 | `.modify money` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify money #money Add or remove money to the selected player; negative values take money (all of it when it would reach zero). |
+| `.modify swim` | 2 | GameMaster | declared retail level | Syntax: .modify swim #rate Set the selected player's swim speed rate. |
+| `.modify bwalk` | 2 | GameMaster | declared retail level | Syntax: .modify bwalk #rate Set the selected player's backwards run speed rate. |
+| `.modify aspeed` | 2 | GameMaster | declared retail level | Syntax: .modify aspeed #rate Set the walk, run and swim speed rate of the selected unit or yourself. |
+| `.modify drunk` | 2 | GameMaster | declared retail level | Syntax: .modify drunk #percent Set how drunk the selected player or you are (0-100). |
+| `.modify morph` | 3 | GameMaster | declared retail level | Syntax: .modify morph #displayid Change the model of the selected unit or yourself to #displayid. |
+| `.modify emotestate` | 3 | GameMaster | declared retail level | Syntax: .modify emotestate #emoteid Set the state emote of the selected unit (0 ends it). |
 | `.modify speed` | 2 | GameMaster | declared retail level | Syntax: .modify speed #rate Set the selected player's run speed rate. |
 | `.modify scale` | 3 | GameMaster | declared retail level | Syntax: .modify scale #scale Set the selected unit's model scale (0 exclusive to 100 inclusive). |
 | `.modify hp` | 3 | GameMaster | declared retail level | Syntax: .modify hp #newhp [#newmaxhp] Change the HP (and maximum HP) of the selected player, or yours. |

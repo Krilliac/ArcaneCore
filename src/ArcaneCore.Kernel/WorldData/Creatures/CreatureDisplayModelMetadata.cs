@@ -21,5 +21,8 @@ public sealed class CreatureDisplayModelMetadataContent(IEnumerable<CreatureDisp
 
     public string Provenance { get; } = provenance;
 
+    /// <summary>How many display ids are known (0 without the client's CreatureDisplayInfo.dbc).</summary>
+    public int Count => _rows.Count;
+
     public CreatureDisplayModelMetadata? Find(uint displayId) => _rows.GetValueOrDefault(displayId);
 }
