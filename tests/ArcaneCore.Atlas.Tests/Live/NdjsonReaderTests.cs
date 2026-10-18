@@ -110,16 +110,26 @@ public sealed class NdjsonReaderTests
     public async Task AnEndlessLineWithoutNewline_IsDiscardedNotBuffered()
     {
         // 5 MiB of one line against a 1 KiB limit: the reader must report it oversize once the newline arrives and never hold it.
+        const int Limit = 1024;
+        const int BufferSize = 8192;
         byte[] junk = new byte[5 * 1024 * 1024];
         Array.Fill(junk, (byte)'x');
         byte[] tail = Encoding.UTF8.GetBytes("\nok\n");
         byte[] data = [.. junk, .. tail];
+        var reader = new NdjsonReader(new PiecewiseStream(data, 4096), Limit, BufferSize);
+        int mostRetained = reader.RetainedBytes;
 
-        var items = await ReadAllAsync(data, piece: 4096, limit: 1024, bufferSize: 8192);
+        NdjsonItem oversize = await reader.ReadAsync(CancellationToken.None);
+        mostRetained = Math.Max(mostRetained, reader.RetainedBytes);
+        NdjsonItem ok = await reader.ReadAsync(CancellationToken.None);
+        mostRetained = Math.Max(mostRetained, reader.RetainedBytes);
 
-        Assert.Equal(NdjsonKind.Oversize, items[0].Kind);
-        Assert.Equal(junk.Length, items[0].Length);
-        Assert.Equal("ok", items[1].Text);
+        Assert.Equal(NdjsonKind.Oversize, oversize.Kind);
+        Assert.Equal(junk.Length, oversize.Length);
+        Assert.Equal("ok", Encoding.UTF8.GetString(ok.Line.Span));
+
+        // The read buffer plus a carry that never grew past the limit: nowhere near the 5 MiB that went by.
+        Assert.True(mostRetained <= BufferSize + (2 * Limit), $"the reader held {mostRetained} bytes");
     }
 
     [Fact]

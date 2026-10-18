@@ -33,8 +33,14 @@ public sealed record LiveEntityFilter(
 /// <para>
 /// Threads: commands call in from any thread; frames are applied on the connection's reader loop. Connect, disconnect and subscribe are
 /// serialised by one gate; queries are not (they only read the current connection). The store is only written by the connection that is
-/// current, under a lock that disconnect also takes, so a stale connection can never put entities into a newer store. Event-hub and view
-/// subscribers run on the reader loop and must not block (their contract).
+/// current, under a lock that disconnect also takes, and a frame is pushed to the hub under that same lock, so a stale connection can
+/// never put entities into a newer store and no frame is pushed after the disconnect that retired it. Event-hub and view subscribers run
+/// on the reader loop and must not block (their contract).
+/// </para>
+/// <para>
+/// One subscription: the feed serves a connection one map/instance at a time (the protocol's <c>unsubscribe</c> names nothing, and a new
+/// <c>subscribe</c> replaces the old one), so subscribing again replaces the remembered request and drops the entities of the map that was
+/// watched before; frames of any other map/instance that are still in flight are ignored and counted.
 /// </para>
 /// </summary>
 public sealed class LiveFeed : IDisposable
@@ -53,7 +59,7 @@ public sealed class LiveFeed : IDisposable
     private readonly Lock _state = new();
     private readonly Lock _apply = new();
     private readonly CancellationTokenSource _lifetime = new();
-    private readonly List<LiveSubscription> _subscriptions = [];
+    private LiveSubscription? _subscription;
     private FeedSession? _session;
     private LiveStats _stats = new();
     private string _detail = "not connected";
@@ -147,18 +153,30 @@ public sealed class LiveFeed : IDisposable
                 throw;
             }
 
+            bool disposedMeanwhile;
             lock (_state)
             {
-                _session = session;
-                _stats = session.Stats;
-                _connections++;
-                _detail = $"connected to process {(session.Hello?.Pid ?? target).ToString(CultureInfo.InvariantCulture)} on pipe '{session.PipeName}'";
+                disposedMeanwhile = _disposed;
+                if (!disposedMeanwhile)
+                {
+                    _session = session;
+                    _stats = session.Stats;
+                    _connections++;
+                    _detail = $"connected to process {(session.Hello?.Pid ?? target).ToString(CultureInfo.InvariantCulture)} on pipe '{session.PipeName}'";
+                }
+            }
+
+            if (disposedMeanwhile)
+            {
+                // Dispose ran between the handshake and here; it never saw this session, so closing it is ours to do.
+                session.Dispose();
+                throw new ObjectDisposedException(nameof(LiveFeed));
             }
 
             if (!session.IsOpen)
             {
                 OnClosed(session, "the server closed the connection right after hello");
-                throw new CommandException(CommandException.Unavailable, "the server closed the connection right after hello; its client slots may be taken.");
+                throw new CommandException(CommandException.Unavailable, "the server closed the connection right after hello.");
             }
 
             PublishStatus(connected: true, session, Detail());
@@ -188,7 +206,7 @@ public sealed class LiveFeed : IDisposable
             FeedSession? session = Detach();
             lock (_state)
             {
-                _subscriptions.Clear();
+                _subscription = null;
             }
 
             if (session is not null)
@@ -221,11 +239,14 @@ public sealed class LiveFeed : IDisposable
     }
 
     /// <summary>
-    /// Asks the server for frames of one map/instance and remembers the request for reconnects. The server sends no acknowledgement:
-    /// frames follow, and a refusal shows up in <see cref="Status"/> as <c>lastServerError</c>.
+    /// Asks the server for frames of one map/instance, replacing the connection's previous subscription, and remembers the request for
+    /// reconnects. The entities of the map that was watched before are dropped once the request is sent. The server sends no
+    /// acknowledgement: frames follow, and a refusal shows up in <see cref="Status"/> as <c>lastServerError</c>.
     /// </summary>
     public async Task<JsonObject> SubscribeAsync(LiveSubscription subscription, CancellationToken cancellationToken)
     {
+        // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:215,223 (subscribe names one map/instance; unsubscribe names none)
+        // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/WorldMapFeed.cs:299,314 (a subscribe replaces the connection's previous one)
         ArgumentNullException.ThrowIfNull(subscription);
         ThrowIfDisposed();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
@@ -233,19 +254,34 @@ public sealed class LiveFeed : IDisposable
         try
         {
             FeedSession session = RequireSession();
-            Store.ResetSequence(subscription.Map, subscription.Instance);
-            await session.SendAsync(subscription.ToMessage(), linked.Token).ConfigureAwait(false);
+
+            // The request is remembered before it is sent: the first frame of the new map can arrive before SendAsync returns, and frames
+            // of any map other than the subscribed one are ignored.
+            LiveSubscription? previous;
             lock (_state)
             {
-                int index = _subscriptions.FindIndex(s => s.Map == subscription.Map && s.Instance == subscription.Instance);
-                if (index >= 0)
+                previous = _subscription;
+                _subscription = subscription;
+            }
+
+            Store.ResetSequence(subscription.Map, subscription.Instance);
+            try
+            {
+                await session.SendAsync(subscription.ToMessage(), linked.Token).ConfigureAwait(false);
+            }
+            catch
+            {
+                lock (_state)
                 {
-                    _subscriptions[index] = subscription;
+                    _subscription = previous;
                 }
-                else
-                {
-                    _subscriptions.Add(subscription);
-                }
+
+                throw;
+            }
+
+            lock (_apply)
+            {
+                Store.Retain(subscription.Map, subscription.Instance);
             }
 
             return new JsonObject { ["subscribed"] = subscription.ToJson(), ["subscriptions"] = SubscriptionsJson() };
@@ -272,7 +308,8 @@ public sealed class LiveFeed : IDisposable
             string why = reply["message"] is JsonValue m && m.TryGetValue(out string? text)
                 ? text
                 : reply["error"]?.ToJsonString() ?? "it gave no reason";
-            throw new CommandException(CommandException.Failed, $"the server could not answer the {query.Kind} query: {why}");
+            string code = reply["code"] is JsonValue c && c.TryGetValue(out string? codeText) ? $"{codeText}: " : string.Empty;
+            throw new CommandException(CommandException.Failed, $"the server could not answer the {query.Kind} query: {code}{why}");
         }
 
         var data = new JsonObject();
@@ -302,28 +339,22 @@ public sealed class LiveFeed : IDisposable
         return data;
     }
 
-    /// <summary>The map and instance a query without them targets: the only subscription, else the view's map and instance 0.</summary>
-    /// <exception cref="CommandException">BadArguments when several subscriptions exist and the caller named neither.</exception>
+    /// <summary>
+    /// The map and instance a query without them targets: the subscribed map and instance, else the view's map and instance 0. A map named
+    /// without an instance gets the subscription's instance when the subscription is for that map, else instance 0.
+    /// </summary>
     public (uint Map, uint Instance) QueryTarget(uint? map, uint? instance)
     {
         lock (_state)
         {
             if (map is { } m)
             {
-                uint i = instance ?? (_subscriptions.FirstOrDefault(s => s.Map == m)?.Instance ?? 0);
-                return (m, i);
+                return (m, instance ?? (_subscription is { } same && same.Map == m ? same.Instance : 0));
             }
 
-            if (_subscriptions.Count == 1)
+            if (_subscription is { } subscribed)
             {
-                return (_subscriptions[0].Map, instance ?? _subscriptions[0].Instance);
-            }
-
-            if (_subscriptions.Count > 1)
-            {
-                throw new CommandException(
-                    CommandException.BadArguments,
-                    "live.query: several maps are subscribed, so 'map' (and 'instance') must say which one to ask.");
+                return (subscribed.Map, instance ?? subscribed.Instance);
             }
         }
 
@@ -423,14 +454,14 @@ public sealed class LiveFeed : IDisposable
         LiveStats stats;
         string detail;
         long connections;
-        LiveSubscription[] subscriptions;
+        LiveSubscription? subscription;
         lock (_state)
         {
             session = _session;
             stats = _stats;
             detail = _detail;
             connections = _connections;
-            subscriptions = [.. _subscriptions];
+            subscription = _subscription;
         }
 
         IReadOnlyList<MapSummary> summaries = Store.Summaries();
@@ -480,7 +511,7 @@ public sealed class LiveFeed : IDisposable
             ["protocol"] = LiveProtocol.Version,
             ["connections"] = connections,
             ["serverMaps"] = new JsonArray([.. serverMaps.Select(m => (JsonNode?)m.ToJson())]),
-            ["subscriptions"] = new JsonArray([.. subscriptions.Select(s => (JsonNode?)s.ToJson())]),
+            ["subscriptions"] = SubscriptionsJson(subscription),
             ["frames"] = frames,
             ["entities"] = totals,
             ["stats"] = stats.ToJson(missed, Store.DroppedForCapacity),
@@ -598,39 +629,46 @@ public sealed class LiveFeed : IDisposable
         }
     }
 
+    /// <summary>The subscriptions as an array for <c>live.status</c> (a connection carries at most one, so it holds zero or one entry).</summary>
     private JsonArray SubscriptionsJson()
     {
         lock (_state)
         {
-            return new JsonArray([.. _subscriptions.Select(s => (JsonNode?)s.ToJson())]);
+            return SubscriptionsJson(_subscription);
         }
     }
 
+    private static JsonArray SubscriptionsJson(LiveSubscription? subscription)
+        => subscription is null ? new JsonArray() : new JsonArray(subscription.ToJson());
+
     private async Task ResubscribeAsync(FeedSession session, CancellationToken cancellationToken)
     {
-        LiveSubscription[] remembered;
+        LiveSubscription? remembered;
         lock (_state)
         {
-            remembered = [.. _subscriptions];
+            remembered = _subscription;
         }
 
-        foreach (LiveSubscription subscription in remembered)
+        if (remembered is null)
         {
-            Store.ResetSequence(subscription.Map, subscription.Instance);
-            try
-            {
-                await session.SendAsync(subscription.ToMessage(), cancellationToken).ConfigureAwait(false);
-            }
-            catch (CommandException e)
-            {
-                _log.LogWarning("could not ask the new connection for map {Map} again: {Reason}", subscription.Map, e.Message);
-                return;
-            }
+            return;
+        }
+
+        Store.ResetSequence(remembered.Map, remembered.Instance);
+        try
+        {
+            await session.SendAsync(remembered.ToMessage(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CommandException e)
+        {
+            _log.LogWarning("could not ask the new connection for map {Map} again: {Reason}", remembered.Map, e.Message);
         }
     }
 
     private void OnFrame(FeedSession session, ParsedFrame parsed)
     {
+        // The hub push stays inside the lock that disconnect takes to retire this connection: no frame is announced after the
+        // "disconnected" status, and a stale connection cannot announce one at all.
         lock (_apply)
         {
             if (session.Id != _currentId)
@@ -638,10 +676,17 @@ public sealed class LiveFeed : IDisposable
                 return;
             }
 
+            LiveSubscription? wanted = Volatile.Read(ref _subscription);
+            if (wanted is not null && (wanted.Map != parsed.Frame.Map || wanted.Instance != parsed.Frame.Instance))
+            {
+                session.Stats.IgnoredFrame();
+                return;
+            }
+
             Store.Apply(parsed.Frame);
+            Publish(EventHub.Topics.LiveFrame, parsed.Json);
         }
 
-        Publish(EventHub.Topics.LiveFrame, parsed.Json);
         FollowStep();
     }
 

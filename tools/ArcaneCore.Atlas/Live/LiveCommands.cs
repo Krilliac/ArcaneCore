@@ -22,6 +22,7 @@ internal static class LiveCommands
     public const double DefaultRadius = 100;
 
     /// <summary>The map is 64 x 533.33 yd across, so no radius beyond its full extent can mean anything.</summary>
+    // ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:22,25,55 (MaxNumberOfGrids = 64, SizeOfGrids = 533.33333, MapSize = their product, about 34 133 yd)
     public const double MaxRadius = 40_000;
 
     public static void Register(CommandRegistry registry, LiveFeed feed)
@@ -37,7 +38,7 @@ internal static class LiveCommands
 
         registry.Register(new CommandDefinition(
             "live.connect",
-            "Connect to a running world daemon's map feed (a same-user local named pipe). With no pid the only feed found is used. Replaces a current connection and re-sends its subscriptions.",
+            "Connect to a running world daemon's map feed (a same-user local named pipe). With no pid the only feed found is used. Replaces a current connection and re-sends its subscription. The daemon may close a connection that stays unsubscribed for a while; live.status then shows why.",
             [new CommandArg("pid", ArgType.Integer, "Process id of the world daemon. Required where feeds cannot be discovered (not Windows) or when several run.")],
             (call, ct) => ConnectAsync(feed, call, ct)));
 
@@ -49,7 +50,7 @@ internal static class LiveCommands
 
         registry.Register(new CommandDefinition(
             "live.subscribe",
-            "Ask the connected feed for entity frames of one map and instance. The server does not acknowledge; frames follow, and a refusal appears in live.status as lastServerError.",
+            "Ask the connected feed for entity frames of one map and instance. A connection carries one subscription: this replaces the previous one, and the entities of the map it watched before are dropped. The server does not acknowledge; frames follow, and a refusal appears in live.status as lastServerError.",
             [
                 new CommandArg("map", ArgType.Integer, "Map id.", Required: true),
                 new CommandArg("instance", ArgType.Integer, "Instance id (0 for continents).", Default: JsonValue.Create(0)),
@@ -65,7 +66,8 @@ internal static class LiveCommands
             [
                 new CommandArg("kind", ArgType.String, "Only this kind.", Choices: LiveKinds.Names),
                 new CommandArg("near", ArgType.Point3, "[x, y, z] centre of a distance filter (straight-line yards). Applies to the view's map unless map is given."),
-                new CommandArg("radius", ArgType.Number, $"Radius in yards for near (default {DefaultRadius:0}, at most {MaxRadius:0}).", Default: JsonValue.Create(DefaultRadius)),
+                // No schema default: a client that fills schema defaults into every call would send radius without near, which is refused.
+                new CommandArg("radius", ArgType.Number, $"Radius in yards for near; only valid together with near (when omitted, {DefaultRadius:0}; at most {MaxRadius:0})."),
                 new CommandArg("name", ArgType.String, "Only entities whose name contains this text, ignoring case."),
                 new CommandArg("limit", ArgType.Integer, $"Most entities to return (default {DefaultEntityLimit}, at most {MaxEntityLimit}).", Default: JsonValue.Create(DefaultEntityLimit)),
                 new CommandArg("map", ArgType.Integer, "Only this map."),
@@ -88,8 +90,8 @@ internal static class LiveCommands
                 new CommandArg("kind", ArgType.String, "What to ask: los and path need a and b; height and undermap need a only.", Required: true, Choices: LiveQuery.Kinds),
                 new CommandArg("a", ArgType.Point3, "[x, y, z] first point.", Required: true),
                 new CommandArg("b", ArgType.Point3, "[x, y, z] second point (los and path)."),
-                new CommandArg("map", ArgType.Integer, "Map id. Default: the only subscribed map, else the view's map."),
-                new CommandArg("instance", ArgType.Integer, "Instance id. Default: that subscription's, else 0."),
+                new CommandArg("map", ArgType.Integer, "Map id. Default: the subscribed map, else the view's map."),
+                new CommandArg("instance", ArgType.Integer, "Instance id. Default: the subscription's when it is for this map, else 0."),
             ],
             (call, ct) => QueryAsync(feed, call, ct)));
     }

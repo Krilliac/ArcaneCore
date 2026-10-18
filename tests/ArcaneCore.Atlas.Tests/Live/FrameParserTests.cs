@@ -229,7 +229,7 @@ public sealed class FrameParserTests
     }
 
     [Fact]
-    public void TheHelloReply_IsParsedAndItsOddEntriesSkipped()
+    public void TheHelloReply_IsParsedAndItsOddEntriesSkippedAndCounted()
     {
         JsonObject hello = Wire.Hello(1, 99, "abc123", (0, 0, 3, 40), (1, 0, 0, 7));
         hello["maps"]!.AsArray().Add(Raw("""{"map":"x"}"""));
@@ -241,6 +241,17 @@ public sealed class FrameParserTests
         Assert.Equal(99, info.Pid);
         Assert.Equal("abc123", info.Sha);
         Assert.Equal(new[] { new ServerMap(0, 0, 3, 40), new ServerMap(1, 0, 0, 7) }, info.Maps);
+        Assert.Equal(2, info.MapsRejected);
+        Assert.Contains("maps[2]", info.FirstMapProblem, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACleanHelloReply_RejectsNothing()
+    {
+        Assert.True(FrameParser.TryParseHello(OnTheWire(Wire.Hello(1, 99, "abc123", (0, 0, 3, 40))), out HelloInfo? info, out string? problem), problem);
+
+        Assert.Equal(0, info.MapsRejected);
+        Assert.Null(info.FirstMapProblem);
     }
 
     [Theory]

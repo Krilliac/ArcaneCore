@@ -17,6 +17,7 @@ internal sealed class LiveStats
     private long _unknownOps;
     private long _serverErrors;
     private long _lateResults;
+    private long _ignoredFrames;
     private string? _lastProblem;
     private string? _lastServerError;
 
@@ -36,6 +37,8 @@ internal sealed class LiveStats
 
     public long LateResults => Interlocked.Read(ref _lateResults);
 
+    public long IgnoredFrames => Interlocked.Read(ref _ignoredFrames);
+
     public string? LastProblem => Volatile.Read(ref _lastProblem);
 
     public string? LastServerError => Volatile.Read(ref _lastServerError);
@@ -43,12 +46,21 @@ internal sealed class LiveStats
     public void FrameAccepted(int rejectedItems, string? firstProblem)
     {
         Interlocked.Increment(ref _frames);
-        if (rejectedItems > 0)
+        ItemsRejected(rejectedItems, firstProblem);
+    }
+
+    /// <summary>Counts entries dropped from an otherwise accepted message (entities and grid pairs of a frame, maps of a hello).</summary>
+    public void ItemsRejected(int count, string? firstProblem)
+    {
+        if (count > 0)
         {
-            Interlocked.Add(ref _badItems, rejectedItems);
+            Interlocked.Add(ref _badItems, count);
             Volatile.Write(ref _lastProblem, Clip(firstProblem));
         }
     }
+
+    /// <summary>Counts a well-formed frame that was not applied because it is for a map the client no longer watches.</summary>
+    public void IgnoredFrame() => Interlocked.Increment(ref _ignoredFrames);
 
     public void BadMessage(string problem)
     {
@@ -95,6 +107,7 @@ internal sealed class LiveStats
         ["truncatedLines"] = TruncatedLines,
         ["unknownOps"] = UnknownOps,
         ["lateResults"] = LateResults,
+        ["ignoredFrames"] = IgnoredFrames,
         ["droppedForCapacity"] = droppedForCapacity,
         ["serverErrors"] = ServerErrors,
         ["lastProblem"] = LastProblem,

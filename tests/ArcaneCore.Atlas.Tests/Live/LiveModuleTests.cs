@@ -105,6 +105,31 @@ public sealed class LiveModuleTests
     }
 
     [Fact]
+    public async Task APlainEntitiesCallWithEverySchemaDefaultFilledIn_Works_BecauseRadiusAdvertisesNone()
+    {
+        using AtlasContext context = Compose(new LiveModule(Options("unused")));
+        Assert.True(context.Commands.TryGet("live.entities", out CommandDefinition? definition));
+
+        // A palette or MCP client may send every schema default with each call. Radius is refused without near, so it must not have one.
+        JsonObject properties = CommandSchema.InputSchema(definition)["properties"]!.AsObject();
+        var filled = new JsonObject();
+        foreach ((string name, JsonNode? property) in properties)
+        {
+            if (property!.AsObject()["default"] is { } value)
+            {
+                filled[name] = value.DeepClone();
+            }
+        }
+
+        CommandResult result = await Invoke(context, "live.entities", filled);
+
+        Assert.Null(properties["radius"]!.AsObject()["default"]);
+        Assert.Equal(new[] { "limit", "trails" }, filled.Select(p => p.Key).Order(StringComparer.Ordinal));
+        Assert.True(result.Ok, result.ErrorMessage);
+        Assert.Equal(0, result.Data!["matched"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void TheLiveLayersHaveAnOwner_ThatNeverPretendsToHaveTiles()
     {
         using AtlasContext context = Compose(new LiveModule(Options("unused")));

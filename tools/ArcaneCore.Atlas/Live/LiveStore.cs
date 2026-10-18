@@ -153,6 +153,24 @@ public sealed class LiveStore
         }
     }
 
+    /// <summary>
+    /// Keeps only the state of one map/instance and drops the rest: the feed serves a connection one map at a time, so once the
+    /// subscription moved the entities of the old map are no longer being updated and must not be shown as current.
+    /// </summary>
+    public void Retain(uint map, uint instance)
+    {
+        lock (_gate)
+        {
+            foreach ((uint Map, uint Instance) key in _maps.Keys.ToList())
+            {
+                if (key.Map != map || key.Instance != instance)
+                {
+                    _maps.Remove(key);
+                }
+            }
+        }
+    }
+
     /// <summary>Drops everything (a disconnect: stale positions must not outlive their connection).</summary>
     public void Clear()
     {

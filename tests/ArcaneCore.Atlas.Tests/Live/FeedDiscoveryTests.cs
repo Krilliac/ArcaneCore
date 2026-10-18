@@ -63,7 +63,7 @@ public sealed class FeedDiscoveryTests
     }
 
     [NonWindowsFact]
-    public void WithoutWindowsPipes_DiscoveryIsRefusedAsUnavailable_ButAnExplicitPidStillWorks()
+    public void WithoutWindowsPipes_DiscoveryIsRefusedAsUnavailable_AndPipeExistsCannotTell()
     {
         var discovery = new PipeFeedDiscovery();
 
@@ -72,6 +72,29 @@ public sealed class FeedDiscoveryTests
         Assert.Equal(CommandException.Unavailable, e.Code);
         Assert.Contains("pass the world daemon's pid", e.Message, StringComparison.Ordinal);
         Assert.Null(discovery.PipeExists("arcanecore-mapfeed-1"));
+    }
+
+    [Fact]
+    public async Task AnExplicitPid_ConnectsThroughTheRealDiscovery_OnEveryPlatform_WithoutListingPipes()
+    {
+        // The real discovery refuses to list pipes off Windows, so a connect that listed them would fail there; with a pid it must not.
+        await using var rig = new LiveRig(discovery: new PipeFeedDiscovery());
+
+        await rig.ConnectAsync(pid: 4242);
+
+        Assert.True(rig.Feed.IsConnected);
+    }
+
+    [NonWindowsFact]
+    public async Task WithoutAPid_ConnectingOffWindows_IsUnavailable_AndSaysToPassThePid()
+    {
+        await using var rig = new LiveRig(discovery: new PipeFeedDiscovery());
+
+        CommandResult result = await rig.RunAsync("live.connect");
+
+        Assert.False(result.Ok);
+        Assert.Equal(CommandException.Unavailable, result.ErrorCode);
+        Assert.Contains("pass the world daemon's pid", result.ErrorMessage, StringComparison.Ordinal);
     }
 
     [WindowsFact]

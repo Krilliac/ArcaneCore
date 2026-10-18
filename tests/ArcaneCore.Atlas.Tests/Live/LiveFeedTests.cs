@@ -1,3 +1,4 @@
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
@@ -97,6 +98,41 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
+    public async Task AHelloWithoutAPid_IsRefused_BecauseTheProcessCannotBeChecked()
+    {
+        await using var rig = new LiveRig();
+        (FakeFeedServer server, Task<JsonObject> connect) = await rig.BeginConnectAsync(pid: 4242);
+        JsonObject hello = Wire.Hello();
+        hello.Remove("pid");
+
+        await server.AnswerHelloAsync(hello);
+        CommandException e = await FailureOf(connect);
+
+        Assert.Equal(CommandException.Failed, e.Code);
+        Assert.Contains("without its process id", e.Message, StringComparison.Ordinal);
+        Assert.Contains("process 4242", e.Message, StringComparison.Ordinal);
+        Assert.False(rig.Feed.IsConnected);
+    }
+
+    [Fact]
+    public async Task MalformedMapsInTheHello_AreCountedAndReported_NotSilentlyDropped()
+    {
+        await using var rig = new LiveRig();
+        JsonObject hello = Wire.Hello(1, 4242, "feedface", (0, 0, 2, 310));
+        hello["maps"]!.AsArray().Add(Obj("""{"map":"zero"}"""));
+        hello["maps"]!.AsArray().Add(JsonValue.Create(7));
+
+        await rig.ConnectAsync(pid: 4242, hello);
+        JsonObject status = rig.Feed.Status();
+
+        Assert.True(rig.Feed.IsConnected);
+        Assert.Single(status["serverMaps"]!.AsArray());
+        JsonObject stats = status["stats"]!.AsObject();
+        Assert.Equal(2, stats["badItems"]!.GetValue<long>());
+        Assert.Contains("maps[1]", stats["lastProblem"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AMalformedHello_IsRefused()
     {
         await using var rig = new LiveRig();
@@ -146,6 +182,44 @@ public sealed class LiveFeedTests
 
         Assert.Equal(CommandException.Unavailable, e.Code);
         Assert.Contains(rig.PipeName, e.Message, StringComparison.Ordinal);
+    }
+
+    [WindowsFact]
+    public async Task APipeWithEveryInstanceInUse_EndsInTheConnectTimeout_ThatNamesTheClientSlots()
+    {
+        // The daemon creates MaxConnections instances of its pipe; a client beyond the last finds it busy. One instance, taken, models that.
+        await using var rig = new LiveRig(o => o with { ConnectTimeout = TimeSpan.FromMilliseconds(400) });
+        FakeFeedServer server = rig.NewServer();
+        Task accept = server.AcceptAsync();
+        await using var taken = new NamedPipeClientStream(".", rig.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await taken.ConnectAsync(5000);
+        await accept;
+
+        CommandException e = await Assert.ThrowsAsync<CommandException>(() => rig.Feed.ConnectAsync(4242, CancellationToken.None));
+
+        Assert.Equal(CommandException.Unavailable, e.Code);
+        Assert.Contains("client slots are in use", e.Message, StringComparison.Ordinal);
+        Assert.False(rig.Feed.IsConnected);
+    }
+
+    [Fact]
+    public void EveryLineTheClientSends_StaysFarUnderTheServersFourKilobyteLimit()
+    {
+        // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/MapFeedProtocol.cs:71 (MaxLineBytes = 4096 for client lines; a longer one closes the connection)
+        const int ServerLimit = 4096;
+        var widest = new LiveSubscription(uint.MaxValue, uint.MaxValue, 60.123456789, LiveKinds.Names, Paths: true);
+        var query = new LiveQuery("path", uint.MaxValue, uint.MaxValue, new WorldPoint(-17066.666666, -17066.666666, -99999.99), new WorldPoint(17066.666666, 17066.666666, 99999.99));
+        JsonObject withId = query.ToMessage();
+        withId["id"] = long.MaxValue;
+
+        int[] sizes =
+        [
+            widest.ToMessage().ToJsonString().Length,
+            withId.ToJsonString().Length,
+            new JsonObject { ["op"] = LiveProtocol.OpHello, ["protocol"] = LiveProtocol.Version }.ToJsonString().Length,
+        ];
+
+        Assert.All(sizes, size => Assert.True(size < ServerLimit / 4, $"a client line of {size} characters is too close to the server's {ServerLimit} byte limit"));
     }
 
     [Fact]
@@ -236,7 +310,57 @@ public sealed class LiveFeedTests
         Assert.Equal("""{"op":"subscribe","map":0,"instance":3,"hz":2.5,"kinds":["player","creature"],"paths":false}""", customLine.ToJsonString());
         Assert.True(defaults.Ok, defaults.ErrorMessage);
         Assert.Equal("""{"op":"subscribe","map":1,"instance":0,"hz":4,"kinds":["player","bot","creature","gameobject"],"paths":true}""", defaultLine.ToJsonString());
-        Assert.Equal(2, defaults.Data!["subscriptions"]!.AsArray().Count);
+
+        // A connection carries one subscription (the second replaced the first), so the status lists one.
+        Assert.Equal(1, Assert.Single(defaults.Data!["subscriptions"]!.AsArray())!["map"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task SubscribingAnotherMap_ReplacesTheSubscription_DropsTheOldMapsEntities_AndIgnoresItsLateFrames()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer server = await rig.ConnectAsync();
+        await rig.RunAsync("live.subscribe", Obj("""{"map":0}"""));
+        _ = await server.ReadAsync();
+        await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+        Assert.Equal(1, rig.Feed.Store.EntityCount);
+
+        CommandResult second = await rig.RunAsync("live.subscribe", Obj("""{"map":1,"instance":2}"""));
+        _ = await server.ReadAsync();
+
+        // Frames of the replaced subscription that were already in flight, then the first frame of the new one.
+        await server.WriteAsync(Wire.Frame(0, 0, 2, Wire.Entity("1", "creature", 9, 9, 9), Wire.Entity("5", "creature", 8, 8, 8)));
+        await server.WriteAsync(Wire.Frame(1, 2, 3, Wire.Entity("7", "bot", 4, 5, 6)));
+        JsonObject pushed = (await rig.Log.NextAsync(EventHub.Topics.LiveFrame))!.AsObject();
+
+        Assert.True(second.Ok, second.ErrorMessage);
+        Assert.Equal(1, pushed["map"]!.GetValue<int>());
+        Assert.Equal(new ulong[] { 7 }, rig.Feed.Store.Snapshot().Select(s => s.Entity.Id));
+        Assert.Empty(rig.Log.Drain(EventHub.Topics.LiveFrame));
+        JsonObject status = rig.Feed.Status();
+        Assert.Equal(1, status["stats"]!["ignoredFrames"]!.GetValue<long>());
+        Assert.Equal(1u, Assert.Single(status["frames"]!.AsArray())!["map"]!.GetValue<uint>());
+        Assert.Equal(2u, Assert.Single(status["subscriptions"]!.AsArray())!["instance"]!.GetValue<uint>());
+    }
+
+    [Fact]
+    public async Task AfterTheConnectionIsLost_SubscribingIsUnavailable_AndTheRememberedSubscriptionSurvivesForTheReconnect()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer server = await rig.ConnectAsync();
+        await rig.RunAsync("live.subscribe", Obj("""{"map":0,"hz":2}"""));
+        _ = await server.ReadAsync();
+
+        server.Drop();
+        await Wait.UntilAsync(() => !rig.Feed.IsConnected, "the drop is noticed");
+        CommandResult refused = await rig.RunAsync("live.subscribe", Obj("""{"map":1}"""));
+
+        Assert.False(refused.Ok);
+        Assert.Equal(CommandException.Unavailable, refused.ErrorCode);
+        JsonObject kept = Assert.Single(rig.Feed.Status()["subscriptions"]!.AsArray())!.AsObject();
+        Assert.Equal(0u, kept["map"]!.GetValue<uint>());
+        Assert.Equal(2.0, kept["hz"]!.GetValue<double>());
     }
 
     [Fact]
@@ -424,7 +548,25 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
-    public async Task AfterTheServerDisconnects_Reconnecting_AsksAgainForWhatWasSubscribed()
+    public async Task AServerThatRefusesAndHangsUp_HasItsReasonInTheCloseNotice()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer server = await rig.ConnectAsync();
+        await rig.Log.NextAsync(EventHub.Topics.LiveStatus);
+
+        await server.WriteAsync(Obj("""{"op":"error","code":"idle-timeout","message":"no request for a while and no subscription; closing the connection"}"""));
+        server.Drop();
+        JsonObject pushed = (await rig.Log.NextAsync(EventHub.Topics.LiveStatus))!.AsObject();
+
+        Assert.False(pushed["connected"]!.GetValue<bool>());
+        string detail = pushed["detail"]!.GetValue<string>();
+        Assert.Contains("server closed the connection", detail, StringComparison.Ordinal);
+        Assert.Contains("idle-timeout", detail, StringComparison.Ordinal);
+        Assert.Equal(1, rig.Feed.Status()["stats"]!["serverErrors"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task AfterTheServerDisconnects_Reconnecting_AsksAgainForTheSubscriptionThatWasInForce()
     {
         await using var rig = new LiveRig();
         FakeFeedServer first = await rig.ConnectAsync();
@@ -432,7 +574,7 @@ public sealed class LiveFeedTests
         _ = await first.ReadAsync();
         await rig.RunAsync("live.subscribe", Obj("""{"map":1,"instance":4,"kinds":["bot"],"paths":false}"""));
         _ = await first.ReadAsync();
-        await first.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await first.WriteAsync(Wire.Frame(1, 4, 1, Wire.Entity("1", "bot", 1, 2, 3)));
         await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
         first.Drop();
         await Wait.UntilAsync(() => !rig.Feed.IsConnected, "the drop is noticed");
@@ -444,17 +586,19 @@ public sealed class LiveFeedTests
         await accept;
         await second.AnswerHelloAsync(Wire.Hello(pid: 4242, sha: "newer"));
         CommandResult result = await reconnect.WaitAsync(FakeFeedServer.Patience);
-        JsonObject again1 = await second.ReadAsync();
-        JsonObject again2 = await second.ReadAsync();
-        await second.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("7", "player", 9, 9, 9)));
+        JsonObject again = await second.ReadAsync();
+        await second.WriteAsync(Wire.Frame(1, 4, 1, Wire.Entity("7", "bot", 9, 9, 9)));
         await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
 
         Assert.True(result.Ok, result.ErrorMessage);
         Assert.Equal("newer", result.Data!["sha"]!.GetValue<string>());
-        Assert.Equal("""{"op":"subscribe","map":0,"instance":0,"hz":2,"kinds":["player","bot","creature","gameobject"],"paths":true}""", again1.ToJsonString());
-        Assert.Equal("""{"op":"subscribe","map":1,"instance":4,"hz":4,"kinds":["bot"],"paths":false}""", again2.ToJsonString());
+        Assert.Equal("""{"op":"subscribe","map":1,"instance":4,"hz":4,"kinds":["bot"],"paths":false}""", again.ToJsonString());
         Assert.Equal(new ulong[] { 7 }, rig.Feed.Store.Snapshot().Select(s => s.Entity.Id));
         Assert.Equal(2, result.Data["connections"]!.GetValue<int>());
+
+        // Nothing else follows the one subscribe: the replaced request is not asked for again.
+        await rig.RunAsync("live.disconnect");
+        Assert.Equal("unsubscribe", (await second.ReadAsync())["op"]!.GetValue<string>());
     }
 
     [Fact]
@@ -596,6 +740,39 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
+    public async Task MoreThanSixtyFourQueriesWaiting_AreRefused_UntilSomeFinish()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer server = await rig.ConnectAsync();
+        var waiting = new List<Task<CommandResult>>();
+        for (int i = 0; i < 64; i++)
+        {
+            waiting.Add(rig.RunAsync("live.query", Obj("""{"kind":"height","a":[1,2,3],"map":0}""")));
+        }
+
+        // Reading every line proves every query was registered and sent before the next one is tried.
+        var asked = new List<JsonObject>();
+        for (int i = 0; i < 64; i++)
+        {
+            asked.Add(await server.ReadAsync());
+        }
+
+        CommandResult refused = await rig.RunAsync("live.query", Obj("""{"kind":"height","a":[1,2,3],"map":0}"""));
+        await server.WriteAsync(Wire.Result(asked[0]["id"]!.GetValue<long>()));
+        await waiting[0].WaitAsync(FakeFeedServer.Patience);
+        Task<CommandResult> again = rig.RunAsync("live.query", Obj("""{"kind":"height","a":[1,2,3],"map":0}"""));
+        JsonObject next = await server.ReadAsync();
+        await server.WriteAsync(Wire.Result(next["id"]!.GetValue<long>()));
+        CommandResult accepted = await again.WaitAsync(FakeFeedServer.Patience);
+
+        Assert.Equal(64, asked.Select(a => a["id"]!.GetValue<long>()).Distinct().Count());
+        Assert.False(refused.Ok);
+        Assert.Equal(CommandException.Failed, refused.ErrorCode);
+        Assert.Contains("64 queries", refused.ErrorMessage, StringComparison.Ordinal);
+        Assert.True(accepted.Ok, accepted.ErrorMessage);
+    }
+
+    [Fact]
     public async Task AQueryTheServerRefuses_FailsWithItsReason()
     {
         await using var rig = new LiveRig();
@@ -632,7 +809,7 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
-    public async Task AQueryWithoutAMap_AsksTheOnlySubscribedOne_ElseTheViewsMap()
+    public async Task AQueryWithoutAMap_AsksTheSubscribedOne_ElseTheViewsMap()
     {
         await using var rig = new LiveRig();
         FakeFeedServer server = await rig.ConnectAsync();
@@ -649,16 +826,28 @@ public sealed class LiveFeedTests
         await server.WriteAsync(Wire.Result(second["id"]!.GetValue<long>()));
         await subscribed.WaitAsync(FakeFeedServer.Patience);
 
+        // Subscribing elsewhere moves the default with it: there is one subscription, so there is nothing to disambiguate.
         await rig.RunAsync("live.subscribe", Obj("""{"map":1}"""));
         _ = await server.ReadAsync();
-        CommandResult ambiguous = await rig.RunAsync("live.query", Obj("""{"kind":"height","a":[1,2,3]}"""));
+        Task<CommandResult> moved = rig.RunAsync("live.query", Obj("""{"kind":"height","a":[1,2,3]}"""));
+        JsonObject third = await server.ReadAsync();
+        await server.WriteAsync(Wire.Result(third["id"]!.GetValue<long>()));
+        await moved.WaitAsync(FakeFeedServer.Patience);
+
+        // A map named without an instance gets the subscription's instance only when it is the subscribed map.
+        Task<CommandResult> other = rig.RunAsync("live.query", Obj("""{"kind":"height","a":[1,2,3],"map":530}"""));
+        JsonObject fourth = await server.ReadAsync();
+        await server.WriteAsync(Wire.Result(fourth["id"]!.GetValue<long>()));
+        await other.WaitAsync(FakeFeedServer.Patience);
 
         Assert.Equal(0, first["map"]!.GetValue<int>());
         Assert.Equal(0, first["instance"]!.GetValue<int>());
         Assert.Equal(530, second["map"]!.GetValue<int>());
         Assert.Equal(6, second["instance"]!.GetValue<int>());
-        Assert.False(ambiguous.Ok);
-        Assert.Equal(CommandException.BadArguments, ambiguous.ErrorCode);
+        Assert.Equal(1, third["map"]!.GetValue<int>());
+        Assert.Equal(0, third["instance"]!.GetValue<int>());
+        Assert.Equal(530, fourth["map"]!.GetValue<int>());
+        Assert.Equal(0, fourth["instance"]!.GetValue<int>());
     }
 
     [Fact]

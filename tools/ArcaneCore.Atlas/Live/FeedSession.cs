@@ -46,8 +46,10 @@ internal sealed class FeedSession : IDisposable
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonObject>> _pending = new();
     private readonly TaskCompletionSource<HelloInfo> _hello = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _nextQueryId;
+    private int _queriesWaiting;
     private int _disposed;
     private int _ended;
+    private string? _abortReason;
     private volatile bool _helloDone;
 
     private FeedSession(long id, string pipeName, NamedPipeClientStream pipe, int? expectedPid, LiveOptions options, ILogger log, IFeedSink sink)
@@ -115,24 +117,47 @@ internal sealed class FeedSession : IDisposable
         }
     }
 
-    /// <summary>Writes one message as a line. Serialised with other writers; fails if the pipe stops accepting data for the write timeout.</summary>
+    /// <summary>
+    /// Writes one message as a line. Serialised with other writers. If the pipe stops accepting data for the write timeout, or the write is
+    /// cancelled part way, the connection is closed: a line cut in half would be glued to the next one and the server would read garbage.
+    /// </summary>
     public async Task SendAsync(JsonObject message, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(message);
         byte[] bytes = Encoding.UTF8.GetBytes(message.ToJsonString() + "\n");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
         linked.CancelAfter(_options.WriteTimeout);
+        bool writing = false;
         try
         {
             await _writeGate.WaitAsync(linked.Token).ConfigureAwait(false);
             try
             {
+                writing = true;
                 await _pipe.WriteAsync(bytes, linked.Token).ConfigureAwait(false);
             }
             finally
             {
                 _writeGate.Release();
             }
+        }
+        catch (OperationCanceledException) when (writing)
+        {
+            // Cancelled after the first byte may have gone out. The reader loop reports the close, with this reason. When the session is
+            // already closing (_stop) there is nothing to add.
+            if (!_stop.IsCancellationRequested)
+            {
+                Abort(cancellationToken.IsCancellationRequested
+                    ? "a write to the map feed was cancelled part way, so the connection was closed"
+                    : string.Create(CultureInfo.InvariantCulture, $"the map feed stopped accepting data for {_options.WriteTimeout.TotalSeconds:0.#} s, so the connection was closed"));
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            throw new CommandException(CommandException.Unavailable, "the map feed connection closed or stopped accepting data.");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -151,8 +176,9 @@ internal sealed class FeedSession : IDisposable
     public async Task<JsonObject> QueryAsync(JsonObject message, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(message);
-        if (_pending.Count >= MaxPendingQueries)
+        if (Interlocked.Increment(ref _queriesWaiting) > MaxPendingQueries)
         {
+            Interlocked.Decrement(ref _queriesWaiting);
             throw new CommandException(CommandException.Failed, $"{MaxPendingQueries} queries are already waiting for the server; wait for some to finish.");
         }
 
@@ -175,6 +201,7 @@ internal sealed class FeedSession : IDisposable
         finally
         {
             _pending.TryRemove(id, out _);
+            Interlocked.Decrement(ref _queriesWaiting);
         }
     }
 
@@ -189,8 +216,19 @@ internal sealed class FeedSession : IDisposable
         // The stop source has no timers or linked registrations of its own, so it needs no disposal; disposing it would make later
         // sends throw ObjectDisposedException from Token instead of reporting a closed connection.
         _stop.Cancel();
-        FailWaiters("the map feed connection was closed.");
+        FailWaiters("the map feed connection was closed");
         _pipe.Dispose();
+    }
+
+    /// <summary>Closes the connection because of <paramref name="reason"/>, which the close notice then carries instead of the generic "disconnected".</summary>
+    private void Abort(string reason)
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+        {
+            Interlocked.CompareExchange(ref _abortReason, reason, null);
+        }
+
+        Dispose();
     }
 
     private static NamedPipeClientStream CreatePipe(string pipeName)
@@ -208,16 +246,17 @@ internal sealed class FeedSession : IDisposable
         }
         catch (TimeoutException e)
         {
+            // A pipe with every instance in use (the daemon's client limit) also ends here: Windows reports it as busy, not as refused.
             throw new CommandException(
                 CommandException.Unavailable,
-                string.Create(CultureInfo.InvariantCulture, $"nothing answered on pipe '{pipeName}' within {options.ConnectTimeout.TotalSeconds:0.#} s: the world daemon is not running, its map feed is off, or it runs as another user."),
+                string.Create(CultureInfo.InvariantCulture, $"nothing answered on pipe '{pipeName}' within {options.ConnectTimeout.TotalSeconds:0.#} s: the world daemon is not running, its map feed is off, all of its client slots are in use, or it runs as another user."),
                 e);
         }
         catch (UnauthorizedAccessException e)
         {
             throw new CommandException(
                 CommandException.Unavailable,
-                $"access to pipe '{pipeName}' was denied: it belongs to another user, or its client slots are all taken.",
+                $"access to pipe '{pipeName}' was denied: it belongs to another user, or its access list does not admit this account.",
                 e);
         }
         catch (IOException e)
@@ -237,6 +276,7 @@ internal sealed class FeedSession : IDisposable
     /// <c>PipeOptions.CurrentUserOnly</c> compares that owner with the token's default owner, which for an elevated administrator is the
     /// Administrators group and so would refuse the same user; this accepts the user SID or the token owner.
     /// </summary>
+    // ref: src/ArcaneCore.World/Ops/Control/ControlPipeSecurity.cs:45 (security.SetOwner(user): the daemon's pipe is owned by the daemon's user)
     [SupportedOSPlatform("windows")]
     private static void VerifyOwner(NamedPipeClientStream pipe, string pipeName)
     {
@@ -302,6 +342,11 @@ internal sealed class FeedSession : IDisposable
             reason = $"the reader failed: {e.GetType().Name}: {e.Message}";
         }
 
+        if (Volatile.Read(ref _abortReason) is { } aborted)
+        {
+            reason = aborted;
+        }
+
         Volatile.Write(ref _ended, 1);
         FailWaiters(reason);
         _sink.Closed(this, reason);
@@ -317,7 +362,10 @@ internal sealed class FeedSession : IDisposable
             switch (item.Kind)
             {
                 case NdjsonKind.End:
-                    return "the server closed the connection";
+                    // A server that refuses and then hangs up (protocol, idle, too many errors) says why in its last error line.
+                    return Stats.LastServerError is { } lastError
+                        ? $"the server closed the connection (its last error was {lastError})"
+                        : "the server closed the connection";
                 case NdjsonKind.Truncated:
                     Stats.Truncated(item.Length);
                     return "the server closed the connection in the middle of a message";
@@ -409,12 +457,30 @@ internal sealed class FeedSession : IDisposable
             return;
         }
 
-        if (_expectedPid is { } expected && hello.Pid is { } actual && expected != actual)
+        if (_expectedPid is { } expected)
         {
-            _hello.TrySetException(new CommandException(
-                CommandException.Failed,
-                string.Create(CultureInfo.InvariantCulture, $"pipe '{PipeName}' is served by process {actual}, not by process {expected}; refusing to use it.")));
-            return;
+            // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:214 (the hello reply carries "pid"), so a reply without it cannot be checked.
+            if (hello.Pid is not { } actual)
+            {
+                _hello.TrySetException(new CommandException(
+                    CommandException.Failed,
+                    string.Create(CultureInfo.InvariantCulture, $"pipe '{PipeName}' answered hello without its process id, so it cannot be confirmed to belong to process {expected}; refusing to use it.")));
+                return;
+            }
+
+            if (expected != actual)
+            {
+                _hello.TrySetException(new CommandException(
+                    CommandException.Failed,
+                    string.Create(CultureInfo.InvariantCulture, $"pipe '{PipeName}' is served by process {actual}, not by process {expected}; refusing to use it.")));
+                return;
+            }
+        }
+
+        if (hello.MapsRejected > 0)
+        {
+            Stats.ItemsRejected(hello.MapsRejected, hello.FirstMapProblem);
+            Warn(string.Create(CultureInfo.InvariantCulture, $"the hello dropped {hello.MapsRejected} malformed map entr{(hello.MapsRejected == 1 ? "y" : "ies")}; first: {hello.FirstMapProblem}"));
         }
 
         _helloDone = true;
@@ -484,7 +550,7 @@ internal sealed class FeedSession : IDisposable
 
     private void FailWaiters(string reason)
     {
-        var hello = new CommandException(CommandException.Unavailable, $"the server closed the connection before answering hello ({reason}); all of its client slots may be taken.");
+        var hello = new CommandException(CommandException.Unavailable, $"the server closed the connection before answering hello ({reason}).");
         _hello.TrySetException(hello);
         foreach (long id in _pending.Keys)
         {

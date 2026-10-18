@@ -46,6 +46,9 @@ internal sealed class NdjsonReader(Stream stream, int maxLineBytes, int bufferSi
     /// <summary>Total bytes read from the stream so far.</summary>
     public long BytesRead { get; private set; }
 
+    /// <summary>Bytes this reader holds right now: its read buffer plus the carry of a line still being assembled. Bounded by the buffer size and the line limit.</summary>
+    public int RetainedBytes => _buffer.Length + _carry.Length;
+
     /// <summary>Reads the next line. The returned memory is valid until the next call.</summary>
     public async ValueTask<NdjsonItem> ReadAsync(CancellationToken cancellationToken)
     {

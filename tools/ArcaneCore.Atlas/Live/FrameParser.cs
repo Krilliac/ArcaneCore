@@ -20,7 +20,9 @@ internal sealed record ParsedFrame(LiveFrame Frame, JsonObject Json, int Rejecte
 /// <param name="Sha">The server build, when it reported one.</param>
 /// <param name="Pid">The server process id, when it reported one.</param>
 /// <param name="Maps">The maps and instances it has loaded.</param>
-internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyList<ServerMap> Maps);
+/// <param name="MapsRejected">Entries of <c>maps</c> that were malformed and dropped.</param>
+/// <param name="FirstMapProblem">Why the first of them was dropped.</param>
+internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyList<ServerMap> Maps, int MapsRejected = 0, string? FirstMapProblem = null);
 
 /// <summary>
 /// Validates map-feed messages (design section 9). A message whose structure is wrong is refused whole; inside an accepted frame, an
@@ -79,17 +81,24 @@ internal static class FrameParser
         }
 
         var maps = new List<ServerMap>();
+        int mapsRejected = 0;
+        string? firstMapProblem = null;
         if (root["maps"] is JsonArray array)
         {
-            foreach (JsonNode? item in array)
+            for (int i = 0; i < array.Count; i++)
             {
-                if (item is JsonObject o
+                if (array[i] is JsonObject o
                     && TryInteger(o["map"], 0, uint.MaxValue, out long map)
                     && TryOptionalInteger(o["instance"], 0, uint.MaxValue, 0, out long instance)
                     && TryOptionalInteger(o["players"], 0, int.MaxValue, 0, out long players)
                     && TryOptionalInteger(o["creatures"], 0, int.MaxValue, 0, out long creatures))
                 {
                     maps.Add(new ServerMap((uint)map, (uint)instance, (int)players, (int)creatures));
+                }
+                else
+                {
+                    mapsRejected++;
+                    firstMapProblem ??= string.Create(CultureInfo.InvariantCulture, $"hello maps[{i}] is not {{map, instance, players, creatures}} with non-negative integers");
                 }
             }
         }
@@ -99,7 +108,7 @@ internal static class FrameParser
             return false;
         }
 
-        hello = new HelloInfo((int)protocol, sha, pid, maps);
+        hello = new HelloInfo((int)protocol, sha, pid, maps, mapsRejected, firstMapProblem);
         problem = null;
         return true;
     }
@@ -165,7 +174,7 @@ internal static class FrameParser
                 return false;
             }
 
-            // ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:18-19 (MaxNumberOfGrids = 64 grids per side, indices 0..63)
+            // ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:22 (MaxNumberOfGrids = 64 grids per side, indices 0..63)
             for (int i = 0; i < gridArray.Count; i++)
             {
                 if (gridArray[i] is JsonArray { Count: 2 } pair

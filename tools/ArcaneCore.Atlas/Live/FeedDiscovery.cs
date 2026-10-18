@@ -21,8 +21,8 @@ public interface IFeedDiscovery
 /// </summary>
 public sealed class PipeFeedDiscovery : IFeedDiscovery
 {
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:210 (pipe "arcanecore-mapfeed-{pid}", same-user, local only)
-    // ref: src/ArcaneCore.World/Ops/Control/WorldControlPipe.cs:48 (the control pipe it is modelled on is "arcanecore-world-{pid}")
+    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:211-212 (pipe "arcanecore-mapfeed-{pid}", same-user, local only)
+    // ref: src/ArcaneCore.World/Ops/Control/WorldControlPipeOptions.cs:26 (the control pipe it is modelled on is "arcanecore-world-" + PidToken)
     private readonly Func<IEnumerable<string>>? _pipeNames;
 
     /// <summary>Discovery over the real pipe namespace (Windows only).</summary>

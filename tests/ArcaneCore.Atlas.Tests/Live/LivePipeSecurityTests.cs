@@ -15,7 +15,7 @@ namespace ArcaneCore.Atlas.Tests.Live;
 [SupportedOSPlatform("windows")]
 public sealed class LivePipeSecurityTests
 {
-    // ref: src/ArcaneCore.World/Ops/Control/ControlPipeSecurity.cs:49-58 (Create)
+    // ref: src/ArcaneCore.World/Ops/Control/ControlPipeSecurity.cs:39-50 (Create, with its [SupportedOSPlatform] attribute: protected descriptor :44, SetOwner at :45, deny NETWORK :46, allow user :47, allow SYSTEM :48)
     private static PipeSecurity DaemonSecurity(SecurityIdentifier user)
     {
         var security = new PipeSecurity();
