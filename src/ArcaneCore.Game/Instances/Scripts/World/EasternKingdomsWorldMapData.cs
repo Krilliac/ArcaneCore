@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Combat;
+﻿using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Instances.Scripts.World;
 /// cmangos <c>world_map_eastern_kingdoms</c> (AI/ScriptDevAI/scripts/eastern_kingdoms/world_eastern_kingdoms.cpp, world_eastern_kingdoms.h),
 /// the parts a ported script needs: the single-creature store of OnCreatureCreate (Jonathan, Wrynn, Bolvar, Prestor, Windsor, Falstad
 /// Wildhammer, Short John Mithril) and <c>event_wildhammer_message</c> (hinterlands.cpp:357-374, event 8608, The Final Message to the
-/// Wildhammer, q7843). The Stranglethorn Fever waves, the Gurubashi Arena event and the Scourge Invasion circles are not ported here.
+/// Wildhammer, q7843). OnEventHappened starts Short John Mithril's Gurubashi Arena run (<see cref="Creatures.Scripts.ShortJohnMithrilAI"/>). The Stranglethorn Fever waves are the vmangos creature script (<see cref="Creatures.Scripts.WitchDoctorUnbagwaAI"/>) because the cmangos spawn groups are not in this DB; the Scourge Invasion circles are not ported here.
 /// SetData is empty in cmangos, so the single encounter slot that ScriptedInstance requires is never used.
 /// </summary>
 public sealed class EasternKingdomsWorldMapData : WorldMapData
@@ -48,6 +48,18 @@ public sealed class EasternKingdomsWorldMapData : WorldMapData
             case NpcShortJohnMithril:
                 StoreCreature(creature);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// OnEventHappened (world_eastern_kingdoms.cpp): when the Gurubashi Arena event (16) starts, Short John Mithril sets off on his run.
+    /// </summary>
+    protected override void OnEventHappened(ushort eventId, bool active, bool resume)
+    {
+        if (eventId == Creatures.Scripts.ShortJohnMithrilAI.GameEventGurubashiArena && active
+            && GetSingleCreatureFromStorage(NpcShortJohnMithril)?.AI is Creatures.Scripts.ShortJohnMithrilAI shortJohn)
+        {
+            shortJohn.StartBootyRun();
         }
     }
 

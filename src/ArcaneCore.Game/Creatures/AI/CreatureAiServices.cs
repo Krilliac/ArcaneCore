@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Combat;
+﻿using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
@@ -240,6 +240,8 @@ public sealed class CreatureAiFactory
         [Scripts.KerlonianAI.Entry] = E(static c => new Scripts.KerlonianAI(c)),
         [Scripts.MistAI.Entry] = E(static c => new Scripts.MistAI(c)),
         [Scripts.DaphneStilwellAI.Entry] = E(static c => new Scripts.DaphneStilwellAI(c)),
+        [Scripts.WitchDoctorUnbagwaAI.Entry] = E(static c => new Scripts.WitchDoctorUnbagwaAI(c)),
+        [Scripts.ShortJohnMithrilAI.Entry] = E(static c => new Scripts.ShortJohnMithrilAI(c)),
         [Scripts.GrarkLorkrubAI.Entry] = E(static c => new Scripts.GrarkLorkrubAI(c)),
         [Scripts.TapokeSlimJahnAI.Entry] = E(static c => new Scripts.TapokeSlimJahnAI(c)),
         [Scripts.MikhailAI.Entry] = E(static c => new Scripts.MikhailAI(c)),

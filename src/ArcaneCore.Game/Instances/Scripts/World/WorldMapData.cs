@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Creatures;
+﻿using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
 
 namespace ArcaneCore.Game.Instances.Scripts.World;
@@ -15,6 +15,30 @@ public abstract class WorldMapData : ScriptedInstance
     protected WorldMapData(Map map, int maxEncounter)
         : base(map, maxEncounter)
     {
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(ushort EventId, bool Active, bool Resume)> _gameEvents = new();
+
+    /// <summary>
+    /// A game event started or stopped (mangos-classic GameEventMgr.cpp:1153-1160 calls the world map scripts' <c>OnEventHappened</c>).
+    /// Any thread: the change is queued and <see cref="OnEventHappened"/> runs at this map's next update, on the map's own thread.
+    /// </summary>
+    public void QueueGameEvent(ushort eventId, bool active, bool resume) => _gameEvents.Enqueue((eventId, active, resume));
+
+    /// <summary>mangos-classic <c>InstanceData::OnEventHappened(event_id, activate, resume)</c>, on the map thread.</summary>
+    protected virtual void OnEventHappened(ushort eventId, bool active, bool resume)
+    {
+    }
+
+    /// <summary>Runs the queued game event changes, then the script's update.</summary>
+    public override void Update(uint diffMs)
+    {
+        while (_gameEvents.TryDequeue(out (ushort EventId, bool Active, bool Resume) change))
+        {
+            OnEventHappened(change.EventId, change.Active, change.Resume);
+        }
+
+        base.Update(diffMs);
     }
 
     /// <summary>World map data is never saved (cmangos world map scripts have no Save()).</summary>

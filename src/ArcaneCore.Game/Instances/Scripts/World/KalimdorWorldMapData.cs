@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Combat;
+﻿using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
@@ -378,6 +378,7 @@ public sealed class KalimdorWorldMapData : WorldMapData
 
     public override void Update(uint diffMs)
     {
+        base.Update(diffMs); // the queued game event changes
         // The Hive Tower area trigger summons drones again only after the five minute timer.
         if (_dronesTimerMs == 0)
         {
