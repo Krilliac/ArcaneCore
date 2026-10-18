@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells.Rogue;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
 
 namespace ArcaneCore.Game.Spells.ClassScripts;
@@ -103,16 +104,29 @@ public sealed class DeepWoundsScript : ISpellScript
 
 /// <summary>
 /// Bloodthirst (23881, 23892, 23893, 23894; spell_warrior.cpp:37-56): effect 0's damage is that many percent of the caster's total melee attack power.
-/// LIMITS: SPELL_AURA_MOD_MELEE_ATTACK_POWER_VERSUS against the target's creature type is not added.
+/// With a target, the caster's SPELL_AURA_MOD_MELEE_ATTACK_POWER_VERSUS auras whose creature-type mask matches the target are added to the attack
+/// power first (Mark of the Champion, Seal of the Dawn, slaying enchants and the like).
 /// </summary>
-public sealed class BloodthirstDamage : ISpellValueModifier
+public sealed class BloodthirstDamage(SpellSystem? system = null) : ISpellValueModifier
 {
     public static readonly uint[] Ranks = [23881, 23892, 23893, 23894];
 
     public int Modify(SpellValueKind kind, in SpellValueContext context, int value)
-        => kind == SpellValueKind.EffectValue && context.EffectIndex == 0 && Array.IndexOf(Ranks, context.Spell.Id) >= 0
-            ? (int)(value * RogueBleedScripts.MeleeAttackPower(context.Caster) / 100)
-            : value;
+    {
+        if (kind != SpellValueKind.EffectValue || context.EffectIndex != 0 || Array.IndexOf(Ranks, context.Spell.Id) < 0)
+        {
+            return value;
+        }
+
+        float attackPower = RogueBleedScripts.MeleeAttackPower(context.Caster);
+        if (system is not null && context.Target is { } target)
+        {
+            uint typeMask = target.CreatureTypeMask();
+            attackPower += system.GetTotalAuraModifier(context.Caster, AuraType.ModMeleeAttackPowerVersus, a => ((uint)a.MiscValue & typeMask) != 0);
+        }
+
+        return (int)(value * attackPower / 100);
+    }
 }
 
 /// <summary>
@@ -265,7 +279,7 @@ public sealed class WarriorScriptsModule : ISpellHandlerModule
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        system.RegisterValueModifier(new BloodthirstDamage());
+        system.RegisterValueModifier(new BloodthirstDamage(system));
         system.RegisterValueModifier(new ShieldSlamDamage());
         system.RegisterSpellTargetFilter(IntimidatingShout, FilterIntimidatingShout);
         system.HolderRemoved += holder => BloodFuryScript.OnHolderRemoved(system, holder);
