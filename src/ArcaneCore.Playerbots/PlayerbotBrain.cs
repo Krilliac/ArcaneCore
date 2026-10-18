@@ -2945,17 +2945,18 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The non-urgent bind-point teleport a completed quest's unreachable ender asks for (<see cref="PlayerbotWorldDestinations.TeleportToBind"/>; tests).</summary>
     internal bool TeleportToBindPointForQuest(Player player, string why) => TryTeleportToBindPoint(player, why, urgent: false);
 
+    /// <summary><see cref="TryTeleportToBindPoint(Player, string, bool, bool)"/> with the trip made for the bot's safety exactly when it is urgent.</summary>
+    private bool TryTeleportToBindPoint(Player player, string why, bool urgent) => TryTeleportToBindPoint(player, why, urgent, safety: urgent);
+
     /// <summary>
     /// Send the bot to its bind point when <see cref="BindTeleportRefusal"/> allows it, and log why (<paramref name="why"/>). An urgent escape
     /// (<paramref name="urgent"/>: the bot must leave now, and a ten second cast a fight or a fall interrupts is no escape) teleports directly
     /// (vmangos <c>Player::TeleportToHomebind</c>). Any other reason uses the bot's own hearthstone when it is ready
     /// (<see cref="PlayerbotHearthstone.IsReady"/>: <see cref="PlayerbotTravelOptions.Hearthstone"/> on, the stone carried and off cooldown; the
     /// leg is driven by the next thinks, PlayerbotHearthstone.Drive), as a 1.12 player does; when it is not ready only a trip made for the bot's
-    /// safety (<c>safety</c>: stranded on ground no route leaves, or among creatures too strong for it) falls back to the direct teleport, and any other reason sends the bot nowhere. True when the
+    /// safety (<paramref name="safety"/>: stranded on ground no route leaves, or among creatures too strong for it) falls back to the direct teleport, and any other reason sends the bot nowhere. True when the
     /// bot was sent (or its hearthstone cast begun); its intent is dropped, a journey under way with it, and it explores from there.
     /// </summary>
-    private bool TryTeleportToBindPoint(Player player, string why, bool urgent) => TryTeleportToBindPoint(player, why, urgent, safety: urgent);
-
     private bool TryTeleportToBindPoint(Player player, string why, bool urgent, bool safety)
     {
         uint now = _session.World.NowMs;
@@ -3250,8 +3251,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             ? ExploreLegYards
             : PlayerbotStallWatch.ProgressYards + PlayerbotNavigation.WanderMaxShortfallYards;
 
+    /// <summary>The turns off the forward heading (degrees) <see cref="DeflectZoneBorderLeg"/> tries in order along a clipped home's zone border.</summary>
+    private static readonly float[] BorderDeflectDegrees = [45f, -45f, 90f, -90f, 135f, -135f];
+
     /// <summary>
-    /// The end of the next wandering leg from <c>from</c>, facing <c>orientation</c>: roughly that facing (within
+    /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
     /// +-60 degrees, golden-ratio spread so successive legs differ). After any refusal turn anywhere around the compass so the bot turns
     /// away from a cliff or canyon wall immediately instead of probing into the same wall again, and shorten the ray
     /// (<see cref="ExploreLegLength"/>): the full 48-yard ray is what <see cref="PlayerbotNavigation.PlanWander"/> keeps refusing.
@@ -3260,8 +3264,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// Westfall-Duskwood border inside the circle). Back in is the centre first, then, while legs are refused, a fan around it (InwardLeg).
     /// Takes the next direction of the rotation (<c>_roamDirection</c>).
     /// </summary>
-    private static readonly float[] BorderDeflectDegrees = [45f, -45f, 90f, -90f, 135f, -135f];
-
     private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation)
     {
         int attempt = _roamDirection++;

@@ -881,14 +881,14 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>A battlemaster spawn: its guid, where it stands, its name and its faction template.</summary>
     private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction);
 
-    /// <summary>
-    /// The nearest battlemaster of <c>type</c> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
-    /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>).
-    /// The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
-    /// </summary>
     /// <summary>The distance within which a battlemaster's absence from the map is trusted (well inside the visibility range).</summary>
     internal const float MasterPresenceYards = 60f;
 
+    /// <summary>
+    /// The nearest battlemaster of <paramref name="type"/> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
+    /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>).
+    /// The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
+    /// </summary>
     private Battlemaster? FindMaster(Player player, BattlegroundType type)
     {
         if (player.Map is not { } map || services.GetService<QuestNpcFeature>() is not { } npcs) return null;

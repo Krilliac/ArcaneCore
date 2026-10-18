@@ -963,22 +963,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private readonly Dictionary<uint, int> _setAsides = [];
     private readonly Dictionary<uint, uint> _heldAtLevel = [];
 
-    /// <summary>
-    /// One more failed plan of the completed quest <c>questId</c> (a single ender). A single failure proves nothing
-    /// (<see cref="PlayerbotNavigation.TryPlanToward"/> also refuses a bot momentarily on a steep patch): only the
-    /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed for a steep ascent or a hazard on a connected route,
-    /// once per quest and spot; a bot that moved starts the count again. A confirmed refusal sets the quest and its
-    /// ender aside for this bot; the <see cref="AbandonAfterSetAsides"/>th set-aside of a quest abandons it through the client's
-    /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up). A completed quest refused for a hazard
-    /// is held instead (<see cref="TeleportToBind"/> when the bind point is beside the ender), until <see cref="MaxHeldSetAsides"/>
-    /// set-asides pass with no level gained. A death or retreat mark beside the road is not that hazard when
-    /// <c>friendlyTownEnder</c>: it must not set a friendly town turn-in aside.
-    /// <para>
-    /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
-    /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map
-    /// but behind steep ground or guarded by mobs it cannot fight.
-    /// </para>
-    /// </summary>
     private uint _arrivedQuest;
     private Vector3 _arrivedSpot;
     private int _arrivedCount;
@@ -1012,6 +996,22 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 $"quest {questId}: arrived within 4 yd of ender {entry} (found: {ender is not null}) {ConfirmFailures} times and the turn-in never started");
     }
 
+    /// <summary>
+    /// One more failed plan of the completed quest <paramref name="questId"/> (a single ender). A single failure proves nothing
+    /// (<see cref="PlayerbotNavigation.TryPlanToward"/> also refuses a bot momentarily on a steep patch): only the
+    /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed for a steep ascent or a hazard on a connected route,
+    /// once per quest and spot; a bot that moved starts the count again. A confirmed refusal sets the quest and its
+    /// ender aside for this bot; the <see cref="AbandonAfterSetAsides"/>th set-aside of a quest abandons it through the client's
+    /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up). A completed quest refused for a hazard
+    /// is held instead (<see cref="TeleportToBind"/> when the bind point is beside the ender), until <see cref="MaxHeldSetAsides"/>
+    /// set-asides pass with no level gained. A death or retreat mark beside the road is not that hazard when
+    /// <paramref name="friendlyTownEnder"/>: it must not set a friendly town turn-in aside.
+    /// <para>
+    /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
+    /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map
+    /// but behind steep ground or guarded by mobs it cannot fight.
+    /// </para>
+    /// </summary>
     private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now, bool friendlyTownEnder)
     {
         Vector3 spot = new(player.X, player.Y, player.Z);
