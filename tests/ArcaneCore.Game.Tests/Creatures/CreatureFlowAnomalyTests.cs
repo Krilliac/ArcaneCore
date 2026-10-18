@@ -24,6 +24,7 @@ public sealed class CreatureFlowAnomalyTests
     private const uint NoPathEntry = 950005;
     private const uint PathEntry = 950006;
     private const uint ReasonEvadeEntry = 950007;
+    private const uint LastVictimEvadeEntry = 950008;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -98,6 +99,28 @@ public sealed class CreatureFlowAnomalyTests
         Assert.Contains("; evades: EvadeOnce(no victim, 0 att, ", detail);
         Assert.Contains("; EvadeOnce(", detail); // the second (the wolf, back home, had aggroed the player meanwhile)
         Assert.True(detail.Contains("; " + f.Wolf.AI!.GetType().Name + ".TheEvade", StringComparison.Ordinal), detail); // the AI asked (the rest is past the ledger's text limit)
+    }
+
+    /// <summary>
+    /// Live 2026-10-18: almost every loop read "SelectHostileTarget(no victim, 0 att, Chase)" three times. An evade without a victim now names
+    /// the last unit the creature attacked and its state (here a player it killed).
+    /// </summary>
+    [Fact]
+    public void AnEvadeWithoutAVictim_NamesTheLastVictim_AndItsState()
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", LastVictimEvadeEntry);
+        using Fight f = Start(LastVictimEvadeEntry);
+        f.Map.Combat.Attack(f.Wolf, f.Player, melee: false);
+        f.Map.Combat.Kill(f.Wolf, f.Player);
+        f.Map.Combat.AttackStop(f.Wolf);
+
+        EvadeOnce(f);
+        EvadeOnce(f);
+        EvadeOnce(f);
+
+        string detail = Assert.Single(capture.Notices).Detail;
+        Assert.Contains("; evades: EvadeOnce(no victim, 0 att, ", detail);
+        Assert.Contains(", last player dead ", detail);
     }
 
     [Fact]

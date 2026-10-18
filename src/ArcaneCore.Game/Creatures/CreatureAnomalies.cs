@@ -587,22 +587,48 @@ public sealed partial class CreatureMapSystem
                 CreatureAnomalies.CreatureSubsystem,
                 CreatureAnomalies.EvadeLoopCode,
                 CreatureAnomalies.Subject(creature),
-                $"Creature {creature.Guid} (entry {creature.Entry}) entered evade mode {count} times within {windowMs} ms at ({creature.X:F1}, {creature.Y:F1}, {creature.Z:F1}) on map {Map.MapId}"
+                $"entered evade mode {count} times within {windowMs} ms at ({creature.X:F1}, {creature.Y:F1}, {creature.Z:F1}) on map {Map.MapId}"
                     + (reasons is null ? "" : $"; evades: {reasons}"));
         }
     }
 
-    /// <summary>One evade for the loop report: who asked, and the fight it ended (the victim, its state and distance, the attackers left).</summary>
-    private static string DescribeEvade(Creature creature, string reason)
+    /// <summary>
+    /// One evade for the loop report: who asked, and the fight it ended (the victim, its state and distance, the attackers left, the motion).
+    /// Without a victim it adds the last unit the creature attacked and its state now (live 2026-10-18: nearly every loop was "no victim,
+    /// 0 att, Chase", e.g. six Stockade guards at -8784,830 evading together every 2-3 s). Kept short: the ledger cuts a detail at 300 chars.
+    /// </summary>
+    private string DescribeEvade(Creature creature, string reason)
     {
         UnitCombat combat = creature.Combat;
-        string victim = combat.Victim is not { } v
-            ? "no victim"
-            : (v is Player ? "player " : v is Creature ? "creature " : "unit ") + (v.IsAlive ? "alive" : "dead")
-              + (ReferenceEquals(v.Map, creature.Map)
-                  ? " " + Vector3.Distance(new(v.X, v.Y, v.Z), new(creature.X, creature.Y, creature.Z)).ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + "yd"
-                  : " off-map");
-        return $"{reason}({victim}, {combat.AttackersInternal.Count} att, {creature.Motion.CurrentType})";
+        string victim = combat.Victim is { } v ? DescribeEvadeTarget(creature, v) : "no victim";
+        string threat = combat.HasThreatList ? $", threat {combat.Threat.Entries.Count}" : "";
+        string last = combat.Victim is null && !combat.LastVictimGuid.IsEmpty ? ", last " + DescribeLastVictim(creature, combat.LastVictimGuid) : "";
+        return $"{reason}({victim}, {combat.AttackersInternal.Count} att{threat}, {creature.Motion.CurrentType}{last})";
+    }
+
+    private static string DescribeEvadeTarget(Creature creature, Unit v)
+        => (v is Player ? "player " : v is Creature c ? $"creature {c.Entry} " : "unit ") + (v.IsAlive ? "alive" : "dead")
+            + (ReferenceEquals(v.Map, creature.Map)
+                ? " " + Vector3.Distance(new(v.X, v.Y, v.Z), new(creature.X, creature.Y, creature.Z)).ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + "yd"
+                : " off-map");
+
+    /// <summary>The last victim by GUID: gone from the map, or its state now (dead, a ghost, evading, or alive but not attackable and its unit flags).</summary>
+    private string DescribeLastVictim(Creature creature, ObjectGuid guid)
+    {
+        if ((Map.FindPlayer(guid) as Unit ?? Map.FindObject(guid) as Unit) is not { } last)
+        {
+            return guid.High == HighGuid.Player ? "player gone" : $"{guid.Entry} gone";
+        }
+
+        string state = last switch
+        {
+            Player p when (p.Flags & PlayerFlags.Ghost) != 0 => " ghost",
+            Player { IsGameMaster: true } => " gm",
+            Creature { IsInEvadeMode: true } => " evading",
+            _ when last.IsAlive && !Map.Combat.Hooks.CanAttack(creature, last) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $" unattackable 0x{(uint)last.UnitFlags:X}"),
+            _ => "",
+        };
+        return DescribeEvadeTarget(creature, last) + state;
     }
 
     internal void RecordLeashResetAnomaly(Creature creature, string reason)

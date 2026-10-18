@@ -100,6 +100,9 @@ public sealed class UnitCombat
 
     internal uint CombatSetsSinceClear { get; set; }
 
+    /// <summary>Diagnostics for creature/evade-loop: the last unit this one started auto-attacking (<see cref="MapCombat.Attack"/>).</summary>
+    internal ObjectGuid LastVictimGuid { get; set; }
+
     /// <summary>The last auto-attack error sent to this player's client (vmangos Player::m_swingErrorMsg).</summary>
     public AttackCheckResult LastSwingError { get; internal set; }
 

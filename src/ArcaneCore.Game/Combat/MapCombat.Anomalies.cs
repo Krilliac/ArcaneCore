@@ -151,7 +151,7 @@ public sealed partial class MapCombat
         else if (Advance(ref _stuckEpisodes, unit, stuckBad, elapsed, CombatNeverLeftBudgetMs, 0))
         {
             AnomalyLedger.Shared.Report(AnomalySubsystem, CombatNeverLeftCode, SubjectOf(unit),
-                string.Create(CultureInfo.InvariantCulture, $"flagged in combat for {CombatNeverLeftBudgetMs} ms with no victim, attacker or reachable threat holder (threatenedBy={c.ThreatenedByInternal.Count} threatList={c.HasThreatList}); {StuckCombatFacts(unit, c)}{Where(unit)}"));
+                string.Create(CultureInfo.InvariantCulture, $"in combat {CombatNeverLeftBudgetMs} ms with no victim, attacker or reachable threat holder (threatenedBy={c.ThreatenedByInternal.Count} threatList={c.HasThreatList}); {StuckCombatFacts(unit, c)}{Where(unit)}"));
         }
 
         // Regeneration stalled: an alive creature out of combat, below full health, whose health did not move.
@@ -288,11 +288,11 @@ public sealed partial class MapCombat
             owner = found is null
                 ? string.Create(CultureInfo.InvariantCulture, $"{ownerGuid} not on this map")
                 : string.Create(CultureInfo.InvariantCulture,
-                    $"{SubjectOf(found)} {found.Combat.DeathState} inCombat={found.Combat.IsInCombat} victim={(found.Combat.Victim is null ? "none" : SubjectOf(found.Combat.Victim))} threatenedBy={found.Combat.ThreatenedByInternal.Count} {MathF.Sqrt(((found.X - unit.X) * (found.X - unit.X)) + ((found.Y - unit.Y) * (found.Y - unit.Y))):F0} yd");
+                    $"{SubjectOf(found)} {found.Combat.DeathState} combat={found.Combat.IsInCombat} victim={(found.Combat.Victim is null ? "none" : "yes")} thr={found.Combat.ThreatenedByInternal.Count} {MathF.Sqrt(((found.X - unit.X) * (found.X - unit.X)) + ((found.Y - unit.Y) * (found.Y - unit.Y))):F0}yd");
         }
 
         return string.Create(CultureInfo.InvariantCulture,
-            $"{facts}; entry {creature.Entry} summon {creature.Summon?.Kind.ToString() ?? "none"} ai {creature.AI?.GetType().Name ?? "none"} motion {creature.Motion.CurrentType} owner {owner}");
+            $"{facts}; entry {creature.Entry} {creature.Summon?.Kind.ToString() ?? "no summon"} {creature.AI?.GetType().Name ?? "no AI"} {creature.Motion.CurrentType}; owner {owner}");
     }
 
     /// <summary>Stable identity of a unit for the ledger (no positions or counters).</summary>

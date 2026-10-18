@@ -91,6 +91,7 @@ public sealed partial class MapCombat
         attacker.Target = victim.Guid;
         c.IsMeleeAttacking = melee;
         c.Victim = victim;
+        c.LastVictimGuid = victim.Guid;
         victim.Combat.AttackersInternal.Add(attacker);
         Track(attacker);
         Track(victim);
