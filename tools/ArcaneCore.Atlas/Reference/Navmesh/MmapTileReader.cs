@@ -46,16 +46,16 @@ public static class MmapTileReader
     // ushort neis[6], ushort flags, uchar vertCount, uchar areaAndtype = 32 bytes).
     private const int PolyBytes = 32;
 
-    // ref: DetourNavMesh.h:203-209 (dtPolyDetail: uint vertBase, uint triBase, uchar vertCount, uchar triCount, 2 bytes padding = 12).
+    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:203-209 (dtPolyDetail: uint vertBase, uint triBase, uchar vertCount, uchar triCount, 2 bytes padding = 12).
     private const int PolyDetailBytes = 12;
 
-    // ref: DetourNavMesh.h:227-232 (dtBVNode: ushort bmin[3], ushort bmax[3], int i = 16).
+    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:227-232 (dtBVNode: ushort bmin[3], ushort bmax[3], int i = 16).
     private const int BvNodeBytes = 16;
 
-    // ref: DetourNavMesh.h:236-257 (dtOffMeshConnection: float pos[6], float rad, ushort poly, uchar flags, uchar side, uint userId = 36).
+    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:236-257 (dtOffMeshConnection: float pos[6], float rad, ushort poly, uchar flags, uchar side, uint userId = 36).
     private const int OffMeshBytes = 36;
 
-    // ref: DetourNavMesh.h:28 (#define DT_POLYREF64 1) and :214-222 (dtLink: dtPolyRef ref, uint next, 4 uchars): 8 + 4 + 4 = 16 bytes
+    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:28 (#define DT_POLYREF64 1) and :214-222 (dtLink: dtPolyRef ref, uint next, 4 uchars): 8 + 4 + 4 = 16 bytes
     // with a 64-bit reference, 4 + 4 + 4 = 12 with a 32-bit one.
     private const int LinkBytes64 = 16;
     private const int LinkBytes32 = 12;
@@ -145,7 +145,7 @@ public static class MmapTileReader
             throw new InvalidDataException($"Detour tile is {data.Length} bytes, shorter than its {DetourHeaderSize}-byte header");
         }
 
-        // ref: DetourNavMesh.h:261-289 field order; byte offsets: magic 0, version 4, x 8, y 12, layer 16, userId 20, polyCount 24,
+        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:261-289 field order; byte offsets: magic 0, version 4, x 8, y 12, layer 16, userId 20, polyCount 24,
         // vertCount 28, maxLinkCount 32, detailMeshCount 36, detailVertCount 40, detailTriCount 44, bvNodeCount 48, offMeshConCount 52.
         int magic = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(0));
         if (magic != NavMeshFormat.DetourMagic)
@@ -173,9 +173,18 @@ public static class MmapTileReader
             throw new InvalidDataException("Detour tile counts are out of range");
         }
 
+        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:997 (tile->links[header->maxLinkCount-1].next = DT_NULL_LINK)
+        // and tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:457: addTile writes the last link of the table, so a tile with no
+        // links (a tile without polygons) is not one either engine can take.
+        if (maxLinkCount == 0)
+        {
+            throw new InvalidDataException($"Detour tile has a link table of 0 links ({polyCount} polygons); addTile indexes links[maxLinkCount - 1], so the tile cannot be added");
+        }
+
         // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMeshBuilder.cpp:427-459 (the writer's section sizes)
-        // and DetourNavMesh.cpp:970-995 (the reader's): header, verts, polys, links, detail meshes, detail verts, detail tris, BV tree,
-        // off-mesh connections, each dtAlign4'ed.
+        // and D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:970-989 (the reader's): header, verts, polys,
+        // links, detail meshes, detail verts, detail tris, BV tree, off-mesh connections, each dtAlign4'ed. The writer stores
+        // bvNodeCount = 2 * polyCount (DetourNavMeshBuilder.cpp:483), so the tree's tail is allocated and zero.
         long fixedSize = DetourHeaderSize + Align4(12L * vertCount) + Align4(PolyBytes * polyCount) + Align4(PolyDetailBytes * detailMeshCount)
             + Align4(12L * detailVertCount) + Align4(4L * detailTriCount) + Align4(BvNodeBytes * bvNodeCount) + Align4(OffMeshBytes * offMeshCount);
         if (fixedSize + Align4(LinkBytes64 * maxLinkCount) == data.Length)
@@ -214,8 +223,8 @@ public static class MmapTileReader
                     throw new InvalidDataException($"polygon {i} names vertex {p.verts[j]} of {h.vertCount}");
                 }
 
-                // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:175-177 (neis: 0 = wall, 1-based
-                // internal polygon, DT_EXT_LINK | side for a tile border); DotRecast builds the link reference from neis - 1.
+                // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:543-549 (connectIntLinks skips a neis of 0 or
+                // with DT_EXT_LINK, otherwise links to polygon neis - 1) and DetourNavMesh.h:97 (DT_EXT_LINK = 0x8000).
                 int nei = p.neis[j];
                 if ((nei & NavMeshFormat.ExternalLink) == 0 && nei > h.polyCount)
                 {

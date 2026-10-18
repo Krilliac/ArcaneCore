@@ -128,8 +128,10 @@ public sealed class ReferenceNavMap : IDisposable
             tileHeight = parameters.TileHeight,
             maxTiles = parameters.MaxTiles,
 
-            // vmangos writes maxPolys = 0 because its Detour uses 64-bit polygon references (contrib/mmap/src/MapBuilder.cpp:462);
-            // DotRecast's DtNavMesh.Init stores the value without reading it (DtNavMesh.cs:50-77), so any positive number serves.
+            // vmangos writes maxPolys = 0 because its Detour uses 64-bit polygon references.
+            // ref: D:\refs\vmangos@0e3ff01\contrib\mmap\src\MapBuilder.cpp:462 (maxPolys = 0; // Unused if DT_POLYREF64 set.)
+            // DotRecast's Init stores the value without reading it, so any positive number serves.
+            // ref: tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:50-77 (Init copies the parameters; maxPolys is never used).
             maxPolys = parameters.MaxPolys > 0 ? parameters.MaxPolys : 1 << 16,
         };
         _mesh = NewMesh();
@@ -410,8 +412,10 @@ public sealed class ReferenceNavMap : IDisposable
         }
         catch (IndexOutOfRangeException e)
         {
-            // DotRecast allocates links from the tile's own table without a bounds check (DtNavMesh.cs:455-459 and the AllocLink
-            // callers): a table smaller than the polygons need throws part-way, after the tile is already in the mesh's hash.
+            // DotRecast allocates links from the tile's own table without a bounds check (the free list is threaded through it and
+            // every AllocLink caller indexes it): a table smaller than the polygons need throws part-way, after the tile is already
+            // in the mesh's hash.
+            // ref: tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:455-459 (links[maxLinkCount - 1].next, unchecked).
             Reject(tile, load, $"DotRecast AddTile ran past the tile's link table ({file.Data.header.maxLinkCount} links): {e.Message}");
             Rebuild();
             return;

@@ -67,7 +67,7 @@ public sealed class ReferenceNavMeshService : IDisposable
         NavMeshParams parameters;
         try
         {
-            parameters = NavMeshParams.Parse(File.ReadAllBytes(path));
+            parameters = MmapParamsReader.Parse(File.ReadAllBytes(path));
         }
         catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
         {
