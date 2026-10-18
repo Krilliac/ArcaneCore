@@ -66,7 +66,7 @@ y; z unchanged).
 | BIH | f32[3] low, f32[3] high, u32 n + u32 node words, u32 m + u32 object indices. Node: axis bits 30–31 (3 = leaf), BVH2 bit 29, 29-bit offset; leaf: count in word 1; inner: clip planes in words 1–2. A node with an empty left side stores offset = right child − 3 and a left clip of −inf (vmangos `BIH::subdivide`), so its offset can equal the node itself; the "children follow their parent" guard applies to the child actually entered. |
 
 Pieces: `BihTree` (reader, builder for fixtures, bounds-checked ray/point traversal), `WorldModel`
-/ `GroupModel` (Möller–Trumbore ray/triangle, enclosing-group floor), `ModelInstance` (rotation
+/ `GroupModel` (Möller–Trumbore ray/triangle with vmangos' determinant cut-off of 1e-5, enclosing-group floor), `ModelInstance` (rotation
 Rz(rot.y)·Ry(rot.x)·Rx(rot.z), scale), `VMapTree` (per-map slots, refcounted tiles),
 `VMapManager` (`ILineOfSight` + `ICollisionTileLifecycle`). M2 doodads do not break line of
 sight but count for heights and object hits. Model names must be plain file names.

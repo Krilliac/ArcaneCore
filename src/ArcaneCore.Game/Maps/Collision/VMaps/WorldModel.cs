@@ -97,6 +97,9 @@ public sealed class GroupModel
         return IntersectRay(point, down, ref distance, stopAtFirstHit: false);
     }
 
+    /// <summary>vmangos <c>IntersectTriangle</c> <c>EPS</c>: a smaller determinant (a sliver, or a ray grazing the plane) is no hit.</summary>
+    private const float DeterminantEpsilon = 1e-5f;
+
     /// <summary>
     /// Ray/triangle intersection (Möller–Trumbore; standard algorithm, both faces): true when the
     /// ray meets the triangle at 0 &lt; t &lt; <paramref name="distance"/>, which becomes t.
@@ -108,7 +111,7 @@ public sealed class GroupModel
         Vector3 edge2 = _vertices[triangle.Index2] - v0;
         Vector3 p = Vector3.Cross(direction, edge2);
         float det = Vector3.Dot(edge1, p);
-        if (MathF.Abs(det) < 1e-10f)
+        if (MathF.Abs(det) < DeterminantEpsilon)
         {
             return false;
         }
