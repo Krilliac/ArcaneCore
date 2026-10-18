@@ -43,11 +43,24 @@ public sealed class AtlasContext : IDisposable
         Paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Loggers = loggers ?? throw new ArgumentNullException(nameof(loggers));
         Headless = headless;
+        Cache = new LayerCache(Layers);
         Services.Add(paths);
         Services.Add(Commands);
         Services.Add(Layers);
+        Services.Add(Cache);
+        Services.Add(Events);
+        Services.Add(View);
         Services.Add(this);
     }
+
+    /// <summary>Every consumer of layer geometry builds through this cache.</summary>
+    public LayerCache Cache { get; }
+
+    /// <summary>Pushes to connected UIs (view changes, command log, live frames).</summary>
+    public EventHub Events { get; } = new();
+
+    /// <summary>The shared current view (headless runs use it as the capture/export view).</summary>
+    public ViewStore View { get; } = new(ViewState.Default);
 
     public AtlasPaths Paths { get; }
 
