@@ -14,7 +14,10 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// or redacts the message: the composer redacts at output, as for every other signal.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
+internal sealed class PlayerbotQaFaultFeed(
+    FaultLedger ledger,
+    Func<IReadOnlyList<InvariantFailure>>? invariantSource = null,
+    AnomalyLedger? serverAnomalySource = null)
 {
     /// <summary>The ledger site of a bot's update exception (ManagedPlayerbotFeature.Fault).</summary>
     internal const string BotSite = "playerbot";
@@ -30,15 +33,24 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
         "playerbot.policy-telemetry-io", "net.packet-capture", "dump.free-space",
     };
 
+    /// <summary>Terrain/mesh collision observer keys that are spatial warnings rather than server code faults.</summary>
+    internal static readonly HashSet<string> SpatialAnomalyKeys = new(StringComparer.Ordinal)
+    {
+        "creature/under-map", "player/under-map",
+    };
+
     private readonly object _gate = new();
     private Dictionary<string, long> _seen = new(StringComparer.Ordinal);
+    private Dictionary<string, long> _seenInvariants = new(StringComparer.Ordinal);
+    private Dictionary<string, long> _seenServerAnomalies = new(StringComparer.Ordinal);
 
-    /// <summary>The signals for what the ledger recorded since the previous call (none when nothing changed).</summary>
+    /// <summary>The signals for what the ledger, invariant tracker, and server error anomalies recorded since the previous call (none when nothing changed).</summary>
     internal IReadOnlyList<QaSignal> Pull()
     {
         var signals = new List<QaSignal>();
         lock (_gate)
         {
+            ledger.ReplayCrashJournal();
             IReadOnlyList<FaultSnapshot> snapshot = ledger.Snapshot(); // under the gate: two overlapping pulls must not both send the same delta
             var seen = new Dictionary<string, long>(snapshot.Count, StringComparer.Ordinal);
             foreach (FaultSnapshot fault in snapshot)
@@ -71,10 +83,77 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
             }
 
             _seen = seen;
+
+            if (invariantSource is not null)
+            {
+                IReadOnlyList<InvariantFailure> invariants = invariantSource();
+                var seenInvariants = new Dictionary<string, long>(invariants.Count, StringComparer.Ordinal);
+                DateTime nowUtc = DateTime.UtcNow;
+                foreach (InvariantFailure inv in invariants)
+                {
+                    if (inv.Count <= 0 || string.IsNullOrWhiteSpace(inv.Member))
+                    {
+                        continue;
+                    }
+
+                    string siteKey = $"{inv.Member}@{inv.File}:{inv.Line}";
+                    long before = _seenInvariants.TryGetValue(siteKey, out long previous) && previous <= inv.Count ? previous : 0;
+                    seenInvariants[siteKey] = inv.Count;
+                    long added = inv.Count - before;
+                    if (added <= 0)
+                    {
+                        continue;
+                    }
+
+                    signals.Add(InvariantSignalOf(inv, siteKey, nowUtc, added));
+                }
+
+                _seenInvariants = seenInvariants;
+            }
+
+            if (serverAnomalySource is not null)
+            {
+                IReadOnlyList<AnomalySnapshot> anomalies = serverAnomalySource.Snapshot();
+                var seenAnomalies = new Dictionary<string, long>(anomalies.Count, StringComparer.Ordinal);
+                foreach (AnomalySnapshot anomaly in anomalies)
+                {
+                    if (!QualifiesServerAnomaly(anomaly))
+                    {
+                        continue;
+                    }
+
+                    long before = _seenServerAnomalies.TryGetValue(anomaly.Key, out long previous) && previous <= anomaly.Count ? previous : 0;
+                    seenAnomalies[anomaly.Key] = anomaly.Count;
+                    long added = anomaly.Count - before;
+                    if (added <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (before == 0)
+                    {
+                        signals.Add(ServerAnomalySignalOf(anomaly, anomaly.FirstSeen, 1));
+                        added--;
+                    }
+
+                    if (added > 0)
+                    {
+                        signals.Add(ServerAnomalySignalOf(anomaly, anomaly.LastSeen, added));
+                    }
+                }
+
+                _seenServerAnomalies = seenAnomalies;
+            }
         }
 
         return signals;
     }
+
+    internal static bool QualifiesServerAnomaly(AnomalySnapshot anomaly)
+        => !string.Equals(anomaly.Key, AnomalyLedger.OverflowKey, StringComparison.Ordinal)
+            && !anomaly.Subsystem.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal)
+            && !SpatialAnomalyKeys.Contains(anomaly.Key)
+            && anomaly.Severity >= AnomalySeverity.Error;
 
     /// <summary>
     /// Connection teardown at the session site (a peer that reset, a closed stream, a cancelled read) is the network, not a server bug: it is counted in
@@ -94,7 +173,41 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
         ExceptionType = fault.ExceptionType,
         Reason = fault.ExceptionType,
         Detail = string.Join(" > ", fault.Frames),
+        Diag = fault.SampleStack,
         Message = string.Empty, // the exception message stays in the ledger (.server faults show); it can name a player and never enters a finding
+        Occurrences = occurrences,
+    };
+
+    private static QaSignal InvariantSignalOf(InvariantFailure inv, string siteKey, DateTime atUtc, long occurrences)
+    {
+        string file = Path.GetFileName(inv.File);
+        string frame = string.IsNullOrEmpty(file) ? inv.Member : $"{inv.Member}({file}:{inv.Line})";
+        return new QaSignal
+        {
+            Kind = QaSignalKind.ServerFault,
+            AtUtc = atUtc,
+            FaultId = FaultLedger.HashSignature("invariant|" + siteKey),
+            Goal = "invariant",
+            ExceptionType = typeof(InvariantViolationException).FullName!,
+            Reason = typeof(InvariantViolationException).FullName!,
+            Detail = inv.Member,
+            Diag = frame,
+            Message = string.Empty,
+            Occurrences = occurrences,
+        };
+    }
+
+    private static QaSignal ServerAnomalySignalOf(AnomalySnapshot anomaly, DateTimeOffset at, long occurrences) => new()
+    {
+        Kind = QaSignalKind.ServerFault,
+        AtUtc = at.UtcDateTime,
+        FaultId = FaultLedger.HashSignature("anomaly|" + anomaly.Key),
+        Goal = anomaly.Subsystem,
+        ExceptionType = "Anomaly:" + anomaly.Key,
+        Reason = "Anomaly:" + anomaly.Key,
+        Detail = anomaly.Key,
+        Diag = anomaly.Key,
+        Message = string.Empty,
         Occurrences = occurrences,
     };
 }

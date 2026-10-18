@@ -182,4 +182,35 @@ public sealed class PlayerbotQaLogTapTests
         Assert.Equal(1, tap.Failures);
         Assert.Equal(0, bus.Received);
     }
+
+    [Fact]
+    public void ServerCategories_CaptureDirectLogErrorAndCritical_AndSkipExceptionsAlreadyRecordedInFaultLedger()
+    {
+        var bus = new PlayerbotQaSignalBus(16);
+        using var tap = new PlayerbotQaLogTap(bus, true, null, null);
+        ILogger chat = tap.CreateLogger("ArcaneCore.World.Chat.ChatFeature");
+
+        Assert.False(chat.IsEnabled(LogLevel.Warning));
+        Assert.True(chat.IsEnabled(LogLevel.Error));
+        Assert.True(chat.IsEnabled(LogLevel.Critical));
+
+        // 1. Direct LogError with an unrecorded exception -> becomes a ServerFault signal.
+        var unrecorded = new InvalidOperationException("chat channel failure");
+        chat.LogError(unrecorded, "Chat channel {Channel} failed", "General");
+
+        // 2. Direct LogError without an exception -> becomes a LogError ServerFault signal keyed by template.
+        chat.LogError("Guild roster invariant broken for guild {GuildId}", 42);
+
+        // 3. Exception already recorded in FaultLedger -> skipped by LogTap to avoid duplicating PlayerbotQaFaultFeed.
+        var recorded = new ArgumentException("already in ledger");
+        var ledger = new ArcaneCore.Kernel.Diagnostics.FaultLedger();
+        ledger.Record("chat", recorded);
+        chat.LogError(recorded, "Chat failed after recording");
+
+        var drained = new List<QaSignal>();
+        Assert.Equal(2, bus.Drain(drained, 10));
+        Assert.All(drained, s => Assert.Equal(QaSignalKind.ServerFault, s.Kind));
+        Assert.Contains(drained, s => s.Goal == "log:ChatFeature" && s.ExceptionType == typeof(InvalidOperationException).FullName);
+        Assert.Contains(drained, s => s.Goal == "log:ChatFeature" && s.ExceptionType == "LogError" && s.Diag == "Guild roster invariant broken for guild {GuildId}");
+    }
 }

@@ -58,7 +58,7 @@ internal sealed class PlayerbotQaAnomalyFeed(
         => !string.Equals(anomaly.Key, AnomalyLedger.OverflowKey, StringComparison.Ordinal)
             && anomaly.Subsystem.StartsWith(BotSubsystemPrefix, StringComparison.Ordinal)
             && anomaly.Severity >= minSeverity
-            && (anomaly.Count >= minCount || anomaly.DistinctSubjects >= minDistinctSubjects);
+            && (anomaly.Severity >= AnomalySeverity.Error || anomaly.Count >= minCount || anomaly.DistinctSubjects >= minDistinctSubjects);
 
     private static QaSignal SignalOf(AnomalySnapshot anomaly, long occurrences) => new()
     {

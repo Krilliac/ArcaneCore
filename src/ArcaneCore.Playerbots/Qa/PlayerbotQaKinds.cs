@@ -30,15 +30,15 @@ internal static class QaKinds
         new(QaSignalKind.Stall, "stall", "stall", 15, BotIndependent: false, SingleOccurrence: false, SpellKind: false),
         new(QaSignalKind.SharedSetAside, "shared set-aside", "shared-set-aside", 35, false, false, false),
         new(QaSignalKind.DeathLoop, "death loop", "death-loop", 30, false, false, false),
-        new(QaSignalKind.ActionFault, "action fault", "action-fault", 40, false, false, false),
-        new(QaSignalKind.Quarantine, "quarantine", "quarantine", 45, false, false, false),
-        new(QaSignalKind.Disabled, "disabled", "disabled", 45, false, false, false),
+        new(QaSignalKind.ActionFault, "action fault", "action-fault", 40, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
+        new(QaSignalKind.Quarantine, "quarantine", "quarantine", 45, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
+        new(QaSignalKind.Disabled, "disabled", "disabled", 45, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
         new(QaSignalKind.RelayDataMissing, "relay data", "relay-data", 25, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
         new(QaSignalKind.RelayScriptMissing, "relay script", "relay-script", 25, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
         new(QaSignalKind.SpellUnsupported, "spell unsupported", "spell-unsupported", 30, BotIndependent: true, SingleOccurrence: true, SpellKind: true),
         new(QaSignalKind.SpellRefused, "spell refused", "spell-refused", 20, BotIndependent: false, SingleOccurrence: false, SpellKind: true),
         new(QaSignalKind.SpellNoEffect, "spell no effect", "spell-no-effect", 28, BotIndependent: false, SingleOccurrence: false, SpellKind: true),
-        new(QaSignalKind.ServerFault, "server fault", "server-fault", 42, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
+        new(QaSignalKind.ServerFault, "server fault", "server-fault", 42, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
         // Run failed 24: a give-up is the dungeon system working as designed most of the time (a wipe, a slow walk), so it ranks just under a relay gap (25)
         // and needs MinOccurrences repeats at one stage before it becomes an issue; the count term then lifts a stage that fails again and again.
         new(QaSignalKind.RunFailed, "run failed", "run-failed", 24, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
@@ -47,7 +47,7 @@ internal static class QaKinds
         // one-off kind would reopen closed issues on every deploy.
         new(QaSignalKind.TickHang, "tick hang", "tick-hang", 50, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
         new(QaSignalKind.UnreachableGoal, "unreachable goal", "unreachable-goal", 18, BotIndependent: false, SingleOccurrence: false, SpellKind: false),
-        new(QaSignalKind.Anomaly, "bot anomaly", "bot-anomaly", 26, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
+        new(QaSignalKind.Anomaly, "bot anomaly", "bot-anomaly", 26, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
     ]);
 
     /// <summary>Every row, in kind order.</summary>

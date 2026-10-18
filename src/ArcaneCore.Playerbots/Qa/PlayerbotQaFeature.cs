@@ -60,6 +60,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     /// <summary>Test seam: the anomaly ledger the bot-anomaly signals are read from (default: the container's, else <see cref="AnomalyLedger.Shared"/>).</summary>
     internal AnomalyLedger? AnomalySource { get; init; }
 
+    /// <summary>Test seam: the invariant failure source the server-fault feed polls (default: <see cref="Invariant.Failures"/> when using the host's fault ledger).</summary>
+    internal Func<IReadOnlyList<InvariantFailure>>? InvariantSource { get; init; }
+
     /// <summary>Test seam: the clock of the passes, the age-out and the publisher (default: the system clock).</summary>
     internal TimeProvider Time { get; init; } = TimeProvider.System;
 
@@ -205,9 +208,19 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view, Redactor);
         }
 
-        // Only a host that registered the ledger (UseArcaneDiagnostics) feeds server faults; a bare provider has no ledger to read.
-        if ((FaultSource ?? services.GetService<FaultLedger>()) is { } ledger) _faultFeed = new PlayerbotQaFaultFeed(ledger);
-        if ((AnomalySource ?? services.GetService<AnomalyLedger>()) is { } anomalyLedger) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);
+        // Only a host that registered the ledger (UseArcaneDiagnostics) or an explicit test source feeds server faults.
+        FaultLedger? faultLedger = FaultSource ?? services.GetService<FaultLedger>();
+        AnomalyLedger? anomalyLedger = AnomalySource ?? services.GetService<AnomalyLedger>();
+        if (faultLedger is not null || InvariantSource is not null)
+        {
+            Func<IReadOnlyList<InvariantFailure>>? invariantSource = InvariantSource ?? (FaultSource is null ? Invariant.Failures : null);
+            _faultFeed = new PlayerbotQaFaultFeed(
+                faultLedger ?? new FaultLedger(),
+                invariantSource,
+                FaultSource is null ? anomalyLedger : null);
+        }
+
+        if (anomalyLedger is not null) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);
         if (services.GetService<SpellFeature>() is { } spells)
         {
             // Spell signals come straight from the spell system's observer seam, never from a log line (docs/areas/playbots-qa.md).

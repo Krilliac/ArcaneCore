@@ -3,8 +3,10 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using ArcaneCore.Kernel.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -63,6 +65,8 @@ public sealed class FaultLedger
     /// <summary>Distinct signatures remembered by the overflow bucket so each logs its first occurrence.</summary>
     private const int MaxOverflowSeen = 256;
 
+    private static readonly ConditionalWeakTable<Exception, string> RecordedExceptions = new();
+
     private readonly ConcurrentDictionary<string, FaultEntry> _entries = new(StringComparer.Ordinal);
     private readonly object _addGate = new();
     private readonly TimeProvider _time;
@@ -70,6 +74,7 @@ public sealed class FaultLedger
     private volatile int _maxSignatures;
     private volatile int _logLimit;
     private volatile bool _beepOnException;
+    private volatile string? _crashJournalPath;
     private long _total;
     private long _lastTicks;
     private readonly RateWindow _rate = new();
@@ -94,6 +99,15 @@ public sealed class FaultLedger
 
     /// <summary>The process-wide ledger.</summary>
     public static FaultLedger Shared { get; } = new();
+
+    /// <summary>Whether <paramref name="exception"/> (or its unwrapped inner exception) has already been recorded in a <see cref="FaultLedger"/>.</summary>
+    public static bool WasRecorded(Exception? exception)
+        => exception is not null
+            && (RecordedExceptions.TryGetValue(exception, out _) || RecordedExceptions.TryGetValue(Unwrap(exception), out _));
+
+    /// <summary>Configure the file path where terminating faults (<c>unhandled</c>, <c>unobserved-task</c>) are appended so the next startup can replay them into QA.</summary>
+    public void ConfigureCrashJournal(string? path)
+        => _crashJournalPath = string.IsNullOrWhiteSpace(path) ? null : path;
 
     /// <summary>
     /// Raised on the recording thread, after the counts are updated, for each fault whose recording says the caller should log it (so a fault
@@ -428,12 +442,163 @@ public sealed class FaultLedger
         }
     }
 
+    /// <summary>Compute the 16-hex signature id for an arbitrary signature string.</summary>
+    public static string HashSignature(string signature) => HashOf(signature ?? string.Empty);
+
+    /// <summary>
+    /// Replay and remove any terminating crash faults previously written to <paramref name="path"/> (or the configured crash journal path).
+    /// Returns the number of replayed crash records.
+    /// </summary>
+    public int ReplayCrashJournal(string? path = null)
+    {
+        string? journal = string.IsNullOrWhiteSpace(path) ? _crashJournalPath : path;
+        if (string.IsNullOrWhiteSpace(journal) || !File.Exists(journal))
+        {
+            return 0;
+        }
+
+        int replayed = 0;
+        try
+        {
+            string[] lines;
+            lock (_addGate)
+            {
+                if (!File.Exists(journal))
+                {
+                    return 0;
+                }
+
+                lines = File.ReadAllLines(journal);
+                File.Delete(journal);
+            }
+
+            foreach (string line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    PersistedCrashFault? crash = JsonSerializer.Deserialize<PersistedCrashFault>(line);
+                    if (crash is null || string.IsNullOrWhiteSpace(crash.Id))
+                    {
+                        continue;
+                    }
+
+                    RecordPersistedCrash(crash);
+                    replayed++;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Skip malformed crash journal lines.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Never fail startup because the crash journal could not be read or removed.
+        }
+
+        return replayed;
+    }
+
+    private void RecordPersistedCrash(PersistedCrashFault crash)
+    {
+        string id = crash.Id.ToLowerInvariant();
+        string site = string.IsNullOrWhiteSpace(crash.Site) ? "unhandled" : crash.Site;
+        string type = string.IsNullOrWhiteSpace(crash.ExceptionType) ? "System.Exception" : crash.ExceptionType;
+        IReadOnlyList<string> frames = crash.Frames ?? [];
+        DateTimeOffset at = crash.AtUtc == default ? _time.GetUtcNow() : crash.AtUtc;
+        string msg = Truncate(crash.Message);
+        string stack = crash.SampleStack ?? string.Empty;
+        string chain = crash.SampleChain ?? string.Empty;
+
+        if (!_entries.TryGetValue(id, out FaultEntry? entry))
+        {
+            lock (_addGate)
+            {
+                if (!_entries.TryGetValue(id, out entry))
+                {
+                    if (_entries.Count >= _maxSignatures)
+                    {
+                        entry = _overflow;
+                    }
+                    else
+                    {
+                        entry = new FaultEntry(id, site, type, frames, at, msg, stack, chain);
+                        _entries[id] = entry;
+                    }
+                }
+            }
+        }
+
+        Interlocked.Increment(ref _total);
+        Interlocked.Exchange(ref _lastTicks, at.UtcTicks);
+        _rate.Add(at);
+        Interlocked.CompareExchange(ref _firstTicks, at.UtcTicks, 0);
+        entry.NoteSynthetic(at, msg, stack, chain);
+    }
+
+    private void PersistTerminatingCrash(string path, string id, string site, string type, IReadOnlyList<string> frames, Exception exception, DateTimeOffset now)
+    {
+        try
+        {
+            var record = new PersistedCrashFault(
+                id,
+                site,
+                type,
+                [.. frames],
+                Truncate(exception.Message),
+                FormatCondensedStack(exception),
+                FormatExceptionChain(exception),
+                now);
+            string json = JsonSerializer.Serialize(record) + "\n";
+            lock (_addGate)
+            {
+                string? dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                File.AppendAllText(path, json);
+            }
+        }
+        catch
+        {
+            // Never let crash persistence interfere with the crash handler.
+        }
+    }
+
+    private sealed record PersistedCrashFault(
+        string Id,
+        string Site,
+        string ExceptionType,
+        string[] Frames,
+        string Message,
+        string SampleStack,
+        string SampleChain,
+        DateTimeOffset AtUtc);
+
     private FaultRecording RecordCore(string site, Exception exception, bool terminating)
     {
         string signature = SignatureOf(site, exception, out string type, out IReadOnlyList<string> frames);
         string id = HashOf(signature);
+        RecordedExceptions.AddOrUpdate(exception, id);
+        Exception root = Unwrap(exception);
+        if (!ReferenceEquals(root, exception))
+        {
+            RecordedExceptions.AddOrUpdate(root, id);
+        }
+
         DateTimeOffset now = _time.GetUtcNow();
         FaultMeters.Count(site, type);
+        if (terminating && _crashJournalPath is { Length: > 0 } journalPath)
+        {
+            PersistTerminatingCrash(journalPath, id, site, type, frames, exception, now);
+        }
 
         if (!_entries.TryGetValue(id, out FaultEntry? entry))
         {
@@ -776,6 +941,37 @@ public sealed class FaultLedger
                 }
 
                 return new FaultRecording(id, _count, log, suppressed) { Timing = log ? TimingAt(now) : null };
+            }
+        }
+
+        public void NoteSynthetic(DateTimeOffset now, string message, string stack, string chain)
+        {
+            lock (this)
+            {
+                _count++;
+                DateTimeOffset previous = _last;
+                _last = now;
+                _rate.Add(now);
+                string line = message.ReplaceLineEndings(" ");
+                string tallied = line.Length <= MaxTallyMessageLength ? line : line[..MaxTallyMessageLength];
+                if (line.Length != 0)
+                {
+                    _messages.Add(tallied);
+                    _recent.Add(line);
+                }
+
+                if (_count > 1)
+                {
+                    (_gaps ??= new GapRing()).Add(now - previous);
+                }
+
+                if (_count == 1)
+                {
+                    _first = now;
+                    _message = message;
+                    _stack = stack;
+                    _chain = chain;
+                }
             }
         }
 

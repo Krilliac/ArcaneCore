@@ -214,4 +214,73 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         Assert.Contains("failed for", clean, StringComparison.Ordinal); // RedactFault still keeps ordinary text; the composer simply never calls it on a message
         Assert.Equal("see http://example.org/a and a/b", new PlayerbotQaRedactor().RedactFault("see http://example.org/a and a/b"));
     }
+
+    [Fact]
+    public async Task SingleOccurrence_ServerFault_ActionFault_Quarantine_AndDisabled_PublishImmediately_UnderDefaultThresholds()
+    {
+        var ledger = new FaultLedger();
+        ledger.Record("worldtick", One("single crash"));
+        PlayerbotQaAggregator aggregator = Fold(ledger, new PlayerbotQaFaultFeed(ledger));
+        aggregator.Ingest(QaData.Fault(QaData.Bot1, "playerbot-recovery-stalled"), new FakeFacts(), QaData.T0);
+        aggregator.Ingest(QaData.Parse($"Playerbot {QaData.Bot1} quarantined for 30 s (fault 1 of 5): action: playerbot-recovery-stalled"), new FakeFacts(), QaData.T0);
+        aggregator.Ingest(QaData.Parse($"Playerbot {QaData.Bot1} disabled after 5 faults within 600 s: action: playerbot-recovery-stalled"), new FakeFacts(), QaData.T0);
+
+        var github = new FakeGitHub();
+        var options = new PlayerbotQaOptions
+        {
+            GitHub = { Enabled = true, Repository = QaData.Repo, Publish = true, MinOccurrences = 3, MinDistinctBots = 2, MaxIssuesPerHour = 10 },
+        };
+        var time = new ManualTime(QaData.T0);
+        var publisher = new PlayerbotQaPublisher(options, _directory, aggregator, new PlayerbotQaRedactor(), new ListLogger(),
+            name => name == TokenVariable ? QaData.FakeToken : null,
+            t => new PlayerbotQaGitHubClient(github.Http, QaData.Repo, t, options.GitHub, (_, _) => Task.CompletedTask, null, () => time.GetUtcNow()),
+            time, "test-build", null, (_, _) => Task.CompletedTask);
+
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+
+        Assert.Equal(4, github.Creates);
+        Assert.All(aggregator.Snapshot(), f => Assert.Equal(QaPublicationState.Published, f.Publication.State));
+    }
+
+    [Fact]
+    public void TerminatingCrash_PersistsToJournal_AndReplaysIntoServerFaultOnNextPull()
+    {
+        string journal = Path.Combine(_directory, "crash-faults.jsonl");
+        var crashingProcessLedger = new FaultLedger();
+        crashingProcessLedger.ConfigureCrashJournal(journal);
+        crashingProcessLedger.Record("unhandled", One("fatal crash"), terminating: true);
+        Assert.True(File.Exists(journal));
+
+        var restartedLedger = new FaultLedger();
+        restartedLedger.ConfigureCrashJournal(journal);
+        var feed = new PlayerbotQaFaultFeed(restartedLedger);
+
+        QaSignal signal = Assert.Single(feed.Pull());
+        Assert.Equal(QaSignalKind.ServerFault, signal.Kind);
+        Assert.Equal("unhandled", signal.Goal);
+        Assert.Equal(1, signal.Occurrences);
+        Assert.False(File.Exists(journal));
+        Assert.Empty(feed.Pull());
+    }
+
+    [Fact]
+    public void InvariantFailures_AndServerErrorAnomalies_ArePulledAsServerFaults()
+    {
+        var ledger = new FaultLedger();
+        var anomalyLedger = new AnomalyLedger();
+        anomalyLedger.Report("persist", "write-retry-exhausted", "CharacterSave", "busy after 6 attempts", AnomalySeverity.Error);
+        anomalyLedger.Report("creature", "under-map", "spawn 1", "z below floor", AnomalySeverity.Error); // spatial observer key is excluded
+
+        var invariants = new List<InvariantFailure>
+        {
+            new("Step", "D:\\src\\MoveSpline.cs", 88, 2, "spline index out of range"),
+        };
+        var feed = new PlayerbotQaFaultFeed(ledger, () => invariants, anomalyLedger);
+
+        IReadOnlyList<QaSignal> signals = feed.Pull();
+        Assert.Equal(2, signals.Count);
+        Assert.Contains(signals, s => s.Goal == "invariant" && s.Occurrences == 2 && s.Diag == "Step(MoveSpline.cs:88)");
+        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1);
+        Assert.Empty(feed.Pull());
+    }
 }

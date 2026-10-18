@@ -85,7 +85,8 @@ internal static partial class PlayerbotQaIssueComposer
             if (f.Kind != QaSignalKind.ServerFault) sb.Append("  `").Append(Code(redactor.Redact(s.Message))).Append("`\n"); // a server fault never publishes its message: it may name a player
             if (s.Diag is { Length: > 0 } diag)
             {
-                sb.Append("  - Diagnostic: `").Append(Code(redactor.Redact(diag))).Append("`\n");
+                string cleanDiag = f.Kind == QaSignalKind.ServerFault ? redactor.RedactFault(diag) : redactor.Redact(diag);
+                sb.Append("  - Diagnostic: `").Append(Code(cleanDiag)).Append("`\n");
             }
         }
 
@@ -142,6 +143,11 @@ internal static partial class PlayerbotQaIssueComposer
         Row(sb, "Site", redactor.RedactFault(f.Goal));
         Row(sb, "Exception type", redactor.RedactFault(f.Reason));
         Row(sb, "Ledger id", LedgerId(f));
+        if (f.Samples.LastOrDefault(s => !string.IsNullOrEmpty(s.Diag))?.Diag is { Length: > 0 } stack)
+        {
+            Row(sb, "Condensed stack", "`" + Code(redactor.RedactFault(stack)) + "`");
+        }
+
         sb.Append("\n**Top frames**\n\n");
         string[] frames = f.ReasonDetail.Length == 0 ? [] : f.ReasonDetail.Split(" > ", StringSplitOptions.RemoveEmptyEntries);
         if (frames.Length == 0)
