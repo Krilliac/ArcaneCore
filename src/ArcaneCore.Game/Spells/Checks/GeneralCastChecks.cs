@@ -16,6 +16,7 @@ public static class GeneralCastChecks
     {
         ArgumentNullException.ThrowIfNull(spells);
         spells.RegisterCastCheck(new StandingCastCheck());
+        spells.RegisterCastCheck(new LocationCastCheck());
         spells.RegisterCastCheck(new CombatRestrictionCastCheck());
         spells.RegisterCastCheck(new StealthCastCheck(spells));
         spells.RegisterCastCheck(new FacingCastCheck());
