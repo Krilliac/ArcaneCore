@@ -7,11 +7,15 @@ namespace ArcaneCore.World.Contracts;
 /// in the middle of a tick instead of at load.
 /// Bump <see cref="Current"/> on every change to a public type of this assembly that a compiled pack could notice
 /// (a member added to, removed from or changed on an interface, a renamed or moved type, a changed signature).
+/// <para>
+/// History: 1 the lifecycle, feature and bot seams of tier 2a/2b; 2 <c>IBotRouteSource</c> (with <c>BotRouteInfo</c> and
+/// <c>BotRouteFlags</c>), the read-only route seam of the map feed.
+/// </para>
 /// </summary>
 public static class ContractsVersion
 {
     /// <summary>The contracts version this server was built with.</summary>
-    public const int Current = 1;
+    public const int Current = 2;
 
     /// <summary>Whether a pack built against <paramref name="builtAgainst"/> may be loaded: only the exact same version.</summary>
     public static bool IsCompatible(int builtAgainst) => builtAgainst == Current;

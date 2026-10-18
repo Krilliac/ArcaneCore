@@ -63,7 +63,7 @@ public sealed class ManagedBot
 /// <summary>
 /// The core-owned state of the managed bots (docs/design/hot-reload-tiers.md, sections 4.1 and 4.4 2a): the bots that are logged
 /// in, the split-brain latch, and the seams through which the core reaches the playerbot pack (a session policy, a cast refusal
-/// observer, a tick hang sink). The playerbot features keep their brains and plans; everything that must survive a detach of those
+/// observer, a tick hang sink, a route source). The playerbot features keep their brains and plans; everything that must survive a detach of those
 /// features, or a swap of their pack, lives here. A pinned feature (discovered, never detached).
 /// <para>
 /// Each seam holds at most one registration, made through the pack's <see cref="FeatureSubscriptions"/> so that a detach removes it;
@@ -83,6 +83,7 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
     private IManagedBotSessionPolicy? _sessionPolicy;
     private IBotCastRefusalObserver? _castRefusals;
     private IBotTickHangSink? _hangSink;
+    private IBotRouteSource? _routeSource;
     private IDisposable? _shutdownHook;
 
     /// <summary>How long the shutdown fallback waits for the sessions it closes.</summary>
@@ -131,6 +132,9 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
     /// <summary>The tick hang sink of the attached bot QA (null: none).</summary>
     public IBotTickHangSink? HangSink => Volatile.Read(ref _hangSink);
 
+    /// <summary>The route source of the attached playerbot pack (null: none attached), read by the map feed (docs/areas/map-feed.md).</summary>
+    public IBotRouteSource? RouteSource => Volatile.Read(ref _routeSource);
+
     public bool TryAdd(ManagedBot bot)
     {
         ArgumentNullException.ThrowIfNull(bot);
@@ -165,6 +169,13 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
     {
         Claim(ref _hangSink, sink, "tick hang sink");
         return new Registration(() => Interlocked.CompareExchange(ref _hangSink, null, sink));
+    }
+
+    /// <summary>Use <paramref name="source"/> until the result is disposed. One at a time.</summary>
+    public IDisposable UseRouteSource(IBotRouteSource source)
+    {
+        Claim(ref _routeSource, source, "route source");
+        return new Registration(() => Interlocked.CompareExchange(ref _routeSource, null, source));
     }
 
     /// <summary>The name of the shutdown hook that logs out the bots no feature stopped.</summary>
