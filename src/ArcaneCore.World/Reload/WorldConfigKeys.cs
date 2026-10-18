@@ -84,6 +84,7 @@ public static class WorldConfigKeys
         Fixed("Parallel:Ungated", v => v.Runtime.Parallel.Ungated),
         Fixed("Parallel:Gated", v => v.Runtime.Parallel.Gated),
         Fixed("Parallel:OwnerGuard", v => v.Runtime.Parallel.OwnerGuard),
+        Fixed("Parallel:CreatureSplinePass", v => v.Runtime.Parallel.CreatureSplinePass),
         Fixed("Maps:DataDirectory", v => v.Runtime.Maps.DataDirectory),
         FixedPlayerbots(nameof(PlayerbotOptions.AsyncNavigationEnabled), o => o.AsyncNavigationEnabled),
         FixedListener("Port", v => v.Port),

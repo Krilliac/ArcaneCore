@@ -179,7 +179,7 @@ public sealed class ParallelMapUpdateTests
     public async Task OnAStartedWorld_MapThreadsCountAsWorldThreads_AndUpdateMapsOffTheWorldThread()
     {
         using WorldRuntime world = CreateRuntime(3);
-        world.UseManualClock();
+        world.UseManualClockFrom(0); // a fixed origin: the wall-clock reading so far would shift every timestamp of the run
         var probes = new[] { new ProbeUpdater(world), new ProbeUpdater(world), new ProbeUpdater(world) };
         world.GetMap(0).AddUpdater(probes[0]);
         world.GetMap(1).AddUpdater(probes[1]);
@@ -209,7 +209,7 @@ public sealed class ParallelMapUpdateTests
     private static string RunScripted(int threads, bool gateAll, string ungated)
     {
         using WorldRuntime world = CreateRuntime(threads, OwnerGuardMode.Throw, gateAll, ungated);
-        world.UseManualClock();
+        world.UseManualClockFrom(0); // a fixed origin: the wall-clock reading so far would shift every timestamp of the run
         var sessions = new List<FakeSession>();
         var units = new List<WorldObject>();
         (uint Map, uint Instance)[] maps = [(0, 0), (1, 0), (33, 1), (36, 2), (209, 5)];

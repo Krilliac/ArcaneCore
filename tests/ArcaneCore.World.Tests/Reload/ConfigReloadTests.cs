@@ -797,7 +797,7 @@ public sealed class ConfigReloadTests : IDisposable
         // Playerbots:AsyncNavigationEnabled: the private navigation executor is created when the feature attaches.
         // Parallel:*: WorldRuntime builds the map threads and the stage gates once (docs/research/multithreading-plan-20261017.md).
         Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp",
-            "World:Parallel:GateAllStages", "World:Parallel:Gated", "World:Parallel:MapUpdateThreads", "World:Parallel:OwnerGuard",
+            "World:Parallel:CreatureSplinePass", "World:Parallel:GateAllStages", "World:Parallel:Gated", "World:Parallel:MapUpdateThreads", "World:Parallel:OwnerGuard",
             "World:Parallel:Ungated", "World:Playerbots:AsyncNavigationEnabled", "World:Port", "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
     }
 

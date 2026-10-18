@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       596 keys
+#   WORLD                       597 keys
 #
 ###############################################################################
 
@@ -8509,6 +8509,24 @@ World.MaxWorldPacketsPerTick = 150
 #        Docs: docs/reference/configuration.md#world
 #
 World.Motd = "Welcome to ArcaneCore."
+
+#
+#    World.Parallel.CreatureSplinePass
+#        Description: Split each creature update into a spline pass (every active living creature's
+#                     spline advanced and relocated, map-local work) and the rest (AI, leash,
+#                     generators, respawns), instead of one pass that does both per creature
+#                     (default false). With CreatureMapSystem in Ungated the spline pass runs
+#                     outside the serial gate and the rest inside it, one gate entry per stage; a
+#                     relocation that changes cell still takes the gate (grid loads). The order
+#                     changes for every thread count alike: a creature's AI sees the other creatures
+#                     of its map already moved this tick.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Parallel.CreatureSplinePass = false
 
 #
 #    World.Parallel.GateAllStages

@@ -125,7 +125,15 @@ public sealed partial class WorldRuntime : IDisposable
     /// <see cref="WorldRuntimeOptions.TickIntervalMs"/> of wall time (with a zero diff), so sessions and
     /// <see cref="InvokeAsync{T}"/> keep working while the simulation stands still. Call before <see cref="Start"/>.
     /// </summary>
-    public void UseManualClock(uint stepMs = 50)
+    public void UseManualClock(uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs: null);
+
+    /// <summary>
+    /// <see cref="UseManualClock"/> starting at <paramref name="startAtMs"/> instead of the wall-clock reading so far, for tests
+    /// that compare whole runs (the reading so far depends on how long the set-up took, so every timestamp of a run would shift).
+    /// </summary>
+    public void UseManualClockFrom(long startAtMs, uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs);
+
+    private void UseManualClockCore(uint stepMs, long? startAtMs)
     {
         if (_thread is not null)
         {
@@ -139,7 +147,7 @@ public sealed partial class WorldRuntime : IDisposable
 
         _manualStepMs = stepMs;
         // Continue from the current reading, so values cached by features that attached earlier never run backwards.
-        Interlocked.Exchange(ref _manualNowMs, _clock.ElapsedMilliseconds);
+        Interlocked.Exchange(ref _manualNowMs, startAtMs ?? _clock.ElapsedMilliseconds);
         _manualClock = true;
     }
 

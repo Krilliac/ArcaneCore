@@ -10402,6 +10402,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Parallel:CreatureSplinePass",
+      "section": "World",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "restart",
+      "meaning": "Split each creature update into a spline pass (every active living creature's spline advanced and relocated, map-local work) and the rest (AI, leash, generators, respawns), instead of one pass that does both per creature (default false). With CreatureMapSystem in `Ungated` the spline pass runs outside the serial gate and the rest inside it, one gate entry per stage; a relocation that changes cell still takes the gate (grid loads). The order changes for every thread count alike: a creature's AI sees the other creatures of its map already moved this tick.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#world",
+      "isCollection": false
+    },
+    {
       "path": "World:Parallel:GateAllStages",
       "section": "World",
       "type": "bool",

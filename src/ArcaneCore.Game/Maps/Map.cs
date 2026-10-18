@@ -220,6 +220,9 @@ public sealed class Map
     /// <summary>How long this map's last update took (microseconds): the longest-first order of the parallel maps phase.</summary>
     internal long LastUpdateMicros { get; set; }
 
+    /// <summary>The world this map belongs to (its serial gate and parallel options, for map systems).</summary>
+    internal WorldRuntime Runtime => _world;
+
     /// <summary>The systems attached with <see cref="AddUpdater"/>, in attach order.</summary>
     public IReadOnlyList<IMapUpdater> Updaters => _updaters;
 
@@ -1121,11 +1124,28 @@ public sealed class Map
     /// <summary>Re-file an object whose X/Y changed; non-player objects get a visibility pass this tick.</summary>
     internal void OnObjectMoved(WorldObject obj)
     {
-        if (_world.IsParallelPhase && !ReferenceEquals(TickOwner.CurrentMap, this))
+        if (_world.IsParallelPhase)
         {
-            _world.CheckOwner(this, "object relocation");
+            if (!ReferenceEquals(TickOwner.CurrentMap, this))
+            {
+                _world.CheckOwner(this, "object relocation");
+            }
+
+            // A move into another cell can create or load grids (GridLoaded/GridApproaching: spawns, terrain and navmesh tiles, which
+            // are shared): that one takes the serial gate when the caller runs outside it (an ungated creature spline pass).
+            if (!_world.HoldsSerialGate && _grid.ChangesCell(obj))
+            {
+                using WorldRuntime.SerialScope serial = _world.EnterSerial();
+                OnObjectMovedCore(obj);
+                return;
+            }
         }
 
+        OnObjectMovedCore(obj);
+    }
+
+    private void OnObjectMovedCore(WorldObject obj)
+    {
         CheckFinitePosition(obj);
         if (!_grid.Relocate(obj) && !_grid.Contains(obj))
         {

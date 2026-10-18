@@ -23,6 +23,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.Game.Creatures.CreaturePathStats.s_homeTeleports"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Creatures.CreaturePathStats.s_noPath"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Locomotion.ForcedMovement.s_splineId"] = "spline id counter, Interlocked.Increment",
+        ["ArcaneCore.Game.Maps.Collision.NavJobSystem.s_shared"] = "the process's path-job pool, created under lock (s_sharedGate)",
         ["ArcaneCore.Game.Maps.Collision.PathSearchCounters.s_bvTreesRejected"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Maps.Collision.PathSearchCounters.s_processTileReadTicks"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Maps.Collision.PathSearchCounters.s_processTileReads"] = "process-wide counter, Interlocked",

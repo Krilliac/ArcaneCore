@@ -22,6 +22,12 @@ public sealed partial class WorldRuntime
     private long _gateEntries;
     private long _gateContended;
     private long _parallelTicks;
+    private long _phaseWallMicros;
+    private long _phaseMapMicros;
+    private long _summaryAt;
+    private ParallelMapCounters _summaryBase;
+    private long _summaryWallBase;
+    private long _summaryMapBase;
 
     /// <summary>True while maps are being updated concurrently (between the start of the parallel maps phase and its barrier).</summary>
     public bool IsParallelPhase => _parallelPhase;
@@ -194,6 +200,7 @@ public sealed partial class WorldRuntime
         }));
 
         int callerThread = Environment.CurrentManagedThreadId;
+        long phaseStart = Stopwatch.GetTimestamp();
         _parallelPhase = true;
         try
         {
@@ -235,6 +242,7 @@ public sealed partial class WorldRuntime
         }
 
         Interlocked.Increment(ref _parallelTicks);
+        _phaseWallMicros += Micros(Stopwatch.GetTimestamp() - phaseStart);
         long otherThreadBytes = 0;
         for (int i = 0; i < mapCount; i++)
         {
@@ -270,10 +278,46 @@ public sealed partial class WorldRuntime
                 }
             }
 
+            _phaseMapMicros += run.Micros;
             run = default;
         }
 
+        LogParallelSummary();
         return otherThreadBytes;
+    }
+
+    /// <summary>Once a minute while maps update in parallel: how much the phase overlapped and how hard the serial gate was contended.</summary>
+    private void LogParallelSummary()
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_summaryAt == 0)
+        {
+            _summaryAt = now;
+            _summaryBase = ParallelCounters;
+            _summaryWallBase = _phaseWallMicros;
+            _summaryMapBase = _phaseMapMicros;
+            return;
+        }
+
+        if (now - _summaryAt < Stopwatch.Frequency * 60 || !_logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        ParallelMapCounters c = ParallelCounters;
+        ParallelMapCounters b = _summaryBase;
+        long wall = _phaseWallMicros - _summaryWallBase;
+        long mapsMicros = _phaseMapMicros - _summaryMapBase;
+        _logger.LogInformation(
+            "Parallel maps phase ({Seconds} s): {Ticks} ticks on {Threads} map threads, map updates {MapMs} ms in {WallMs} ms wall (overlap x{Overlap:0.00}); "
+            + "serial gate {Entries} entries, {Contended} contended, {GateWaitMs} ms waiting; barrier wait {BarrierMs} ms; owner violations {Violations}",
+            (now - _summaryAt) / Stopwatch.Frequency, c.ParallelTicks - b.ParallelTicks, c.Threads, mapsMicros / 1000, wall / 1000,
+            wall > 0 ? (double)mapsMicros / wall : 0, c.GateEntries - b.GateEntries, c.GateContended - b.GateContended,
+            (c.GateWaitMicros - b.GateWaitMicros) / 1000, (c.BarrierWaitMicros - b.BarrierWaitMicros) / 1000, c.OwnerViolations - b.OwnerViolations);
+        _summaryAt = now;
+        _summaryBase = c;
+        _summaryWallBase = _phaseWallMicros;
+        _summaryMapBase = _phaseMapMicros;
     }
 }
 

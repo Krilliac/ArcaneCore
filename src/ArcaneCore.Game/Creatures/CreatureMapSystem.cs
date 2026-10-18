@@ -175,27 +175,50 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _pathNodesThisTick = 0;
         _pathTicksThisTick = 0;
         _timing = default;
+        // World:Parallel:CreatureSplinePass: the creatures' splines advance in a pass of their own, which is the only part of this update
+        // that runs outside the world's serial gate when the map updater runs ungated (World:Parallel:Ungated=CreatureMapSystem). Every
+        // other stage reaches shared services (spells, scripts, the pathfinder, persistence) and holds the gate; outside the parallel
+        // maps phase, or when the map gates this updater, Serial() is a no-op or a reentrant entry.
+        bool splinePass = Map.Runtime.Options.Parallel.CreatureSplinePass;
         long t = Stopwatch.GetTimestamp();
-        SweepPathJobs();
-        RunDeferredMoves();
-        SendCatchUpMoves();
-        t = Lap(t, out _timing.CatchUp);
-        UpdateLinkedFollowers();
-        t = Lap(t, out _timing.Linked);
-        UpdateCreatures(diffMs);
+        using (Serial())
+        {
+            SweepPathJobs();
+            RunDeferredMoves();
+            SendCatchUpMoves();
+            t = Lap(t, out _timing.CatchUp);
+            UpdateLinkedFollowers();
+            t = Lap(t, out _timing.Linked);
+            if (!splinePass)
+            {
+                UpdateCreatures(diffMs);
+            }
+        }
+
+        if (splinePass)
+        {
+            UpdateCreaturesInPasses(diffMs);
+        }
+
         t = Lap(t, out _timing.Creatures);
-        UpdateSpawnGroups();
-        CheckDormantRespawnStuck(diffMs);
-        t = Lap(t, out _timing.SpawnGroups);
-        UpdatePendingAi();
-        t = Lap(t, out _timing.PendingAi);
-        UpdateRelayScripts();
-        t = Lap(t, out _timing.Relay);
-        UpdateForcedDespawns();
-        t = Lap(t, out _timing.Despawns);
-        Map.RunAfterUpdate(_captureNewObservers ??= CaptureNewObservers);
-        Lap(t, out _timing.AfterUpdate);
+        using (Serial())
+        {
+            UpdateSpawnGroups();
+            CheckDormantRespawnStuck(diffMs);
+            t = Lap(t, out _timing.SpawnGroups);
+            UpdatePendingAi();
+            t = Lap(t, out _timing.PendingAi);
+            UpdateRelayScripts();
+            t = Lap(t, out _timing.Relay);
+            UpdateForcedDespawns();
+            t = Lap(t, out _timing.Despawns);
+            Map.RunAfterUpdate(_captureNewObservers ??= CaptureNewObservers);
+            Lap(t, out _timing.AfterUpdate);
+        }
     }
+
+    /// <summary>The world's serial gate (a no-op outside the parallel maps phase, reentrant when the map already gates this updater).</summary>
+    private WorldRuntime.SerialScope Serial() => Map.Runtime.EnterSerial();
 
     /// <summary>One stage's duration in <see cref="Stopwatch"/> ticks, and the timestamp the next stage starts from.</summary>
     private static long Lap(long since, out long ticks)
@@ -212,6 +235,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
         /// <summary>Inside <see cref="Creatures"/>: AI updates, motion generator updates, and (inside either) path searches.</summary>
         public long Ai, Motion, Path;
+
+        /// <summary>The spline pass of World:Parallel:CreatureSplinePass (inside <see cref="Creatures"/>; 0 when the pass is off).</summary>
+        public long SplinePass;
 
         public int Walked, Updated, Searches;
         public long SlowestCreatureTicks;
@@ -243,7 +269,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     string IMapUpdateBreakdown.DescribeLastUpdate()
     {
         UpdateTiming t = _timing;
-        string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
+        string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}{(t.SplinePass > 0 ? $", spline pass {TickMs(t.SplinePass)}" : "")}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
             + $"catch-up moves {TickMs(t.CatchUp)}, linked followers {TickMs(t.Linked)}, spawn groups {TickMs(t.SpawnGroups)}, pending ai {TickMs(t.PendingAi)}, "
             + $"relay scripts {TickMs(t.Relay)}, forced despawns {TickMs(t.Despawns)}, observers {TickMs(t.AfterUpdate)}, "
             + $"path outcomes so far: {NoPathPaths} no-path, {DirectFallbackPaths} straight authored routes, {DeferredPathSearches} deferred, {HomePathTeleports} home teleports";
@@ -824,14 +850,96 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         }
     }
 
-    private void UpdateCreatures(uint diffMs)
+    /// <summary>The walk's per-creature verdict of the spline pass (<see cref="UpdateCreaturesInPasses"/>), by index in <see cref="_scratchCreatures"/>.</summary>
+    private enum SplinePassMark : byte
+    {
+        Inactive,
+        Active,
+        Advanced,
+    }
+
+    private SplinePassMark[] _splineMarks = [];
+
+    /// <summary>
+    /// <see cref="UpdateCreatures"/> in two passes (World:Parallel:CreatureSplinePass): first every creature of the walk is judged
+    /// active or not and an active living one has its spline advanced (map-local: position, grid cell, visibility queue; a change of cell
+    /// takes the gate in <see cref="Map.OnObjectMoved"/>), outside the serial gate; then the rest of the walk runs inside it with those
+    /// verdicts. Same walk, same order of creatures, at any thread count.
+    /// </summary>
+    private void UpdateCreaturesInPasses(uint diffMs)
     {
         uint now = _serverTime();
-        // Live position may be outside the spawn's original grid. Snapshot ownership rather
-        // than spawn buckets so a moved creature is updated once and survives home-grid unload.
-        ApplyPendingActivations();
+        using (Serial())
+        {
+            ApplyPendingActivations();
+        }
+
         _scratchCreatures.Clear();
         _scratchCreatures.AddRange(_creatures.Values);
+        int count = _scratchCreatures.Count;
+        if (_splineMarks.Length < count)
+        {
+            _splineMarks = new SplinePassMark[Math.Max(count, _splineMarks.Length * 2)];
+        }
+
+        bool activeCellsOnly = Map.UpdatesActiveCellsOnly;
+        int start = _pathFirstDeferred is { } resume ? Math.Max(0, _scratchCreatures.IndexOf(resume)) : 0;
+        long splineStart = Stopwatch.GetTimestamp();
+        for (int walked = 0; walked < count; walked++)
+        {
+            int index = (start + walked) % count;
+            Creature creature = _scratchCreatures[index];
+            if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
+            {
+                _splineMarks[index] = SplinePassMark.Inactive;
+                continue;
+            }
+
+            if (creature.DeathState == CreatureDeathState.Alive)
+            {
+                try
+                {
+                    creature.AdvanceSpline(_clockMs, now);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("CreatureMapSystem.SplinePass", ex, "Creature spline pass fault for {Guid} (entry={Entry}, map={MapId})",
+                        creature.Guid, creature.Entry, Map.MapId);
+                }
+
+                _splineMarks[index] = SplinePassMark.Advanced;
+            }
+            else
+            {
+                _splineMarks[index] = SplinePassMark.Active;
+            }
+        }
+
+        _timing.SplinePass = Stopwatch.GetTimestamp() - splineStart;
+        using (Serial())
+        {
+            UpdateCreatures(diffMs, _splineMarks);
+        }
+    }
+
+    private void UpdateCreatures(uint diffMs) => UpdateCreatures(diffMs, null);
+
+    /// <summary>
+    /// The creature walk. With <paramref name="marks"/> (the spline pass ran), the scratch list is the pass's, each creature's active
+    /// verdict is the pass's and a creature the pass advanced is not advanced again.
+    /// </summary>
+    private void UpdateCreatures(uint diffMs, SplinePassMark[]? marks)
+    {
+        uint now = _serverTime();
+        if (marks is null)
+        {
+            // Live position may be outside the spawn's original grid. Snapshot ownership rather
+            // than spawn buckets so a moved creature is updated once and survives home-grid unload.
+            ApplyPendingActivations();
+            _scratchCreatures.Clear();
+            _scratchCreatures.AddRange(_creatures.Values);
+        }
+
         bool activeCellsOnly = Map.UpdatesActiveCellsOnly;
 
         // Fair deferral: the walk starts at the creature whose path search was deferred first last update, so deferred chasers are
@@ -844,10 +952,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _pathFirstDeferred = null; // deferrals from here on (this walk, or a pull before the next update) choose the next start
         for (int walked = 0; walked < count; walked++)
         {
-            Creature creature = _scratchCreatures[(start + walked) % count];
+            int index = (start + walked) % count;
+            Creature creature = _scratchCreatures[index];
             _timing.Walked++;
             // vmangos Map::UpdateActiveCellsSynch: only the cells around players and active objects are visited.
-            if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
+            if (marks is not null ? marks[index] == SplinePassMark.Inactive
+                : activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
             {
                 // vmangos Unit::Update -> UpdateSplineMovement(p_time), Unit.cpp:322,10632:
                 // splines advance only by an active update's delta, never by time spent in an inactive cell.
@@ -870,7 +980,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 switch (creature.DeathState)
                 {
                     case CreatureDeathState.Alive:
-                        creature.AdvanceSpline(_clockMs, now);
+                        if (marks is null || marks[index] != SplinePassMark.Advanced)
+                        {
+                            creature.AdvanceSpline(_clockMs, now);
+                        }
+
                         if (creature.PacifiedMs > 0)
                         {
                             creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update

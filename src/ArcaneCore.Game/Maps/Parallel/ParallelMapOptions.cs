@@ -49,6 +49,15 @@ public sealed class ParallelMapOptions
     /// </summary>
     public OwnerGuardMode OwnerGuard { get; set; } = OwnerGuardMode.Report;
 
+    /// <summary>
+    /// Split each creature update into a spline pass (every active living creature's spline advanced and relocated, map-local work)
+    /// and the rest (AI, leash, generators, respawns), instead of one pass that does both per creature (default false). With
+    /// CreatureMapSystem in <see cref="Ungated"/> the spline pass runs outside the serial gate and the rest inside it, one gate entry
+    /// per stage; a relocation that changes cell still takes the gate (grid loads). The order changes for every thread count alike:
+    /// a creature's AI sees the other creatures of its map already moved this tick.
+    /// </summary>
+    public bool CreatureSplinePass { get; set; }
+
     /// <summary>The thread count actually used (clamped to 1..64).</summary>
     internal int EffectiveMapUpdateThreads => Math.Clamp(MapUpdateThreads, 1, 64);
 }
