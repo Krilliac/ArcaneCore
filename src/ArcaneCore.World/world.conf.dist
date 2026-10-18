@@ -38,7 +38,7 @@
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
-#   CREATURES                   68 keys
+#   CREATURES                   67 keys
 #   DATABASE                    26 keys
 #   DIAGNOSTICS                 13 keys
 #   ECONOMY                     29 keys
@@ -2510,19 +2510,6 @@ Creatures.Movement.PathJobs = false
 #        Docs: docs/reference/configuration.md#creatures
 #
 Creatures.Movement.PathJobsFollow = false
-
-#
-#    Creatures.Movement.PathJobsMaxInFlightPerMap
-#        Description: Creatures:Movement:PathJobsMaxInFlightPerMap: the most outstanding path jobs
-#                     one map may have (PathJobs); past it a request is searched synchronously under
-#                     the per-update budget, as without jobs.
-#        Type: int
-#        Default: 512
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#creatures
-#
-Creatures.Movement.PathJobsMaxInFlightPerMap = 512
 
 #
 #    Creatures.Movement.RunDuringWanderChancePercent

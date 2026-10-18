@@ -24,6 +24,12 @@ public sealed partial class CreatureMapSystem
     /// <summary>How far (yd) a re-asked destination may lie from the job's for the job's path to still apply.</summary>
     internal const float PathJobDestinationTolerance = 0.25f;
 
+    /// <summary>
+    /// The most outstanding path jobs one map may have; past it a request is searched synchronously under the per-update budget, as
+    /// without jobs. Live peaks at ~40-70 in flight per continent (MT-J1 after 680f3cf8), so 512 is head-room, not a tuning knob.
+    /// </summary>
+    internal const int PathJobsMaxInFlightPerMap = 512;
+
     /// <summary>How far (yd) a re-asked follow point may lie from the job's for the job's path to still apply (<c>PathJobsFollow</c>).</summary>
     internal const float PathJobFollowTolerance = 1f;
 
@@ -99,7 +105,7 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     public int PathJobsPending => _pathJobsPending;
 
-    bool ICreaturePathQuery.CanQueuePathJob => PathJobs is not null && _pathJobsPending < Math.Max(1, _options.Movement.PathJobsMaxInFlightPerMap);
+    bool ICreaturePathQuery.CanQueuePathJob => PathJobs is not null && _pathJobsPending < PathJobsMaxInFlightPerMap;
 
     bool ICreaturePathQuery.LastPlanQueued => _lastPlanQueued;
 
@@ -164,7 +170,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
-        if (_pathJobsPending >= Math.Max(1, _options.Movement.PathJobsMaxInFlightPerMap))
+        if (_pathJobsPending >= PathJobsMaxInFlightPerMap)
         {
             PathJobsRejected++;
             return false;

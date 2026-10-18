@@ -3183,22 +3183,6 @@
       "isCollection": false
     },
     {
-      "path": "Creatures:Movement:PathJobsMaxInFlightPerMap",
-      "section": "Creatures",
-      "type": "int",
-      "kind": "scalar",
-      "elementType": "int",
-      "enumValues": null,
-      "default": "512",
-      "defaultEntries": [],
-      "daemons": "World",
-      "reload": "start",
-      "meaning": "`Creatures:Movement:PathJobsMaxInFlightPerMap`: the most outstanding path jobs one map may have (`PathJobs`); past it a request is searched synchronously under the per-update budget, as without jobs.",
-      "allowed": "a whole number, -2147483648 to 2147483647",
-      "docs": "docs/reference/configuration.md#creatures",
-      "isCollection": false
-    },
-    {
       "path": "Creatures:Movement:RunDuringWanderChancePercent",
       "section": "Creatures",
       "type": "uint",

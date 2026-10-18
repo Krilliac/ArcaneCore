@@ -78,12 +78,6 @@ public sealed class CreatureMovementOptions
     public int PathJobThreads { get; set; } = 4;
 
     /// <summary>
-    /// <c>Creatures:Movement:PathJobsMaxInFlightPerMap</c>: the most outstanding path jobs one map may have (<see cref="PathJobs"/>);
-    /// past it a request is searched synchronously under the per-update budget, as without jobs.
-    /// </summary>
-    public int PathJobsMaxInFlightPerMap { get; set; } = 512;
-
-    /// <summary>
     /// <c>Creatures:Movement:PathJobsFollow</c>: out-of-combat follow searches (pets and escorts following their leader) go to the path-job
     /// pool too (<see cref="PathJobs"/> must be on). The follower keeps its current spline until the answer arrives (one or two updates);
     /// an answer whose destination is within <c>CreatureMapSystem.PathJobFollowTolerance</c> (1 yd) of the re-asked one still applies,
