@@ -102,6 +102,18 @@ internal sealed class ClientTerrainOracle
     /// <summary>Vertices the extractor read for a shown square and then reset because their own square is hidden.</summary>
     public long ReadButReset { get; private set; }
 
+    /// <summary>Not-kept corner heights under a square the merged grid reset to the floor (the extractor's reset of hidden squares).</summary>
+    public long NotKeptReset { get; private set; }
+
+    /// <summary>Not-kept corner heights where another layer of the same MCNK is higher at that corner (the extractor keeps the maximum).</summary>
+    public long NotKeptMaxOfLayers { get; private set; }
+
+    /// <summary>Not-kept corner heights on an MCNK edge that a later neighbouring MCNK rewrote in the merged grid.</summary>
+    public long NotKeptEdgeRewrite { get; private set; }
+
+    /// <summary>Not-kept corner heights that fit none of the classes above.</summary>
+    public long NotKeptOther { get; private set; }
+
     /// <summary>MCNKs whose server liquid type flags differ from the extractor rules' merge of the client layers.</summary>
     public long LiquidFlagMismatches { get; private set; }
 
@@ -143,7 +155,7 @@ internal sealed class ClientTerrainOracle
         text.AppendLine(CultureInfo.InvariantCulture, $"  tiles: {FlatTiles} flat (no-height), {ClampedTiles} clamped, {StorageMismatches} storage mismatches; {ChunksWithoutHeights} MCNKs without MCVT");
         text.AppendLine(CultureInfo.InvariantCulture, $"  holes: {ChunksWithHoles} MCNKs with holes, {HoleSquares} hole squares, {HoleWordMismatches} hole-word mismatches, {HoleQueryMismatches} of {HoleQueries} GetHeight hole answers differ");
         text.AppendLine(CultureInfo.InvariantCulture, $"  liquid: {LiquidTiles} tiles with a liquid section ({FlatLiquidTiles} one level), {LiquidChunks} MCNKs with {LiquidLayers} MCLQ layers, {StackedChunks} MCNKs with 2+ layers, {OverlappingSquares} squares shown by 2+ layers");
-        text.AppendLine(CultureInfo.InvariantCulture, $"  liquid vs server merge: {LayerSquares} visible layer squares, {LayerVerticesNotKept} of {LayerVertices} layer corner heights not kept by the merged grid, {ReadButReset} read-then-reset vertices; {LiquidFlagMismatches} type-flag and {LiquidLevelMismatches} level mismatches with the extractor merge rules");
+        text.AppendLine(CultureInfo.InvariantCulture, $"  liquid vs server merge: {LayerSquares} visible layer squares, {LayerVerticesNotKept} of {LayerVertices} layer corner heights not kept by the merged grid, {ReadButReset} read-then-reset vertices; not kept by class: {NotKeptReset} reset, {NotKeptMaxOfLayers} max-of-layers, {NotKeptEdgeRewrite} neighbour edge rewrite, {NotKeptOther} other; {LiquidFlagMismatches} type-flag and {LiquidLevelMismatches} level mismatches with the extractor merge rules");
         foreach (string example in _examples)
         {
             text.AppendLine(CultureInfo.InvariantCulture, $"  e.g. {example}");
@@ -329,6 +341,30 @@ internal sealed class ClientTerrainOracle
     private void CountLayerSquares(AdtChunk chunk, int i, int j, ExtractorEmulation.LiquidModel model)
     {
         var shown = new int[64];
+        var chunkMax = new float[81];
+        Array.Fill(chunkMax, float.NegativeInfinity);
+        foreach (AdtLiquidLayer layer in chunk.LiquidLayers)
+        {
+            for (int y = 0; y < 8; y++)
+            {
+                for (int x = 0; x < 8; x++)
+                {
+                    if (!layer.IsVisible(y, x))
+                    {
+                        continue;
+                    }
+
+                    for (int vy = y; vy <= y + 1; vy++)
+                    {
+                        for (int vx = x; vx <= x + 1; vx++)
+                        {
+                            chunkMax[(vy * 9) + vx] = Math.Max(chunkMax[(vy * 9) + vx], layer.Height(vy, vx));
+                        }
+                    }
+                }
+            }
+        }
+
         foreach (AdtLiquidLayer layer in chunk.LiquidLayers)
         {
             for (int y = 0; y < 8; y++)
@@ -348,7 +384,30 @@ internal sealed class ClientTerrainOracle
                         {
                             LayerVertices++;
                             float merged = model.Grid[((((i * 8) + vy) * (Squares + 1)) + (j * 8)) + vx];
-                            LayerVerticesNotKept += Math.Abs(layer.Height(vy, vx) - merged) > Tolerance ? 1 : 0;
+                            float own = layer.Height(vy, vx);
+                            if (Math.Abs(own - merged) <= Tolerance)
+                            {
+                                continue;
+                            }
+
+                            LayerVerticesNotKept++;
+                            float best = chunkMax[(vy * 9) + vx];
+                            if (merged == ExtractorEmulation.MinHeight)
+                            {
+                                NotKeptReset++;
+                            }
+                            else if (Math.Abs(best - merged) <= Tolerance && own < best)
+                            {
+                                NotKeptMaxOfLayers++;
+                            }
+                            else if (vy is 0 or 8 || vx is 0 or 8)
+                            {
+                                NotKeptEdgeRewrite++;
+                            }
+                            else
+                            {
+                                NotKeptOther++;
+                            }
                         }
                     }
                 }

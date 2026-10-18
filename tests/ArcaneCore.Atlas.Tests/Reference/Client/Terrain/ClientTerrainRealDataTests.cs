@@ -84,6 +84,8 @@ public sealed class ClientTerrainRealDataTests(ITestOutputHelper output)
         Assert.True(oracle.HoleQueryMismatches == 0, because);
         Assert.True(oracle.LiquidFlagMismatches == 0, because);
         Assert.True(oracle.LiquidLevelMismatches == 0, because);
+        Assert.True(oracle.NotKeptOther == 0, because);
+        Assert.Equal(oracle.LayerVerticesNotKept, oracle.NotKeptReset + oracle.NotKeptMaxOfLayers + oracle.NotKeptEdgeRewrite);
     }
 
     [ClientTerrainRealFact]
@@ -166,19 +168,29 @@ public sealed class ClientTerrainRealDataTests(ITestOutputHelper output)
     {
         ClientTerrainService service = Service();
         int total = 0;
+        long notKept = 0;
+        long notKeptReset = 0;
+        long notKeptMax = 0;
+        long notKeptEdge = 0;
+        long notKeptOther = 0;
         foreach (uint mapId in ClientTerrainRealData.ServerMapIds())
         {
             IReadOnlyList<TileKey> server = ClientTerrainRealData.ServerTiles(mapId);
             ClientTerrainOracle oracle = Run($"map {mapId}", server);
             AssertExplained(oracle, server.Count);
             total += server.Count;
+            notKept += oracle.LayerVerticesNotKept;
+            notKeptReset += oracle.NotKeptReset;
+            notKeptMax += oracle.NotKeptMaxOfLayers;
+            notKeptEdge += oracle.NotKeptEdgeRewrite;
+            notKeptOther += oracle.NotKeptOther;
 
             // Tiles the WDT lists with an ADT that the server never converted.
             int clientOnly = service.AvailableTiles(mapId).Count(t => !server.Contains(t));
             Assert.True(clientOnly == 0, $"map {mapId}: {clientOnly} WDT-listed client ADTs have no server .map");
         }
 
-        output.WriteLine($"{total} tiles compared over {ClientTerrainRealData.ServerMapIds().Count} maps");
+        output.WriteLine($"{total} tiles compared over {ClientTerrainRealData.ServerMapIds().Count} maps; liquid not-kept: {notKept} = {notKeptReset} reset + {notKeptMax} max-of-layers + {notKeptEdge} neighbour edge rewrite + {notKeptOther} other");
         Assert.True(total > 2000, $"{total} tiles");
     }
 
@@ -286,8 +298,50 @@ public sealed class ClientTerrainRealDataTests(ITestOutputHelper output)
         Assert.NotNull(wmo);
         Assert.NotEmpty(wmo);
         Assert.All(wmo, p => Assert.True(p.Kind == PlacementKind.Wmo && ClientTerrainRealData.Files.Exists(p.ModelPath), p.ModelPath));
-        output.WriteLine($"Goldshire: {adt.Doodads.Count} doodads, {adt.WmoObjects.Count} WMOs, {asNamed} paths as named; {global.Directory} global WMO {wmo[0].ModelPath}");
+
+        // Every MODF entry in every real 1.12.1 WDT and ADT has BoundsMin <= BoundsMax componentwise.
+        int wdtModf = 0;
+        int adtModf = 0;
+        int invertedBounds = 0;
+        int zeroAdts = 0;
+        foreach (string path in ClientTerrainRealData.Files.List("World\\Maps\\"))
+        {
+            if (path.EndsWith(".wdt", StringComparison.OrdinalIgnoreCase))
+            {
+                WdtFile wdtFile = WdtFile.Parse(ClientTerrainRealData.Files.Read(path)!);
+                foreach (AdtWmoObject o in wdtFile.WmoObjects)
+                {
+                    wdtModf++;
+                    invertedBounds += IsOrdered(o) ? 0 : 1;
+                }
+            }
+            else if (path.EndsWith(".adt", StringComparison.OrdinalIgnoreCase))
+            {
+                byte[] bytes = ClientTerrainRealData.Files.Read(path)!;
+                if (bytes.Length == 0)
+                {
+                    zeroAdts++;
+                    continue;
+                }
+
+                AdtFile adtFile = AdtFile.Parse(bytes);
+                foreach (AdtWmoObject o in adtFile.WmoObjects)
+                {
+                    adtModf++;
+                    invertedBounds += IsOrdered(o) ? 0 : 1;
+                }
+            }
+        }
+
+        Assert.Equal(20, wdtModf);
+        Assert.Equal(4851, adtModf);
+        Assert.Equal(49, zeroAdts);
+        Assert.Equal(0, invertedBounds);
+        output.WriteLine($"Goldshire: {adt.Doodads.Count} doodads, {adt.WmoObjects.Count} WMOs, {asNamed} paths as named; {global.Directory} global WMO {wmo[0].ModelPath}; {wdtModf} WDT + {adtModf} ADT MODFs ({zeroAdts} zero-byte ADTs), {invertedBounds} inverted bounds");
     }
+
+    private static bool IsOrdered(AdtWmoObject o)
+        => o.BoundsMin.X <= o.BoundsMax.X && o.BoundsMin.Y <= o.BoundsMax.Y && o.BoundsMin.Z <= o.BoundsMax.Z;
 
     [ClientTerrainRealFact]
     public async Task Commands_AnswerFromTheRealGoldshireTile()
