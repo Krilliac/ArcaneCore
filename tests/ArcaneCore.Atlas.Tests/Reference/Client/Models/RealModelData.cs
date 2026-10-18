@@ -29,6 +29,9 @@ internal static class RealClientModels
 {
     public const string TerrainVariable = "ARCANECORE_TEST_TERRAIN_DIR";
 
+    // The real-data classes share one xUnit collection so they run one after another: each holds hundreds of MB of models.
+    public const string Collection = "Atlas R3 real client models";
+
     private static readonly Lazy<DirectoryClientFiles> SharedFiles = new(
         () => new DirectoryClientFiles(Environment.GetEnvironmentVariable(DirectoryClientFiles.TestEnvironmentVariable)!),
         LazyThreadSafetyMode.ExecutionAndPublication);

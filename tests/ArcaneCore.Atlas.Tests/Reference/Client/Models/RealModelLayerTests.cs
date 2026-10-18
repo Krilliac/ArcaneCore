@@ -15,6 +15,7 @@ namespace ArcaneCore.Atlas.Tests.Reference.Client.Models;
 /// drawn by exactly one tile, the drawn triangle counts equal the resolved placements, and the model description agrees
 /// with the server's own model file.
 /// </summary>
+[Collection(RealClientModels.Collection)]
 public sealed class RealModelLayerTests(ITestOutputHelper output)
 {
     private static readonly TileKey GoldshireTile = new(0, 49, 31);
@@ -96,6 +97,7 @@ public sealed class RealModelLayerTests(ITestOutputHelper output)
         long renderTriangles = m2Plan.M2s.Sum(m => (long)m.Model.RenderTriangleCount);
         Assert.Equal(wmoTriangles, wmo.Chunks.Sum(c => (long)c.TriangleCount));
         Assert.Equal(skippedTriangles, CountTriangles(wmo, a => a["extractorSkipped"]!.GetValue<bool>()));
+        Assert.Equal(wmoTriangles - skippedTriangles, CountTriangles(wmo, a => a["serverCollides"]!.GetValue<bool>()));
         Assert.Equal(collisionTriangles, collision.Chunks.Sum(c => (long)c.TriangleCount));
         Assert.Equal(renderTriangles, render.Chunks.Sum(c => (long)c.TriangleCount));
         Assert.True(wmoPlan.Wmos.Count >= 3 && m2Plan.M2s.Count >= 100, Inv($"only {wmoPlan.Wmos.Count} WMOs and {m2Plan.M2s.Count} M2s resolved"));

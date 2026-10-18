@@ -14,6 +14,7 @@ namespace ArcaneCore.Atlas.Tests.Reference.Client.Models;
 /// with ArcaneCore.Game's readers. Each test asserts counts that are only reachable when real files were read, and prints
 /// every mismatch class it found.
 /// </summary>
+[Collection(RealClientModels.Collection)]
 public sealed class RealModelOracleTests(ITestOutputHelper output)
 {
     private const double ModelTolerance = 1e-3;
