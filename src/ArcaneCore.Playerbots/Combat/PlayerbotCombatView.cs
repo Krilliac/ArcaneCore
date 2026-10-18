@@ -125,6 +125,15 @@ internal static class PlayerbotCombatView
         bool canCallPet = player.Class == Class.Hunter && player.PetGuid.IsEmpty
             && session.Services.GetService<PetsFeature>()?.Service.TryGetCachedCurrentPet(player, out _) == true;
 
+        RotationUnit? tameCandidate = null;
+        if (player.Class == Class.Hunter && player.PetGuid.IsEmpty && !canCallPet && !player.Combat.IsInCombat
+            && spells.Has(PlayerbotHunterRotation.TameBeast) && map is not null
+            && FindTameCandidate(session, player, map) is { } beast)
+        {
+            units[beast.Guid] = beast;
+            tameCandidate = Describe(system, player, beast, groups);
+        }
+
         Item? mainHand = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand);
         Item? ranged = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged);
         Item? offHand = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.OffHand);
@@ -210,6 +219,7 @@ internal static class PlayerbotCombatView
             PetFighting = petFighting,
             PetFightingCrowdControlled = petFightingCrowdControlled,
             CanCallPet = canCallPet,
+            TameCandidate = tameCandidate,
             AutoRepeatActive = system.HasAutoRepeat(player),
             HasRangedWeapon = ranged?.Template is { Class: ItemClassWeapon } rangedTemplate && rangedTemplate.SubClass != SubClassWand
                 && !(ranged.MaxDurability > 0 && ranged.Durability == 0),
@@ -234,6 +244,42 @@ internal static class PlayerbotCombatView
     }
 
     /// <summary>A snapshot of <paramref name="unit"/> as <paramref name="bot"/> sees it.</summary>
+    private const float TameReach = 28f;
+    private const uint TameScanIntervalMs = 5_000;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, uint> s_lastTameScan = new();
+
+    /// <summary>
+    /// The nearest beast a pet-less hunter bot can tame from where it stands (SummonService.TameFailure rules: tameable beast, level at most the
+    /// hunter's, unowned; plus not elite and not already fighting). Scans the map at most every 5 s per bot so live hunters exercise Tame Beast.
+    /// </summary>
+    private static Creature? FindTameCandidate(WorldSession session, Player player, Map map)
+    {
+        uint now = session.World.NowMs;
+        if (s_lastTameScan.TryGetValue(player.Guid.Value, out uint last) && unchecked(now - last) < TameScanIntervalMs)
+            return null;
+        s_lastTameScan[player.Guid.Value] = now;
+        if (map.FindUpdater<CreatureMapSystem>() is not { } creatures)
+            return null;
+
+        Creature? best = null;
+        float bestSq = TameReach * TameReach;
+        foreach (Creature c in creatures.Creatures)
+        {
+            if (!c.IsInWorld || !c.IsAlive || c.Level > player.Level || c.Template.Rank != 0 || !c.OwnerGuid.IsEmpty || !c.CharmerGuid.IsEmpty
+                || c.Combat.IsInCombat || !Game.Pets.SummonService.IsTameable(c))
+                continue;
+            float dx = c.X - player.X, dy = c.Y - player.Y, dz = c.Z - player.Z;
+            float sq = (dx * dx) + (dy * dy) + (dz * dz);
+            if (sq < bestSq)
+            {
+                best = c;
+                bestSq = sq;
+            }
+        }
+
+        return best;
+    }
+
     internal static RotationUnit Describe(SpellSystem system, Player bot, Unit unit, GroupManager? groups)
     {
         var auras = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

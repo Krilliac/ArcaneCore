@@ -1,4 +1,4 @@
-﻿using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Generic;
 using ArcaneCore.Game.Spells.Scripts;

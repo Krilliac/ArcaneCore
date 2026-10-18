@@ -1,4 +1,4 @@
-﻿using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Entities;

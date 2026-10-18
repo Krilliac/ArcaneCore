@@ -140,6 +140,9 @@ internal sealed class RotationState
     /// <summary>A hunter whose current pet is stabled away (Call Pet can bring it).</summary>
     public bool CanCallPet { get; init; }
 
+    /// <summary>A pet-less hunter's tameable beast in reach (at most the bot's level, not elite, not fighting, unowned), or null.</summary>
+    public RotationUnit? TameCandidate { get; init; }
+
     /// <summary>An auto-repeat spell (Auto Shot, wand Shoot) is running.</summary>
     public bool AutoRepeatActive { get; init; }
 

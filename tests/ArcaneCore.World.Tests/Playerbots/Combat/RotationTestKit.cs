@@ -139,6 +139,7 @@ internal sealed class RotationStateBuilder
     public bool PetFighting { get; set; }
     public bool PetFightingCrowdControlled { get; set; }
     public bool CanCallPet { get; set; }
+    public RotationUnit? TameCandidate { get; set; }
     public bool AutoRepeatActive { get; set; }
     public bool HasRangedWeapon { get; set; }
     public bool HasWand { get; set; }
@@ -152,7 +153,7 @@ internal sealed class RotationStateBuilder
         Spells = Spells, Self = Self, Victim = Victim, Role = Role, InCombat = InCombat, PowerType = PowerType, Power = Power, MaxPower = MaxPower,
         Party = Party, Attackers = Attackers, ComboPoints = ComboPoints, Form = Form, IsStealthed = IsStealthed, WearsShield = WearsShield,
         IsMoving = IsMoving, Pet = Pet, PetUnit = PetUnit, PetFighting = PetFighting, PetFightingCrowdControlled = PetFightingCrowdControlled,
-        CanCallPet = CanCallPet, AutoRepeatActive = AutoRepeatActive,
+        CanCallPet = CanCallPet, TameCandidate = TameCandidate, AutoRepeatActive = AutoRepeatActive,
         HasRangedWeapon = HasRangedWeapon, HasWand = HasWand, HealingPotion = HealingPotion, Bandage = Bandage, Totems = Totems,
         InGroup = Party.Count > 0, CanCast = CanCast,
     };

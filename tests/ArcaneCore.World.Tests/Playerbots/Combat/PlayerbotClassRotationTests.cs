@@ -101,7 +101,7 @@ public sealed class PlayerbotClassRotationTests
     private static SpellInfo[] HunterBook =>
     [
         Hostile("Auto Shot", 0), Hostile("Arcane Shot"), Debuff("Serpent Sting"), Hostile("Raptor Strike"), Debuff("Wing Clip"),
-        Aura("Aspect of the Hawk", 1, SpellImplicitTarget.UnitCaster), SelfSpell("Call Pet"), Hostile("Revive Pet") with { AttributesEx2 = SpellAttributesEx2.AllowDeadTarget }, Debuff("Hunter's Mark"),
+        Aura("Aspect of the Hawk", 1, SpellImplicitTarget.UnitCaster), SelfSpell("Call Pet"), Hostile("Tame Beast"), Hostile("Revive Pet") with { AttributesEx2 = SpellAttributesEx2.AllowDeadTarget }, Debuff("Hunter's Mark"),
     ];
 
     [Fact]
@@ -131,6 +131,12 @@ public sealed class PlayerbotClassRotationTests
         Assert.Equal("Call Pet", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
             inCombat: false, more: s => s.CanCallPet = true))));
         Assert.Null(Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps, inCombat: false))));
+        // A hunter with no pet at all tames the beast in reach, standing still.
+        var beast = new RotationUnit { Guid = new ObjectGuid(0xF130000000000077UL), Distance = 15f, Health = 100, MaxHealth = 100, IsAlive = true };
+        Assert.Equal("Tame Beast", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
+            inCombat: false, more: s => s.TameCandidate = beast))));
+        Assert.Null(Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
+            inCombat: false, more: s => { s.TameCandidate = beast; s.IsMoving = true; }))));
         // The shot is the think and the idle pet is sent beside it; a pet command that leads would take every think when it does not stick.
         RotationState shooting = State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f), PlayerbotRole.RangeDps,
             more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; });

@@ -25,6 +25,7 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
     internal const string MongooseBite = "Mongoose Bite";
     internal const string RaptorStrike = "Raptor Strike";
     internal const string CallPet = "Call Pet";
+    internal const string TameBeast = "Tame Beast";
     internal const string RevivePet = "Revive Pet";
     internal const string MendPet = "Mend Pet";
     internal const string DistractingShot = "Distracting Shot";
@@ -34,7 +35,7 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
     public override IReadOnlyList<string> Abilities { get; } =
     [
         AutoShot, AspectOfTheHawk, AspectOfTheMonkey, HuntersMark, ConcussiveShot, AimedShot, ArcaneShot, SerpentSting, MultiShot,
-        ScareBeast, Disengage, FeignDeath, WingClip, MongooseBite, RaptorStrike, CallPet, RevivePet, MendPet, DistractingShot,
+        ScareBeast, Disengage, FeignDeath, WingClip, MongooseBite, RaptorStrike, CallPet, TameBeast, RevivePet, MendPet, DistractingShot,
     ];
 
     /// <summary>A hunter with a ranged weapon and Auto Shot stands off at 30 yards; without them it fights in melee.</summary>
@@ -58,13 +59,14 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
 
 
     /// <summary>
-    /// vmangos SummonPetIfNeeded for a hunter: a dead pet is revived, a stabled current pet is called. (vmangos also tames a
-    /// random beast for a pet-less bot; an autonomous bot keeps to its own pet.)
+    /// vmangos SummonPetIfNeeded for a hunter: a dead pet is revived, a stabled current pet is called. A pet-less hunter tames a beast in reach.
     /// </summary>
     internal static RotationAction? Pet(RotationState s) => s.Pet switch
     {
         RotationPetStatus.Dead when s.PetUnit is { } dead => Do(s, RevivePet, dead),
         RotationPetStatus.None when s.CanCallPet => Do(s, CallPet, s.Self),
+        // A hunter that never tamed (or abandoned) a pet tames a beast standing in reach (vmangos PartyBotAI tames for a pet-less bot).
+        RotationPetStatus.None when s.TameCandidate is { } beast && !s.IsMoving => Do(s, TameBeast, beast),
         RotationPetStatus.Alive when s.PetUnit is { } pet && pet.HealthPercent < 50f && !pet.HasAura(MendPet) => Do(s, MendPet, pet),
         _ => null,
     };

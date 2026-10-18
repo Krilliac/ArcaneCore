@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Crafting;
@@ -111,6 +112,11 @@ internal sealed class PlayerbotEquipment(WorldSession session)
                         continue;
 
                     anyTeachEffect = true;
+                    // A grimoire teaches the pet (TARGET_PET): with no living pet out the cast fails NoPet (live: ~650 Firebolt
+                    // 20270 refusals in 10 min from warlock bots).
+                    if (eff.TargetA == SpellImplicitTarget.UnitCasterPet && player.GetPet() is not { IsAlive: true })
+                        continue;
+
                     if (spellbook is not null && spellbook.HasSpell(player, eff.TriggerSpell))
                         continue;
 
@@ -147,6 +153,10 @@ internal sealed class PlayerbotEquipment(WorldSession session)
         SpellStore? store = spells?.System.Store;
         SpellbookCache? spellbook = spells?.Spellbook;
         if (store is null || spellbook is null)
+            return false;
+
+        // The teaching spells have a cast time; a walking bot is refused (Moving).
+        if (PlayerbotMotion.IsActive(player))
             return false;
 
         foreach (Item item in Carried(player))
