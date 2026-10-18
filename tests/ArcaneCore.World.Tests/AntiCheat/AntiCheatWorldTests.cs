@@ -216,20 +216,33 @@ public sealed class AntiCheatWorldTests
         Assert.Equal(valid, block.X, 2);
     }
 
-    /// <summary>Every system chat line the client receives until it has been quiet for <paramref name="quietMs"/>.</summary>
-    private static async Task<List<string>> ChatLinesAsync(WorldTestClient client, int quietMs = 400)
+    /// <summary>
+    /// Every chat line the server has queued for <paramref name="client"/> so far: one ping, then everything read up to its pong. The
+    /// session answers CMSG_PING on its read loop and queues SMSG_PONG behind every packet already queued (vmangos
+    /// WorldSocket::_HandlePing, one send queue), so once the caller has waited on the world thread for whatever sends the lines, this
+    /// returns exactly those lines however late the world tick or the session writer runs. A quiet window instead returned nothing when
+    /// either was held back past it under full-suite load.
+    /// </summary>
+    private static async Task<List<string>> ChatLinesAsync(WorldTestClient client)
     {
+        await client.SendAsync(WorldOpcode.CmsgPing, Ping(BarrierPing, 0));
         var lines = new List<string>();
-        foreach ((WorldOpcode opcode, byte[] payload) in await client.CollectAsync(TimeSpan.FromMilliseconds(quietMs)))
+        while (true)
         {
+            (WorldOpcode opcode, byte[] payload) = await client.ReadAsync();
+            if (opcode == WorldOpcode.SmsgPong && BinaryPrimitives.ReadUInt32LittleEndian(payload) == BarrierPing)
+            {
+                return lines;
+            }
+
             if (opcode == WorldOpcode.SmsgMessagechat)
             {
                 lines.Add(ChatMessage.Parse(payload).Text);
             }
         }
-
-        return lines;
     }
+
+    private const uint BarrierPing = 0xBA77;
 
     [Fact]
     public async Task TheKick_GoesToStaffDirectlyOnce_AndTheAnnouncerAddsOnlyAWorldLineThatNamesNeitherThePlayerNorTheDetector()
@@ -295,10 +308,14 @@ public sealed class AntiCheatWorldTests
         await again.LoginAsync((ulong)characterId);
         await KickAsync(again);
 
+        // Both kicks were judged on the world thread before it closed their sessions: the first line is queued, the second held back.
         List<string> lines = await ChatLinesAsync(staff);
         Assert.Single(lines, l => l.Contains("Kicked Rekicked", StringComparison.Ordinal)); // the second kick is held back, not sent
+        Assert.Equal(1, await host.OnWorldAsync(() => FeatureOf(host).StaffLimiter.Count)); // its window is open, holding the count
 
+        // The world tick that sees the window ended sends the held count and forgets the window, in one call on the world thread.
         clock.Advance(TimeSpan.FromSeconds(31));
+        await host.WaitForWorldAsync(() => FeatureOf(host).StaffLimiter.Count == 0, "the world tick reported the ended kick window");
         string count = Assert.Single(await ChatLinesAsync(staff));
         Assert.Contains("[AntiCheat]", count, StringComparison.Ordinal);
         Assert.Contains($"account {account.Id}: kick: 1 more suppressed in the last 30 s", count, StringComparison.Ordinal);
@@ -332,7 +349,11 @@ public sealed class AntiCheatWorldTests
             await m.StepAsync(100, 80f); // teleport 25: alert
         }
 
-        List<string> lines = await ChatLinesAsync(staff, 600);
+        // The alert goes out while the world judges a block, before it stores it: once every mover stands where it says, every alert is queued.
+        await SettledAsync(host, "Firstcheat", m1);
+        await SettledAsync(host, "Secondcheat", m2);
+        await SettledAsync(host, "Thirdcheat", m3);
+        List<string> lines = await ChatLinesAsync(staff);
         foreach (string name in new[] { "Firstcheat", "Secondcheat", "Thirdcheat" })
         {
             string line = Assert.Single(lines, l => l.Contains(name, StringComparison.Ordinal));
