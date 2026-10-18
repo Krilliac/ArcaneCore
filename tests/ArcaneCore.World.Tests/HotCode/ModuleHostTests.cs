@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
+using ArcaneCore.Game.Tests;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
@@ -89,9 +90,7 @@ public sealed class ModuleHostTests : IDisposable
     {
         for (int i = 0; i < 80; i++)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            AllocationProbe.CollectBetweenWindows();
             if (_host.RetiredStillReferenced == expected)
             {
                 return true;

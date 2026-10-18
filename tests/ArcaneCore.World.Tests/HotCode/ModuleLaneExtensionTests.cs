@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Scripting;
+using ArcaneCore.Game.Tests;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Commands;
@@ -71,9 +72,7 @@ public sealed class ModuleLaneExtensionTests : IDisposable
     {
         for (int i = 0; i < 80; i++)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            AllocationProbe.CollectBetweenWindows();
             if (host.RetiredStillReferenced == expected)
             {
                 return true;

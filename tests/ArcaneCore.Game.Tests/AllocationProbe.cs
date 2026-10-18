@@ -45,6 +45,23 @@ internal static class AllocationProbe
 
     private static readonly object Gate = new();
 
+    /// <summary>
+    /// A full blocking collection (collect, run finalizers, collect) that never lands inside a measured window: it waits for a probe in
+    /// progress to finish. A collection another thread forces ends the probe's no-GC region, so a test that forces collections in a loop
+    /// (waiting for a module's load context to be collected) took every clean window from a probe that ran meanwhile (CI 2026-10-18: failing
+    /// ModuleRollbackTests forced collections for four minutes, and the escape-fan probe ended all 40 of its no-GC regions early). Such loops
+    /// call this instead of <see cref="GC.Collect()"/>.
+    /// </summary>
+    public static void CollectBetweenWindows()
+    {
+        lock (Gate)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+    }
+
     private static void MeasureWindows(Action window, long maxBytes, string what, int cleanWindows, ref int clean, ref int discarded, ref int refused, ref int broken)
     {
         long budget = NoGcBudget;

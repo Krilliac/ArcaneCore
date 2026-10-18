@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Scripting;
+using ArcaneCore.Game.Tests;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Commands;
@@ -117,9 +118,7 @@ public sealed class ModuleCreatureSwapTests : IDisposable
     {
         for (int i = 0; i < 80; i++)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            AllocationProbe.CollectBetweenWindows();
             if (host.RetiredStillReferenced == expected)
             {
                 return true;
@@ -224,9 +223,7 @@ public sealed class ModuleCreatureSwapTests : IDisposable
 
         Assert.True(unload.Ok, unload.Detail);
         Assert.Equal("ModuleCreatureAI", AiName(creature));
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
+        AllocationProbe.CollectBetweenWindows();
         Assert.Equal(1, host.RetiredStillReferenced);
 
         // The combat state is world-thread data: clear it there, then let the (gated) retry run exactly once more.
