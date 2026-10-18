@@ -86,8 +86,8 @@ public static class ScriptedEvents
         // Always returns true: the DB rows (possess visual, Mind Exhaustion) never run in cmangos.
         RazorgorePossess => true,
         // Returns false only for a player while TYPE_DREADSTEED allows the step (NOT_STARTED or FAIL for J'eevee, SPECIAL for the
-        // Dreadsteed). The Dire Maul port has no Dreadsteed ritual state (DireMaulInstance), so the gate never opens.
-        SummonJeevee or SummonDreadsteed => true,
+        // Dreadsteed). In Dire Maul the instance script decides (DireMaulInstance.OnSpellEvent handles the refusals); elsewhere it stays shut.
+        SummonJeevee or SummonDreadsteed => map.FindUpdater<InstanceData>() is not Classic.DireMaulInstance,
         // instance_naxxramas::DoHandleEvent (naxxramas.cpp:916-951): false (the DB script runs) while Gluth is in the instance's
         // storage, true without him. ArcaneCore has no Naxxramas instance script; Gluth on the map stands for the storage.
         GluthDecimate => map.FindUpdater<CreatureMapSystem>()?.Creatures.Any(creature => creature.Template.Entry == Gluth) != true,

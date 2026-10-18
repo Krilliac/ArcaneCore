@@ -157,6 +157,37 @@ public sealed partial class CreatureMapSystem
         }
     }
 
+    /// <summary>
+    /// cmangos SCRIPT_COMMAND_RESPAWN_GAMEOBJECT on a found object (ScriptMgr.cpp:2001-2047), also ScriptDev2's
+    /// <c>ScriptedInstance::DoRespawnGameObject(guid, timeToDespawn)</c> (sc_instance.cpp): a spawned object is left alone, a static spawn can
+    /// only respawn on its own timer, and an object not spawned by default (negative spawntimesecs, or a summon) is shown now and gone again
+    /// after <paramref name="despawnDelaySeconds"/> seconds.
+    /// </summary>
+    public void RespawnGameObjectFor(GameObjects.GameObject go, uint despawnDelaySeconds)
+    {
+        ArgumentNullException.ThrowIfNull(go);
+        if (go.IsSpawned || Map.FindUpdater<GameObjects.GameObjectMapSystem>() is not { } objects)
+        {
+            return;
+        }
+
+        if (go.Spawn is not { SpawnTimeSeconds: < 0 })
+        {
+            objects.RespawnPending(go); // IsSpawnedByDefault: a static spawn can only respawn
+            return;
+        }
+
+        // Not spawned by default (negative spawntimesecs): shown, then gone again after datalong2 seconds (SetLootState(GO_READY),
+        // SetRespawnTime(despawnDelay), Refresh). The latest SetRespawnTime replaces an earlier one, so a stale timer is dropped.
+        // datalong2 0 schedules nothing: SetRespawnTime(0) leaves m_respawnDelay 0, which IsSpawned() treats as spawned, so the
+        // object stays (cmangos GameObject.h:757-768). ClassicDB has three such rows: dbscripts_on_event 466-468, the Water Well
+        // Cleansing Aura (2904) of quests 754/758/760. vmangos (ScriptCommands.cpp:383) would clamp the delay to 5 s instead.
+        objects.ForceRespawn(go);
+        _scriptObjectDespawns.RemoveAll(pending => pending.GameObject == go);
+        if (go.IsSpawned && despawnDelaySeconds > 0)
+            _scriptObjectDespawns.Add((go, _clockMs + (despawnDelaySeconds * 1000L)));
+    }
+
     /// <summary>A MOVE_TO with a relay id reached its point: the relay starts with the creature as the source (cmangos PointMovementGenerator).</summary>
     private void OnRelayMoveArrived(Creature creature)
     {
@@ -472,24 +503,9 @@ public sealed partial class CreatureMapSystem
                 GameObjects.GameObjectMapSystem? objects = Map.FindUpdater<GameObjects.GameObjectMapSystem>();
                 GameObjects.GameObject? go = step.DataLong == 0 ? source as GameObjects.GameObject
                     : objects?.GameObjects.FirstOrDefault(candidate => candidate.Spawn?.Guid == step.DataLong);
-                if (objects is null || go is null || go.IsSpawned
-                    || go.Type is GameObjects.GameObjectType.Door or GameObjects.GameObjectType.FishingNode)
+                if (objects is null || go is null || go.Type is GameObjects.GameObjectType.Door or GameObjects.GameObjectType.FishingNode)
                     return false;
-                if (go.Spawn is not { SpawnTimeSeconds: < 0 })
-                {
-                    objects.RespawnPending(go); // IsSpawnedByDefault: a static spawn can only respawn
-                    return false;
-                }
-
-                // Not spawned by default (negative spawntimesecs): shown, then gone again after datalong2 seconds (SetLootState(GO_READY),
-                // SetRespawnTime(despawnDelay), Refresh). The latest SetRespawnTime replaces an earlier one, so a stale timer is dropped.
-                // datalong2 0 schedules nothing: SetRespawnTime(0) leaves m_respawnDelay 0, which IsSpawned() treats as spawned, so the
-                // object stays (cmangos GameObject.h:757-768). ClassicDB has three such rows: dbscripts_on_event 466-468, the Water Well
-                // Cleansing Aura (2904) of quests 754/758/760. vmangos (ScriptCommands.cpp:383) would clamp the delay to 5 s instead.
-                objects.ForceRespawn(go);
-                _scriptObjectDespawns.RemoveAll(pending => pending.GameObject == go);
-                if (go.IsSpawned && step.DataLong2 > 0)
-                    _scriptObjectDespawns.Add((go, _clockMs + (step.DataLong2 * 1000L)));
+                RespawnGameObjectFor(go, step.DataLong2);
                 return false;
             }
 

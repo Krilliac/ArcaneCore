@@ -33,7 +33,7 @@ public sealed partial class DireMaulInstance
 
     public override void OnCreatureCreate(Creature creature)
     {
-        if (creature.Template.Entry is NpcKingGordok or NpcKromcrush or NpcChorush or NpcSlipkik)
+        if (creature.Template.Entry is NpcKingGordok or NpcKromcrush or NpcChorush or NpcSlipkik or NpcJeevee or NpcWarlockDummyInfernal)
         {
             StoreCreature(creature);
         }
@@ -56,6 +56,7 @@ public sealed partial class DireMaulInstance
             NpcKromcrush => TypeKromcrush,
             NpcChorush => TypeChorush,
             NpcStomperKreeg => TypeStomperKreeg,
+            NpcLordHelnurath => TypeDreadsteed, // instance_dire_maul::OnCreatureDeath
             _ => uint.MaxValue,
         };
 
