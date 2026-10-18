@@ -139,7 +139,7 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// vmangos Player::SpawnCorpseBones (ObjectAccessor::ConvertCorpseForPlayer): a resurrected player's corpse is no longer
-    /// resurrectable. Bones objects are not modelled, so the corpse simply leaves the world.
+    /// resurrectable. Here the corpse simply leaves the world; only a removed insignia leaves bones (<see cref="ConvertCorpseToBones"/>).
     /// </summary>
     public void SpawnCorpseBones(Player player)
     {

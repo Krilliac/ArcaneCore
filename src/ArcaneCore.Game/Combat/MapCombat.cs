@@ -200,6 +200,7 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
     {
+        RemoveExpiredBones();
         Player[] players = _map.RentPlayerSnapshot(out int playerCount);
         try
         {

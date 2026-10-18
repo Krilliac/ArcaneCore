@@ -9,6 +9,12 @@ namespace ArcaneCore.Game.Combat;
 /// </summary>
 public sealed class Corpse : WorldObject
 {
+    /// <summary>CORPSE_FLAG_BONES (vmangos Corpse.h CorpseFlags): the body is bones, no longer resurrectable.</summary>
+    public const uint FlagBones = 0x01;
+
+    /// <summary>CORPSE_DYNFLAG_LOOTABLE (CORPSE_FIELD_DYNAMIC_FLAGS): the bones hold insignia loot.</summary>
+    public const uint DynFlagLootable = 0x01;
+
     /// <summary>CORPSE_FLAG_UNK2 (vmangos Corpse.h CorpseFlags), set on every player corpse by Corpse::Create.</summary>
     public const uint FlagUnk2 = 0x04;
 
@@ -68,6 +74,48 @@ public sealed class Corpse : WorldObject
 
         return corpse;
     }
+
+    /// <summary>Whether this body is bones (<see cref="CorpseType.Bones"/>): left by a resurrection or a removed insignia, never reclaimed.</summary>
+    public bool IsBones => Type == CorpseType.Bones;
+
+    /// <summary>
+    /// The bones of <paramref name="corpse"/> (vmangos ObjectAccessor/Map::ConvertCorpseForPlayer, Map.cpp:3630-3660): a new corpse object
+    /// of type bones with every value of the body but its guid and type, at its place, flagged CORPSE_FLAG_UNK2 | CORPSE_FLAG_BONES, the
+    /// owner kept and the equipment display cleared. The caller puts it in the map.
+    /// </summary>
+    public static Corpse CreateBones(Corpse corpse)
+    {
+        ArgumentNullException.ThrowIfNull(corpse);
+        uint counter = (uint)Interlocked.Increment(ref s_nextCounter);
+        var bones = new Corpse(new ObjectGuid(((ulong)HighGuid.Corpse << 48) | counter))
+        {
+            Type = CorpseType.Bones,
+            MapId = corpse.MapId,
+            X = corpse.X,
+            Y = corpse.Y,
+            Z = corpse.Z,
+            Orientation = corpse.Orientation,
+            InstanceId = corpse.InstanceId,
+        };
+
+        for (int i = UpdateFields.ObjectFieldEntry; i < UpdateFields.CorpseEnd; i++)
+        {
+            bones.SetUInt32(i, corpse.GetUInt32(i)); // "don't overwrite guid and object type"
+        }
+
+        bones.SetUInt32(UpdateFields.CorpseFieldFlags, FlagUnk2 | FlagBones);
+        bones.SetUInt32(UpdateFields.CorpseFieldDynamicFlags, 0);
+        for (int slot = 0; slot < EquipmentSlots; slot++)
+        {
+            bones.SetUInt32(UpdateFields.CorpseFieldItem + slot, 0);
+        }
+
+        bones.ClearChangedFields();
+        return bones;
+    }
+
+    /// <summary>EQUIPMENT_SLOT_END: the CORPSE_FIELD_ITEM slots.</summary>
+    private const int EquipmentSlots = 19;
 
     /// <summary>
     /// The corpse of <paramref name="player"/> at an explicit place and of an explicit type: a body

@@ -5,6 +5,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
@@ -14,7 +15,7 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>
-/// The special loot sources of the world daemon (an <see cref="IWorldFeature"/>, discovered): fishing, Pick Pocket and Disenchant. It hangs on the maps' game object systems
+/// The special loot sources of the world daemon (an <see cref="IWorldFeature"/>, discovered): fishing, Pick Pocket, Disenchant and Remove Insignia (<see cref="InsigniaLoot"/>). It hangs on the maps' game object systems
 /// of <see cref="GameObjectLootFeature"/> (which stays untouched) and on the spell system of <see cref="SpellFeature"/>:
 /// per map a <see cref="FishingService"/> (bobber timers, the click, holes), the use handler of fishing bobbers and a <see cref="PickpocketLoot"/>,
 /// and once per spell system the TRANS_DOOR effect of the fishing spells and the Pick Pocket check and effect. Missing collaborators (no spell feature, no game object feature) leave fishing off, never half on.
@@ -25,6 +26,7 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
     private readonly Dictionary<Map, FishingService> _fishing = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Map, PickpocketLoot> _pickpockets = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Map, DisenchantLoot> _disenchants = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Map, InsigniaLoot> _insignia = new(ReferenceEqualityComparer.Instance);
     private WorldRuntime? _world;
 
     public SpecialLootOptions Options { get; } = new();
@@ -55,6 +57,7 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
         new FishingSpells(() => _fishing.Values).Register(spells.System);
         new PickpocketSpells(map => _pickpockets.GetValueOrDefault(map)).Register(spells.System);
         new DisenchantSpells(map => _disenchants.GetValueOrDefault(map)).Register(spells.System);
+        new InsigniaSpells(map => _insignia.GetValueOrDefault(map)).Register(spells.System);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps.ToArray())
@@ -87,6 +90,13 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
             map.Combat.UnitKilled += pockets.OnCreatureKilled;
             _pickpockets.Add(map, pockets);
             _disenchants.Add(map, new DisenchantLoot(loot));
+            var insignia = new InsigniaLoot(loot)
+            {
+                InBattleground = player => services.GetService<BattlegroundFeature>()?.BattlegroundOf(player.Guid) is not null || map.Template is { IsBattleground: true },
+                RefLootOf = player => services.GetService<BattlegroundFeature>()?.BattlegroundOf(player.Guid)?.Template.PlayerSkinRefLootId ?? 0,
+            };
+            map.Combat.BonesRemoved += loot.RemoveSpecial;
+            _insignia.Add(map, insignia);
         }
     }
 
@@ -94,6 +104,7 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
     {
         _fishing.Remove(map);
         _disenchants.Remove(map);
+        _insignia.Remove(map);
         if (_pickpockets.Remove(map, out PickpocketLoot? pockets))
         {
             map.Combat.UnitKilled -= pockets.OnCreatureKilled;

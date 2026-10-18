@@ -65,6 +65,9 @@ public enum LootSourceKind
     GameObject,
     Item,
     Skinning,
+
+    /// <summary>The insignia of a battleground body: its bones (vmangos LOOT_INSIGNIA, <see cref="InsigniaLoot"/>).</summary>
+    Bones,
 }
 
 /// <summary>How the shared items of one loot window are handed out (vmangos Loot permission: ALL, GROUP, MASTER).</summary>

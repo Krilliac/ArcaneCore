@@ -1003,6 +1003,19 @@ public sealed partial class LootService : IViewerFieldFilter
     {
         ArgumentNullException.ThrowIfNull(player);
 
+        // Insignia bones (vmangos Player::SendLoot, HIGHGUID_CORPSE): anyone may open the loot again while something is left.
+        if (_bags.TryGetValue(guid, out var bonesEntry) && bonesEntry.Source is Corpse && bonesEntry.Bag.Kind == LootSourceKind.Bones)
+        {
+            LootBag bones = bonesEntry.Bag;
+            if (bones.SourceCheck?.Invoke(player) == false || bones.IsClosed || !bones.HasSomethingFor(player))
+            {
+                Refuse(player, guid);
+                return LootResult.NotAllowed;
+            }
+
+            return Show(player, bones);
+        }
+
         if (!_bags.TryGetValue(guid, out var entry) || entry.Source is not Creature creature
             || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind is not (LootSourceKind.Creature or LootSourceKind.Skinning)
             || creature.DeathState != CreatureDeathState.Corpse)

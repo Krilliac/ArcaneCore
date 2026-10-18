@@ -222,7 +222,9 @@ inert default.
   cast on release). The effect itself (`SpiritHealEffect`, with the pet re-summon) is in the death area; the guide's script that channels 22011
   and the area spirit healer opcodes (738-740) are not modelled (`BuildAreaSpiritHealerTime` is only the packet): a ghost in a battleground runs
   back to its body (a corpse reclaim restores it fully) or waits for the match end. The released body of a player in a battleground carries
-  CORPSE_FLAG_LOOTABLE (insignia).
+  CORPSE_FLAG_LOOTABLE (insignia). Remove Insignia (22027, SPELL_EFFECT_SKIN_PLAYER_CORPSE) on such a body (or on a dead player marked skinnable,
+  released first) turns it into bones holding the insignia money and the battleground's player skin reference loot, which anyone may take
+  (`InsigniaLoot`, vmangos EffectSkinPlayerCorpse / RemovedInsignia / SendLoot HIGHGUID_CORPSE); bones leave the world after an hour.
 - **Not delivered in wave 2.** The battleground raid group (slice S7), the BG chat channel (lane ops-social), the vmangos debug "testing"
   mode, the queue announcer, and the honor weekend calendar (the `IBattlegroundCalendar` port stays inert).
 
