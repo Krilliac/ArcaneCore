@@ -380,11 +380,6 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 {
                     ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-sweep", ex);
                 }
-                else if (DatabaseTransience.IsBusy(ex))
-                {
-                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-busy", ex);
-                    logger.LogWarning(ex, "creature respawn write failed: the database is locked by another writer; retained for retry");
-                }
                 else
                 {
                     ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn", ex);

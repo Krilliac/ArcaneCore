@@ -284,13 +284,6 @@ internal sealed class PlayerbotQaPublisher
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (f.Kind == QaSignalKind.SharedSetAside && !f.Publication.HoldsIssue && CoveredByStall(f, all)) return false; // the stall finding carries the rich samples
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
-        if (!f.Publication.HoldsIssue && !string.IsNullOrEmpty(_build) && f.LastBuild is not null
-            && !string.Equals(f.LastBuild, _build, StringComparison.Ordinal) && f.CountOnBuild(_build) == 0
-            && _state.IsBuildNewer(_build, f.LastBuild))
-        {
-            return false; // an unpublished finding from an older build that has not occurred on the running build must not open a new "0 on build" issue
-        }
-
         return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(f));
     }
 

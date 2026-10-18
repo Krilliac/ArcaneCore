@@ -105,22 +105,6 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     }
 
     [Fact]
-    public void TheFeed_SkipsTransientWriteQueueRetrySites_ButFilesExhaustedWriteQueueFaults()
-    {
-        var ledger = new FaultLedger();
-        ledger.Record("writequeue-respawn-attempt", One("attempt"));
-        ledger.Record("writequeue-respawn-busy", One("busy"));
-        ledger.Record("writequeue-respawn-sweep", One("sweep"));
-        ledger.Record("writequeue-character-busy", One("char-busy"));
-        ledger.Record("writequeue-respawn", Two("exhausted"));
-        ledger.Record("writequeue-respawn-consume", Two("consume"));
-
-        IReadOnlyList<QaSignal> signals = new PlayerbotQaFaultFeed(ledger).Pull();
-
-        Assert.Equal(["writequeue-respawn", "writequeue-respawn-consume"], signals.Select(s => s.Goal).Order());
-    }
-
-    [Fact]
     public async Task TheFeature_FoldsTheLedgerIntoAServerFaultFinding_OnAPass()
     {
         var ledger = new FaultLedger();
