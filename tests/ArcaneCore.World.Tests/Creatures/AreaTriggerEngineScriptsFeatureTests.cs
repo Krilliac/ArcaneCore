@@ -72,6 +72,21 @@ public sealed class AreaTriggerEngineScriptsFeatureTests
     }
 
     [Fact]
+    public async Task EasternKingdoms_GetsItsWorldMapScript_AndTheHiveTowerStaysKalimdors()
+    {
+        var fixture = new QuestJournalFixture { Templates = [Plain(1)] };
+        await using WorldTestHost host = Start(fixture, Template(KalimdorWorldMapData.NpcHiveAshiDrone));
+        await using WorldTestClient client = await EnterAsync(host, fixture, "ATEKMAP", "Atekmap", seed: false);
+        Player player = await host.PlayerAsync("Atekmap");
+        await WaitLoadedAsync(host, player);
+
+        InstanceData? data = null;
+        await host.OnWorldAsync(() => data = player.Map!.FindUpdater<InstanceData>());
+
+        Assert.IsType<EasternKingdomsWorldMapData>(data);
+    }
+
+    [Fact]
     public async Task HiveTower_WithoutWorldMapData_DoesNothing()
     {
         var fixture = new QuestJournalFixture { Templates = [Plain(1)] };
@@ -267,7 +282,13 @@ public sealed class AreaTriggerEngineScriptsFeatureTests
 
     private static KalimdorWorldMapData InstallKalimdor(Player player)
     {
-        // The test world runs Eastern Kingdoms only; the Kalimdor script is put on it the way WorldMapScriptsFeature puts it on map 1.
+        // The test world runs Eastern Kingdoms only; the Kalimdor script takes the place of its Eastern Kingdoms one, the way
+        // WorldMapScriptsFeature puts it on map 1.
+        if (player.Map!.FindUpdater<InstanceData>() is WorldMapData eastern)
+        {
+            Assert.True(player.Map.RemoveUpdater(eastern));
+        }
+
         var data = new KalimdorWorldMapData(player.Map!);
         data.Initialize();
         player.Map!.AddUpdater(data);

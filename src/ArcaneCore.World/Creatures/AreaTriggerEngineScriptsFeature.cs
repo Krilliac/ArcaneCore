@@ -106,7 +106,7 @@ public sealed class AreaTriggerEngineScriptsFeature(IServiceProvider services) :
     // AreaTrigger_at_hive_tower: three Hive'Ashi Drones for 5 min, then not again until the world map script's 5 min timer resets TYPE_HIVE.
     private static bool HiveTower(Player player)
     {
-        if (player.Map?.FindUpdater<InstanceData>() is not WorldMapData map
+        if (player.Map?.FindUpdater<InstanceData>() is not KalimdorWorldMapData map
             || map.GetData(KalimdorWorldMapData.TypeHive) != EncounterState.NotStarted)
         {
             return false;

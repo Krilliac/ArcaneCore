@@ -239,6 +239,19 @@ public sealed class Map
     }
 
     /// <summary>
+    /// Detach a per-map system that <see cref="AddUpdater"/> attached (world thread, outside the update phase), forgetting its fault count.
+    /// False when it was not attached.
+    /// </summary>
+    public bool RemoveUpdater(IMapUpdater updater)
+    {
+        ArgumentNullException.ThrowIfNull(updater);
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        _updaterFaults.Remove(updater);
+        return _updaters.Remove(updater);
+    }
+
+    /// <summary>
     /// Give every updater skipped by the fault breaker another chance, and forget the failure
     /// counts (world thread). A code hot reload calls this after each applied edit, because the
     /// edit may be the fix.

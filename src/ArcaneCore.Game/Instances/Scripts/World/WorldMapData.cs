@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Instances.Scripts.World;
 
 /// <summary>
 /// cmangos <c>ScriptedMap</c> for an open-world map (AI/ScriptDevAI/scripts/world/world_map_scripts.h, kalimdor/world_kalimdor.cpp,
-/// eastern_kingdoms/world_eastern_kingdoms.cpp): the same encounter array and creature store an instance script keeps, on a continent. It is
+/// eastern_kingdoms/world_eastern_kingdoms.cpp: <see cref="KalimdorWorldMapData"/>, <see cref="EasternKingdomsWorldMapData"/>): the same encounter array and creature store an instance script keeps, on a continent. It is
 /// an <see cref="InstanceData"/>, so the creature hooks every map already calls (create, death, evade, respawn) and the EventAI
 /// SET_INST_DATA writes reach it, and anything on the map finds it with <c>map.FindUpdater&lt;InstanceData&gt;()</c>
 /// (<c>Player::GetInstanceData</c>). Nothing is saved: cmangos keeps world map state in memory only.
@@ -50,6 +50,7 @@ public abstract class WorldMapData : ScriptedInstance
         return map.MapId switch
         {
             KalimdorWorldMapData.MapKalimdor => new KalimdorWorldMapData(map),
+            EasternKingdomsWorldMapData.MapEasternKingdoms => new EasternKingdomsWorldMapData(map),
             _ => null,
         };
     }
