@@ -65,8 +65,14 @@ public sealed class PetAggroOnSightTests
 
         Assert.Same(mob, y.Pet.Combat.Victim);
         Assert.Equal(MovementGeneratorType.Chase, y.Pet.Motion.CurrentType);
-        Assert.True(y.Pet.Combat.IsInCombat);
         Assert.NotEmpty(Packets(y.Session, WorldOpcode.SmsgAiReaction)); // PetAI::DoAttack: the pet picked the target itself
+        // The attack start's combat flag is not kept until the pet strikes: a player's pet uses the PvP combat timer, and the 1.2 s check
+        // clears it while no creature holds the pet on a threat list (vmangos Unit::Update, Unit.cpp:256-287; 90716802). Once it hits, the
+        // mob holds it and it stays in combat.
+        Run(y.World, 3000);
+        Assert.Same(mob, y.Pet.Combat.Victim);
+        Assert.True(y.Pet.Combat.IsInCombat);
+        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck");
         Assert.Null(y.Owner.Combat.Victim);
     }
 
