@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
@@ -168,6 +169,12 @@ public sealed class KalimdorWorldMapData : WorldMapData
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(go);
+        if (go.Entry is GoBlackwoodGrainStores or GoBlackwoodNutStores or GoBlackwoodFruitStores)
+        {
+            FurbolgFood(player, go);
+            return true;
+        }
+
         if (go.Entry != GoCageDoor)
         {
             return false;
@@ -192,6 +199,98 @@ public sealed class KalimdorWorldMapData : WorldMapData
                     .FirstOrDefault(k => k.IsAlive) is { AI: KindalMoonweaverAI kindal })
             {
                 kindal.AttackRaider(raider);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>darkshore.cpp go_furbolg_food: the three Blackwood stores (scriptdev2.sql binds 175329-175331) and the warrior they draw.</summary>
+    public const uint GoBlackwoodGrainStores = 175329, GoBlackwoodNutStores = 175330, GoBlackwoodFruitStores = 175331, NpcBlackwoodWarrior = 2168;
+    public const float FurbolgFoodRange = 20f;
+    public const uint FurbolgWarriorLifetimeMs = 120_000;
+
+    /// <summary>
+    /// GOUse_go_furbolg_food (darkshore.cpp:870-890): the nearest living Blackwood Warrior within 20 yd of the stores attacks the player if
+    /// it is out of combat and can; with none in range a new one appears at a random point within 20 yd (two minutes, out-of-combat timer)
+    /// and attacks. The script takes the use.
+    /// </summary>
+    private void FurbolgFood(Player player, GameObject go)
+    {
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return;
+        }
+
+        if (creatures.ClosestOfEntry(go, NpcBlackwoodWarrior, FurbolgFoodRange, aliveOnly: true) is { } warrior)
+        {
+            if (!warrior.Combat.IsInCombat && Instance.Combat.Hooks.CanAttack(warrior, player))
+            {
+                warrior.AI?.AttackStart(player);
+            }
+
+            return;
+        }
+
+        (float x, float y, float z) = RandomPointAround(go.X, go.Y, go.Z, FurbolgFoodRange);
+        if (creatures.SummonDeadDespawnAt(NpcBlackwoodWarrior, x, y, z, 0f) is { } summoned)
+        {
+            creatures.MarkTimedOutOfCombatDespawn(summoned, FurbolgWarriorLifetimeMs);
+            summoned.AI?.AttackStart(player);
+        }
+    }
+
+    /// <summary>azshara.cpp event_arcanite_buoy: the event, Maws's spawn point and facing, and the radius that keeps a second Maws away.</summary>
+    public const uint EventArcaniteBuoy = 9542;
+    public const float MawsSearchRange = 200f, LightningSearchRange = 20f;
+    public static readonly (float X, float Y, float Z, float O) MawsSpawn = (3561.73f, -6647.2f, -7.5f, 1.6f);
+
+    /// <summary>
+    /// ProcessEventId_arcanite_buoy (azshara.cpp:336-366): a player's buoy brings Maws (manual despawn: <see cref="MawsAI"/> goes on its own)
+    /// running along its entry path, unless a Maws is already within 200 yd (then the event is not handled), and respawns a despawned Theatric
+    /// Lightning within 20 yd of the player.
+    /// </summary>
+    public override bool OnSpellEvent(Unit caster, uint eventId)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        if (eventId != EventArcaniteBuoy)
+        {
+            return false;
+        }
+
+        if (caster is not Player player)
+        {
+            return true;
+        }
+
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures
+            || creatures.ClosestOfEntry(player, MawsAI.Entry, MawsSearchRange, aliveOnly: true) is not null)
+        {
+            return false;
+        }
+
+        if (creatures.SummonDeadDespawnAt(MawsAI.Entry, MawsSpawn.X, MawsSpawn.Y, MawsSpawn.Z, MawsSpawn.O) is { } maws)
+        {
+            creatures.SetScriptRun(maws, true);
+            creatures.StartEntryWaypointPath(maws, 0);
+            if (Instance.FindUpdater<GameObjectMapSystem>() is { } objects)
+            {
+                GameObject? lightning = null;
+                float bestSq = LightningSearchRange * LightningSearchRange;
+                foreach (GameObject go in objects.GameObjects)
+                {
+                    float dx = go.X - player.X, dy = go.Y - player.Y, dz = go.Z - player.Z, sq = (dx * dx) + (dy * dy) + (dz * dz);
+                    if (go.Entry == MawsAI.GoTheatricLightning && sq <= bestSq)
+                    {
+                        lightning = go;
+                        bestSq = sq;
+                    }
+                }
+
+                if (lightning is { IsSpawned: false })
+                {
+                    objects.ForceRespawn(lightning);
+                }
             }
         }
 

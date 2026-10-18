@@ -173,6 +173,57 @@ public sealed class AreaTriggerScriptsFeatureTests
         Assert.Contains("Come, Atgrove.", Encoding.UTF8.GetString(chat), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SentryPoint_BringsTervoshForTheMissingDiplomat_OnceWhileHeIsNear()
+    {
+        var fixture = new QuestJournalFixture { Templates = [Plain(AreaTriggerScriptsFeature.QuestMissingDiplomat14)] };
+        await using WorldTestHost host = Start(fixture, Template(AreaTriggerScriptsFeature.NpcTervosh), Template(AreaTriggerScriptsFeature.NpcSentryPointGuard));
+        await using WorldTestClient client = await EnterAsync(host, fixture, "ATSENTRY", "Atsentry", seed: true);
+        Player player = await host.PlayerAsync("Atsentry");
+        await WaitLoadedAsync(host, player);
+
+        bool first = false, second = true;
+        int count = 0;
+        (float X, float Y) at = default;
+        await host.OnWorldAsync(() =>
+        {
+            (float x, float y, float z, _) = AreaTriggerScriptsFeature.TervoshSpawn;
+            player.Relocate(x + 5f, y, z, 0f, 0);
+            first = Run(host, player, AreaTriggerScriptsFeature.TriggerSentryPoint);
+            second = Run(host, player, AreaTriggerScriptsFeature.TriggerSentryPoint);
+            count = Count(host, player, AreaTriggerScriptsFeature.NpcTervosh);
+            Creature tervosh = player.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.Single(c => c.Entry == AreaTriggerScriptsFeature.NpcTervosh);
+            at = (tervosh.X - x, tervosh.Y - y);
+        });
+
+        Assert.True(first);
+        Assert.False(second);
+        Assert.Equal(1, count);
+        Assert.Equal(0f, at.X, 0.01f);
+        Assert.Equal(0f, at.Y, 0.01f);
+    }
+
+    [Fact]
+    public async Task SentryPoint_WithoutTheQuest_DoesNothing()
+    {
+        var fixture = new QuestJournalFixture { Templates = [Plain(AreaTriggerScriptsFeature.QuestMissingDiplomat14)] };
+        await using WorldTestHost host = Start(fixture, Template(AreaTriggerScriptsFeature.NpcTervosh));
+        await using WorldTestClient client = await EnterAsync(host, fixture, "ATNOSENT", "Atnosent", seed: false);
+        Player player = await host.PlayerAsync("Atnosent");
+        await WaitLoadedAsync(host, player);
+
+        bool ran = true;
+        int count = -1;
+        await host.OnWorldAsync(() =>
+        {
+            ran = Run(host, player, AreaTriggerScriptsFeature.TriggerSentryPoint);
+            count = Count(host, player, AreaTriggerScriptsFeature.NpcTervosh);
+        });
+
+        Assert.False(ran);
+        Assert.Equal(0, count);
+    }
+
     private static bool Run(WorldTestHost host, Player player, uint trigger)
         => AreaTriggerScriptsFeature.Run(host.WorldServices.GetRequiredService<QuestNpcFeature>().Services, player, trigger);
 

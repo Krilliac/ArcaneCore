@@ -26,6 +26,11 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
     public const uint TriggerRavenholdt = 3066;
     public const uint TriggerAncientLeaf = 3587;
     public const uint TriggerTwilightGrove = 4017;
+    public const uint TriggerSentryPoint = 302;
+
+    /// <summary>dustwallow_marsh.cpp at_sentry_point: The Missing Diplomat part 14, Archmage Tervosh, the teleport visual and the guard.</summary>
+    public const uint QuestMissingDiplomat14 = 1265, NpcTervosh = 4967, NpcSentryPointGuard = 5085, SpellTeleportVisual2 = 799, EmoteSalute = 66;
+    public static readonly (float X, float Y, float Z, float O) TervoshSpawn = (-3476.51f, -4105.94f, 17.1f, 5.3816f);
     public const uint TriggerLarkorwiFirst = 1726, TriggerLarkorwiLast = 1740;
 
     public const uint QuestManorRavenholdt = 6681, NpcRavenholdt = 13936;
@@ -87,6 +92,7 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
             >= 3546 and <= 3552 => ChildrensWeekSpot(quests, player, triggerId),
             TriggerAncientLeaf => AncientLeaf(quests, player),
             TriggerTwilightGrove => TwilightGrove(quests, player),
+            TriggerSentryPoint => SentryPoint(quests, player),
             TwiggyFlatheadAI.AreaTriggerAffray => Creatures(player) is { } creatures
                 && TwiggyFlatheadAI.OnAreaTrigger(creatures, player, (p, q) => StatusOf(quests, p, q) == QuestStatus.Incomplete),
             _ => false,
@@ -177,6 +183,34 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
 
         creatures.MarkTimedOutOfCombatDespawn(corrupter, 30 * 60_000);
         creatures.SayText(corrupter, TextTwilightCorrupterSpawn, player);
+        return true;
+    }
+
+    // AreaTrigger_at_sentry_point (dustwallow_marsh.cpp:772-793): a living player on The Missing Diplomat (part 14) who has not completed it
+    // brings Archmage Tervosh for a minute, unless he is within 100 yd: he casts the teleport visual on himself, and the nearest Sentry Point
+    // guard within 15 yd of him turns to him and salutes.
+    private static bool SentryPoint(QuestNpcServices quests, Player player)
+    {
+        if (!player.IsAlive || StatusOf(quests, player, QuestMissingDiplomat14) is QuestStatus.None or QuestStatus.Complete
+            || Creatures(player) is not { } creatures || Closest(creatures, player, NpcTervosh, 100f, aliveOnly: true) is not null)
+        {
+            return false;
+        }
+
+        (float x, float y, float z, float o) = TervoshSpawn;
+        if (creatures.SummonInstanceCreature(NpcTervosh, x, y, z, o) is not { } tervosh)
+        {
+            return false;
+        }
+
+        creatures.MarkTimedDespawn(tervosh, 60_000);
+        creatures.CastSpell(tervosh, SpellTeleportVisual2, tervosh, triggered: true);
+        if (creatures.ClosestOfEntry(tervosh, NpcSentryPointGuard, 15f, aliveOnly: true) is { } guard)
+        {
+            creatures.SetFacingTo(guard, MathF.Atan2(tervosh.Y - guard.Y, tervosh.X - guard.X));
+            creatures.PlayEmote(guard, EmoteSalute);
+        }
+
         return true;
     }
 
