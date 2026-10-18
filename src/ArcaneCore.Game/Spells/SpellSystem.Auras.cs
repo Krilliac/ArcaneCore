@@ -414,6 +414,7 @@ public sealed partial class SpellSystem
             ApplyAuraModifier(holder, aura, true);
         }
 
+        HandleSpellSpecificBoosts(holder, apply: true);
         RaiseHolderAdded(holder);
     }
 
@@ -834,6 +835,7 @@ public sealed partial class SpellSystem
             ApplyAuraModifier(holder, aura, false);
         }
 
+        HandleSpellSpecificBoosts(holder, apply: false);
         RaiseHolderRemoved(holder);
         StartCooldownOnAuraEnd(holder, mode);
 
