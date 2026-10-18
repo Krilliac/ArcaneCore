@@ -1131,7 +1131,11 @@ public sealed partial class MapCombat
         }
     }
 
-    /// <summary>vmangos Unit::SetInCombatWithAggressor: the victim's PvP pulse and combat state (players linger 5.5 s).</summary>
+    /// <summary>
+    /// vmangos Unit::SetInCombatWithAggressor (Unit.cpp:5985): the victim's PvP pulse and combat state; a victim that uses the PvP combat
+    /// timer (<see cref="UsesPvpCombatTimer"/>: a player, a player's pet or charm, a NO_THREAT_LIST creature) lingers 5.5 s. It was players
+    /// only, so a NO_THREAT_LIST creature (Mr. Smite) hit by a player had no linger and left combat - evaded - at the next 1.2 s check.
+    /// </summary>
     private void SetInCombatWithAggressor(Unit victim, Unit aggressor)
     {
         // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
@@ -1142,10 +1146,10 @@ public sealed partial class MapCombat
             UpdatePvp(pv, true);
         }
 
-        SetInCombatState(victim, victim is Player ? CombatConstants.PvpCombatTimerMs : 0);
+        SetInCombatState(victim, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0);
     }
 
-    /// <summary>vmangos Unit::SetInCombatWithVictim: PvP flag on attack, then combat (5.5 s when the victim is a player).</summary>
+    /// <summary>vmangos Unit::SetInCombatWithVictim (Unit.cpp:6070): PvP flag on attack, then combat (5.5 s when the victim uses the PvP combat timer).</summary>
     private void SetInCombatWithVictim(Unit attacker, Unit victim)
     {
         if (attacker is Player player)
@@ -1153,7 +1157,7 @@ public sealed partial class MapCombat
             TogglePlayerPvpFlagOnAttackVictim(player, victim);
         }
 
-        SetInCombatState(attacker, victim is Player ? CombatConstants.PvpCombatTimerMs : 0);
+        SetInCombatState(attacker, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0);
     }
 
     /// <summary>vmangos Unit::ClearInCombat.</summary>
