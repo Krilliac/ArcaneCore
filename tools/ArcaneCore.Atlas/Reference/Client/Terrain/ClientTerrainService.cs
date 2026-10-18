@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using ArcaneCore.Atlas.Core;
 using Microsoft.Extensions.Logging;
 
@@ -31,11 +30,15 @@ public sealed class ClientTerrainService
     /// <summary>How many parsed ADTs are kept (about half a megabyte each).</summary>
     public const int DefaultCacheCapacity = 64;
 
+    // A WDT is a few tens of kilobytes and a client has about 25 maps.
+    private const int MaxCachedWdts = 64;
+
     private readonly Func<IClientFileSource?> _files;
     private readonly Func<IMapDirectory?> _maps;
     private readonly ILogger _log;
-    private readonly ConcurrentDictionary<(IClientFileSource Files, uint MapId), Lazy<WdtLoad>> _wdts = new();
-    private readonly ConcurrentDictionary<(IClientFileSource Files, uint MapId), Lazy<IReadOnlyCollection<TileKey>>> _available = new();
+    // Only parsed files stay cached: an absent or refused file is looked up again next time, so a file that appears
+    // (an extraction finishing) or is repaired is found without restarting Atlas.
+    private readonly LoadCache<(IClientFileSource Files, uint MapId), WdtLoad> _wdts = new(MaxCachedWdts);
     private readonly LoadCache<(IClientFileSource Files, TileKey Tile), AdtLoad> _adts;
 
     /// <summary>Creates the service over lazily resolved dependencies.</summary>
@@ -61,11 +64,10 @@ public sealed class ClientTerrainService
     /// <summary>AreaTable.dbc name for an area id when a map directory is registered and knows it.</summary>
     public string? AreaName(uint areaId) => _maps()?.AreaName(areaId);
 
-    /// <summary>Drops every cached WDT, tile list and ADT so the next request re-reads the files.</summary>
+    /// <summary>Drops every cached WDT and ADT so the next request re-reads the files.</summary>
     public void Clear()
     {
         _wdts.Clear();
-        _available.Clear();
         _adts.Clear();
     }
 
@@ -89,7 +91,7 @@ public sealed class ClientTerrainService
             return new WdtLoad(TileState.Missing, $"Map {mapId} is not in Map.dbc.", null, null, null);
         }
 
-        return _wdts.GetOrAdd((files, mapId), key => new Lazy<WdtLoad>(() => ReadWdt(key.Files, map), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        return _wdts.GetOrLoad((files, mapId), () => ReadWdt(files, map), IsParsed);
     }
 
     /// <summary>
@@ -116,7 +118,7 @@ public sealed class ClientTerrainService
             return new AdtLoad(TileState.Missing, $"The WDT of {map.Directory} does not list tile ({tile.X}, {tile.Y}); the client never loads it.", null, null, null);
         }
 
-        return _adts.GetOrLoad((files, tile), () => ReadAdt(files, map, tile));
+        return _adts.GetOrLoad((files, tile), () => ReadAdt(files, map, tile), IsParsed);
     }
 
     /// <summary>
@@ -145,8 +147,9 @@ public sealed class ClientTerrainService
     }
 
     /// <summary>
-    /// The tiles of <paramref name="mapId"/> that have an ADT: those the WDT lists whose file the client files hold.
-    /// Empty when the map, its WDT or the client files are unavailable.
+    /// The tiles of <paramref name="mapId"/> that have an ADT: those the WDT lists whose file the client files hold
+    /// (a directory-listing question, one existence check per listed tile). Empty when the map, its WDT or the client
+    /// files are unavailable. Not cached, so it follows the files.
     /// </summary>
     public IReadOnlyCollection<TileKey> AvailableTiles(uint mapId)
     {
@@ -157,10 +160,12 @@ public sealed class ClientTerrainService
             return [];
         }
 
-        return _available.GetOrAdd((files, mapId), _ => new Lazy<IReadOnlyCollection<TileKey>>(
-            () => [.. wdtFile.Tiles(mapId).Where(t => files.Exists(ClientMapPaths.AdtPath(map.Directory, t)))],
-            LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        return [.. wdtFile.Tiles(mapId).Where(t => files.Exists(ClientMapPaths.AdtPath(map.Directory, t)))];
     }
+
+    private static bool IsParsed(WdtLoad load) => load.State == TileState.Ok;
+
+    private static bool IsParsed(AdtLoad load) => load.State == TileState.Ok;
 
     private WdtLoad ReadWdt(IClientFileSource files, ClientMap map)
     {

@@ -2,7 +2,9 @@ namespace ArcaneCore.Atlas.Reference.Client.Terrain;
 
 /// <summary>
 /// A small least-recently-used cache whose loads run once per key even when many threads ask at the same time. A load
-/// that throws is not cached. All members are thread-safe; the loader runs outside the cache lock.
+/// that throws is not cached, and neither is a result the caller's predicate rejects (callers use that to keep absent or
+/// refused files out, so a file that appears or is repaired later is found). All members are thread-safe; the loader
+/// runs outside the cache lock.
 /// </summary>
 /// <typeparam name="TKey">Key type.</typeparam>
 /// <typeparam name="TValue">Cached value type.</typeparam>
@@ -26,8 +28,12 @@ internal sealed class LoadCache<TKey, TValue>(int capacity)
         }
     }
 
-    /// <summary>The value for <paramref name="key"/>, loading it with <paramref name="load"/> when it is not cached.</summary>
-    public TValue GetOrLoad(TKey key, Func<TValue> load)
+    /// <summary>
+    /// The value for <paramref name="key"/>, loading it with <paramref name="load"/> when it is not cached. Callers that
+    /// were waiting on the same load all receive its value; afterwards the value stays cached only when
+    /// <paramref name="keep"/> is null or returns true for it.
+    /// </summary>
+    public TValue GetOrLoad(TKey key, Func<TValue> load, Func<TValue, bool>? keep = null)
     {
         ArgumentNullException.ThrowIfNull(load);
         Lazy<TValue> lazy;
@@ -51,23 +57,23 @@ internal sealed class LoadCache<TKey, TValue>(int capacity)
             }
         }
 
+        TValue value;
         try
         {
-            return lazy.Value;
+            value = lazy.Value;
         }
         catch
         {
-            lock (_gate)
-            {
-                if (_entries.TryGetValue(key, out Entry? entry) && ReferenceEquals(entry.Value, lazy))
-                {
-                    _recent.Remove(entry.Node);
-                    _entries.Remove(key);
-                }
-            }
-
+            Forget(key, lazy);
             throw;
         }
+
+        if (keep is not null && !keep(value))
+        {
+            Forget(key, lazy);
+        }
+
+        return value;
     }
 
     /// <summary>The value when it is already loaded; never starts a load and does not change the recency order.</summary>
@@ -93,6 +99,18 @@ internal sealed class LoadCache<TKey, TValue>(int capacity)
         {
             _entries.Clear();
             _recent.Clear();
+        }
+    }
+
+    private void Forget(TKey key, Lazy<TValue> lazy)
+    {
+        lock (_gate)
+        {
+            if (_entries.TryGetValue(key, out Entry? entry) && ReferenceEquals(entry.Value, lazy))
+            {
+                _recent.Remove(entry.Node);
+                _entries.Remove(key);
+            }
         }
     }
 
