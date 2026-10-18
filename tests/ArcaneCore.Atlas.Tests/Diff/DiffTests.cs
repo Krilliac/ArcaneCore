@@ -392,6 +392,10 @@ public sealed class DiffTests
         Assert.Contains(surfaces, s => s!["kind"]!.GetValue<string>() == "terrain" && Math.Abs(s["z"]!.GetValue<double>() - 12.0) < 0.05);
         Assert.Contains(surfaces, s => s!["kind"]!.GetValue<string>() == "model" && s["modelKind"]!.GetValue<string>() == "m2");
         Assert.Contains(surfaces, s => s!["kind"]!.GetValue<string>() == "model" && s["modelKind"]!.GetValue<string>() == "wmo" && Math.Abs(s["z"]!.GetValue<double>() - 50.0) < 0.05);
+        for (int i = 1; i < surfaces.Count; i++)
+        {
+            Assert.True(surfaces[i - 1]!["z"]!.GetValue<double>() >= surfaces[i]!["z"]!.GetValue<double>());
+        }
     }
 
     [Fact]

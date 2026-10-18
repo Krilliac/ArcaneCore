@@ -151,7 +151,7 @@ public sealed class ReferenceModelQueries(AtlasServices services, ClientModelCac
 
     /// <summary>
     /// Samples every client terrain, liquid, WMO and M2 surface across the vertical column at <c>(x, y)</c> between
-    /// <paramref name="zMin"/> and <paramref name="zMax"/>, sorted by <c>z</c> ascending.
+    /// <paramref name="zMin"/> and <paramref name="zMax"/>, sorted by <c>z</c> descending.
     /// </summary>
     public JsonObject FloorStack(uint mapId, double x, double y, double zMin, double zMax, bool includeExtractorSkipped, CancellationToken cancellationToken)
     {
@@ -271,7 +271,7 @@ public sealed class ReferenceModelQueries(AtlasServices services, ClientModelCac
             }
         }
 
-        surfaces.Sort((a, b) => a.Z.CompareTo(b.Z));
+        surfaces.Sort(static (a, b) => b.Z.CompareTo(a.Z));
         bool truncated = surfaces.Count > MaxFloorSurfaces;
         var surfaceArray = new JsonArray();
         var points = new JsonArray();
