@@ -161,3 +161,37 @@ export function filterArgs(schema, args) {
     }
     return out;
 }
+
+/**
+ * Texts to pre-fill a probe form with: the clicked points, the current map, and x/y fields. One point field takes the
+ * latest click; two take the previous click then the latest (so "click A, click B" fills A and B in that order).
+ * `clicks` is latest first. Returns {fieldName: text}.
+ */
+export function autoFill(fields, { clicks, map }) {
+    const out = {};
+    const points = fields.filter((f) => f.kind === 'point3');
+    const latest = clicks[0] ?? null;
+    const previous = clicks[1] ?? null;
+    const text = (p) => formatPointText(p, 3);
+    if (latest && points.length === 1) {
+        out[points[0].name] = text(latest);
+    } else if (latest && points.length >= 2) {
+        if (previous) {
+            out[points[0].name] = text(previous);
+            out[points[1].name] = text(latest);
+        } else {
+            out[points[0].name] = text(latest);
+        }
+    }
+    if (latest) {
+        for (const [name, axis] of [['x', 0], ['y', 1]]) {
+            if (fields.some((f) => f.name === name && f.kind === 'number')) {
+                out[name] = Number(latest[axis].toFixed(3)).toString();
+            }
+        }
+    }
+    if (fields.some((f) => f.name === 'map' && (f.kind === 'integer' || f.kind === 'number'))) {
+        out.map = String(map);
+    }
+    return out;
+}

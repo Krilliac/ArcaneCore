@@ -184,3 +184,25 @@ export function describeSurface(layerTitle, record, attributeId) {
     }
     return parts.join(' · ');
 }
+
+/**
+ * Commands matching the palette text: every word must appear in the name or summary (case-insensitive). Names that
+ * start with the first word come first, then names containing it, then summary matches; ties keep name order.
+ */
+export function filterCommands(commands, text) {
+    const words = String(text ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+        return commands.slice();
+    }
+    const scored = [];
+    for (const c of commands) {
+        const name = c.name.toLowerCase();
+        const hay = `${name} ${c.summary.toLowerCase()}`;
+        if (!words.every((w) => hay.includes(w))) {
+            continue;
+        }
+        const rank = name.startsWith(words[0]) ? 0 : name.includes(words[0]) ? 1 : 2;
+        scored.push({ c, rank });
+    }
+    return scored.sort((a, b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name)).map((s) => s.c);
+}

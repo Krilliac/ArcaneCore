@@ -3,7 +3,7 @@
 
 import { FILE_KINDS } from '../notices.js';
 import { describePosition } from '../tiles.js';
-import { clamp, formatNumber, h, niceFloor } from '../util.js';
+import { clamp, clear, fill, formatNumber, h, niceFloor } from '../util.js';
 import { yardsPerPixel } from '../camera.js';
 
 const STATE_ORDER = ['Ok', 'Rejected', 'Error', 'Empty', 'Missing', 'Unknown'];
@@ -132,7 +132,7 @@ export class Hud {
             this.rEstimate.textContent = '';
             this.rTile.textContent = 'Move the cursor over the map.';
             this.rSurface.textContent = '';
-            this.rFiles.replaceChildren();
+            clear(this.rFiles);
             return;
         }
         const [x, y, z] = hover.point;
@@ -143,10 +143,10 @@ export class Hud {
         const d = describePosition(map, x, y);
         if (!d.tile) {
             this.rTile.textContent = `Map ${map} · outside the 64 × 64 tile grid`;
-            this.rFiles.replaceChildren();
+            clear(this.rFiles);
         } else {
             this.rTile.textContent = `Map ${map} · tile ${d.tile.x}, ${d.tile.y} · cell ${d.cell.x}, ${d.cell.y} · square ${d.square.x}, ${d.square.y}`;
-            this.rFiles.replaceChildren(
+            fill(this.rFiles, 
                 this.#file('.map', d.files.map, fileState('map', d.tile, statusOf)),
                 this.#file('.vmtile', d.files.vmap, fileState('vmap', d.tile, statusOf)),
                 this.#file('.mmtile', d.files.mmap, fileState('mmap', d.tile, statusOf)),
@@ -166,7 +166,7 @@ export class Hud {
             return;
         }
         this._noticeKey = key;
-        this.notices.replaceChildren(...list.slice(0, 4).map((n) => h('div', { class: `notice notice-${n.level}` },
+        fill(this.notices, ...list.slice(0, 4).map((n) => h('div', { class: `notice notice-${n.level}` },
             h('div', { class: 'notice-text', text: n.text }), n.hint ? h('div', { class: 'notice-hint', text: n.hint }) : null)));
         this.notices.hidden = list.length === 0;
     }

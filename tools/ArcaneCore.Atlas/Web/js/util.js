@@ -273,7 +273,7 @@ export function h(tag, props = {}, ...children) {
     const node = document.createElement(tag);
     for (const [key, value] of Object.entries(props ?? {})) {
         if (value === undefined || value === null || value === false) {
-            if (key === 'checked' || key === 'disabled' || key === 'hidden') {
+            if (key === 'checked' || key === 'disabled' || key === 'hidden' || (key === 'spellcheck' && value === false)) {
                 node[key] = false;
             }
             continue;
@@ -361,6 +361,13 @@ function appendChildren(node, children) {
             node.appendChild(document.createTextNode(String(child)));
         }
     }
+}
+
+/** Replaces a node's children with the given ones (null, undefined and false are skipped, arrays are flattened). */
+export function fill(node, ...children) {
+    node.replaceChildren();
+    appendChildren(node, children);
+    return node;
 }
 
 /** Removes every child of a node. */
