@@ -94,7 +94,7 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     public bool SetEventRespawnMode(uint spawnGuid, bool forced)
     {
-        Creature? creature = _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == spawnGuid);
+        Creature? creature = FindBySpawnGuid(spawnGuid);
         if (creature is null)
         {
             return false;

@@ -19,7 +19,7 @@ public sealed partial class CreatureMapSystem
         foreach (uint guid in guids)
         {
             _scriptOnlySpawns.Add(guid);
-            Creature? loaded = _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == guid);
+            Creature? loaded = FindBySpawnGuid(guid);
             if (loaded is not null)
             {
                 Despawn(loaded);
@@ -42,7 +42,7 @@ public sealed partial class CreatureMapSystem
             return null;
         }
 
-        if (_creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == guid) is { } existing)
+        if (FindBySpawnGuid(guid) is { } existing)
         {
             return existing;
         }
@@ -52,12 +52,12 @@ public sealed partial class CreatureMapSystem
         {
             GridCoord coord = ComputeGrid(spawn.X, spawn.Y);
             LoadedGrid grid = LoadGrid(coord);
-            if (_creatures.Values.All(c => c.Spawn?.Guid != guid))
+            if (!_bySpawnGuid.ContainsKey(guid))
             {
                 LoadSpawns(grid, [spawn]);
             }
 
-            return _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == guid);
+            return FindBySpawnGuid(guid);
         }
         finally
         {

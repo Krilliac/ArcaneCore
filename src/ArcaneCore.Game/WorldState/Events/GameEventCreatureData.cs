@@ -107,7 +107,7 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
         foreach (uint guid in guids)
         {
             GameEventCreatureOverride? active = For(guid);
-            Creature? live = system.Creatures.FirstOrDefault(c => c.Spawn?.Guid == guid);
+            Creature? live = system.FindBySpawnGuid(guid);
             if (live is null)
             {
                 continue;

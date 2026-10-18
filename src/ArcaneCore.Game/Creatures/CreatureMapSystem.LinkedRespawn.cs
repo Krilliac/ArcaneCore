@@ -119,7 +119,7 @@ public sealed partial class CreatureMapSystem
     private Creature? FindLinkedMaster(Creature slave, (uint Flags, uint MasterGuid, CreatureTemplateLink? Template) info)
     {
         if (info.Template is not { } t)
-            return _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == info.MasterGuid);
+            return FindBySpawnGuid(info.MasterGuid);
         Creature[] candidates = [.. _creatures.Values.Where(c => c.Spawn is not null && c.Entry == t.MasterEntry
             && InSearchRange(slave.Spawn!, c.Spawn, t.SearchRange))];
         return t.SearchRange <= 0 ? candidates.Length == 1 ? candidates[0] : null : candidates.OrderBy(c => DistanceSq(slave.Spawn!, c.Spawn!)).FirstOrDefault();
@@ -159,7 +159,7 @@ public sealed partial class CreatureMapSystem
     private bool MasterRespawnReady(uint masterGuid)
     {
         if (_respawnAt.TryGetValue(masterGuid, out long at)) return at <= _clockMs;
-        Creature? master = _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == masterGuid);
+        Creature? master = FindBySpawnGuid(masterGuid);
         return master is null || master.IsAlive || master.RespawnAtMs <= _clockMs;
     }
 

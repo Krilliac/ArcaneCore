@@ -37,7 +37,7 @@ public sealed partial class WarEffortFeature
             bool shown = ResearcherShown(state, boss);
             foreach (uint guid in guids[boss])
             {
-                Creature? loaded = silithus.Creatures.FirstOrDefault(c => c.Spawn?.Guid == guid);
+                Creature? loaded = silithus.FindBySpawnGuid(guid);
                 // SpawnScripted keeps the spawn's own gating, so he still needs event 123 running.
                 if (shown && loaded is null) silithus.SpawnScripted(guid);
                 else if (!shown && loaded is not null) silithus.Despawn(loaded);

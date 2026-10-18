@@ -38,6 +38,13 @@ public sealed partial class CreatureMapSystem
 
     internal bool HasSpawnIndex(uint spawnGuid) => _bySpawnGuid.ContainsKey(spawnGuid);
 
+    /// <summary>
+    /// The creature of this map spawned from database row <paramref name="spawnGuid"/> (the first one added when a duplicate exists), or
+    /// null: the spawn-guid index, not a scan of every creature of the map. <c>Creatures.FirstOrDefault(c =&gt; c.Spawn?.Guid == guid)</c>
+    /// ran every world tick for the AQ war-effort researchers of Kalimdor (4% of the live world thread, Oct 17). World thread only.
+    /// </summary>
+    public Creature? FindBySpawnGuid(uint spawnGuid) => _bySpawnGuid.GetValueOrDefault(spawnGuid);
+
     internal int SpawnDuplicateCount => _spawnGuidDuplicates.Count;
 
     /// <summary>Record a creature that has just entered <c>_creatures</c> in the spawn-guid index and, when it follows, the follower set.</summary>

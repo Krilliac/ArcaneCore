@@ -284,7 +284,7 @@ public sealed partial class CreatureMapSystem
         {
             if (creatureBuddy)
             {
-                Creature? byGuid = _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == step.SearchRadius);
+                Creature? byGuid = FindBySpawnGuid(step.SearchRadius);
                 if (byGuid is not null && byGuid.IsAlive == ((step.DataFlags & FlagBuddyIsDespawned) != 0))
                 {
                     if (!terminate)
