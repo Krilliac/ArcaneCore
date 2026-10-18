@@ -14,8 +14,8 @@ Everything defaults to the vmangos / retail 1.12.1 behaviour; every deliberate d
 | Spell attribute facts: ranged slot 0x2, exotic ammo 0x8, Ex2 auto-repeat 0x20, Ex2 do-not-reset-combat-timers 0x20000, weapon attack type of a spell | `Game/Ranged/RangedSpellFacts.cs` | vmangos `SpellDefines.h:831,833,911,923`, `SpellEntry.cpp:435-455`, `SpellEntry.h:892-895,1067-1075` |
 | Weapon kinds (bow 2, gun 3, thrown 16, crossbow 18, wand 19), ammo matrix (bow and crossbow take arrows, gun takes bullets), ammo DPS `(min+max)/2`, no-ammo spells 2094 / 13099 / 13119 / 23577, exotic flag 0x8 | `Game/Ranged/AmmoRules.cs` | vmangos `Spell.cpp:5129-5171,7390-7455`, `Player.cpp:7514-7569` |
 | `PLAYER_AMMO_ID`: `CanUseAmmo` (dead, unknown item, not `INVTYPE_AMMO`, equipment requirements), `SetAmmo`, `RemoveAmmo`, derived `CurrentDps`, starting ammo | `Game/Ranged/PlayerAmmo.cs` | vmangos `Player.cpp:10100-10158,7514-7569,560-575` |
-| CMSG_SET_AMMO; ammo restored at login; starting ammo at character creation; delete hook | `World/Ranged/AmmoHandlers.cs`, `AmmoFeature.cs`, `AmmoPersistence.cs` | vmangos `ItemHandler.cpp:988-1008`, `Player.cpp:14703,16501` |
-| `character_ammo` (characters schema module, `CharacterAmmoDataModule.Version` = 14, provisional) with `ICharacterDataCleanup` | `Data/Characters/Ranged/CharacterAmmoDataModule.cs` | vmangos `characters.ammo_id` (`sql/characters.sql:94`) |
+| CMSG_SET_AMMO; ammo restored at login; starting ammo at character creation; delete hook (the item-mechanics lane's, see the wave-2 note below) | `World/Items/ItemMiscHandlers.cs` (`HandleSetAmmo`), `World/Items/ItemsFeature.cs` (login restore), `Game/Items/PlayerInventory.Ammo.cs` | vmangos `ItemHandler.cpp:988-1008`, `Player.cpp:14703,16501` |
+| The selected ammo in `character_item_state` (characters schema module, `CharacterItemStateDataModule.Version` = 16) with `ICharacterDataCleanup` | `Data/Characters/Items/CharacterItemStateDataModule.cs` | vmangos `characters.ammo_id` (`sql/characters.sql:94`) |
 | Ranged weapon and ammo checks (`EQUIPPED_ITEM`, `NO_AMMO`, `NEED_EXOTIC_AMMO`) before the range check; one ammo / thrown weapon / durability point taken after `TakePower` | `Game/Spells/SpellSystem.Ranged.cs`, call sites in `SpellSystem.cs` | vmangos `Spell.cpp:5694-5702,3716-3718,5129-5171,7390-7455` |
 | `CAST_FLAG_AMMO` with the projectile trailer: START flags 0x22, GO flags 0x120, display id and inventory type of the arrow / bullet / thrown weapon, or the weapon's own inventory type with display 0 | `SpellSystem.Ranged.cs` (`GetAmmoVisual`), `SpellPackets.cs`, `Game/Ranged/AmmoVisual.cs` | vmangos `Spell.cpp:4495-4620` |
 | Cooldown of a ranged-slot spell includes `UNIT_FIELD_RANGEDATTACKTIME` unless Ex2 0x20000, also when the spell has no recovery of its own | `SpellSystem.cs` (`AddCooldown`) | vmangos `Player.cpp:22193-22197` |
@@ -89,8 +89,9 @@ Not possible from the references; to run against the developer's 5875 client dat
 ## Tests
 
 - `tests/ArcaneCore.Game.Tests/Ranged/`: `RangedRulesTests` (item and attribute facts), `PlayerAmmoTests`, `RangedCastPipelineTests` (checks, ammo use, packets, cooldown, cast time), `RangeLeewayTests`, `TrackingAuraTests`, `FeignDeathTests`, `SpellObjectOwnershipTests`, `TrapSystemTests`.
-- `tests/ArcaneCore.Data.Tests/Ranged/CharacterAmmoStoreTests.cs`: round trip, replacement, zero removes, deletion cleanup, conditional queued removal.
-- `tests/ArcaneCore.World.Tests/Ranged/`: `SetAmmoLoopbackTests` (CMSG_SET_AMMO, owner-only field update, persistence across relog, starting ammo, character delete), `RangedFeatureTests` (configuration binding, handler and map system installation).
+- `tests/ArcaneCore.Data.Tests/CharacterItemStateStoreTests.cs` (the ammo selection in `character_item_state`): round trip, a snapshot without ammo leaves the stored one, replacement, zero removes, deletion cleanup.
+- `tests/ArcaneCore.World.Tests/Items/AmmoWorldTests.cs`: CMSG_SET_AMMO, starting ammo, an item the player does not carry, persistence across relog.
+- `tests/ArcaneCore.World.Tests/Ranged/`: `RangedFeatureTests` (configuration binding, handler and map system installation).
 
 ## Wave-2 integration note: ammo
 
