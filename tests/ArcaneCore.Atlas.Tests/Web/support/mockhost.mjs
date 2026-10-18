@@ -241,7 +241,8 @@ export class MockHost {
             socket.destroy();
             return;
         }
-        const accept = crypto.createHash('sha1').update(key + GUID).digest('base64');
+        // RFC 6455 section 4.2.2 fixes SHA-1 for Sec-WebSocket-Accept (a handshake checksum, not a security use).
+        const accept = crypto.createHash('sha1').update(key + GUID).digest('base64'); // DevSkim: ignore DS126858
         socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
         const client = { socket, id: `c${this.nextSocket++}`, authed: false, buffer: Buffer.alloc(0) };
         this.sockets.add(client);

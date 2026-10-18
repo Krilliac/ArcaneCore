@@ -19,6 +19,9 @@ export const GLOBAL_INDEX = -1;
 
 const f32 = Math.fround;
 
+/** C# `(int)` of a float: truncation toward zero. Adding 0 folds -0 into 0, because an int has no negative zero. */
+const castInt = (value) => Math.trunc(value) + 0;
+
 /** The tile holding a world position, or null outside the 64x64 grid (TerrainTile.TileOf). */
 export function tileOf(x, y) {
     const fx = f32(x);
@@ -26,8 +29,8 @@ export function tileOf(x, y) {
     if (!Number.isFinite(fx) || !Number.isFinite(fy)) {
         return null;
     }
-    const tx = Math.trunc(f32(32 - f32(fx / TILE_SIZE)));
-    const ty = Math.trunc(f32(32 - f32(fy / TILE_SIZE)));
+    const tx = castInt(f32(32 - f32(fx / TILE_SIZE)));
+    const ty = castInt(f32(32 - f32(fy / TILE_SIZE)));
     return inGrid(tx, ty) ? { x: tx, y: ty } : null;
 }
 
@@ -113,15 +116,15 @@ export const tileOfGrid = (gx, gy) => ({ x: TILES_PER_SIDE - 1 - gx, y: TILES_PE
 
 /** The 16x16 cell inside a tile that holds the area flag (TerrainTile.GetAreaFlag: ((int)(16 * (32 - x / G))) & 15). */
 export function cellOf(x, y) {
-    const cx = Math.trunc(f32(CELLS_PER_TILE_SIDE * f32(32 - f32(f32(x) / TILE_SIZE))));
-    const cy = Math.trunc(f32(CELLS_PER_TILE_SIDE * f32(32 - f32(f32(y) / TILE_SIZE))));
+    const cx = castInt(f32(CELLS_PER_TILE_SIDE * f32(32 - f32(f32(x) / TILE_SIZE))));
+    const cy = castInt(f32(CELLS_PER_TILE_SIDE * f32(32 - f32(f32(y) / TILE_SIZE))));
     return { x: cx & (CELLS_PER_TILE_SIDE - 1), y: cy & (CELLS_PER_TILE_SIDE - 1) };
 }
 
 /** The 128x128 height square inside a tile (TerrainTile.GetHeightFromFloat: ((int)(128 * (32 - x / G))) & 127). */
 export function squareOf(x, y) {
-    const sx = Math.trunc(f32(MAP_RESOLUTION * f32(32 - f32(f32(x) / TILE_SIZE))));
-    const sy = Math.trunc(f32(MAP_RESOLUTION * f32(32 - f32(f32(y) / TILE_SIZE))));
+    const sx = castInt(f32(MAP_RESOLUTION * f32(32 - f32(f32(x) / TILE_SIZE))));
+    const sy = castInt(f32(MAP_RESOLUTION * f32(32 - f32(f32(y) / TILE_SIZE))));
     return { x: sx & (MAP_RESOLUTION - 1), y: sy & (MAP_RESOLUTION - 1) };
 }
 

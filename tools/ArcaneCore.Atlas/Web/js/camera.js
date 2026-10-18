@@ -242,10 +242,21 @@ export function orbitDrag(camera, dxPixels, dyPixels, degreesPerPixel = 0.25) {
 
 /**
  * Right-drag pan that keeps the world point under the cursor under the cursor: `start` is the camera when the drag
- * began, (ndc0 -> ndc1) the cursor motion. The point is taken on the plane z = start target z. Returns the new camera,
- * or the start camera when a ray misses the plane (a horizon-grazing view).
+ * began, (ndc0 -> ndc1) the cursor motion. Orbit and top grab a point on the plane z = start target z. A fly camera
+ * sits on that plane, so it grabs the point on the plane facing the camera `max(distance, 20)` yards ahead instead,
+ * which slides the camera sideways and up or down. Returns the new camera, or the start camera when a ray misses the
+ * plane (a horizon-grazing view).
  */
 export function panGrab(start, ndc0, ndc1, aspect) {
+    if (start.mode === 'fly') {
+        const forward = direction(start);
+        const depth = Math.max(start.distance, 20);
+        const grab = (ndc) => {
+            const ray = rayThrough(start, 0, ndc.x, ndc.y, aspect);
+            return add(ray.origin, scale(ray.direction, depth / dot(ray.direction, forward)));
+        };
+        return { ...start, target: add(start.target, sub(grab(ndc0), grab(ndc1))) };
+    }
     const planeZ = start.target[2];
     const a = intersectPlaneZ(rayThrough(start, 0, ndc0.x, ndc0.y, aspect), planeZ);
     const b = intersectPlaneZ(rayThrough(start, 0, ndc1.x, ndc1.y, aspect), planeZ);

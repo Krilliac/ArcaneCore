@@ -22,7 +22,8 @@ function listOf(answer, ...keys) {
 export function normalizeMaps(answer) {
     const maps = [];
     for (const item of listOf(answer, 'maps')) {
-        const id = Number(isObject(item) ? item.map ?? item.id ?? item.mapId : item);
+        const raw = isObject(item) ? item.map ?? item.id ?? item.mapId : item;
+        const id = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
         if (!Number.isInteger(id) || id < 0) {
             continue;
         }

@@ -93,7 +93,8 @@ export class Scene extends Emitter {
         }
         this.queue = this.queue.filter((q) => wanted.has(q.key));
 
-        // Queue what is missing.
+        // Queue what is missing. A tile the host has answered (any state but a transport or decode error) is final until the
+        // host announces a change (invalidate), including one whose chunks are decoded and waiting for pump to upload them.
         const queued = new Set(this.queue.map((q) => q.key));
         for (const [key, w] of wanted) {
             if (this.entries.has(key) || this.inflight.has(key) || queued.has(key)) {
@@ -104,7 +105,7 @@ export class Scene extends Emitter {
                 continue;
             }
             const status = this.statuses.get(key);
-            if (status && (status.state === 'Missing' || status.state === 'Empty' || status.state === 'NotApplicable') && status.fetched) {
+            if (status && status.fetched && status.state !== 'Error') {
                 continue;
             }
             this.queue.push({ key, ...w });
@@ -274,6 +275,7 @@ export class Scene extends Emitter {
                 for (const c of chunks) {
                     this.renderer.destroyChunk(c);
                 }
+                this.failedAt.set(job.key, this.clock());
                 this.setStatus(job.key, job.layer, job.map, job.x, job.y, { state: 'Error', detail: `GPU upload failed: ${error.message}`, fetched: true });
                 this.noteError(`${job.layer} ${job.map}/${job.x}/${job.y}: GPU upload failed: ${error.message}`);
                 continue;

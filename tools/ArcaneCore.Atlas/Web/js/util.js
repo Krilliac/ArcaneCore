@@ -64,7 +64,10 @@ export function mergePatch(target, patch) {
 
 /**
  * Composes two merge patches into one that has the effect of applying `first` then `second` (nulls are kept, because a
- * null in the combined patch must still delete the member when it is finally applied).
+ * null in the combined patch must still delete the member when it is finally applied). One pair cannot be composed
+ * exactly: a member deleted or replaced by a scalar in `first` and given an object in `second`, because a merge patch
+ * cannot say "replace" and the object would merge into whatever the member held. The view patches the UI sends never
+ * contain such a pair.
  */
 export function composePatch(first, second) {
     const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
