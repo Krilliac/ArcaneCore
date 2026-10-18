@@ -405,6 +405,9 @@ internal static class PlayerbotRiskModel
     /// <summary>The share of its health the bot may lose on the run and still count the retreat a success.</summary>
     internal const float RetreatHealthBudget = 0.9f;
 
+    /// <summary>The gap a fleeing bot must open before a slower pursuer stops landing blows (melee reach plus both combat radii, about 5 yards).</summary>
+    internal const float PursuerReachYards = 5f;
+
     /// <summary>
     /// Whether a retreat breaks contact before it kills the bot (pure estimate). The bot runs <see cref="PlayerbotPursuit.EscapeYards"/>
     /// at its run speed (times the best speed escape ready); a pursuer no faster than the bot falls behind at once (it never lands
@@ -431,8 +434,10 @@ internal static class PlayerbotRiskModel
             bool nearest = index == 0;
             float speed = (float.IsFinite(pursuer.RunSpeed) && pursuer.RunSpeed > 0f ? pursuer.RunSpeed : float.PositiveInfinity)
                 * (nearest ? kit.VictimSpeed : 1f);
-            if (speed <= botSpeed) continue;
-            float exposed = MathF.Max(0f, run - (kit.AllFreeSeconds + (nearest ? kit.VictimFreeSeconds : 0f)));
+            // A pursuer starts in melee contact. One as fast as the bot stays there and keeps hitting the whole run (live 2026-10-17: 74% of
+            // 'losing' retreats died when equal speed counted as an escape); a slower one hits until the gap opens past its reach.
+            float contact = speed >= botSpeed ? run : MathF.Min(run, PursuerReachYards / (botSpeed - speed));
+            float exposed = MathF.Max(0f, contact - (kit.AllFreeSeconds + (nearest ? kit.VictimFreeSeconds : 0f)));
             damage += dpsIn * (MathF.Max(0f, pursuer.Dps) / totalDps) * exposed;
         }
 

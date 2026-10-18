@@ -40,10 +40,13 @@ public sealed class PlayerbotRetreatFeasibilityTests
     }
 
     [Fact]
-    public void ALosingBot_RetreatsFromASlowerOrEquallyFastCreature()
+    public void ALosingBot_RetreatsOnlyFromAClearlySlowerCreature()
     {
-        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 0.9f)), Options).Retreat);
-        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed)), Options).Retreat);
+        // 3.5 yd/s slower: the 5 yd reach opens in 1.4 s (86 damage of a 270 budget).
+        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 0.5f)), Options).Retreat);
+        // As fast as the bot it stays in contact the whole run; 0.7 yd/s slower still hits for about 7 s.
+        Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed)), Options).Reason);
+        Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 0.9f)), Options).Reason);
     }
 
     [Fact]
@@ -111,9 +114,9 @@ public sealed class PlayerbotRetreatFeasibilityTests
     {
         PlayerbotEscapeKit sprint = PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.Sprint, EscapeTarget.Self, 15_000, AuraType.ModIncreaseSpeed, 50)]);
         Assert.Equal(1.5f, sprint.SelfSpeed);
-        // 10.5 yards a second outpaces a speed_run 1.43 creature (10.0) but not a 1.6 one (11.2).
-        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 1.43f, sprint)), Options).Retreat);
-        Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 1.6f, sprint)), Options).Reason);
+        // 10.5 yards a second opens the 5 yd reach on a speed_run 1.2 creature (8.4) in 2.4 s; a 1.43 one (10.0) stays in reach the whole run.
+        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 1.2f, sprint)), Options).Retreat);
+        Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 1.43f, sprint)), Options).Reason);
     }
 
     [Fact]
