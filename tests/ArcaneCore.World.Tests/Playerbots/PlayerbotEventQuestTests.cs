@@ -40,7 +40,19 @@ public sealed class PlayerbotEventQuestTests
 
     /// <summary>Listed under Winter Veil, asking for a kill of <see cref="WolfEntry"/> (300 yards off, so it is not done at once).</summary>
     private const uint EventKillQuest = 990903;
+
+    /// <summary>
+    /// The kill quest's wolf: the only creature here the bot can grind, so it grinds it out of season too. It does not bite back
+    /// (<see cref="NoMelee"/>). The scenario's level-1 warrior fights with its fists and regenerates no health out of combat (no
+    /// spirit), so against a wolf as strong as itself every grind was a near-even fight whose loss the bot carried into the next
+    /// one. In a run whose rolls went the wolf's way the risk model judged the retreat hopeless (cornered-no-escape) and the bot
+    /// fought on until it died at the fight spot (main CI 39129777118; 5 of 30 runs locally), and a dead bot turns nothing in.
+    /// Who wins a fight is no part of what this test checks.
+    /// </summary>
     private const uint WolfEntry = 990913, WolfSpawn = 990913;
+
+    /// <summary>cmangos CREATURE_EXTRA_FLAG_NO_MELEE (<see cref="CreatureBehaviourFlags.NoMelee"/>): the creature never swings.</summary>
+    private const uint NoMelee = 0x00020000;
 
     [Fact]
     public async Task AnOutOfSeasonQuest_IsNeitherTakenNorTurnedIn_UntilItsEventRuns()
@@ -112,6 +124,9 @@ public sealed class PlayerbotEventQuestTests
             () => Status(EventQuest)?.Rewarded == true && Status(SeasonalEnderQuest)?.Rewarded == true),
             await world.Host.OnWorldAsync(() => Describe(world, bot, Status(EventQuest), Status(SeasonalEnderQuest))));
 
+        // And in season the kill quest's wolf is hunted: the out-of-season hunt check above could see a hunt had there been one.
+        Assert.True(await HuntsAsync(world, bot, 60_000), "the bot did not hunt the objective of the event quest in season");
+
         QuestStatusData? Status(uint quest) => quests.StateOf(world.Bots.FindSession(bot)!.Player!) is { Loaded: true } state ? state.Quests.Get(quest) : null;
     }
 
@@ -137,7 +152,7 @@ public sealed class PlayerbotEventQuestTests
         return false;
     }
 
-    /// <summary>Whether, within <paramref name="ms"/>, the bot's quest objective to hunt was the out-of-season quest's wolf.</summary>
+    /// <summary>Whether, within <paramref name="ms"/>, the bot's quest objective to hunt was the event kill quest's wolf.</summary>
     private static async Task<bool> HuntsAsync(ScenarioTestWorld world, Guid bot, uint ms)
     {
         for (uint elapsed = 0; elapsed < ms; elapsed += 200)
@@ -179,7 +194,8 @@ public sealed class PlayerbotEventQuestTests
         Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
             [Npc(HeraldEntry, "Holiday Herald"), Npc(EnderEntry, "Holiday Steward"), Npc(WinterEnderEntry, "Winter Steward"),
                 new CreatureTemplate { Entry = WolfEntry, Name = "Winter Wolf", Faction = 14, CreatureType = 1, MinLevel = 1, MaxLevel = 1,
-                    DisplayIds = [903], MinLevelHealth = 50, MaxLevelHealth = 50, MinMeleeDamage = 1, MaxMeleeDamage = 2, MeleeBaseAttackTime = 2000 }],
+                    DisplayIds = [903], MinLevelHealth = 50, MaxLevelHealth = 50, MinMeleeDamage = 1, MaxMeleeDamage = 2, MeleeBaseAttackTime = 2000,
+                    ExtraFlags = NoMelee, ExtraFlagsDialect = CreatureExtraFlagsDialect.CMangos }],
             [
                 new CreatureSpawn { Guid = HeraldSpawn, Entry = HeraldEntry, MapId = 0, X = StartX + 3f, Y = StartY, Z = StartZ, Orientation = MathF.PI },
                 new CreatureSpawn { Guid = EnderSpawn, Entry = EnderEntry, MapId = 0, X = StartX + 40f, Y = StartY, Z = StartZ },
