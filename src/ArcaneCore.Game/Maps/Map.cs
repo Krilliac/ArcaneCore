@@ -205,6 +205,21 @@ public sealed class Map
 
     public Player? FindPlayer(ObjectGuid guid) => _players.GetValueOrDefault(guid);
 
+    private int _parallelOwnerThreadId;
+
+    /// <summary>
+    /// During the parallel maps phase: the managed id of the thread updating this map, -1 while it waits for one, 0 when it is not part
+    /// of this tick's map list (a map created during the phase). 0 outside the phase. Written by the world's map scheduler.
+    /// </summary>
+    internal int ParallelOwnerThreadId
+    {
+        get => Volatile.Read(ref _parallelOwnerThreadId);
+        set => Volatile.Write(ref _parallelOwnerThreadId, value);
+    }
+
+    /// <summary>How long this map's last update took (microseconds): the longest-first order of the parallel maps phase.</summary>
+    internal long LastUpdateMicros { get; set; }
+
     /// <summary>The systems attached with <see cref="AddUpdater"/>, in attach order.</summary>
     public IReadOnlyList<IMapUpdater> Updaters => _updaters;
 
@@ -659,6 +674,92 @@ public sealed class Map
         diagnostics?.Begin();
         diagnostics?.BeginTiles();
         GridLifecycleCounters gridsBefore = diagnostics is not null ? _grid.Counters : default;
+        // While maps update in parallel, every stage that is not classified map-local runs inside the world's serial gate
+        // (MapStageGates; docs/research/multithreading-plan-20261017.md, W3). With one map thread the gates are no-ops.
+        WorldRuntime.SerialScope gate = Gate(MapStage.Packets);
+        try
+        {
+            UpdatePacketsAndTimers();
+        }
+        finally
+        {
+            gate.Dispose();
+        }
+
+        diagnostics?.EndPackets();
+
+        gate = Gate(MapStage.Heartbeat);
+        try
+        {
+            UpdateHeartbeats(diffMs, diagnostics);
+        }
+        finally
+        {
+            gate.Dispose();
+        }
+
+        diagnostics?.EndHeartbeat();
+
+        // vmangos Map::UpdateCells marks the cells around players and active objects after the sessions (UpdateActiveCellsSynch).
+        if (UpdatesActiveCellsOnly)
+        {
+            gate = Gate(MapStage.ActiveCells);
+            try
+            {
+                _grid.MarkActiveCells();
+            }
+            finally
+            {
+                gate.Dispose();
+            }
+        }
+        diagnostics?.EndActiveCells();
+
+        // (1c) per-map systems (creatures, …) — see IMapUpdater
+        foreach (IMapUpdater updater in _updaters)
+        {
+            if (_updaterFaults.Count > 0 && _updaterFaults.TryGetValue(updater, out int faults) && faults < 0)
+            {
+                continue; // isolated by the fault breaker (see ClearUpdaterFaults)
+            }
+
+            gate = GateUpdater(updater);
+            try
+            {
+                updater.Update(this, diffMs);
+                if (_updaterFaults.Count > 0)
+                {
+                    _updaterFaults.Remove(updater); // only consecutive failures count
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("map-updater", ex,
+                    "map {MapId} instance {InstanceId} updater {Updater} failed (diff={DiffMs} ms, players={Players}, objects={Objects})",
+                    MapId, InstanceId, updater.GetType().Name, diffMs, _players.Count, _objects.Count);
+                CountUpdaterFault(updater, ex);
+            }
+            finally
+            {
+                gate.Dispose();
+            }
+
+            diagnostics?.EndUpdater(updater);
+        }
+
+        UpdateOutput(diffMs, diagnostics, gridsBefore);
+    }
+
+    /// <summary>The serial gate for one stage of this map's update (a no-op scope outside the parallel maps phase).</summary>
+    private WorldRuntime.SerialScope Gate(MapStage stage)
+        => _world.IsParallelPhase && _world.StageGates.IsGated(stage) ? _world.EnterSerial() : default;
+
+    private WorldRuntime.SerialScope GateUpdater(IMapUpdater updater)
+        => _world.IsParallelPhase && _world.StageGates.IsGated(updater) ? _world.EnterSerial() : default;
+
+    /// <summary>Stage (1): in-world packets, players in transit, logout timers.</summary>
+    private void UpdatePacketsAndTimers()
+    {
         // (1) in-world packets, over a snapshot (a handler may add or remove players); the snapshot list is reused
         List<Player> snapshot = _updatePlayers;
         snapshot.AddRange(_players.Values);
@@ -709,9 +810,11 @@ public sealed class Map
         {
             snapshot.Clear();
         }
+    }
 
-        diagnostics?.EndPackets();
-
+    /// <summary>Unit heartbeats over the membership snapshot.</summary>
+    private void UpdateHeartbeats(uint diffMs, MapUpdateDiagnostics? diagnostics)
+    {
         // Snapshot only when membership changes. Heartbeat callbacks can add/remove units: keep this tick's
         // snapshot intact and rebuild next tick, still skipping removed units below. Timers and dictionary order
         // are unchanged (vmangos Object.cpp WorldObject::Update / Unit.cpp Unit::Heartbeat).
@@ -743,43 +846,11 @@ public sealed class Map
                 }
             }
         }
+    }
 
-        diagnostics?.EndHeartbeat();
-
-        // vmangos Map::UpdateCells marks the cells around players and active objects after the sessions (UpdateActiveCellsSynch).
-        if (UpdatesActiveCellsOnly)
-        {
-            _grid.MarkActiveCells();
-        }
-        diagnostics?.EndActiveCells();
-
-        // (1c) per-map systems (creatures, …) — see IMapUpdater
-        foreach (IMapUpdater updater in _updaters)
-        {
-            if (_updaterFaults.Count > 0 && _updaterFaults.TryGetValue(updater, out int faults) && faults < 0)
-            {
-                continue; // isolated by the fault breaker (see ClearUpdaterFaults)
-            }
-
-            try
-            {
-                updater.Update(this, diffMs);
-                if (_updaterFaults.Count > 0)
-                {
-                    _updaterFaults.Remove(updater); // only consecutive failures count
-                }
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                _logger.LogFault("map-updater", ex,
-                    "map {MapId} instance {InstanceId} updater {Updater} failed (diff={DiffMs} ms, players={Players}, objects={Objects})",
-                    MapId, InstanceId, updater.GetType().Name, diffMs, _players.Count, _objects.Count);
-                CountUpdaterFault(updater, ex);
-            }
-
-            diagnostics?.EndUpdater(updater);
-        }
-
+    /// <summary>Stages (2)-(6): visibility, values, flush, grid and terrain lifecycles, deferred work.</summary>
+    private void UpdateOutput(uint diffMs, MapUpdateDiagnostics? diagnostics, GridLifecycleCounters gridsBefore)
+    {
         if (diagnostics is not null)
         {
             diagnostics.Players = _players.Count;
@@ -788,6 +859,7 @@ public sealed class Map
             diagnostics.EndSimulation();
         }
 
+        WorldRuntime.SerialScope gate = Gate(MapStage.Output);
         _inUpdatePhase = true;
         try
         {
@@ -916,9 +988,11 @@ public sealed class Map
         finally
         {
             _inUpdatePhase = false;
+            gate.Dispose();
         }
 
         // (5) grid and terrain lifecycles (vmangos Map::Update → grid states; TerrainInfo::CleanUpGrids)
+        gate = Gate(MapStage.Grid);
         try
         {
             _grid.Update(diffMs);
@@ -940,11 +1014,16 @@ public sealed class Map
                 "terrain cleanup failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
                 MapId, InstanceId, diffMs);
         }
+        finally
+        {
+            gate.Dispose();
+        }
         diagnostics?.EndTerrain();
 
         // (6) work scheduled for after the update (vmangos MapManager::ScheduleFarTeleport)
         if (_afterUpdate.Count > 0)
         {
+            using WorldRuntime.SerialScope deferredGate = Gate(MapStage.Deferred);
             // Work scheduled while this batch runs goes to the other list and runs after the next update, as before.
             List<Action> pending = _afterUpdate;
             _afterUpdate = _afterUpdateRunning;
@@ -992,6 +1071,11 @@ public sealed class Map
 
     internal void QueueValuesUpdate(WorldObject obj)
     {
+        if (_world.IsParallelPhase && !ReferenceEquals(TickOwner.CurrentMap, this))
+        {
+            _world.CheckOwner(this, "values update");
+        }
+
         obj.IsQueuedForUpdate = true;
         _valuesQueue.Add(obj);
     }
@@ -1037,6 +1121,11 @@ public sealed class Map
     /// <summary>Re-file an object whose X/Y changed; non-player objects get a visibility pass this tick.</summary>
     internal void OnObjectMoved(WorldObject obj)
     {
+        if (_world.IsParallelPhase && !ReferenceEquals(TickOwner.CurrentMap, this))
+        {
+            _world.CheckOwner(this, "object relocation");
+        }
+
         CheckFinitePosition(obj);
         if (!_grid.Relocate(obj) && !_grid.Contains(obj))
         {
@@ -1701,6 +1790,11 @@ public sealed class Map
         if (!_world.IsWorldThread)
         {
             throw new InvalidOperationException("map state may only be changed on the world thread");
+        }
+
+        if (_world.IsParallelPhase)
+        {
+            _world.CheckOwner(this, "map membership change");
         }
     }
 

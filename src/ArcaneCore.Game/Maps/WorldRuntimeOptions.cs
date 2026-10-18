@@ -112,6 +112,9 @@ public sealed class WorldRuntimeOptions
     /// </summary>
     public PerformanceLogOptions Perf { get; set; } = new();
 
+    /// <summary>Parallel map updates (the <c>World:Parallel</c> section; docs/research/multithreading-plan-20261017.md). Read at world start.</summary>
+    public ParallelMapOptions Parallel { get; set; } = new();
+
     /// <summary>Grid lifecycle and terrain data (the <c>World:Maps</c> section; docs/areas/grid-terrain.md).</summary>
     public MapOptions Maps { get; set; } = new();
 

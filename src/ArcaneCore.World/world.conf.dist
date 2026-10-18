@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       591 keys
+#   WORLD                       596 keys
 #
 ###############################################################################
 
@@ -8476,6 +8476,75 @@ World.MaxWorldPacketsPerTick = 150
 #        Docs: docs/reference/configuration.md#world
 #
 World.Motd = "Welcome to ArcaneCore."
+
+#
+#    World.Parallel.GateAllStages
+#        Description: With MapUpdateThreads above 1, run every stage of every map update inside the
+#                     serial gate, even the ones classified map-local (default false). The workers
+#                     and the barrier still run; nothing runs concurrently. A switch to tell a race
+#                     in a map-local stage from a problem of the parallel machinery itself.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Parallel.GateAllStages = false
+
+#
+#    World.Parallel.Gated
+#        Description: Map-update stages or updater type names to run inside the serial gate although
+#                     the code classifies them map-local (default empty).
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Parallel.Gated = ""
+
+#
+#    World.Parallel.MapUpdateThreads
+#        Description: Threads that update maps during the maps phase, the world thread included
+#                     (default 1: today's serial loop, exactly). With 2 or more, maps (continents,
+#                     instances, battlegrounds) are updated concurrently, one thread per map at a
+#                     time; map work that is not classified as map-local runs inside the world's
+#                     serial gate, and the tick continues only when every map is done. 1..64.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Parallel.MapUpdateThreads = 1
+
+#
+#    World.Parallel.OwnerGuard
+#        Description: What a change to a map's state from a thread that does not own it does while
+#                     maps update in parallel (default Report). Off with MapUpdateThreads 1, where
+#                     only the world thread runs. Values: Off, Report, Throw.
+#        Type: OwnerGuardMode
+#        Default: Report
+#        Allowed: Off | Report | Throw
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Parallel.OwnerGuard = Report
+
+#
+#    World.Parallel.Ungated
+#        Description: Map-update stages (Packets, Heartbeat, ActiveCells, Output, Grid, Deferred) or
+#                     updater type names (CreatureMapSystem, …) to run outside the serial gate
+#                     although the code does not classify them map-local, comma-separated (default
+#                     empty). An experiment switch for finding what still races; a stage that is not
+#                     map-local can corrupt shared state when ungated.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Parallel.Ungated = ""
 
 #
 #    World.PlayerCommands

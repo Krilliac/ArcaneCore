@@ -78,6 +78,12 @@ public static class WorldConfigKeys
         // WorldRuntime.Run builds its waiter and scheduler once (docs/integration/perf-limits-20261008.md).
         Fixed("TickTimer", v => v.Runtime.TickTimer),
         Fixed("TickLateToleranceMs", v => v.Runtime.TickLateToleranceMs),
+        // WorldRuntime builds the map threads and the stage gates once, on the first parallel tick (docs/research/multithreading-plan-20261017.md).
+        Fixed("Parallel:MapUpdateThreads", v => v.Runtime.Parallel.MapUpdateThreads),
+        Fixed("Parallel:GateAllStages", v => v.Runtime.Parallel.GateAllStages),
+        Fixed("Parallel:Ungated", v => v.Runtime.Parallel.Ungated),
+        Fixed("Parallel:Gated", v => v.Runtime.Parallel.Gated),
+        Fixed("Parallel:OwnerGuard", v => v.Runtime.Parallel.OwnerGuard),
         Fixed("Maps:DataDirectory", v => v.Runtime.Maps.DataDirectory),
         FixedPlayerbots(nameof(PlayerbotOptions.AsyncNavigationEnabled), o => o.AsyncNavigationEnabled),
         FixedListener("Port", v => v.Port),

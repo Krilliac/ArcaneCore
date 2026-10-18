@@ -14,7 +14,7 @@ namespace ArcaneCore.Game.Maps;
 /// All in-world state is owned by that thread; other threads interact only through
 /// <see cref="Post"/> / <see cref="InvokeAsync{T}"/> and the thread-safe online registry.
 /// </summary>
-public sealed class WorldRuntime : IDisposable
+public sealed partial class WorldRuntime : IDisposable
 {
     private readonly ILogger _logger;
     private readonly ICharacterSaveQueue _saveQueue;
@@ -228,8 +228,17 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Approximate number of commands waiting for a world-thread tick.</summary>
     public int PendingCommandCount => _commands.Count;
 
-    /// <summary>True when the caller is the world thread (or no world thread is running).</summary>
-    public bool IsWorldThread => _worldThreadId == -1 || Environment.CurrentManagedThreadId == _worldThreadId;
+    /// <summary>
+    /// True when the caller is the world thread (or no world thread is running), or a map thread of the parallel maps phase while it
+    /// updates one of this world's maps (<see cref="TickOwner"/>): simulation code may run there and must keep its synchronous,
+    /// on-thread path (an <see cref="InvokeAsync{T}"/> from a map thread would wait for a world thread that waits for it). Whether the
+    /// caller may change one particular map is <see cref="IsOwner"/>; world-wide state during the parallel phase is behind <see cref="EnterSerial"/>.
+    /// </summary>
+    public bool IsWorldThread => _worldThreadId == -1 || Environment.CurrentManagedThreadId == _worldThreadId
+        || ReferenceEquals(TickOwner.CurrentWorld, this);
+
+    /// <summary>True only on the world thread itself (or when no world thread runs): never on a map thread.</summary>
+    public bool IsMainWorldThread => _worldThreadId == -1 || Environment.CurrentManagedThreadId == _worldThreadId;
 
     /// <summary>Whether a character is currently in the world. Thread-safe.</summary>
     public bool IsOnline(ObjectGuid guid) => _online.ContainsKey(guid);
@@ -243,8 +252,22 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Every player in the world (world thread).</summary>
     public IEnumerable<Player> OnlinePlayers => _online.Values;
 
-    /// <summary>Existing maps (world thread); features can install per-map systems at attachment.</summary>
-    public IEnumerable<Map> Maps => _maps.Values;
+    /// <summary>Existing maps (world thread; a snapshot while maps update in parallel); features can install per-map systems at attachment.</summary>
+    public IEnumerable<Map> Maps
+    {
+        get
+        {
+            if (!_parallelPhase)
+            {
+                return _maps.Values;
+            }
+
+            lock (_maps)
+            {
+                return [.. _maps.Values];
+            }
+        }
+    }
 
     /// <summary>
     /// Raised on the world thread after a map and its default updaters have been registered.
@@ -450,6 +473,11 @@ public sealed class WorldRuntime : IDisposable
     /// </summary>
     public Map GetMap(uint mapId, uint instanceId)
     {
+        if (_parallelPhase)
+        {
+            return GetMapInParallelPhase(mapId, instanceId);
+        }
+
         if (!_maps.TryGetValue((mapId, instanceId), out Map? map))
         {
             map = new Map(mapId, instanceId, this, _logger);
@@ -461,8 +489,55 @@ public sealed class WorldRuntime : IDisposable
         return map;
     }
 
+    /// <summary>
+    /// <see cref="GetMap(uint, uint)"/> while maps update in parallel (W2.4): the lookup is locked, and a map that must be made is made
+    /// inside the serial gate (its default updaters and the <see cref="MapCreated"/> handlers touch world features). The new map is not
+    /// in this tick's map list, so it is first updated next tick, as in the serial loop (which updates a snapshot of the maps too).
+    /// </summary>
+    private Map GetMapInParallelPhase(uint mapId, uint instanceId)
+    {
+        lock (_maps)
+        {
+            if (_maps.TryGetValue((mapId, instanceId), out Map? existing))
+            {
+                return existing;
+            }
+        }
+
+        using SerialScope gate = EnterSerial();
+        Map? map;
+        lock (_maps)
+        {
+            if (_maps.TryGetValue((mapId, instanceId), out map))
+            {
+                return map;
+            }
+        }
+
+        map = new Map(mapId, instanceId, this, _logger);
+        DefaultMapUpdaters.AttachTo(map, this);
+        lock (_maps)
+        {
+            _maps[(mapId, instanceId)] = map;
+        }
+
+        Raise(MapCreated, map, nameof(MapCreated));
+        return map;
+    }
+
     /// <summary>An existing map instance, or null (vmangos <c>MapManager::FindMap</c>; world thread).</summary>
-    public Map? FindMap(uint mapId, uint instanceId = 0) => _maps.GetValueOrDefault((mapId, instanceId));
+    public Map? FindMap(uint mapId, uint instanceId = 0)
+    {
+        if (!_parallelPhase)
+        {
+            return _maps.GetValueOrDefault((mapId, instanceId));
+        }
+
+        lock (_maps)
+        {
+            return _maps.GetValueOrDefault((mapId, instanceId));
+        }
+    }
 
     /// <summary>
     /// Ask for an instance map to be unloaded after the current map pass (world thread). It is
@@ -473,9 +548,12 @@ public sealed class WorldRuntime : IDisposable
     public void UnloadMap(Map map)
     {
         ArgumentNullException.ThrowIfNull(map);
-        if (map.InstanceId != 0 && !_unloadRequests.Contains(map))
+        lock (_unloadRequests) // a map thread may ask during the parallel maps phase; the requests are served after it
         {
-            _unloadRequests.Add(map);
+            if (map.InstanceId != 0 && !_unloadRequests.Contains(map))
+            {
+                _unloadRequests.Add(map);
+            }
         }
     }
 
@@ -574,8 +652,20 @@ public sealed class WorldRuntime : IDisposable
         int mapCount = _maps.Count;
         Map[] maps = System.Buffers.ArrayPool<Map>.Shared.Rent(Math.Max(mapCount, 1));
         _maps.Values.CopyTo(maps, 0);
+        long parallelMapBytes = 0;
+        if (Options.Parallel.EffectiveMapUpdateThreads > 1)
+        {
+            EnsureMapScheduler();
+        }
+
         try
         {
+            if (_mapScheduler is { } scheduler && mapCount > 1)
+            {
+                parallelMapBytes = RunMapsParallel(scheduler, maps, mapCount, diffMs, observeMap);
+                mapCount = 0; // the serial loop below has nothing left to do
+            }
+
             for (int mapIndex = 0; mapIndex < mapCount; mapIndex++)
             {
                 Map map = maps[mapIndex];
@@ -609,6 +699,7 @@ public sealed class WorldRuntime : IDisposable
                     }
                 }
 
+                map.LastUpdateMicros = Micros(Stopwatch.GetTimestamp() - mapStart);
                 LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics, gcBeforeMap);
                 if (diagnostics is not null && observeMap is not null)
                 {
@@ -654,7 +745,7 @@ public sealed class WorldRuntime : IDisposable
             Micros((worldTickEnd - commandsEnd) + (featuresEnd - mapsEnd)))
         {
             CommandsBytes = commandsBytesEnd - bytesStart,
-            MapsBytes = mapsBytesEnd - worldTickBytesEnd,
+            MapsBytes = mapsBytesEnd - worldTickBytesEnd + parallelMapBytes,
             FeaturesBytes = (worldTickBytesEnd - commandsBytesEnd) + (featuresBytesEnd - mapsBytesEnd),
             WorldTickMicros = Micros(worldTickEnd - commandsEnd),
             AutosaveMicros = autosaveMicros,
@@ -708,6 +799,7 @@ public sealed class WorldRuntime : IDisposable
     public void Dispose()
     {
         Stop();
+        DisposeMapScheduler();
         _stopSignal.Dispose();
     }
 
@@ -718,10 +810,19 @@ public sealed class WorldRuntime : IDisposable
             return;
         }
 
-        long micros = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency;
+        LogIfSlowMicros(thresholdMs, (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency, what, map, diagnostics, gcBefore);
+    }
+
+    private void LogIfSlowMicros(int thresholdMs, long micros, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)
+    {
+        if (thresholdMs <= 0)
+        {
+            return;
+        }
+
         if (micros > thresholdMs * 1000L)
         {
-            string host = HostLoadText(micros);
+            string host = HostLoadText(micros) + ParallelText(map);
             if (diagnostics is { Completed: true } timing)
             {
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId,
@@ -1195,6 +1296,7 @@ public sealed class WorldRuntime : IDisposable
             }
         }
 
+        DisposeMapScheduler();
         _logger.LogInformation("World thread stopped");
     }
 }

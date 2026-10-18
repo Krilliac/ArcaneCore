@@ -594,9 +594,14 @@ public sealed class ConfigReloadTests : IDisposable
     public void EveryWorldOption_IsClassified_LiveOrRestartOnly()
     {
         var expected = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (PropertyInfo property in typeof(WorldRuntimeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(MapOptions) && p.PropertyType != typeof(WorldRespawnOptions) && p.PropertyType != typeof(PerformanceLogOptions))) // Perf is bound from the top-level PerformanceLog section (ops lane), not World:*
+        foreach (PropertyInfo property in typeof(WorldRuntimeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(MapOptions) && p.PropertyType != typeof(WorldRespawnOptions) && p.PropertyType != typeof(PerformanceLogOptions) && p.PropertyType != typeof(ParallelMapOptions))) // Perf is bound from the top-level PerformanceLog section (ops lane), not World:*
         {
             expected.Add($"World:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(ParallelMapOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"World:Parallel:{property.Name}");
         }
 
         foreach (PropertyInfo property in typeof(MapOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
@@ -790,8 +795,10 @@ public sealed class ConfigReloadTests : IDisposable
         // MaxConnections / MaxConnectionsPerIp: the connection limiter is built at start (hardening lane);
         // TickTimer / TickLateToleranceMs: WorldRuntime.Run builds its waiter and scheduler once (perf-limits lane);
         // Playerbots:AsyncNavigationEnabled: the private navigation executor is created when the feature attaches.
+        // Parallel:*: WorldRuntime builds the map threads and the stage gates once (docs/research/multithreading-plan-20261017.md).
         Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp",
-            "World:Playerbots:AsyncNavigationEnabled", "World:Port", "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
+            "World:Parallel:GateAllStages", "World:Parallel:Gated", "World:Parallel:MapUpdateThreads", "World:Parallel:OwnerGuard",
+            "World:Parallel:Ungated", "World:Playerbots:AsyncNavigationEnabled", "World:Port", "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
     }
 
     private sealed class NullSaveQueue : ICharacterSaveQueue
