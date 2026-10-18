@@ -98,7 +98,7 @@ public sealed class CharacterBoostExtension : ICommandExtension
             context.Reply($"Boost {name}: {BoostGearPlanner.SlotName(slot)} unchanged ({result}).");
         }
 
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsConsole && !ReferenceEquals(target, context.Player))
         {
             target.SendSystemMessage(string.Create(CultureInfo.InvariantCulture,
                 $"{GmStrings.PlayerLink(context.Player.Name)} boosted you to level {report.NewLevel}."));

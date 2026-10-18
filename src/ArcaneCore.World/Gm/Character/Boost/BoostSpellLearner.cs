@@ -110,7 +110,7 @@ internal static class BoostSpellLearner
             {
                 uint id = effect.TriggerSpell;
                 if (effect.Effect != SpellEffectName.LearnSpell || system.Store.Get(id) is not { } spell
-                    || spell.SpellFamilyName != family || spell.SpellLevel > level
+                    || (spell.SpellFamilyName != family && spell.SpellFamilyName != 0) || spell.SpellLevel > level
                     || spells.Spellbook.HasSpell(player, id)
                     || !(learner?.IsSpellFitByClassAndRace(player, id) ?? false)
                     || !SpellVariants.IsSpellValid(system, items, id))

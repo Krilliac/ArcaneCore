@@ -579,4 +579,46 @@ public sealed class CharacterBoostCommandTests
         BoostGearPlan noShield = BoostGearPlanner.Plan([oneHand, twoHand], weights, Class.Warrior, false, _ => true);
         Assert.Contains(InventorySlots.OffHand, noShield.EmptySlots);
     }
+
+    [Fact]
+    public async Task Boost_FromConsole_LearnsGenericFamilyClassQuestSpells_AndRepliesToConsoleSink()
+    {
+        const uint genericQuestTeach = 90012;
+        const uint genericQuestSpell = 1515; // e.g. Tame Beast: SpellFamilyName = 0 (SPELLFAMILY_GENERIC)
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: ConfigureSkills);
+        await using WorldTestClient client = await EnterAsync(host, "BSTCON", "Bstcon");
+        Player player = await InstallAsync(host, "Bstcon");
+
+        List<string> consoleReplies = [];
+        await host.OnWorldAsync(() =>
+        {
+            QuestNpcFeature quests = host.WorldServices.GetRequiredService<QuestNpcFeature>();
+            quests.Services.ReplaceQuests(new QuestStore(new QuestContent(
+            [
+                new QuestTemplate { Entry = 9001, MinLevel = 10, RequiredClasses = WarriorClassMask, RewSpellCast = QuestTeachNear },
+                new QuestTemplate { Entry = 9003, MinLevel = 10, RequiredClasses = WarriorClassMask, RewSpellCast = genericQuestTeach },
+            ], [], [])));
+
+            SpellFeature spells = host.WorldServices.GetRequiredService<SpellFeature>();
+            spells.System.Store = new SpellStore(
+            [
+                new SpellInfo { Id = Attack, SpellFamilyName = WarriorFamily, SpellLevel = 1 },
+                new SpellInfo { Id = TeachNear, Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = TaughtNear }] },
+                new SpellInfo { Id = TaughtNear, SpellFamilyName = WarriorFamily, SpellLevel = 4 },
+                new SpellInfo { Id = QuestTeachNear, Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = QuestNear }] },
+                new SpellInfo { Id = QuestNear, SpellFamilyName = WarriorFamily, SpellLevel = 10 },
+                new SpellInfo { Id = genericQuestTeach, Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = genericQuestSpell }] },
+                new SpellInfo { Id = genericQuestSpell, SpellFamilyName = 0, SpellLevel = 10 },
+            ], [], []);
+
+            var table = ArcaneCore.World.Commands.ChatCommands.CreateTable();
+            var ctx = ArcaneCore.World.Commands.CommandContext.ForConsole((ArcaneCore.World.Net.WorldSession)player.Session!, table, consoleReplies.Add);
+            var cmd = table.Resolve("character boost", AccountSecurity.Administrator)!;
+            Assert.True(cmd.Handler!(ctx, "Bstcon 14"));
+        });
+
+        Assert.Equal((byte)14, await host.PlayerStateAsync("Bstcon", p => p.Level));
+        Assert.True(await Knows(host, player, genericQuestSpell));
+        Assert.Contains(consoleReplies, l => l.StartsWith("Boost Bstcon: level 1->14, 3 spells learned", StringComparison.Ordinal));
+    }
 }
