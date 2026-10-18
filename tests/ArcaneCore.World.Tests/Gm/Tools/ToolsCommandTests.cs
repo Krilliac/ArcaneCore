@@ -208,3 +208,46 @@ public sealed class WorldToolsCommandTests
         return await client.CollectChatLinesAsync();
     }
 }
+
+/// <summary><c>.creature spawnmany</c>, <c>.inspect items</c> and <c>.alter durability</c>.</summary>
+public sealed class SpawnItemToolsCommandTests
+{
+    [Fact]
+    public void NewCommandsHaveTheirSecurityLevels()
+    {
+        CommandTable table = ChatCommands.CreateTable();
+        foreach (string path in new[] { "creature spawnmany", "inspect items", "alter durability" })
+        {
+            Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
+            Assert.NotNull(table.Resolve(path, AccountSecurity.GameMaster));
+        }
+    }
+
+    [Fact]
+    public async Task CreaturesAreSpawnedInBulkAndItemsListed()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSSPAWN", "Toolsspawn", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        CreatureMapSystem system = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().FindSystem(0)!);
+        int before = await host.OnWorldAsync(() => system.Creatures.Count(c => c.Spawn is null));
+
+        Assert.Contains(await RunAsync(gm, ".creature spawnmany 299 12 10"), l => l == "Placed 12 temporary Young Wolf (entry 299) within 10 yards.");
+        Assert.Equal(before + 12, await host.OnWorldAsync(() => system.Creatures.Count(c => c.Spawn is null)));
+        Player me = await host.PlayerAsync("Toolsspawn");
+        Assert.True(await host.OnWorldAsync(() => system.Creatures.Where(c => c.Spawn is null).All(c => MathF.Sqrt(((c.X - me.X) * (c.X - me.X)) + ((c.Y - me.Y) * (c.Y - me.Y))) <= 10.01f)));
+        Assert.Contains(await RunAsync(gm, ".creature spawnmany 299 500"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".creature spawnmany 4242424 3"), l => l == "Creature template 4242424 not found.");
+        Assert.Contains(await RunAsync(gm, ".creature despawntemp 20"), l => l.StartsWith("Removed 12 temporary", StringComparison.Ordinal));
+
+        Assert.Contains(await RunAsync(gm, ".inspect items"), l => l.StartsWith("Toolsspawn: ", StringComparison.Ordinal) && l.EndsWith(" item(s)", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".alter durability 50"), l => l.StartsWith("Toolsspawn: ", StringComparison.Ordinal) && l.Contains("worn item(s) set to 50% durability", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".alter durability 150"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+    }
+
+    private static async Task<string[]> RunAsync(WorldTestClient client, string command)
+    {
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        return await client.CollectChatLinesAsync();
+    }
+}

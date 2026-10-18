@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 363 |
-| `Administrator` | 6 | 532 |
+| `GameMaster` | 3 | 366 |
+| `Administrator` | 6 | 535 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -375,6 +375,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.creature delete` | 3 | GameMaster | stored level through the map | Syntax: .creature delete — remove the selected temporary creature. |
 | `.creature despawntemp` | 3 | GameMaster | declared retail level | Syntax: .creature despawntemp [#radius] Remove the temporary creatures (clones, .npc add without save, script summons; not pets, guardians, totems or database spawns) within #radius yards of you (default 30, at most 200). |
 | `.creature clone` | 3 | GameMaster | declared retail level | Syntax: .creature clone [#count] Place #count (default 1, at most 25) temporary copies of the selected creature's template around you. They are not saved and do not respawn. |
+| `.creature spawnmany` | 3 | GameMaster | declared retail level | Syntax: .creature spawnmany #entry #count [#radius] Place #count (1-200) temporary creatures of #entry spread evenly over a disc of #radius yards around you (default 15, 2-100) at ground height. Not saved; remove them with .creature despawntemp. |
 | `.arcane` ... | 3 | GameMaster | stored level through the map | ArcaneCore operator commands (read-only). Syntax: .arcane $subcommand |
 | `.arcane bancheck` | 3 | GameMaster | stored level through the map | Syntax: .arcane bancheck account\|character\|ip $value Show whether an account (by name), the account of a character, or an IP address is blocked from logging in right now. |
 | `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
@@ -416,6 +417,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.inspect grid` | 3 | GameMaster | declared retail level | Syntax: .inspect grid Show the grid and cell the selected object (or you) is in, whether that grid is loaded and how many grids of the map are loaded, the active cells and the map's largest bounding radius. |
 | `.inspect visibility` | 3 | GameMaster | declared retail level | Syntax: .inspect visibility Show whether the selected object is in your client's visible set and in visibility range, whether you are in its visible set (a player), and the size of both visible sets. |
 | `.inspect loot` | 3 | GameMaster | declared retail level | Syntax: .inspect loot Show the selected creature's loot: owner, permission, recipients, gold and every item with count, quest/per-player flags, looted and roll state. |
+| `.inspect items` | 3 | GameMaster | declared retail level | Syntax: .inspect items [$filter] List the items of the selected player (or yours), equipped, backpack, bags and bank: bag/slot, entry, name, count, durability and item guid; $filter keeps names containing it (at most 60 rows). |
 | `.inspect gobject` | 3 | GameMaster | declared retail level | Syntax: .inspect gobject [#guid] Show a game object (the nearest within 30 yards without #guid): template, type, state, loot state, flags, dynamic flags, faction, user, owner, summoning spell, use count, cooldown, auto-close and respawn timers, skill-ups granted, non-zero data fields and its open loot. |
 | `.inspect cooldowns` | 3 | GameMaster | declared retail level | Syntax: .inspect cooldowns List the running spell and category cooldowns of the selected unit (creature or player, yourself without a selection) with the time left. |
 | `.inspect quests` | 3 | GameMaster | declared retail level | Syntax: .inspect quests [$filter] List the quest log of the selected player (or yours): slot, id, title, status, each kill/object and item objective's progress and the timer; $filter keeps the titles containing it. Also counts the rewarded quests. |
@@ -453,6 +455,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.alter field` | 6 | Administrator | declared retail level | Syntax: .alter field #index #value\|#hex\|#float f Write a raw update field of the selected unit (sent to the clients that see it). Debugging only: the server may overwrite it at any time. |
 | `.alter auraduration` | 3 | GameMaster | declared retail level | Syntax: .alter auraduration #spellid #seconds Set the remaining time of the selected unit's (or your) aura of #spellid (a spell link works) to #seconds (0 lets it expire now, at most 86400). Permanent auras are not changed. |
 | `.alter aurastacks` | 3 | GameMaster | declared retail level | Syntax: .alter aurastacks #spellid #stacks Set the stack count of the selected unit's (or your) aura of #spellid to #stacks (1 up to the spell's limit); the effect amounts scale with it and an increase refreshes the duration. |
+| `.alter durability` | 3 | GameMaster | declared retail level | Syntax: .alter durability #percent [all] Set the durability of the selected player's (or your) worn items, or with 'all' every carried item, to #percent (0-100) of the maximum; 0 breaks them and a broken worn item loses its stats. Saved. |
 | `.alter instancedata` | 4 | Administrator | declared retail level | Syntax: .alter instancedata #slot #value Call SetData(#slot, #value) on your map's instance script (encounter states: 0 not started, 1 in progress, 2 failed, 3 done, as the script defines) and show GetData before and after. The script may save it. |
 | `.alter dynflag` | 3 | GameMaster | declared retail level | Syntax: .alter dynflag $flag\|#hex on\|off Set or clear one dynamic flag of the selected unit: Lootable, TrackUnit, Tapped, TappedByPlayer, SpecialInfo, Dead or a hex bit. |
 | `.alter combatreach` | 3 | GameMaster | declared retail level | Syntax: .alter combatreach #yards Set the combat reach of the selected unit (0-50 yards; melee range is built from it). A creature gets its model's value back when it respawns. |
