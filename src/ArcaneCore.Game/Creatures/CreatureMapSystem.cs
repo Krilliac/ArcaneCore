@@ -215,7 +215,19 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         public long SlowestCreatureTicks;
         public uint SlowestEntry;
         public Type? SlowestGenerator;
+
+        /// <summary>The update's slowest A* search (<see cref="SearchPath"/>): its time, who asked, the endpoints and the work it did.</summary>
+        public long SlowestSearchTicks;
+        public SlowSearch SlowestSearch;
     }
+
+    /// <summary>
+    /// One search's detail for the slow-map-update line. Few nodes and expansions with a long time mean the search didn't get the
+    /// thread (a GC, paging, the host). Many nodes mean the search did the work. LS-008: single creature searches of 120-560 ms with
+    /// no GC on the live 2026-10-17 run, under node caps of 512-2048.
+    /// </summary>
+    private readonly record struct SlowSearch(
+        uint Entry, MovementGeneratorType Motion, Vector3 From, Vector3 To, long Nodes, long Expansions, PathType Result, bool GcDuring);
 
     private UpdateTiming _timing;
 
@@ -232,6 +244,13 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         if (t.SlowestCreatureTicks > 0)
         {
             text += $"; slowest creature entry {t.SlowestEntry} {TickMs(t.SlowestCreatureTicks)} ms, top generator {t.SlowestGenerator?.Name ?? "none"}";
+        }
+
+        if (t.SlowestSearchTicks > 0)
+        {
+            SlowSearch s = t.SlowestSearch;
+            text += string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"; slowest path search {TickMs(t.SlowestSearchTicks)} ms: entry {s.Entry} ({s.Motion}) from {s.From.X:F1},{s.From.Y:F1},{s.From.Z:F1} to {s.To.X:F1},{s.To.Y:F1},{s.To.Z:F1}, {s.Nodes} nodes, {s.Expansions} expansions, {s.Result}{(s.GcDuring ? ", a GC ran during it" : "")}");
         }
 
         return text;
@@ -439,7 +458,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         PathOptions pathOptions = PathOptionsFor(creature, toSpawn, chase);
-        PathResult path = SearchPath(start, destination, pathOptions);
+        PathResult path = SearchPath(creature, start, destination, pathOptions);
         if ((path.Type & PathType.TilesPending) != 0)
         {
             NoteDeferredPath(creature);
@@ -611,9 +630,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         => !creature.Combat.IsInCombat && creature.Motion.CurrentType == MovementGeneratorType.Random;
 
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
-    private PathResult SearchPath(Vector3 start, Vector3 destination, PathOptions? options = null)
+    private PathResult SearchPath(Creature creature, Vector3 start, Vector3 destination, PathOptions? options = null)
     {
         PathSearchTotals before = PathSearchCounters.Current;
+        int gen0Before = GC.CollectionCount(0);
         long started = Stopwatch.GetTimestamp();
         PathResult path = Map.Collision.FindPath(start, destination, options);
         long elapsed = Stopwatch.GetTimestamp() - started;
@@ -622,6 +642,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         if (spent.Searches > 0)
         {
             _pathTicksThisTick += elapsed; // as with the counts, a straight line without navigation data costs nothing
+            if (elapsed > _timing.SlowestSearchTicks)
+            {
+                _timing.SlowestSearchTicks = elapsed;
+                _timing.SlowestSearch = new SlowSearch(creature.Entry, creature.Motion.CurrentType, start, destination, spent.Nodes, spent.Expansions,
+                    path.Type, GC.CollectionCount(0) != gen0Before);
+            }
         }
 
         _timing.Searches += (int)spent.Searches;

@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -158,6 +160,49 @@ public sealed class SlowMapBreakdownTests
             Assert.Contains("spawn groups ", text);
             Assert.Contains($"slowest creature entry {WolfEntry} ", text);
             Assert.Contains(diagnostics.Updaters, u => ReferenceEquals(u.Updater, system)); // timed like every updater
+        }
+    }
+
+    /// <summary>Answers "tiles pending" once (the move waits for the next update), then a slow 7-node search.</summary>
+    private sealed class SlowSecondSearch : IPathfinder
+    {
+        private int _calls;
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (_calls++ == 0)
+            {
+                return new PathResult(PathType.TilesPending, [start]);
+            }
+
+            Thread.Sleep(30);
+            PathSearchCounters.RecordSearch(7, 9, capped: false);
+            return new PathResult(PathType.Normal, [start, end]);
+        }
+    }
+
+    [Fact]
+    public void CreatureSystem_NamesTheSlowestPathSearch_WithItsEndpointsAndWork()
+    {
+        var content = new CreatureContent([Template()], [Spawn(1, WolfEntry, 15f, 0f)], [], [], [], CreatureAiContent.Empty);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        using (world)
+        {
+            AddPlayer(world, 1, 0, 0);
+            WorldCollision.Of(world).Install(pathfinder: new SlowSecondSearch());
+            Creature wolf = Assert.Single(system.Creatures);
+            system.MoveTo(wolf, 25f, 4f, wolf.Z, run: false, finalOrientation: null); // deferred to the next update
+            map.Update(100, map.ReusableDiagnostics());
+
+            string text = ((IMapUpdateBreakdown)system).DescribeLastUpdate();
+
+            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(text,
+                @"slowest path search (\d+\.\d) ms: entry (\d+) \(\w+\) from 15\.0,0\.0,[-\d.]+ to 25\.0,4\.0,[-\d.]+, 7 nodes, 9 expansions, Normal");
+            Assert.True(m.Success, text);
+            Assert.Equal(WolfEntry.ToString(System.Globalization.CultureInfo.InvariantCulture), m.Groups[2].Value);
+            Assert.True(double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) >= 25.0, text);
         }
     }
 }
