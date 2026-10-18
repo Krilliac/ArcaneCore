@@ -68,6 +68,20 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         HandleList(player, player.Guid);
     }
 
+    /// <summary>
+    /// Load a hunter's stable at login so its pet numbers are reserved before the hunter can tame again: pet numbers are only reserved when a
+    /// stored pet loads, and a fresh tame after a restart must not reuse a stabled pet's number (vmangos seeds GeneratePetNumber from the
+    /// whole character_pet table, stabled pets included).
+    /// </summary>
+    public void Prefetch(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.Class == Class.Hunter && Store is not null)
+        {
+            WithState(player, failWhenBusy: false, static _ => { });
+        }
+    }
+
     /// <summary>MSG_LIST_STABLED_PETS from the client: u64 stable master.</summary>
     public void HandleList(Player player, ObjectGuid npc)
     {
@@ -352,6 +366,11 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             }
 
             entry.State = loaded;
+            foreach (StabledPet stabled in loaded.Pets)
+            {
+                summons.ReservePetNumber(stabled.Pet.PetNumber);
+            }
+
             if (player.IsInWorld && ReferenceEquals(_entries.GetValueOrDefault(id), entry))
             {
                 next(loaded);

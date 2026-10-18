@@ -45,6 +45,7 @@ public sealed class PetStableFeature(IServiceProvider services, IServiceScopeFac
         controller.MoneyChanged += world.SavePlayer;
         Controller = controller;
         world.PlayerLoggingOut += player => controller.Forget(checked((int)player.Guid.Low));
+        world.PlayerLoggedIn += controller.Prefetch;
         world.WorldTick += _ => WireGossip();
         WireGossip();
     }

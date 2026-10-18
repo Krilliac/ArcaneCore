@@ -85,6 +85,21 @@ public sealed class PetStableTests
         => (StableResult)session.Sent.Last(p => p.Opcode == WorldOpcode.SmsgStableResult).Payload.Single();
 
     [Fact]
+    public void Prefetch_ReservesStabledPetNumbers_SoANewTameDoesNotReuseThem()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store) = Stable(kit, slots: 1);
+        (Player hunter, _) = Hunter(kit);
+        store.Stabled[1] = new PersistentPetSnapshot(1, 500, BeastEntry, 20, 0, 100, 0, 0, 1, [], []);
+
+        stable.Prefetch(hunter);
+        Creature pet = Tame(kit, hunter);
+
+        Assert.True(pet.Summon!.Charm!.PetNumber > 500);
+        Assert.Single(stable.CachedState(1)!.Pets);
+    }
+
+    [Fact]
     public void BuySlot_ChargesTheDbcPrice_UpToTwoSlots()
     {
         using PetTestKit kit = Kit();
