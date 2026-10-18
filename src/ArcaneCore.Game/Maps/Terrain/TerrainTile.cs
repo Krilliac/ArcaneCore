@@ -182,7 +182,8 @@ public sealed class TerrainTile
         }
     }
 
-    private enum HeightStorage
+    /// <summary>How a tile stores its heights: none (flat at the grid height), f32 samples, or u16/u8 samples scaled by the grid height range.</summary>
+    internal enum HeightStorage
     {
         Flat,
         Float,
@@ -191,6 +192,93 @@ public sealed class TerrainTile
 
     /// <summary>Whether the tile came from a file (false for <see cref="Empty"/>).</summary>
     public bool HasData => !ReferenceEquals(this, Empty);
+
+    // Internal read-only views for the Atlas visualizer (tools/ArcaneCore.Atlas, InternalsVisibleTo). They only read the arrays
+    // parsed above, with the same indexing the lookups use, so what a tool draws is what the lookups interpolate. No behaviour change.
+
+    /// <summary>The storage the height lookups use for this tile.</summary>
+    internal HeightStorage Storage => _heightStorage;
+
+    /// <summary>The grid height: the answer of a flat tile, and the offset packed samples are scaled onto.</summary>
+    internal float GridHeight => _gridHeight;
+
+    /// <summary>
+    /// Height of V9 corner (<paramref name="row"/>, <paramref name="col"/>) in 0..128, the sample <see cref="GetHeightFromFloat"/> and
+    /// <see cref="GetHeightFromPacked"/> read as h1..h4: world X falls with the row, world Y with the column. Packed samples are scaled and
+    /// offset the way <see cref="GetHeightFromPacked"/> does; a flat tile answers the grid height.
+    /// </summary>
+    internal float CornerHeight(int row, int col)
+    {
+        CheckSample(row, col, Resolution + 1);
+        return _heightStorage switch
+        {
+            HeightStorage.Float => _v9![(row * (Resolution + 1)) + col],
+            HeightStorage.Packed => (_v9Int![(row * (Resolution + 1)) + col] * _gridIntHeightMultiplier) + _gridHeight,
+            _ => _gridHeight,
+        };
+    }
+
+    /// <summary>
+    /// Height of the V8 centre sample of square (<paramref name="row"/>, <paramref name="col"/>) in 0..127: the apex all four triangles of the
+    /// square meet in (the interpolation reads it as h5 = 2 * V8).
+    /// </summary>
+    internal float CentreHeight(int row, int col)
+    {
+        CheckSample(row, col, Resolution);
+        return _heightStorage switch
+        {
+            HeightStorage.Float => _v8![(row * Resolution) + col],
+            HeightStorage.Packed => (_v8Int![(row * Resolution) + col] * _gridIntHeightMultiplier) + _gridHeight,
+            _ => _gridHeight,
+        };
+    }
+
+    /// <summary>Whether the hole mask covers square (<paramref name="row"/>, <paramref name="col"/>) in 0..127, whatever the storage (<see cref="IsHole"/>).</summary>
+    internal bool HoleMaskCovers(int row, int col)
+    {
+        CheckSample(row, col, Resolution);
+        return IsHole(row, col);
+    }
+
+    /// <summary>Whether the height lookup answers <see cref="InvalidHeightValue"/> for the square because of a hole: only float tiles check the mask.</summary>
+    internal bool IsServerHole(int row, int col) => _heightStorage == HeightStorage.Float && HoleMaskCovers(row, col);
+
+    /// <summary>
+    /// The liquid of square (<paramref name="row"/>, <paramref name="col"/>) in 0..127 as <see cref="GetLiquidStatus"/> reads it before it compares
+    /// with the ground or the query height: false when the tile has no liquid type there or the square lies outside the liquid rectangle.
+    /// </summary>
+    internal bool TryGetLiquidSquare(int row, int col, out byte type, out ushort entry, out float level)
+    {
+        CheckSample(row, col, Resolution);
+        type = 0;
+        entry = 0;
+        level = InvalidHeightValue;
+        if (_liquidFlags is null && _liquidGlobalFlags == 0)
+        {
+            return false;
+        }
+
+        int idx = ((row >> 3) * 16) + (col >> 3);
+        type = _liquidFlags is not null ? _liquidFlags[idx] : _liquidGlobalFlags;
+        entry = _liquidEntry is not null ? _liquidEntry[idx] : _liquidGlobalEntry;
+        int lx = row - _liquidOffY;
+        int ly = col - _liquidOffX;
+        if (type == 0 || lx < 0 || lx >= _liquidHeight || ly < 0 || ly >= _liquidWidth)
+        {
+            return false;
+        }
+
+        level = _liquidMap is not null ? _liquidMap[(lx * _liquidWidth) + ly] : _liquidLevel;
+        return true;
+    }
+
+    private static void CheckSample(int row, int col, int size)
+    {
+        if ((uint)row >= (uint)size || (uint)col >= (uint)size)
+        {
+            throw new ArgumentOutOfRangeException(nameof(row), $"sample ({row}, {col}) is outside 0..{size - 1}");
+        }
+    }
 
     /// <summary>
     /// Parse a <c>.map</c> file. Throws <see cref="InvalidDataException"/> for a wrong magic or

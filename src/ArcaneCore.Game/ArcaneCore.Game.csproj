@@ -10,6 +10,8 @@
     <InternalsVisibleTo Include="ArcaneCore.Game.Tests" />
     <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
     <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />
+    <InternalsVisibleTo Include="arcane-atlas" />
+    <InternalsVisibleTo Include="ArcaneCore.Atlas.Tests" />
   </ItemGroup>
 
   <ItemGroup>
