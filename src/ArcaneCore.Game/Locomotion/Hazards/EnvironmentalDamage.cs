@@ -31,12 +31,11 @@ public enum EnvironmentalSchool
 public readonly record struct EnvironmentalMitigation(uint Absorb, int Resist);
 
 /// <summary>
-/// Absorb, resist and immunity for environmental damage. The spell combat rules that compute them (vmangos
-/// <c>IsImmuneToDamage</c>, <c>CalculateDamageAbsorbAndResist</c>) belong to the spell-combat-rules lane and are not on
-/// this branch, so the default (<see cref="None"/>) mitigates nothing: lava is not reduced by fire resistance and fire
-/// immunity does not protect. Register the real implementation with <see cref="LocomotionEnvironment.RegisterMitigation"/>.
-/// Falling, drowning and fatigue are never absorbed (client 1.7.0 and later, Player.cpp:743-750); only their immunity
-/// is asked.
+/// Absorb, resist and immunity for environmental damage (vmangos <c>IsImmuneToDamage</c>, <c>CalculateDamageAbsorbAndResist</c>).
+/// The spell system's <see cref="Spells.SpellEnvironmentalMitigation"/> answers them from the live auras and the spell combat
+/// rules; the world daemon registers it with <see cref="LocomotionEnvironment.RegisterMitigation"/>. With nothing registered
+/// <see cref="NoEnvironmentalMitigation"/> mitigates nothing. Falling, drowning and fatigue are never absorbed (client 1.7.0
+/// and later, Player.cpp:743-750); only their immunity is asked.
 /// </summary>
 public interface IEnvironmentalDamageMitigation
 {
@@ -47,7 +46,7 @@ public interface IEnvironmentalDamageMitigation
     EnvironmentalMitigation Calculate(Player player, EnvironmentalSchool school, uint damage);
 }
 
-/// <summary>The pass-through mitigation.</summary>
+/// <summary>The pass-through mitigation of a world without a spell system.</summary>
 public sealed class NoEnvironmentalMitigation : IEnvironmentalDamageMitigation
 {
     public static NoEnvironmentalMitigation Instance { get; } = new();

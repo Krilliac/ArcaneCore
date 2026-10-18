@@ -8,8 +8,9 @@ namespace ArcaneCore.Game.Locomotion;
 
 /// <summary>
 /// Physical damage taken modifiers for a fall (vmangos <c>GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN,
-/// SPELL_SCHOOL_MASK_NORMAL)</c>, Player.cpp:20854). The spell combat rules own that aura query and are not on this
-/// branch, so the default multiplier is 1; register the real one with <see cref="LocomotionEnvironment.RegisterFallModifiers"/>.
+/// SPELL_SCHOOL_MASK_NORMAL)</c>, Player.cpp:20854-20855). The spell system's <see cref="SpellEnvironmentalMitigation"/> reads
+/// those auras; the world daemon registers it with <see cref="LocomotionEnvironment.RegisterFallModifiers"/>. With nothing
+/// registered the multiplier is 1 (<see cref="NoFallDamageModifiers"/>).
 /// </summary>
 public interface IFallDamageModifiers
 {
@@ -17,7 +18,7 @@ public interface IFallDamageModifiers
     float TakenDamageMultiplier(Player player);
 }
 
-/// <summary>The pass-through modifier: nothing changes fall damage.</summary>
+/// <summary>The pass-through modifier of a world without a spell system: nothing changes fall damage.</summary>
 public sealed class NoFallDamageModifiers : IFallDamageModifiers
 {
     public static NoFallDamageModifiers Instance { get; } = new();

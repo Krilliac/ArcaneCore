@@ -54,7 +54,7 @@ public static class SpellCombatRules
 /// code copied; formulas cited per member). Damage class NONE spells always hit and never crit
 /// (vmangos Unit::SpellHitResult / IsSpellCrit "case SPELL_DAMAGE_CLASS_NONE").
 /// </summary>
-public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISpellResistRoll
+public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISpellResistRoll, ISchoolResistRoll
 {
     /// <summary>
     /// Base spell critical chance (percent) of a player before stat-driven bonuses. The stats area
@@ -499,19 +499,37 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (damage == 0 || (spell.School == SpellSchool.Holy && Options.IgnoreHolyResistance))
+        bool canResist = spell.School != SpellSchool.Normal && !IsBinary(spell) && !spell.IgnoresResistances();
+        return RollResist(system, caster, target, spell.School, damage, canResist, periodic ? spell : null);
+    }
+
+    /// <summary>
+    /// The resist of damage no spell deals (<see cref="ISchoolResistRoll"/>; vmangos CalculateDamageAbsorbAndResist with a null
+    /// spell entry, Unit.cpp:1938-1953): any non-physical school can be partially resisted, a vulnerability adds damage, and the
+    /// chance and outcome are those of <see cref="RollResist(SpellSystem, Unit, Unit, SpellInfo, uint, bool)"/> for a direct hit.
+    /// </summary>
+    public virtual int RollResist(SpellSystem system, Unit caster, Unit target, SpellSchool school, uint damage)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(target);
+        return RollResist(system, caster, target, school, damage, school != SpellSchool.Normal, dotSpell: null);
+    }
+
+    private int RollResist(SpellSystem system, Unit caster, Unit target, SpellSchool school, uint damage, bool canResist, SpellInfo? dotSpell)
+    {
+        if (damage == 0 || (school == SpellSchool.Holy && Options.IgnoreHolyResistance))
         {
             return 0;
         }
 
-        bool canResist = spell.School != SpellSchool.Normal && !IsBinary(spell) && !spell.IgnoresResistances();
-        float chance = ResistChance(system, caster, target, spell.School, innateResists: true);
+        float chance = ResistChance(system, caster, target, school, innateResists: true);
         if (chance == 0f || (!canResist && chance >= 0f))
         {
             return 0;
         }
 
-        float multiplier = ResistMultiplier(system, Math.Abs(chance), periodic ? spell : null);
+        float multiplier = ResistMultiplier(system, Math.Abs(chance), dotSpell);
         int resisted = SpellRounding.Dither(damage * multiplier, system.Random);
         return chance < 0f ? -resisted : resisted;
     }
