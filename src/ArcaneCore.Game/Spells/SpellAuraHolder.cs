@@ -353,7 +353,47 @@ public sealed class SpellAuraHolder
     /// vmangos SpellAuraHolder::IsNeedVisibleSlot (subset): spells with a SpellVisual always take
     /// a slot; otherwise passive auras do not.
     /// </summary>
-    internal bool NeedsVisibleSlot => Spell.SpellVisual != 0 || !Spell.IsPassive;
+    internal bool NeedsVisibleSlot
+    {
+        get
+        {
+            // vmangos SpellAuraHolder::IsNeedVisibleSlot (SpellAuras.cpp): a persistent area aura (Blizzard, Rain of Fire, Volley) that only
+            // deals damage takes no slot; one with a secondary effect (Hurricane's slow) does. Party and pet area auras: the passive source
+            // on its own caster takes none.
+            bool persistent = Spell.Effects[0].Effect == SpellEffectName.PersistentAreaAura;
+            bool secondary = false;
+            for (int i = 0; i < SpellConstants.MaxEffects; i++)
+            {
+                if (_auras[i] is null && !persistent)
+                {
+                    continue;
+                }
+
+                switch (Spell.Effects[i].Effect)
+                {
+                    case SpellEffectName.ApplyAreaAuraParty:
+                    case SpellEffectName.ApplyAreaAuraPet:
+                        return (Target.Guid != CasterGuid || !Spell.IsPassive) && _auras[i] is { Type: not AuraType.None };
+                    case SpellEffectName.PersistentAreaAura when Spell.Effects[i].AuraType != AuraType.PeriodicDamage:
+                        secondary = true;
+                        break;
+                }
+            }
+
+            if (persistent && !secondary)
+            {
+                return false;
+            }
+
+            return Spell.SpellVisual != 0 || !Spell.IsPassive;
+        }
+    }
+
+    /// <summary>The spell that made this holder was triggered (vmangos SpellAuraHolder::IsTriggered, set from Spell::IsTriggered).</summary>
+    internal bool IsTriggered { get; init; }
+
+    /// <summary>When the holder joined its unit, for the visible slot limit's "the later one wins" within a category.</summary>
+    internal long ApplyOrder { get; set; }
 
     /// <summary>
     /// AURAFLAGS nibble for this holder (vmangos SpellAuraHolder::SetAuraFlag, build &gt; 1.6.1):

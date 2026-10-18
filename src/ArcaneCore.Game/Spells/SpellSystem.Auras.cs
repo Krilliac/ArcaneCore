@@ -215,6 +215,7 @@ public sealed partial class SpellSystem
             context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration)
         {
             IsItemEquipAura = context.Cast.IsItemEquipCast,
+            IsTriggered = context.Cast.IsTriggered,
             Charges = context.Spell.ProcCharges > 0
                 ? Math.Max(0, ModInt(context.Caster, context.Spell, SpellModOp.Charges, (int)context.Spell.ProcCharges))
                 : 0,
@@ -388,8 +389,15 @@ public sealed partial class SpellSystem
             }
         }
 
+        if (!MakeRoomForVisibleAura(state, holder))
+        {
+            holder.IsRemoved = true;
+            return;
+        }
+
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
         holder.AppliedInProcEvent = CurrentProcEvent;
+        holder.ApplyOrder = ++_auraApplyOrder;
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
         SitDownForStandingCancelsAura(holder);
