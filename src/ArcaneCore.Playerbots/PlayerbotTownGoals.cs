@@ -790,7 +790,15 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     }
 
     /// <summary>
-    /// With no free bag slot left, sell the cheapest junk: a white (or gray) item that is not protected and is either not
+    /// The free bag slots a sale of junk leaves the bot (<see cref="FindJunk"/>): it sells while fewer are free. Selling stopped at the
+    /// first free slot, and the next corpse filled it again: live bots stood at quest enders with bags full of trade goods
+    /// (Stringy Wolf Meat x10 in six slots), every turn-in refused for space (bot-quest/turnin-refused InventoryFull, 44 of 50 in a
+    /// night's log, quests 183 and 182 at Talin Keeneye and Senir Whitebeard) and every loot left.
+    /// </summary>
+    internal const int JunkReserveSlots = 4;
+
+    /// <summary>
+    /// With fewer than <see cref="JunkReserveSlots"/> bag slots free, sell the cheapest junk: a white (or gray) item that is not protected and is either not
     /// equipment or equipment that is no upgrade for the bot's build (including what it cannot use at all).
     /// </summary>
     private bool TrySellJunk(Player player, QuestNpcServices services, NpcInfo npc)
@@ -803,7 +811,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private Item? FindJunk(Player player, QuestNpcServices services)
     {
-        if (FreeBagSlots(player) > 0)
+        if (FreeBagSlots(player) >= JunkReserveSlots)
             return null;
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
         return player.Inventory.AllItems

@@ -558,11 +558,14 @@ public sealed class PlayerbotQuestGoalsTests
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
+            session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
+            // The bags fill once the exchange has begun: a giver of a source item the full bags cannot take is not asked at all (c2f3484f).
+            Assert.True(goals.HasCandidate(player));
+            session.ManagedBudget = new ManagedActionBudget(1);
+            goals.Update(player, 500);
             while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
                 Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
-            session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
-            Assert.True(goals.HasCandidate(player));
-            for (int think = 0; think < 4; think++)
+            for (int think = 0; think < 3; think++)
             { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
             Assert.Equal(1, queries);
             Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)); // refused

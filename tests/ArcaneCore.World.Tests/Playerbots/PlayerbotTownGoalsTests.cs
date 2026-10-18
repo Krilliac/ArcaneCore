@@ -478,7 +478,8 @@ public sealed class PlayerbotTownGoalsTests
 
     /// <summary>
     /// With every bag slot taken, the bot sells the cheapest junk (a white trade good) and nothing it needs: not a quest item, not
-    /// the food it carries, not a white item that would be an upgrade; with a slot free again it stops selling.
+    /// the food it carries, not a white item that would be an upgrade; it goes on selling junk, cheapest first, until
+    /// <see cref="PlayerbotTownGoals.JunkReserveSlots"/> slots are free (one free slot was filled by the next corpse), then stops.
     /// </summary>
     [Fact]
     public async Task FullBags_SellTheCheapestJunk_AndNothingElse()
@@ -530,6 +531,13 @@ public sealed class PlayerbotTownGoalsTests
                     Assert.True(goals.Update(player, 1500));
                     Assert.Equal(0u, player.Inventory.GetItemCount(9302));
                     Assert.Equal(1, PlayerbotTownGoals.FreeBagSlots(player));
+                    // Then the white goods, one a service request, until the reserve is free.
+                    for (int sale = 0; sale < 8 && PlayerbotTownGoals.FreeBagSlots(player) < PlayerbotTownGoals.JunkReserveSlots; sale++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        Assert.True(goals.Update(player, 1500));
+                    }
+                    Assert.Equal(PlayerbotTownGoals.JunkReserveSlots, PlayerbotTownGoals.FreeBagSlots(player));
                     Assert.False(goals.HasCandidate(player));
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.False(goals.Update(player, 1500));
@@ -538,7 +546,7 @@ public sealed class PlayerbotTownGoalsTests
                 Assert.Equal(1u, await host.PlayerStateAsync("Controlone", p => p.Inventory.GetItemCount(9001)));
                 Assert.Equal(1u, await host.PlayerStateAsync("Controlone", p => p.Inventory.GetItemCount(9303)));
                 Assert.Equal(1u, await host.PlayerStateAsync("Controlone", p => p.Inventory.GetItemCount(117)));
-                Assert.Equal(2u, await host.PlayerStateAsync("Controlone", p => p.Money));
+                Assert.Equal(2u + (7u * (PlayerbotTownGoals.JunkReserveSlots - 1)), await host.PlayerStateAsync("Controlone", p => p.Money));
             }
             finally { session.Kick(); await session.ManagedClosed; }
         }
