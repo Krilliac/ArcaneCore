@@ -249,6 +249,67 @@ public sealed class KalimdorWorldMapData : WorldMapData
         }
     }
 
+    /// <summary>darkshore.cpp event_purify_food: how far from the bonfire furbolgs come, where the two extra warriors appear, how long they stay.</summary>
+    public const float PurifyFurbolgRange = 40f, PurifyWarriorRange = 30f, PurifyBowlDistance = 5f;
+    public const uint PurifyWarriorLifetimeMs = 120_000;
+
+    /// <summary>
+    /// ProcessEventId_event_purify_food (darkshore.cpp:826-861): for a player at the bonfire, every Blackwood furbolg within 40 yd of it
+    /// and two new Blackwood Warriors (at random points within 30 yd, two minutes out of combat) that are alive, out of combat and hostile
+    /// seek the purified food, 5 yd in front of the player (without the source's collision check); the last of them emotes. The handler
+    /// returns false, so the event's DB script (Xabraxxis) still runs. Any other source or target is handled and runs nothing.
+    /// </summary>
+    public override bool OnSpellEvent(Unit caster, uint eventId, WorldObject? target)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        if (eventId != ScriptedEvents.PurifyFood)
+        {
+            return OnSpellEvent(caster, eventId);
+        }
+
+        if (caster is not Player player || target is not GameObject bonfire)
+        {
+            return true;
+        }
+
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return false;
+        }
+
+        float rangeSq = PurifyFurbolgRange * PurifyFurbolgRange;
+        List<Creature> furbolgs = [.. creatures.Creatures.Where(c =>
+            c.Template.Entry is CorruptedFurbolgAI.NpcBlackwoodWarrior or CorruptedFurbolgAI.NpcBlackwoodTotemic
+            && ((c.X - bonfire.X) * (c.X - bonfire.X)) + ((c.Y - bonfire.Y) * (c.Y - bonfire.Y)) + ((c.Z - bonfire.Z) * (c.Z - bonfire.Z)) <= rangeSq)];
+        float bowlX = player.X + (MathF.Cos(player.Orientation) * PurifyBowlDistance), bowlY = player.Y + (MathF.Sin(player.Orientation) * PurifyBowlDistance);
+
+        for (int i = 0; i < 2; i++)
+        {
+            (float x, float y, float z) = RandomPointAround(bonfire.X, bonfire.Y, bonfire.Z, PurifyWarriorRange);
+            if (creatures.SummonDeadDespawnAt(CorruptedFurbolgAI.NpcBlackwoodWarrior, x, y, z, 0f) is { } warrior)
+            {
+                creatures.MarkTimedOutOfCombatDespawn(warrior, PurifyWarriorLifetimeMs);
+                furbolgs.Add(warrior);
+            }
+        }
+
+        Creature? last = furbolgs.Count > 0 ? furbolgs[^1] : null;
+        foreach (Creature furbolg in furbolgs)
+        {
+            if (furbolg.Combat.IsInCombat || !furbolg.IsAlive || !Instance.Combat.Hooks.CanAttack(furbolg, player))
+            {
+                continue;
+            }
+
+            if (furbolg.AI is CorruptedFurbolgAI ai)
+            {
+                ai.SeekPurification(ReferenceEquals(furbolg, last), bowlX, bowlY, player.Z);
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>azshara.cpp event_arcanite_buoy: the event, Maws's spawn point and facing, and the radius that keeps a second Maws away.</summary>
     public const uint EventArcaniteBuoy = 9542;
     public const float MawsSearchRange = 200f, LightningSearchRange = 20f;

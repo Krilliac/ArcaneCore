@@ -57,7 +57,7 @@ public static class ScriptedEvents
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(source);
-        if (map.FindUpdater<InstanceData>()?.OnSpellEvent(source, eventId) == true || GatedOff(map, eventId, source, target))
+        if (map.FindUpdater<InstanceData>()?.OnSpellEvent(source, eventId, target) == true || GatedOff(map, eventId, source, target))
         {
             return ScriptedEventResult.Handled;
         }
@@ -76,8 +76,8 @@ public static class ScriptedEvents
     /// The ClassicDB z2815 <c>scripted_event_id</c> handlers that also have dbscripts_on_event rows and no instance-script port: what each
     /// returns to StartEvents_Event, so the DB rows run only where cmangos runs them. Of the 50 bound event ids, 14 have rows: 2488 and
     /// 2609 (ZulFarrakInstance), 4884 (BlackrockSpireInstance) and 5618-5623 (ScholomanceInstance) are ported as instance scripts; the
-    /// five here are not. Their own side effects (the furbolg purification, the possess visual, J'eevee's ritual, the zombie chow
-    /// movement) are not ported; only the gate is.
+    /// five here are not, though event_purify_food's furbolg sequence is (KalimdorWorldMapData), which then lets this gate decide. The
+    /// others' own side effects (the possess visual, J'eevee's ritual, the zombie chow movement) are not ported; only the gate is.
     /// </summary>
     public static bool GatedOff(Map map, uint eventId, Unit source, WorldObject? target) => eventId switch
     {

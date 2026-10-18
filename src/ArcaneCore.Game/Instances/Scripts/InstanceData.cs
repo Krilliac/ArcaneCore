@@ -178,6 +178,12 @@ public abstract partial class InstanceData : IMapUpdater
     /// </summary>
     public virtual bool OnSpellEvent(Unit caster, uint eventId) => false;
 
+    /// <summary>
+    /// <see cref="OnSpellEvent(Unit, uint)"/> with the event's target (the SEND_EVENT spell's target, or the chest or goober that started it):
+    /// cmangos ProcessEventId's <c>target</c>. By default it asks the two-argument form, so scripts that do not need the target override that.
+    /// </summary>
+    public virtual bool OnSpellEvent(Unit caster, uint eventId, WorldObject? target) => OnSpellEvent(caster, eventId);
+
     /// <summary>ScriptDev2 InstanceData player leave callback.</summary>
     public virtual void OnPlayerLeave(Player player)
     {
