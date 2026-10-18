@@ -1024,6 +1024,7 @@ internal sealed class PlayerbotRisk
     /// </summary>
     internal void Refused(Player player, PlayerbotHazard hazard)
     {
+        if (hazard.Kind == PlayerbotHazards.StrongKind) StrongRefusals++;
         if (hazard.Kind != PlayerbotHazards.StrongKind || !Enabled || !player.IsAlive || EscapeRoute is not null) return;
         uint now = _session.World.NowMs;
         var here = new Vector3(player.X, player.Y, player.Z);
@@ -1084,6 +1085,12 @@ internal sealed class PlayerbotRisk
 
     /// <summary>Whether the last escape's route strayed into more aggro reach than its straight line (inspection, tests).</summary>
     internal bool LastEscapeStrays { get; private set; }
+
+    /// <summary>
+    /// The count of walks refused for a strong creature's reach (<see cref="Refused"/>), escaping or not: a caller compares it around a
+    /// plan to tell a refusal by a ring of creatures from one by the mesh (<see cref="PlayerbotBrain"/>'s explore ray).
+    /// </summary>
+    internal int StrongRefusals { get; private set; }
 
     /// <summary>When the boxed-in clock started (0: not started; tests).</summary>
     internal uint BoxedSinceMs => _boxedSinceMs;

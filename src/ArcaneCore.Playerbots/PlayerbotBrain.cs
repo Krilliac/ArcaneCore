@@ -124,6 +124,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
     private int _exploreRefusals;
+
+    /// <summary>The last explore leg was refused for a strong creature's reach, not by the mesh: the next ray stays full length (<see cref="WanderLegEnd"/>).</summary>
+    private bool _exploreRingRefused;
     private bool _exploreIslandWatchStarted;
     private bool _earlyExploreIslandChecked;
     private System.Numerics.Vector3 _exploreIslandAnchor;
@@ -3048,6 +3051,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
         PlayerbotThinkProbe.Phase("explore wander plan");
         ExploreWanderPlans++;
+        int strongRefusals = Risk.StrongRefusals;
         if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
         {
             AbandonRoute();
@@ -3085,6 +3089,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         else
         {
             _exploreRefusals++;
+            _exploreRingRefused = Risk.StrongRefusals != strongRefusals;
             if (_exploreRefusals == 1) _trace.Record(_session.World.NowMs, "wander-refused");
             PlayerbotMovementControl.Stop(_session, player);
         }
@@ -3243,7 +3248,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         float angle = _exploreRefusals >= 1
             ? orientation + (turnSign * _exploreRefusals * 2.39996323f)
             : orientation + (spread * MathF.PI * 2f / 3f);
-        float leg = ExploreLegLength(_exploreRefusals);
+        // A ray refused for a ring of strong creatures stays full length: a short one fits inside the ring, is taken, and the bot paces
+        // there instead of being boxed in and escaping through a gap (PlayerbotRisk.Refused; PlayerbotRingEscapeTests, red since d302bdd4).
+        float leg = ExploreLegLength(_exploreRingRefused ? 0 : _exploreRefusals);
         var destination = new System.Numerics.Vector3(
             from.X + (MathF.Cos(angle) * leg),
             from.Y + (MathF.Sin(angle) * leg),
