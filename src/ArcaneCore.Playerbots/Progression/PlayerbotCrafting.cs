@@ -376,6 +376,10 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                         return true;
                     if (planned == PlanOutcome.Refused || _route is null)
                     {
+                        // A fire in sight that no route reaches (inside a closed building, up a cliff) is no reason to skip the recipe: a cook
+                        // with Basic Campfire, wood and a flint lights one here instead (GitHub #774, ~60/h 'spell focus 4 unreachable' on live).
+                        if (bestSpell.RequiresSpellFocus == CookingFireFocus && TryLightCampfire(player, store, spellbook, now, out bool fallbackHandled))
+                            return fallbackHandled;
                         SetFocusAside(bestSpell, distantFocus, now);
                         if (!_session.IsInChaosProbe)
                             PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} spell focus {bestSpell.RequiresSpellFocus} unreachable");
