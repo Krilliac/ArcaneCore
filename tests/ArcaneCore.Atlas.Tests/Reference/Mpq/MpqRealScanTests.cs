@@ -58,7 +58,7 @@ public sealed class MpqRealScanTests(ITestOutputHelper output)
         Assert.Equal(97373, blocks);
 
         // Format version 0 with the 32-byte header, and version 1 (StormLib's MPQ_FORMAT_VERSION_2, which mpqcli prints as
-        // "Format version: 2") with the 44-byte header (StormLib.h:149-150,511-512).
+        // "Format version: 2") with the 44-byte header (StormLib.h:303-304,511-512).
         Assert.Equal(new[] { "v0/32", "v1/44" }, formats);
 
         // Every block: exists, optionally compressed (0x200), sector CRC (0x04000000) or deletion marker (0x02000000).

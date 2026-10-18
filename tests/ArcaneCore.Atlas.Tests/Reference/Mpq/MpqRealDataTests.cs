@@ -148,6 +148,39 @@ public sealed class MpqRealDataTests(ITestOutputHelper output)
         Assert.All(ExtractedArchives, a => Assert.True(compared.GetValueOrDefault(a) > 0, $"nothing compared from {a}"));
     }
 
+    [TerrainArchiveExtractFact]
+    public void EveryFileOfTerrainMpq_EqualsAStormLibExtractionOfThatArchiveAlone()
+    {
+        // patch.MPQ shadows most of terrain.MPQ's World\Maps\Azeroth files, so the merged extraction above cannot vouch for
+        // terrain.MPQ's own copies; this compares the archive itself, every listed name, against StormLib's copy of it alone.
+        using MpqArchive archive = MpqArchive.Open(Path.Combine(ClientArchiveData.ClientRoot!, "Data", "terrain.MPQ"));
+        string root = ClientArchiveData.TerrainExtractRoot!;
+        int compared = 0, azeroth = 0;
+        long bytes = 0;
+        var mismatched = new List<string>();
+        // StormLib also extracts the archive's own (listfile) and (attributes) entries.
+        string[] names = [.. archive.ListFile.Union(new[] { "(listfile)", "(attributes)" }.Where(archive.Contains), StringComparer.OrdinalIgnoreCase)];
+        foreach (string name in names)
+        {
+            byte[] ours = archive.Read(name);
+            byte[] theirs = File.ReadAllBytes(Path.Combine(root, name.Replace('\\', Path.DirectorySeparatorChar)));
+            if (!ours.AsSpan().SequenceEqual(theirs))
+            {
+                mismatched.Add($"{name} ({ours.Length} vs {theirs.Length} bytes)");
+            }
+
+            compared++;
+            bytes += ours.Length;
+            azeroth += name.StartsWith("World\\Maps\\Azeroth\\", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        }
+
+        int extracted = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Count();
+        output.WriteLine($"terrain.MPQ: {compared} listed files compared ({azeroth} under World\\Maps\\Azeroth), {bytes} bytes; StormLib wrote {extracted} files");
+        Assert.Empty(mismatched);
+        Assert.Equal(extracted, compared);
+        Assert.True(azeroth > 500, $"only {azeroth} World\\Maps\\Azeroth files in terrain.MPQ");
+    }
+
     [ClientArchiveFact]
     public void TheMountedBaseArchives_HoldDisjointNames()
     {

@@ -296,7 +296,8 @@ public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
         return level is >= 2 and <= 99 ? level : null;
     }
 
-    [GeneratedRegex(@"^patch-(\d{1,2})\.MPQ$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    // The extractors build these names with "%s-%d.MPQ" for 2..99 (vmapexport.cpp:299-308), so there is no leading zero.
+    [GeneratedRegex(@"^patch-([2-9]|[1-9][0-9])\.MPQ$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PatchName();
 
     private static List<string> FindArchiveFiles(string directory)

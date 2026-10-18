@@ -21,11 +21,12 @@ public sealed class MpqFileSystemTests : IDisposable
     [Fact]
     public void LoadOrder_IsTheClientChain_ThenOtherArchives_ThenPatchesByLevel()
     {
-        string[] names = ["patch-2.MPQ", "wmo.MPQ", "Fonts.MPQ", "patch.MPQ", "BASE.mpq", "patch-10.MPQ", "dbc.MPQ", "backup.MPQ", "terrain.MPQ", "patch-100.MPQ"];
+        string[] names = ["patch-2.MPQ", "wmo.MPQ", "Fonts.MPQ", "patch.MPQ", "BASE.mpq", "patch-10.MPQ", "dbc.MPQ", "backup.MPQ", "terrain.MPQ", "patch-100.MPQ", "patch-03.MPQ"];
         IReadOnlyList<string> order = MpqFileSystem.LoadOrder(names, out IReadOnlyList<(string Name, string Reason)> skipped);
 
-        // patch-100 is past the extractors' 1..99 scan, so it is just another archive (mounted below the patches).
-        Assert.Equal(new[] { "BASE.mpq", "dbc.MPQ", "terrain.MPQ", "wmo.MPQ", "Fonts.MPQ", "patch-100.MPQ", "patch.MPQ", "patch-2.MPQ", "patch-10.MPQ" }, order);
+        // patch-100 is past the extractors' 2..99 scan and patch-03 is not a name "%s-%d.MPQ" produces, so both are just
+        // other archives (mounted below the patches).
+        Assert.Equal(new[] { "BASE.mpq", "dbc.MPQ", "terrain.MPQ", "wmo.MPQ", "Fonts.MPQ", "patch-03.MPQ", "patch-100.MPQ", "patch.MPQ", "patch-2.MPQ", "patch-10.MPQ" }, order);
         Assert.Equal("backup.MPQ", Assert.Single(skipped).Name);
     }
 

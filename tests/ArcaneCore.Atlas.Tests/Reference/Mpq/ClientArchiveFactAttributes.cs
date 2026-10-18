@@ -45,6 +45,21 @@ public sealed class ClientDbcFactAttribute : FactAttribute
     }
 }
 
+/// <summary>
+/// A fact that needs the real client's MPQs and a StormLib extraction of terrain.MPQ alone
+/// (<c>ARCANECORE_TEST_TERRAIN_MPQ_EXTRACT_DIR</c>, made with <c>mpqcli extract -k</c>); skipped, visibly, without either.
+/// </summary>
+public sealed class TerrainArchiveExtractFactAttribute : FactAttribute
+{
+    public TerrainArchiveExtractFactAttribute()
+    {
+        if ((ClientArchiveData.SkipReason() ?? ClientArchiveData.TerrainExtractSkipReason()) is { } reason)
+        {
+            Skip = reason;
+        }
+    }
+}
+
 /// <summary>Where the real-data tests find the client, its StormLib extraction and the DBC checksum list.</summary>
 internal static class ClientArchiveData
 {
@@ -68,6 +83,19 @@ internal static class ClientArchiveData
         string? root = ExtractRoot;
         return root is null || !Directory.Exists(root)
             ? $"{DirectoryClientFiles.TestEnvironmentVariable} is not set to a StormLib extraction of the 1.12.1 client."
+            : null;
+    }
+
+    /// <summary>Directory holding a StormLib extraction (folder structure kept) of terrain.MPQ on its own.</summary>
+    public const string TerrainExtractVariable = "ARCANECORE_TEST_TERRAIN_MPQ_EXTRACT_DIR";
+
+    public static string? TerrainExtractRoot => Normalize(Environment.GetEnvironmentVariable(TerrainExtractVariable));
+
+    public static string? TerrainExtractSkipReason()
+    {
+        string? root = TerrainExtractRoot;
+        return root is null || !Directory.Exists(Path.Combine(root, "World"))
+            ? $"{TerrainExtractVariable} is not set to a StormLib extraction of terrain.MPQ alone (mpqcli extract -k)."
             : null;
     }
 
