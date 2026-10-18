@@ -46,6 +46,16 @@ public sealed class PackageLockFileTests
         Assert.All(restores, r => Assert.Contains("--locked-mode", r, StringComparison.Ordinal));
     }
 
+    /// <summary>The deploy build's own build step must not restore again: an implicit restore there is unlocked and would re-resolve.</summary>
+    [Fact]
+    public void TheDeployBuild_BuildsFromItsLockedRestore()
+    {
+        // The command, not prose: the script's header comment says "the dotnet build does not emit".
+        string[] builds = [.. Regex.Matches(RepoRoot.ReadText("tools/ops/deploy/build-integrated.sh"), @"dotnet build \S+\.slnx[^\r\n]*").Select(m => m.Value)];
+        Assert.NotEmpty(builds);
+        Assert.All(builds, b => Assert.Contains("--no-restore", b, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void TheContributingGuide_SaysHowToUpdateTheLockFiles()
     {

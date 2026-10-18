@@ -23,11 +23,12 @@ avail=$(powershell.exe -NoProfile -Command "[int](Get-Counter '\Memory\Available
 [ "$avail" -ge 3000 ] || { echo "refusing: only ${avail} MB available" >&2; exit 2; }
 # Locked, as ci.yml and the Dockerfile: a package graph that differs from the committed lock files fails here (NU1004) instead of
 # being re-resolved into the candidate. The restore writes the assets under the same --artifacts-path the --no-restore build reads.
-# A failure prints the log's error lines (NU1004 sits near the top at minimal verbosity), or the tail when it has none.
+# A failure prints the log's error lines (NU1004 sits near the top at minimal verbosity), or the tail when it has none. The print is
+# non-fatal: under pipefail, head closing early makes sort die of SIGPIPE (141), which would replace the exit 1.
 (cd "$wt" && dotnet restore ArcaneCore.slnx --locked-mode -m:1 -nodeReuse:false -p:NuGetAudit=false --artifacts-path "$out" &&
   dotnet build ArcaneCore.slnx -c Release --no-restore -m:1 -nodeReuse:false -p:UseSharedCompilation=false \
   --artifacts-path "$out") > "$log" 2>&1 ||
-  { if grep -qE ' error ' "$log"; then grep -E ' error ' "$log" | sort -u | head -20; else tail -20 "$log"; fi; exit 1; }
+  { if grep -qE ' error ' "$log"; then grep -E ' error ' "$log" | sort -u | head -20 || true; else tail -20 "$log"; fi; exit 1; }
 grep -q " 0 Error(s)" "$log" || { echo "no '0 Error(s)' line in $log" >&2; exit 1; }
 cp -r "$wt/tools" "$out/tools"
 for f in tools/content/refresh-world-content.ps1 tools/content/set-optional-data.ps1 \
