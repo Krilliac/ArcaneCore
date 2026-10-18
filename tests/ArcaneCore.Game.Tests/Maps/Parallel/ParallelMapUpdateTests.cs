@@ -180,7 +180,9 @@ public sealed class ParallelMapUpdateTests
     {
         using WorldRuntime world = CreateRuntime(3);
         world.UseManualClockFrom(0); // a fixed origin: the wall-clock reading so far would shift every timestamp of the run
-        var probes = new[] { new ProbeUpdater(world), new ProbeUpdater(world), new ProbeUpdater(world) };
+        // Each map update takes 2 ms: with empty updates the world thread could take every map of a batch before a worker woke (seen
+        // under a loaded test run once map updates held the serial gate across their gated stages).
+        var probes = new[] { new ProbeUpdater(world) { WorkMs = 2 }, new ProbeUpdater(world) { WorkMs = 2 }, new ProbeUpdater(world) { WorkMs = 2 } };
         world.GetMap(0).AddUpdater(probes[0]);
         world.GetMap(1).AddUpdater(probes[1]);
         world.GetMap(30, 4).AddUpdater(probes[2]);
@@ -384,10 +386,18 @@ public sealed class ParallelMapUpdateTests
         public bool AlwaysWorldThread = true;
         public readonly List<string?> ThreadNames = [];
 
+        /// <summary>Time each update takes (ms): long enough that the caller thread cannot drain a batch before the workers wake.</summary>
+        public int WorkMs;
+
         public void OnPlayerRemoved(Map map, Player player) { }
 
         public void Update(Map map, uint diffMs)
         {
+            if (WorkMs > 0)
+            {
+                Thread.Sleep(WorkMs);
+            }
+
             Updates++;
             SawParallelPhase |= world.IsParallelPhase;
             if (world.IsParallelPhase)
