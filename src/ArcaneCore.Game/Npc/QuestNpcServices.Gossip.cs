@@ -125,7 +125,12 @@ public sealed partial class QuestNpcServices
 
         if (ScriptFor(player, npc)?.Hello(player, npc) is { } scripted)
         {
-            if (!scripted.Silent)
+            if (scripted.DatabaseMenuId != 0)
+            {
+                PrepareGossipMenu(s, npc, scripted.DatabaseMenuId);
+                SendPreparedGossip(s, npc);
+            }
+            else if (!scripted.Silent)
             {
                 SendScriptedGossip(s, npc, scripted);
             }

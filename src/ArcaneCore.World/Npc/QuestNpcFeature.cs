@@ -145,6 +145,12 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             {
                 Services.RegisterGossipScript(demon, staveGossip);
             }
+            // Zone scripts batch 14: the Rallying Cry heralds' head-raised menus.
+            var heraldGossip = new ArcaneCore.Game.Creatures.Scripts.RallyingCryGossip();
+            foreach (uint herald in ArcaneCore.Game.Creatures.Scripts.RallyingCryGossip.Heralds.Keys)
+            {
+                Services.RegisterGossipScript(herald, heraldGossip);
+            }
         }
 
         _world = world;

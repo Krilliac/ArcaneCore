@@ -295,6 +295,27 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
+    /// cmangos <c>SetEntry</c> + <c>SetDisplayId(ChooseDisplayId)</c> + <c>SetName</c> + the template scale, without UpdateEntry (felwood.cpp
+    /// CorruptedSaberVisual): the creature shows as <paramref name="entry"/> (the client asks that entry's name) and keeps its template, faction,
+    /// flags, stats and AI. Its next respawn shows its own template again. False for a missing template.
+    /// </summary>
+    public bool ShowAsEntry(Creature creature, uint entry)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            return false;
+        }
+
+        creature.SetUInt32(UpdateFields.ObjectFieldEntry, template.Entry);
+        uint displayId = Creature.ChooseDisplayId(template, _random);
+        creature.DisplayId = displayId;
+        creature.NativeDisplayId = displayId;
+        creature.SetFloat(UpdateFields.ObjectFieldScaleX, template.Scale > 0 ? template.Scale : 1f);
+        return true;
+    }
+
+    /// <summary>
     /// cmangos Creature::UpdateEntry(entry) with its health kept (EventAI UPDATE_TEMPLATE, CreatureEventAI.cpp:1078-1086): the creature takes
     /// the other template (entry, model, faction, flags, level and stats) and keeps its health percent, its combat and its AI; its next respawn
     /// returns to the template it had. False for the creature's own entry or a missing template.

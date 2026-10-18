@@ -69,6 +69,16 @@ public sealed record ScriptedGossipMenu(bool ShowQuests, uint NpcTextId, IReadOn
 {
     public bool Silent { get; init; }
 
+    /// <summary>
+    /// Non-zero: the script picked this database gossip menu instead of the creature's own (a pGossipHello calling PrepareGossipMenu(creature,
+    /// gossipId) and SendPreparedGossip). The menu is built and sent as a database menu, conditions and options included; the other fields
+    /// are not used.
+    /// </summary>
+    public uint DatabaseMenuId { get; init; }
+
+    /// <summary>The database gossip menu <paramref name="menuId"/>, shown in place of the creature's own.</summary>
+    public static ScriptedGossipMenu Database(uint menuId) => new(false, 0, []) { DatabaseMenuId = menuId };
+
     /// <summary>The script handled the hello and shows nothing.</summary>
     public static ScriptedGossipMenu Nothing { get; } = new(false, 0, []) { Silent = true };
 }

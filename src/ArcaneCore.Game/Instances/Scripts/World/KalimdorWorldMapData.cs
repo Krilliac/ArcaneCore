@@ -82,9 +82,15 @@ public sealed class KalimdorWorldMapData : WorldMapData
             _felhoundRegistered = true;
             system.RegisterEntryAi(FelhoundTrackerAi.Entry, c => new FelhoundTrackerAi(c), rebuildExisting: creature.AI is not null);
         }
+        else if (creature.Template.Entry == FelwoodKittenAI.Entry && !_kittenRegistered && creature.System is { } kittenSystem)
+        {
+            // felwood.cpp npc_kitten (a FollowerAI on the quest item's kitten), registered the same way so a guardian keeps it.
+            _kittenRegistered = true;
+            kittenSystem.RegisterEntryAi(FelwoodKittenAI.Entry, c => new FelwoodKittenAI(c), rebuildExisting: creature.AI is not null);
+        }
     }
 
-    private bool _felhoundRegistered;
+    private bool _felhoundRegistered, _kittenRegistered;
 
     public override void OnCreatureDeath(Creature creature)
     {
