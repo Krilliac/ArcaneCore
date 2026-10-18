@@ -399,7 +399,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     {
         if (pass.Chat is not { } chat || pass.Bots.Count == 0) return;
         _channelBotsScratch.Clear();
-        if (_channelBotsScratch.Capacity < pass.Bots.Count) _channelBotsScratch.Capacity = pass.Bots.Count;
+        _channelBotsScratch.EnsureCapacity(pass.Bots.Count);
         foreach (PlayerbotSocialBot bot in pass.Bots) _channelBotsScratch.Add(new PlayerbotChannelBot(bot.Id, bot.Session, bot.Player));
         _channels.Run(_channelBotsScratch, pass.Social.Channels, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Areas, chat.SpeechOptions, pass.NowMs);
     }

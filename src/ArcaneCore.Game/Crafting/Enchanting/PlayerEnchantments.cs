@@ -452,9 +452,10 @@ public sealed class PlayerEnchantments
         {
             for (int slot = 0; slot < EnchantSlots.Count; slot++)
             {
-                if (ItemEnchantments.Id(item, slot) != 0 && ItemEnchantments.Duration(item, slot) > 0 && !IsTracked(item, slot))
+                uint duration = ItemEnchantments.Duration(item, slot);
+                if (duration > 0 && ItemEnchantments.Id(item, slot) != 0 && !IsTracked(item, slot))
                 {
-                    AddDuration(item, slot, ItemEnchantments.Duration(item, slot), send);
+                    AddDuration(item, slot, duration, send);
                 }
             }
         }

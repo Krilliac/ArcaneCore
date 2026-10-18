@@ -1515,6 +1515,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             _seenScratch.Clear();
             foreach (ObjectGuid guid in player.VisibleObjects)
             {
+                if (guid.IsPlayer)
+                {
+                    continue;
+                }
+
                 if (_creatures.TryGetValue(guid, out Creature? creature) && seen.Creatures.Add(creature) && creature.Spline is not null)
                 {
                     _seenScratch.Add(creature);

@@ -1208,6 +1208,10 @@ public sealed partial class SpellSystem
         foreach (SpellAuraHolder holder in state.Auras)
         {
             holder.IsRemoved = true;
+            if (_stalkedHolders.Count > 0)
+            {
+                _stalkedHolders.Remove(holder);
+            }
         }
 
         state.Auras.Clear();

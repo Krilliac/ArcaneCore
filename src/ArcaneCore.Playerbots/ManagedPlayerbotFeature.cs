@@ -72,6 +72,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private uint _snapshotElapsedMs;
     private readonly List<PlayerbotGroupCoordinator.PlayerbotGroupBot> _groupBotsScratch = [];
     private readonly List<PlayerbotBattlegroundCoordinator.PlayerbotBattlegroundBot> _bgBotsScratch = [];
+    private readonly HashSet<Guid> _republishedScratch = [];
+    private readonly List<PlayerbotStatus> _freshSnapshotScratch = [];
+    private readonly List<PlayerbotStatus> _nextSnapshotScratch = [];
     private WorldRuntime? _world;
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
@@ -629,7 +632,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         destination.Clear();
         ActiveBot[] bots = _ordered;
-        if (destination.Capacity < bots.Length) destination.Capacity = bots.Length;
+        destination.EnsureCapacity(bots.Length);
         foreach (ActiveBot active in bots)
         {
             if (active.Paused || active.Controller is not null || active.Record.State != ManagedPlayerbotState.Running) continue;
@@ -1120,16 +1123,48 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        foreach (PlayerbotHome home in saved) _homes[home.BotId] = home;
+        bool anyActive = false;
+        foreach (PlayerbotHome home in saved)
+        {
+            _homes[home.BotId] = home;
+            if (_active.ContainsKey(home.BotId)) anyActive = true;
+        }
         if (saved.Count != 0)
         {
-            await world.InvokeAsync(() =>
+            if (anyActive)
             {
-                foreach (PlayerbotHome home in saved)
-                    if (_active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused) active.Brain.Home = AreaOf(home.BotId);
-                lock (_snapshotGate) _snapshotEpoch++;
-                return true;
-            }).ConfigureAwait(false);
+                await world.InvokeAsync(() =>
+                {
+                    foreach (PlayerbotHome home in saved)
+                        if (_active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused) active.Brain.Home = AreaOf(home.BotId);
+                    lock (_snapshotGate) _snapshotEpoch++;
+                    return true;
+                }).ConfigureAwait(false);
+            }
+            else
+            {
+                lock (_snapshotGate)
+                {
+                    PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
+                    PlayerbotStatus[]? updated = null;
+                    for (int i = 0; i < current.Length; i++)
+                    {
+                        PlayerbotStatus s = current[i];
+                        if (s.State == ManagedPlayerbotState.Running || s.Home == "stopped") continue;
+                        for (int j = 0; j < saved.Count; j++)
+                        {
+                            if (saved[j].BotId == s.BotId)
+                            {
+                                updated ??= (PlayerbotStatus[])current.Clone();
+                                updated[i] = s with { Home = "stopped" };
+                                break;
+                            }
+                        }
+                    }
+                    if (updated is not null)
+                        Volatile.Write(ref _snapshot, updated);
+                }
+            }
         }
 
         if (refused) throw new PlayerbotSplitBrainException(saved.Count);
@@ -1851,7 +1886,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             else
             {
                 _groupBotsScratch.Clear();
-                if (_groupBotsScratch.Capacity < bots.Length) _groupBotsScratch.Capacity = bots.Length;
+                _groupBotsScratch.EnsureCapacity(bots.Length);
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
@@ -1885,7 +1920,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             else
             {
                 _bgBotsScratch.Clear();
-                if (_bgBotsScratch.Capacity < bots.Length) _bgBotsScratch.Capacity = bots.Length;
+                _bgBotsScratch.EnsureCapacity(bots.Length);
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _bgBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
@@ -2374,16 +2409,26 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     // Rows this tick republishes are replaced. Every other row stays, including a bot that became active after
                     // `bots` was captured: its previous (stopped) row remains until the next tick publishes the running one.
-                    var republished = new HashSet<Guid>(running);
-                    var fresh = new List<PlayerbotStatus>(running);
+                    _republishedScratch.Clear();
+                    _republishedScratch.EnsureCapacity(running);
+                    _freshSnapshotScratch.Clear();
+                    _freshSnapshotScratch.EnsureCapacity(running);
                     foreach (ActiveBot b in bots)
                     {
                         if ((!sameActiveSet && !_active.ContainsKey(b.Record.BotId)) || b.Status is null) continue;
-                        republished.Add(b.Record.BotId);
-                        fresh.Add(b.Status);
+                        _republishedScratch.Add(b.Record.BotId);
+                        _freshSnapshotScratch.Add(b.Status);
                     }
 
-                    Volatile.Write(ref _snapshot, current.Where(s => !republished.Contains(s.BotId)).Concat(fresh).ToArray());
+                    _nextSnapshotScratch.Clear();
+                    _nextSnapshotScratch.EnsureCapacity(current.Length + _freshSnapshotScratch.Count);
+                    foreach (PlayerbotStatus s in current)
+                    {
+                        if (!_republishedScratch.Contains(s.BotId))
+                            _nextSnapshotScratch.Add(s);
+                    }
+                    _nextSnapshotScratch.AddRange(_freshSnapshotScratch);
+                    Volatile.Write(ref _snapshot, _nextSnapshotScratch.ToArray());
                 }
 
                 _builtCount = running;

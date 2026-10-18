@@ -32,7 +32,7 @@ public sealed partial class CreatureMapSystem
     }
 
     private FormationState? FormationOfMember(Creature creature)
-        => creature.Spawn is { } spawn && _groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? group)
+        => _formations.Count > 0 && creature.Spawn is { } spawn && _groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? group)
             ? _formations.GetValueOrDefault(group.Id) : null;
 
     /// <summary>

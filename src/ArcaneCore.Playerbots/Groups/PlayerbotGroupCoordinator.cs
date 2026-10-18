@@ -139,6 +139,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private readonly Dictionary<(Guid Bot, (PlayerbotGroupGoalKind, uint) Key), uint> _setAside = [];
     private readonly Dictionary<ObjectGuid, uint> _declinedPlayers = [];
     private readonly Dictionary<Guid, PlayerbotGroupBot> _bots = [];
+    private readonly List<PlayerbotGroupBot> _orderedBots = [];
     private WorldRuntime? _world;
     private uint _scanElapsed = ScanMs;
     private int _nextId = 1;
@@ -216,6 +217,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             _leaderChanges.Clear();
             _leadersWatched = null;
             _bots.Clear();
+            _orderedBots.Clear();
             _stalls.Clear();
             _world = null;
             _subscriptions = null;
@@ -266,7 +268,19 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         if (_world is null) return; // detached
         _bots.Clear();
-        foreach (PlayerbotGroupBot bot in bots) _bots[bot.BotId] = bot;
+        _bots.EnsureCapacity(bots.Count);
+        _orderedBots.Clear();
+        _orderedBots.EnsureCapacity(bots.Count);
+        bool ordered = true;
+        Guid prev = Guid.Empty;
+        foreach (PlayerbotGroupBot bot in bots)
+        {
+            _bots[bot.BotId] = bot;
+            _orderedBots.Add(bot);
+            if (ordered && bot.BotId.CompareTo(prev) < 0) ordered = false;
+            prev = bot.BotId;
+        }
+        if (!ordered) _orderedBots.Sort(static (a, b) => a.BotId.CompareTo(b.BotId));
         TakeLeaderChanges(); // leader handoffs (PlayerbotGroupCoordinator.Handoff.cs)
         if (_groups.Count > 0)
         {
@@ -347,11 +361,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal string? Describe(Guid botId)
     {
         if (_memberOf.Count > 0 && _memberOf.TryGetValue(botId, out BotGroup? group) && group.Find(botId) is { } member)
-            return string.Create(CultureInfo.InvariantCulture,
-                $"group={group.Id}:{member.Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(group.LeaderBotId == botId ? ":leader" : string.Empty)}{(group.Run is not null ? ":run" : string.Empty)}{(group.Handoff is not null ? ":handoff" : string.Empty)}");
+            return member.Describe(group);
         if (_waiting.Count > 0 && _waiting.TryGetValue(botId, out Waiting? waiting))
-            return string.Create(CultureInfo.InvariantCulture,
-                $"group=waiting:{waiting.Goal.Kind.ToString().ToLowerInvariant()}:{waiting.Goal.Key.Value}:size{waiting.Goal.Size}");
+            return waiting.Describe();
         return null;
     }
 
@@ -395,6 +407,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public string Name { get; } = name;
         public PlayerbotGroupGoal Goal { get; set; } = goal;
         public uint SinceMs { get; } = since;
+        private PlayerbotGroupGoal? _descGoal;
+        private string? _desc;
+
+        public string Describe()
+        {
+            if (_desc is not null && _descGoal == Goal) return _desc;
+            _descGoal = Goal;
+            return _desc = string.Create(CultureInfo.InvariantCulture,
+                $"group=waiting:{Goal.Kind.ToString().ToLowerInvariant()}:{Goal.Key.Value}:size{Goal.Size}");
+        }
     }
 
     private void Scan()
@@ -411,7 +433,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             if (!_bots.TryGetValue(waiting, out PlayerbotGroupBot bot) || !bot.Free || bot.Session.Player is not { } player || !player.IsInWorld)
                 Unhold(waiting, null);
 
-        foreach (PlayerbotGroupBot bot in _bots.Values.OrderBy(b => b.BotId))
+        foreach (PlayerbotGroupBot bot in _orderedBots)
         {
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || bot.Session.Player is not { IsInWorld: true } player) continue;
             // A mage serving a portal request, or a bot on a mage leg, may stand in the short-lived party of the portal (party-only portals):
@@ -1697,7 +1719,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public bool Succeeded { get; set; }
         public string? Reason { get; set; }
 
-        public Member? Find(Guid botId) => botId == Guid.Empty ? null : Members.FirstOrDefault(m => m.BotId == botId);
+        public Member? Find(Guid botId)
+        {
+            if (botId == Guid.Empty) return null;
+            foreach (Member m in Members)
+                if (m.BotId == botId) return m;
+            return null;
+        }
 
         public Player? LeaderPlayer(WorldRuntime world) => world.FindOnlinePlayer(LeaderGuid);
 
@@ -1784,5 +1812,17 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         /// <summary>The member's outcome clocks (<see cref="PlayerbotMemberWatch"/>).</summary>
         public PlayerbotMemberWatch Watch { get; } = new();
+
+        private (int GroupId, PlayerbotGroupRole Role, PlayerbotGroupState State, bool IsLeader, bool HasRun, bool HasHandoff) _descKey;
+        private string? _desc;
+
+        public string Describe(BotGroup group)
+        {
+            var key = (group.Id, Role, group.State, group.LeaderBotId == BotId, group.Run is not null, group.Handoff is not null);
+            if (_desc is not null && _descKey == key) return _desc;
+            _descKey = key;
+            return _desc = string.Create(CultureInfo.InvariantCulture,
+                $"group={group.Id}:{Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(key.Item4 ? ":leader" : string.Empty)}{(key.Item5 ? ":run" : string.Empty)}{(key.Item6 ? ":handoff" : string.Empty)}");
+        }
     }
 }

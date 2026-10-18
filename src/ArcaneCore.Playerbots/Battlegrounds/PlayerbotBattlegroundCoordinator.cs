@@ -68,6 +68,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     private readonly Dictionary<Guid, Tracked> _tracked = [];
     private readonly Dictionary<(Guid Bot, BattlegroundType Type), uint> _setAside = [];
     private readonly Dictionary<Guid, PlayerbotBattlegroundBot> _bots = [];
+    private readonly List<PlayerbotBattlegroundBot> _orderedBots = [];
     private readonly HashSet<(BattlegroundType, PlayerbotBattlegroundRefusal)> _loggedRefusals = [];
     private readonly PlayerbotBattlegroundDemand _demand = new();
     private readonly Random _random = new(0x5EED);
@@ -144,6 +145,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         {
             _tracked.Clear();
             _bots.Clear();
+            _orderedBots.Clear();
             _setAside.Clear();
             _wsgPlans.Clear();
             _refusedMasters.Clear();
@@ -184,6 +186,21 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         public bool Healer { get; set; }
 
         public PlayerbotBattlegroundAI? AI { get; set; }
+
+        private (BattlegroundType Type, PlayerbotBattlegroundPhase Phase, PlayerbotBattlegroundRole Role, string? Activity) _descKey;
+        private string? _desc;
+
+        public string Describe()
+        {
+            string? activity = Phase == PlayerbotBattlegroundPhase.InMatch ? (AI?.Activity ?? "idle") : null;
+            var key = (Type, Phase, Role, activity);
+            if (_desc is not null && _descKey == key) return _desc;
+            _descKey = key;
+            string phase = Phase.ToString().ToLowerInvariant();
+            return _desc = Phase == PlayerbotBattlegroundPhase.InMatch
+                ? string.Create(CultureInfo.InvariantCulture, $"bg={Type}:{phase}:{Role.ToString().ToLowerInvariant()}:{activity}")
+                : string.Create(CultureInfo.InvariantCulture, $"bg={Type}:{phase}");
+        }
     }
 
     /// <summary>
@@ -206,8 +223,20 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     {
         if (_world is null) return; // detached
         _bots.Clear();
+        _bots.EnsureCapacity(bots.Count);
+        _orderedBots.Clear();
+        _orderedBots.EnsureCapacity(bots.Count);
         _tick++;
-        foreach (PlayerbotBattlegroundBot bot in bots) _bots[bot.BotId] = bot;
+        bool ordered = true;
+        Guid prev = Guid.Empty;
+        foreach (PlayerbotBattlegroundBot bot in bots)
+        {
+            _bots[bot.BotId] = bot;
+            _orderedBots.Add(bot);
+            if (ordered && bot.BotId.CompareTo(prev) < 0) ordered = false;
+            prev = bot.BotId;
+        }
+        if (!ordered) _orderedBots.Sort(static (a, b) => a.BotId.CompareTo(b.BotId));
         if (Feature() is not { } feature) return;
         if (_tracked.Count > 0)
         {
@@ -273,13 +302,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     /// <summary>The battleground part of a bot's status line: <c>bg=WarsongGulch:inmatch:attacker:taking-flag</c>, or null.</summary>
     internal string? Describe(Guid botId)
-    {
-        if (_tracked.Count == 0 || !_tracked.TryGetValue(botId, out Tracked? t)) return null;
-        string phase = t.Phase.ToString().ToLowerInvariant();
-        return t.Phase == PlayerbotBattlegroundPhase.InMatch
-            ? string.Create(CultureInfo.InvariantCulture, $"bg={t.Type}:{phase}:{t.Role.ToString().ToLowerInvariant()}:{t.AI?.Activity ?? "idle"}")
-            : string.Create(CultureInfo.InvariantCulture, $"bg={t.Type}:{phase}");
-    }
+        => _tracked.Count == 0 || !_tracked.TryGetValue(botId, out Tracked? t) ? null : t.Describe();
 
     /// <summary>The <c>.playerbot battlegrounds</c> lines (world thread).</summary>
     internal IReadOnlyList<string> Report()
@@ -588,7 +611,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
         bool anyRealWaiting = _demand.AnyRealWaiting;
         bool checkedRefusalsThisScan = false;
-        foreach (PlayerbotBattlegroundBot bot in _bots.Values.OrderBy(b => b.BotId))
+        foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
             if (_tracked.ContainsKey(bot.BotId) || !bot.Free || !bot.Session.IsManaged || bot.Session.Player is not { IsInWorld: true } player) continue;
             if (Adopt(bot, player, feature)) continue;

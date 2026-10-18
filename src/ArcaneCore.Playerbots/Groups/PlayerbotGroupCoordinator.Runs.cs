@@ -236,7 +236,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
         WorldMaps maps = WorldMaps.Of(_world);
         var free = new List<RunCandidate>();
-        foreach (PlayerbotGroupBot bot in _bots.Values.OrderBy(b => b.BotId))
+        foreach (PlayerbotGroupBot bot in _orderedBots)
         {
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || _waiting.ContainsKey(bot.BotId)
                 || bot.Session.Player is not { IsInWorld: true, IsAlive: true } player

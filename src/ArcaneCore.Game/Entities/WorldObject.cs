@@ -17,6 +17,7 @@ public abstract class WorldObject
     private readonly UpdateMask _changed;
     private bool _batchingMove;
     private bool _rejectedNonFiniteRelocation;
+    internal Player? SightWatcher;
 
     /// <summary>
     /// True if a caller attempted to relocate or move this object to a non-finite position

@@ -18,6 +18,7 @@ public abstract partial class Unit : WorldObject
     public const float BaseTurnRate = 3.141594f;
 
     private MovementInfo _movement;
+    internal Pets.Control.UnitControlState? ControlState;
 
     /// <summary>vmangos Object.h: BATCHING_INTERVAL (400 ms) × 13.</summary>
     public const uint HeartbeatIntervalMs = 5200;

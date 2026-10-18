@@ -50,7 +50,7 @@ public sealed class EnchantUpdater : IMapUpdater
     public void Update(Map map, uint diffMs)
     {
         ArgumentNullException.ThrowIfNull(map);
-        foreach (Player player in map.Players)
+        foreach (Player player in map.PlayerValues)
         {
             try
             {

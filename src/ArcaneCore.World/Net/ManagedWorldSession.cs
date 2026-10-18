@@ -27,8 +27,43 @@ internal sealed class ManagedActionBudget(int remaining)
 /// <summary>Trusted, socketless transport for registered server-owned P0 players.</summary>
 public sealed partial class WorldSession
 {
+    [System.Runtime.CompilerServices.InlineArray(16)]
+    private struct ManagedOpcodeMask
+    {
+        private ulong _element0;
+
+        public void Set(WorldOpcode opcode)
+        {
+            uint code = (uint)opcode;
+            if (code < 1024)
+            {
+                this[(int)(code >> 6)] |= 1UL << (int)(code & 63);
+            }
+        }
+
+        public readonly bool Contains(WorldOpcode opcode)
+        {
+            uint code = (uint)opcode;
+            return code >= 1024 || (this[(int)(code >> 6)] & (1UL << (int)(code & 63))) != 0;
+        }
+
+        public readonly bool ContainsAny(WorldOpcode[] opcodes)
+        {
+            for (int i = 0; i < opcodes.Length; i++)
+            {
+                if (Contains(opcodes[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
     private bool _managed;
     private readonly Queue<ManagedSessionPacket> _managedPackets = new();
+    private ManagedOpcodeMask _managedOpcodeMask;
     private int _managedPacketBytes;
     private readonly TaskCompletionSource _managedClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal bool IsManaged => _managed;
@@ -187,6 +222,7 @@ public sealed partial class WorldSession
             while (_managedPackets.Count > 0 && (_managedPackets.Count >= 128 || _managedPacketBytes + payload.Length > 1_048_576))
                 _managedPacketBytes -= _managedPackets.Dequeue().Payload.Length;
             _managedPackets.Enqueue(new ManagedSessionPacket(opcode, copy));
+            _managedOpcodeMask.Set(opcode);
             _managedPacketBytes += payload.Length;
         }
     }
@@ -195,10 +231,173 @@ public sealed partial class WorldSession
     {
         lock (_sendLock)
         {
+            if (_managedPackets.Count == 0)
+            {
+                return [];
+            }
+
             ManagedSessionPacket[] packets = _managedPackets.ToArray();
             _managedPackets.Clear();
+            _managedOpcodeMask = default;
             _managedPacketBytes = 0;
             return packets;
+        }
+    }
+
+    internal IReadOnlyList<ManagedSessionPacket> DrainManagedPackets(WorldOpcode onlyOpcode)
+    {
+        lock (_sendLock)
+        {
+            int count = _managedPackets.Count;
+            if (count == 0 || !_managedOpcodeMask.Contains(onlyOpcode))
+            {
+                return [];
+            }
+
+            _managedOpcodeMask = default;
+            List<ManagedSessionPacket>? result = null;
+            for (int i = 0; i < count; i++)
+            {
+                ManagedSessionPacket packet = _managedPackets.Dequeue();
+                if (packet.Opcode == onlyOpcode)
+                {
+                    (result ??= []).Add(packet);
+                    _managedPacketBytes -= packet.Payload.Length;
+                }
+                else
+                {
+                    _managedPackets.Enqueue(packet);
+                    _managedOpcodeMask.Set(packet.Opcode);
+                }
+            }
+
+            return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
+        }
+    }
+
+    internal IReadOnlyList<ManagedSessionPacket> DrainManagedPackets(WorldOpcode op1, WorldOpcode op2)
+    {
+        lock (_sendLock)
+        {
+            int count = _managedPackets.Count;
+            if (count == 0 || (!_managedOpcodeMask.Contains(op1) && !_managedOpcodeMask.Contains(op2)))
+            {
+                return [];
+            }
+
+            _managedOpcodeMask = default;
+            List<ManagedSessionPacket>? result = null;
+            for (int i = 0; i < count; i++)
+            {
+                ManagedSessionPacket packet = _managedPackets.Dequeue();
+                if (packet.Opcode == op1 || packet.Opcode == op2)
+                {
+                    (result ??= []).Add(packet);
+                    _managedPacketBytes -= packet.Payload.Length;
+                }
+                else
+                {
+                    _managedPackets.Enqueue(packet);
+                    _managedOpcodeMask.Set(packet.Opcode);
+                }
+            }
+
+            return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
+        }
+    }
+
+    internal IReadOnlyList<ManagedSessionPacket> DrainManagedPackets(WorldOpcode op1, WorldOpcode op2, WorldOpcode op3)
+    {
+        lock (_sendLock)
+        {
+            int count = _managedPackets.Count;
+            if (count == 0 || (!_managedOpcodeMask.Contains(op1) && !_managedOpcodeMask.Contains(op2) && !_managedOpcodeMask.Contains(op3)))
+            {
+                return [];
+            }
+
+            _managedOpcodeMask = default;
+            List<ManagedSessionPacket>? result = null;
+            for (int i = 0; i < count; i++)
+            {
+                ManagedSessionPacket packet = _managedPackets.Dequeue();
+                if (packet.Opcode == op1 || packet.Opcode == op2 || packet.Opcode == op3)
+                {
+                    (result ??= []).Add(packet);
+                    _managedPacketBytes -= packet.Payload.Length;
+                }
+                else
+                {
+                    _managedPackets.Enqueue(packet);
+                    _managedOpcodeMask.Set(packet.Opcode);
+                }
+            }
+
+            return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
+        }
+    }
+
+    internal IReadOnlyList<ManagedSessionPacket> DrainManagedPackets(WorldOpcode op1, WorldOpcode op2, WorldOpcode op3, WorldOpcode op4)
+    {
+        lock (_sendLock)
+        {
+            int count = _managedPackets.Count;
+            if (count == 0 || (!_managedOpcodeMask.Contains(op1) && !_managedOpcodeMask.Contains(op2)
+                && !_managedOpcodeMask.Contains(op3) && !_managedOpcodeMask.Contains(op4)))
+            {
+                return [];
+            }
+
+            _managedOpcodeMask = default;
+            List<ManagedSessionPacket>? result = null;
+            for (int i = 0; i < count; i++)
+            {
+                ManagedSessionPacket packet = _managedPackets.Dequeue();
+                if (packet.Opcode == op1 || packet.Opcode == op2 || packet.Opcode == op3 || packet.Opcode == op4)
+                {
+                    (result ??= []).Add(packet);
+                    _managedPacketBytes -= packet.Payload.Length;
+                }
+                else
+                {
+                    _managedPackets.Enqueue(packet);
+                    _managedOpcodeMask.Set(packet.Opcode);
+                }
+            }
+
+            return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
+        }
+    }
+
+    internal IReadOnlyList<ManagedSessionPacket> DrainManagedPackets(WorldOpcode op1, WorldOpcode op2, WorldOpcode op3, WorldOpcode op4, WorldOpcode op5)
+    {
+        lock (_sendLock)
+        {
+            int count = _managedPackets.Count;
+            if (count == 0 || (!_managedOpcodeMask.Contains(op1) && !_managedOpcodeMask.Contains(op2)
+                && !_managedOpcodeMask.Contains(op3) && !_managedOpcodeMask.Contains(op4) && !_managedOpcodeMask.Contains(op5)))
+            {
+                return [];
+            }
+
+            _managedOpcodeMask = default;
+            List<ManagedSessionPacket>? result = null;
+            for (int i = 0; i < count; i++)
+            {
+                ManagedSessionPacket packet = _managedPackets.Dequeue();
+                if (packet.Opcode == op1 || packet.Opcode == op2 || packet.Opcode == op3 || packet.Opcode == op4 || packet.Opcode == op5)
+                {
+                    (result ??= []).Add(packet);
+                    _managedPacketBytes -= packet.Payload.Length;
+                }
+                else
+                {
+                    _managedPackets.Enqueue(packet);
+                    _managedOpcodeMask.Set(packet.Opcode);
+                }
+            }
+
+            return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
         }
     }
 
@@ -207,14 +406,27 @@ public sealed partial class WorldSession
         // Bots drain several times per think: no set and no list unless something matches (54 MB per 30 s on live).
         lock (_sendLock)
         {
-            List<ManagedSessionPacket>? result = null;
             int count = _managedPackets.Count;
+            if (count == 0 || !_managedOpcodeMask.ContainsAny(onlyOpcodes))
+            {
+                return [];
+            }
+
+            _managedOpcodeMask = default;
+            List<ManagedSessionPacket>? result = null;
             for (int i = 0; i < count; i++)
             {
                 ManagedSessionPacket packet = _managedPackets.Dequeue();
                 if (Array.IndexOf(onlyOpcodes, packet.Opcode) >= 0)
-                { (result ??= []).Add(packet); _managedPacketBytes -= packet.Payload.Length; }
-                else _managedPackets.Enqueue(packet);
+                {
+                    (result ??= []).Add(packet);
+                    _managedPacketBytes -= packet.Payload.Length;
+                }
+                else
+                {
+                    _managedPackets.Enqueue(packet);
+                    _managedOpcodeMask.Set(packet.Opcode);
+                }
             }
             return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
         }
@@ -233,6 +445,7 @@ public sealed partial class WorldSession
             _packetCapture?.Dispose();
             _packetCapture = null;
             _managedPackets.Clear();
+            _managedOpcodeMask = default;
             _managedPacketBytes = 0;
             _outbound.Writer.TryComplete();
         }

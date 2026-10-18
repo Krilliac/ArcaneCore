@@ -280,6 +280,8 @@ internal static class PlayerbotRouteSmoothing
         return anyOffset && result.Count >= 3 ? result : null;
     }
 
+    private static readonly float[] OffsetScales = [1.0f, 0.6f, 0.3f];
+
     private static float ProbeMaxSafePointScale(
         Map map,
         Vector3 basePt,
@@ -287,8 +289,7 @@ internal static class PlayerbotRouteSmoothing
         float desiredOffset,
         out Vector3 snapped)
     {
-        ReadOnlySpan<float> scales = [1.0f, 0.6f, 0.3f];
-        foreach (float scale in scales)
+        foreach (float scale in OffsetScales)
         {
             float off = desiredOffset * scale;
             if (MathF.Abs(off) < 0.08f)
@@ -321,8 +322,7 @@ internal static class PlayerbotRouteSmoothing
         out Vector3 chosen)
     {
         // Only try same-side offsets (never negative/opposite-side scales, which cause left-right slalom chicanes).
-        ReadOnlySpan<float> scales = [1.0f, 0.6f, 0.3f];
-        foreach (float scale in scales)
+        foreach (float scale in OffsetScales)
         {
             float off = desiredOffset * scale;
             if (MathF.Abs(off) < 0.08f)

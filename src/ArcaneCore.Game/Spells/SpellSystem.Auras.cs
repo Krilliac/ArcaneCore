@@ -401,6 +401,11 @@ public sealed partial class SpellSystem
         CalculateHeartbeat(holder);
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
+        if (IsOwnedTrackingAura(holder.Spell))
+        {
+            _stalkedHolders.Add(holder);
+        }
+
         SitDownForStandingCancelsAura(holder);
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
@@ -835,6 +840,11 @@ public sealed partial class SpellSystem
         holder.RemoveMode = mode;
         holder.IsRemoved = true;
         state.Auras.Remove(holder);
+        if (_stalkedHolders.Count > 0)
+        {
+            _stalkedHolders.Remove(holder);
+        }
+
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
             WriteAuraFields(holder, add: false);

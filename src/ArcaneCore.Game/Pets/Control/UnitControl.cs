@@ -49,11 +49,9 @@ internal sealed class UnitControlState
 /// <summary>The unit-control members (charm, possess, mover, view point, invincibility); see <see cref="UnitControlState"/>.</summary>
 public static class UnitControl
 {
-    private static readonly ConditionalWeakTable<Unit, UnitControlState> s_states = new();
+    internal static UnitControlState State(Unit unit) => unit.ControlState ??= new UnitControlState();
 
-    internal static UnitControlState State(Unit unit) => s_states.GetValue(unit, static _ => new UnitControlState());
-
-    internal static UnitControlState? Find(Unit unit) => s_states.TryGetValue(unit, out UnitControlState? state) ? state : null;
+    internal static UnitControlState? Find(Unit unit) => unit.ControlState;
 
     extension(Unit unit)
     {
@@ -151,20 +149,38 @@ public static class UnitControl
         return true;
     }
 
-    /// <summary>The player whose camera looks from <paramref name="unit"/>: its possessor when that player's farsight is the unit.</summary>
+    /// <summary>The player whose camera looks from <paramref name="obj"/>: its possessor when that player's farsight is the unit.</summary>
     internal static Player? ViewerOf(WorldObject obj)
     {
-        if (obj is Unit unit && Find(unit)?.Possessor is { IsEmpty: false } possessor && unit.Map?.FindPlayer(possessor) is { } player
+        if (obj is Unit { ControlState.Possessor: { IsEmpty: false } possessor } unit && unit.Map?.FindPlayer(possessor) is { } player
             && player.GetUInt64(UpdateFields.PlayerFarsight) == unit.Guid.Value && Find(player)?.ViewResetFor != unit.Guid.Value)
         {
             return player;
         }
 
         // SPELL_AURA_BIND_SIGHT (Mind Vision) and far sight points: the player who looks from the object.
-        return SightWatchers.TryGetValue(obj, out Player? watcher) && watcher.IsInWorld && ReferenceEquals(watcher.Map, obj.Map)
+        return obj.SightWatcher is { IsInWorld: true } watcher && ReferenceEquals(watcher.Map, obj.Map)
             && watcher.GetUInt64(UpdateFields.PlayerFarsight) == obj.Guid.Value && Find(watcher)?.ViewResetFor != obj.Guid.Value ? watcher : null;
     }
 
+    internal readonly struct SightWatcherMap
+    {
+        public void AddOrUpdate(WorldObject obj, Player watcher) => obj.SightWatcher = watcher;
+
+        public bool Remove(WorldObject obj)
+        {
+            bool had = obj.SightWatcher is not null;
+            obj.SightWatcher = null;
+            return had;
+        }
+
+        public bool TryGetValue(WorldObject obj, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Player? watcher)
+        {
+            watcher = obj.SightWatcher;
+            return watcher is not null;
+        }
+    }
+
     /// <summary>The player whose camera a bind-sight aura or far sight point moved to the object (vmangos Camera::SetView from a spell).</summary>
-    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldObject, Player> SightWatchers = new();
+    internal static readonly SightWatcherMap SightWatchers = default;
 }

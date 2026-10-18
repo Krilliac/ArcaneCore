@@ -6,12 +6,16 @@ namespace ArcaneCore.Game.Spells;
 public sealed partial class SpellSystem
 {
     private readonly List<DeathAuraRemoval> _deathAuraRemovals = [];
+    private readonly HashSet<SpellAuraHolder> _stalkedHolders = new(ReferenceEqualityComparer.Instance);
 
     private sealed record DeathAuraRemoval(SpellAuraHolder Holder, WeakReference<Unit> Caster);
 
+    private static bool IsOwnedTrackingAura(SpellInfo spell)
+        => spell.IsFitToFamily(9, 10) && spell.HasAura(AuraType.ModStalked);
+
     private void RemoveOwnedTrackingAurasOnDeath(Unit caster)
     {
-        if (caster.IsAlive || !caster.IsInWorld || caster.Map is null
+        if (_stalkedHolders.Count == 0 || caster.IsAlive || !caster.IsInWorld || caster.Map is null
             || !ReferenceEquals(Units.Find(caster, caster.Guid), caster))
         {
             return;
@@ -20,25 +24,17 @@ public sealed partial class SpellSystem
         // Upstream's registry is gated by the spell_template Custom single-target flag.
         // That content producer is not present here. Restrict this carve-out to the known
         // Hunter's Mark family/flag (SpellClassMask.h:251), not all MOD_STALKED spells.
-        // Every death walked every unit's spell state through ToArray (one array of all units, large-object-heap sized on a
-        // full world) and a Where iterator per unit. Collect the few matches first; most deaths have none.
         List<(UnitSpellState State, SpellAuraHolder Holder)>? marks = null;
-        foreach (UnitSpellState candidate in _states.Values)
+        foreach (SpellAuraHolder h in _stalkedHolders)
         {
-            if (!candidate.Unit.IsInWorld || !ReferenceEquals(candidate.Unit.Map, caster.Map))
+            if (!h.IsRemoved
+                && ReferenceEquals(h.CasterOwner.Caster, caster)
+                && h.Target.IsInWorld
+                && ReferenceEquals(h.Target.Map, caster.Map)
+                && _states.TryGetValue(h.Target.Guid, out UnitSpellState? candidate)
+                && ReferenceEquals(candidate.Unit, h.Target))
             {
-                continue;
-            }
-
-            List<SpellAuraHolder> auras = candidate.Auras;
-            for (int i = 0; i < auras.Count; i++)
-            {
-                SpellAuraHolder h = auras[i];
-                if (!h.IsRemoved && h.Spell.IsFitToFamily(9, 10) && h.Spell.HasAura(AuraType.ModStalked)
-                    && ReferenceEquals(h.CasterOwner.Caster, caster))
-                {
-                    (marks ??= []).Add((candidate, h));
-                }
+                (marks ??= []).Add((candidate, h));
             }
         }
 

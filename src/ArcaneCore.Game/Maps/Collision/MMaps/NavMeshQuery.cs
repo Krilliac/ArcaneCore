@@ -417,8 +417,12 @@ public static class NavMeshQuery
     {
         public Node[] Nodes = new Node[64];
         public bool[] Closed = new bool[64];
+        public long[] Keys = new long[64];
+        public int[] NextInBucket = new int[64];
+        private int[] _buckets = new int[256];
+        private int[] _bucketStamps = new int[256];
+        private int _stamp;
         public int Count;
-        public readonly Dictionary<long, int> Index = [];
         public readonly PriorityQueue<int, float> Open = new();
         public readonly List<NavNeighbour> Neighbours = [];
         public readonly List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> Corridor = [];
@@ -429,7 +433,7 @@ public static class NavMeshQuery
         {
             InUse = true;
             Count = 0;
-            Index.Clear();
+            AdvanceStamp();
             Open.Clear();
             Neighbours.Clear();
             Corridor.Clear();
@@ -442,24 +446,89 @@ public static class NavMeshQuery
             // Do not pin a far tile's polygons (NavPolyRef holds the tile) until the next query.
             Array.Clear(Nodes, 0, Count);
             Count = 0;
-            Index.Clear();
             Neighbours.Clear();
             Corridor.Clear();
             Corners.Clear();
         }
 
-        /// <summary>Appends a node (open, not closed) and answers its index.</summary>
-        public int Add(in Node node)
+        private void AdvanceStamp()
         {
-            if (Count == Nodes.Length)
+            if (++_stamp == int.MaxValue)
             {
-                Array.Resize(ref Nodes, Count * 2);
-                Array.Resize(ref Closed, Count * 2);
+                Array.Clear(_bucketStamps);
+                _stamp = 1;
+            }
+        }
+
+        private static int BucketOf(long key, int mask)
+            => (int)(((ulong)key * 11400714819323198485UL) >> 32) & mask;
+
+        public bool TryGetIndex(long key, out int index)
+        {
+            int bucket = BucketOf(key, _buckets.Length - 1);
+            if (_bucketStamps[bucket] == _stamp)
+            {
+                for (int i = _buckets[bucket]; i >= 0; i = NextInBucket[i])
+                {
+                    if (Keys[i] == key)
+                    {
+                        index = i;
+                        return true;
+                    }
+                }
             }
 
-            Nodes[Count] = node;
-            Closed[Count] = false;
-            return Count++;
+            index = -1;
+            return false;
+        }
+
+        /// <summary>Appends a node (open, not closed), indexes it under <paramref name="key"/>, and answers its index.</summary>
+        public int Add(long key, in Node node)
+        {
+            int index = Count;
+            if (index == Nodes.Length)
+            {
+                int newCap = index * 2;
+                Array.Resize(ref Nodes, newCap);
+                Array.Resize(ref Closed, newCap);
+                Array.Resize(ref Keys, newCap);
+                Array.Resize(ref NextInBucket, newCap);
+            }
+
+            if (index * 2 >= _buckets.Length)
+            {
+                GrowBuckets(index);
+            }
+
+            Nodes[index] = node;
+            Closed[index] = false;
+            Keys[index] = key;
+            int bucket = BucketOf(key, _buckets.Length - 1);
+            NextInBucket[index] = _bucketStamps[bucket] == _stamp ? _buckets[bucket] : -1;
+            _buckets[bucket] = index;
+            _bucketStamps[bucket] = _stamp;
+            Count = index + 1;
+            return index;
+        }
+
+        private void GrowBuckets(int count)
+        {
+            int newLen = _buckets.Length * 2;
+            _buckets = new int[newLen];
+            _bucketStamps = new int[newLen];
+            if (++_stamp == int.MaxValue)
+            {
+                _stamp = 1;
+            }
+
+            int mask = newLen - 1;
+            for (int i = 0; i < count; i++)
+            {
+                int bucket = BucketOf(Keys[i], mask);
+                NextInBucket[i] = _bucketStamps[bucket] == _stamp ? _buckets[bucket] : -1;
+                _buckets[bucket] = i;
+                _bucketStamps[bucket] = _stamp;
+            }
         }
     }
 
@@ -470,7 +539,6 @@ public static class NavMeshQuery
     private static bool Search(
         NavMesh mesh, NavPolyRef start, Vector3 startPos, NavPolyRef end, Vector3 endPos, PathOptions options, SearchScratch scratch)
     {
-        Dictionary<long, int> index = scratch.Index;
         PriorityQueue<int, float> open = scratch.Open;
         List<NavNeighbour> neighbours = scratch.Neighbours;
         NavMeshTile endTile = end.Tile;
@@ -479,8 +547,9 @@ public static class NavMeshQuery
         NavTerrain include = options.EffectiveIncludeFlags;
         NavTerrain exclude = options.ExcludeFlags;
         CancellationToken cancel = options.CancellationToken;
-        scratch.Add(new Node(start, -1, startPos, 0, Vector3.Distance(startPos, endPos) * HeuristicScale, default, default));
-        index[NodeKey(start.Tile, start.Poly, 0)] = 0;
+        scratch.Add(
+            NodeKey(start.Tile, start.Poly, 0),
+            new Node(start, -1, startPos, 0, Vector3.Distance(startPos, endPos) * HeuristicScale, default, default));
         open.Enqueue(0, scratch.Nodes[0].Total);
         int best = 0;
         float bestHeuristic = scratch.Nodes[0].Total;
@@ -542,7 +611,7 @@ public static class NavMeshQuery
                 }
 
                 long key = NodeKey(nextTile, nextPoly, neighbour.CrossSide);
-                bool known = index.TryGetValue(key, out int existing);
+                bool known = scratch.TryGetIndex(key, out int existing);
                 if (!known && scratch.Count >= maxNodes)
                 {
                     capped = true;
@@ -577,8 +646,7 @@ public static class NavMeshQuery
                 }
                 else
                 {
-                    existing = scratch.Add(new Node(neighbour.To, current, position, cost, total, neighbour.Left, neighbour.Right));
-                    index[key] = existing;
+                    existing = scratch.Add(key, new Node(neighbour.To, current, position, cost, total, neighbour.Left, neighbour.Right));
                     open.Enqueue(existing, total);
                 }
 

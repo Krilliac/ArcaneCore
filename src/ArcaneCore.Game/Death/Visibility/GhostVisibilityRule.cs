@@ -67,15 +67,7 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
             return true;
         }
 
-        for (int i = 0; i < 48; i++)
-        {
-            if (target.GetUInt32(UpdateFields.UnitFieldAura + i) == SpellGhostAura)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return target.Values.Slice(UpdateFields.UnitFieldAura, 48).Contains(SpellGhostAura);
     }
 
     /// <inheritdoc />
@@ -135,15 +127,14 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
             return true;
         }
 
-        bool ghostCreature = IsGhostCreature(target);
         bool viewerLiving = viewer.Combat.DeathState != DeathState.Dead;
         if (viewerLiving)
         {
             // IsInvisibleForAlive differs between a living viewer and a living ghost/spirit-service creature: the living cannot see it.
-            return !(viewer.IsAlive && target.IsAlive && ghostCreature);
+            return !(viewer.IsAlive && target.IsAlive && IsGhostCreature(target));
         }
 
-        if (ghostCreature)
+        if (IsGhostCreature(target))
         {
             return true;
         }
