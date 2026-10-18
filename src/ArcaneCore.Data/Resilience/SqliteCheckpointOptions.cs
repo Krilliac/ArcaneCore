@@ -7,6 +7,9 @@ public sealed class SqliteDatabaseOptions
 {
     /// <summary>Who checkpoints the write-ahead log of every file-backed SQLite database (<c>Database:Sqlite:Checkpoint</c>).</summary>
     public SqliteCheckpointOptions Checkpoint { get; set; } = new();
+
+    /// <summary>The in-process single writer per database file (<c>Database:Sqlite:SingleWriter</c>, off by default): see <see cref="SqliteWriteGate"/>.</summary>
+    public SqliteSingleWriterOptions SingleWriter { get; set; } = new();
 }
 
 /// <summary>

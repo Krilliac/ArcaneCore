@@ -188,6 +188,39 @@ The per-snapshot cost was also cut: `EfCharacterStore.SaveStateAsync` writes the
 statement, removed ones are deleted, new ones inserted) instead of deleting and reinserting every button on every save
 (`CharacterStoreActionButtonDiffTests` counts the statements on the wire).
 
+## In-process single writer (`Database:Sqlite:SingleWriter:Enabled`)
+
+SQLite admits one writer at a time, even in WAL mode. About a dozen background queues (character saves, respawns, rest, reputation, social,
+honor, taxi, explored zones, instances, keyed stores, bot rows, spellbook) each write to `characters.db` on their own connection, and a writer
+that finds the lock taken polls it from SQLite's busy handler (sleeps of 1 to 100 ms, no queue). Under load that polling is unfair: some writers
+win again and again while others reach the 5 s write bound and fail as "database is locked" although the total work fits in the time (live
+2026-10-17: 246 locked log entries in 24 h, a 1000-character save backlog with the oldest snapshot 130 s old at 2 PM CT).
+
+With `Database:Sqlite:SingleWriter:Enabled` (off by default) `SqliteWriteGateInterceptor` puts every EF write behind one in-process gate per
+database file (`SqliteWriteGate`, an async FIFO semaphore keyed on the full path):
+
+- A transaction EF begins (`BEGIN IMMEDIATE`, which takes the write lock at once) takes the gate before the BEGIN and gives it back when it is
+  committed, rolled back, disposed (EF's `TransactionDisposed` diagnostic event) or its connection closes.
+- A write statement run outside a transaction (single-statement `SaveChanges`, `ExecuteUpdate`/`ExecuteDelete` with the fence off, raw SQL)
+  takes it around the statement (a reader's statement until the reader is disposed).
+- Reads, statements inside a transaction, and transactions adopted with `UseTransaction` (the deferred read snapshots of `ReadSnapshot` and the
+  auction snapshot) never take it. WAL readers do not block the writer.
+- A waiter is bounded by its connection's own write bound (`Database:SqliteWriteTimeoutMs` on the characters database) unless `WaitMs` says
+  otherwise, and then fails with SQLite's own busy error (code 5), so every existing "locked: retain and retry" path behaves as before; the
+  message names the holder (context type, and the calling method when someone was queued behind it).
+- A hold older than `MaxHoldMs` (default 60 s; a transaction that was never ended) is released by the next waiter and logged at ERROR. That only
+  lets the next writer try SQLite's lock itself, as it would without the gate.
+- `WarnWaitMs` (default 1 s) logs a writer that waited long; every `StatsIntervalMs` (default 5 min) each gate logs one INFO line: writes,
+  queued writes, mean and max wait, longest hold and its owner, timeouts, stuck holds released.
+
+The gate does not shorten a slow holder: a transaction held for 3 s by the application still makes everyone wait 3 s
+(`SlowTransactionInterceptor` names those holders). It removes the failures that came from unfair polling, and the wasted sleeps.
+Another process on the same file (the realm daemon on a shared auth file, a DB tool) still meets SQLite's lock as before.
+
+`SqliteWriteGateTests.ManyConcurrentWriteTransactions_AllCommit_WithoutABusyFailure` runs 16 concurrent EF writers x 25 transactions, each
+holding the lock about 8 ms, against one file with a 300 ms busy timeout (the test runs with the live 5 s write bound). With a 1 s write bound
+**33 of 400 transactions failed as locked with the gate off, none with it on** (Debug build, Nate's PC, 2026-10-17).
+
 ## Spellbook learn batching
 
 `SpellbookCache` writes spell changes on one background task. Each learn used to be its own store call and transaction, so a character
@@ -215,5 +248,5 @@ before and after the write starts, hold, quarantine and retained-failure behavio
 - One consumer: coalescing and the priority lane remove the queueing delay, but a single slow store call still delays every other
   character. Parallel writers were not added; a full snapshot costs well under a millisecond on disk, so one consumer is not the limit at 200 characters.
 - Other background writers (skills, talents, reputation, quests, ...) keep their own queues and connections; this lane gave them the
-  shared busy timeout but did not merge them.
+  shared busy timeout, and `Database:Sqlite:SingleWriter:Enabled` queues them on one in-process gate, but their writes are not yet merged into shared transactions.
 - The backlog thresholds are warnings only; nothing sheds load or refuses a save when they are crossed.

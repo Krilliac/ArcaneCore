@@ -50,7 +50,7 @@ public static class DataServiceCollectionExtensions
         AddDatabaseCommon(services, configuration, DatabaseComponent.Auth);
         services.AddDbContext<AuthDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth), provider.GetRequiredService<SlowTransactionInterceptor>(),
-                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider), checkpoint: CheckpointOptions(provider)));
+                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider), checkpoint: CheckpointOptions(provider), writeGate: WriteGate(provider)));
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
@@ -66,7 +66,7 @@ public static class DataServiceCollectionExtensions
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>(),
                 provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs,
-                provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider), CheckpointOptions(provider)));
+                provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider), CheckpointOptions(provider), WriteGate(provider)));
 
         AddCharacterWriteFence(services, configuration);
         services.AddScoped<ICharacterStore, EfCharacterStore>();
@@ -127,12 +127,24 @@ public static class DataServiceCollectionExtensions
         AddDatabaseCommon(services, configuration, DatabaseComponent.World);
         services.AddDbContextFactory<WorldDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World), provider.GetRequiredService<SlowTransactionInterceptor>(),
-                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider), checkpoint: CheckpointOptions(provider)));
+                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider), checkpoint: CheckpointOptions(provider), writeGate: WriteGate(provider)));
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<WorldDbInitializer>();
         DataModules.AddServices(services, DatabaseComponent.World);
         return services;
+    }
+
+    /// <summary>
+    /// The SQLite single-writer gate interceptor (<c>Database:Sqlite:SingleWriter</c>), or null when it is off. ConfigureProvider attaches it to SQLite contexts only;
+    /// the gate itself skips memory, read-only and URI databases.
+    /// </summary>
+    private static SqliteWriteGateInterceptor? WriteGate(IServiceProvider provider)
+    {
+        SqliteSingleWriterOptions options = provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Sqlite.SingleWriter;
+        return options.Enabled
+            ? SqliteWriteGateInterceptor.For(options, provider.GetService<ILoggerFactory>()?.CreateLogger(typeof(SqliteWriteGateInterceptor).FullName!))
+            : null;
     }
 
     /// <summary>The configured <c>Database:Sqlite:Checkpoint</c> settings the connections of a context are set up with.</summary>
@@ -207,7 +219,7 @@ public static class DataServiceCollectionExtensions
     }
 
     /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> and <paramref name="slowCommands"/> (when given) are attached on every provider; <paramref name="sqliteWriteTimeoutMs"/> bounds a SQLite connection's lock waits (0: none).</summary>
-    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0, SlowCommandInterceptor? slowCommands = null, ILogger? pragmaLogger = null, SqliteCheckpointOptions? checkpoint = null)
+    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0, SlowCommandInterceptor? slowCommands = null, ILogger? pragmaLogger = null, SqliteCheckpointOptions? checkpoint = null, SqliteWriteGateInterceptor? writeGate = null)
     {
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
@@ -241,6 +253,11 @@ public static class DataServiceCollectionExtensions
             case DatabaseProvider.Sqlite:
                 builder.UseSqlite(WithWriteBound(options.ConnectionString, sqliteWriteTimeoutMs))
                     .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs, options.SqliteSynchronous ?? SqliteSynchronousMode.Full, pragmaLogger, CheckpointJournalLimit(options, checkpoint)));
+                if (writeGate is not null)
+                {
+                    builder.AddInterceptors(writeGate);
+                }
+
                 break;
 
             default:
