@@ -387,6 +387,57 @@ public sealed class PlayerbotTownGoalsTests
     }
 
     /// <summary>
+    /// A broke bot with broken gear (live 2026-10-17: bot-gear/broken-unrepaired ~2000/h at 0 to 4 copper, "repair trip due True") sells
+    /// its junk for the repair money although its bags have room, then repairs; before, it waited for money that never came.
+    /// </summary>
+    [Fact]
+    public async Task ABrokeBotWithBrokenGear_SellsJunkForTheRepair_ThoughItsBagsHaveRoom()
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9201, durability: 20));
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9301, Name = "White goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 7 });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton(RepairPrices()));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9201);
+                    Item boots = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!;
+                    boots.Durability = 0;
+                    for (int i = 0; i < 4; i++)
+                        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9301, 1, out _));
+                    Assert.True(PlayerbotTownGoals.FreeBagSlots(player) >= PlayerbotTownGoals.JunkReserveSlots);
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)(NpcFlags.Vendor | NpcFlags.Repair);
+                    player.Money = 0;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    Assert.True(goals.HasCandidate(player), "a broke bot with broken gear and junk to sell has nothing to do at the vendor");
+                    // 20 durability points at 1 copper each: three goods (21 copper) pay for it, then the repair.
+                    for (int think = 0; think < 8 && boots.Durability == 0; think++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        goals.Update(player, 1500);
+                    }
+                    Assert.Equal(20u, boots.Durability);
+                    Assert.Equal(1u, player.Inventory.GetItemCount(9301));
+                    Assert.Equal(1u, player.Money); // 21 - 20
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>
     /// A vendor refuses to buy a damaged item it has no repair price for (PlayerInventory.SellItem: SELL_ERR_CANT_SELL_ITEM). The
     /// bot offers that gray item once, then neither offers it again nor keeps the vendor as a goal. Live 2026-10-08: Ironwander
     /// stood at Adlin Pridedrift for hours re-sending CMSG_SELL_ITEM for its damaged gray Frayed Pants, goal Vendor, no fault.

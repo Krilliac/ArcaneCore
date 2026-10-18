@@ -187,7 +187,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // Throttle service requests, not travel. Motion must keep progressing
         // at the advertised speed until ordinary interaction distance is reached.
         _cooldownMs = ThinkCooldownMs;
-        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && TryRepair(player, npc))
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && TryRepair(player, services, npc))
             return true;
         // Full bags first make room (a purchase would only fail for space).
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellJunk(player, services, npc))
@@ -268,9 +268,13 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// CMSG_REPAIR_ITEM with an empty item guid: repair everything (vmangos HandleRepairItemOpcode, DurabilityRepairAll). When
     /// nothing got better (no repair prices loaded, too little money) repairs pause for a minute instead of repeating.
     /// </summary>
-    private bool TryRepair(Player player, NpcInfo npc)
+    private bool TryRepair(Player player, QuestNpcServices services, NpcInfo npc)
     {
         if (!RepairWanted(player))
+            return false;
+        // Not even the cheapest damaged item is affordable: the handler would repair nothing and start the one-minute backoff, and the
+        // junk sale that would pay for it (TrySellJunk, forMoney) would wait behind that. Live 2026-10-17: broken-unrepaired at 0 to 4 copper.
+        if (CheapestWornRepair(player, services) is { } cheapest && cheapest > player.Money)
             return false;
         Goal = PlayerbotGoalKind.Vendor;
         uint before = EquippedDurability(player);
@@ -467,7 +471,17 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// killing (bot QA #684, #700, #705, #741, #845, #884 and more: <c>loot-bag-full -> goal=Explore</c> in the trace before the stall).
     /// </summary>
     private bool SellTripNeeded(Player player, QuestNpcServices services)
-        => FreeBagSlots(player) == 0 && (FindJunk(player, services) is not null || SellableGrays(player, services).Any());
+        => (FreeBagSlots(player) == 0 && (FindJunk(player, services) is not null || SellableGrays(player, services).Any()))
+           || (RepairUnaffordable(player, services) && (FindJunk(player, services, forMoney: true) is not null || SellableGrays(player, services).Any()));
+
+    /// <summary>
+    /// The gear needs a repair trip (<see cref="NeedsRepairTrip"/>) and the bot cannot pay even its cheapest damaged item's repair
+    /// (<see cref="CheapestWornRepair"/>): it sells its junk and grays for the money, whatever room its bags have. Before, a broke bot
+    /// waited for money that never came (live 2026-10-17: bot-gear/broken-unrepaired ~2000/h, money 0 to 4 copper, "repair trip due
+    /// True"), fighting with a broken weapon and dying more, which broke more gear.
+    /// </summary>
+    private bool RepairUnaffordable(Player player, QuestNpcServices services)
+        => NeedsRepairTrip(player) && CheapestWornRepair(player, services) is { } cost && cost > player.Money;
 
     /// <summary>
     /// The price of the cheapest damaged worn item's repair, by the server's own pricing (<see cref="IItemService.Repair"/>, asked with
@@ -803,15 +817,17 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// </summary>
     private bool TrySellJunk(Player player, QuestNpcServices services, NpcInfo npc)
     {
-        if (services.Npcs.VendorItems(npc.Entry).Count == 0 || FindJunk(player, services) is not { } item)
+        if (services.Npcs.VendorItems(npc.Entry).Count == 0
+            || (FindJunk(player, services) ?? (RepairUnaffordable(player, services) ? FindJunk(player, services, forMoney: true) : null)) is not { } item)
             return false;
         Goal = PlayerbotGoalKind.Vendor;
         return Sell(npc, item);
     }
 
-    private Item? FindJunk(Player player, QuestNpcServices services)
+    /// <param name="forMoney">Sold for the money a repair needs (<see cref="RepairUnaffordable"/>): whatever room the bags have.</param>
+    private Item? FindJunk(Player player, QuestNpcServices services, bool forMoney = false)
     {
-        if (FreeBagSlots(player) >= JunkReserveSlots)
+        if (!forMoney && FreeBagSlots(player) >= JunkReserveSlots)
             return null;
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
         return player.Inventory.AllItems
@@ -964,9 +980,11 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return _supply == 2 ? goals._supplyNeeds : null;
         }
 
-        internal bool Repair(PlayerbotTownGoals goals, Player player)
+        internal bool Repair(PlayerbotTownGoals goals, Player player, QuestNpcServices services)
         {
-            if (_repair == 0) _repair = (byte)(goals.RepairWanted(player) ? 2 : 1);
+            // Unaffordable even for the cheapest damaged item: no reason to stand at a repair NPC (TryRepair would not ask).
+            if (_repair == 0) _repair = (byte)(goals.RepairWanted(player)
+                && !(CheapestWornRepair(player, services) is { } cheapest && cheapest > player.Money) ? 2 : 1);
             return _repair == 2;
         }
 
@@ -997,7 +1015,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
         internal bool Junk(PlayerbotTownGoals goals, Player player, QuestNpcServices services)
         {
-            if (_junk == 0) _junk = (byte)(goals.FindJunk(player, services) is not null ? 2 : 1);
+            if (_junk == 0) _junk = (byte)((goals.FindJunk(player, services)
+                ?? (goals.RepairUnaffordable(player, services) ? goals.FindJunk(player, services, forMoney: true) : null)) is not null ? 2 : 1);
             return _junk == 2;
         }
     }
@@ -1226,7 +1245,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
     {
-        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player)) return true;
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player, services)) return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(npc.Entry).Count > 0)
         {
             if (session.Services.GetService<SpellFeature>()?.System is { } spells
