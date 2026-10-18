@@ -165,10 +165,10 @@ function Invoke-Account([string[]]$Arguments, [string]$StdIn) {
 }
 
 # How many of the Commands, from the first, arcane-mock live has logged as sending, in order: its '<HH:mm:ss.fff> [<endpoint>] > <command>'
-# lines written after StartOffset. "Delivered" means the mock logged the send; a send that fails ends the mock non-zero, which the
-# finally block turns into exit 1. Replies are '< ' lines; a multi-line reply's continuation lines are written raw without a timestamp,
-# so they never match, even when they look like '[x] > y'. Endpoint is the session's local endpoint from its 'IN WORLD' line (IPv4 or
-# '[::1]:port'); without one, any IPv4 or bracketed IPv6 endpoint is accepted.
+# lines (OpsLib Get-OpsMockEchoPattern, which a '#waitfor' skips) written after StartOffset. "Delivered" means the mock logged the send;
+# a send that fails ends the mock non-zero, which the finally block turns into exit 1. Replies are '< ' lines; a multi-line reply's
+# continuation lines are written raw without a timestamp, so they never match, even when they look like '[x] > y'. Endpoint is the
+# session's local endpoint from its 'IN WORLD' line (IPv4 or '[::1]:port'); without one, any IPv4 or bracketed IPv6 endpoint is accepted.
 function Get-OpsDeliveredCount([string]$Path, [long]$StartOffset, [string[]]$Commands, [string]$Endpoint) {
     $stream = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
     try {
@@ -177,8 +177,7 @@ function Get-OpsDeliveredCount([string]$Path, [long]$StartOffset, [string[]]$Com
         $text = [System.IO.StreamReader]::new($stream).ReadToEnd()
     }
     finally { $stream.Dispose() }
-    $endpointPattern = if ($Endpoint) { [regex]::Escape($Endpoint) } else { '(?:\[[0-9A-Fa-f:.]+\]|[0-9.]+):\d+' }
-    $echo = [regex]::new("^\d{2}:\d{2}:\d{2}\.\d{3} \[$endpointPattern\] > (.*)$")
+    $echo = [regex]::new((Get-OpsMockEchoPattern -Endpoint $Endpoint))
     $count = 0
     foreach ($row in $text -split "\r?\n") {
         if ($count -ge $Commands.Count) { break }
@@ -286,7 +285,10 @@ try {
                 # The offset is the log length taken just before the last command was appended to the script file, not the length now:
                 # the pace sleep after that command can outlast the reply, and a reply already in the log must still count.
                 $offset = if ($null -ne $lastSendOffset) { $lastSendOffset } else { (Get-Item -LiteralPath $LogPath).Length }
+                # The mock's own '> <command>' echo lines are left out: a pattern that is also in the command ('.lookup item Linen',
+                # then '#waitfor 10 Linen') would otherwise match the command as soon as it was sent, before the reply arrived.
                 $found = Wait-OpsLogMatch -Path $LogPath -Pattern $waitPattern -TimeoutSeconds $waitSpan -StartOffset $offset `
+                    -SkipLinePattern (Get-OpsMockEchoPattern -Endpoint $localEndpoint) `
                     -IsAlive { $job.State -eq 'Running' -and -not (Test-Path -LiteralPath $StopFile) }
                 if (-not $found -and -not (Test-Path -LiteralPath $StopFile)) {
                     if ($job.State -ne 'Running') { throw "the session ended during '$line' (see $LogPath)." }

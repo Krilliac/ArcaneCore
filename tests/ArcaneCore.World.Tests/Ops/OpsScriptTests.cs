@@ -433,6 +433,45 @@ public sealed class OpsScriptTests
     }
 
     [PwshFact]
+    public void WaitForLog_SkippingTheMockEcho_IgnoresTheSentCommand_ButCountsEveryReplyLine()
+    {
+        // arcane-mock live logs each line it sends as '<time> [<endpoint>] > <command>', so a pattern that is also in the command
+        // ('.lookup item Linen', then a wait for 'Linen') matched that echo before the server had answered. The logs are CRLF, as
+        // PowerShell writes them on Windows; the echo-only log ends mid-line, as it does while the mock is writing.
+        string dir = Path.Combine(Path.GetTempPath(), "arcane-ops-wait-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string echoOnly = Path.Combine(dir, "echo.log");
+            File.WriteAllText(echoOnly, "12:00:00.000 [127.0.0.1:50000] > .lookup item Linen\r\n12:00:00.400 [127.0.0.1:50000] < No item found.\r\n"
+                + "12:00:01.000 [127.0.0.1:50000] > .lookup item Linen");
+            string ipv6Echo = Path.Combine(dir, "echo6.log");
+            File.WriteAllText(ipv6Echo, "12:00:00.000 [[::1]:50000] > .lookup item Linen\r\n");
+            string reply = Path.Combine(dir, "reply.log");
+            File.WriteAllText(reply, "12:00:00.000 [127.0.0.1:50000] > .lookup item Linen\r\n12:00:00.400 [127.0.0.1:50000] < 2996 - [Bolt of Linen Cloth]\r\n");
+            string continuation = Path.Combine(dir, "continuation.log");
+            File.WriteAllText(continuation, "12:00:00.000 [127.0.0.1:50000] > .lookup item Linen\r\n12:00:00.400 [127.0.0.1:50000] < Items:\r\nItem [Linen] > cloth\r\n");
+            object input = new { echoOnly, ipv6Echo, reply, continuation };
+            string known = "-SkipLinePattern (Get-OpsMockEchoPattern -Endpoint '127.0.0.1:50000')";
+            string any = "-SkipLinePattern (Get-OpsMockEchoPattern)";
+
+            Assert.True(EvalWith(WaitForLinen("echoOnly", ""), input).GetBoolean());           // no skip: the echo matches, as every wait did before
+            Assert.False(EvalWith(WaitForLinen("echoOnly", known), input).GetBoolean());
+            Assert.False(EvalWith(WaitForLinen("echoOnly", any), input).GetBoolean());         // no 'IN WORLD' endpoint known: any loopback endpoint
+            Assert.False(EvalWith(WaitForLinen("ipv6Echo", any), input).GetBoolean());
+            Assert.True(EvalWith(WaitForLinen("reply", known), input).GetBoolean());           // the server's reply counts
+            Assert.True(EvalWith(WaitForLinen("continuation", known), input).GetBoolean());    // and so does a multi-line reply's raw continuation line
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+
+        static string WaitForLinen(string log, string skip)
+            => $"Wait-OpsLogMatch -Path $in.{log} -Pattern 'Linen' -TimeoutSeconds 1 -PollMilliseconds 50 {skip}";
+    }
+
+    [PwshFact]
     public void HomeSetCount_SumsTheServersConfirmations_AndIsZeroForAnUnconfirmedRun()
     {
         string[] log =
@@ -831,6 +870,83 @@ public sealed class OpsScriptTests
         Assert.True(code == 3, $"exit {code}: {output}");
         Assert.Contains("stop file seen", output);
         Assert.DoesNotContain("first undelivered", output);
+    }
+
+    // A fake arcane-mock live that answers each replayed line with one reply line, ReplyDelayMilliseconds after its echo (the server
+    // taking its time). Just before the reply it logs 'appended before the reply: N' when the runner appended N more lines meanwhile.
+    private static string WriteReplyingMock(string directory, string reply, int replyDelayMilliseconds)
+    {
+        string mock = Path.Combine(directory, "replying-mock.ps1");
+        File.WriteAllText(mock, $$"""
+            $args_ = $args
+            function Get-Arg([string]$Name) { $i = [array]::IndexOf($args_, $Name); $args_[$i + 1] }
+            $scriptFile = Get-Arg '--script-file'
+            $stopFile = Get-Arg '--stop-file'
+            $deadline = (Get-Date).AddSeconds([int](Get-Arg '--duration-s'))
+            Write-Output 'IN WORLD as Opsgm; connection 127.0.0.1:50000 -> 127.0.0.1:8085'
+            $seen = 0
+            while (-not (Test-Path -LiteralPath $stopFile) -and (Get-Date) -lt $deadline) {
+                $lines = @(Get-Content -LiteralPath $scriptFile)
+                if ($seen -lt $lines.Count) {
+                    Write-Output ('{0} [127.0.0.1:50000] > {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $lines[$seen])
+                    Start-Sleep -Milliseconds {{replyDelayMilliseconds}}
+                    $early = @(Get-Content -LiteralPath $scriptFile).Count - $seen - 1
+                    if ($early -gt 0) { Write-Output "appended before the reply: $early" }
+                    Write-Output ('{0} [127.0.0.1:50000] < {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), '{{reply}}')
+                    $seen++
+                }
+                else { Start-Sleep -Milliseconds 20 }
+            }
+            exit 0
+            """);
+        return mock;
+    }
+
+    [PwshFact]
+    public void RunGmCommands_WaitFor_IsNotSatisfiedByTheMocksEchoOfTheCommand()
+    {
+        // The pattern is in the command ('.lookup item Linen') but not in the reply. The mock's echo of the command used to satisfy the
+        // wait, so the run passed (exit 0) without the server ever printing 'Linen'.
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteReplyingMock(toolDir, "No item found.", replyDelayMilliseconds: 100);
+        string log = Path.Combine(toolDir, "session.log");
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".lookup item Linen", "#waitfor 3 Linen"),
+            "-PaceMilliseconds", "450", "-LogPath", log);
+
+        Assert.Contains("[127.0.0.1:50000] > .lookup item Linen", File.ReadAllText(log));   // the echo was there to be matched
+        Assert.Contains("< No item found.", File.ReadAllText(log));
+        Assert.True(code == 1, $"exit {code}: {output}");
+        Assert.Contains("no log line matched 'Linen' within 3 s", output);
+    }
+
+    [PwshFact]
+    public void RunGmCommands_WaitFor_HoldsTheNextCommandUntilTheReplyArrives()
+    {
+        // The reply comes 2 s after the echo. A wait satisfied by the echo appended '.second' right after the pace sleep, while the
+        // server was still answering the first: the next command went out before the reply it was meant to wait for.
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteReplyingMock(toolDir, "2996 - [Bolt of Linen Cloth]", replyDelayMilliseconds: 2000);
+        string log = Path.Combine(toolDir, "session.log");
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".lookup item Linen", "#waitfor 10 Linen", ".second"),
+            "-PaceMilliseconds", "450", "-LogPath", log);
+
+        string text = File.ReadAllText(log);
+        Assert.True(code == 0, $"exit {code}: {output}");
+        Assert.Contains("sent 2 of 2 commands", output);
+        Assert.Contains("< 2996 - [Bolt of Linen Cloth]", text);
+        Assert.DoesNotContain("appended before the reply", text);
     }
 
     private static string ReadShared(string path)
