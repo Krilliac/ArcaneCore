@@ -5,7 +5,7 @@ namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>
 /// Every <c>docs/...md</c> path (and <c>#anchor</c>) that code, scripts, project files and workflows cite resolves. When
-/// this was added, 16 citations named five docs that had never existed in the repository. The checker is tested on a
+/// this was added, 12 citations named five docs that had never existed in the repository. The checker is tested on a
 /// scratch tree first so a broken checker cannot report a clean repository.
 /// </summary>
 public sealed partial class CodeDocReferenceTests : IDisposable
@@ -27,15 +27,22 @@ public sealed partial class CodeDocReferenceTests : IDisposable
         ["docs/gguf.md"] = "ggml's GGUF specification (in the ggml repository)",
     };
 
-    /// <summary>Files whose doc paths are synthetic inputs (scratch trees, changed-path fixtures), not pointers.</summary>
-    private static readonly string[] SyntheticInputFiles =
-    [
-        "tests/ArcaneCore.Kernel.Tests/Configuration/Conf/ConfFixtureCatalog.cs",
-        "tests/ArcaneCore.Kernel.Tests/Configuration/Conf/ConfWriterTests.cs",
-        "tests/ArcaneCore.World.Tests/Docs/DocsHarnessTests.cs",
-        "tests/ArcaneCore.World.Tests/Docs/CodeDocReferenceTests.cs",
-        "tests/ArcaneCore.World.Tests/Ops/RedeployPlanTests.cs",
-    ];
+    /// <summary>
+    /// The doc citations each file uses as synthetic inputs (scratch trees, changed-path fixtures), not pointers, as
+    /// written (path, or path#anchor). Only these are skipped, so a real pointer in the same file is still checked.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> SyntheticCitations = new(StringComparer.Ordinal)
+    {
+        ["tests/ArcaneCore.Kernel.Tests/Configuration/Conf/ConfFixtureCatalog.cs"] = ["docs/reference/configuration.md#fixture"],
+        ["tests/ArcaneCore.Kernel.Tests/Configuration/Conf/ConfWriterTests.cs"] = ["docs/reference/configuration.md#fixture"],
+        ["tests/ArcaneCore.World.Tests/Docs/DocsHarnessTests.cs"] = ["docs/reference/x.md", "docs/x.md"],
+        ["tests/ArcaneCore.World.Tests/Ops/RedeployPlanTests.cs"] = ["docs/x.md", "docs/a.md"],
+    };
+
+    /// <summary>Files the checker does not read: this one, whose scratch trees cite made-up docs throughout.</summary>
+    private static readonly string[] UnreadFiles = ["tests/ArcaneCore.World.Tests/Docs/CodeDocReferenceTests.cs"];
+
+    private static readonly Dictionary<string, string[]> NoSyntheticCitations = new(StringComparer.Ordinal);
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "arcane-codedocs-" + Guid.NewGuid().ToString("N"));
 
@@ -56,7 +63,10 @@ public sealed partial class CodeDocReferenceTests : IDisposable
     /// <summary>Repo-relative, '/'-separated paths of the code files the checker reads.</summary>
     internal static IReadOnlyList<string> CodeFiles(string root)
     {
+        // The root's own files cite docs too (Directory.Build.props, docker-compose.yml, .codacy.yml); below the root
+        // only CodeDirectories are walked.
         var files = new List<string>();
+        AddCodeFiles(root, root, files);
         foreach (string dir in CodeDirectories)
         {
             string full = Path.Combine(root, dir);
@@ -72,20 +82,25 @@ public sealed partial class CodeDocReferenceTests : IDisposable
 
     private static void Collect(string root, string dir, List<string> files)
     {
+        AddCodeFiles(root, dir, files);
+        foreach (string sub in Directory.EnumerateDirectories(dir))
+        {
+            if (!SkippedDirectories.Contains(Path.GetFileName(sub), StringComparer.OrdinalIgnoreCase))
+            {
+                Collect(root, sub, files);
+            }
+        }
+    }
+
+    /// <summary>Adds the code files directly in <paramref name="dir"/> (not its subdirectories).</summary>
+    private static void AddCodeFiles(string root, string dir, List<string> files)
+    {
         foreach (string file in Directory.EnumerateFiles(dir))
         {
             string name = Path.GetFileName(file);
             if (TextExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase) || name.Equals("Dockerfile", StringComparison.Ordinal))
             {
                 files.Add(Path.GetRelativePath(root, file).Replace('\\', '/'));
-            }
-        }
-
-        foreach (string sub in Directory.EnumerateDirectories(dir))
-        {
-            if (!SkippedDirectories.Contains(Path.GetFileName(sub), StringComparer.OrdinalIgnoreCase))
-            {
-                Collect(root, sub, files);
             }
         }
     }
@@ -111,20 +126,29 @@ public sealed partial class CodeDocReferenceTests : IDisposable
             : [];
     }
 
-    internal static IReadOnlyList<string> FindBrokenCitations(string root, IReadOnlyDictionary<string, string> external, IReadOnlyCollection<string> syntheticFiles)
-        => Check(root, CodeFiles(root).Where(f => !syntheticFiles.Contains(f)), external);
+    internal static IReadOnlyList<string> FindBrokenCitations(
+        string root, IReadOnlyDictionary<string, string> external, IReadOnlyDictionary<string, string[]> synthetic, IReadOnlyCollection<string> unreadFiles)
+        => Check(root, CodeFiles(root).Where(f => !unreadFiles.Contains(f)), external, synthetic);
 
-    /// <summary>The unresolved citations in <paramref name="files"/>, each as "file:line: problem".</summary>
-    private static List<string> Check(string root, IEnumerable<string> files, IReadOnlyDictionary<string, string> external)
+    /// <summary>A citation as written: its path, then <c>#anchor</c> when it has one.</summary>
+    private static string AsWritten(DocCitation citation) => citation.Anchor is null ? citation.Path : citation.Path + "#" + citation.Anchor;
+
+    /// <summary>
+    /// The unresolved citations in <paramref name="files"/>, each as "file:line: problem", leaving out the
+    /// <paramref name="synthetic"/> citations each file lists.
+    /// </summary>
+    private static List<string> Check(
+        string root, IEnumerable<string> files, IReadOnlyDictionary<string, string> external, IReadOnlyDictionary<string, string[]> synthetic)
     {
         var problems = new List<string>();
         var anchorCache = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
         HashSet<string> existing = ExistingDocs(root);
         foreach (string file in files)
         {
+            string[] inputs = synthetic.GetValueOrDefault(file) ?? [];
             foreach (DocCitation citation in Citations(file, File.ReadAllText(Path.Combine(root, file))))
             {
-                if (external.ContainsKey(citation.Path))
+                if (external.ContainsKey(citation.Path) || inputs.Contains(AsWritten(citation), StringComparer.Ordinal))
                 {
                     continue;
                 }
@@ -162,17 +186,25 @@ public sealed partial class CodeDocReferenceTests : IDisposable
         Write("tools/run.ps1", "# Usage: docs/ops/missing.md\n");
         Write("src/A/obj/Gen.cs", "// docs/never-read.md\n");
         Write("src/A/B.cs", "// https://example.com/docs/web.md ../docs/areas/real.md ggml's docs/spec.md\n");
-        Write("tests/T/Fixture.cs", "\"docs/x.md\"\n");
+        Write("tests/T/Fixture.cs", "\"docs/x.md\"\n\"docs/areas/real.md#fixture\"\n/// docs/ops/stale.md\n");
+        Write("tests/T/Scratch.cs", "// docs/never.md\n");
         Write("src/A/notes.md", "docs/markdown-is-not-code.md\n");
         Write("src/A/Case.cs", "// docs/Areas/real.md\n");
+        Write("Directory.Build.props", "<!-- docs/guide/gone.md -->\n");
 
-        IReadOnlyList<string> problems = FindBrokenCitations(_root, new Dictionary<string, string> { ["docs/spec.md"] = "test" }, ["tests/T/Fixture.cs"]);
+        IReadOnlyList<string> problems = FindBrokenCitations(
+            _root,
+            new Dictionary<string, string> { ["docs/spec.md"] = "test" },
+            new Dictionary<string, string[]> { ["tests/T/Fixture.cs"] = ["docs/x.md", "docs/areas/real.md#fixture"] },
+            ["tests/T/Scratch.cs"]);
 
-        Assert.Equal(4, problems.Count);
+        Assert.Equal(6, problems.Count);
         Assert.Contains("src/A/A.cs:2: docs/areas/gone.md does not exist", problems);
         Assert.Contains("src/A/A.cs:3: no heading #nope in docs/areas/real.md", problems);
         Assert.Contains("src/A/Case.cs:1: docs/Areas/real.md does not exist", problems);
         Assert.Contains("tools/run.ps1:1: docs/ops/missing.md does not exist", problems);
+        Assert.Contains("tests/T/Fixture.cs:3: docs/ops/stale.md does not exist", problems);
+        Assert.Contains("Directory.Build.props:1: docs/guide/gone.md does not exist", problems);
     }
 
     [Fact]
@@ -184,7 +216,7 @@ public sealed partial class CodeDocReferenceTests : IDisposable
         int citations = files.Sum(f => Citations(f, File.ReadAllText(Path.Combine(root, f))).Count());
         Assert.True(citations > 500, $"the checker must see the code's doc citations (found {citations})");
 
-        IReadOnlyList<string> problems = FindBrokenCitations(root, ExternalDocs, SyntheticInputFiles);
+        IReadOnlyList<string> problems = FindBrokenCitations(root, ExternalDocs, SyntheticCitations, UnreadFiles);
         Assert.True(problems.Count == 0, string.Join("\n", problems));
     }
 
@@ -192,16 +224,33 @@ public sealed partial class CodeDocReferenceTests : IDisposable
     public void Exemptions_StayNeeded()
     {
         string root = RepoRoot.Find();
+        IReadOnlyList<string> readFiles = [.. CodeFiles(root).Where(f => !UnreadFiles.Contains(f))];
         foreach ((string path, string owner) in ExternalDocs)
         {
             Assert.False(File.Exists(Path.Combine(root, path)), $"{path} exists here now, so it is no longer only {owner}");
-            Assert.Contains(CodeFiles(root), f => Citations(f, File.ReadAllText(Path.Combine(root, f))).Any(c => c.Path == path));
+            Assert.True(
+                readFiles.Any(f => Citations(f, File.ReadAllText(Path.Combine(root, f))).Any(c => c.Path == path)),
+                $"no code cites {path} any more (this file's own table does not count); drop its {nameof(ExternalDocs)} entry");
         }
 
-        foreach (string file in SyntheticInputFiles)
+        foreach ((string file, string[] inputs) in SyntheticCitations)
         {
             Assert.True(File.Exists(Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar))), $"{file} is exempt but no longer exists");
-            Assert.True(Check(root, [file], ExternalDocs).Count > 0, $"{file} cites no synthetic doc path or anchor any more; drop its exemption");
+            foreach (string input in inputs)
+            {
+                var others = new Dictionary<string, string[]>(StringComparer.Ordinal) { [file] = [.. inputs.Where(i => i != input)] };
+                Assert.True(
+                    Check(root, [file], ExternalDocs, others).Count > 0,
+                    $"{file} no longer cites the synthetic {input}, or it resolves now; drop it from {nameof(SyntheticCitations)}");
+            }
+        }
+
+        foreach (string file in UnreadFiles)
+        {
+            Assert.True(File.Exists(Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar))), $"{file} is unread but no longer exists");
+            Assert.True(
+                Check(root, [file], ExternalDocs, NoSyntheticCitations).Count > 0,
+                $"{file} cites no synthetic doc path or anchor any more; drop it from {nameof(UnreadFiles)}");
         }
     }
 
