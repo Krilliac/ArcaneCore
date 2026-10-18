@@ -313,6 +313,7 @@ public sealed class CreatureAiFactory
         [Scripts.TheramoreSparControllerAI.NpcMasterSzigeti] = E(static c => new Scripts.TheramoreSparControllerAI(c)),
         [Scripts.CorkGizeltonAI.Entry] = E(static c => new Scripts.CorkGizeltonAI(c)),
         [Scripts.RiggerGizeltonAI.Entry] = E(static c => new Scripts.RiggerGizeltonAI(c)),
+        [Instances.Scripts.SunkenTemple.MalfurionStormrageAI.Entry] = E(static c => new Instances.Scripts.SunkenTemple.MalfurionStormrageAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
