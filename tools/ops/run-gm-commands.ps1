@@ -3,10 +3,13 @@
   Runs GM commands on a live ArcaneCore world through an operator account, then puts the account back as it found it.
 
 .DESCRIPTION
-  The server has no console command channel for '.' commands, so this logs a character in with arcane-mock live (the loopback
-  protocol client, tools/ArcaneCore.MockClient) and sends the lines as chat, paced, while it prints every reply into a log.
+  This logs a character in with arcane-mock live (the loopback protocol client, tools/ArcaneCore.MockClient) and sends the lines
+  as chat, paced, while it prints every reply into a log, so each line runs as that character. The world also runs '.' commands
+  without a character, over remote admin (RA, on by default at 127.0.0.1:3443, docs/ops/remote-admin.md; clients in tools/botctl),
+  at its console window and over its control pipe (off by default; docs/areas/server-console.md); this script uses none of them.
 
-    1. checks every command line (a GM command '.x', a '# comment', or '#wait N' to pause N seconds) and refuses the run otherwise;
+    1. checks every command line (a GM command '.x', a '# comment', '#wait N' to pause N seconds, or '#waitfor N <regex>' to wait up
+       to N seconds for a log line that matches) and refuses the run otherwise;
     2. reads the operator account's security level (arcane-account list), so it can be restored exactly;
     3. sets a fresh random password (arcane-account set-password --password-stdin: the password goes through standard input, never
        the command line) and promotes the account to Administrator (arcane-account set-gmlevel);
@@ -22,7 +25,7 @@
   the log (the log is scanned for it afterwards as a second guard). The account keeps an unknown password afterwards; the next run
   sets a new one.
 
-  Exit codes: 0 done and every command was delivered (counted from the log); 1 the session or a tool failed, or fewer commands were
+  Exit codes: 0 done and every command was delivered (counted from the log); 1 the session or a tool failed, a '#waitfor' timed out, or fewer commands were
   delivered than appended (the message names the first undelivered one); 2 refused before any change (bad argument, stop file already present, missing
   tool, unknown account); 3 stopped by the stop file; 4 the account could not be demoted (check it by hand: arcane-account list).
 
