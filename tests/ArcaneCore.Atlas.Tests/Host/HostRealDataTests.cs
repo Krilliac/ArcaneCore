@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Host;
@@ -118,5 +119,42 @@ public sealed class HostRealDataTests(ITestOutputHelper output)
         Assert.Equal(paths.TerrainData, status.Str("paths.terrainData"));
         Assert.Empty(paths.Problems());
         Assert.DoesNotContain(status.At("problems")!.AsArray(), p => p!.GetValue<string>().Contains(paths.TerrainData!, StringComparison.Ordinal));
+    }
+}
+
+/// <summary>Every built-in bookmark's coordinates are on the repository line its <see cref="Bookmark.Source"/> cites.</summary>
+public sealed class BuiltInBookmarkSourceTests
+{
+    [Fact]
+    public void EachBuiltInBookmark_ComesFromTheLineItCites()
+    {
+        string root = RepositoryRoot();
+        Assert.NotEmpty(BuiltInBookmarks.All);
+        foreach (Bookmark bookmark in BuiltInBookmarks.All)
+        {
+            Assert.True(bookmark.BuiltIn);
+            int colon = bookmark.Source!.LastIndexOf(':');
+            string file = Path.Combine(root, bookmark.Source[..colon]);
+            int line = int.Parse(bookmark.Source[(colon + 1)..], CultureInfo.InvariantCulture);
+            string text = File.ReadLines(file).ElementAt(line - 1);
+            foreach (double coordinate in new[] { bookmark.Target.X, bookmark.Target.Y, bookmark.Target.Z })
+            {
+                string written = coordinate.ToString("R", CultureInfo.InvariantCulture);
+                Assert.True(text.Contains(written, StringComparison.Ordinal), $"{bookmark.Name}: {bookmark.Source} does not contain {written}: {text.Trim()}");
+            }
+        }
+    }
+
+    private static string RepositoryRoot()
+    {
+        for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "ArcaneCore.slnx")))
+            {
+                return dir.FullName;
+            }
+        }
+
+        throw new InvalidOperationException($"No ArcaneCore.slnx above {AppContext.BaseDirectory}.");
     }
 }
