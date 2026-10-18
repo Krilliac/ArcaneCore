@@ -63,7 +63,11 @@ public static class DataServiceCollectionExtensions
     public static IServiceCollection AddCharacterDatabase(this IServiceCollection services, IConfiguration configuration)
     {
         AddDatabaseCommon(services, configuration, DatabaseComponent.Characters);
-        services.AddDbContext<CharacterDbContext>((provider, builder) =>
+        // Pooled: every save, autosave and store call resolves a context in a fresh scope (CharacterSaveQueue, ~1500 writes/min on live).
+        // Unpooled, each one rebuilt its options (WarningsConfiguration and extension copies) and EF's internal service scope, about a fifth
+        // of the save path's allocations. The options are built once from the root provider (every input above is a singleton or IOptions),
+        // and EF resets a returned context (change tracker, AutoTransactionBehavior the write fence sets, adopted transactions) before reuse.
+        services.AddDbContextPool<CharacterDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>(),
                 provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs,
                 provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider), CheckpointOptions(provider), WriteGate(provider)));
