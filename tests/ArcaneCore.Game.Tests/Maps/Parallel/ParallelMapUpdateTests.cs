@@ -191,6 +191,72 @@ public sealed class ParallelMapUpdateTests
         Assert.Contains(probes.SelectMany(p => p.ThreadNames), name => name is not null && name.StartsWith("map-worker", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AMapUpdateThatThrows_IsContained_AndEveryOtherMapStillUpdatesEveryTick()
+    {
+        using WorldRuntime world = CreateRuntime(4);
+        var probes = new List<ProbeUpdater>();
+        for (uint i = 0; i < 6; i++)
+        {
+            Map map = world.GetMap(i == 0 ? 0u : 30, i);
+            var probe = new ProbeUpdater(world);
+            map.AddUpdater(probe);
+            probes.Add(probe);
+        }
+
+        world.GetMap(30, 3).AddUpdater(new ActionUpdater((_, tick) =>
+        {
+            if (tick % 2 == 0) throw new InvalidOperationException("boom");
+        }));
+
+        for (int i = 0; i < 20; i++) world.RunTick(50);
+
+        Assert.Equal(20, world.ParallelCounters.ParallelTicks);
+        Assert.All(probes, p => Assert.Equal(20, p.Updates));
+    }
+
+    /// <summary>
+    /// Churn: maps made and unloaded from inside map updates, every tick, for many ticks at 4 threads; every map that exists at a tick's
+    /// start is updated exactly once, and nothing deadlocks or faults.
+    /// </summary>
+    [Fact]
+    public void MapsMadeAndUnloadedFromMapUpdates_UnderChurn_KeepTheOncePerTickRule()
+    {
+        using WorldRuntime world = CreateRuntime(4);
+        var counts = new System.Collections.Concurrent.ConcurrentDictionary<(uint, uint), int>();
+        uint nextInstance = 100;
+        void Attach(Map map)
+        {
+            map.AddUpdater(new ActionUpdater((m, tick) =>
+            {
+                counts.AddOrUpdate((m.MapId, m.InstanceId), 1, (_, c) => c + 1);
+                if (m.InstanceId >= 100 && tick == 3)
+                {
+                    world.UnloadMap(m);
+                }
+            }));
+        }
+
+        for (uint i = 0; i < 4; i++) Attach(world.GetMap(i, 0));
+        world.GetMap(0).AddUpdater(new ActionUpdater((_, _) =>
+        {
+            using WorldRuntime.SerialScope serial = world.EnterSerial();
+            for (int k = 0; k < 2; k++) Attach(world.GetMap(33, nextInstance++));
+        }));
+
+        for (int tick = 0; tick < 60; tick++)
+        {
+            int before = world.Maps.Count();
+            counts.Clear();
+            world.RunTick(50);
+            Assert.True(counts.Count >= 4, $"tick {tick}: only {counts.Count} maps updated");
+            Assert.All(counts, entry => Assert.Equal(1, entry.Value));
+            Assert.True(counts.Count <= before, $"tick {tick}: {counts.Count} updates for {before} maps");
+        }
+
+        Assert.Equal(0, world.ParallelCounters.OwnerViolations);
+    }
+
     /// <summary>
     /// The determinism check (plan section 8.1): the same seeded world, ticked the same way, ends in identical positions and sends
     /// every session the identical byte stream at 1 thread and at 4 (gated and ungated), and with everything gated.
