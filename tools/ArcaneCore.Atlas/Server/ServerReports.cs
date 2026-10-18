@@ -137,7 +137,7 @@ public sealed record IndoorSample(bool InsideWmo, uint MogpFlags, int AdtId, int
         ["adtId"] = InsideWmo ? AdtId : null,
         ["rootId"] = InsideWmo ? RootId : null,
         ["groupId"] = InsideWmo ? GroupId : null,
-        ["groundZ"] = InsideWmo ? ReportJson.Number(GroundZ) : null,
+        ["groundZ"] = InsideWmo ? ReportJson.Number((float?)GroundZ) : null,
     };
 }
 

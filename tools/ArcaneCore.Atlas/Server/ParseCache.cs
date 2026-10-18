@@ -51,10 +51,18 @@ public sealed class ParseCache<TKey, TValue>(long maxCost)
 {
     private readonly ConcurrentDictionary<TKey, Lazy<Entry>> _entries = new();
     private readonly LinkedList<TKey> _lru = new();
+    private readonly Dictionary<TKey, Slot> _slots = new();
     private readonly Lock _lruGate = new();
     private long _cost;
     private long _hits;
     private long _loads;
+
+    private sealed class Slot(LinkedListNode<TKey> node, long cost)
+    {
+        public LinkedListNode<TKey> Node { get; } = node;
+
+        public long Cost { get; } = cost;
+    }
 
     private sealed record Entry(ParsedFile<TValue> File, long Cost);
 
@@ -82,7 +90,6 @@ public sealed class ParseCache<TKey, TValue>(long maxCost)
             () =>
             {
                 (ParsedFile<TValue> file, long cost) = load();
-                Interlocked.Add(ref _cost, cost);
                 Interlocked.Increment(ref _loads);
                 return new Entry(file, cost);
             },
@@ -96,7 +103,7 @@ public sealed class ParseCache<TKey, TValue>(long maxCost)
                 Interlocked.Increment(ref _hits);
             }
 
-            Touch(key);
+            Touch(key, lazy, entry.Cost);
             return entry.File;
         }
         catch
@@ -107,49 +114,56 @@ public sealed class ParseCache<TKey, TValue>(long maxCost)
         }
     }
 
-    /// <summary>Forgets every entry.</summary>
+    /// <summary>
+    /// Forgets every entry. A load still in flight finishes for its own callers but is not cached and is not counted in the
+    /// cost, so the cost never drifts.
+    /// </summary>
     public void Clear()
     {
-        foreach (TKey key in _entries.Keys)
+        lock (_lruGate)
         {
-            Drop(key);
+            _entries.Clear();
+            _slots.Clear();
+            _lru.Clear();
+            Interlocked.Exchange(ref _cost, 0);
         }
     }
 
-    private void Touch(TKey key)
+    /// <summary>
+    /// Marks <paramref name="key"/> most recently used and evicts from the cold end while over budget. The cost of an entry
+    /// is counted here, under the gate, and only while that exact entry is still the cached one.
+    /// </summary>
+    private void Touch(TKey key, Lazy<Entry> lazy, long cost)
     {
-        List<TKey> evict = [];
         lock (_lruGate)
         {
-            _lru.Remove(key);
-            _lru.AddFirst(key);
-            long over = Interlocked.Read(ref _cost) - maxCost;
-            for (LinkedListNode<TKey>? node = _lru.Last; over > 0 && node is not null && node != _lru.First; node = node.Previous)
+            if (!_entries.TryGetValue(key, out Lazy<Entry>? current) || !ReferenceEquals(current, lazy))
             {
-                if (_entries.TryGetValue(node.Value, out Lazy<Entry>? lazy) && lazy.IsValueCreated)
-                {
-                    over -= lazy.Value.Cost;
-                    evict.Add(node.Value);
-                }
+                return;
             }
-        }
 
-        foreach (TKey victim in evict)
-        {
-            Drop(victim);
-        }
-    }
+            if (_slots.TryGetValue(key, out Slot? slot))
+            {
+                _lru.Remove(slot.Node);
+                _lru.AddFirst(slot.Node);
+            }
+            else
+            {
+                _slots[key] = new Slot(_lru.AddFirst(key), cost);
+                Interlocked.Add(ref _cost, cost);
+            }
 
-    private void Drop(TKey key)
-    {
-        if (_entries.TryRemove(key, out Lazy<Entry>? lazy) && lazy.IsValueCreated)
-        {
-            Interlocked.Add(ref _cost, -lazy.Value.Cost);
-        }
+            while (Interlocked.Read(ref _cost) > maxCost && _lru.Last is { } last && last != _lru.First)
+            {
+                TKey victim = last.Value;
+                _lru.Remove(last);
+                if (_slots.Remove(victim, out Slot? gone))
+                {
+                    Interlocked.Add(ref _cost, -gone.Cost);
+                }
 
-        lock (_lruGate)
-        {
-            _lru.Remove(key);
+                _entries.TryRemove(victim, out _);
+            }
         }
     }
 }

@@ -531,7 +531,7 @@ public sealed class ServerEngine : IDisposable
             }
         }
 
-        TerrainLos terrain = SampleTerrainAlong(context, from, to, length);
+        TerrainLos terrain = SampleTerrainAlong(context, from, to);
         return new LosReport(
             mapId,
             from,
@@ -561,9 +561,9 @@ public sealed class ServerEngine : IDisposable
             : null;
     }
 
-    private static TerrainLos SampleTerrainAlong(MapContext context, Vector3 from, Vector3 to, float length)
+    private static TerrainLos SampleTerrainAlong(MapContext context, Vector3 from, Vector3 to)
     {
-        int steps = Math.Max(1, (int)MathF.Ceiling(length));
+        int steps = PlanarSteps(from, to);
         int unknown = 0;
         for (int i = 0; i <= steps; i++)
         {
@@ -584,10 +584,17 @@ public sealed class ServerEngine : IDisposable
         return new TerrainLos(true, null, steps + 1, unknown);
     }
 
-    /// <summary>The terrain tiles a segment crosses (every yard of it, deduplicated, in order).</summary>
+    /// <summary>
+    /// One step per yard of the segment's horizontal length. Terrain is a function of (x, y), so the vertical part of a
+    /// segment needs no samples of its own: a near-vertical segment of 800000 yards costs one lookup, not 800000.
+    /// </summary>
+    private static int PlanarSteps(Vector3 from, Vector3 to) =>
+        Math.Max(1, (int)MathF.Ceiling(Vector2.Distance(new Vector2(from.X, from.Y), new Vector2(to.X, to.Y))));
+
+    /// <summary>The terrain tiles a segment crosses (every horizontal yard of it, deduplicated, in order).</summary>
     private static IEnumerable<(int X, int Y)> TilesAlong(Vector3 from, Vector3 to)
     {
-        int steps = Math.Max(1, (int)MathF.Ceiling(Vector3.Distance(from, to)));
+        int steps = PlanarSteps(from, to);
         (int, int)? last = null;
         for (int i = 0; i <= steps; i++)
         {

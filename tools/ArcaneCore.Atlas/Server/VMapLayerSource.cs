@@ -485,7 +485,6 @@ public sealed class VMapLayerSource : ServerLayerSource
             }
         }
 
-        tally.FallbackOwned++;
         int minX = ClampTile(32 - (high.X / WorldGrid.TileSize));
         int maxX = ClampTile(32 - (low.X / WorldGrid.TileSize));
         int minY = ClampTile(32 - (high.Y / WorldGrid.TileSize));
@@ -497,7 +496,13 @@ public sealed class VMapLayerSource : ServerLayerSource
                 var candidate = new TileKey(tile.MapId, x, y);
                 if (Lists(candidate, entry.Slot))
                 {
-                    return candidate == tile;
+                    if (candidate == tile)
+                    {
+                        tally.FallbackOwned++;
+                        return true;
+                    }
+
+                    return false;
                 }
             }
         }

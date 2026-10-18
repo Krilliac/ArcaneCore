@@ -178,6 +178,8 @@ public sealed class ServerRealDataTests(ITestOutputHelper output) : IDisposable
         Assert.NotNull(floor);
         output.WriteLine($"inn floor triangle at z {floorZ:F3}: {floor.ToJsonString()}");
         Assert.Equal("wmo group", (string)floor["kind"]!);
+        Assert.EndsWith("Goldshireinn.wmo", (string)floor["model"]!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(30340u, (uint)floor["spawnId"]!);
         Assert.False((bool)floor["outdoors"]!);
 
         LayerBuild bounds = Build(LayerIds.VMapBounds, Goldshire);
@@ -185,6 +187,284 @@ public sealed class ServerRealDataTests(ITestOutputHelper output) : IDisposable
         Assert.Contains(
             bounds.Chunks.SelectMany(c => c.Attributes.Values),
             o => o["spawnId"]!.ToJsonString() == floor["spawnId"]!.ToJsonString() && Contains(o, InsideInn));
+    }
+
+    [AtlasServerRealTerrainFact]
+    public void VMapM2_Goldshire_AttributesEveryDoodad_AndMatchesModelTriangleSum()
+    {
+        LayerBuild m2 = Build(LayerIds.VMapM2, Goldshire);
+        LayerBuild wmo = Build(LayerIds.VMapWmo, Goldshire);
+        Assert.Equal(TileState.Ok, m2.Status.State);
+        Assert.Equal(TileState.Ok, wmo.Status.State);
+
+        var trianglesBySpawnId = new Dictionary<uint, int>();
+        foreach (GeometryChunk chunk in m2.Chunks)
+        {
+            chunk.Validate();
+            for (int t = 0; t < chunk.TriangleCount; t++)
+            {
+                JsonObject attr = chunk.Attributes[chunk.TriangleAttributes[t]];
+                Assert.Equal("m2 doodad", (string)attr["kind"]!);
+                trianglesBySpawnId[(uint)attr["spawnId"]!] = (int)attr["triangles"]!;
+            }
+        }
+
+        JsonObject m2Stats = m2.Chunks[0].Stats;
+        JsonObject wmoStats = wmo.Chunks[0].Stats;
+        output.WriteLine(m2Stats.ToJsonString());
+
+        int wmoCountOfTile = (int)wmoStats["spawnsListed"]! - (int)wmoStats["spawnsOfOtherLayers"]!;
+        Assert.Equal(wmoCountOfTile, (int)m2Stats["spawnsOfOtherLayers"]!);
+        Assert.Equal((int)wmoStats["spawnsDrawn"]! + (int)wmoStats["spawnsDrawnByAnotherTile"]!, (int)m2Stats["spawnsOfOtherLayers"]!);
+
+        ServerData data = _context.Services.Require<ServerData>();
+        VMapTileData tileData = data.VMapTileFile(Goldshire).Value!;
+        int modelTriangleSum = tileData.Spawns
+            .Where(s => s.Spawn.IsM2 && trianglesBySpawnId.ContainsKey(s.Spawn.Id))
+            .Sum(s => data.ModelFile(s.Spawn.Name).Value!.Groups.Sum(g => g.Triangles.Count));
+        int drawnTriangles = m2.Chunks.Sum(c => c.TriangleCount);
+
+        Assert.True(drawnTriangles > 0);
+        Assert.Equal((int)m2Stats["spawnsDrawn"]!, trianglesBySpawnId.Count);
+        Assert.Equal(drawnTriangles, trianglesBySpawnId.Values.Sum());
+        Assert.Equal(drawnTriangles, modelTriangleSum);
+        Assert.Equal(drawnTriangles, (int)m2Stats["triangles"]!);
+    }
+
+    [AtlasServerRealTerrainFact]
+    public void VMapOwnership_AroundGoldshire3x3_DrawsEachSpawnInExactlyOneTile_OwnedByItsBoundsCentre()
+    {
+        TileKey[] tiles = [.. WorldGrid.Around(EasternKingdoms, InsideInn.X, InsideInn.Y, 1)];
+        Assert.Equal(9, tiles.Length);
+        HashSet<TileKey> tileSet = [.. tiles];
+        ServerData data = _context.Services.Require<ServerData>();
+        VMapTreeData tree = data.VMapTreeFile(EasternKingdoms).Value!;
+
+        foreach (string layer in new[] { LayerIds.VMapWmo, LayerIds.VMapM2 })
+        {
+            bool wantM2 = layer == LayerIds.VMapM2;
+            var ownerBySpawnId = new Dictionary<uint, TileKey>();
+            var listedInTiles = new Dictionary<uint, (ArcaneCore.Game.Maps.Collision.VMaps.ModelSpawn Spawn, uint Slot, List<TileKey> Tiles)>();
+            int tilesWithBorderSpawns = 0;
+
+            foreach (TileKey tile in tiles)
+            {
+                LayerBuild build = Build(layer, tile);
+                Assert.Equal(TileState.Ok, build.Status.State);
+                JsonObject stats = build.Chunks[0].Stats;
+
+                uint[] drawnIds = [.. build.Chunks.SelectMany(c => c.Attributes.Values).Select(a => (uint)a["spawnId"]!).Distinct()];
+                Assert.Equal((int)stats["spawnsDrawn"]!, drawnIds.Length);
+                foreach (uint spawnId in drawnIds)
+                {
+                    Assert.True(ownerBySpawnId.TryAdd(spawnId, tile), $"{layer}: spawnId {spawnId} drawn in both {ownerBySpawnId.GetValueOrDefault(spawnId)} and {tile}");
+                }
+
+                VMapTileData rawTile = data.VMapTileFile(tile).Value!;
+                int borderSpawnsOnTile = 0;
+                foreach (VMapSpawn entry in rawTile.Spawns)
+                {
+                    if (entry.Spawn.IsM2 != wantM2 || entry.Slot >= (uint)tree.SlotCount)
+                    {
+                        continue;
+                    }
+
+                    if (!listedInTiles.TryGetValue(entry.Spawn.Id, out var record))
+                    {
+                        record = (entry.Spawn, entry.Slot, []);
+                        listedInTiles[entry.Spawn.Id] = record;
+                    }
+
+                    record.Tiles.Add(tile);
+                    (Vector3 low, Vector3 high) = entry.Spawn.HasBound
+                        ? VMapLayerSource.WorldBounds(entry.Spawn)
+                        : (ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.ToWorld(entry.Spawn.Position), ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.ToWorld(entry.Spawn.Position));
+                    Vector3 centre = (low + high) * 0.5f;
+                    if (WorldGrid.TileOf(EasternKingdoms, centre.X, centre.Y) is { } centreOwner
+                        && centreOwner != tile
+                        && data.VMapTileFile(centreOwner) is { IsOk: true } ownerFile
+                        && ownerFile.Value.Slots.Contains(entry.Slot))
+                    {
+                        borderSpawnsOnTile++;
+                    }
+                }
+
+                int drawnByAnother = (int)stats["spawnsDrawnByAnotherTile"]!;
+                int fallbackOwned = (int)stats["spawnsOwnedByFallbackRule"]!;
+                int orphanOwned = (int)stats["spawnsListedByNoCoveringTile"]!;
+                Assert.True(fallbackOwned >= 0 && orphanOwned >= 0);
+                if (borderSpawnsOnTile > 0)
+                {
+                    tilesWithBorderSpawns++;
+                    Assert.True(drawnByAnother > 0, $"{layer} {tile}: {borderSpawnsOnTile} border-spanning spawns but spawnsDrawnByAnotherTile == 0");
+                }
+
+                Assert.True(drawnByAnother >= borderSpawnsOnTile);
+            }
+
+            Assert.True(tilesWithBorderSpawns > 0, $"{layer}: expected border-spanning spawns in 3x3 around Goldshire");
+            int multiTileVerified = 0;
+            foreach ((ArcaneCore.Game.Maps.Collision.VMaps.ModelSpawn spawn, uint slot, List<TileKey> listingTiles) in listedInTiles.Values)
+            {
+                if (listingTiles.Count < 2)
+                {
+                    continue;
+                }
+
+                (Vector3 low, Vector3 high) = spawn.HasBound
+                    ? VMapLayerSource.WorldBounds(spawn)
+                    : (ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.ToWorld(spawn.Position), ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.ToWorld(spawn.Position));
+                Vector3 centre = (low + high) * 0.5f;
+                TileKey expectedOwner = WorldGrid.TileOf(EasternKingdoms, centre.X, centre.Y)!.Value;
+                if (tileSet.Contains(expectedOwner) && data.VMapTileFile(expectedOwner).Value!.Slots.Contains(slot))
+                {
+                    Assert.True(ownerBySpawnId.TryGetValue(spawn.Id, out TileKey actualOwner), $"{layer}: multi-tile spawn {spawn.Id} was not drawn by its centre owner {expectedOwner}");
+                    Assert.Equal(expectedOwner, actualOwner);
+                    multiTileVerified++;
+                }
+            }
+
+            output.WriteLine($"{layer}: {ownerBySpawnId.Count} unique spawns drawn across 9 tiles, {tilesWithBorderSpawns} tiles with border spawns, {multiTileVerified} multi-tile spawns verified against WorldGrid.TileOf(centre)");
+            Assert.True(multiTileVerified > 0, $"{layer}: expected at least one multi-tile spawn with centre in the 3x3");
+        }
+    }
+
+    [AtlasServerRealTerrainFact]
+    public void VMapLiquid_AroundGoldshire_MatchesWmoLiquidGetLiquidHeight()
+    {
+        ServerData data = _context.Services.Require<ServerData>();
+        int verifiedQuads = 0;
+
+        foreach (TileKey tile in WorldGrid.Around(EasternKingdoms, InsideInn.X, InsideInn.Y, 1))
+        {
+            LayerBuild build = Build(LayerIds.VMapLiquid, tile);
+            if (build.Status.State != TileState.Ok || build.Chunks.Count == 0)
+            {
+                continue;
+            }
+
+            VMapTileData rawTile = data.VMapTileFile(tile).Value!;
+            Dictionary<uint, ArcaneCore.Game.Maps.Collision.VMaps.ModelSpawn> spawnsById = rawTile.Spawns
+                .Where(s => !s.Spawn.IsM2)
+                .GroupBy(s => s.Spawn.Id)
+                .ToDictionary(g => g.Key, g => g.First().Spawn);
+
+            foreach (GeometryChunk chunk in build.Chunks)
+            {
+                chunk.Validate();
+                for (int t = 0; t + 1 < chunk.TriangleCount; t += 2)
+                {
+                    uint attrId = chunk.TriangleAttributes[t];
+                    JsonObject attr = chunk.Attributes[attrId];
+                    Assert.Equal("wmo liquid", (string)attr["kind"]!);
+                    uint spawnId = (uint)attr["spawnId"]!;
+                    int groupIndex = (int)attr["group"]!;
+                    ArcaneCore.Game.Maps.Collision.VMaps.ModelSpawn spawn = spawnsById[spawnId];
+                    ArcaneCore.Game.Maps.Collision.VMaps.WorldModel model = data.ModelFile(spawn.Name).Value!;
+                    var instance = new ArcaneCore.Game.Maps.Collision.VMaps.ModelInstance(spawn, model);
+                    ArcaneCore.Game.Maps.Collision.VMaps.WmoLiquid liquid = model.Groups[groupIndex].Liquid!;
+
+                    // Each drawn liquid square emits two triangles: (a, b, d) for dx > dy and (a, d, c) for dx < dy.
+                    for (int triOffset = 0; triOffset < 2; triOffset++)
+                    {
+                        WorldPoint a = chunk.Vertex(chunk.Triangles[(t + triOffset) * 3]);
+                        WorldPoint b = chunk.Vertex(chunk.Triangles[((t + triOffset) * 3) + 1]);
+                        WorldPoint c = chunk.Vertex(chunk.Triangles[((t + triOffset) * 3) + 2]);
+                        var centroidWorld = new Vector3((float)((a.X + b.X + c.X) / 3.0), (float)((a.Y + b.Y + c.Y) / 3.0), (float)((a.Z + b.Z + c.Z) / 3.0));
+                        Vector3 centroidModel = instance.ToModel(ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.ToInternal(centroidWorld));
+
+                        Assert.True(TryGetWmoLiquidHeight(liquid, centroidModel, out float modelLiqZ));
+                        Vector3 expectedWorld = ArcaneCore.Game.Maps.Collision.VMaps.VMapFormat.ToWorld(
+                            instance.FromModel(new Vector3(centroidModel.X, centroidModel.Y, modelLiqZ)));
+                        double? drawnZ = ZAt(a, b, c, centroidWorld.X, centroidWorld.Y);
+                        Assert.NotNull(drawnZ);
+                        Assert.Equal(expectedWorld.Z, drawnZ.Value, 2);
+                    }
+
+                    verifiedQuads++;
+                    if (verifiedQuads >= 32)
+                    {
+                        break;
+                    }
+                }
+
+                if (verifiedQuads >= 32)
+                {
+                    break;
+                }
+            }
+
+            if (verifiedQuads >= 32)
+            {
+                break;
+            }
+        }
+
+        output.WriteLine($"verified {verifiedQuads} real WMO liquid quads against WmoLiquid::GetLiquidHeight");
+        Assert.True(verifiedQuads > 0, "expected real WMO liquid quads in the 3x3 tiles around Goldshire");
+    }
+
+    [AtlasServerRealTerrainFact]
+    public void NavBv_Goldshire_IsEmpty_BecauseTheBvTreePassedVerification()
+    {
+        LayerBuild bv = Build(LayerIds.NavBvRejected, Goldshire);
+        output.WriteLine($"{bv.Status.State}: {bv.Status.Detail}");
+
+        Assert.Equal(TileState.Empty, bv.Status.State);
+        Assert.Empty(bv.Chunks);
+        Assert.Contains("passed the server's verification", bv.Status.Detail, StringComparison.Ordinal);
+    }
+
+    // ref: D:\refs\vmangos\src\game\vmap\WorldModel.cpp:158-204 WmoLiquid::GetLiquidHeight
+    internal static bool TryGetWmoLiquidHeight(ArcaneCore.Game.Maps.Collision.VMaps.WmoLiquid liquid, Vector3 pos, out float liqHeight)
+    {
+        liqHeight = 0;
+        float txF = (pos.X - liquid.Corner.X) / VMapLayerSource.LiquidTileSize;
+        if (txF < 0f)
+        {
+            return false;
+        }
+
+        uint tx = (uint)txF;
+        if (tx >= liquid.TilesX)
+        {
+            return false;
+        }
+
+        float tyF = (pos.Y - liquid.Corner.Y) / VMapLayerSource.LiquidTileSize;
+        if (tyF < 0f)
+        {
+            return false;
+        }
+
+        uint ty = (uint)tyF;
+        if (ty >= liquid.TilesY)
+        {
+            return false;
+        }
+
+        if ((liquid.Flags[tx + (ty * liquid.TilesX)] & 0x0F) == 0x0F)
+        {
+            return false;
+        }
+
+        float dx = txF - tx;
+        float dy = tyF - ty;
+        uint rowOffset = liquid.TilesX + 1;
+        if (dx > dy)
+        {
+            float sx = liquid.Heights[tx + 1 + (ty * rowOffset)] - liquid.Heights[tx + (ty * rowOffset)];
+            float sy = liquid.Heights[tx + 1 + ((ty + 1) * rowOffset)] - liquid.Heights[tx + 1 + (ty * rowOffset)];
+            liqHeight = liquid.Heights[tx + (ty * rowOffset)] + (dx * sx) + (dy * sy);
+        }
+        else
+        {
+            float sx = liquid.Heights[tx + 1 + ((ty + 1) * rowOffset)] - liquid.Heights[tx + ((ty + 1) * rowOffset)];
+            float sy = liquid.Heights[tx + ((ty + 1) * rowOffset)] - liquid.Heights[tx + (ty * rowOffset)];
+            liqHeight = liquid.Heights[tx + (ty * rowOffset)] + (dx * sx) + (dy * sy);
+        }
+
+        return true;
     }
 
     [AtlasServerRealTerrainFact]
@@ -244,7 +524,7 @@ public sealed class ServerRealDataTests(ITestOutputHelper output) : IDisposable
     }
 
     // Height of triangle (a, b, c) above (x, y), or null when (x, y) is outside its projection.
-    private static double? ZAt(WorldPoint a, WorldPoint b, WorldPoint c, double x, double y)
+    internal static double? ZAt(WorldPoint a, WorldPoint b, WorldPoint c, double x, double y)
     {
         double d = ((b.Y - c.Y) * (a.X - c.X)) + ((c.X - b.X) * (a.Y - c.Y));
         if (Math.Abs(d) < 1e-9)

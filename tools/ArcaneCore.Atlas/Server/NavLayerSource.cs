@@ -463,7 +463,7 @@ public sealed class NavLayerSource : ServerLayerSource
                     continue;
                 }
 
-                // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:686 GetCrossPortals; D:/refs/vmangos/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:300-415 findConnectingPolys (slab overlap)
+                // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:85-88,686-703 GetCrossPortals (Volatile-published cache); D:/refs/vmangos/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:300-415 findConnectingPolys (slab overlap)
                 CrossPortal[] found = mesh.GetCrossPortals(p, e, other);
                 if (found.Length == 0)
                 {
@@ -578,9 +578,13 @@ public sealed class NavLayerSource : ServerLayerSource
             return LayerBuild.Empty(LayerIds.NavBvRejected, tile, $"{file}: the BV tree passed the server's verification ({data.HeaderBvNodeCount} header nodes)");
         }
 
-        string reason = data.HeaderBvNodeCount == 0
-            ? "the file has no BV nodes"
-            : $"the file's {data.HeaderBvNodeCount} BV nodes failed the server's verification (malformed, a polygon missing from the tree, or quantization slack over the limit)";
+        if (data.HeaderBvNodeCount == 0)
+        {
+            // Not a failed verification: the file simply stores no BV tree, so there is nothing for the server to reject.
+            return LayerBuild.Empty(LayerIds.NavBvRejected, tile, $"{file}: the file stores no BV nodes (nothing to verify; not a rejected tree)");
+        }
+
+        string reason = $"the file's {data.HeaderBvNodeCount} BV nodes failed the server's verification (malformed, a polygon missing from the tree, or quantization slack over the limit)";
         WorldPoint origin = WorldGrid.Origin(tile);
         var builder = new GeometryBuilder(LayerIds.NavBvRejected, tile, origin);
         Vector3 a = World(mesh.BoundLow);

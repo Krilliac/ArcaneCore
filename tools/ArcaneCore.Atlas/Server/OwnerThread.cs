@@ -45,8 +45,8 @@ public sealed class OwnerThread : IDisposable
 
     /// <summary>
     /// Runs <paramref name="work"/> on the owner thread. The task completes with its result, faults with the exception it
-    /// threw, or is cancelled when <paramref name="cancellationToken"/> fires before the job starts (a running job is not
-    /// interrupted).
+    /// threw, or is cancelled as soon as <paramref name="cancellationToken"/> fires while the job is still waiting (a running
+    /// job is not interrupted, and a cancelled job is skipped when its turn comes).
     /// </summary>
     /// <exception cref="ObjectDisposedException">The owner thread has been disposed.</exception>
     public Task<T> RunAsync<T>(Func<T> work, CancellationToken cancellationToken = default)
@@ -72,10 +72,14 @@ public sealed class OwnerThread : IDisposable
 
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         EnsureStarted();
+        CancellationTokenRegistration registration = cancellationToken.CanBeCanceled
+            ? cancellationToken.Register(static (state, token) => ((TaskCompletionSource<T>)state!).TrySetCanceled(token), completion)
+            : default;
         try
         {
             _queue.Add(() =>
             {
+                registration.Dispose();
                 if (cancellationToken.IsCancellationRequested)
                 {
                     completion.TrySetCanceled(cancellationToken);
@@ -92,9 +96,10 @@ public sealed class OwnerThread : IDisposable
                 }
             });
         }
-        catch (InvalidOperationException)
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException)
         {
-            // CompleteAdding ran between the disposed check and the add.
+            // Dispose ran between the disposed check and the add.
+            registration.Dispose();
             throw new ObjectDisposedException(nameof(OwnerThread));
         }
 
@@ -122,12 +127,14 @@ public sealed class OwnerThread : IDisposable
             return;
         }
 
-        _queue.CompleteAdding();
         Thread? thread;
         lock (_startGate)
         {
+            // EnsureStarted re-checks _disposed under this lock, so after this point no thread can appear.
             thread = _thread;
         }
+
+        _queue.CompleteAdding();
 
         if (IsCurrent)
         {
@@ -149,6 +156,7 @@ public sealed class OwnerThread : IDisposable
 
         lock (_startGate)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (_thread is not null)
             {
                 return;

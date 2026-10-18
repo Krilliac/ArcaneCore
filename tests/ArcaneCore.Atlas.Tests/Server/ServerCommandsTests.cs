@@ -217,7 +217,7 @@ public sealed class ServerCommandsTests : IDisposable
     }
 
     [Fact]
-    public async Task OwnerThread_PropagatesFailures_AndRefusesWorkAfterDispose()
+    public async Task OwnerThread_PropagatesFailures_CancelsPromptlyWhileQueued_AndRefusesWorkAfterDispose()
     {
         var owner = new OwnerThread("atlas-server-test");
         await Assert.ThrowsAsync<InvalidOperationException>(() => owner.RunAsync<int>(() => throw new InvalidOperationException("boom")));
@@ -225,7 +225,78 @@ public sealed class ServerCommandsTests : IDisposable
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => owner.RunAsync(() => 1, cancelled.Token));
+
+        using var blockGate = new ManualResetEventSlim(false);
+        using var enteredGate = new ManualResetEventSlim(false);
+        Task blocker = owner.RunAsync(() =>
+        {
+            enteredGate.Set();
+            blockGate.Wait(TimeSpan.FromSeconds(5));
+        });
+        Assert.True(enteredGate.Wait(TimeSpan.FromSeconds(5)));
+
+        using var waitingCts = new CancellationTokenSource();
+        int queuedRan = 0;
+        Task<int> waiting = owner.RunAsync(() => Interlocked.Increment(ref queuedRan), waitingCts.Token);
+        await waitingCts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(1)));
+
+        blockGate.Set();
+        await blocker;
+        Assert.Equal(0, Volatile.Read(ref queuedRan));
+
         owner.Dispose();
         Assert.Throws<ObjectDisposedException>(() => { _ = owner.RunAsync(() => 1); });
+    }
+
+    [Fact]
+    public async Task ParseCache_EvictsLeastRecentlyUsed_AndClearDoesNotDriftCostWhenLoadInFlight()
+    {
+        var cache = new ParseCache<string, string>(maxCost: 20);
+        cache.GetOrLoad("a", () => (ParsedFile<string>.Ok("A", "a"), 10));
+        cache.GetOrLoad("b", () => (ParsedFile<string>.Ok("B", "b"), 10));
+        Assert.Equal(20, cache.Stats.Cost);
+
+        // Touch "a" so "b" becomes least recently used, then insert "c" (cost 10) to evict "b".
+        cache.GetOrLoad("a", () => (ParsedFile<string>.Ok("A2", "a"), 10));
+        cache.GetOrLoad("c", () => (ParsedFile<string>.Ok("C", "c"), 10));
+        Assert.True(cache.TryPeek("a", out _));
+        Assert.False(cache.TryPeek("b", out _));
+        Assert.True(cache.TryPeek("c", out _));
+        Assert.Equal(20, cache.Stats.Cost);
+
+        using var inFlightStarted = new ManualResetEventSlim(false);
+        using var releaseInFlight = new ManualResetEventSlim(false);
+        Task<ParsedFile<string>> inFlight = Task.Run(() => cache.GetOrLoad("d", () =>
+        {
+            inFlightStarted.Set();
+            releaseInFlight.Wait(TimeSpan.FromSeconds(5));
+            return (ParsedFile<string>.Ok("D", "d"), 15);
+        }));
+        Assert.True(inFlightStarted.Wait(TimeSpan.FromSeconds(5)));
+        cache.Clear();
+        Assert.Equal(0, cache.Stats.Cost);
+        releaseInFlight.Set();
+        ParsedFile<string> dResult = await inFlight;
+        Assert.True(dResult.IsOk);
+        Assert.Equal(0, cache.Stats.Cost);
+        Assert.False(cache.TryPeek("d", out _));
+    }
+
+    [Fact]
+    public async Task Los_VerticalSegment_SamplesPlanarStepsOnly_AndNonFiniteIndoorGroundZIsNull()
+    {
+        WriteFloatTile();
+        using AtlasContext context = Compose();
+        (double x, double y) = Inside();
+
+        CommandResult vertical = await Invoke(context, ServerCommands.LosName, $$"""{"map":1,"a":[{{N(x)}},{{N(y)}},300000],"b":[{{N(x)}},{{N(y)}},-300000]}""");
+        Assert.True(vertical.Ok, vertical.ErrorMessage);
+        Assert.Equal(2, (int)vertical.Data!["terrain"]!["samples"]!);
+
+        var sample = new IndoorSample(InsideWmo: true, MogpFlags: 0x2000, AdtId: 1, RootId: 2, GroupId: 3, GroundZ: float.NaN, Outdoors: false);
+        JsonObject json = sample.ToJson();
+        Assert.True((bool)json["insideWmo"]!);
+        Assert.Null(json["groundZ"]);
     }
 }
