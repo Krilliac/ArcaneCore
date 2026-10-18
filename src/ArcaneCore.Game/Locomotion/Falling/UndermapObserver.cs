@@ -78,7 +78,8 @@ public sealed class UndermapObserver : IClientMovementObserver
                     state.LastUndermapSampleMs = nowMs;
                     // Terrain alone convicts a player in a cave or a city; the models decide (MapCollision.ClassifyUnderMap; Unknown never convicts).
                     UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, UnderTerrainThresholdYards);
-                    if (verdict.Kind == UnderMapKind.UnderMap)
+                    if (verdict.Kind == UnderMapKind.UnderMap
+                        && !map.Collision.LevelWithAnyNearbyFloor(player.X, player.Y, player.Movement.Z))
                     {
                         if (!state.UndermapReportedInEpisode)
                         {

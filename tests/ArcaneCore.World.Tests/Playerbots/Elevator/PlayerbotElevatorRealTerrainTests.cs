@@ -1,6 +1,9 @@
 using System.Numerics;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Transports;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.WorldData;
@@ -164,6 +167,75 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
         Assert.Equal(ElevatorLevel.Low, ElevatorNetwork.LevelOf(lift, regions, survey, new Vector3(1582.9f, 316.8f, -23.0f)));
         Assert.Equal(ElevatorLevel.Low, ElevatorNetwork.LevelOf(lift, regions, survey, new Vector3(1720.0f, 239.0f, -40.0f)));
         Assert.All(PlayerbotElevator.VaultLandingRadii, r => Assert.InRange(r, 11.5f, 14.0f));
+    }
+
+    [Fact]
+    public void UndercityVaultLift_NearUpperEntrance_PrefersThatLiftOverOtherVaultLifts()
+    {
+        var lift189 = new ElevatorLift(0, [new ElevatorCar(0, 20648, 20656, new Vector3(1595.24f, 189.647f, -40.76f), new Vector3(1595.24f, 189.647f, 55.65f), 16_667)]);
+        var lift292 = new ElevatorLift(0, [new ElevatorCar(0, 20649, 20657, new Vector3(1596.22f, 291.798f, -40.76f), new Vector3(1596.22f, 291.798f, 55.65f), 16_667)]);
+        var network = new ElevatorNetwork([lift189, lift292]);
+        var survey = new ElevatorSurvey(_ => (1497u, 1497u));
+
+        // Bot at 1574.7, 308.5, 61.7 (inside the upper entrance room of lift 1596, 292) heading to a goal near 1595, 189 underground:
+        // takes the lift it is already standing beside (1596, 292) rather than trying to walk through Ruins walls to 1595, 189.
+        (ElevatorLift Lift, ElevatorLevel From)? choice = network.Choose(0, new Vector3(1574.7f, 308.5f, 61.7f), new Vector3(1595.0f, 189.0f, -43.0f), survey);
+        Assert.Equal((lift292, ElevatorLevel.High), choice);
+    }
+
+    [RealElevatorFact]
+    public async Task RealTerrain_ThunderBluffAndUndercityLifts_HaveWalkableAndReachableLandings()
+    {
+        string terrain = Environment.GetEnvironmentVariable(RealElevatorFactAttribute.TerrainVariable)!;
+        string dbc = Environment.GetEnvironmentVariable(RealElevatorFactAttribute.DbcVariable)!;
+        TransportAnimationCatalog animation = TransportAnimationDbcReader.Load(Path.Combine(dbc, "TransportAnimation.dbc"));
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartRealAsync(terrain, animation);
+        (ElevatorNetwork network, _) = Load();
+        ElevatorLift tbLift = Lift(network, -1297f, 188f);
+        var options = new PlayerbotOptions();
+
+        foreach (Vector3 botPos in (Vector3[])[new(-1284.7f, 250.3f, 129.0f), new(-1254.0f, 224.2f, 130.8f)])
+        {
+            await world.PlaceAsync(botPos);
+            (Vector3? reachable, bool onMesh, bool canPlan) = await world.OnWorldAsync(() =>
+            {
+                Map kalimdor = world.Host.World.GetMap(1);
+                Player player = world.Player;
+                Vector3? found = null;
+                foreach (ElevatorCar car in tbLift.Cars)
+                {
+                    found = PlayerbotElevator.LandingBesideReachable(player, kalimdor, car.At(ElevatorLevel.High), botPos, options);
+                    if (found is not null) break;
+                }
+
+                bool mesh = found is not null && PlayerbotNavigation.OnWalkableMesh(kalimdor, found.Value);
+                bool plan = found is not null && PlayerbotNavigation.TryPlanToward(player, found.Value, options, out _);
+                return (found, mesh, plan);
+            });
+
+            output.WriteLine($"TB from {botPos} -> landing {reachable}");
+            Assert.NotNull(reachable);
+            Assert.True(onMesh, $"Landing {reachable} is not on walkable mesh");
+            Assert.True(canPlan, $"Cannot plan from {botPos} to {reachable}");
+        }
+
+        foreach ((Vector3 stop, Vector3 toward) in (ValueTuple<Vector3, Vector3>[])
+        [
+            (new(1595.24f, 189.647f, 55.65f), new(3200.7f, 341.0f, 32.1f)),
+            (new(1596.22f, 291.798f, 55.65f), new(1574.7f, 308.5f, 61.7f)),
+        ])
+        {
+            (Vector3? landing, bool onMesh) = await world.OnWorldAsync(() =>
+            {
+                Map ek = world.Host.World.GetMap(0);
+                Vector3? found = PlayerbotElevator.LandingBeside(ek, stop, toward);
+                return (found, found is not null && PlayerbotNavigation.OnWalkableMesh(ek, found.Value));
+            });
+
+            output.WriteLine($"UC stop {stop} toward {toward} -> landing {landing}");
+            Assert.NotNull(landing);
+            Assert.True(onMesh, $"UC landing {landing} for stop {stop} is not on walkable mesh");
+        }
     }
 
     private static ElevatorLift Lift(ElevatorNetwork network, float x, float y)

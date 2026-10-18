@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Diagnostics;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -251,12 +252,100 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
 
         if (models.TryGetAreaInfo(Map.MapId, x, y, z, out _)
             || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null
-            || TryGetMeshFloorUnder(x, y, z, UnderMapFloorSearch - FloorProbeOffset, out _))
+            || TryGetMeshFloor(x, y, z, UnderMapFloorSearch - FloorProbeOffset, UnderMapMeshChordRise, out _)
+            || LevelWithANearbyFloor(x, y, z))
         {
             return UnderMapVerdict.Ok;
         }
 
         return UnderMapVerdict.Under(depth);
+    }
+
+    private const float UnderMapMeshChordRise = 6.0f;
+    private const float NearbyFloorAbove = 5.0f;
+    private const float NearbyFloorBelow = 5.0f;
+    private const int NearbyFloorAxes = 4;
+    private static readonly float[] NearbyFloorRings = [1f, 2f, 3f];
+
+    /// <summary>
+    /// Whether a point that missed the vertical column probe sits in a narrow 1–3 yard seam bridged by floor on opposite sides
+    /// (e.g. between WMO floor pieces in Ironforge/Undercity), as opposed to off the edge of a room into the void.
+    /// </summary>
+    public bool LevelWithANearbyFloor(float x, float y, float z)
+    {
+        ILineOfSight models = _services.LineOfSight;
+        bool checkModels = models is VMapManager;
+        float probeZ = z + NearbyFloorAbove;
+        float searchDepth = NearbyFloorAbove + NearbyFloorBelow;
+
+        for (int i = 0; i < NearbyFloorAxes; i++)
+        {
+            float angle = i * (MathF.PI / NearbyFloorAxes);
+            float cos = MathF.Cos(angle);
+            float sin = MathF.Sin(angle);
+            if (HasFloorAlongRay(models, checkModels, x, y, z, probeZ, searchDepth, cos, sin)
+                && HasFloorAlongRay(models, checkModels, x, y, z, probeZ, searchDepth, -cos, -sin))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool HasFloorAlongRay(ILineOfSight models, bool checkModels, float x, float y, float z, float probeZ, float searchDepth, float cos, float sin)
+    {
+        foreach (float radius in NearbyFloorRings)
+        {
+            float rx = x + (radius * cos);
+            float ry = y + (radius * sin);
+            if ((checkModels && (models.GetModelHeight(Map.MapId, rx, ry, probeZ, searchDepth) is not null
+                    || models.TryGetAreaInfo(Map.MapId, rx, ry, probeZ, out _)))
+                || TryGetMeshFloor(rx, ry, z, NearbyFloorBelow, NearbyFloorAbove, out _))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly Vector2[] AnyNearbyFloorDirections =
+    [
+        new(1f, 0f), new(0f, 1f), new(-1f, 0f), new(0f, -1f),
+        new(0.7071f, 0.7071f), new(-0.7071f, 0.7071f), new(-0.7071f, -0.7071f), new(0.7071f, -0.7071f),
+    ];
+
+    /// <summary>
+    /// Whether any model or navigation-mesh floor lies within 2.5–8 yards horizontally at the point's height (between 4 yards below and
+    /// 3 yards above). Used by the report-only <c>move/under-map</c> observer to excuse city doodad/grating gaps in Ironforge and Undercity
+    /// without altering <see cref="ClassifyUnderMap"/> or login-floor recovery.
+    /// </summary>
+    public bool LevelWithAnyNearbyFloor(float x, float y, float z)
+    {
+        ILineOfSight models = _services.LineOfSight;
+        bool checkModels = models is VMapManager;
+        const float above = 3.0f;
+        const float below = 4.0f;
+        foreach (float radius in (ReadOnlySpan<float>)[2.5f, 5.0f, 8.0f])
+        {
+            foreach (Vector2 dir in AnyNearbyFloorDirections)
+            {
+                float px = x + (dir.X * radius);
+                float py = y + (dir.Y * radius);
+                if (checkModels && models.GetModelHeight(Map.MapId, px, py, z + above, above + below) is { } floor && floor >= z - below)
+                {
+                    return true;
+                }
+
+                if (TryGetMeshFloor(px, py, z, below, above, out _))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

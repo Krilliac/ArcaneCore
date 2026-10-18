@@ -240,10 +240,48 @@ public sealed class RandomWanderTests
         Assert.Equal(spawnZ, wolf.Z, 0.01f);
         Assert.True(generator.ConsecutiveNoPath >= 2);
 
+        paths.Drop = -90f; // raw terrain 90 yd above a cave (Grizzled Den) is also skipped
+        float beforeX = wolf.X;
+        Run(world, 5_000, 50);
+        Assert.Equal(beforeX, wolf.X, 0.01f);
+
         paths.Drop = 3f; // a step down off a doodad onto the mesh is a leg
         Run(world, 25_000, 50);
-        Assert.NotEqual(30f, wolf.X);
+        Assert.NotEqual(beforeX, wolf.X);
         Assert.Equal(0, generator.ConsecutiveNoPath);
+    }
+
+    private sealed class ArchedCaveMeshPathfinder : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshFloorQuery
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(
+            uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            ArcaneCore.Game.Maps.Collision.PathSearchCounters.RecordSearch(1, 1, capped: false);
+            return new ArcaneCore.Game.Maps.Collision.PathResult(
+                ArcaneCore.Game.Maps.Collision.PathType.Normal,
+                [start, new System.Numerics.Vector3(start.X + 8f, start.Y, start.Z - 3.0f)]);
+        }
+
+        public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height)
+        {
+            height = 83.5f;
+            return height >= z - below && height <= z + above;
+        }
+    }
+
+    [Fact]
+    public void AWanderLegAcrossAnArchedCaveMesh_DrapesCornersToTheMeshFloor()
+    {
+        (WorldRuntime w, _, Creature wendigo, _) = Start(Template());
+        using WorldRuntime world = w;
+        var caveMesh = new ArchedCaveMeshPathfinder();
+        ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world).Install(pathfinder: caveMesh);
+
+        Run(world, 6_000, 50);
+
+        Assert.Equal(83.5f, wendigo.Z, 0.05f);
     }
 
     [Fact]

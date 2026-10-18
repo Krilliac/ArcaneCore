@@ -482,7 +482,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
             bool attemptedBefore = attempted;
             attempted = true;
-            Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
+            TryResolveSpawnPosition(player, entry.Spawn, requireLivePatroller: false, out Vector3 destination);
             // Across Teldrassil's water on this map no walk reaches the spawn. With journeys allowed (WaterJourneysAllowed) and its goal not
             // waiting after a failed journey, it is passed over without a path query, and the nearest such one gets a journey only when no
             // entry on this side is walked to (after the loop): a farther giver on the bot's own side is worth more than a boat. A waiting
@@ -854,6 +854,36 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// </summary>
     internal static bool IsPresent(Player player, CreatureSpawn spawn)
         => player.Map?.FindUpdater<CreatureMapSystem>()?.SpawnGate?.AllowsCreature(spawn.Guid) != false;
+
+    /// <summary>
+    /// Resolves the world position to walk toward for <paramref name="spawn"/>. Waypoint-patrolling spawns (<c>MovementType == 2</c>,
+    /// such as Antonio Perelli 844 across four zones or Hamlin Atkins 3547 across Tirisfal Glades) roam far from their database spawn
+    /// point; when the live creature is in the world, use its live position, and when <paramref name="requireLivePatroller"/> is true
+    /// (town vendor/repair trips), skip unspawned or dead waypoint patrollers rather than walking to their empty static spawn point.
+    /// </summary>
+    internal static bool TryResolveSpawnPosition(Player player, CreatureSpawn spawn, bool requireLivePatroller, out Vector3 position)
+    {
+        if (spawn.MovementType == 2)
+        {
+            ObjectGuid guid = ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid);
+            if ((player.Map?.FindObject(guid) as Creature ?? player.Map?.FindUpdater<CreatureMapSystem>()?.FindCreature(guid))
+                is { IsInWorld: true, IsAlive: true } live
+                && float.IsFinite(live.X) && float.IsFinite(live.Y) && float.IsFinite(live.Z))
+            {
+                position = new Vector3(live.X, live.Y, live.Z);
+                return true;
+            }
+
+            if (requireLivePatroller)
+            {
+                position = default;
+                return false;
+            }
+        }
+
+        position = new Vector3(spawn.X, spawn.Y, spawn.Z);
+        return true;
+    }
 
     internal static bool IsFiniteDestination(CreatureSpawn spawn)
         => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
@@ -1690,7 +1720,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     }
 
     private static float DistanceSquared(Player player, CreatureSpawn spawn)
-        => Vector3.DistanceSquared(new(player.X, player.Y, player.Z), new(spawn.X, spawn.Y, spawn.Z));
+    {
+        TryResolveSpawnPosition(player, spawn, requireLivePatroller: false, out Vector3 pos);
+        return Vector3.DistanceSquared(new(player.X, player.Y, player.Z), pos);
+    }
 
     private sealed record DestinationEntry(uint Entry, CreatureSpawn Spawn);
 }

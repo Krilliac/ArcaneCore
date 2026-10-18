@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
@@ -901,6 +902,54 @@ public sealed class PlayerbotTownGoalsTests
                 var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
                 Assert.False(goals.HasCandidate(session.Player!));
                 Assert.False(goals.Update(session.Player!, 1000));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task WaypointPatrollingVendor_UsesLivePositionWhenLoaded_AndSkipsWhenUnloaded()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        var session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                var patrollerSpawn = new CreatureSpawn
+                {
+                    Guid = 99945655,
+                    Entry = 844,
+                    MapId = player.MapId,
+                    X = -9468.2f,
+                    Y = 16.5f,
+                    Z = 56.9f,
+                    MovementType = 2,
+                };
+
+                // When the patroller is not loaded in the map, requireLivePatroller=true skips it (no walk to empty static spawn),
+                // while requireLivePatroller=false falls back to the static spawn.
+                Assert.False(PlayerbotWorldDestinations.TryResolveSpawnPosition(player, patrollerSpawn, requireLivePatroller: true, out _));
+                Assert.True(PlayerbotWorldDestinations.TryResolveSpawnPosition(player, patrollerSpawn, requireLivePatroller: false, out Vector3 fallbackPos));
+                Assert.Equal(new Vector3(-9468.2f, 16.5f, 56.9f), fallbackPos);
+
+                // Once the patroller is in the world and has walked 500 yards down the road along its waypoints, both resolve its live position.
+                var template = new CreatureTemplate { Entry = 844, Name = "Antonio Perelli", NpcFlags = (uint)NpcFlags.Vendor, DisplayIds = [49], MinLevel = 10, MaxLevel = 10 };
+                var creature = new Creature(patrollerSpawn.Guid, template, patrollerSpawn, new CreatureContent([template], [patrollerSpawn], [], [], []), new Random(1));
+                creature.Relocate(-9950.0f, -220.0f, 42.0f, 0f, 0);
+                player.Map!.AddObject(creature);
+                try
+                {
+                    Assert.True(PlayerbotWorldDestinations.TryResolveSpawnPosition(player, patrollerSpawn, requireLivePatroller: true, out Vector3 livePos));
+                    Assert.Equal(new Vector3(-9950.0f, -220.0f, 42.0f), livePos);
+                }
+                finally
+                {
+                    player.Map.RemoveObject(creature);
+                }
+
                 return true;
             });
         }

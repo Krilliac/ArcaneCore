@@ -102,4 +102,51 @@ public sealed class PetCombatTimerTests
             Assert.True(owner.Combat.IsInCombat); // vmangos Unit.cpp:264-266: the owner waits for its pet
         }
     }
+
+    [Theory]
+    [InlineData(PetSpell)]
+    [InlineData(GuardianSpell)]
+    public void ACreatureOwnedPetOrGuardian_LeavesCombatWhenItsOwnerKillsTheVictimOrLeavesCombat(uint summonSpell)
+    {
+        var kit = new PetTestKit();
+        using (kit)
+        {
+            Creature owner = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(NpcCasterEntry)!, 5, 5, 83.5f, 0);
+            kit.Cast(owner, summonSpell);
+            Creature summon = Assert.Single(kit.Map.Pets!.SummonsOf(owner));
+            kit.Map.SetActive(summon, true);
+            Assert.False(MapCombat.UsesPvpCombatTimer(summon));
+
+            Creature enemy = Enemy(kit, 8, 5);
+            Assert.True(kit.Creatures.AttackStart(owner, enemy));
+            Assert.True((summon.AI as PetAI)!.AttackTarget(enemy));
+            Assert.True(summon.Combat.IsInCombat);
+            Assert.True(summon.Combat.HasThreatList);
+
+            // Owner kills the enemy: summon hears OnKilledUnit, clears threat and leaves combat immediately.
+            kit.Map.Combat.Kill(owner, enemy);
+            Assert.False(summon.Combat.IsInCombat);
+            Assert.False(summon.Combat.HasThreatList);
+            Assert.Null(summon.Combat.Victim);
+
+            // Second case: owner and summon fight a second enemy, then owner leaves combat (evaded at home, IsInEvadeMode already false).
+            Creature enemy2 = Enemy(kit, 60, 5);
+            Assert.True(kit.Creatures.AttackStart(owner, enemy2));
+            Assert.True((summon.AI as PetAI)!.AttackTarget(enemy2));
+            Assert.True(summon.Combat.IsInCombat);
+
+            owner.Combat.Threat.Clear();
+            enemy2.Combat.Threat.Clear();
+            owner.AI = new NullCreatureAI(owner);
+            enemy2.AI = new NullCreatureAI(enemy2);
+            kit.Map.Combat.CombatStop(owner);
+            Assert.False(owner.Combat.IsInCombat);
+            Assert.False(owner.IsInEvadeMode);
+
+            kit.Run(200);
+            Assert.Null(summon.Combat.Victim);
+            Assert.False(summon.Combat.IsInCombat);
+            Assert.False(summon.Combat.HasThreatList);
+        }
+    }
 }

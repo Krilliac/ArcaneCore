@@ -106,6 +106,21 @@ public sealed class PetAI : CreatureAI
         }
         else if (!playerControlled)
         {
+            if (Me.Combat.Victim is not null)
+            {
+                Fight?.AttackStop(Me);
+            }
+
+            if (Me.Combat.IsInCombat && !charm.IsCommandFollow)
+            {
+                (Unit? next, _) = SelectNextTarget(charm);
+                if (next is not null && AttackTarget(next))
+                {
+                    return;
+                }
+            }
+
+            LeaveCombatIfIdle(charm);
             HandleReturnMovement(charm);
         }
 
@@ -149,10 +164,7 @@ public sealed class PetAI : CreatureAI
         {
             if (ownerCreature.IsAlive)
             {
-                if (ownerCreature.IsInEvadeMode)
-                {
-                    return true;
-                }
+                return true;
             }
             else if (System?.IsOutOfThreatArea(Me, victim) == true)
             {
@@ -177,7 +189,32 @@ public sealed class PetAI : CreatureAI
         System?.AiServices.Spells?.Interrupt(Me);
         charm.IsCommandAttack = false;
         charm.ClearFlags();
+        LeaveCombatIfIdle(charm);
         HandleReturnMovement(charm);
+    }
+
+    /// <summary>
+    /// Summons that do not run the 1.2 s PvP combat timer (creature-owned pets, creature-owned guardians, player-owned guardians)
+    /// never call <c>UpdateVictim</c>/<c>EnterEvadeMode</c>, so once they have no live victim and their creature owner is out of
+    /// combat (or nothing attacks or holds them on a threat list), clear their combat state and threat list here.
+    /// </summary>
+    private void LeaveCombatIfIdle(CharmInfo charm)
+    {
+        if (!Me.Combat.IsInCombat || Me.Combat.Victim is { IsAlive: true } || MapCombat.UsesPvpCombatTimer(Me))
+        {
+            return;
+        }
+
+        if (Owner is Creature { IsAlive: true, Combat.IsInCombat: false }
+            || (Me.Combat.Attackers.Count == 0 && Me.Combat.ThreatenedBy.Count == 0))
+        {
+            if (Me.Combat.HasThreatList)
+            {
+                Me.Combat.Threat.Clear();
+            }
+
+            Fight?.CombatStop(Me);
+        }
     }
 
     /// <summary>vmangos PetAI::HandleReturnMovement (PetAI.cpp:585-620): back to the stay point, or to the owner.</summary>
@@ -313,6 +350,13 @@ public sealed class PetAI : CreatureAI
             return false;
         }
 
+        // Creature-owned pets/guardians do not initiate or resume combat while their living owner is out of combat or evading (LS-022);
+        // NeedToStop (PetAI.cpp:259-269) immediately stops any attack in that state anyway.
+        if (Owner is Creature ownerCreature && (ownerCreature.IsInEvadeMode || (ownerCreature.IsAlive && !ownerCreature.Combat.IsInCombat)))
+        {
+            return false;
+        }
+
         // Passive - passive pets can attack if told to
         if (charm.ReactState == ReactState.Passive)
         {
@@ -398,8 +442,8 @@ public sealed class PetAI : CreatureAI
         SpellSystem? spells = _spells();
         if (owner is Creature ownerCreature)
         {
-            // Owner is creature and is evading. We must not re-aggro.
-            if (ownerCreature.IsInEvadeMode)
+            // Owner is creature and is evading or out of combat. We must not re-aggro.
+            if (ownerCreature.IsInEvadeMode || (ownerCreature.IsAlive && !ownerCreature.Combat.IsInCombat))
             {
                 return (null, SelectResult.FailNotEnabled);
             }
@@ -478,6 +522,11 @@ public sealed class PetAI : CreatureAI
         }
         else if (reason is SelectResult.FailDefault or SelectResult.FailNotEnabled or SelectResult.FailNoOwner)
         {
+            if (Me.Combat.HasThreatList)
+            {
+                Me.Combat.Threat.Clear();
+            }
+
             if (Me.Combat.IsInCombat)
             {
                 Fight?.CombatStop(Me);

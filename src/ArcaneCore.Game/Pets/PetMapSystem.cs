@@ -68,7 +68,36 @@ public sealed class PetMapSystem : IMapUpdater
         if (!_combatSubscribed && _map.FindUpdater<MapCombat>() is { } combat)
         {
             combat.DamageDealt += OnDamageDealt;
+            combat.UnitKilled += OnUnitKilled;
             _combatSubscribed = true;
+        }
+    }
+
+    /// <summary>
+    /// vmangos Player::KilledMonster / Unit::DealDamage: when the owner kills a unit, its living pet and guardians hear
+    /// <see cref="PetAI.OnKilledUnit"/> so they select the next target or leave combat and return.
+    /// </summary>
+    private void OnUnitKilled(Unit? killer, Unit victim)
+    {
+        if (killer is null || _summons.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Creature pet in _summons.ToArray())
+        {
+            try
+            {
+                if (!ReferenceEquals(pet, killer) && pet.OwnerGuid == killer.Guid && pet.IsAlive
+                    && pet.Summon is { Kind: SummonKind.Pet or SummonKind.Guardian } && PetAI.Of(pet.AI) is { } ai)
+                {
+                    ai.OnKilledUnit(victim);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-pet", ex);
+            }
         }
     }
 

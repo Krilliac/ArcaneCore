@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 
@@ -166,7 +167,12 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             double distance = wander * Math.Sqrt(mover.NextDouble());
             destX = home.X + (float)(distance * Math.Cos(angle));
             destY = home.Y + (float)(distance * Math.Sin(angle));
-            destZ = mover.GetHeight(creature.MapId, destX, destY, home.Z) ?? home.Z;
+            if (mover.GetHeight(creature.MapId, destX, destY, home.Z) is { } ground
+                && float.IsFinite(ground)
+                && MathF.Abs(ground - home.Z) <= MaxFallbackLegDropYards)
+            {
+                destZ = ground;
+            }
         }
 
         bool run = _run ?? ShouldRun(creature, mover);
@@ -191,19 +197,22 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
-        if (!onMesh && plan.Corners.Count > 0 && plan.Corners[^1].Z < MathF.Min(creature.Z, home.Z) - MaxFallbackLegDropYards)
+        if (!onMesh && plan.Corners.Count > 0
+            && (plan.Corners[^1].Z < MathF.Min(creature.Z, home.Z) - MaxFallbackLegDropYards
+                || plan.Corners[^1].Z > MathF.Max(creature.Z, home.Z) + MaxFallbackLegDropYards))
         {
             // A spawn off the mesh draws its point on the terrain (or at its own height where the terrain has a hole), and the search
             // snaps that end to the nearest polygon in a 200 yd tall column (vmangos getPolyByLocation): live 2026-10-18 Lordaeron
             // Citizen 3617 spawn 156011 (ruins, z 70.8, a terrain hole over Undercity) got incomplete legs ending on the Undercity floor
-            // at z -44 and walked down through the ground (seen at z 9-13, creature/under-map after every restart). A wander leg never
-            // drops a floor: skip it like a leg without a path. A leg that climbs (back up to the mesh) still runs.
+            // at z -44 and walked down through the ground (seen at z 9-13, creature/under-map after every restart). In caves (Grizzled Den)
+            // raw terrain is 90 yd above the cave floor. A wander leg never jumps to another storey: skip it like a leg without a path.
             _nextMoveMs = NoPathRetryDelay(mover, ++_consecutiveNoPath);
             return true;
         }
 
         _consecutiveNoPath = 0;
-        mover.MovePath(creature, plan.Corners, run, SplineFacing.None);
+        IReadOnlyList<Vector3> corners = DrapeCornersOverMeshFloor(creature, plan.Corners);
+        mover.MovePath(creature, corners, run, SplineFacing.None);
 
         if (_wanderSteps > 0 && mover is not ICreaturePathQuery { IsCrowdedRandomPass: true })
         {
@@ -249,5 +258,69 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         }
 
         return (behaviour & CreatureBehaviourFlags.AlwaysRun) != 0;
+    }
+
+    /// <summary>
+    /// Straight 3D chords between coarse polygon corners across an arched cave floor (such as Grizzled Den, where Wendigo 1135
+    /// spawns 3564/3574/3576 dipped 2.6–3.2 yd below the cave mesh at z 365.8–368.5 under mesh 368.5–371.7) sink below the mesh
+    /// surface. Samples every 4 yards along each segment and raises any point that sits below the local mesh floor.
+    /// </summary>
+    private static IReadOnlyList<Vector3> DrapeCornersOverMeshFloor(Creature creature, IReadOnlyList<Vector3> corners)
+    {
+        if (corners.Count == 0 || creature.Map?.Collision is not { } collision)
+        {
+            return corners;
+        }
+
+        List<Vector3>? draped = null;
+        var prev = new Vector3(creature.X, creature.Y, creature.Z);
+        for (int i = 0; i < corners.Count; i++)
+        {
+            Vector3 corner = corners[i];
+            float dx = corner.X - prev.X;
+            float dy = corner.Y - prev.Y;
+            float flatDist = MathF.Sqrt((dx * dx) + (dy * dy));
+            int steps = (int)MathF.Ceiling(flatDist / 4f);
+            if (steps > 1)
+            {
+                for (int s = 1; s < steps; s++)
+                {
+                    float t = (float)s / steps;
+                    var mid = Vector3.Lerp(prev, corner, t);
+                    if (collision.TryGetMeshFloor(mid.X, mid.Y, mid.Z, 4f, 4f, out float midFloor) && midFloor > mid.Z + 0.05f)
+                    {
+                        if (draped is null)
+                        {
+                            draped = new List<Vector3>(corners.Count + steps);
+                            for (int k = 0; k < i; k++)
+                            {
+                                draped.Add(corners[k]);
+                            }
+                        }
+
+                        draped.Add(mid with { Z = midFloor });
+                    }
+                }
+            }
+
+            Vector3 adjusted = corner;
+            if (collision.TryGetMeshFloor(corner.X, corner.Y, corner.Z, 4f, 4f, out float floorZ) && floorZ > corner.Z + 0.05f)
+            {
+                adjusted = corner with { Z = floorZ };
+                if (draped is null)
+                {
+                    draped = new List<Vector3>(corners.Count);
+                    for (int k = 0; k < i; k++)
+                    {
+                        draped.Add(corners[k]);
+                    }
+                }
+            }
+
+            draped?.Add(adjusted);
+            prev = adjusted;
+        }
+
+        return draped ?? corners;
     }
 }

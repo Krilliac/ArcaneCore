@@ -531,13 +531,13 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // one leg of the way, PlayerbotNavigation.TryPlanToward) is planned again from here, and only no closing for
         // RepairTripStuckMs sets the spawn aside.
         if (_repairSpawn != 0 && _repairSpawns.FirstOrDefault(s => s.Spawn.Guid == _repairSpawn) is { Spawn: not null } current
-            && SpawnPresent(player, current.Spawn))
+            && SpawnPresent(player, current.Spawn)
+            && PlayerbotWorldDestinations.TryResolveSpawnPosition(player, current.Spawn, requireLivePatroller: true, out Vector3 at))
         {
-            Vector3 at = new(current.Spawn.X, current.Spawn.Y, current.Spawn.Z);
             float left = Vector3.Distance(here, at);
             // Arrived at the repair NPC's own spawn point with nothing of use in sight (this method runs only then): the NPC is not there.
-            if (left <= RepairArrivedYards && _repairMissReported != _repairSpawn && Suspensions?.IsEntrySuspended(current.Entry, now) != true
-                && !PlayerbotNavigationAnomalies.Silenced(player))
+            if (left <= RepairArrivedYards && current.Spawn.MovementType != 2 && _repairMissReported != _repairSpawn
+                && Suspensions?.IsEntrySuspended(current.Entry, now) != true && !PlayerbotNavigationAnomalies.Silenced(player))
             {
                 _repairMissReported = _repairSpawn;
                 PlayerbotAnomalies.Report(player, "town", "service-npc-missing",
@@ -591,14 +591,20 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // the rest wait for the next think, the blocked set keeping the refused ones out. A refused plan blocks its spawn as ever: a
         // start off the mesh still reaches some spawns (the steep-ground escape depends on the destination), so none is skipped.
         bool tilesPending = false;
-        foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid)
-                     && SpawnPresent(player, s.Spawn))
-                     .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
+        var candidates = new List<(uint Entry, CreatureSpawn Spawn, Vector3 Target)>();
+        foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns)
+        {
+            if (_blockedRepairSpawns.Contains(spawn.Guid) || !SpawnPresent(player, spawn)) continue;
+            if (!PlayerbotWorldDestinations.TryResolveSpawnPosition(player, spawn, requireLivePatroller: true, out Vector3 resolved)) continue;
+            candidates.Add((entry, spawn, resolved));
+        }
+
+        candidates.Sort((a, b) => Vector3.DistanceSquared(here, a.Target).CompareTo(Vector3.DistanceSquared(here, b.Target)));
+        foreach ((uint entry, CreatureSpawn spawn, Vector3 target) in candidates)
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
             if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && RepairQueryBudgetSpent()) return false;
             _repairPlansThisThink++;
-            var target = new Vector3(spawn.X, spawn.Y, spawn.Z);
             PlayerbotRoute? walk = null;
             if (PlayerbotElevator.TryBegin(session, player, target, options, out walk))
             {
