@@ -49,9 +49,10 @@ internal static class RealTerrainData
 /// <summary>
 /// A test-only terrain layer over the real <c>.map</c> files: per height square the four corner samples and the centre
 /// sample as the server interpolates them (<see cref="TerrainTile.GetHeight"/>), as four triangles around the centre.
-/// Corner heights are read a few float steps inside the square so a hole or edge on the far side of a corner cannot
-/// change the answer. Production layers belong to the terrain lane; this stands in for them so the renderer is exercised
-/// against real data without depending on them.
+/// Each corner of the height grid is one vertex shared by every square that meets there, as the V9 grid is, so neighbouring
+/// squares meet edge to edge without cracks; its height is read a few float steps inside the first square that uses it, so
+/// a hole or edge on the far side of the corner cannot change the answer. Production layers belong to the terrain lane;
+/// this stands in for them so the renderer is exercised against real data without depending on them.
 /// </summary>
 internal sealed class RealTerrainSource : ILayerSource
 {
@@ -102,6 +103,21 @@ internal sealed class RealTerrainSource : ILayerSource
         var builder = new GeometryBuilder(layerId, tile, WorldGrid.Origin(tile));
         const double square = WorldGrid.SquareSize;
         WorldPoint origin = builder.Origin;
+        const int corners = WorldGrid.MapResolution + 1;
+        var cornerVertex = new uint[corners * corners];
+        Array.Fill(cornerVertex, uint.MaxValue);
+
+        uint Corner(int row, int col, float z)
+        {
+            ref uint vertex = ref cornerVertex[(row * corners) + col];
+            if (vertex == uint.MaxValue)
+            {
+                vertex = builder.AddVertex(origin.X - (row * square), origin.Y - (col * square), z);
+            }
+
+            return vertex;
+        }
+
         for (int row = 0; row < WorldGrid.MapResolution; row++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -126,10 +142,10 @@ internal sealed class RealTerrainSource : ILayerSource
                 }
 
                 uint vm = builder.AddVertex(cx, cy, centre);
-                uint va = builder.AddVertex(x0, y0, a);
-                uint vb = builder.AddVertex(x1, y0, b);
-                uint vc = builder.AddVertex(x1, y1, c);
-                uint vd = builder.AddVertex(x0, y1, d);
+                uint va = Corner(row, col, a);
+                uint vb = Corner(row + 1, col, b);
+                uint vc = Corner(row + 1, col + 1, c);
+                uint vd = Corner(row, col + 1, d);
                 builder.AddTriangle(vm, va, vb, edges: false);
                 builder.AddTriangle(vm, vb, vc, edges: false);
                 builder.AddTriangle(vm, vc, vd, edges: false);
@@ -360,7 +376,10 @@ public sealed class RenderRealTerrainTests
         Assert.Equal("terrain_0_49_31", only.Name);
         Assert.Equal(chunk.VertexCount, obj.Vertices.Count);
         Assert.Equal(chunk.TriangleCount, only.Groups.Sum(g => g.Faces.Count));
-        Assert.Equal(0, chunk.VertexCount % 5);
+        // Four triangles and one centre vertex per drawn square; the corners are shared, at most one per height-grid corner.
+        Assert.Equal(0, chunk.TriangleCount % 4);
+        int squares = chunk.TriangleCount / 4;
+        Assert.InRange(chunk.VertexCount, squares + 4, squares + ((WorldGrid.MapResolution + 1) * (WorldGrid.MapResolution + 1)));
         for (int i = 0; i < chunk.VertexCount; i++)
         {
             WorldPoint expected = chunk.Vertex((uint)i);
@@ -369,10 +388,12 @@ public sealed class RenderRealTerrainTests
 
         Assert.All(only.Groups.SelectMany(g => g.Faces).SelectMany(f => f), index => Assert.InRange(index, 1, chunk.VertexCount));
 
-        // Every centre vertex sits on the server's surface; every corner within the sampling nudge of it.
+        // Every face starts at its square's centre vertex, which sits on the server's surface.
+        int[][] faces = [.. only.Groups.SelectMany(g => g.Faces)];
         int checkedCentres = 0;
-        for (int i = 0; i < chunk.VertexCount; i += 5 * 97)
+        for (int f = 0; f < faces.Length; f += 4 * 97)
         {
+            int i = faces[f][0] - 1;
             (double x, double y, double z) = obj.Vertices[i];
             float expected = terrain.GetHeight((float)x, (float)y);
             Assert.True(expected > TerrainTile.InvalidHeight, $"vertex {i} at ({x:F3},{y:F3}) is not over terrain");
@@ -387,6 +408,105 @@ public sealed class RenderRealTerrainTests
             Assert.InRange(v.X, minX - 0.01, maxX + 0.01);
             Assert.InRange(v.Y, minY - 0.01, maxY + 0.01);
         });
+    }
+
+    /// <summary>
+    /// A perspective view of the real terrain has no pinholes: in the near half of the image (ground closer than the
+    /// 160-yard target, where a 4.2-yard hole square spans several pixels) no background pixel has terrain on all eight
+    /// sides. Squares that do not share their corner vertices crack along their edges and fail this.
+    /// </summary>
+    [RenderRealTerrainFact]
+    public void Perspective_OfTheRealTerrain_HasNoPinholes()
+    {
+        const int width = 400;
+        const int height = 300;
+        CameraState camera = new(Inn, 160, 30, 35, 55, CameraMode.Orbit);
+        RenderedFrame frame = Renderer().Rasterize(TerrainView(camera, radius: 1), width, height, CancellationToken.None);
+        byte[] pixels = frame.Buffer.Pixels;
+
+        bool IsBackground(int x, int y)
+        {
+            int i = ((y * width) + x) * 4;
+            return pixels[i] == Rgb.Background.R && pixels[i + 1] == Rgb.Background.G && pixels[i + 2] == Rgb.Background.B;
+        }
+
+        int terrainPixels = 0;
+        var pinholes = new List<(int X, int Y)>();
+        for (int y = height / 2; y < height - 1; y++)
+        {
+            for (int x = 1; x < width - 1; x++)
+            {
+                if (!IsBackground(x, y))
+                {
+                    terrainPixels++;
+                    continue;
+                }
+
+                bool enclosed = true;
+                for (int dy = -1; dy <= 1 && enclosed; dy++)
+                {
+                    for (int dx = -1; dx <= 1 && enclosed; dx++)
+                    {
+                        enclosed = (dx == 0 && dy == 0) || !IsBackground(x + dx, y + dy);
+                    }
+                }
+
+                if (enclosed)
+                {
+                    pinholes.Add((x, y));
+                }
+            }
+        }
+
+        Assert.True(terrainPixels > (width - 2) * ((height / 2) - 1) * 9 / 10, $"only {terrainPixels} terrain pixels in the near half");
+        Assert.True(pinholes.Count == 0, $"{pinholes.Count} pinholes in the near half, first at {string.Join(" ", pinholes.Take(8))}");
+    }
+
+    /// <summary>
+    /// render.png over the real Goldshire terrain (perspective, HUD on, one tile of load radius) writes a PNG whose decoded
+    /// pixels are exactly the frame the renderer draws for the same view. When <c>ARCANECORE_TEST_RENDER_OUT_DIR</c> names
+    /// a directory outside every checkout, the PNG is kept there so an independent decoder can open it.
+    /// </summary>
+    [RenderRealTerrainFact]
+    public async Task RenderPng_OfGoldshire_WritesTheRenderedFrame_AsAPng()
+    {
+        using AtlasContext context = AtlasModules.Compose(
+            new AtlasPaths(null, null),
+            NullLoggerFactory.Instance,
+            headless: true,
+            [new RealLayersModule(), new RenderModule()]);
+        using var dir = new TempDirectory();
+        string? keep = Environment.GetEnvironmentVariable("ARCANECORE_TEST_RENDER_OUT_DIR");
+        string path = string.IsNullOrWhiteSpace(keep) ? dir.File("goldshire.png") : Path.Combine(keep, "atlas-h-goldshire.png");
+        const int width = 400;
+        const int height = 300;
+        CameraState camera = new(Inn, 160, 30, 35, 55, CameraMode.Orbit);
+        ViewState view = TerrainView(camera, radius: 1, hud: true);
+        context.View.Set(view, "test");
+
+        CommandResult result = await context.Commands.InvokeAsync(
+            "render.png",
+            new JsonObject { ["width"] = width, ["height"] = height, ["out"] = path },
+            context.Services,
+            CommandOrigin.Cli,
+            headless: true,
+            CancellationToken.None);
+
+        Assert.True(result.Ok, $"{result.ErrorCode}: {result.ErrorMessage}");
+        DecodedPng png = DecodedPng.Parse(File.ReadAllBytes(path));
+        Assert.Equal((width, height), (png.Width, png.Height));
+        RenderedFrame frame = Renderer().Rasterize(context.View.Current, width, height, CancellationToken.None);
+        Assert.Equal(frame.Buffer.Pixels, png.Pixels());
+
+        // The nine tiles around the inn are all on disk (Elwynn Forest), so every one was read and none is missing.
+        JsonNode stats = result.Data!["stats"]!;
+        int onDisk = WorldGrid.Around(0, Inn.X, Inn.Y, 1).Count(t => File.Exists(Path.Combine(RealTerrainData.MapsDirectory, WorldGrid.MapFileName(t))));
+        Assert.Equal(9, onDisk);
+        Assert.Equal(9, Json.Int(stats["tiles"]!["ok"]));
+        Assert.Equal(0, Json.Int(stats["tiles"]!["missing"]));
+        long cached = WorldGrid.Around(0, Inn.X, Inn.Y, 1).Sum(t => context.Cache.Get(LayerIds.Terrain, t, CancellationToken.None).Chunks.Sum(c => (long)c.TriangleCount));
+        Assert.Equal(cached, Json.Int(stats["triangles"]));
+        Assert.True(cached > 9 * 50_000, $"{cached} triangles for nine terrain tiles of at most 65536 each");
     }
 
     private sealed class RealLayersModule : IAtlasModule
