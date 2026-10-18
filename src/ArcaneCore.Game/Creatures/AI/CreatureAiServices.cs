@@ -310,6 +310,8 @@ public sealed class CreatureAiFactory
         [Scripts.PreciousTheDevourerAI.Entry] = E(static c => new Scripts.PreciousTheDevourerAI(c)),
         [Scripts.MawsAI.Entry] = E(static c => new Scripts.MawsAI(c)),
         [Scripts.ColonelKurzenAI.Entry] = E(static c => new Scripts.ColonelKurzenAI(c)),
+        [Scripts.FaulkAI.HenzeEntry] = E(static c => new Scripts.FaulkAI(c)),
+        [Scripts.FaulkAI.NarmEntry] = E(static c => new Scripts.FaulkAI(c)),
         [Scripts.CorruptedFurbolgAI.NpcBlackwoodWarrior] = E(static c => new Scripts.CorruptedFurbolgAI(c)),
         [Scripts.CorruptedFurbolgAI.NpcBlackwoodTotemic] = E(static c => new Scripts.CorruptedFurbolgAI(c)),
         [Scripts.TheramoreSparControllerAI.NpcMasterSzigeti] = E(static c => new Scripts.TheramoreSparControllerAI(c)),

@@ -1,4 +1,4 @@
-﻿using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
