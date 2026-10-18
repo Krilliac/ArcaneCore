@@ -33,6 +33,7 @@ public sealed class PaladinScriptsModule : ISpellHandlerModule
             system.RegisterProcScript(rank, judgement);
         }
 
+        system.RegisterValueModifier(new JudgementOfLightT3Bonus(system));
         system.RegisterValueModifier(new JudgementOfCommandDamage(system));
         system.RegisterValueModifier(new HammerOfWrathDamage(system));
         system.RegisterObserver(new ForbearanceObserver(system));

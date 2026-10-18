@@ -99,7 +99,8 @@ public sealed class SealOfRighteousnessProc : IProcScript
 /// Judgement of Light and Judgement of Wisdom (vmangos <c>Unit::HandleProcTriggerSpell</c>, UnitAuraProcHandler.cpp:1428-1466): the judged unit's
 /// PROC_TRIGGER_SPELL debuff names a trigger spell that does not exist in Spell.dbc, so the rank's heal (JoL: 20267, 20341, 20342, 20343) or mana
 /// (JoW: 20268, 20352, 20353) is cast by the unit that struck the judged one, on itself, triggered ("Seal of Light healing is done by the person who
-/// attacks, and does not increase threat of the original caster"). No hidden cooldown.
+/// attacks, and does not increase threat of the original caster"). No hidden cooldown. The judged debuff's own effect 0 amount (20 from the paladin's
+/// Redemption Armor bonus, see <see cref="JudgementOfLightT3Bonus"/>) is added to the heal (spell_paladin.cpp:158-172, m_triggeredByAuraBasePoints).
 /// </summary>
 public sealed class JudgementOfLightWisdomProc : IProcScript
 {
@@ -128,7 +129,26 @@ public sealed class JudgementOfLightWisdomProc : IProcScript
             return AuraProcResult.Failed;
         }
 
-        context.System.CastProcSpell(attacker, trigger, SpellCastTargets.ForUnit(attacker.Guid), context.Holder.Spell);
+        int extra = context.Aura.Amount;
+        int? heal = extra > 0 && trigger.Effects.Count > 0 && trigger.Effects[0].Effect == SpellEffectName.Heal ? trigger.SimpleValue(0) + extra : null;
+        context.System.CastProcSpell(attacker, trigger, SpellCastTargets.ForUnit(attacker.Guid), context.Holder.Spell, heal);
         return AuraProcResult.Ok;
     }
+}
+
+/// <summary>
+/// Paladin T3 Judgement of Light (28775, Redemption Armor 4/8; vmangos spell_paladin.cpp:138-156): a paladin with the bonus judges a
+/// Judgement of Light debuff whose effect 0 base points are 20, which every heal it procs adds (see <see cref="JudgementOfLightWisdomProc"/>).
+/// </summary>
+public sealed class JudgementOfLightT3Bonus(SpellSystem system) : ISpellValueModifier
+{
+    public const uint T3Bonus = 28775;
+    public const int ExtraHeal = 20;
+    public static readonly uint[] Ranks = [20185, 20344, 20345, 20346, 25751];
+
+    public int Modify(SpellValueKind kind, in SpellValueContext context, int value)
+        => kind == SpellValueKind.EffectValue && context.EffectIndex == 0 && Array.IndexOf(Ranks, context.Spell.Id) >= 0
+            && system.HasAura(context.Caster, T3Bonus)
+            ? ExtraHeal
+            : value;
 }

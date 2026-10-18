@@ -141,7 +141,8 @@ public sealed class PaladinScriptTests : IDisposable
             {
                 CasterAuraState = AuraState.Judgement,
                 Duration = new SpellDuration(30_000, 0, 30_000),
-            }));
+            }),
+            Instant(Spell(JudgementOfLightT3Bonus.T3Bonus, Effect(SpellEffectName.ApplyAura, 20, aura: AuraType.Dummy))));
         (_paladin, _) = _kit.AddPlayer(1, 0, 0);
         (_enemy, _) = _kit.AddPlayer(2, 3, 0);
         (_friend, _) = _kit.AddPlayer(3, -3, 0);
@@ -308,6 +309,21 @@ public sealed class PaladinScriptTests : IDisposable
         _kit.System.OnMeleeSwingResolved(Swing(_friend, _enemy));
 
         Assert.Equal(before + 25u, _friend.Health);
+    }
+
+    [Fact]
+    public void JudgementOfLight_FromAPaladinWithTheT3Bonus_Heals20More()
+    {
+        Assert.True(_kit.System.AddAura(_paladin, JudgementOfLightT3Bonus.T3Bonus));
+        PutOn(SealOfLight);
+        Assert.Equal(SpellCastResult.CastOk, Cast(_paladin, PaladinSpells.Judgement, _enemy));
+        Assert.Equal(20, Holder(_enemy, JudgementOfLight)!.Auras[0]!.Amount);
+        _kit.Now++;
+        uint before = _friend.Health;
+
+        _kit.System.OnMeleeSwingResolved(Swing(_friend, _enemy));
+
+        Assert.Equal(before + 45u, _friend.Health);
     }
 
     [Fact]
