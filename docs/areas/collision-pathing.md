@@ -17,7 +17,7 @@ the server reads the 28 bytes raw (`src\game\Maps\MoveMap.cpp:86-92`). `NavMeshP
 `maxPolys >= 0` and ignores the value; length, finite-origin and `maxTiles > 0` checks stay.
 A tile with `MMAP_VERSION 8` (mangos-classic, `D:\refs\mangos-classic\src\game\MotionGenerators\MoveMapSharedDefines.h:26`)
 is refused with a message that names the cMaNGOS generator; vmangos reads only version 6
-(`MoveMapSharedDefines.h:23`, `MoveMap.cpp:170-176`).
+(`MoveMapSharedDefines.h:26`, `MoveMap.cpp:170-176`).
 
 ### Path contract follows vmangos (CollisionContracts, PathMover)
 
@@ -63,7 +63,7 @@ numbers are in `docs/integration/detour-oracle-20261008.md`.
 A mover with `CanFly` goes straight, typed `Normal | NotUsingPath | FlyPath`, when no collision model blocks the
 segment (`PathFinder.cpp:172-186`; the model test is `ILineOfSight.IsInLineOfSight(ignoreM2: false)`, the
 equivalent of `Map::FindCollisionModel`, which does not skip doodads). When a model blocks, it follows the mesh
-and the destination is forced as vmangos does (`PathFinder.cpp:451-472`: partial subpath kept if it covers 70%
+and the destination is forced as vmangos does (`PathFinder.cpp:451-472`: partial subpath kept if it leaves under about 55%
 of the way, else a shortcut; `DestForced | FlyPath`). A hole in the mesh answers the flying shortcut instead of
 `NoPath` (`PathFinder.cpp:190-198`). `WorldCollision.Install` hands the line-of-sight service to the navmesh
 pathfinder in either install order. Swim and underwater shortcuts (`PathFinder.cpp:160-170`, `BuildUnderwaterPath`)
@@ -74,7 +74,7 @@ are still not implemented; a swimmer takes the mesh path.
 Not a vmangos feature: a coarse level over a whole map's mesh for long walks (the playerbots' far goals, issues
 #191 and #194). Every `.mmtile` of the map is read once; each tile's polygons that pass a filter (the bots':
 ground and water, no steep slopes) are split into regions by the tile's own links, and regions of adjacent tiles
-meet at portals where their border edges meet by the rule `NavMesh.Neighbours` crosses a border (one portal per
+meet at portals where their border edges meet by the rule `NavMesh.CollectNeighbours` crosses a border (one portal per
 stretch of at most 64 yards, 1 yard inside the region it enters). `FindRoute` is A* over the portals with
 straight-line costs; without a way it returns the way to the portal nearest the goal, as Detour's partial path
 does. Chains of regions are chains of polygons a path query can walk, so the graph answers reachability on foot
@@ -87,12 +87,22 @@ Kalimdor settles in under 1 ms, an unreachable goal's full search of the Eastern
 ## Limits (not done in this lane run)
 
 See the open questions of the lane report for the reasons. Not implemented: the `MapCollision` partial split,
-`PathMoverFactory` (needs a Creature-to-template `InhabitType` accessor from the creature-ai lane),
-FindWalkPoly extents / `farFromPoly` rules, swim/underwater paths, smooth path,
-navmesh raycast and random points, off-mesh links, vmap/mmap tile lifecycle shared across instances,
-model-aware `GetHeightStatic`, WMO liquids, indoor check, dynamic gameobject LOS, DBC-fed WMO areas and
-collision heights, async tile loading, the data-directory inspector. Transports and boats, cMaNGOS mmaps
-(version 8) and WMO area names without `WMOAreaTable.dbc` remain unsupported.
+FindWalkPoly extents / `farFromPoly` rules for the start point (the end point has them when `PathOptions.EndTolerance`
+is set: return home, charge), swim/underwater paths, smooth path (`findSmoothPath`; `CreatureSplineSmoothing` only
+rounds the corners of creature splines), off-mesh links, vmap/mmap tile lifecycle shared across instances, the
+fallback model searches of `GetHeightStatic` (unbounded, upward and near the terrain, `GridMap.cpp:840-850`), model
+floors in `Map.GetHeight` (`Map.cpp:3405-3409`; creature movement heights come from it), WMO liquids, the terrain test
+of the indoor check (`GetAreaInfo`, `GridMap.cpp:894-907`), dynamic gameobject LOS, DBC-fed WMO areas, the unit's
+collision height in line of sight (`MapCollision.DefaultEyeHeight` at both ends; `Object.cpp:1766-1781`), the
+data-directory inspector. Paths on transports and boats (`PathFinder.cpp:77-84`), cMaNGOS mmaps (version 8) and WMO
+area names without `WMOAreaTable.dbc` remain unsupported.
+
+Implemented since: the creature mover (`PathMover.For`, from the template's `InhabitType`); navmesh raycast and random
+points (`NavMeshQuery.Raycast`, `NavMeshQuery.TryRandomPointAround`, reached through `MapCollision.MeshPoints`;
+creature wander and flee points use them); background tile reads (vmap and mmap prefetch when a grid approaches,
+`ICollisionTilePrefetch`, and `PathOptions.NonBlockingTiles`); DBC collision heights on units
+(`LocomotionState.CollisionHeight`, used for the swim depth). The base seam already had `MapCollision.GetHeight`
+(terrain and model floors, the first search of `GetHeightStatic`) and `MapCollision.IsOutdoors` (the MOGP exterior flag).
 
 ## Verification status
 
