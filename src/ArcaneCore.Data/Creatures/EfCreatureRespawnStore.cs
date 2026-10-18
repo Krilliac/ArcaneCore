@@ -9,7 +9,8 @@ namespace ArcaneCore.Data.Creatures;
 /// <summary>
 /// EF Core implementation of <see cref="ICreatureRespawnStore"/> over the characters database. Meant for one writer at a time (the world's
 /// respawn queue): an upsert reads the key and updates or inserts it, so two concurrent writers of one key could both insert. Every write is one
-/// transaction; nothing here relies on advisory locks, provider-specific SQL or the case of an identifier.
+/// transaction; nothing here relies on advisory locks or the case of an identifier. On SQLite the upsert is one
+/// <c>INSERT ... ON CONFLICT DO UPDATE</c> per row (<see cref="SqliteRowCommand"/>); other providers read, then update or insert.
 /// </summary>
 public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRespawnStore
 {
@@ -104,6 +105,24 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
                 foreach (CreatureRespawnRecord[] chunk in records.Chunk(ChunkSize))
                 {
                     await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+                    if (db.Database.IsSqlite())
+                    {
+                        // SQLite: one raw INSERT ... ON CONFLICT DO UPDATE per row instead of a tracked read, update or insert and SaveChanges,
+                        // so the write lock covers only the statements (the tracked form held it 2-10 s on a starved live host).
+                        using (SqliteRowCommand upsert = SqliteRowCommand.Upsert(db, typeof(CreatureRespawnRow),
+                            [nameof(CreatureRespawnRow.InstanceId), nameof(CreatureRespawnRow.SpawnGuid)],
+                            [nameof(CreatureRespawnRow.MapId), nameof(CreatureRespawnRow.RespawnTime)]))
+                        {
+                            foreach (CreatureRespawnRecord record in chunk)
+                            {
+                                await upsert.ExecuteAsync([instance, record.SpawnGuid, record.MapId, record.RespawnTime], cancellationToken).ConfigureAwait(false);
+                            }
+                        }
+
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
                     try
                     {
                         List<uint> guids = [.. chunk.Select(c => c.SpawnGuid)];

@@ -143,11 +143,25 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
             // check is part of its WHERE, so a mismatch or a stale revision is a zero-row update, not a failure of the chunk.
             await using Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction =
                 await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            // SQLite: one UPDATE text built once and run as raw SQL per row (SqliteRowCommand), not an ExecuteUpdate expression per row, so the write lock
+            // is held for the statements rather than for EF's per-row query work. Other providers keep the LINQ form.
+            using SqliteRowCommand? command = db.Database.IsSqlite()
+                ? SqliteRowCommand.Update(db, typeof(ManagedPlayerbotRow), UpdateSet, UpdateWhere)
+                : null;
             for (int i = start; i < end; i++)
             {
                 ManagedPlayerbot bot = updates[i].Bot;
                 long expected = updates[i].ExpectedRevision;
                 if (expected < 0 || bot.Revision != expected + 1) continue;
+                if (command is not null)
+                {
+                    results[i] = await command.ExecuteAsync(
+                        [bot.DesiredEnabled, bot.State, bot.Goal, bot.TargetEntry, bot.QuestId, bot.Revision, bot.UpdatedUnix, bot.ErrorCode,
+                            bot.BotId, expected, bot.AccountId, bot.CharacterId, bot.AccountName, bot.CreatedUnix],
+                        cancellationToken).ConfigureAwait(false) == 1;
+                    continue;
+                }
+
                 results[i] = await db.Set<ManagedPlayerbotRow>()
                     .Where(row => row.BotId == bot.BotId && row.Revision == expected && row.AccountId == bot.AccountId
                         && row.CharacterId == bot.CharacterId && row.AccountName == bot.AccountName && row.CreatedUnix == bot.CreatedUnix)
@@ -167,6 +181,15 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
 
         return results;
     }
+
+    /// <summary>The columns <see cref="UpdateManyAsync"/> sets, then the identity and revision its WHERE checks (as the LINQ form).</summary>
+    private static readonly string[] UpdateSet = [nameof(ManagedPlayerbotRow.DesiredEnabled), nameof(ManagedPlayerbotRow.State),
+        nameof(ManagedPlayerbotRow.Goal), nameof(ManagedPlayerbotRow.TargetEntry), nameof(ManagedPlayerbotRow.QuestId),
+        nameof(ManagedPlayerbotRow.Revision), nameof(ManagedPlayerbotRow.UpdatedUnix), nameof(ManagedPlayerbotRow.ErrorCode)];
+
+    private static readonly string[] UpdateWhere = [nameof(ManagedPlayerbotRow.BotId), nameof(ManagedPlayerbotRow.Revision),
+        nameof(ManagedPlayerbotRow.AccountId), nameof(ManagedPlayerbotRow.CharacterId), nameof(ManagedPlayerbotRow.AccountName),
+        nameof(ManagedPlayerbotRow.CreatedUnix)];
 
     public async Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
         => await CharacterWrites.InTransactionAsync(db, () => db.Set<ManagedPlayerbotRow>()

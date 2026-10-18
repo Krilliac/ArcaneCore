@@ -12,7 +12,7 @@ namespace ArcaneCore.Data.Tests;
 /// The characters-database <c>creature_respawn</c> table and its store (<see cref="CreatureRespawnDataModule"/>, <see cref="EfCreatureRespawnStore"/>):
 /// vmangos keeps <c>guid, respawn_time, instance, map</c> in the characters database and drops expired rows when it loads them
 /// (sql/characters.sql:472-480, Maps/MapPersistentStateMgr.cpp:80-101, :1070-1100). The store is written to by one queue at a time; replacing a
-/// key is an EF update-or-insert, never <c>REPLACE INTO</c> (PostgreSQL has none). Every theory runs on each provider the machine has: SQLite
+/// key is an EF update-or-insert, or on SQLite one <c>INSERT ... ON CONFLICT DO UPDATE</c> per row, never <c>REPLACE INTO</c> (PostgreSQL has none). Every theory runs on each provider the machine has: SQLite
 /// locally, MariaDB and PostgreSQL on hosted CI.
 /// </summary>
 public sealed class CreatureRespawnStoreTests : IAsyncLifetime
