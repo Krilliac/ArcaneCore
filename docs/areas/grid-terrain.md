@@ -83,8 +83,10 @@ pass unmodified). Internally:
 - Non-player objects (`AddObject` / `RemoveObject` / `SetActive`) are the seam for creatures
   and game objects: moving one schedules its visibility pass for the end of the tick.
 - `Update` order: packets → packets of players in transit from this map (only the world-port
-  ack is handled) → due logouts → visibility → values → flush → grid state machine and terrain
-  clean-up → actions scheduled with `RunAfterUpdate` (far teleports).
+  ack is handled) → due logouts → visibility → values → flush → grid state machine → actions
+  scheduled with `RunAfterUpdate` (far teleports). The terrain clean-up is not part of it: the
+  world runs it once per tick after the maps (`TerrainManager.Update`, vmangos
+  `TerrainManager::Update` at the end of `World::Update`).
 
 ### Terrain (`src/ArcaneCore.Game/Maps/Terrain/`)
 
@@ -94,9 +96,10 @@ pass unmodified). Internally:
   height on float maps), `GetAreaFlag`, `GetLiquidLevel`, `GetTerrainType` and
   `GetLiquidStatus` (vmangos `GridMap::getLiquidStatus`: none / above / water-walk / in /
   under, by the depth of z below the surface, within 2 yards under the ground).
-- `TerrainInfo` (one per map id) loads tiles on demand, reference-counts them for grids
-  (`Load` / `Unload`; `Map` refs a grid's tile when the grid is created and unrefs it when it
-  unloads) and frees unreferenced tiles once a minute (`CleanUp`). It answers `GetHeight`,
+- `TerrainInfo` (one per map id, shared by all its instances) loads tiles on demand,
+  reference-counts them for grids (`Load` / `Unload`; `Map` refs a grid's tile when the grid
+  is created and unrefs it when it unloads) and frees unreferenced tiles once a minute
+  (`CleanUp`, run once per world tick by `TerrainManager.Update`). It answers `GetHeight`,
   `GetAreaFlag`, `GetZoneAndAreaId` (through `AreaTable`), `GetLiquidStatus` (kept only when
   the surface is above the ground, as vmangos `TerrainInfo::getLiquidStatus` without vmaps)
   and `GetWaterOrGroundLevel`.

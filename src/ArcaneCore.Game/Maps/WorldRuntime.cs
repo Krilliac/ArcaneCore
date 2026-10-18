@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Characters;
@@ -728,6 +729,18 @@ public sealed partial class WorldRuntime : IDisposable
         }
 
         UnloadRequestedMaps();
+
+        // vmangos World::Update ends with sTerrainMgr.Update (World.cpp:2147-2149): the terrain clean-up of every map id, once per tick and
+        // after the maps, since one map id's terrain serves all of its instances.
+        try
+        {
+            WorldMaps.Of(this).Terrain.Update(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("map-terrain", ex, "terrain cleanup failed (diff={DiffMs} ms, maps={Maps})", diffMs, _maps.Count);
+        }
+
         long mapsEnd = Stopwatch.GetTimestamp();
         long mapsBytesEnd = GC.GetAllocatedBytesForCurrentThread();
         SetPosition(TickPhase.Features, null, mapsEnd);

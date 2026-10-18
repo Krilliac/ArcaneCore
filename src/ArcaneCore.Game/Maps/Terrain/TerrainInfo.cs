@@ -97,7 +97,8 @@ public sealed class TerrainInfo
     /// <summary>
     /// vmangos <c>TerrainInfo::CleanUpGrids</c>: once a minute, free every loaded tile nobody
     /// references. (vmangos starts the first run at a random 20–40 s; ArcaneCore uses the
-    /// interval, so behaviour is deterministic.)
+    /// interval, so behaviour is deterministic.) Run once per world tick by
+    /// <see cref="TerrainManager.Update"/>, never by the maps that share this terrain.
     /// </summary>
     public void CleanUp(long diffMs)
     {

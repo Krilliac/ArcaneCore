@@ -18,8 +18,8 @@ namespace ArcaneCore.Game.Maps;
 /// Thread affinity: world thread only. <see cref="Update"/> runs, in order:
 /// (1) each player's queued in-world packets (and those of players in transit from this map),
 /// (2) visibility for players and objects that moved, (3) values updates for objects whose
-/// fields changed, (4) a flush of every client's queued update blocks, (5) the grid and
-/// terrain lifecycles, (6) work deferred until after the update (far teleports). Objects are
+/// fields changed, (4) a flush of every client's queued update blocks, (5) the grid
+/// lifecycle, (6) work deferred until after the update (far teleports). Objects are
 /// only added/removed outside (2)–(4), so a client never receives blocks about an object it
 /// was just told to destroy.
 /// </para>
@@ -1162,7 +1162,8 @@ public sealed class Map
             gate.Dispose();
         }
 
-        // (5) grid and terrain lifecycles (vmangos Map::Update → grid states; TerrainInfo::CleanUpGrids)
+        // (5) grid lifecycle (vmangos Map::Update → grid states). The terrain clean-up is the world's, once per tick
+        // (TerrainManager.Update): the terrain is shared by every instance of the map id.
         gate = Gate(MapStage.Grid);
         try
         {
@@ -1174,22 +1175,11 @@ public sealed class Map
                 "grid lifecycle update failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
                 MapId, InstanceId, diffMs);
         }
-        diagnostics?.EndGrid();
-        try
-        {
-            _terrain.CleanUp(diffMs);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _logger.LogFault("map-terrain", ex,
-                "terrain cleanup failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
-                MapId, InstanceId, diffMs);
-        }
         finally
         {
             gate.Dispose();
         }
-        diagnostics?.EndTerrain();
+        diagnostics?.EndGrid();
 
         // (6) work scheduled for after the update (vmangos MapManager::ScheduleFarTeleport)
         if (_afterUpdate.Count > 0)

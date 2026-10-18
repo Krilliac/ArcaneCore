@@ -65,6 +65,19 @@ public sealed class TerrainManager
         return terrain;
     }
 
+    /// <summary>
+    /// vmangos <c>TerrainManager::Update</c> (GridMap.cpp:1275-1280): every map's terrain clean-up (<see cref="TerrainInfo.CleanUp"/>),
+    /// once per world tick. One <see cref="TerrainInfo"/> serves every instance of its map id, so a clean-up run by each instance would
+    /// count the tick once per instance, and one whose instances are all gone would never run again. World thread.
+    /// </summary>
+    public void Update(long diffMs)
+    {
+        foreach (TerrainInfo terrain in _maps.Values)
+        {
+            terrain.CleanUp(diffMs);
+        }
+    }
+
     /// <summary>Prefetches the loader took instead of reading the file itself (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
 
