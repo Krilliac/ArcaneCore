@@ -296,6 +296,13 @@ public sealed class CreatureAiFactory
         [Scripts.AreiAI.Entry] = E(static c => new Scripts.AreiAI(c)),
         [Scripts.OgronAI.Entry] = E(static c => new Scripts.OgronAI(c)),
         [Scripts.CapturedArkonarinAI.Entry] = E(static c => new Scripts.CapturedArkonarinAI(c)),
+        [Scripts.KlinfranAI.NpcFranklin] = E(static c => new Scripts.KlinfranAI(c)),
+        [Scripts.KlinfranAI.NpcKlinfran] = E(static c => new Scripts.KlinfranAI(c)),
+        [Scripts.SolenorAI.NpcNelson] = E(static c => new Scripts.SolenorAI(c)),
+        [Scripts.SolenorAI.NpcSolenor] = E(static c => new Scripts.SolenorAI(c)),
+        [Scripts.ArtoriusAI.NpcAmiable] = E(static c => new Scripts.ArtoriusAI(c)),
+        [Scripts.ArtoriusAI.NpcDoombringer] = E(static c => new Scripts.ArtoriusAI(c)),
+        [Scripts.TheCleanerAI.Entry] = E(static c => new Scripts.TheCleanerAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
