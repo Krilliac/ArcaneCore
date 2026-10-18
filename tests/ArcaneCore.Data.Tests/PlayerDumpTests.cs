@@ -88,6 +88,12 @@ public sealed class PlayerDumpTests : IAsyncLifetime
             Assert.NotEqual(900u, pet.PetNumber);
             Assert.Equal(pet.PetNumber, (await db.Set<PersistentPetCooldownRow>().SingleAsync(c => c.CharacterId == clone)).PetNumber);
 
+            // The stable comes along: the bought slots and the stabled pet, under a new number of its own.
+            Assert.Equal(2, (await db.Set<PetStableSlotsRow>().SingleAsync(s => s.CharacterId == clone)).Slots);
+            PetStableRow stabled = await db.Set<PetStableRow>().SingleAsync(s => s.CharacterId == clone);
+            Assert.Equal(("Crab", (byte)1), (stabled.Name, stabled.Slot));
+            Assert.DoesNotContain(stabled.PetNumber, new[] { 900u, 901u, pet.PetNumber });
+
             // Not dumped: social lists (vmangos dumpTables has no character_social).
             Assert.Empty(await new EfSocialStore(db).GetSocialAsync(clone));
 
@@ -187,6 +193,8 @@ public sealed class PlayerDumpTests : IAsyncLifetime
         db.Add(new ItemLootRow { ItemGuid = 100, Slot = 0, ItemId = 2589, Amount = 2 });
         db.Add(new PersistentPetRow { CharacterId = alice, PetNumber = 900, Entry = 299, Level = 10, Name = "Wolf" });
         db.Add(new PersistentPetCooldownRow { CharacterId = alice, PetNumber = 900, SpellId = 17253, EndsAtUnixMs = 1 });
+        db.Add(new PetStableRow { CharacterId = alice, Slot = 1, PetNumber = 901, Entry = 3126, Level = 9, Name = "Crab" });
+        db.Add(new PetStableSlotsRow { CharacterId = alice, Slots = 2 });
         db.Add(new HonorCpRow { CharacterId = alice, VictimId = 1, Cp = 10, Date = 1, Type = 1 });
         await db.SaveChangesAsync();
         return (cs, alice);

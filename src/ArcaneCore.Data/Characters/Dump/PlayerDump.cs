@@ -19,7 +19,7 @@ public enum DumpTableType
     /// <summary><c>character_inventory</c>: owner, item and bag guids change (-> item guids).</summary>
     Inventory,
 
-    /// <summary><c>character_pet</c>: owner and pet number change (-> pet numbers).</summary>
+    /// <summary><c>character_pet</c>, <c>character_pet_stable</c>: owner and pet number change (-> pet numbers).</summary>
     Pet,
 
     /// <summary><c>character_pet_cooldown</c>: owner and pet number (&lt;- pet numbers).</summary>
@@ -79,7 +79,9 @@ public sealed class StoredPlayerDumpIds : IPlayerDumpIds
             _item = await MaxAsync(db, "item_instance", "Guid", cancellationToken).ConfigureAwait(false),
             _mail = await MaxAsync(db, "mail", "Id", cancellationToken).ConfigureAwait(false),
             _text = await MaxAsync(db, "item_text", "Id", cancellationToken).ConfigureAwait(false),
-            _pet = await MaxAsync(db, "character_pet", "PetNumber", cancellationToken).ConfigureAwait(false),
+            // vmangos keeps stabled pets in character_pet too, so its pet number seed covers them.
+            _pet = Math.Max(await MaxAsync(db, "character_pet", "PetNumber", cancellationToken).ConfigureAwait(false),
+                await MaxAsync(db, "character_pet_stable", "PetNumber", cancellationToken).ConfigureAwait(false)),
         };
     }
 
@@ -135,6 +137,8 @@ public static class PlayerDumpTables
         ("character_vitals", DumpTableType.CharTable),
         ("character_inventory", DumpTableType.Inventory),
         ("character_pet", DumpTableType.Pet),
+        ("character_pet_stable", DumpTableType.Pet),
+        ("character_pet_stable_slots", DumpTableType.CharTable),
         ("character_pet_cooldown", DumpTableType.PetTable),
         ("mail", DumpTableType.Mail),
         ("item_instance", DumpTableType.Item),
