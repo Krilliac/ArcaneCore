@@ -195,7 +195,7 @@ internal sealed class PlayerbotRisk
     private string Memo(int kind, PlayerbotFightVerdict verdict, PlayerbotEngagement? engagement, string? reason,
         Func<PlayerbotFightVerdict, PlayerbotEngagement?, string?, string> format)
     {
-        if (kind != _reportKind || !verdict.Equals(_reportVerdict) || !Nullable.Equals(engagement, _reportEngagement)
+        if (kind != _reportKind || !verdict.Equals(_reportVerdict) || engagement != _reportEngagement
             || !string.Equals(reason, _reportReason, StringComparison.Ordinal))
         {
             _reportKind = kind;

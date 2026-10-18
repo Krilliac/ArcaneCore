@@ -40,6 +40,12 @@ public interface ISharedMeshPointQuery
     /// owner instead.
     /// </summary>
     bool? TryGetRandomPointAroundShared(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point);
+
+    /// <summary>
+    /// <see cref="IMeshPointQuery.Raycast"/> from any thread over the loaded tiles; null when the owner has not looked the map's mesh up
+    /// yet, so the caller must ask the owner instead.
+    /// </summary>
+    MeshRaycastResult? RaycastShared(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null);
 }
 
 /// <summary>How a <see cref="NavJob"/> ended.</summary>

@@ -192,6 +192,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             if (splinePass)
             {
                 ApplyPendingActivations();
+                if (_creatures.Count == 0)
+                {
+                    t = Lap(t, out _timing.Creatures);
+                    UpdateTail(diffMs, t);
+                    return;
+                }
             }
             else
             {
@@ -409,6 +415,42 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     bool ICreatureMover.TryRaycastMesh(Creature creature, Vector3 from, Vector3 to, out Vector3 reached)
     {
         reached = to;
+        if (_ungatedMotion)
+        {
+            if (_ungatedNoMesh)
+            {
+                return false;
+            }
+
+            if (_ungatedMeshPoints?.RaycastShared(creature.MapId, from, to, MeshPointOptions) is { } sharedRay)
+            {
+                if (!sharedRay.Available)
+                {
+                    return false;
+                }
+
+                reached = sharedRay.Point;
+                return true;
+            }
+
+            using (Serial())
+            {
+                if (Map.Collision.MeshPoints is not { } owned)
+                {
+                    return false;
+                }
+
+                MeshRaycastResult ownedRay = owned.Raycast(creature.MapId, from, to, MeshPointOptions);
+                if (!ownedRay.Available)
+                {
+                    return false;
+                }
+
+                reached = ownedRay.Point;
+                return true;
+            }
+        }
+
         if (Map.Collision.MeshPoints is not { } mesh)
         {
             return false;

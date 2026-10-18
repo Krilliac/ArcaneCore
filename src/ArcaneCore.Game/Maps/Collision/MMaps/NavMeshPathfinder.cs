@@ -756,6 +756,36 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return MeshRaycastResult.Unavailable(end);
         }
 
+        return RaycastCore(mesh, start, end, options);
+    }
+
+    public MeshRaycastResult? RaycastShared(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+    {
+        _sharedLock.EnterReadLock();
+        try
+        {
+            if (!_meshes.TryGetValue(mapId, out NavMesh? mesh))
+            {
+                return null;
+            }
+
+            if (!Invariant.Check(IsFinite(start) && IsFinite(end),
+                    $"NavMeshPathfinder.RaycastShared called with non-finite coordinates start={start}, end={end} on map {mapId}")
+                || mesh is null)
+            {
+                return MeshRaycastResult.Unavailable(end);
+            }
+
+            return RaycastCore(mesh, start, end, options);
+        }
+        finally
+        {
+            _sharedLock.ExitReadLock();
+        }
+    }
+
+    private static MeshRaycastResult RaycastCore(NavMesh mesh, Vector3 start, Vector3 end, PathOptions? options)
+    {
         options ??= PathOptions.Default;
         Vector3 startRc = NavMeshFormat.ToRecast(start);
         if (!mesh.HaveTileAt(startRc) || !mesh.TryFindNearestPoly(startRc, NearExtents, options, out NavPolyRef startPoly, out Vector3 onMesh))

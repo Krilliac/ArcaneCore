@@ -357,6 +357,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         Passes++;
     }
 
+    private readonly List<PlayerbotChannelBot> _channelBotsScratch = [];
+    private readonly List<PlayerbotSocialBot> _socialBotsScratch = [];
+
     /// <summary>
     /// Keep each bot in its zone's world channels (<see cref="PlayerbotChannelMembership"/>) while bot speech is on; with it off the bots
     /// leave them (the wanted set becomes none) and are then left alone.
@@ -364,24 +367,17 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private void RunChannels(PlayerbotSocialPass pass)
     {
         if (pass.Chat is not { } chat || pass.Bots.Count == 0) return;
-        var bots = new List<PlayerbotChannelBot>(pass.Bots.Count);
-        foreach (PlayerbotSocialBot bot in pass.Bots) bots.Add(new PlayerbotChannelBot(bot.Id, bot.Session, bot.Player));
-        _channels.Run(bots, pass.Social.Channels, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Areas, chat.SpeechOptions, pass.NowMs);
+        _channelBotsScratch.Clear();
+        if (_channelBotsScratch.Capacity < pass.Bots.Count) _channelBotsScratch.Capacity = pass.Bots.Count;
+        foreach (PlayerbotSocialBot bot in pass.Bots) _channelBotsScratch.Add(new PlayerbotChannelBot(bot.Id, bot.Session, bot.Player));
+        _channels.Run(_channelBotsScratch, pass.Social.Channels, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Areas, chat.SpeechOptions, pass.NowMs);
     }
 
     private List<PlayerbotSocialBot> Gather(ManagedPlayerbotFeature bots)
     {
         PlayerbotGroupCoordinator? groups = services.GetService<PlayerbotGroupCoordinator>();
-        var list = new List<PlayerbotSocialBot>();
-        foreach (PlayerbotStatus status in bots.Snapshot())
-        {
-            if (status.State != ManagedPlayerbotState.Running || bots.IsScripted(status.BotId)) continue;
-            if (bots.FindSession(status.BotId) is not { State: SessionState.InWorld, Player: { IsInWorld: true, Map: not null } player } session) continue;
-            if (bots.FindPartyAI(status.BotId) is not { } party) continue;
-            list.Add(new PlayerbotSocialBot(status.BotId, session, player, party, bots.IsPartyDriven(status.BotId), groups?.Drives(status.BotId) == true));
-        }
-
-        return list;
+        bots.GatherSocialBots(groups, _socialBotsScratch);
+        return _socialBotsScratch;
     }
 
     /// <summary>The server packets this feature reads from each bot, and nothing else (the party AI and the brain drain their own).</summary>

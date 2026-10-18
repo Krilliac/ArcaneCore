@@ -647,6 +647,12 @@ public sealed class Map
     /// </summary>
     internal WorldRuntime.SerialScope EnterSerialAndFlush()
     {
+        if (_holdingGate)
+        {
+            FlushOutbox();
+            return default;
+        }
+
         WorldRuntime.SerialScope scope = _world.EnterSerial();
         FlushOutbox();
         return scope;
@@ -866,7 +872,8 @@ public sealed class Map
     {
         if (_world.IsParallelPhase)
         {
-            if (_world.StageGates.IsGated(updater))
+            if (_world.StageGates.IsGated(updater)
+                || (_players.Count == 0 && _objects.Count == 0 && updater.GetType().Assembly == typeof(Map).Assembly))
             {
                 HoldGate();
             }
@@ -1274,7 +1281,7 @@ public sealed class Map
 
             // A move into another cell can create or load grids (GridLoaded/GridApproaching: spawns, terrain and navmesh tiles, which
             // are shared): that one takes the serial gate when the caller runs outside it (an ungated creature spline pass).
-            if (!_world.HoldsSerialGate && _grid.ChangesCell(obj))
+            if (!_world.HoldsSerialGate && _grid.RelocateTouchesGridLifecycle(obj))
             {
                 using WorldRuntime.SerialScope serial = _world.EnterSerial();
                 OnObjectMovedCore(obj);

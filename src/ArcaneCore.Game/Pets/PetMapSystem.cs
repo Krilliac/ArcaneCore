@@ -30,6 +30,12 @@ public sealed class PetMapSystem : IMapUpdater
 {
     private readonly Map _map;
     private readonly List<Creature> _summons = [];
+    private readonly Dictionary<ObjectGuid, List<Creature>> _byOwner = [];
+    private readonly Dictionary<Creature, ObjectGuid> _ownerOf = new(ReferenceEqualityComparer.Instance);
+    private readonly List<Creature> _updateScratch = [];
+    private readonly List<Creature> _eventScratch = [];
+    private bool _updateScratchInUse;
+    private bool _eventScratchInUse;
     private SummonService? _service;
     private bool _combatSubscribed;
 
@@ -48,19 +54,52 @@ public sealed class PetMapSystem : IMapUpdater
 
     /// <summary>The owner's guardians (not totems, not its pet), optionally of one entry (vmangos Unit::m_guardianPets).</summary>
     public IEnumerable<Creature> GuardiansOf(Unit owner, uint entry = 0)
-        => _summons.Where(c => c.Summon is { Kind: SummonKind.Guardian } && c.OwnerGuid == owner.Guid && (entry == 0 || c.Entry == entry));
+        => _byOwner.TryGetValue(owner.Guid, out List<Creature>? owned)
+            ? owned.Where(c => c.Summon is { Kind: SummonKind.Guardian } && c.OwnerGuid == owner.Guid && (entry == 0 || c.Entry == entry))
+            : [];
 
     /// <summary>Every summon the unit owns.</summary>
-    public IEnumerable<Creature> SummonsOf(Unit owner) => _summons.Where(c => c.OwnerGuid == owner.Guid);
+    public IEnumerable<Creature> SummonsOf(Unit owner)
+        => _byOwner.TryGetValue(owner.Guid, out List<Creature>? owned)
+            ? owned.Where(c => c.OwnerGuid == owner.Guid)
+            : [];
 
     /// <summary>The owner's current mini pet, if any.</summary>
-    public Creature? MiniPetOf(Unit owner) => _summons.FirstOrDefault(c => c.Summon is { Kind: SummonKind.MiniPet } && c.OwnerGuid == owner.Guid);
+    public Creature? MiniPetOf(Unit owner)
+    {
+        if (!_byOwner.TryGetValue(owner.Guid, out List<Creature>? owned))
+        {
+            return null;
+        }
+
+        foreach (Creature c in owned)
+        {
+            if (c.Summon is { Kind: SummonKind.MiniPet } && c.OwnerGuid == owner.Guid)
+            {
+                return c;
+            }
+        }
+
+        return null;
+    }
 
     internal void Register(Creature creature, SummonService service)
     {
         _service = service;
         SubscribeCombat();
         _summons.Add(creature);
+        ObjectGuid ownerGuid = creature.OwnerGuid;
+        if (!ownerGuid.IsEmpty)
+        {
+            _ownerOf[creature] = ownerGuid;
+            if (!_byOwner.TryGetValue(ownerGuid, out List<Creature>? owned))
+            {
+                owned = [];
+                _byOwner[ownerGuid] = owned;
+            }
+
+            owned.Add(creature);
+        }
     }
 
     private void SubscribeCombat()
@@ -79,24 +118,44 @@ public sealed class PetMapSystem : IMapUpdater
     /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (killer is null || _summons.Count == 0)
+        if (killer is null || !_byOwner.TryGetValue(killer.Guid, out List<Creature>? owned) || owned.Count == 0)
         {
             return;
         }
 
-        foreach (Creature pet in _summons.ToArray())
+        bool ownsScratch = !_eventScratchInUse;
+        List<Creature> snapshot = ownsScratch ? _eventScratch : new List<Creature>(owned.Count);
+        if (ownsScratch)
         {
-            try
+            _eventScratchInUse = true;
+            snapshot.Clear();
+        }
+
+        snapshot.AddRange(owned);
+        try
+        {
+            foreach (Creature pet in snapshot)
             {
-                if (!ReferenceEquals(pet, killer) && pet.OwnerGuid == killer.Guid && pet.IsAlive
-                    && pet.Summon is { Kind: SummonKind.Pet or SummonKind.Guardian } && PetAI.Of(pet.AI) is { } ai)
+                try
                 {
-                    ai.OnKilledUnit(victim);
+                    if (!ReferenceEquals(pet, killer) && pet.OwnerGuid == killer.Guid && pet.IsAlive
+                        && pet.Summon is { Kind: SummonKind.Pet or SummonKind.Guardian } && PetAI.Of(pet.AI) is { } ai)
+                    {
+                        ai.OnKilledUnit(victim);
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("map-pet", ex);
                 }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+        }
+        finally
+        {
+            if (ownsScratch)
             {
-                FaultLedger.Shared.Record("map-pet", ex);
+                snapshot.Clear();
+                _eventScratchInUse = false;
             }
         }
     }
@@ -108,32 +167,70 @@ public sealed class PetMapSystem : IMapUpdater
     /// </summary>
     private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
     {
-        if (_summons.Count == 0)
+        if (_byOwner.Count == 0)
         {
             return;
         }
 
-        foreach (Creature pet in _summons.ToArray())
+        _byOwner.TryGetValue(victim.Guid, out List<Creature>? victimPets);
+        _byOwner.TryGetValue(attacker.Guid, out List<Creature>? attackerPets);
+        int vCount = victimPets?.Count ?? 0;
+        int aCount = attackerPets is not null && !ReferenceEquals(attackerPets, victimPets) ? attackerPets.Count : 0;
+        if (vCount == 0 && aCount == 0)
         {
-            try
-            {
-                if (PetAI.Of(pet.AI) is not { } ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
-                {
-                    continue;
-                }
+            return;
+        }
 
-                if (pet.OwnerGuid == victim.Guid)
+        bool ownsScratch = !_eventScratchInUse;
+        List<Creature> snapshot = ownsScratch ? _eventScratch : new List<Creature>(vCount + aCount);
+        if (ownsScratch)
+        {
+            _eventScratchInUse = true;
+            snapshot.Clear();
+        }
+
+        if (vCount > 0)
+        {
+            snapshot.AddRange(victimPets!);
+        }
+
+        if (aCount > 0)
+        {
+            snapshot.AddRange(attackerPets!);
+        }
+
+        try
+        {
+            foreach (Creature pet in snapshot)
+            {
+                try
                 {
-                    ai.OwnerAttackedBy(attacker);
+                    if (PetAI.Of(pet.AI) is not { } ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
+                    {
+                        continue;
+                    }
+
+                    if (pet.OwnerGuid == victim.Guid)
+                    {
+                        ai.OwnerAttackedBy(attacker);
+                    }
+                    else if (pet.OwnerGuid == attacker.Guid)
+                    {
+                        ai.OwnerAttacked(victim);
+                    }
                 }
-                else if (pet.OwnerGuid == attacker.Guid)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    ai.OwnerAttacked(victim);
+                    FaultLedger.Shared.Record("map-pet", ex);
                 }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+        }
+        finally
+        {
+            if (ownsScratch)
             {
-                FaultLedger.Shared.Record("map-pet", ex);
+                snapshot.Clear();
+                _eventScratchInUse = false;
             }
         }
     }
@@ -145,6 +242,15 @@ public sealed class PetMapSystem : IMapUpdater
         {
             return;
         }
+
+        if (_ownerOf.Remove(creature, out ObjectGuid ownerGuid) && _byOwner.TryGetValue(ownerGuid, out List<Creature>? owned))
+        {
+            owned.Remove(creature);
+            if (owned.Count == 0)
+            {
+                _byOwner.Remove(ownerGuid);
+            }
+        }
     }
 
     public void Update(Map map, uint diffMs)
@@ -154,38 +260,58 @@ public sealed class PetMapSystem : IMapUpdater
             return;
         }
 
-        foreach (Creature creature in _summons.ToArray())
+        bool ownsScratch = !_updateScratchInUse;
+        List<Creature> snapshot = ownsScratch ? _updateScratch : new List<Creature>(_summons.Count);
+        if (ownsScratch)
         {
-            try
+            _updateScratchInUse = true;
+            snapshot.Clear();
+        }
+
+        snapshot.AddRange(_summons);
+        try
+        {
+            foreach (Creature creature in snapshot)
             {
-                if (creature.System is not { } system || !ReferenceEquals(system.FindCreature(creature.Guid), creature) || creature.Summon is not { } links)
+                try
                 {
-                    // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
-                    // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
-                    if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Player petOwner)
+                    if (creature.System is not { } system || !ReferenceEquals(system.FindCreature(creature.Guid), creature) || creature.Summon is not { } links)
                     {
-                        _service?.QueueCurrentPetSave(petOwner);
-                        SummonService.ReleasePetLink(creature, petOwner);
+                        // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
+                        // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
+                        if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Player petOwner)
+                        {
+                            _service?.QueueCurrentPetSave(petOwner);
+                            SummonService.ReleasePetLink(creature, petOwner);
+                        }
+
+                        Forget(creature);
+                        continue;
                     }
 
-                    Forget(creature);
-                    continue;
+                    Unit? owner = creature.GetOwner();
+                    switch (links.Kind)
+                    {
+                        case SummonKind.Wild:
+                            UpdateWild(creature, links, diffMs);
+                            break;
+                        default:
+                            UpdatePet(creature, links, owner, diffMs);
+                            break;
+                    }
                 }
-
-                Unit? owner = creature.GetOwner();
-                switch (links.Kind)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    case SummonKind.Wild:
-                        UpdateWild(creature, links, diffMs);
-                        break;
-                    default:
-                        UpdatePet(creature, links, owner, diffMs);
-                        break;
+                    FaultLedger.Shared.Record("map-pet", ex);
                 }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+        }
+        finally
+        {
+            if (ownsScratch)
             {
-                FaultLedger.Shared.Record("map-pet", ex);
+                snapshot.Clear();
+                _updateScratchInUse = false;
             }
         }
     }

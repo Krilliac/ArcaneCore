@@ -256,6 +256,60 @@ public sealed class GridContainer
     internal bool ChangesCell(WorldObject obj)
         => float.IsFinite(obj.X) && float.IsFinite(obj.Y) && _cells.TryGetValue(obj, out CellCoord cell) && GridDefines.ComputeCellCoord(obj.X, obj.Y) != cell;
 
+    /// <summary>
+    /// Whether <see cref="Relocate"/> would create, load or approach a grid that is not already in memory (and therefore fire
+    /// <see cref="GridLoaded"/> or <see cref="GridApproaching"/>, which touch shared spawn/terrain/navmesh state).
+    /// </summary>
+    internal bool RelocateTouchesGridLifecycle(WorldObject obj)
+    {
+        if (!float.IsFinite(obj.X) || !float.IsFinite(obj.Y) || !_cells.TryGetValue(obj, out CellCoord oldCell))
+        {
+            return false;
+        }
+
+        CellCoord newCell = GridDefines.ComputeCellCoord(obj.X, obj.Y);
+        if (newCell == oldCell)
+        {
+            return false;
+        }
+
+        if (obj is Player)
+        {
+            return true;
+        }
+
+        bool active = _active.Contains(obj);
+        if (newCell.Grid != oldCell.Grid)
+        {
+            Grid? targetGrid = _grids[newCell.Grid.Id];
+            if (targetGrid is null || (active && !targetGrid.ObjectDataLoaded))
+            {
+                return true;
+            }
+        }
+
+        float prefetch = Options.GridPrefetchDistance;
+        if (GridApproaching is not null && prefetch > 0)
+        {
+            float radius = prefetch / 2;
+            CellArea area = GridDefines.CalculateCellArea(obj.X, obj.Y, radius);
+            for (int gx = area.Low.Grid.X; gx <= area.High.Grid.X; gx++)
+            {
+                for (int gy = area.Low.Grid.Y; gy <= area.High.Grid.Y; gy++)
+                {
+                    var coord = new GridCoord(gx, gy);
+                    if (_grids[coord.Id] is null
+                        && (!_approached.TryGetValue(coord.Id, out long at) || _clockMs - at >= TilePrefetchCache<object>.ExpiryMs))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
     public bool Relocate(WorldObject obj)
     {
         if (!_cells.TryGetValue(obj, out CellCoord oldCell))

@@ -618,7 +618,26 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 await StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore).ConfigureAwait(false);
     }
 
-    public IReadOnlyList<PlayerbotStatus> Snapshot() => Volatile.Read(ref _snapshot).ToArray();
+    public IReadOnlyList<PlayerbotStatus> Snapshot()
+    {
+        if (_world?.IsWorldThread == true && _snapshotElapsedMs > 0)
+            PublishSnapshot(_ordered, 0, force: true);
+        return Volatile.Read(ref _snapshot).ToArray();
+    }
+
+    internal void GatherSocialBots(PlayerbotGroupCoordinator? groups, List<BotSocial.PlayerbotSocialBot> destination)
+    {
+        destination.Clear();
+        ActiveBot[] bots = _ordered;
+        if (destination.Capacity < bots.Length) destination.Capacity = bots.Length;
+        foreach (ActiveBot active in bots)
+        {
+            if (active.Paused || active.Controller is not null || active.Record.State != ManagedPlayerbotState.Running) continue;
+            if (active.Session is not { State: SessionState.InWorld, Player: { IsInWorld: true, Map: not null } player } session) continue;
+            destination.Add(new BotSocial.PlayerbotSocialBot(active.Record.BotId, session, player, active.Party, active.PartyDriven,
+                groups?.Drives(active.Record.BotId) == true));
+        }
+    }
 
     public Task<PlayerbotInspection?> InspectAsync(string idOrName, CancellationToken cancellationToken = default)
     {
@@ -2297,16 +2316,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// in <paramref name="bots"/>, omits it from <see cref="Snapshot"/> until the next tick. The wait posted as soon as start
     /// returns runs at the beginning of that next tick and then finds no row.
     /// </summary>
-    private void PublishSnapshot(ActiveBot[] bots, uint elapsedMs)
+    private void PublishSnapshot(ActiveBot[] bots, uint elapsedMs, bool force = false)
     {
         _snapshotElapsedMs = unchecked(_snapshotElapsedMs + elapsedMs);
         int currentVersion = Volatile.Read(ref _activeVersion);
         bool sameActiveSet = currentVersion == _orderedVersion;
-        if (bots.Length > 64
+        if (!force
+            && bots.Length > 64
             && sameActiveSet
             && currentVersion == _builtActiveVersion
             && Volatile.Read(ref _snapshotEpoch) == _builtEpoch
-            && _snapshotElapsedMs < 250)
+            && _snapshotElapsedMs < 1000)
         {
             return;
         }
