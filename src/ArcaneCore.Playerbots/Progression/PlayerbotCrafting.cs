@@ -1188,6 +1188,9 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     /// The cast waited on is over without reaching its effects (<see cref="SpellCast.Completed"/> false), or the server never started it:
     /// no loot window is coming.
     /// </summary>
+    /// <summary>Targets whose current failure streak holds a refusal other than the TRY_AGAIN skill roll.</summary>
+    private readonly HashSet<ulong> _failedLootNonDice = [];
+
     private bool LootCastFailed(Player player)
     {
         if (_lootCast is not { } cast)
@@ -1205,19 +1208,32 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         ObjectGuid target = _gatheringTarget;
         uint spellId = _lootSpellId;
         EndLootWait();
+        // Why the cast went nowhere (SMSG_CAST_RESULT: u32 spell, u8 status, u8 SpellCastResult), for the report (GitHub #774). A herb or ore
+        // node in the orange band fails with TRY_AGAIN by the skill roll (vmangos Spell::EffectOpenLock / Player::UpdateGatherSkill): a player
+        // clicks again, so a streak of those is the dice, not a fault, and is not reported.
+        string? result = null;
+        foreach (ManagedSessionPacket packet in _session.DrainManagedPackets(WorldOpcode.SmsgCastResult))
+        {
+            if (packet.Payload.Length >= 6 && BitConverter.ToUInt32(packet.Payload, 0) == spellId && packet.Payload[4] != 0)
+                result = ((SpellCastResult)packet.Payload[5]).ToString();
+        }
+        if (result is not null && result != nameof(SpellCastResult.TryAgain))
+            _failedLootNonDice.Add(target.Value);
         int failures = _failedLootCasts.GetValueOrDefault(target.Value) + 1;
         if (failures < MaxGatherCasts)
         {
             if (_failedLootCasts.Count >= 64)
                 _failedLootCasts.Clear();
+                _failedLootNonDice.Clear();
             _failedLootCasts[target.Value] = failures;
             _refusedUntil.Remove(target.Value);
             return;
         }
 
         _failedLootCasts.Remove(target.Value);
-        if (!_session.IsInChaosProbe)
-            PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant cast {spellId} on {target} failed {failures} times in a row (no loot window)");
+        bool onlyDice = !_failedLootNonDice.Remove(target.Value) && result == nameof(SpellCastResult.TryAgain);
+        if (!_session.IsInChaosProbe && !onlyDice)
+            PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant cast {spellId} on {target} failed {failures} times in a row (no loot window, last result {result ?? "none sent"})");
     }
 
     private bool DrainGatherLoot(Player player, uint now)
@@ -1270,6 +1286,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 continue;
 
             _failedLootCasts.Remove(sourceGuid);
+            _failedLootNonDice.Remove(sourceGuid);
             EndLootWait();
             // Any loot type is a window: herb and mining nodes go out as 1, skinning as 2, disenchanting as 4 (LootTypes.ToWire, vmangos
             // Player::SendLoot, Player.cpp:7980-7995). Only 0 (LOOT_NONE) is the refusal reply, followed by its LootError byte.
