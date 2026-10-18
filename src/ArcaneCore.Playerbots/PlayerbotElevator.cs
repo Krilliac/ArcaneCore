@@ -1514,12 +1514,18 @@ internal static class PlayerbotElevator
     /// footprint (<see cref="CarHalfYards"/> of its shaft, flat) and more than <see cref="PitYards"/> under the car's lower level. The real
     /// Great Lift's foot is such a pit (the static floor at -49.4, 5.3 to 5.5 yards under the stops; an enclosed recess no way leads out
     /// of): a bot dropped into it would stay there until its next login, so <see cref="Drop"/> places it on the landing instead.
+    /// On an enclosed vault lift (Undercity) the shaft reaches the doors (<see cref="VaultDoorOuterYards"/>), not only the car's footprint.
+    /// LS-009 (live 2026-10-17): 356 trips failed as "no way to the lower landing" from 1599.0,181.5,-62.0, 8.5 yards from the
+    /// shaft centre of the lift at 1595,189 and 21 yards under its lower stop. That is the shaft's bottom, inside the doors and outside
+    /// the 5-yard footprint, so the bot was never rescued.
     /// </summary>
-    private static bool InPit(ElevatorLift lift, Vector3 at, float floor)
+    internal static bool InPit(ElevatorLift lift, Vector3 at, float floor)
     {
+        bool vault = ElevatorRegions.IsVaultLift(lift.MapId, new Vector3(lift.Centre, lift.LowZ));
+        float footprint = vault ? VaultDoorOuterYards : CarHalfYards;
         foreach (ElevatorCar car in lift.Cars)
         {
-            if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) <= CarHalfYards && floor < car.Low.Z - PitYards)
+            if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) <= footprint && floor < car.Low.Z - PitYards)
                 return true;
         }
 
