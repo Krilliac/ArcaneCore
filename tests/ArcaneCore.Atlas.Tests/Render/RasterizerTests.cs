@@ -533,19 +533,16 @@ public sealed class RasterizerTests
         CpuRenderer.ValidateSize(3840, 2160);
     }
 
-    [Fact]
-    public void ASmallRender_OfAFewThousandTriangles_IsFast()
+    /// <summary>A shared-vertex height grid of <paramref name="cells"/> x <paramref name="cells"/> yards around (100, 200): two triangles per cell with their edges.</summary>
+    private static GeometryChunk WavyGrid(int cells)
     {
-        // A 40 x 40 height grid (3200 triangles, 4800 edges) at 640 x 360 with the HUD, hidden-line wire plus fill, from an orbit camera.
-        var camera = new CameraState(new WorldPoint(100, 200, 0), 60, 30, 45, 55, CameraMode.Orbit);
         var builder = new GeometryBuilder(LayerIds.Terrain, Tile, new WorldPoint(0, 0, 0));
-        const int cells = 40;
         var vertices = new uint[cells + 1, cells + 1];
         for (int i = 0; i <= cells; i++)
         {
             for (int j = 0; j <= cells; j++)
             {
-                vertices[i, j] = builder.AddVertex(80 + i, 180 + j, 3 * Math.Sin(i / 5.0) * Math.Cos(j / 7.0));
+                vertices[i, j] = builder.AddVertex(100 - (cells / 2.0) + i, 200 - (cells / 2.0) + j, 3 * Math.Sin(i / 5.0) * Math.Cos(j / 7.0));
             }
         }
 
@@ -558,7 +555,36 @@ public sealed class RasterizerTests
             }
         }
 
-        var rig = new RenderRig(new FakeSource().Add(LayerIds.Terrain, Tile, builder.Build()));
+        return builder.Build();
+    }
+
+    [Fact]
+    public void ASharedVertexMesh_HasNoPinholes_InPerspective()
+    {
+        // Triangles that share vertices must tile the screen exactly: no background pixel may show through inside the mesh.
+        var camera = new CameraState(new WorldPoint(100, 200, 0), 60, 30, 45, 55, CameraMode.Orbit);
+        var rig = new RenderRig(new FakeSource().Add(LayerIds.Terrain, Tile, WavyGrid(40)));
+        RenderedFrame frame = rig.Frame(Views.Of(camera, (LayerIds.Terrain, Views.Style(mode: RenderMode.Fill))), 640, 360);
+
+        int holes = 0;
+        for (int y = 160; y <= 200; y++)
+        {
+            for (int x = 280; x <= 360; x++)
+            {
+                holes += frame.Buffer.Get(x, y) == Rgb.Background ? 1 : 0;
+            }
+        }
+
+        Assert.Equal(0, holes);
+        Assert.NotEqual(Rgb.Background, frame.Buffer.Get(320, 180));
+    }
+
+    [Fact]
+    public void ASmallRender_OfAFewThousandTriangles_IsFast()
+    {
+        // A 40 x 40 height grid (3200 triangles, 4800 edges) at 640 x 360 with the HUD, hidden-line wire plus fill, from an orbit camera.
+        var camera = new CameraState(new WorldPoint(100, 200, 0), 60, 30, 45, 55, CameraMode.Orbit);
+        var rig = new RenderRig(new FakeSource().Add(LayerIds.Terrain, Tile, WavyGrid(40)));
         ViewState view = Views.Of(camera, (LayerIds.Terrain, Views.Style(mode: RenderMode.Both))) with { ShowHud = true };
         rig.Frame(view, 64, 64);
 
