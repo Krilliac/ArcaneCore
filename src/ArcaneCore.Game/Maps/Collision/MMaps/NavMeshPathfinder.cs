@@ -19,18 +19,30 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// box from any loaded polygon (on a loaded tile; an endpoint on an unloaded tile goes straight,
 /// <see cref="PathType.Normal"/> | <see cref="PathType.NotUsingPath"/>, as vmangos' <c>HaveTiles</c> shortcut) answers <see cref="PathType.NoPath"/> (a two-point shortcut, so a
 /// caller may still decide to move straight); an end off the mesh but above or below it is
-/// projected and the path is <see cref="PathType.Incomplete"/>. Corrupt files are logged and read
-/// as missing; nothing here throws into the world thread.
+/// projected and the path is <see cref="PathType.Incomplete"/>. With <see cref="PathOptions.EndTolerance"/> both endpoints follow vmangos
+/// instead: each is looked for as <c>FindWalkPoly</c> does, and an endpoint off the mesh makes the path incomplete (a flier's the
+/// straight line) only when it is farther than the tolerance from its polygon. Corrupt files are logged and read as missing; nothing here
+/// throws into the world thread.
 /// </para>
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
 public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch,
     ISharedMeshPointQuery
 {
-    /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
+    /// <summary>
+    /// First search box half-extents (Recast x, y, z) for the nearest polygon of an endpoint of a query without an end tolerance: the
+    /// first box of MaNGOS Zero's <c>getPolyByLocation</c> (mangos-unified expansions/zero/MotionGenerators/PathFinder.cpp:213) and of
+    /// the TrinityCore line's (AzerothCore PathGenerator.cpp:234). vmangos looks 5 around and 10 up and down instead (<c>FindWalkPoly</c>,
+    /// PathFinder.cpp:128-142, PathFinder.h:89), which is the search of a query with <see cref="PathOptions.EndTolerance"/>.
+    /// </summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
 
-    /// <summary>Second, taller box for points high above or below the mesh (flagged as off the mesh).</summary>
+    /// <summary>
+    /// Second, taller box for points high above or below the mesh (flagged as off the mesh): MaNGOS Zero's <c>getPolyByLocation</c> retry
+    /// with <c>extents[1] = 200</c> (mangos-unified expansions/zero/MotionGenerators/PathFinder.cpp:223; AzerothCore retries 50 tall,
+    /// PathGenerator.cpp:245). vmangos (<c>FindWalkPoly</c>) and cmangos-classic (<c>NearPolySearchBound</c>, <c>FarPolySearchBound</c>,
+    /// MotionGenerators/PathFinder.h:58-59) have no such column.
+    /// </summary>
     public static readonly Vector3 FarExtents = new(3, 200, 3);
 
     /// <summary>
@@ -566,7 +578,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
-        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, 0f, out NavPolyRef poly, out _, out _)
+        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, options.EndTolerance, out NavPolyRef poly, out _, out _)
             ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
     }
 
@@ -648,7 +660,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
     /// <see cref="IMeshPointQuery.TryGetRandomPointAround"/> over the loaded tiles (no tile is read). Unavailable (false, nothing drawn
     /// from <paramref name="random"/>) when the map has no mesh, the tile under <paramref name="center"/> is not loaded, no polygon lies
     /// within <see cref="NearExtents"/> of it, or an argument is unusable. The start polygon is the one a path from
-    /// <paramref name="center"/> would start on, so the point is reachable by <see cref="FindPath(uint, Vector3, Vector3, PathOptions?)"/>.
+    /// <paramref name="center"/> without an end tolerance would start on, so the point is reachable by
+    /// <see cref="FindPath(uint, Vector3, Vector3, PathOptions?)"/>.
     /// </summary>
     public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
     {
@@ -1123,11 +1136,23 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             forceDestination = true;
         }
 
-        if (!TryLocate(mesh, startRc, options, 0f, out NavPolyRef startPoly, out Vector3 startOnMesh, out _)
-            || !TryLocate(mesh, endRc, options, options.EndTolerance, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar, options.WideEndSearch))
+        // vmangos BuildPolyPath locates the start and the end alike (getPolyByLocation, PathFinder.cpp:188-189). So does a query with an end
+        // tolerance; one without locates both in the search boxes and grades only the end.
+        float tolerance = options.EndTolerance;
+        if (!TryLocate(mesh, startRc, options, tolerance, out NavPolyRef startPoly, out Vector3 startOnMesh, out bool startFar)
+            || !TryLocate(mesh, endRc, options, tolerance, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar, options.WideEndSearch))
         {
             // PathFinder.cpp:190-198: a hole in the mesh is a flying shortcut for a flier, NOPATH otherwise.
             return PathResult.StraightLine(start, end, flier ? PathType.Normal | PathType.NotUsingPath | PathType.FlyPath : PathType.NoPath);
+        }
+
+        // farFromPoly (PathFinder.cpp:209-235): with an end tolerance, either endpoint farther than it from its polygon. A flier then goes
+        // straight (BuildShortcut, NORMAL | NOT_USING_PATH, :220-225); anything else still follows the mesh to the end's polygon and the path
+        // is incomplete (:227-235). The swimmers' answers (the underwater path, :213-218; a swimmable end stays whole, :234) are not modelled.
+        bool farFromPoly = endFar || (tolerance > 0 && startFar);
+        if (flier && tolerance > 0 && farFromPoly)
+        {
+            return PathResult.StraightLine(start, end, PathType.Normal | PathType.NotUsingPath);
         }
 
         List<Vector3>? points = NavMeshQuery.FindWorldPath(mesh, start, startPoly, startOnMesh, endPoly, endOnMesh, endRc, options, out bool complete);
@@ -1136,7 +1161,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return PathResult.StraightLine(start, end, PathType.NoPath);
         }
 
-        PathType type = complete && !endFar ? PathType.Normal : PathType.Incomplete;
+        PathType type = complete && !farFromPoly ? PathType.Normal : PathType.Incomplete;
         if (forceDestination && ((type & PathType.Normal) == 0 || !InRange(end, points[^1], 1f, 1f)))
         {
             // PathFinder.cpp:451-472: keep a partial subpath only when it already covers 70% of the way.
@@ -1174,8 +1199,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         far = false;
         if (tolerance > 0)
         {
-            // vmangos FindWalkPoly (PathFinder.cpp:128-141): extents {5, 10, 5}, and a polygon whose nearest point is more than 3 above the query point is refused;
-            // "far" is the farFromPoly test of BuildPolyPath (3D distance past tolerance).
+            // vmangos FindWalkPoly (PathFinder.cpp:128-142), for either endpoint (getPolyByLocation, :145-157): extents {5, 10, 5}, and a polygon whose nearest
+            // point is more than 3 above the query point is refused; "far" is the farFromPoly test of BuildPolyPath (3D distance past tolerance).
             if (!mesh.TryFindNearestPoly(position, new Vector3(5, 10, 5), options, out poly, out onMesh) || onMesh.Y > position.Y + 3.0f)
             {
                 far = true;
@@ -1186,6 +1211,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return true;
         }
 
+        // MaNGOS Zero's getPolyByLocation boxes (NearExtents, then FarExtents).
         if (mesh.TryFindNearestPoly(position, NearExtents, options, out poly, out onMesh))
         {
             far = NavMeshTile.DistanceXzSquared(onMesh, position) > 0.01f || MathF.Abs(onMesh.Y - position.Y) > NearExtents.Y;

@@ -202,10 +202,11 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
                 || plan.Corners[^1].Z > MathF.Max(creature.Z, home.Z) + MaxFallbackLegDropYards))
         {
             // A spawn off the mesh draws its point on the terrain (or at its own height where the terrain has a hole), and the search
-            // snaps that end to the nearest polygon in a 200 yd tall column (vmangos getPolyByLocation): live 2026-10-18 Lordaeron
-            // Citizen 3617 spawn 156011 (ruins, z 70.8, a terrain hole over Undercity) got incomplete legs ending on the Undercity floor
-            // at z -44 and walked down through the ground (seen at z 9-13, creature/under-map after every restart). In caves (Grizzled Den)
-            // raw terrain is 90 yd above the cave floor. A wander leg never jumps to another storey: skip it like a leg without a path.
+            // snaps that end to the nearest polygon in a 200 yd tall column (NavMeshPathfinder.FarExtents, MaNGOS Zero's getPolyByLocation;
+            // vmangos FindWalkPoly looks only 10 yd up and down): live 2026-10-18 Lordaeron Citizen 3617 spawn 156011 (ruins, z 70.8, a
+            // terrain hole over Undercity) got incomplete legs ending on the Undercity floor at z -44 and walked down through the ground
+            // (seen at z 9-13, creature/under-map after every restart). In caves (Grizzled Den) raw terrain is 90 yd above the cave floor.
+            // A wander leg never jumps to another storey: skip it like a leg without a path.
             _nextMoveMs = NoPathRetryDelay(mover, ++_consecutiveNoPath);
             return true;
         }
