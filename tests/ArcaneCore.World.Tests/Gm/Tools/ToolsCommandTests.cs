@@ -53,7 +53,7 @@ public sealed class ToolsCommandTests
         }
 
         await using WorldTestHost host = started;
-        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSGO", "Toolsgo", AccountSecurity.GameMaster);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSGO", "Toolsgo", AccountSecurity.Administrator);
         await gm.CollectAsync();
         GameObject go = await host.OnWorldAsync(() => objects.Feature!.FindSystem(0u)!.GameObjects.Single(g => g.Spawn is not null));
 
@@ -74,6 +74,8 @@ public sealed class ToolsCommandTests
         Assert.True(await host.OnWorldAsync(() => (go.Flags & GameObjectFlags.Locked) != 0));
         Assert.Contains(await RunAsync(gm, ".alter goflag 0x2 off"), l => l.Contains("flag Locked cleared", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(gm, ".alter goflag sparkly on"), l => l.StartsWith("Unknown game object flag 'sparkly'", StringComparison.Ordinal));
+
+        Assert.Contains(await RunAsync(gm, $".gobject spawnmany {DoorEntry} 3 6"), l => l.StartsWith($"Placed 3 temporary Tools Door (entry {DoorEntry}) within 6 yards", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -117,6 +119,10 @@ public sealed class ToolsCommandTests
         {
             ArcaneMeters.Opcodes.LocalCounting = before;
         }
+
+        string[] botthink = await RunAsync(gm, ".debug botthink 3");
+        Assert.Contains(botthink, l => l.StartsWith("Playerbot think: ", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".debug botthink 0"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
     }
 
     private static uint[] DoorData()
@@ -133,20 +139,20 @@ public sealed class ToolsCommandTests
     }
 }
 
-/// <summary><c>.inspect quests/instance/weather/worldstates</c>, <c>.quest objective</c> and <c>.alter instancedata</c>.</summary>
+/// <summary><c>.inspect quests/instance/weather/worldstates</c>, <c>.quest objective</c>, <c>.alter instancedata/instancedata64</c>, <c>.event info/trigger</c>.</summary>
 public sealed class WorldToolsCommandTests
 {
     [Fact]
     public void NewCommandsHaveTheirSecurityLevels()
     {
         CommandTable table = ChatCommands.CreateTable();
-        foreach (string path in new[] { "inspect quests", "inspect instance", "inspect weather", "inspect worldstates" })
+        foreach (string path in new[] { "inspect quests", "inspect instance", "inspect weather", "inspect worldstates", "event info" })
         {
             Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
             Assert.NotNull(table.Resolve(path, AccountSecurity.GameMaster));
         }
 
-        foreach (string path in new[] { "quest objective", "alter instancedata" })
+        foreach (string path in new[] { "quest objective", "alter instancedata", "alter instancedata64", "event trigger" })
         {
             Assert.Null(table.Resolve(path, AccountSecurity.GameMaster));
             Assert.NotNull(table.Resolve(path, AccountSecurity.Administrator));
@@ -197,6 +203,10 @@ public sealed class WorldToolsCommandTests
         Assert.Contains(instance, l => l.StartsWith("map 0/0 [", StringComparison.Ordinal) && l.Contains(": script ", StringComparison.Ordinal));
         Assert.Contains(instance, l => l.StartsWith("  data: ", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(admin, ".alter instancedata 1"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".alter instancedata64 0"), l => l.Contains("data64 0: 0x", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".alter instancedata64 bogus"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(admin, ".event info 99999"), l => l == "Event not exist!");
+        Assert.Contains(await RunAsync(admin, ".event trigger 99999"), l => l.Contains("99999", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(admin, ".inspect weather"), l => l.StartsWith("Your zone ", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(admin, ".inspect worldstates"), l => l.Contains("world state(s) for map 0 zone", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(admin, ".inspect worldstates x"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
@@ -209,7 +219,7 @@ public sealed class WorldToolsCommandTests
     }
 }
 
-/// <summary><c>.creature spawnmany</c>, <c>.inspect items</c> and <c>.alter durability</c>.</summary>
+/// <summary><c>.creature spawnmany</c>, <c>.gobject spawnmany</c>, <c>.inspect items</c> and <c>.alter durability</c>.</summary>
 public sealed class SpawnItemToolsCommandTests
 {
     [Fact]
@@ -221,13 +231,16 @@ public sealed class SpawnItemToolsCommandTests
             Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
             Assert.NotNull(table.Resolve(path, AccountSecurity.GameMaster));
         }
+
+        Assert.Null(table.Resolve("gobject spawnmany", AccountSecurity.GameMaster));
+        Assert.NotNull(table.Resolve("gobject spawnmany", AccountSecurity.Administrator));
     }
 
     [Fact]
     public async Task CreaturesAreSpawnedInBulkAndItemsListed()
     {
         await using WorldTestHost host = InspectCommandTests.StartWithWolf();
-        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSSPAWN", "Toolsspawn", AccountSecurity.GameMaster);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSSPAWN", "Toolsspawn", AccountSecurity.Administrator);
         await gm.CollectAsync();
         CreatureMapSystem system = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().FindSystem(0)!);
         int before = await host.OnWorldAsync(() => system.Creatures.Count(c => c.Spawn is null));
@@ -240,6 +253,9 @@ public sealed class SpawnItemToolsCommandTests
         Assert.Contains(await RunAsync(gm, ".creature spawnmany 4242424 3"), l => l == "Creature template 4242424 not found.");
         Assert.Contains(await RunAsync(gm, ".creature despawntemp 20"), l => l.StartsWith("Removed 12 temporary", StringComparison.Ordinal));
 
+        Assert.Contains(await RunAsync(gm, ".gobject spawnmany 4242424 3"), l => l == "Game object template 4242424 does not exist.");
+        Assert.Contains(await RunAsync(gm, ".gobject spawnmany 1 99"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+
         Assert.Contains(await RunAsync(gm, ".inspect items"), l => l.StartsWith("Toolsspawn: ", StringComparison.Ordinal) && l.EndsWith(" item(s)", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(gm, ".alter durability 50"), l => l.StartsWith("Toolsspawn: ", StringComparison.Ordinal) && l.Contains("worn item(s) set to 50% durability", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(gm, ".alter durability 150"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
@@ -251,3 +267,48 @@ public sealed class SpawnItemToolsCommandTests
         return await client.CollectChatLinesAsync();
     }
 }
+
+/// <summary><c>.ai waypoints</c>, <c>.inspect aispells/reputation</c> and <c>.alter reputation</c>.</summary>
+public sealed class AiAndReputationToolsCommandTests
+{
+    [Fact]
+    public void NewCommandsHaveTheirSecurityLevels()
+    {
+        CommandTable table = ChatCommands.CreateTable();
+        foreach (string path in new[] { "ai waypoints", "inspect aispells", "inspect reputation", "alter reputation", "debug botthink" })
+        {
+            Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
+            Assert.NotNull(table.Resolve(path, AccountSecurity.GameMaster));
+        }
+    }
+
+    [Fact]
+    public async Task AiWaypointsAiSpellsAndReputationAnswer()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSAI", "Toolsai", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        Creature wolf = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().FindSystem(0)!.Creatures.Last());
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Toolsai")!.Selection = wolf.Guid);
+
+        Assert.Contains(await RunAsync(gm, ".ai waypoints resume"), l => l.EndsWith("has no waypoint path (default); standing idle.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai waypoints 999999"), l => l.EndsWith("has no waypoint path 999999; standing idle.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai waypoints bogus"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+
+        string[] aiSpells = await RunAsync(gm, ".inspect aispells");
+        Assert.Contains(aiSpells, l => l.StartsWith("Young Wolf (entry 299, guid", StringComparison.Ordinal) && l.Contains("has no EventAI or SmartAI spell table", StringComparison.Ordinal));
+
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Toolsai")!.Selection = ObjectGuid.Empty);
+        string[] rep = await RunAsync(gm, ".inspect reputation");
+        Assert.Contains(rep, l => l.StartsWith("Reputation is not available", StringComparison.Ordinal) || l.StartsWith("Toolsai", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".alter reputation 999999 100"), l => l.StartsWith("Reputation is not available", StringComparison.Ordinal) || l == "No faction matches '999999'.");
+        Assert.Contains(await RunAsync(gm, ".alter reputation"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+    }
+
+    private static async Task<string[]> RunAsync(WorldTestClient client, string command)
+    {
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        return await client.CollectChatLinesAsync();
+    }
+}
+

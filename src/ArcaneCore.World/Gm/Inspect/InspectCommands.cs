@@ -265,6 +265,22 @@ public sealed class InspectCommands : ICommandGroup
                 $"melee {ai.MeleeEnabled}, combat movement {ai.CombatMovement}, caster chase distance {ai.CasterChaseDistance:F1}, aggroes on sight {ai.AggroesOnSight}, victim {(ai.Victim is { } v ? Describe(v) : "none")}"));
         }
 
+        if (ai is CreatureEventAI eventAi)
+        {
+            int armed = eventAi.Engine.Holders.Count(h => h.Enabled);
+            int casts = eventAi.Engine.Holders.Count(h => h.Event.Actions.Any(a => a.Type == (byte)EventAiActionType.Cast));
+            context.Reply(string.Create(C,
+                $"eventAI: phase {eventAi.Phase}, {armed}/{eventAi.Engine.Holders.Count} holder(s) armed, {casts} cast row(s), {eventAi.Unsupported.Count} unsupported"));
+        }
+        else if (ai is CreatureSmartAI smartAi)
+        {
+            SmartScript script = smartAi.Script;
+            int active = script.Events.Count(h => h.Active);
+            int casts = script.Events.Count(h => h.Row.ActionType == (byte)SmartAction.Cast);
+            context.Reply(string.Create(C,
+                $"smartAI: phase {script.Phase}, {active}/{script.Events.Count} event(s) active, {script.TimedActionList.Count} timed-list row(s), {casts} cast row(s)"));
+        }
+
         context.Reply(string.Create(C,
             $"home {creature.Home.X:F2} {creature.Home.Y:F2} {creature.Home.Z:F2}, {Distance(creature, creature.Home.X, creature.Home.Y, creature.Home.Z):F1} yards away; movement type {creature.MovementType}, regenerates health {creature.RegeneratesHealth}"));
         return true;

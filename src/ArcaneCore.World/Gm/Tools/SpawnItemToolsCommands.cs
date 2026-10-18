@@ -1,16 +1,19 @@
 using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
-using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Objects;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Tools;
@@ -76,6 +79,79 @@ public sealed class CreatureSpawnManyCommand : ICommandExtension
         }
 
         context.Reply(string.Create(CultureInfo.InvariantCulture, $"Placed {count} temporary {template.Name} (entry {entry}) within {radius:0.#} yards."));
+        return true;
+    }
+}
+
+/// <summary>
+/// <c>.gobject spawnmany #entry #count [#radius] [#despawnSeconds]</c>: place up to 50 temporary game objects of one template spread over a disc around you.
+/// </summary>
+public sealed class GameObjectSpawnManyCommand : ICommandExtension
+{
+    /// <summary>Most game objects one <c>.gobject spawnmany</c> places.</summary>
+    public const int MaxCount = 50;
+
+    public string Path => "gobject";
+
+    public IReadOnlyList<ChatCommand> Children { get; } =
+    [
+        new("spawnmany", AccountSecurity.Administrator,
+            "Syntax: .gobject spawnmany #entry #count [#radius] [#despawnSeconds]\nPlace #count (1-50) temporary game objects of #entry spread evenly over a disc of #radius yards around you (default 10, 1-100) for #despawnSeconds (default 60, 0 = until restart). Not saved.",
+            SpawnMany, RetailLevel: 4),
+    ];
+
+    private static bool SpawnMany(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractUInt32(out uint entry) || entry == 0 || !args.ExtractUInt32(out uint count)
+            || !args.ExtractOptFloat(out float radius, 10f) || !args.ExtractOptUInt32(out uint despawnSeconds, 60) || !args.IsEmpty
+            || count is 0 or > MaxCount || !float.IsFinite(radius) || radius < 1f || radius > 100f || despawnSeconds > 86400)
+        {
+            return false;
+        }
+
+        if (context.IsConsole)
+        {
+            context.Reply("Run this in game: the game objects are placed around you.");
+            return true;
+        }
+
+        if (GmObjectCommands.SystemOf(context) is not { } system)
+        {
+            context.Reply("You are not in a map with game objects.");
+            return true;
+        }
+
+        if (system.FindTemplate(entry) is not { } template)
+        {
+            context.Reply(GmObjectCommands.TemplateMissing(entry));
+            return true;
+        }
+
+        Player me = context.Player;
+        if (me.Map is not { } map)
+        {
+            context.Reply("You are not in a map.");
+            return true;
+        }
+
+        float golden = MathF.PI * (3f - MathF.Sqrt(5f));
+        int placed = 0;
+        for (int i = 0; i < count; i++)
+        {
+            float r = count == 1 ? 0f : radius * MathF.Sqrt((i + 0.5f) / count);
+            float angle = i * golden;
+            float x = me.X + (MathF.Cos(angle) * r), y = me.Y + (MathF.Sin(angle) * r);
+            float z = map.Collision.GetHeight(x, y, me.Z + 5f);
+            if (!float.IsFinite(z) || z <= TerrainTile.InvalidHeightValue + 1f || MathF.Abs(z - me.Z) > 30f) z = me.Z;
+            if (system.Summon(entry, x, y, z, angle, despawnSeconds) is not null)
+            {
+                placed++;
+            }
+        }
+
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"Placed {placed} temporary {template.Name} (entry {entry}) within {radius:0.#} yards (despawn {despawnSeconds} s)."));
         return true;
     }
 }
