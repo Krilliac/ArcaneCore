@@ -228,11 +228,6 @@ public sealed partial class MapCombat
             : Hooks.IsInstanceable(mapId);
 
     /// <summary>
-    /// CMSG_RECLAIM_CORPSE (vmangos HandleReclaimCorpseOpcode): a ghost with a corpse whose
-    /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% (100% in a
-    /// battleground, whose match must be in progress) and the corpse goes away.
-    /// </summary>
-    /// <summary>
     /// Seconds until this ghost may reclaim its corpse, 0 when it may now or has no corpse: the delay <see cref="TryReclaimCorpse"/>
     /// enforces (vmangos HandleReclaimCorpseOpcode, MiscHandler.cpp:589: <c>GetGhostTime() + GetCorpseReclaimDelay() &gt; now</c>), which the client shows from
     /// SMSG_CORPSE_RECLAIM_DELAY.
@@ -249,6 +244,11 @@ public sealed partial class MapCombat
         return Math.Max(0, ready - NowSeconds);
     }
 
+    /// <summary>
+    /// CMSG_RECLAIM_CORPSE (vmangos HandleReclaimCorpseOpcode): a ghost with a corpse whose
+    /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% (100% in a
+    /// battleground, whose match must be in progress) and the corpse goes away.
+    /// </summary>
     public bool TryReclaimCorpse(Player player)
     {
         UnitCombat c = player.Combat;

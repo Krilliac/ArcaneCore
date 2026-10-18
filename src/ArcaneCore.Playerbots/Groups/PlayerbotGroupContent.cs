@@ -117,12 +117,6 @@ internal static class PlayerbotGroupContent
     /// <summary>The smallest raid a raid quest asks for when its row suggests none.</summary>
     internal const int MinRaidSize = 10;
 
-    /// <summary>
-    /// The group a quest asks for (0: one player is enough). A raid quest a raid of its suggested size (<see cref="MinRaidSize"/> when
-    /// it suggests a party or none), a dungeon quest five, an elite quest its suggested size or three, any other quest its suggested
-    /// size when that is more than one. Only a raid quest gets a raid: a raid group's kills credit raid quests alone (vmangos
-    /// Player::KilledMonster, the quest's raid check), so an elite quest suggesting more than five is done by a party of five.
-    /// </summary>
     /// <summary>The most nested reference tables followed (vmangos LootTemplate::Process follows references; the data nests two deep).</summary>
     internal const int MaxReferenceDepth = 5;
 
@@ -194,6 +188,12 @@ internal static class PlayerbotGroupContent
         return inside;
     }
 
+    /// <summary>
+    /// The group a quest asks for (0: one player is enough). A raid quest a raid of its suggested size (<see cref="MinRaidSize"/> when
+    /// it suggests a party or none), a dungeon quest five, an elite quest its suggested size or three, any other quest its suggested
+    /// size when that is more than one. Only a raid quest gets a raid: a raid group's kills credit raid quests alone (vmangos
+    /// Player::KilledMonster, the quest's raid check), so an elite quest suggesting more than five is done by a party of five.
+    /// </summary>
     internal static int QuestGroupSize(QuestTemplate template)
     {
         ArgumentNullException.ThrowIfNull(template);

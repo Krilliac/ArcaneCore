@@ -246,12 +246,6 @@ public sealed class GridContainer
         return true;
     }
 
-    /// <summary>
-    /// Re-index an object after it moved (vmangos <c>Map::PlayerRelocation</c> /
-    /// <c>CreatureCellRelocation</c>). Moving into another grid loads it for active objects; an
-    /// active object entering a different cell re-activates its grid (expiry × 0.1); only a player
-    /// also loads the grids within the activation distance. Returns true when the cell changed.
-    /// </summary>
     /// <summary>Whether <see cref="Relocate"/> would move <paramref name="obj"/> to another cell (no change made).</summary>
     internal bool ChangesCell(WorldObject obj)
         => float.IsFinite(obj.X) && float.IsFinite(obj.Y) && _cells.TryGetValue(obj, out CellCoord cell) && GridDefines.ComputeCellCoord(obj.X, obj.Y) != cell;
@@ -310,6 +304,12 @@ public sealed class GridContainer
         return false;
     }
 
+    /// <summary>
+    /// Re-index an object after it moved (vmangos <c>Map::PlayerRelocation</c> /
+    /// <c>CreatureCellRelocation</c>). Moving into another grid loads it for active objects; an
+    /// active object entering a different cell re-activates its grid (expiry × 0.1); only a player
+    /// also loads the grids within the activation distance. Returns true when the cell changed.
+    /// </summary>
     public bool Relocate(WorldObject obj)
     {
         if (!_cells.TryGetValue(obj, out CellCoord oldCell))

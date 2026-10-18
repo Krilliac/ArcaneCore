@@ -1223,13 +1223,13 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _lootSpellId = 0;
     }
 
+    /// <summary>Targets whose current failure streak holds a refusal other than the TRY_AGAIN skill roll.</summary>
+    private readonly HashSet<ulong> _failedLootNonDice = [];
+
     /// <summary>
     /// The cast waited on is over without reaching its effects (<see cref="SpellCast.Completed"/> false), or the server never started it:
     /// no loot window is coming.
     /// </summary>
-    /// <summary>Targets whose current failure streak holds a refusal other than the TRY_AGAIN skill roll.</summary>
-    private readonly HashSet<ulong> _failedLootNonDice = [];
-
     private bool LootCastFailed(Player player)
     {
         if (_lootCast is not { } cast)

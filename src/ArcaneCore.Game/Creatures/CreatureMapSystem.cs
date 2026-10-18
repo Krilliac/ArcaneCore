@@ -1471,10 +1471,6 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
     /// <summary>
-    /// Snapshot the map's observer ownership after visibility and flush. A newly visible
-    /// moving creature sends its remaining spline next tick, after its create block.
-    /// </summary>
-    /// <summary>
     /// After the visibility pass: every creature a player started to observe since the last call is remembered, and one that is
     /// moving gets a catch-up SMSG_MONSTER_MOVE next tick (<see cref="SendCatchUpMoves"/>), because the create block does not
     /// carry the spline. A player observes a creature exactly when the creature's GUID is in its visible set (the map keeps

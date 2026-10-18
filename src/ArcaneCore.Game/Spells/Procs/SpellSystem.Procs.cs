@@ -750,10 +750,10 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>A triggered cast made by an aura's proc, optionally with explicit base points (vmangos CastCustomSpell with triggeredByAura).</summary>
-    /// <summary>
-    /// <paramref name="procSpell"/> is the spell whose hit made the aura proc: while a PROC_TRIGGER_SPELL aura's cast runs, damage it deals does not
-    /// break that spell's own crowd control (vmangos m_triggeredByParentSpellInfo, Unit.cpp:896-905).
-    /// </summary>
+    /// <param name="procSpell">
+    /// The spell whose hit made the aura proc: while a PROC_TRIGGER_SPELL aura's cast runs, damage it deals does not break that spell's own
+    /// crowd control (vmangos m_triggeredByParentSpellInfo, Unit.cpp:896-905).
+    /// </param>
     internal SpellCastResult CastProcSpell(Unit caster, SpellInfo spell, SpellCastTargets targets, SpellInfo auraSpell, int? basePoints0 = null,
         int? basePoints1 = null, int? basePoints2 = null, SpellInfo? procSpell = null)
     {

@@ -535,11 +535,6 @@ public sealed partial class PlayerInventory
     }
 
     /// <summary>
-    /// vmangos Player::AutoUnequipOffhandIfNeed: with a two-hander worn, the off hand goes to the
-    /// bags. vmangos mails it when nothing fits; there is no mail yet, so it stays worn (CanEquipItem
-    /// already refuses a two-hander whose off hand would not fit, so that is not reached in practice).
-    /// </summary>
-    /// <summary>
     /// vmangos Player::AutoUnequipWeaponsIfNeed (Player.cpp:19697-19710): main hand, off hand and ranged items the
     /// player can no longer use (a weapon skill was lost) go back to the bags. The reference mails an item that
     /// finds no bag space (AutoUnequipItemFromSlot, Player.cpp:19720-19745); there is no mail system here, so such
@@ -563,6 +558,11 @@ public sealed partial class PlayerInventory
         }
     }
 
+    /// <summary>
+    /// vmangos Player::AutoUnequipOffhandIfNeed: with a two-hander worn, the off hand goes to the
+    /// bags. vmangos mails it when nothing fits; there is no mail yet, so it stays worn (CanEquipItem
+    /// already refuses a two-hander whose off hand would not fit, so that is not reached in practice).
+    /// </summary>
     private void AutoUnequipOffhandIfNeeded()
     {
         if (!IsTwoHandUsed || _items[InventorySlots.OffHand] is not { } offHand)
