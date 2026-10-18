@@ -18,7 +18,7 @@ public enum MapStage
     /// <summary>(2)-(4) bounding radii, visibility, values and the flush to each player.</summary>
     Output,
 
-    /// <summary>(5) grid and terrain lifecycles (grid loads spawn objects; terrain tiles are shared caches).</summary>
+    /// <summary>(5) the grid lifecycle (grid loads spawn objects; grid loads and unloads change the reference counts of terrain tiles shared by every instance).</summary>
     Grid,
 
     /// <summary>(6) work scheduled for after the update (far teleports and other cross-map work).</summary>

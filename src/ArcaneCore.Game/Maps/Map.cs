@@ -1019,7 +1019,7 @@ public sealed class Map
         }
     }
 
-    /// <summary>Stages (2)-(6): visibility, values, flush, grid and terrain lifecycles, deferred work.</summary>
+    /// <summary>Stages (2)-(6): visibility, values, flush, grid lifecycle, deferred work.</summary>
     private void UpdateOutput(uint diffMs, MapUpdateDiagnostics? diagnostics, GridLifecycleCounters gridsBefore)
     {
         if (diagnostics is not null)
