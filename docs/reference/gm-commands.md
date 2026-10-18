@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 260 |
-| `Administrator` | 6 | 384 |
+| `GameMaster` | 3 | 267 |
+| `Administrator` | 6 | 391 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -86,6 +86,13 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.go xy` | 2 | GameMaster | declared retail level | Syntax: .go xy #x #y [#mapid] Teleport to ground or water level at (#x, #y) on the current or specified map. |
 | `.go graveyard` | 2 | GameMaster | declared retail level | Syntax: .go graveyard #graveyardId Teleport to the graveyard with the given WorldSafeLocs.dbc id. |
 | `.go taxinode` | 2 | GameMaster | declared retail level | Syntax: .go taxinode #taxinode Teleport to the flight-path node with the given TaxiNodes.dbc id. |
+| `.go target` | 2 | GameMaster | declared retail level | Syntax: .go target Teleport to the selected creature or player on your map. |
+| `.go trigger` | 2 | GameMaster | declared retail level | Syntax: .go trigger #trigger_id [target] Teleport to the area trigger #trigger_id, or with 'target' to where the trigger sends a player. |
+| `.go xyzo` | 2 | GameMaster | declared retail level | Syntax: .go xyzo #x #y #z #orientation [#mapid] Teleport to the given position, facing #orientation. |
+| `.go grid` | 2 | GameMaster | declared retail level | Syntax: .go grid #gridX #gridY [#mapid] Teleport to the ground at the center of the grid. |
+| `.go forward` | 2 | GameMaster | declared retail level | Syntax: .go forward [#yards] Teleport #yards (default 10) ahead of you. |
+| `.go up` | 2 | GameMaster | declared retail level | Syntax: .go up [#yards] Teleport #yards (default 10) up, or down for a negative value. |
+| `.go relative` | 2 | GameMaster | declared retail level | Syntax: .go relative #forward [#left [#up]] Teleport relative to your position and facing; negative values go back, right or down. |
 | `.go creature` | 2 | GameMaster | declared retail level | Syntax: .go creature #spawn_guid\|id #entry\|#name Teleport to a creature spawn. |
 | `.go object` | 2 | GameMaster | declared retail level | Syntax: .go object #spawn_guid\|id #entry\|#name Teleport to a game object spawn. |
 | `.gobject` ... | 2 | GameMaster | declared retail level | Syntax: .gobject $subcommand Type .gobject to see the list of possible subcommands or .help gobject $subcommand to see info on subcommands. |
