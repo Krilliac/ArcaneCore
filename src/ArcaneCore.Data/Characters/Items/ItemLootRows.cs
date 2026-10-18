@@ -96,6 +96,81 @@ public static class ItemLootPersistence
             s => new ItemLootData(s.Gold, [.. byItem[s.ItemGuid].OrderBy(r => r.Slot).Select(r => new ItemLootEntry(r.Slot, r.ItemId, r.Amount, r.Quest))]));
     }
 
+    internal static async Task StageReplaceForOwnerAsync(
+        CharacterDbContext db,
+        int characterId,
+        IReadOnlyList<InventoryItemData> snapshotItems,
+        Dictionary<uint, ItemInstanceRow>.KeyCollection knownItemGuids,
+        bool hasForeignOwnerItems,
+        CancellationToken cancellationToken)
+    {
+        Dictionary<uint, ItemLootData>? wanted = null;
+        for (int i = 0; i < snapshotItems.Count; i++)
+        {
+            ItemInstanceData item = snapshotItems[i].Item;
+            if (item.Loot is { } loot)
+            {
+                wanted ??= new Dictionary<uint, ItemLootData>();
+                wanted[item.Guid] = loot;
+            }
+        }
+
+        if (wanted is null)
+        {
+            if (knownItemGuids.Count == 0)
+            {
+                return;
+            }
+
+            if (!hasForeignOwnerItems)
+            {
+                IQueryable<uint> ownerGuids = db.Set<ItemInstanceRow>()
+                    .Where(i => i.OwnerGuid == characterId)
+                    .Select(i => i.Guid);
+                List<ItemLootStateRow> staleStates = await db.Set<ItemLootStateRow>()
+                    .Where(r => ownerGuids.Contains(r.ItemGuid))
+                    .ToListAsync(cancellationToken).ConfigureAwait(false);
+                List<ItemLootRow> staleRows = await db.Set<ItemLootRow>()
+                    .Where(r => ownerGuids.Contains(r.ItemGuid))
+                    .ToListAsync(cancellationToken).ConfigureAwait(false);
+                if (staleStates.Count > 0)
+                {
+                    db.RemoveRange(staleStates);
+                }
+
+                if (staleRows.Count > 0)
+                {
+                    db.RemoveRange(staleRows);
+                }
+
+                return;
+            }
+        }
+
+        var guids = new List<uint>(knownItemGuids.Count + (wanted?.Count ?? 0));
+        var seen = new HashSet<uint>(knownItemGuids.Count + (wanted?.Count ?? 0));
+        foreach (uint guid in knownItemGuids)
+        {
+            if (seen.Add(guid))
+            {
+                guids.Add(guid);
+            }
+        }
+
+        if (wanted is not null)
+        {
+            foreach (uint guid in wanted.Keys)
+            {
+                if (seen.Add(guid))
+                {
+                    guids.Add(guid);
+                }
+            }
+        }
+
+        await StageReplaceCoreAsync(db, wanted, guids, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Stage the loot of the items of <paramref name="snapshotItems"/> and drop the loot of every other guid in <paramref name="knownItemGuids"/>
     /// (items that left the inventory or whose loot was taken completely), on the caller's context.
@@ -103,23 +178,96 @@ public static class ItemLootPersistence
     public static async Task StageReplaceAsync(
         CharacterDbContext db, IEnumerable<ItemInstanceData> snapshotItems, IReadOnlyCollection<uint> knownItemGuids, CancellationToken cancellationToken)
     {
-        Dictionary<uint, ItemLootData> wanted = snapshotItems.Where(i => i.Loot is not null).ToDictionary(i => i.Guid, i => i.Loot!);
-        List<uint> guids = [.. knownItemGuids.Union(wanted.Keys)];
+        Dictionary<uint, ItemLootData>? wanted = null;
+        foreach (ItemInstanceData item in snapshotItems)
+        {
+            if (item.Loot is { } loot)
+            {
+                wanted ??= new Dictionary<uint, ItemLootData>();
+                wanted[item.Guid] = loot;
+            }
+        }
+
+        if (wanted is null && knownItemGuids.Count == 0)
+        {
+            return;
+        }
+
+        var guids = new List<uint>(knownItemGuids.Count + (wanted?.Count ?? 0));
+        var seen = new HashSet<uint>(knownItemGuids.Count + (wanted?.Count ?? 0));
+        foreach (uint guid in knownItemGuids)
+        {
+            if (seen.Add(guid))
+            {
+                guids.Add(guid);
+            }
+        }
+
+        if (wanted is not null)
+        {
+            foreach (uint guid in wanted.Keys)
+            {
+                if (seen.Add(guid))
+                {
+                    guids.Add(guid);
+                }
+            }
+        }
+
+        await StageReplaceCoreAsync(db, wanted, guids, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task StageReplaceCoreAsync(
+        CharacterDbContext db,
+        Dictionary<uint, ItemLootData>? wanted,
+        List<uint> guids,
+        CancellationToken cancellationToken)
+    {
         if (guids.Count == 0)
         {
             return;
         }
 
-        Dictionary<uint, ItemLootStateRow> states = await db.Set<ItemLootStateRow>().Where(r => guids.Contains(r.ItemGuid))
-            .ToDictionaryAsync(r => r.ItemGuid, cancellationToken).ConfigureAwait(false);
-        List<ItemLootRow> existing = await db.Set<ItemLootRow>().Where(r => guids.Contains(r.ItemGuid)).ToListAsync(cancellationToken).ConfigureAwait(false);
-
-        foreach (ItemLootStateRow stale in states.Values.Where(s => !wanted.ContainsKey(s.ItemGuid)))
+        Dictionary<uint, ItemLootStateRow> states;
+        List<ItemLootRow> existing;
+        if (guids.Count == 1)
         {
-            db.Remove(stale);
+            uint singleGuid = guids[0];
+            states = await db.Set<ItemLootStateRow>().Where(r => r.ItemGuid == singleGuid)
+                .ToDictionaryAsync(r => r.ItemGuid, cancellationToken).ConfigureAwait(false);
+            existing = await db.Set<ItemLootRow>().Where(r => r.ItemGuid == singleGuid)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            states = await db.Set<ItemLootStateRow>().Where(r => guids.Contains(r.ItemGuid))
+                .ToDictionaryAsync(r => r.ItemGuid, cancellationToken).ConfigureAwait(false);
+            existing = await db.Set<ItemLootRow>().Where(r => guids.Contains(r.ItemGuid))
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        db.RemoveRange(existing.Where(r => !wanted.ContainsKey(r.ItemGuid)));
+        foreach (ItemLootStateRow stale in states.Values)
+        {
+            if (wanted is null || !wanted.ContainsKey(stale.ItemGuid))
+            {
+                db.Remove(stale);
+            }
+        }
+
+        for (int i = 0; i < existing.Count; i++)
+        {
+            ItemLootRow row = existing[i];
+            if (wanted is null || !wanted.ContainsKey(row.ItemGuid))
+            {
+                db.Remove(row);
+            }
+        }
+
+        if (wanted is null)
+        {
+            return;
+        }
+
         foreach ((uint guid, ItemLootData loot) in wanted)
         {
             if (!states.TryGetValue(guid, out ItemLootStateRow? state))
@@ -131,10 +279,20 @@ public static class ItemLootPersistence
                 state.Gold = loot.Gold;
             }
 
-            Dictionary<byte, ItemLootRow> have = existing.Where(r => r.ItemGuid == guid).ToDictionary(r => r.Slot);
+            Dictionary<byte, ItemLootRow>? have = null;
+            for (int i = 0; i < existing.Count; i++)
+            {
+                ItemLootRow row = existing[i];
+                if (row.ItemGuid == guid)
+                {
+                    have ??= new Dictionary<byte, ItemLootRow>();
+                    have[row.Slot] = row;
+                }
+            }
+
             foreach (ItemLootEntry entry in loot.Items)
             {
-                if (have.Remove(entry.Slot, out ItemLootRow? row))
+                if (have is not null && have.Remove(entry.Slot, out ItemLootRow? row))
                 {
                     (row.ItemId, row.Amount, row.Quest) = (entry.ItemId, entry.Count, entry.IsQuest);
                 }
@@ -144,7 +302,10 @@ public static class ItemLootPersistence
                 }
             }
 
-            db.RemoveRange(have.Values);
+            if (have is { Count: > 0 })
+            {
+                db.RemoveRange(have.Values);
+            }
         }
     }
 }

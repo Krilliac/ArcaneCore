@@ -125,6 +125,69 @@ public sealed class ItemStoreTests : IAsyncLifetime
         Assert.Equal([new StartingItem(1, 1, 25, 1), new StartingItem(1, 1, 117, 4)], await source.LoadStartingItemsAsync());
     }
 
+    [Fact]
+    public async Task StageReplace_SkipsTrackingUnchangedRows_AndReusesFormattedStrings()
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+
+        var characters = new EfCharacterStore(db);
+        CharacterRecord created = await characters.CreateAsync(new CharacterRecord { AccountId = 3, Name = "SteadySave", Race = 1, Class = 1, Level = 1 });
+
+        uint[] enchants = new uint[21];
+        enchants[0] = 15;
+        var item1 = new ItemInstanceData
+        {
+            Guid = 500,
+            Entry = 25,
+            Count = 1,
+            Durability = 40,
+            Charges = [1, -1, 0, 0, 0],
+            Enchantments = enchants,
+        };
+        var item2 = new ItemInstanceData
+        {
+            Guid = 501,
+            Entry = 6948,
+            Count = 1,
+            Durability = 10,
+        };
+
+        var snapshot = new InventorySnapshot(
+        [
+            new(0, 23, item1),
+            new(0, 24, item2),
+        ]);
+
+        await ItemPersistence.StageReplaceAsync(db, created.Id, snapshot, default);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        // Steady-state save with no modifications leaves ChangeTracker completely empty (no Attach, no Snapshot boxing, no DetectChanges work).
+        await ItemPersistence.StageReplaceAsync(db, created.Id, snapshot, default);
+        Assert.Empty(db.ChangeTracker.Entries());
+
+        // Modifying only Durability on item1 attaches only that single ItemInstanceRow and reuses its Charges/Enchantments string instances.
+        var updatedSnapshot = new InventorySnapshot(
+        [
+            new(0, 23, item1 with { Durability = 39 }),
+            new(0, 24, item2),
+        ]);
+
+        await ItemPersistence.StageReplaceAsync(db, created.Id, updatedSnapshot, default);
+        ItemInstanceRow trackedItem = Assert.Single(db.ChangeTracker.Entries<ItemInstanceRow>()).Entity;
+        Assert.Equal(500u, trackedItem.Guid);
+        Assert.Equal(39u, trackedItem.Durability);
+        Assert.Empty(db.ChangeTracker.Entries<CharacterInventoryRow>());
+
+        string chargesBefore = trackedItem.Charges;
+        string enchantsBefore = trackedItem.Enchantments;
+        trackedItem.CopyFrom(created.Id, item1 with { Durability = 38 });
+        Assert.Same(chargesBefore, trackedItem.Charges);
+        Assert.Same(enchantsBefore, trackedItem.Enchantments);
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();

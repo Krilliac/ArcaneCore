@@ -306,23 +306,33 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
         if (state.ActionButtons is { } buttons)
         {
-            // A diff, not delete-and-reinsert: the rows are loaded tracked, a button whose action and type are unchanged issues
-            // no statement (EF marks a property modified only when its value differs), a removed one is deleted, a new one inserted.
-            List<ActionButtonRow> existing = await db.ActionButtons.Where(b => b.CharacterId == state.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
+            // A diff, not delete-and-reinsert: unchanged buttons stay untracked and issue no statement;
+            // a changed one is attached and updated, a removed one deleted, a new one inserted.
+            List<ActionButtonRow> existing = await db.ActionButtons.AsNoTracking()
+                .Where(b => b.CharacterId == state.Id)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
             var rows = new Dictionary<byte, ActionButtonRow>(existing.Count);
             foreach (ActionButtonRow row in existing)
             {
                 rows[row.Button] = row;
             }
 
-            var wanted = new HashSet<byte>();
+            var wanted = new HashSet<byte>(buttons.Count);
             foreach (ActionButton button in buttons)
             {
                 wanted.Add(button.Button);
                 if (rows.TryGetValue(button.Button, out ActionButtonRow? row))
                 {
-                    row.Action = button.Action;
-                    row.Type = button.Type;
+                    if (row.Action != button.Action || row.Type != button.Type)
+                    {
+                        if (db.Entry(row).State == EntityState.Detached)
+                        {
+                            db.ActionButtons.Attach(row);
+                        }
+
+                        row.Action = button.Action;
+                        row.Type = button.Type;
+                    }
                 }
                 else
                 {

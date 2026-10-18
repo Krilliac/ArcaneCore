@@ -48,7 +48,7 @@ public static class DataServiceCollectionExtensions
     public static IServiceCollection AddAuthDatabase(this IServiceCollection services, IConfiguration configuration)
     {
         AddDatabaseCommon(services, configuration, DatabaseComponent.Auth);
-        services.AddDbContext<AuthDbContext>((provider, builder) =>
+        services.AddDbContextPool<AuthDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth), provider.GetRequiredService<SlowTransactionInterceptor>(),
                 slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider), checkpoint: CheckpointOptions(provider), writeGate: WriteGate(provider)));
 

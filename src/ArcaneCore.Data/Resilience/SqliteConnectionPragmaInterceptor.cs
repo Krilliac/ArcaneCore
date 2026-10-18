@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
+using SQLitePCL;
 
 namespace ArcaneCore.Data.Resilience;
 
@@ -26,9 +28,14 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// <summary>The largest accepted <c>Database:SqliteBusyTimeoutMs</c>.</summary>
     public const int MaxBusyTimeoutMs = 60000;
 
+    private sealed record AppliedPragmaState(int BusyTimeoutMs, long WalJournalSizeLimit, SqliteSynchronousMode Synchronous, bool FileBacked);
+
     private static readonly ConcurrentDictionary<(int Busy, int Write, SqliteSynchronousMode Synchronous, long WalLimit, ILogger? Logger), SqliteConnectionPragmaInterceptor> Instances = new();
+    private static readonly ConditionalWeakTable<sqlite3, AppliedPragmaState> InitializedHandles = new();
 
     private readonly ILogger? _logger;
+    private readonly string _defaultFilePragmaText;
+    private readonly string _defaultMemoryPragmaText;
 
     /// <summary>Files whose configured NORMAL was refused because they are not in WAL mode (value: the journal mode seen); cleared when the file is seen in WAL again.</summary>
     private readonly ConcurrentDictionary<string, string> _fellBack = new(StringComparer.OrdinalIgnoreCase);
@@ -40,6 +47,10 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         Synchronous = synchronous;
         BusyTimeoutMs = busyTimeoutMs;
         WriteTimeoutMs = writeTimeoutMs;
+        _defaultMemoryPragmaText = FormattableString.Invariant($"PRAGMA busy_timeout = {busyTimeoutMs};");
+        _defaultFilePragmaText = walJournalSizeLimit >= 0
+            ? FormattableString.Invariant($"PRAGMA busy_timeout = {busyTimeoutMs}; PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {walJournalSizeLimit};")
+            : _defaultMemoryPragmaText;
     }
 
     /// <summary>
@@ -126,18 +137,26 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     {
         if (connection is SqliteConnection sqlite)
         {
-            using SqliteCommand command = CreatePragma(sqlite);
+            if (TrySkipInitializedHandle(sqlite, out int milliseconds, out bool fileBacked, out long effectiveWalLimit, out sqlite3? handle))
+            {
+                return;
+            }
+
+            using SqliteCommand command = CreatePragma(sqlite, milliseconds, fileBacked);
             command.ExecuteNonQuery();
-            if (Synchronous == SqliteSynchronousMode.Normal && IsFileBacked(sqlite))
+            bool cacheHandle;
+            if (Synchronous == SqliteSynchronousMode.Normal && fileBacked)
             {
                 using SqliteCommand mode = sqlite.CreateCommand();
                 mode.CommandText = "PRAGMA journal_mode;";
-                ApplySynchronous(sqlite, WalIfEmpty(sqlite, mode.ExecuteScalar() as string));
+                cacheHandle = ApplySynchronous(sqlite, WalIfEmpty(sqlite, mode.ExecuteScalar() as string));
             }
             else
             {
-                ApplySynchronous(sqlite, "wal");
+                cacheHandle = ApplySynchronous(sqlite, "wal");
             }
+
+            RecordHandleState(handle, cacheHandle, milliseconds, effectiveWalLimit, fileBacked);
         }
     }
 
@@ -145,19 +164,71 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     {
         if (connection is SqliteConnection sqlite)
         {
-            await using SqliteCommand command = CreatePragma(sqlite);
+            if (TrySkipInitializedHandle(sqlite, out int milliseconds, out bool fileBacked, out long effectiveWalLimit, out sqlite3? handle))
+            {
+                return;
+            }
+
+            await using SqliteCommand command = CreatePragma(sqlite, milliseconds, fileBacked);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            if (Synchronous == SqliteSynchronousMode.Normal && IsFileBacked(sqlite))
+            bool cacheHandle;
+            if (Synchronous == SqliteSynchronousMode.Normal && fileBacked)
             {
                 await using SqliteCommand mode = sqlite.CreateCommand();
                 mode.CommandText = "PRAGMA journal_mode;";
                 string? journalMode = await mode.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
-                ApplySynchronous(sqlite, await WalIfEmptyAsync(sqlite, journalMode, cancellationToken).ConfigureAwait(false));
+                cacheHandle = ApplySynchronous(sqlite, await WalIfEmptyAsync(sqlite, journalMode, cancellationToken).ConfigureAwait(false));
             }
             else
             {
-                ApplySynchronous(sqlite, "wal");
+                cacheHandle = ApplySynchronous(sqlite, "wal");
             }
+
+            RecordHandleState(handle, cacheHandle, milliseconds, effectiveWalLimit, fileBacked);
+        }
+    }
+
+    private bool TrySkipInitializedHandle(SqliteConnection sqlite, out int milliseconds, out bool fileBacked, out long effectiveWalLimit, out sqlite3? handle)
+    {
+        sqlite.DefaultTimeout = ApplyWriteBound(sqlite.DefaultTimeout, WriteTimeoutMs);
+
+        // Never wait inside SQLite longer than the connection's own timeout: that loop checks the clock only between attempts.
+        milliseconds = (int)Math.Min(BusyTimeoutMs, sqlite.DefaultTimeout * 1000L);
+        fileBacked = IsFileBacked(sqlite);
+        effectiveWalLimit = fileBacked && WalJournalSizeLimit >= 0 ? WalJournalSizeLimit : -1;
+        handle = sqlite.Handle;
+        if (handle is not null && !handle.IsInvalid && !handle.IsClosed
+            && InitializedHandles.TryGetValue(handle, out AppliedPragmaState? applied)
+            && applied.BusyTimeoutMs == milliseconds
+            && applied.WalJournalSizeLimit == effectiveWalLimit
+            && applied.Synchronous == Synchronous
+            && applied.FileBacked == fileBacked)
+        {
+            if (Synchronous == SqliteSynchronousMode.Normal)
+            {
+                _fellBack.TryRemove(sqlite.DataSource ?? string.Empty, out _);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private void RecordHandleState(sqlite3? handle, bool cacheHandle, int milliseconds, long effectiveWalLimit, bool fileBacked)
+    {
+        if (handle is null || handle.IsInvalid || handle.IsClosed)
+        {
+            return;
+        }
+
+        if (cacheHandle)
+        {
+            InitializedHandles.AddOrUpdate(handle, new AppliedPragmaState(milliseconds, effectiveWalLimit, Synchronous, fileBacked));
+        }
+        else
+        {
+            InitializedHandles.Remove(handle);
         }
     }
 
@@ -261,7 +332,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// Sets <c>PRAGMA synchronous</c> for a just-opened connection. Fails closed: Normal is applied only when <paramref name="journalMode"/> is "wal" (SQLite documents that NORMAL
     /// outside WAL can corrupt the database on power loss), otherwise the connection stays on FULL and the refusal is logged at ERROR once per file (until the file is seen in WAL again).
     /// </summary>
-    private void ApplySynchronous(SqliteConnection connection, string? journalMode)
+    private bool ApplySynchronous(SqliteConnection connection, string? journalMode)
     {
         bool wal = string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase);
         string dataSource = connection.DataSource ?? string.Empty;
@@ -282,20 +353,25 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = Synchronous == SqliteSynchronousMode.Normal && wal ? "PRAGMA synchronous = NORMAL;" : "PRAGMA synchronous = FULL;";
         command.ExecuteNonQuery();
+        return Synchronous != SqliteSynchronousMode.Normal || wal;
     }
 
-    private SqliteCommand CreatePragma(SqliteConnection connection)
+    private SqliteCommand CreatePragma(SqliteConnection connection, int milliseconds, bool fileBacked)
     {
-        connection.DefaultTimeout = ApplyWriteBound(connection.DefaultTimeout, WriteTimeoutMs);
-
-        // Never wait inside SQLite longer than the connection's own timeout: that loop checks the clock only between attempts.
-        int milliseconds = (int)Math.Min(BusyTimeoutMs, connection.DefaultTimeout * 1000L);
         SqliteCommand command = connection.CreateCommand();
         // When SqliteCheckpointService owns checkpointing, a commit on this connection must not run one (wal_autocheckpoint is per connection and not persistent), and the writer that restarts the WAL
         // after a full checkpoint is an application connection, so journal_size_limit is set here too. Folded into this command so an open costs no extra round trip.
-        command.CommandText = WalJournalSizeLimit >= 0 && IsFileBacked(connection)
-            ? FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds}; PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {WalJournalSizeLimit};")
-            : FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds};");
+        if (milliseconds == BusyTimeoutMs)
+        {
+            command.CommandText = fileBacked ? _defaultFilePragmaText : _defaultMemoryPragmaText;
+        }
+        else
+        {
+            command.CommandText = WalJournalSizeLimit >= 0 && fileBacked
+                ? FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds}; PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {WalJournalSizeLimit};")
+                : FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds};");
+        }
+
         return command;
     }
 }

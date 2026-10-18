@@ -95,9 +95,17 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
     public async Task<Account> CreateAsync(Account account, CancellationToken cancellationToken = default)
     {
         account.Username = account.Username.ToUpperInvariant();
-        db.Accounts.Add(account);
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        return account;
+        try
+        {
+            db.Accounts.Add(account);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return account;
+        }
+        catch
+        {
+            db.ChangeTracker.Clear();
+            throw;
+        }
     }
 
     public async Task UpdateCredentialsAsync(

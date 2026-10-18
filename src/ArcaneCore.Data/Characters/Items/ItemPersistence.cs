@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Items;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace ArcaneCore.Data.Characters.Items;
 
@@ -20,63 +21,208 @@ public static class ItemPersistence
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        // A List, not an array: C# 14 binds array.Contains to the span overload, which EF cannot translate.
-        List<uint> guids = snapshot.Items.Select(i => i.Item.Guid).ToList();
-        Dictionary<uint, ItemInstanceRow> items = await db.Set<ItemInstanceRow>()
-            .Where(r => r.OwnerGuid == characterId || guids.Contains(r.Guid))
-            .ToDictionaryAsync(r => r.Guid, cancellationToken).ConfigureAwait(false);
-        Dictionary<uint, CharacterInventoryRow> slots = await db.Set<CharacterInventoryRow>()
-            .Where(r => r.Guid == characterId || guids.Contains(r.ItemGuid))
-            .ToDictionaryAsync(r => r.ItemGuid, cancellationToken).ConfigureAwait(false);
-
-        var keep = new HashSet<uint>();
-        foreach (InventoryItemData entry in snapshot.Items)
+        Dictionary<uint, ItemInstanceRow>? trackedItems = null;
+        foreach (EntityEntry<ItemInstanceRow> entry in db.ChangeTracker.Entries<ItemInstanceRow>())
         {
-            uint guid = entry.Item.Guid;
+            trackedItems ??= new Dictionary<uint, ItemInstanceRow>();
+            trackedItems[entry.Entity.Guid] = entry.Entity;
+        }
+
+        Dictionary<uint, CharacterInventoryRow>? trackedSlots = null;
+        foreach (EntityEntry<CharacterInventoryRow> entry in db.ChangeTracker.Entries<CharacterInventoryRow>())
+        {
+            trackedSlots ??= new Dictionary<uint, CharacterInventoryRow>();
+            trackedSlots[entry.Entity.ItemGuid] = entry.Entity;
+        }
+
+        List<ItemInstanceRow> ownedItems = await db.Set<ItemInstanceRow>().AsNoTracking()
+            .Where(r => r.OwnerGuid == characterId)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CharacterInventoryRow> ownedSlots = await db.Set<CharacterInventoryRow>().AsNoTracking()
+            .Where(r => r.Guid == characterId)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        int itemCount = snapshot.Items.Count;
+        var items = new Dictionary<uint, ItemInstanceRow>(Math.Max(ownedItems.Count, itemCount));
+        for (int i = 0; i < ownedItems.Count; i++)
+        {
+            ItemInstanceRow row = ownedItems[i];
+            items[row.Guid] = trackedItems is not null && trackedItems.TryGetValue(row.Guid, out ItemInstanceRow? tracked) ? tracked : row;
+        }
+
+        var slots = new Dictionary<uint, CharacterInventoryRow>(Math.Max(ownedSlots.Count, itemCount));
+        for (int i = 0; i < ownedSlots.Count; i++)
+        {
+            CharacterInventoryRow row = ownedSlots[i];
+            slots[row.ItemGuid] = trackedSlots is not null && trackedSlots.TryGetValue(row.ItemGuid, out CharacterInventoryRow? tracked) ? tracked : row;
+        }
+
+        List<uint>? unseenItemGuids = null;
+        List<uint>? unseenSlotGuids = null;
+        var keep = new HashSet<uint>(itemCount);
+        for (int i = 0; i < itemCount; i++)
+        {
+            uint guid = snapshot.Items[i].Item.Guid;
             if (!keep.Add(guid))
             {
                 throw new InvalidOperationException($"item {guid} appears twice in the inventory of character {characterId}");
             }
 
+            if (!items.ContainsKey(guid))
+            {
+                if (trackedItems is not null && trackedItems.TryGetValue(guid, out ItemInstanceRow? trackedItem))
+                {
+                    items[guid] = trackedItem;
+                }
+                else
+                {
+                    unseenItemGuids ??= [];
+                    unseenItemGuids.Add(guid);
+                }
+            }
+
+            if (!slots.ContainsKey(guid))
+            {
+                if (trackedSlots is not null && trackedSlots.TryGetValue(guid, out CharacterInventoryRow? trackedSlot))
+                {
+                    slots[guid] = trackedSlot;
+                }
+                else
+                {
+                    unseenSlotGuids ??= [];
+                    unseenSlotGuids.Add(guid);
+                }
+            }
+        }
+
+        bool hasForeignOwnerItems = trackedItems is not null;
+        if (unseenItemGuids is { Count: 1 })
+        {
+            uint singleGuid = unseenItemGuids[0];
+            ItemInstanceRow? extra = await db.Set<ItemInstanceRow>().AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Guid == singleGuid, cancellationToken).ConfigureAwait(false);
+            if (extra is not null)
+            {
+                items[extra.Guid] = extra;
+                hasForeignOwnerItems = true;
+            }
+        }
+        else if (unseenItemGuids is { Count: > 1 })
+        {
+            foreach (ItemInstanceRow extra in await db.Set<ItemInstanceRow>().AsNoTracking()
+                .Where(r => unseenItemGuids.Contains(r.Guid))
+                .ToListAsync(cancellationToken).ConfigureAwait(false))
+            {
+                items[extra.Guid] = extra;
+                hasForeignOwnerItems = true;
+            }
+        }
+
+        if (unseenSlotGuids is { Count: 1 })
+        {
+            uint singleGuid = unseenSlotGuids[0];
+            CharacterInventoryRow? extra = await db.Set<CharacterInventoryRow>().AsNoTracking()
+                .FirstOrDefaultAsync(r => r.ItemGuid == singleGuid, cancellationToken).ConfigureAwait(false);
+            if (extra is not null)
+            {
+                slots[extra.ItemGuid] = extra;
+            }
+        }
+        else if (unseenSlotGuids is { Count: > 1 })
+        {
+            foreach (CharacterInventoryRow extra in await db.Set<CharacterInventoryRow>().AsNoTracking()
+                .Where(r => unseenSlotGuids.Contains(r.ItemGuid))
+                .ToListAsync(cancellationToken).ConfigureAwait(false))
+            {
+                slots[extra.ItemGuid] = extra;
+            }
+        }
+
+        for (int i = 0; i < itemCount; i++)
+        {
+            InventoryItemData entry = snapshot.Items[i];
+            uint guid = entry.Item.Guid;
+
             if (!items.TryGetValue(guid, out ItemInstanceRow? item))
             {
                 item = new ItemInstanceRow { Guid = guid };
+                item.CopyFrom(characterId, entry.Item);
                 db.Add(item);
             }
-
-            item.CopyFrom(characterId, entry.Item);
+            else if (trackedItems is not null && trackedItems.ContainsKey(guid))
+            {
+                item.CopyFrom(characterId, entry.Item);
+            }
+            else if (!item.Matches(characterId, entry.Item))
+            {
+                db.Attach(item);
+                item.CopyFrom(characterId, entry.Item);
+            }
 
             if (!slots.TryGetValue(guid, out CharacterInventoryRow? slot))
             {
-                slot = new CharacterInventoryRow { ItemGuid = guid };
+                slot = new CharacterInventoryRow
+                {
+                    ItemGuid = guid,
+                    Guid = characterId,
+                    Bag = entry.ContainerGuid,
+                    Slot = entry.Slot,
+                    ItemId = entry.Item.Entry,
+                };
                 db.Add(slot);
             }
-
-            slot.Guid = characterId;
-            slot.Bag = entry.ContainerGuid;
-            slot.Slot = entry.Slot;
-            slot.ItemId = entry.Item.Entry;
+            else if (trackedSlots is not null && trackedSlots.ContainsKey(guid))
+            {
+                slot.Guid = characterId;
+                slot.Bag = entry.ContainerGuid;
+                slot.Slot = entry.Slot;
+                slot.ItemId = entry.Item.Entry;
+            }
+            else if (slot.Guid != characterId || slot.Bag != entry.ContainerGuid || slot.Slot != entry.Slot || slot.ItemId != entry.Item.Entry)
+            {
+                db.Attach(slot);
+                slot.Guid = characterId;
+                slot.Bag = entry.ContainerGuid;
+                slot.Slot = entry.Slot;
+                slot.ItemId = entry.Item.Entry;
+            }
         }
 
-        db.RemoveRange(items.Values.Where(r => !keep.Contains(r.Guid)));
-        db.RemoveRange(slots.Values.Where(r => !keep.Contains(r.ItemGuid)));
+        foreach (ItemInstanceRow row in items.Values)
+        {
+            if (!keep.Contains(row.Guid))
+            {
+                db.Remove(row);
+            }
+        }
+
+        foreach (CharacterInventoryRow row in slots.Values)
+        {
+            if (!keep.Contains(row.ItemGuid))
+            {
+                db.Remove(row);
+            }
+        }
 
         // The selected ammo rides with the inventory (a null selection means "not carried": leave the stored one alone).
         if (snapshot.AmmoId is { } ammo)
         {
-            CharacterItemStateRow? state = await db.Set<CharacterItemStateRow>()
+            CharacterItemStateRow? state = await db.Set<CharacterItemStateRow>().AsNoTracking()
                 .FirstOrDefaultAsync(r => r.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
             if (state is null)
             {
                 db.Add(new CharacterItemStateRow { CharacterId = characterId, AmmoId = ammo });
             }
-            else
+            else if (state.AmmoId != ammo)
             {
+                db.Attach(state);
                 state.AmmoId = ammo;
             }
         }
+
         // The generated loot of container items commits with the inventory (same SaveChanges).
-        await ItemLootPersistence.StageReplaceAsync(db, snapshot.Items.Select(i => i.Item), [.. items.Keys], cancellationToken).ConfigureAwait(false);
+        await ItemLootPersistence.StageReplaceForOwnerAsync(db, characterId, snapshot.Items, items.Keys, hasForeignOwnerItems, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Stage the removal of every item a character owns (character deletion).</summary>

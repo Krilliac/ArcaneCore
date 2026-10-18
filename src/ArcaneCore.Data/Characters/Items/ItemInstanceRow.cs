@@ -32,6 +32,9 @@ public sealed class ItemInstanceRow
     /// <summary>The wrapped item's own ITEM_FIELD_FLAGS (vmangos character_gifts.flags).</summary>
     public uint GiftFlags { get; set; }
 
+    private const string FiveZeroCharges = "0 0 0 0 0";
+    private const string TwentyOneZeroEnchantments = "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+
     public ItemInstanceData ToData() => new()
     {
         Guid = Guid,
@@ -40,15 +43,31 @@ public sealed class ItemInstanceRow
         Creator = CreatorGuid,
         GiftCreator = GiftCreatorGuid,
         Duration = Duration,
-        Charges = ParseList(Charges, int.Parse),
+        Charges = ParseCharges(Charges),
         Flags = Flags,
-        Enchantments = ParseList(Enchantments, uint.Parse),
+        Enchantments = ParseEnchantments(Enchantments),
         RandomPropertyId = RandomPropertyId,
         Durability = Durability,
         TextId = Text,
         GiftEntry = GiftEntry,
         GiftFlags = GiftFlags,
     };
+
+    internal bool Matches(int ownerId, ItemInstanceData data)
+        => OwnerGuid == ownerId
+            && ItemId == data.Entry
+            && CreatorGuid == data.Creator
+            && GiftCreatorGuid == data.GiftCreator
+            && Count == data.Count
+            && Duration == data.Duration
+            && Flags == data.Flags
+            && RandomPropertyId == data.RandomPropertyId
+            && Durability == data.Durability
+            && Text == data.TextId
+            && GiftEntry == data.GiftEntry
+            && GiftFlags == data.GiftFlags
+            && string.Equals(Charges, FormatCharges(data.Charges, Charges), StringComparison.Ordinal)
+            && string.Equals(Enchantments, FormatEnchantments(data.Enchantments, Enchantments), StringComparison.Ordinal);
 
     public void CopyFrom(int ownerId, ItemInstanceData data)
     {
@@ -58,9 +77,9 @@ public sealed class ItemInstanceRow
         GiftCreatorGuid = data.GiftCreator;
         Count = data.Count;
         Duration = data.Duration;
-        Charges = string.Join(' ', data.Charges.Select(c => c.ToString(CultureInfo.InvariantCulture)));
+        Charges = FormatCharges(data.Charges, Charges);
         Flags = data.Flags;
-        Enchantments = string.Join(' ', data.Enchantments.Select(e => e.ToString(CultureInfo.InvariantCulture)));
+        Enchantments = FormatEnchantments(data.Enchantments, Enchantments);
         RandomPropertyId = data.RandomPropertyId;
         Durability = data.Durability;
         Text = data.TextId;
@@ -88,8 +107,124 @@ public sealed class ItemInstanceRow
         entity.HasIndex(r => r.OwnerGuid);
     }
 
-    private static T[] ParseList<T>(string value, Func<string, IFormatProvider, T> parse)
-        => value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(v => parse(v, CultureInfo.InvariantCulture)).ToArray();
+    private static string FormatCharges(IReadOnlyList<int> charges, string existing)
+    {
+        int count = charges.Count;
+        if (count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (count == 5 && (charges[0] | charges[1] | charges[2] | charges[3] | charges[4]) == 0)
+        {
+            return existing == FiveZeroCharges ? existing : FiveZeroCharges;
+        }
+
+        Span<char> buffer = stackalloc char[128];
+        if (TryFormatList(charges, buffer, out int written))
+        {
+            ReadOnlySpan<char> formatted = buffer[..written];
+            return existing.AsSpan().SequenceEqual(formatted) ? existing : new string(formatted);
+        }
+
+        return string.Join(' ', charges.Select(c => c.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    private static string FormatEnchantments(IReadOnlyList<uint> enchantments, string existing)
+    {
+        int count = enchantments.Count;
+        if (count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (count == 21)
+        {
+            uint any = 0;
+            for (int i = 0; i < 21; i++)
+            {
+                any |= enchantments[i];
+            }
+
+            if (any == 0)
+            {
+                return existing == TwentyOneZeroEnchantments ? existing : TwentyOneZeroEnchantments;
+            }
+        }
+
+        Span<char> buffer = stackalloc char[256];
+        if (TryFormatList(enchantments, buffer, out int written))
+        {
+            ReadOnlySpan<char> formatted = buffer[..written];
+            return existing.AsSpan().SequenceEqual(formatted) ? existing : new string(formatted);
+        }
+
+        return string.Join(' ', enchantments.Select(e => e.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    private static bool TryFormatList<T>(IReadOnlyList<T> values, Span<char> destination, out int written)
+        where T : ISpanFormattable
+    {
+        written = 0;
+        for (int i = 0; i < values.Count; i++)
+        {
+            if (i > 0)
+            {
+                if (written >= destination.Length)
+                {
+                    return false;
+                }
+
+                destination[written++] = ' ';
+            }
+
+            if (!values[i].TryFormat(destination[written..], out int charsWritten, default, CultureInfo.InvariantCulture))
+            {
+                return false;
+            }
+
+            written += charsWritten;
+        }
+
+        return true;
+    }
+
+    private static int[] ParseCharges(string value)
+        => string.IsNullOrEmpty(value) ? [] : value == FiveZeroCharges ? new int[5] : ParseList<int>(value.AsSpan());
+
+    private static uint[] ParseEnchantments(string value)
+        => string.IsNullOrEmpty(value) ? [] : value == TwentyOneZeroEnchantments ? new uint[21] : ParseList<uint>(value.AsSpan());
+
+    private static T[] ParseList<T>(ReadOnlySpan<char> span)
+        where T : ISpanParsable<T>
+    {
+        int count = 0;
+        foreach (Range range in span.Split(' '))
+        {
+            if (range.End.Value > range.Start.Value)
+            {
+                count++;
+            }
+        }
+
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var result = new T[count];
+        int index = 0;
+        foreach (Range range in span.Split(' '))
+        {
+            ReadOnlySpan<char> token = span[range];
+            if (!token.IsEmpty)
+            {
+                result[index++] = T.Parse(token, CultureInfo.InvariantCulture);
+            }
+        }
+
+        return result;
+    }
 }
 
 /// <summary>

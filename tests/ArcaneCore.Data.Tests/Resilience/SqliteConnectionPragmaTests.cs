@@ -502,6 +502,91 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         Assert.Equal(300L, await ScalarAsync(sqlite, "PRAGMA busy_timeout"));
     }
 
+    [Fact]
+    public async Task AddAuthDatabase_PoolsAuthDbContextInstancesAcrossScopes()
+    {
+        string auth = Connection("pooled-auth.db");
+        await using ServiceProvider provider = Build(("Database:Provider", "Sqlite"), ("Database:ConnectionString", auth));
+
+        AuthDbContext firstInstance;
+        await using (AsyncServiceScope scope1 = provider.CreateAsyncScope())
+        {
+            firstInstance = scope1.ServiceProvider.GetRequiredService<AuthDbContext>();
+            firstInstance.Accounts.Attach(new ArcaneCore.Kernel.Accounts.Account
+            {
+                Id = 999,
+                Username = "POOLED",
+                Salt = new byte[32],
+                Verifier = new byte[32],
+            });
+            Assert.NotEmpty(firstInstance.ChangeTracker.Entries());
+        }
+
+        await using (AsyncServiceScope scope2 = provider.CreateAsyncScope())
+        {
+            AuthDbContext secondInstance = scope2.ServiceProvider.GetRequiredService<AuthDbContext>();
+            Assert.Same(firstInstance, secondInstance);
+            Assert.Empty(secondInstance.ChangeTracker.Entries());
+        }
+    }
+
+    [Fact]
+    public async Task PooledSqliteHandle_SkipsRedundantPragmaExecutionOnReopen_UntilConfigurationChanges()
+    {
+        string path = Path.Combine(_directory, "pooled-handle-skip.db");
+        string pooledConn = new SqliteConnectionStringBuilder { DataSource = path, Pooling = true, DefaultTimeout = 0 }.ToString();
+        try
+        {
+            SqliteConnectionPragmaInterceptor normalInterceptor = SqliteConnectionPragmaInterceptor.For(5000, 1000, SqliteSynchronousMode.Normal);
+            DbContextOptions<DbContext> normalOptions = new DbContextOptionsBuilder<DbContext>()
+                .UseSqlite(pooledConn)
+                .AddInterceptors(normalInterceptor)
+                .Options;
+
+            await using (var db1 = new DbContext(normalOptions))
+            {
+                await db1.Database.OpenConnectionAsync();
+                var sqlite1 = (SqliteConnection)db1.Database.GetDbConnection();
+                Assert.Equal(1, sqlite1.DefaultTimeout);
+                Assert.Equal("wal", await ScalarAsync(sqlite1, "PRAGMA journal_mode"));
+                Assert.Equal(1000L, await ScalarAsync(sqlite1, "PRAGMA busy_timeout"));
+                Assert.Equal(1L, await ScalarAsync(sqlite1, "PRAGMA synchronous"));
+
+                // Mutate the live handle's busy_timeout directly; a pooled reopen with identical interceptor settings must skip re-issuing PRAGMAs.
+                await ScalarAsync(sqlite1, "PRAGMA busy_timeout = 777");
+                Assert.Equal(777L, await ScalarAsync(sqlite1, "PRAGMA busy_timeout"));
+            }
+
+            await using (var db2 = new DbContext(normalOptions))
+            {
+                await db2.Database.OpenConnectionAsync();
+                var sqlite2 = (SqliteConnection)db2.Database.GetDbConnection();
+                Assert.Equal(1, sqlite2.DefaultTimeout);
+                Assert.Equal(777L, await ScalarAsync(sqlite2, "PRAGMA busy_timeout"));
+            }
+
+            // Reopening the same pooled handle with a different interceptor configuration must re-apply the PRAGMAs.
+            SqliteConnectionPragmaInterceptor fullInterceptor = SqliteConnectionPragmaInterceptor.For(400, 1000, SqliteSynchronousMode.Full);
+            DbContextOptions<DbContext> fullOptions = new DbContextOptionsBuilder<DbContext>()
+                .UseSqlite(pooledConn)
+                .AddInterceptors(fullInterceptor)
+                .Options;
+
+            await using (var db3 = new DbContext(fullOptions))
+            {
+                await db3.Database.OpenConnectionAsync();
+                var sqlite3 = (SqliteConnection)db3.Database.GetDbConnection();
+                Assert.Equal(400L, await ScalarAsync(sqlite3, "PRAGMA busy_timeout"));
+                Assert.Equal(2L, await ScalarAsync(sqlite3, "PRAGMA synchronous"));
+            }
+        }
+        finally
+        {
+            using var clear = new SqliteConnection(pooledConn);
+            SqliteConnection.ClearPool(clear);
+        }
+    }
+
     /// <summary>A connection string for a database file that is already in WAL mode (the mode is persistent in the file).</summary>
     private string WalConnection(string name)
     {
