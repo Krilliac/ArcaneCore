@@ -57,10 +57,11 @@ export function showShortcuts() {
  * @param {import('./viewport.js').Viewport} o.viewport
  * @param {import('./ui/topbar.js').TopBar} o.topbar
  * @param {(side: 'left'|'right') => void} o.toggleRail
+ * @returns {() => void} removes the key listener again
  */
 export function installHotkeys({ app, viewport, topbar, toggleRail }) {
     let returnMode = 'orbit';
-    document.addEventListener('keydown', (e) => {
+    const onKeyDown = (e) => {
         const key = e.key;
         if ((e.ctrlKey || e.metaKey) && !e.altKey && key.toLowerCase() === 'k') {
             e.preventDefault();
@@ -122,5 +123,7 @@ export function installHotkeys({ app, viewport, topbar, toggleRail }) {
                 app.setGroupVisible(toggle.ids, toggle.visible);
             }
         }
-    });
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
 }

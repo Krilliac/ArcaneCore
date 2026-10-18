@@ -46,6 +46,7 @@ export class App {
         this._staleRemote = false;
         this._flushPatch = throttle(() => this.#flush(), 100);
         this._resolved = null;
+        this.stopped = false;
     }
 
     // ------------------------------------------------------------------------------------------------------------
@@ -54,6 +55,9 @@ export class App {
     start() {
         const s = this.socket;
         s.on('state', (state) => {
+            if (this.stopped) {
+                return;
+            }
             this.connection = { ...this.connection, state, id: s.connection };
             if (state !== 'open') {
                 this.connection.message = state === 'unauthorized' ? 'The host refused the token.' : state === 'closed' ? 'Reconnecting to the host.' : 'Connecting.';
@@ -71,10 +75,23 @@ export class App {
         s.on('event', (topic, data) => this.#onEvent(topic, data));
         s.on('capture', (m) => this.captureHandler?.(m));
         this.api.on('unauthorized', () => {
+            if (this.stopped) {
+                return;
+            }
             this.connection = { ...this.connection, state: 'unauthorized', message: 'The host refused the token.' };
             this.events.emit('connection', this.connection);
         });
         s.start();
+    }
+
+    /**
+     * Ends this app for good (the host refused its token): closes the socket, drops a pending view patch and stops
+     * announcing connection changes, so a request still in flight cannot reopen the token gate over a newer app.
+     */
+    stop() {
+        this.stopped = true;
+        this._pending = null;
+        this.socket.stop();
     }
 
     async #onHello(m) {

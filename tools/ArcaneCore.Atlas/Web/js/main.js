@@ -149,7 +149,7 @@ function start(token) {
 
     fill(root, shell);
     viewport.init();
-    installHotkeys({ app, viewport, topbar, toggleRail });
+    const removeHotkeys = installHotkeys({ app, viewport, topbar, toggleRail });
     app.captureHandler = (message) => viewport.handleCaptureRequest(message);
 
     const applyTheme = () => {
@@ -161,7 +161,11 @@ function start(token) {
     applyTheme();
 
     app.events.on('connection', (c) => {
-        if (c.state === 'unauthorized') {
+        if (c.state === 'unauthorized' && !app.stopped) {
+            // Once only: the socket close and every refused request all report it, and a late one must not replace
+            // the app a fresh token has started since.
+            app.stop();
+            removeHotkeys();
             forgetToken(window.sessionStorage);
             viewport.dispose();
             showGate('The Atlas host refused this token. Open the link from "arcane-atlas serve" again, or paste a fresh token.');

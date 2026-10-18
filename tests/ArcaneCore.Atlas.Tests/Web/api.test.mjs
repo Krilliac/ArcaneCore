@@ -346,3 +346,32 @@ test('socket: stop closes cleanly and does not reconnect; a factory that throws 
     assert.equal(Socket.urlFor({ protocol: 'http:', host: '127.0.0.1:5000' }), 'ws://127.0.0.1:5000/api/ws');
     assert.equal(Socket.urlFor({ protocol: 'https:', host: 'atlas.test' }), 'wss://atlas.test/api/ws');
 });
+
+test('app: once stopped, a late refusal from the old token announces nothing', async () => {
+    const { App } = await import('../../../tools/ArcaneCore.Atlas/Web/js/app.js');
+    const { Emitter } = await import('../../../tools/ArcaneCore.Atlas/Web/js/util.js');
+    const api = new Emitter();
+    const socket = new Emitter();
+    socket.connection = null;
+    socket.origin = null;
+    socket.started = 0;
+    socket.stopped = 0;
+    socket.start = () => socket.started++;
+    socket.stop = () => socket.stopped++;
+    const app = new App({ api, socket });
+    const states = [];
+    app.events.on('connection', (c) => states.push(c.state));
+    app.start();
+    assert.equal(socket.started, 1);
+
+    api.emit('unauthorized');
+    assert.deepEqual(states, ['unauthorized']);
+
+    app.stop();
+    assert.equal(app.stopped, true);
+    assert.equal(socket.stopped, 1);
+    // A tile request and the socket close both still in flight when the gate came up: neither may reopen it.
+    api.emit('unauthorized');
+    socket.emit('state', 'unauthorized');
+    assert.deepEqual(states, ['unauthorized']);
+});
