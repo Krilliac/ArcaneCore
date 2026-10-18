@@ -17,6 +17,13 @@ public readonly record struct ServerMailItem(uint Entry, uint Count);
 public sealed record ServerMailRequest(int ReceiverId, uint SenderEntry, string Subject, string Body, uint Money, IReadOnlyList<ServerMailItem> Items,
     uint TemplateId);
 
+/// <summary>
+/// A letter a GM sends with <c>.send mail</c>, <c>.send money</c> or <c>.send items</c> (vmangos MiscCommands.cpp HandleSend*Command):
+/// MAIL_NORMAL from the GM's character (<see cref="SenderId"/>, 0 from the console) with GM stationery, and at most one item
+/// (MAX_MAIL_ITEMS is 1, Mail.h:51).
+/// </summary>
+public sealed record GmMailRequest(int ReceiverId, uint SenderId, string Subject, string Body, uint Money, ServerMailItem? Item);
+
 public sealed partial class EconomyFeature
 {
     /// <summary>
@@ -58,11 +65,53 @@ public sealed partial class EconomyFeature
         }
     }
 
-    private List<MailView>? BuildServerLetters(ServerMailRequest request)
+    /// <summary>
+    /// World thread: send a GM letter (<see cref="GmMailRequest"/>) in one economy operation, its item created new straight into escrow.
+    /// <paramref name="finished"/> gets true once the letter is committed (and delivered to an online receiver); false when the economy
+    /// store is off, the item template is unknown or the commit failed or its outcome is unknown.
+    /// </summary>
+    public void SendGmMail(GmMailRequest request, Action<bool>? finished = null)
     {
-        if (request.ReceiverId <= 0 || request.TemplateId == 0 || (request.Items.Count > 0 && _items is null)) return null;
+        ArgumentNullException.ThrowIfNull(request);
+        List<MailView>? letters = BuildLetters(request.ReceiverId, 0, request.SenderId, request.Subject, request.Body, request.Money,
+            request.Item is { } item ? [item] : []);
+        if (letters is null)
+        {
+            finished?.Invoke(false);
+            return;
+        }
+
+        var changes = new List<EconomyChange>();
+        foreach (MailView letter in letters)
+        {
+            if (letter.Item is { } escrow) changes.Add(new CreateEscrowItem(escrow));
+            changes.Add(new InsertMail(letter.Mail, letter.Body));
+        }
+
+        if (!Start([], changes, outcome =>
+            {
+                bool ok = outcome == EconomyOutcome.After;
+                if (ok) DeliverAll(letters);
+                finished?.Invoke(ok);
+            }))
+        {
+            finished?.Invoke(false);
+        }
+    }
+
+    private List<MailView>? BuildServerLetters(ServerMailRequest request)
+        => request.TemplateId == 0
+            ? null
+            : BuildLetters(request.ReceiverId, request.SenderEntry, (uint)request.ReceiverId, request.Subject, request.Body, request.Money,
+                request.Items);
+
+    // creatureSender != 0: MAIL_CREATURE from that entry, default stationery; otherwise MAIL_NORMAL from normalSender, GM stationery.
+    private List<MailView>? BuildLetters(int receiverId, uint creatureSender, uint normalSender, string subject, string body, uint letterMoney,
+        IReadOnlyList<ServerMailItem> wantedItems)
+    {
+        if (receiverId <= 0 || (wantedItems.Count > 0 && _items is null)) return null;
         var items = new List<ItemInstanceData?>();
-        foreach (ServerMailItem wanted in request.Items)
+        foreach (ServerMailItem wanted in wantedItems)
         {
             if (Templates.Find(wanted.Entry) is not { } template || wanted.Count == 0) return null;
             Item item = Item.Create(_items!.GuidAllocator.Next(), template, ObjectGuid.Empty);
@@ -72,22 +121,22 @@ public sealed partial class EconomyFeature
 
         if (items.Count == 0) items.Add(null);
         long now = Now;
-        bool creature = request.SenderEntry != 0;
+        bool creature = creatureSender != 0;
         var letters = new List<MailView>();
         for (int i = 0; i < items.Count; i++)
         {
             ItemInstanceData? item = items[i];
-            uint money = i == 0 ? request.Money : 0;
-            bool hasBody = request.Body.Length > 0;
+            uint money = i == 0 ? letterMoney : 0;
+            bool hasBody = body.Length > 0;
             (long deliver, long expire) = MailRules.SendTiming(now, item is not null || money > 0, 0, Options);
             var mail = new MailRecord
             {
                 Id = NextMailId(),
                 MessageType = creature ? MailMessageType.Creature : MailMessageType.Normal,
                 Stationery = creature ? MailStationery.Default : MailStationery.Gm,
-                SenderId = creature ? request.SenderEntry : (uint)request.ReceiverId,
-                ReceiverId = request.ReceiverId,
-                Subject = request.Subject,
+                SenderId = creature ? creatureSender : normalSender,
+                ReceiverId = receiverId,
+                Subject = subject,
                 ItemTextId = hasBody ? NextTextId() : 0,
                 ItemGuid = item?.Guid ?? 0,
                 ItemEntry = item?.Entry ?? 0,
@@ -96,7 +145,7 @@ public sealed partial class EconomyFeature
                 DeliverTime = deliver,
                 ExpireTime = expire,
             };
-            letters.Add(new MailView(mail, item) { Body = hasBody ? request.Body : null });
+            letters.Add(new MailView(mail, item) { Body = hasBody ? body : null });
         }
 
         return letters;

@@ -14,9 +14,9 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
 | `Player` | 0 | 7 |
-| `Moderator` | 1 | 24 |
-| `GameMaster` | 3 | 246 |
-| `Administrator` | 6 | 365 |
+| `Moderator` | 1 | 25 |
+| `GameMaster` | 3 | 247 |
+| `Administrator` | 6 | 369 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -282,6 +282,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.whispers` | 1 | Moderator | stored level through the map | Syntax: .whispers on\|off  Enable/disable accepting whispers by GM from players. By default use the World:Chat:GmWhisperingTo setting. |
 | `.pinfo` | 3 | GameMaster | stored level through the map | Syntax: .pinfo [$playername] Show account, level, position, chat-mute and ticket state of the named character (online or not), the selected player, or yourself. |
 | `.respawn` | 3 | GameMaster | declared retail level | Syntax: .respawn [#radius] Respawn the dead creatures and the despawned game objects within #radius yards (default 100) without waiting for their timers. Temporary objects and chests kept by an instance are left alone. |
+| `.send` ... | 1 | Moderator | declared retail level | Syntax: .send $subcommand Type .send to see the list of possible subcommands or .help send $subcommand to see info on subcommands. |
+| `.send items` | 6 | Administrator | declared retail level | Syntax: .send items #playername "#subject" "#text" itemid[:count] Send a letter with one item stack to a player, online or not. |
+| `.send mail` | 1 | Moderator | declared retail level | Syntax: .send mail #playername "#subject" "#text" Send a letter to a player, online or not. |
+| `.send message` | 6 | Administrator | declared retail level | Syntax: .send message $playername $message Show a message from the administrator in the middle of the player's screen. |
+| `.send money` | 6 | Administrator | declared retail level | Syntax: .send money #playername "#subject" "#text" #money Send a letter with money (in copper) to a player, online or not. |
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
 | `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
 | `.damage` | 3 | GameMaster | declared retail level | Syntax: .damage #amount Deal direct physical damage to the selected unit. |
