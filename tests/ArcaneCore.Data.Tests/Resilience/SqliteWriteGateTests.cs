@@ -203,7 +203,7 @@ public sealed class SqliteWriteGateTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => new SqliteSingleWriterOptions { WaitMs = -1 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new SqliteSingleWriterOptions { MaxHoldMs = SqliteSingleWriterOptions.MaxMs + 1 }.Validate());
         new SqliteSingleWriterOptions().Validate();
-        Assert.True(new SqliteSingleWriterOptions().Enabled); // fixes ship on (2026-10-17); false only rolls back
+        Assert.True(new SqliteSingleWriterOptions().Enabled); // a fix: always on (2026-10-17), not a setting
     }
 
     [Fact]

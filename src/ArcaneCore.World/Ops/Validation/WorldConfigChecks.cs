@@ -101,9 +101,6 @@ public sealed class WorldConfigChecks : IConfigCheck
             }
 
             const string singleWriterRange = "0-3600000 milliseconds";
-            Range(issues, configuration, "Database:Sqlite:SingleWriter:WaitMs", 0, 0, SqliteSingleWriterOptions.MaxMs, singleWriterRange + " (default 0: the connection's write bound)");
-            Range(issues, configuration, "Database:Sqlite:SingleWriter:MaxHoldMs", SqliteSingleWriterOptions.DefaultMaxHoldMs, 0, SqliteSingleWriterOptions.MaxMs, singleWriterRange + " (default 60000; 0 never)");
-            Range(issues, configuration, "Database:Sqlite:SingleWriter:WarnWaitMs", SqliteSingleWriterOptions.DefaultWarnWaitMs, 0, SqliteSingleWriterOptions.MaxMs, singleWriterRange + " (default 1000; 0 never)");
             Range(issues, configuration, "Database:Sqlite:SingleWriter:StatsIntervalMs", SqliteSingleWriterOptions.DefaultStatsIntervalMs, 0, SqliteSingleWriterOptions.MaxMs, singleWriterRange + " (default 300000; 0 never)");
         }
 

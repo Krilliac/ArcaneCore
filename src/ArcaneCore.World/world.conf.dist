@@ -39,7 +39,7 @@
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
 #   CREATURES                   68 keys
-#   DATABASE                    30 keys
+#   DATABASE                    26 keys
 #   DIAGNOSTICS                 13 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
@@ -3197,38 +3197,6 @@ Database.Sqlite.Checkpoint.IntervalMs = 2000
 Database.Sqlite.Checkpoint.JournalSizeLimitBytes = 33554432
 
 #
-#    Database.Sqlite.SingleWriter.Enabled
-#        Description: Whether write transactions and autocommit write statements that EF runs
-#                     against a file-backed SQLite database queue on one in-process gate per file
-#                     (default true; false only to roll back). With it on, the dozen background
-#                     write queues of the characters database are handed SQLite's single write lock
-#                     in arrival order instead of polling for it from SQLite's busy handler, which
-#                     removes the "database is locked" failures that came from unfair polling. A
-#                     waiter is bounded by its connection's write bound and then fails with SQLite's
-#                     own busy error.
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#database
-#
-Database.Sqlite.SingleWriter.Enabled = true
-
-#
-#    Database.Sqlite.SingleWriter.MaxHoldMs
-#        Description: A hold older than this (milliseconds, 0..3600000, default 60000; 0 never) is
-#                     released by the next waiter and logged at ERROR: a transaction that was never
-#                     ended (leaked) must not stop every writer. Releasing it only lets the next
-#                     writer try SQLite's lock itself, as it would without the gate.
-#        Type: int
-#        Default: 60000
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#database
-#
-Database.Sqlite.SingleWriter.MaxHoldMs = 60000
-
-#
 #    Database.Sqlite.SingleWriter.StatsIntervalMs
 #        Description: How often (milliseconds, 0..3600000, default 300000; 0 never) each gate logs
 #                     one INFO line with its writes, contended writes, waits, longest hold and
@@ -3240,33 +3208,6 @@ Database.Sqlite.SingleWriter.MaxHoldMs = 60000
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Sqlite.SingleWriter.StatsIntervalMs = 300000
-
-#
-#    Database.Sqlite.SingleWriter.WaitMs
-#        Description: How long (milliseconds, 0..3600000) a writer waits for the gate before it
-#                     fails as busy. 0 (default) uses the connection's own lock-wait bound
-#                     (Database:SqliteWriteTimeoutMs on the characters database, the connection
-#                     string's Default Timeout elsewhere), so the wait a caller sees is the one it
-#                     had before.
-#        Type: int
-#        Default: 0
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#database
-#
-Database.Sqlite.SingleWriter.WaitMs = 0
-
-#
-#    Database.Sqlite.SingleWriter.WarnWaitMs
-#        Description: A writer that waited longer than this (milliseconds, 0..3600000, default 1000;
-#                     0 never) logs one WARN naming the holder it waited behind.
-#        Type: int
-#        Default: 1000
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#database
-#
-Database.Sqlite.SingleWriter.WarnWaitMs = 1000
 
 #
 #    Database.SqliteBusyTimeoutMs

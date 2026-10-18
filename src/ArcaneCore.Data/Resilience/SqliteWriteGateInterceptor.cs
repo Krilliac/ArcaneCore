@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.Data.Resilience;
 
 /// <summary>
-/// Puts EF's SQLite writes behind the file's <see cref="SqliteWriteGate"/> (<c>Database:Sqlite:SingleWriter:Enabled</c>). A transaction EF begins (Microsoft.Data.Sqlite opens it as
+/// Puts EF's SQLite writes behind the file's <see cref="SqliteWriteGate"/> (always on for file-backed SQLite since 2026-10-17). A transaction EF begins (Microsoft.Data.Sqlite opens it as
 /// <c>BEGIN IMMEDIATE</c>, which takes the write lock at once) takes the gate before the BEGIN and gives it back when the transaction is committed, rolled back, fails, is disposed,
 /// or its connection closes. A write statement run outside any transaction (EF's single-statement SaveChanges, ExecuteUpdate/ExecuteDelete with the write fence off, raw SQL) takes it
 /// around the statement. Reads, transactions adopted with <c>UseTransaction</c> (the deferred read snapshots) and statements inside a transaction are left alone.
@@ -430,7 +430,7 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
 
     private void OnStuckReleased(SqliteWriteGate.Hold hold)
         => _logger?.LogError(
-            "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} (longer than Database:Sqlite:SingleWriter:MaxHoldMs {MaxHoldMs} ms; a transaction that was never ended?). The next writer now waits on SQLite's own lock",
+            "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} (longer than the {MaxHoldMs} ms hold bound; a transaction that was never ended?). The next writer now waits on SQLite's own lock",
             Path.GetFileName(hold.Gate.Path), (long)hold.HeldMs, hold.Owner, _options.MaxHoldMs);
 
     // Debug, not a warning: the usual case is the window between Microsoft.Data.Sqlite running COMMIT and EF raising TransactionCommitted (live,

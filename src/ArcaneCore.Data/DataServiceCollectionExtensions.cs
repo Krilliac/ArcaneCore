@@ -136,7 +136,7 @@ public static class DataServiceCollectionExtensions
     }
 
     /// <summary>
-    /// The SQLite single-writer gate interceptor (<c>Database:Sqlite:SingleWriter</c>), or null when it is off. ConfigureProvider attaches it to SQLite contexts only;
+    /// The SQLite single-writer gate interceptor (always on outside tests that turn it off), or null when it is off. ConfigureProvider attaches it to SQLite contexts only;
     /// the gate itself skips memory, read-only and URI databases.
     /// </summary>
     private static SqliteWriteGateInterceptor? WriteGate(IServiceProvider provider)

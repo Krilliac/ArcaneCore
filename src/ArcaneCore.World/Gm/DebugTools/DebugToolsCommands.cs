@@ -272,7 +272,7 @@ public sealed class DebugToolsCommands : ICommandExtension
         IReadOnlyCollection<SqliteWriteGate> gates = SqliteWriteGate.All;
         if (gates.Count == 0)
         {
-            context.Reply("No SQLite write gate is active (Database:Sqlite:SingleWriter is off, or no SQLite database is in use).");
+            context.Reply("No SQLite write gate is active (no file-backed SQLite database has written yet).");
             return true;
         }
 
