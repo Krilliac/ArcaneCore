@@ -196,7 +196,7 @@ that finds the lock taken polls it from SQLite's busy handler (sleeps of 1 to 10
 win again and again while others reach the 5 s write bound and fail as "database is locked" although the total work fits in the time (live
 2026-10-17: 246 locked log entries in 24 h, a 1000-character save backlog with the oldest snapshot 130 s old at 2 PM CT).
 
-With `Database:Sqlite:SingleWriter:Enabled` (off by default) `SqliteWriteGateInterceptor` puts every EF write behind one in-process gate per
+With `Database:Sqlite:SingleWriter:Enabled` (on by default since 2026-10-17; `false` only to roll back) `SqliteWriteGateInterceptor` puts every EF write behind one in-process gate per
 database file (`SqliteWriteGate`, an async FIFO semaphore keyed on the full path):
 
 - A transaction EF begins (`BEGIN IMMEDIATE`, which takes the write lock at once) takes the gate before the BEGIN and gives it back when it is

@@ -3200,19 +3200,19 @@ Database.Sqlite.Checkpoint.JournalSizeLimitBytes = 33554432
 #    Database.Sqlite.SingleWriter.Enabled
 #        Description: Whether write transactions and autocommit write statements that EF runs
 #                     against a file-backed SQLite database queue on one in-process gate per file
-#                     (default false). With it on, the dozen background write queues of the
-#                     characters database are handed SQLite's single write lock in arrival order
-#                     instead of polling for it from SQLite's busy handler, which removes the
-#                     "database is locked" failures that came from unfair polling. A waiter is
-#                     bounded by its connection's write bound and then fails with SQLite's own busy
-#                     error.
+#                     (default true; false only to roll back). With it on, the dozen background
+#                     write queues of the characters database are handed SQLite's single write lock
+#                     in arrival order instead of polling for it from SQLite's busy handler, which
+#                     removes the "database is locked" failures that came from unfair polling. A
+#                     waiter is bounded by its connection's write bound and then fails with SQLite's
+#                     own busy error.
 #        Type: bool
-#        Default: false
+#        Default: true
 #        Allowed: true | false
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#database
 #
-Database.Sqlite.SingleWriter.Enabled = false
+Database.Sqlite.SingleWriter.Enabled = true
 
 #
 #    Database.Sqlite.SingleWriter.MaxHoldMs

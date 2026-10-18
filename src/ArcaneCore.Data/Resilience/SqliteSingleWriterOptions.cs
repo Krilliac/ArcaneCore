@@ -1,7 +1,7 @@
 namespace ArcaneCore.Data.Resilience;
 
 /// <summary>
-/// The in-process single writer of every file-backed SQLite database (<c>Database:Sqlite:SingleWriter</c>): see <see cref="SqliteWriteGate"/>. Off by default; MariaDB, MySQL
+/// The in-process single writer of every file-backed SQLite database (<c>Database:Sqlite:SingleWriter</c>): see <see cref="SqliteWriteGate"/>. On by default; MariaDB, MySQL
 /// and PostgreSQL ignore it. Plain data, read once when a host builds its database contexts; validated by <see cref="Validate"/>.
 /// </summary>
 public sealed class SqliteSingleWriterOptions
@@ -19,11 +19,11 @@ public sealed class SqliteSingleWriterOptions
     public const int MaxMs = 3_600_000;
 
     /// <summary>
-    /// Whether write transactions and autocommit write statements that EF runs against a file-backed SQLite database queue on one in-process gate per file (default false).
+    /// Whether write transactions and autocommit write statements that EF runs against a file-backed SQLite database queue on one in-process gate per file (default true; false only to roll back).
     /// With it on, the dozen background write queues of the characters database are handed SQLite's single write lock in arrival order instead of polling for it from SQLite's
     /// busy handler, which removes the "database is locked" failures that came from unfair polling. A waiter is bounded by its connection's write bound and then fails with SQLite's own busy error.
     /// </summary>
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
 
     /// <summary>
     /// How long (milliseconds, 0..3600000) a writer waits for the gate before it fails as busy. 0 (default) uses the connection's own lock-wait bound

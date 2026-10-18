@@ -4010,11 +4010,11 @@
       "kind": "scalar",
       "elementType": "bool",
       "enumValues": null,
-      "default": "false",
+      "default": "true",
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "Whether write transactions and autocommit write statements that EF runs against a file-backed SQLite database queue on one in-process gate per file (default false). With it on, the dozen background write queues of the characters database are handed SQLite's single write lock in arrival order instead of polling for it from SQLite's busy handler, which removes the \"database is locked\" failures that came from unfair polling. A waiter is bounded by its connection's write bound and then fails with SQLite's own busy error.",
+      "meaning": "Whether write transactions and autocommit write statements that EF runs against a file-backed SQLite database queue on one in-process gate per file (default true; false only to roll back). With it on, the dozen background write queues of the characters database are handed SQLite's single write lock in arrival order instead of polling for it from SQLite's busy handler, which removes the \"database is locked\" failures that came from unfair polling. A waiter is bounded by its connection's write bound and then fails with SQLite's own busy error.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#database",
       "isCollection": false
