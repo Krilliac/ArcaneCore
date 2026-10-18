@@ -103,6 +103,23 @@ foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
     if (-not (Test-Path -LiteralPath $built)) { throw "$built not found: build $Src (Debug) first" }
 }
 
+# The Playerbots pack is not a project reference of the World (it references the World), so building only ArcaneCore.World leaves the
+# copy beside the world executable as it was (CopyPackBesideWorldHost runs only when ArcaneCore.Playerbots builds). Deploying that copy
+# silently ships old bot code: the 2026-10-17 live sweep ran an 11:46 pack under an 18:50 World. Refuse before anything is stopped.
+$packBeside = Join-Path $Src 'src\ArcaneCore.World\bin\Debug\net11.0\ArcaneCore.Playerbots.dll'
+$packBuilt = Join-Path $Src 'src\ArcaneCore.Playerbots\bin\Debug\net11.0\ArcaneCore.Playerbots.dll'
+$packSources = @(Get-ChildItem -Path (Join-Path $Src 'src\ArcaneCore.Playerbots') -Recurse -File -Include *.cs, *.csproj, *.json -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+if (-not (Test-Path -LiteralPath $packBuilt) -or -not (Test-Path -LiteralPath $packBeside)) {
+    throw "the Playerbots pack is not built beside the World: build ArcaneCore.slnx (or src\ArcaneCore.Playerbots) Debug first"
+}
+if ($packSources.Count -gt 0 -and (Get-Item -LiteralPath $packBuilt).LastWriteTimeUtc -lt $packSources[0].LastWriteTimeUtc) {
+    throw "the Playerbots pack is older than its source ($($packSources[0].Name)): build ArcaneCore.slnx (or src\ArcaneCore.Playerbots) Debug first"
+}
+if ((Get-FileHash -LiteralPath $packBuilt).Hash -ne (Get-FileHash -LiteralPath $packBeside).Hash) {
+    throw "the Playerbots pack beside the World differs from its build output: build src\ArcaneCore.Playerbots Debug (it copies itself beside the World)"
+}
+
 function Send-ConsoleCtrl([int]$ProcId, [int]$CtrlEvent) {
     # A helper process attaches to the daemon's console to send the event, so this shell's own console is never the one that gets it.
     # Exit codes: 0 sent, 2 attach failed, 3 GenerateConsoleCtrlEvent failed.
