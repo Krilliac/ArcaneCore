@@ -43,7 +43,7 @@ CI splits the test step into a matrix (`test (Game)`, `test (World)`, `test (Dat
 line on one solution filter of `ArcaneCore.slnx` (`tests/ci/<suite>.slnf`), and the filters together cover every test project exactly once
 (a test checks this, so a new test project must be added to one of them). The mock-client self-test runs in the `Rest` job.
 
-Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors`), not a command-line flag, so a warning anywhere fails the build locally and in CI. That includes broken doc comments: XML documentation is generated so the compiler resolves them (the `.xml` files are not published), so a `<see cref>` that no longer resolves (CS1574) or a `<paramref>` naming a parameter that is gone (CS1734) fails the build; when you rename or move a member, fix the comments that name it. Test projects run serially
+Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors`), not a command-line flag, so a warning anywhere fails the build locally and in CI. That includes broken doc comments: XML documentation is generated so the compiler resolves them (the `.xml` files stay in `obj`, out of build, publish and deploy output), so a `<see cref>` that no longer resolves (CS1574) or a `<paramref>` naming a parameter that is gone (CS1734) fails the build; when you rename or move a member, fix the comments that name it. Test projects run serially
 (`-m:1`) because first-time database fixture start-up has a bounded deadline. The `.trx` files land in `TestResults/` (ignored by git); CI uploads them and `test-report.yml` posts the summary on the PR. A count of 0 tests, or a run that prints no summary line, means the check did not run.
 
 ### Package lock files

@@ -76,19 +76,16 @@ public sealed class ContributingGuideTests
 
     /// <summary>
     /// A cref that names nothing, a <c>paramref</c> that names a gone parameter and badly formed doc XML fail the build only while the
-    /// compiler reads the doc comments, which it does when the documentation file is generated. The three codes switched off are noise
-    /// (no comment, some parameters undocumented, an overload-ambiguous cref); a fourth one added to the list would blind the gate.
+    /// compiler reads the doc comments, which it does when the documentation file is generated. The guide says so, and where the files
+    /// go; <see cref="DocCommentGateTests"/> pins the gate itself.
     /// </summary>
     [Fact]
     public void BrokenDocComments_FailTheBuild_BecauseDocumentationIsGenerated()
     {
         string props = RepoRoot.ReadText("Directory.Build.props");
         Assert.Contains("<GenerateDocumentationFile>true</GenerateDocumentationFile>", props, StringComparison.Ordinal);
-        Assert.Contains("<PublishDocumentationFile>false</PublishDocumentationFile>", props, StringComparison.Ordinal);
-        string[] silenced = [.. Regex.Match(props, "<NoWarn>([^<]*)</NoWarn>", RegexOptions.CultureInvariant).Groups[1].Value
-            .Split(';', StringSplitOptions.RemoveEmptyEntries).Where(code => code != "$(NoWarn)").Order(StringComparer.Ordinal)];
-        string[] expected = ["CS0419", "CS1573", "CS1591"];
-        Assert.Equal(expected, silenced);
+        Assert.Contains("<CopyDocumentationFileToOutputDirectory>false</CopyDocumentationFileToOutputDirectory>", props, StringComparison.Ordinal);
+        Assert.Contains("(the `.xml` files stay in `obj`, out of build, publish and deploy output)", Text, StringComparison.Ordinal);
         Assert.Contains("(CS1574)", Text, StringComparison.Ordinal);
     }
 
