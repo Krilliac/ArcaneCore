@@ -176,8 +176,10 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
         ArgumentNullException.ThrowIfNull(state);
         try
         {
-            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            await DeleteRowsAsync(characterId, cancellationToken).ConfigureAwait(false);
+            // The new rows are tracked and change-detected before the transaction opens, so the characters.db write lock covers only the
+            // three deletes and the inserts, not EF creating and tracking every cooldown and aura row (W9: the skill and set-aside saves
+            // held it seconds that way on the CPU-starved live host, 2026-10-17). ExecuteDelete never touches the change tracker, so the
+            // order does not change what is written; the finally clears the tracker on every path.
             var seen = new HashSet<(byte, uint)>();
             foreach (CharacterSpellCooldownRow row in state.Cooldowns)
             {
@@ -210,6 +212,9 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
                 db.Set<CharacterAuraRow>().Add(copy);
             }
 
+            db.ChangeTracker.DetectChanges();
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await DeleteRowsAsync(characterId, cancellationToken).ConfigureAwait(false);
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
