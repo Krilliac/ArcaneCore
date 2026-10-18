@@ -1568,7 +1568,18 @@ public sealed partial class SpellSystem
         return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell);
     }
 
-    private bool IsSpellReady(UnitSpellState state, SpellInfo spell, uint? itemCategory = null, Item? castItem = null)
+    /// <summary>
+    /// vmangos SpellCaster::IsSpellReady proper (SpellCaster.cpp:2487-2515): <see cref="IsSpellReady(Unit, SpellInfo)"/> without the global
+    /// cooldown, which vmangos keeps apart (HasGCD).
+    /// </summary>
+    public bool IsSpellReadyIgnoringGlobalCooldown(Unit unit, SpellInfo spell)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(spell);
+        return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell, includeGlobal: false);
+    }
+
+    private bool IsSpellReady(UnitSpellState state, SpellInfo spell, uint? itemCategory = null, Item? castItem = null, bool includeGlobal = true)
     {
         ItemSpellCooldown cooldown = ItemSpellCooldowns.Pick(spell, castItem);
         // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
@@ -1595,7 +1606,7 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        return !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
+        return !includeGlobal || !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
     }
 
     /// <summary>
