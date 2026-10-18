@@ -95,11 +95,13 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
 
     private async Task SaveCoreAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
     {
+        // The two JSON columns are serialized before BEGIN, so the characters.db write lock does not cover that work (W9).
+        (string actionBarJson, string spellsJson) = SerializeJson(snapshot);
         await using Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction =
             await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await WriteRowsAsync(db, snapshot, cancellationToken).ConfigureAwait(false);
+            await WriteRowsAsync(db, snapshot, cancellationToken, actionBarJson, spellsJson).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -114,7 +116,8 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
     }
 
     /// <summary>Write <paramref name="snapshot"/> as the character's character_pet row and its cooldowns, inside the caller's transaction.</summary>
-    internal static async Task WriteRowsAsync(CharacterDbContext db, PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
+    internal static async Task WriteRowsAsync(CharacterDbContext db, PersistentPetSnapshot snapshot, CancellationToken cancellationToken,
+        string? actionBarJson = null, string? spellsJson = null)
     {
         PersistentPetRow? row = await db.Set<PersistentPetRow>().SingleOrDefaultAsync(r => r.CharacterId == snapshot.CharacterId, cancellationToken).ConfigureAwait(false);
         row ??= new PersistentPetRow { CharacterId = snapshot.CharacterId };
@@ -122,8 +125,8 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         row.PetNumber = snapshot.PetNumber; row.Entry = snapshot.Entry; row.Level = snapshot.Level;
         row.Experience = snapshot.Experience; row.Health = snapshot.Health; row.Mana = snapshot.Mana;
         row.Happiness = snapshot.Happiness; row.ReactState = snapshot.ReactState; row.IsCurrent = snapshot.IsCurrent;
-        row.ActionBarJson = JsonSerializer.Serialize(snapshot.ActionBar);
-        row.SpellsJson = JsonSerializer.Serialize(snapshot.Spells);
+        row.ActionBarJson = actionBarJson ?? JsonSerializer.Serialize(snapshot.ActionBar);
+        row.SpellsJson = spellsJson ?? JsonSerializer.Serialize(snapshot.Spells);
         row.Name = snapshot.Name;
         row.NameTimestamp = snapshot.NameTimestamp;
         row.RenameAllowed = snapshot.RenameAllowed;
@@ -142,6 +145,10 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         }
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>The character_pet JSON columns of <paramref name="snapshot"/>, for a caller that serializes them before its write transaction.</summary>
+    internal static (string ActionBar, string Spells) SerializeJson(PersistentPetSnapshot snapshot)
+        => (JsonSerializer.Serialize(snapshot.ActionBar), JsonSerializer.Serialize(snapshot.Spells));
 
     public async Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
     {
