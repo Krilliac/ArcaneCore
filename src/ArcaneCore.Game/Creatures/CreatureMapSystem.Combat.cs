@@ -246,6 +246,30 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     }
 
     /// <summary>
+    /// The soft leash as <see cref="IsOutOfThreatArea"/> sees it, for reports (the playerbots' retreat-died line, QA-13): the creature's and
+    /// the target's distance from where the fight began, the threat radius, the leash clock's age in whole seconds (-1 before its first
+    /// look) and whether the target is out of the threat area now. Read-only: it starts no clock. Null when no leash applies.
+    /// </summary>
+    public LeashFacts? GetLeashFacts(Creature creature, Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        ArgumentNullException.ThrowIfNull(target);
+        if ((creature.Template.Behaviour & CreatureBehaviourFlags.NoLeashEvade) != 0 || Map.Combat.Hooks.IsInstanceable(Map.MapId)
+            || !ReferenceEquals(target.Map, creature.Map))
+        {
+            return null;
+        }
+
+        CreatureHome anchor = creature.CombatStart ?? creature.Home;
+        float radius = MathF.Max(GetAttackDistance(creature, target) * 1.5f, _options.ThreatRadius);
+        static float From(WorldObject o, CreatureHome p) => MathF.Sqrt(((o.X - p.X) * (o.X - p.X)) + ((o.Y - p.Y) * (o.Y - p.Y)) + ((o.Z - p.Z) * (o.Z - p.Z)));
+        long age = creature.LeashClock is { } clock ? (_clockMs / 1000) - clock.Seconds : -1;
+        bool outOfArea = !WithinDistance3d(creature, anchor, radius) && !WithinDistance3d(target, anchor, radius)
+            && age >= 0 && age > _options.LeashExtensionSeconds;
+        return new LeashFacts(From(creature, anchor), From(target, anchor), radius, age, outOfArea);
+    }
+
+    /// <summary>
     /// vmangos WorldObject::IsWithinDist3d(x, y, z, dist) (Objects/Object.cpp:1712-1721) with its default SizeFactor::BoundingRadius: the
     /// object's own bounding radius is added to the distance, so a large creature leashes a little later than its centre would.
     /// </summary>
@@ -443,3 +467,6 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         => target.IsAlive && ReferenceEquals(target.Map, Map)
             && Map.Combat.Hooks.CanAttack(creature, target);
 }
+
+/// <summary>The soft leash of one creature against one target (<see cref="CreatureMapSystem.GetLeashFacts"/>).</summary>
+public readonly record struct LeashFacts(float CreatureFromStart, float TargetFromStart, float Radius, long ClockAgeSeconds, bool OutOfArea);

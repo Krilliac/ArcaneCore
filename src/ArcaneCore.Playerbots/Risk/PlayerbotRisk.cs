@@ -1182,6 +1182,7 @@ internal sealed class PlayerbotRisk
     private bool _refusedPending;
     private RetreatPlan? _activePlan;
     private Vector3 _retreatFrom;
+    private string? _retreatAttackers;
 
     /// <summary>A retreat ended (by <see cref="UpdateRetreat"/> or by the bot's death in <see cref="OnDeath"/>): remember the flight and count the outcome. Gated on <see cref="Enabled"/> in one place.</summary>
     private void NoteRetreatEnd(Player player, string? outcome)
@@ -1206,10 +1207,38 @@ internal sealed class PlayerbotRisk
         uint elapsed = Retreat.StartedMs == 0 ? 0 : unchecked(_session.World.NowMs - Retreat.StartedMs);
         float ran = Vector3.Distance(_retreatFrom, new Vector3(player.X, player.Y, player.Z));
         string actual = string.Create(CultureInfo.InvariantCulture, $"died after {elapsed / 1000f:F1} s, {ran:F0} yd from the start");
+        actual += "; last seen " + (_retreatAttackers ?? "attackers unknown");
+        _retreatAttackers = null;
         return _activePlan is not { } plan
             ? $"not weighed; {actual}"
             : string.Create(CultureInfo.InvariantCulture,
                 $"began at {plan.HealthPct:F0}% health after {plan.FoughtSeconds:F1} s of fight, predicted {plan.PredictedShare:F2} of health lost over a {plan.RunSeconds:F1} s run (leash floor {plan.LeashSeconds:F1} s, from-behind x{plan.FleeFactor:F2}); {actual}");
+    }
+
+    /// <summary>
+    /// Who was on the bot when it died, against the soft leash (QA-13: on the 21:11 pack bots died 85 to 130 yd from where the retreat
+    /// began, past the threat radius): each creature attacking it (up to three), whether the bot had fled from it or it joined on the
+    /// run, its and the bot's distance from where its fight began, the threat radius and the leash clock's age.
+    /// </summary>
+    private string DescribeAttackers(Player player)
+    {
+        CreatureMapSystem? creatures = player.Map?.FindUpdater<CreatureMapSystem>();
+        var parts = new List<string>();
+        int count = 0;
+        foreach (Unit unit in player.Combat.Attackers)
+        {
+            if (unit is not Creature creature) continue;
+            count++;
+            if (parts.Count == 3) continue;
+            bool fled = Array.Exists(_fledFrom, f => f.Guid == creature.Guid);
+            string leash = creatures?.GetLeashFacts(creature, player) is { } facts
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"start {facts.CreatureFromStart:F0}/{facts.TargetFromStart:F0} yd of r{facts.Radius:F0}, clock {facts.ClockAgeSeconds} s{(facts.OutOfArea ? ", out" : "")}")
+                : "no leash";
+            parts.Add($"{creature.Entry}{(fled ? " fled" : " new")} ({leash})");
+        }
+
+        return $"attackers {count} [{string.Join("; ", parts)}]";
     }
 
     /// <summary>
@@ -1343,6 +1372,8 @@ internal sealed class PlayerbotRisk
     internal bool UpdateRetreat(Player player, uint interval)
     {
         if (!Retreat.Active) return false;
+        // The attackers while the bot still lives: at its death combat is already over (the retreat-died line, QA-13).
+        if (player.IsAlive && Enabled) _retreatAttackers = DescribeAttackers(player);
         if (Retreat.Update(player, interval)) return true;
         NoteRetreatEnd(player, Retreat.Outcome);
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
