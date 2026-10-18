@@ -79,20 +79,6 @@ public sealed class HeartbeatResistTests
     }
 
     [Fact]
-    public void TheOption_Off_KeepsTheFullDuration()
-    {
-        using SpellTestKit kit = Kit();
-        kit.System.AuraOptions = new AuraOptions { HeartbeatResist = false };
-        kit.System.Random = new FixedRandom(0.001f, 0);
-        (Player caster, _) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 5, 0);
-        Assert.True(kit.System.AddAura(victim, Stun, caster: caster));
-
-        kit.Advance(19_800);
-        Assert.True(kit.System.HasAura(victim, Stun));
-    }
-
-    [Fact]
     public void ACreaturesStun_RollsTheCastersMissChanceEveryFiveSeconds_AndFearHasNoPveHeartbeat()
     {
         using SpellTestKit kit = Kit();

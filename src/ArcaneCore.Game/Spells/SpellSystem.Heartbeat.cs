@@ -28,7 +28,7 @@ public sealed partial class SpellSystem
     {
         holder.HeartbeatRandValue = 0f;
         holder.PveHeartbeatTimer = -1;
-        if (!AuraOptions.HeartbeatResist || holder.IsPermanent)
+        if (holder.IsPermanent)
         {
             return;
         }
