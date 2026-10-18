@@ -134,6 +134,7 @@ public sealed partial class GameObjectMapSystem
                     go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
                     go.System = this;
                     _objects[go.Guid] = go;
+                    ObjectsChanged();
                     go.ClearChangedFields();
                     Map.AddObject(go, active: true);
                 }

@@ -308,6 +308,7 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.SetUInt32(UpdateFields.ObjectFieldEntry, template.Entry);
+        _templateMasterCache.Clear(); // a template master is matched by its entry
         uint displayId = Creature.ChooseDisplayId(template, _random);
         creature.DisplayId = displayId;
         creature.NativeDisplayId = displayId;

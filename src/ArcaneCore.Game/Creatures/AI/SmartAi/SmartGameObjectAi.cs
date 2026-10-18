@@ -19,6 +19,9 @@ public sealed class SmartGameObjectAi(Func<SmartScriptCatalog> catalog) : IGameO
 
     public bool HandlesAny => catalog().HasGameObjectRows;
 
+    /// <summary>The catalog itself: an object's answer changes only when the catalog is replaced.</summary>
+    public object? HandlesKey => catalog();
+
     public bool Handles(GameObject go)
     {
         ArgumentNullException.ThrowIfNull(go);

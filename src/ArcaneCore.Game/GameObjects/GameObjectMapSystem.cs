@@ -1207,6 +1207,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _objects.Remove(go.Guid);
+        ObjectsChanged();
         IndexRitual(go, tracked: false);
         Loot?.ForgetLoot(go);
         _questFlagsSent.Remove(go.Guid);
@@ -1430,6 +1431,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
         go.System = this;
         _objects[go.Guid] = go;
+        ObjectsChanged();
         IndexRitual(go, tracked: true);
         list.Add(go);
         ConfigureQuestFlags(go);
@@ -1508,6 +1510,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
 
             _objects.Remove(go.Guid);
+            ObjectsChanged();
             IndexRitual(go, tracked: false);
             _questFlagsSent.Remove(go.Guid);
             _despawnAt.Remove(go.Guid);
@@ -1544,6 +1547,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         go.System = this;
         _objects[go.Guid] = go;
+        ObjectsChanged();
         IndexRitual(go, tracked: true);
         GridListOf(go.X, go.Y).Add(go);
         ConfigureQuestFlags(go);

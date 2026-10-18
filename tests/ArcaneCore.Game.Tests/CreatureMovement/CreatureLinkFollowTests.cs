@@ -70,4 +70,35 @@ public sealed class CreatureLinkFollowTests
             Assert.NotEqual(MovementGeneratorType.Follow, system.Creatures.Single(c => c.Entry == 390).Motion.CurrentType);
         }
     }
+
+    [Fact]
+    public void TemplateSlave_OfADeadMaster_FindsANewMasterOnceAnotherCreatureShowsAsTheMasterEntry()
+    {
+        // The template-master search is remembered while the map's creatures and entries stay the same; an entry rewrite must forget it.
+        CreatureContent content = new(
+            [Template(330) with { Civilian = true }, Template(390) with { Civilian = true }, Template(600) with { Civilian = true }],
+            [Spawn(1, 330, 0, 0), Spawn(2, 390, 8, 0), Spawn(3, 600, 5, 0)], [], [], [],
+            templateLinks: [new CreatureTemplateLink(390, 0, 330, 0x200, 50)]);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Creature master = system.Creatures.Single(c => c.Entry == 330);
+            Creature slave = system.Creatures.Single(c => c.Entry == 390);
+            Creature other = system.Creatures.Single(c => c.Entry == 600);
+            Run(world, 100);
+            Assert.Equal(MovementGeneratorType.Follow, slave.Motion.CurrentType);
+
+            master.Health = 1;
+            master.Map!.Combat.Kill(player, master);
+            Run(world, 100);
+            Assert.NotEqual(MovementGeneratorType.Follow, slave.Motion.CurrentType);
+            Run(world, 100); // the dead master is the remembered answer now
+            Assert.NotEqual(MovementGeneratorType.Follow, slave.Motion.CurrentType);
+
+            Assert.True(system.ShowAsEntry(other, 330));
+            Run(world, 100);
+            Assert.Equal(MovementGeneratorType.Follow, slave.Motion.CurrentType);
+        }
+    }
 }

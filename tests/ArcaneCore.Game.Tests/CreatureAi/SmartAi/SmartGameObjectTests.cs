@@ -86,6 +86,56 @@ public sealed class SmartGameObjectTests
         Assert.Empty(rig.ObjectSpells.Casts);
     }
 
+    private sealed class KeyedFallback(uint entry) : IGameObjectFallbackAi
+    {
+        public object Key { get; set; } = new();
+        public int Asked { get; private set; }
+        public int Updates { get; private set; }
+        public uint HandledEntry { get; set; } = entry;
+        public bool HandlesAny => true;
+        public object? HandlesKey => Key;
+
+        public bool Handles(GameObject go)
+        {
+            Asked++;
+            return go.Entry == HandledEntry;
+        }
+
+        public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+
+        public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs) => Updates++;
+    }
+
+    [Fact]
+    public void AFallbackWithAKey_IsAskedPerObjectOnlyWhenTheKeyOrTheObjectsChange()
+    {
+        using SmartRig rig = Start([], [Go(1, Entry, 0, 10), Go(2, SmartRig.ObjectEntry2, 0, 12), Go(3, SmartRig.ObjectEntry2, 0, 14)]);
+        var fallback = new KeyedFallback(Entry);
+        rig.Objects!.FallbackAi = fallback;
+
+        rig.World.RunTick(10);
+        int asked = fallback.Asked;
+        Assert.True(asked >= 3);
+        Assert.Equal(1, fallback.Updates);
+        rig.World.RunTick(10);
+        rig.World.RunTick(10);
+        Assert.Equal(asked + 2, fallback.Asked); // only the one scripted object is asked again, by its own update
+        Assert.Equal(3, fallback.Updates);
+
+        // A new key: every object is asked again, and the answer may differ.
+        fallback.HandledEntry = SmartRig.ObjectEntry2;
+        fallback.Key = new object();
+        rig.World.RunTick(10);
+        Assert.Equal(5, fallback.Updates); // the two objects of the other entry
+
+        // A registered script for an entry is picked up on the next update too.
+        var registered = new CountingAi();
+        rig.Objects.RegisterAi(Entry, registered);
+        rig.World.RunTick(10);
+        Assert.Equal(1, registered.Updates);
+        Assert.Equal(7, fallback.Updates);
+    }
+
     [Fact]
     public void AiInitThenJustCreated_FireOnceWhenTheScriptStarts()
     {

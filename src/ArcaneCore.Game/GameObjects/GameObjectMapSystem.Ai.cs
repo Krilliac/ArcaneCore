@@ -68,6 +68,12 @@ public interface IGameObjectFallbackAi : IGameObjectAi
 
     /// <summary>Whether this script can run any object at all (false lets the map skip walking its objects every update).</summary>
     bool HandlesAny { get; }
+
+    /// <summary>
+    /// What <see cref="Handles"/> answers from: while it stays the same instance an object's answer stays the same, so the map remembers which
+    /// of its objects run a script instead of asking for every object every update. Null (the default) means ask every time.
+    /// </summary>
+    object? HandlesKey => null;
 }
 
 /// <summary>The object scripts by entry and the little a script may do to its object.</summary>
@@ -76,16 +82,47 @@ public sealed partial class GameObjectMapSystem
     private readonly Dictionary<uint, IGameObjectAi> _ais = [];
 
     /// <summary>Run <paramref name="ai"/> for every object of <paramref name="entry"/> in this map (a later registration replaces the earlier one).</summary>
-    public void RegisterAi(uint entry, IGameObjectAi ai) => _ais[entry] = ai ?? throw new ArgumentNullException(nameof(ai));
+    public void RegisterAi(uint entry, IGameObjectAi ai)
+    {
+        _ais[entry] = ai ?? throw new ArgumentNullException(nameof(ai));
+        _aiObjectsStale = true;
+    }
 
     /// <summary>Stop running the script of <paramref name="entry"/>.</summary>
-    public void UnregisterAi(uint entry) => _ais.Remove(entry);
+    public void UnregisterAi(uint entry)
+    {
+        _ais.Remove(entry);
+        _aiObjectsStale = true;
+    }
 
     /// <summary>The script that runs an object whose entry has none registered (see <see cref="IGameObjectFallbackAi"/>); null for none.</summary>
-    public IGameObjectFallbackAi? FallbackAi { get; set; }
+    public IGameObjectFallbackAi? FallbackAi
+    {
+        get => _fallbackAi;
+        set
+        {
+            _fallbackAi = value;
+            _aiObjectsStale = true;
+        }
+    }
+
+    private IGameObjectFallbackAi? _fallbackAi;
+
+    /// <summary>
+    /// The objects that run a script, in <c>_objects</c> order: an object's script follows from its entry and spawn (both fixed), the registered
+    /// scripts and the fallback's <see cref="IGameObjectFallbackAi.HandlesKey"/>, so the list is rebuilt only when one of those or the object set
+    /// changes. Asking every object of a map every update was 10% of map work on live (thousands of objects, a handful scripted).
+    /// </summary>
+    private readonly List<GameObject> _aiObjects = [];
+
+    private bool _aiObjectsStale = true;
+    private object? _aiObjectsKey;
+
+    /// <summary>The object set changed: the scripted objects are found again on the next update.</summary>
+    private void ObjectsChanged() => _aiObjectsStale = true;
 
     private IGameObjectAi? AiOf(GameObject go)
-        => _ais.GetValueOrDefault(go.Entry) ?? (FallbackAi?.Handles(go) == true ? FallbackAi : null);
+        => _ais.GetValueOrDefault(go.Entry) ?? (_fallbackAi?.Handles(go) == true ? _fallbackAi : null);
 
     /// <summary>The script that runs <paramref name="go"/>: its registered one, else the fallback when it handles the object, else null.</summary>
     public IGameObjectAi? AiFor(GameObject go)
@@ -101,10 +138,28 @@ public sealed partial class GameObjectMapSystem
             return;
         }
 
+        object? key = _fallbackAi?.HandlesKey;
+        if (_aiObjectsStale || !ReferenceEquals(key, _aiObjectsKey) || (key is null && _fallbackAi is not null))
+        {
+            _aiObjects.Clear();
+            foreach (GameObject go in _objects.Values)
+            {
+                if (AiOf(go) is not null) _aiObjects.Add(go);
+            }
+
+            _aiObjectsKey = key;
+            _aiObjectsStale = false;
+        }
+
+        if (_aiObjects.Count == 0)
+        {
+            return;
+        }
+
         // A snapshot (an AI may spawn or despawn objects), into a reused buffer: a fresh array per map per tick was 20 MB per 30 s on live.
         List<GameObject> snapshot = _aiUpdateBuffer is { Count: 0 } idle ? idle : [];
         _aiUpdateBuffer = null;
-        snapshot.AddRange(_objects.Values);
+        snapshot.AddRange(_aiObjects);
         try
         {
             foreach (GameObject go in snapshot)

@@ -23,6 +23,14 @@ public sealed partial class CreatureMapSystem
     /// <summary>The creatures whose link (own or by entry) carries FLAG_FOLLOW; stays empty unless the content has a follow link at all.</summary>
     private readonly HashSet<Creature> _followSlaves = [];
 
+    /// <summary>
+    /// <see cref="FindTemplateMaster"/>'s answer per template-linked slave, null included. The answer depends only on which creatures stand
+    /// for which spawn guid and on their entries, so it holds until <see cref="IndexCreature"/>, <see cref="UnindexCreature"/> or
+    /// <see cref="RefreshFollowSlave"/> (an entry rewrite) runs, and each of them clears it. A slave whose master is dead or not loaded
+    /// rescanned every spawn of the map each tick before (6% of map work on live).
+    /// </summary>
+    private readonly Dictionary<Creature, Creature?> _templateMasterCache = [];
+
     /// <summary>The creature_linking flags of a creature: its spawn's own link first, then its entry's on this map (CreatureLinkingMgr.cpp:310-326).</summary>
     private uint LinkFlags(Creature creature, out CreatureLink? link, out CreatureTemplateLink? template)
     {
@@ -50,6 +58,7 @@ public sealed partial class CreatureMapSystem
     /// <summary>Record a creature that has just entered <c>_creatures</c> in the spawn-guid index and, when it follows, the follower set.</summary>
     internal void IndexCreature(Creature creature)
     {
+        _templateMasterCache.Clear();
         if (creature.Spawn is { } spawn)
         {
             if (!_bySpawnGuid.TryAdd(spawn.Guid, creature) && !ReferenceEquals(_bySpawnGuid[spawn.Guid], creature))
@@ -74,6 +83,7 @@ public sealed partial class CreatureMapSystem
     /// <summary>Drop a creature that is leaving <c>_creatures</c> from the indexes; a later creature of the same spawn guid takes its place.</summary>
     internal void UnindexCreature(Creature creature)
     {
+        _templateMasterCache.Clear();
         _followSlaves.Remove(creature);
         _linkedFollowerMaster.Remove(creature.Guid);
         if (creature.Spawn is not { } spawn) return;
@@ -102,6 +112,7 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     internal void RefreshFollowSlave(Creature creature)
     {
+        _templateMasterCache.Clear();
         if (!_content.HasFollowLinks || !_creatures.TryGetValue(creature.Guid, out Creature? member) || !ReferenceEquals(member, creature)) return;
         if ((LinkFlags(creature, out _, out _) & LinkFollow) != 0) _followSlaves.Add(creature);
         else _followSlaves.Remove(creature);
@@ -139,7 +150,11 @@ public sealed partial class CreatureMapSystem
             }
             else
             {
-                master = FindTemplateMaster(slave, spawn, template!);
+                if (!_templateMasterCache.TryGetValue(slave, out master))
+                {
+                    master = FindTemplateMaster(slave, spawn, template!);
+                    _templateMasterCache[slave] = master;
+                }
             }
 
             if (master is null || !master.IsAlive || !slave.IsAlive)
