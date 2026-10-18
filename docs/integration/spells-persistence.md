@@ -76,7 +76,7 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   rolls replace the attack-power part at the weapon speed with the normalized speed
   (`NormalizedWeaponSpeed`, default 2.4 one-hand / 2.8 ranged); armor, crit ×2.
 - `HEALTH_LEECH`: damage, then the caster heals dealt × EffectMultipleValue.
-- `ENVIRONMENTAL_DAMAGE`: school damage that never crits.
+- `ENVIRONMENTAL_DAMAGE`: school damage that never crits (superseded by [locomotion.md](../areas/locomotion.md#slice-3-environmental-damage-delivered): a player takes the spell as `DAMAGE_FIRE` through `EnvironmentalDamage.Apply`, and any other unit takes no damage).
 - `DISPEL`: up to the effect value random auras of the dispel type — harmful from friends,
   beneficial from enemies; dispel-only spells fail CheckCast with `NothingToDispel`.
 - `INTERRUPT_CAST`: a cast with a cast bar or a channel whose PreventionType is SILENCE is

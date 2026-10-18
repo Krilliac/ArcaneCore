@@ -9,7 +9,7 @@
   at its console window and over its control pipe (off by default; docs/areas/server-console.md); this script uses none of them.
 
     1. checks every command line (a GM command '.x', a '# comment', '#wait N' to pause N seconds, or '#waitfor N <regex>' to wait up
-       to N seconds for a log line that matches) and refuses the run otherwise;
+       to N seconds for a log line that matches; arcane-mock's own '[<endpoint>] > <command>' echo of a sent line does not count) and refuses the run otherwise;
     2. reads the operator account's security level (arcane-account list), so it can be restored exactly;
     3. sets a fresh random password (arcane-account set-password --password-stdin: the password goes through standard input, never
        the command line) and promotes the account to Administrator (arcane-account set-gmlevel);

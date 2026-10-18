@@ -14,7 +14,7 @@ Namespace `ArcaneCore.Game.Maps.Collision`:
 | `IPathfinder` | World-wide path queries (vmangos `PathFinder`): `FindPath(mapId, start, end, PathOptions?)` → `PathResult(PathType, Points)`. |
 | `OpenLineOfSight`, `StraightLinePathfinder` | Defaults without data: everything in sight; straight line flagged `Normal` + `NotUsingPath`. |
 | `WorldCollision.Of(world)` | Side table holding the world's two services; `Install(los, pathfinder)` replaces them. |
-| `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(a, b)` (eye height 2 yd), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`. |
+| `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(source, target)` (from `EyeHeightOf(source)` — `Unit.CollisionHeight` for a unit, `1.0 yd` for a non-unit — to `target.Z + 1.0 yd`, `ObjectTargetHeight`, vmangos `WorldObject::GetLosCheckPosition`, returning `true` without a ray when 3D distance `< source.BoundingRadius + target.BoundingRadius`), `IsWithinLineOfSight(source, x, y, z, targetHeight = 2.0f)` (from `EyeHeightOf(source)` to `z + targetHeight`), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`. |
 | `unit.IsWithinLineOfSight(other)` | Extension for spells/AI/combat. |
 | `ICollisionTileLifecycle` | Optional: services that want grid create/unload forwarded as terrain tile indices. |
 | `SpellLineOfSight` | The cast-check hook (`SPELL_FAILED_LINE_OF_SIGHT`, honours `SPELL_ATTR_EX2_IGNORE_LOS` 0x4 and triggered casts). |
@@ -86,7 +86,10 @@ Connectivity comes from the polygon neighbour entries: `neis − 1` inside the t
 across a tile border (joined with the adjacent tile's opposite-side edges where they overlap within
 the walkable climb). Queries:
 
-* nearest polygon in a (3, 5, 3) box, then a (3, 200, 3) box (projected end point → `Incomplete`);
+* without `EndTolerance`, nearest polygon in a (3, 5, 3) box, then a (3, 200, 3) box (projected end point → `Incomplete`);
+  with `EndTolerance > 0` (return home, charge), both ends use vmangos `FindWalkPoly` `{5, 10, 5}`, a polygon more than 3 yd
+  above the point is refused (`NoPath`), the path is `Incomplete` only when either end is more than 7 yd (3D) from its
+  polygon, and a flier then goes straight with `Normal | NotUsingPath` (`PathFinder.cpp:128-142, :209-235`);
   over a polygon only the height beyond the walkable climb counts (as Detour);
 * A* over polygons between portal midpoints with the include/exclude flag filter
   (`PathOptions`, default include ground/water/magma/slime, exclude nothing) and a node
@@ -121,7 +124,7 @@ models with liquid were rejected) and NUL-terminated doodad names (1298 models n
   (callers get MOGP flags, root/group ids and the floor).
 * No dynamic (game object) line of sight; static models only. Terrain does not block line of sight
   (only static models are checked).
-* Eye height is a fixed 2 yd above each unit's position (no per-model collision height).
+* Line-of-sight heights: units look from `Unit.CollisionHeight` (`LocomotionState.CollisionHeight` times the unit's scale override `TransformScale` / `Creature.NativeScaleOverride`, 2 yd fallback without model data), non-units look from `1.0 yd`, and target objects are checked at `+1.0 yd` (`ObjectTargetHeight`, vmangos `WorldObject::GetLosCheckPosition`; game objects do not load model display bounds, so they also use `+1.0 yd`).
 * Off-mesh connections are skipped; diagonal tile sides are ignored (Recast emits none). The BV
   tree drives the nearest-polygon lookup (verified at load, widened by the measured quantization slack; a tile whose tree fails
   verification scans linearly and is counted in `PathSearchCounters.BvTreesRejected`). Cross-tile edge portals are computed once per edge and cached.

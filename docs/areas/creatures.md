@@ -102,9 +102,10 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
 
 - Respawn times are persisted in `creature_respawn` (`Creatures:Respawn:Persist`, default on; battleground maps keep them in memory
   only) and survive restarts; see [creature movement, spawns and respawn](creature-movement-spawns.md), "Durable respawn timers".
-- Creature point heights come from the `ICreatureHeightProvider` default, `MapCreatureHeightProvider`: the `.map` terrain
-  height, without vmap floors. Paths come from the navmesh ([creature movement](creature-movement-spawns.md)) and line of
-  sight from the vmaps ([collision and pathing](collision-pathing.md)).
+- Creature point heights come from the `ICreatureHeightProvider` default, `MapCreatureHeightProvider`: the floor height from
+  terrain and static models (`MapCollision.GetHeight`, falling back to `Map.GetHeight` when no floor is under `z + 2`), while
+  `GetTerrainHeight` answers the raw `.map` terrain surface for the creature under-map check. Paths come from the navmesh
+  ([creature movement](creature-movement-spawns.md)) and line of sight from the vmaps ([collision and pathing](collision-pathing.md)).
 - Not driven yet:
   - Equipment / virtual items (items area)
   - Auras from the addon

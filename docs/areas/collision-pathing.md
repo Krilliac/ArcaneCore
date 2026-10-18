@@ -27,9 +27,16 @@ is refused with a message that names the cMaNGOS generator; vmangos reads only v
 * `PathMover` (CanWalk, CanSwim, CanFly, IsPlayer) in `PathOptions.Mover` derives the polygon include
   flags exactly like `PathInfo::createFilter` (`PathFinder.cpp:657-675`): ground when it walks; water when
   it swims, plus magma and slime for creatures. `PathOptions.EffectiveIncludeFlags` is what queries use.
-* Default `ExcludeFlags` is empty. vmangos excludes steep slopes only for fear, flee, confused and random
-  movement (`FearMovementGenerator.cpp:38`, `RandomMovementGenerator.cpp:52`); callers that need that set
-  `ExcludeFlags = NavTerrain.SteepSlopes`.
+* Default `ExcludeFlags` is empty (`PathInfo::createFilter`, `PathFinder.cpp:657-677`). vmangos excludes steep
+  slopes from the path search of random, confused, fear and flee movement only (`RandomMovementGenerator.cpp:52`
+  through `MoveSplineInit.h:129-130`, `ConfusedMovementGenerator.cpp:79`, `FearMovementGenerator.cpp:38`,
+  `FleeingMovementGenerator.cpp:56`, each `PathFinder::ExcludeSteepSlopes`, `PathFinder.h:88`).
+  `CreatureMapSystem.PathOptionsFor` gives those creature legs `ExcludeFlags = NavTerrain.SteepSlopes` with
+  `ExcludeOnlyInSearch`: vmangos locates the start and end polygons by the include flags alone
+  (`getPolyByLocation`, `PathFinder.cpp:145-157`) and Detour's `findPath` filters only the polygons it enters
+  (`DetourNavMeshQuery.cpp:1037`), so a creature standing on a slope still paths off it. Other queries that set
+  `ExcludeFlags` (the bots') also keep their endpoints off the excluded polygons. Tests:
+  `Creatures/SteepSlopeLegTests.cs`.
 * `MaxPoints` 256 (`PathFinder.h:39`), `MaxSearchNodes` 2048 (`MoveMap.cpp:350`).
 * `ModelAreaInfo.MogpExterior` is 0x8000 (`GridMap.cpp:875-878`; mangos-classic `GridMap.cpp:887-890`); it was 0x8.
 
@@ -64,10 +71,14 @@ A mover with `CanFly` goes straight, typed `Normal | NotUsingPath | FlyPath`, wh
 segment (`PathFinder.cpp:172-186`; the model test is `ILineOfSight.IsInLineOfSight(ignoreM2: false)`, the
 equivalent of `Map::FindCollisionModel`, which does not skip doodads). When a model blocks, it follows the mesh
 and the destination is forced as vmangos does (`PathFinder.cpp:451-472`: partial subpath kept if it leaves under about 55%
-of the way, else a shortcut; `DestForced | FlyPath`). A hole in the mesh answers the flying shortcut instead of
+of the way, else a shortcut; `DestForced | FlyPath`), except that with `EndTolerance > 0` a flier whose start or end is
+more than 7 yd from its polygon goes straight with `Normal | NotUsingPath` (`PathFinder.cpp:220-225`). A hole in the mesh
+(or, with `EndTolerance > 0`, a start or end with no polygon in `FindWalkPoly`'s reach) answers the flying shortcut instead of
 `NoPath` (`PathFinder.cpp:190-198`). `WorldCollision.Install` hands the line-of-sight service to the navmesh
 pathfinder in either install order. Swim and underwater shortcuts (`PathFinder.cpp:160-170`, `BuildUnderwaterPath`)
-are still not implemented; a swimmer takes the mesh path.
+are still not implemented: a swimmer takes the mesh path, and with `EndTolerance > 0` a swimmer whose start or end is out of
+`FindWalkPoly` reach (more than 10 yd above the lake-bottom mesh, or more than 3 yd under a polygon) gets `NoPath`, so home
+teleports (vmangos would swim straight via `IsSwimmable`, `PathFinder.cpp:199-201`).
 
 ### Region graph (NavRegionGraph)
 
@@ -87,21 +98,25 @@ Kalimdor settles in under 1 ms, an unreachable goal's full search of the Eastern
 ## Limits (not done in this lane run)
 
 See the open questions of the lane report for the reasons. Not implemented: the `MapCollision` partial split,
-FindWalkPoly extents / `farFromPoly` rules for the start point (the end point has them when `PathOptions.EndTolerance`
-is set: return home, charge), swim/underwater paths, smooth path (`findSmoothPath`; `CreatureSplineSmoothing` only
-rounds the corners of creature and charge splines), off-mesh links, vmap/mmap tile lifecycle shared across instances, the
-fallback model searches of `GetHeightStatic` (unbounded, upward and near the terrain, `GridMap.cpp:840-850`), model
-floors in `Map.GetHeight` (`Map.cpp:3407-3411`; creature movement heights come from it), WMO liquids, the terrain test
-of the indoor check (`GetAreaInfo`, `GridMap.cpp:894-907`), dynamic gameobject LOS, DBC-fed WMO areas, the unit's
-collision height in line of sight (`MapCollision.DefaultEyeHeight` at both ends; `Object.cpp:1766-1781`), the
-data-directory inspector. Paths on transports and boats (`PathFinder.cpp:77-84`), cMaNGOS mmaps (version 8) and WMO
-area names without `WMOAreaTable.dbc` remain unsupported.
+`FindWalkPoly` extents / `farFromPoly` rules for queries without `PathOptions.EndTolerance` (both endpoints of an
+`EndTolerance` query now use `FindWalkPoly` extents and `farFromPoly` rules, flier shortcut included; queries without a
+tolerance keep MaNGOS Zero's `(3,5,3)`/`(3,200,3)` boxes for both ends), swim/underwater paths, smooth path
+(`findSmoothPath`; `CreatureSplineSmoothing` only rounds the corners of creature and charge splines), off-mesh links,
+vmap/mmap tile lifecycle shared across instances, the fallback model searches of `GetHeightStatic` (unbounded, upward and
+near the terrain, `GridMap.cpp:840-850`), model floors directly in `Map.GetHeight` (`Map.GetHeight` remains raw `.map`
+terrain, `TerrainInfo.GetHeight`, while creature movement and summon/point heights via
+`MapCreatureHeightProvider.GetHeight` / `MapCreatureHeightProvider.Floor` and `CorpseQuery` ghost-entrance ground heights
+now use `MapCollision.GetHeight`, terrain and static model floors falling back to `Map.GetHeight` when no floor lies below
+`z + 2`), WMO liquids, the terrain test of the indoor check (`GetAreaInfo`, `GridMap.cpp:894-907`), dynamic gameobject LOS,
+DBC-fed WMO areas, the data-directory inspector. Paths on transports and boats (`PathFinder.cpp:77-84`), cMaNGOS mmaps
+(version 8) and WMO area names without `WMOAreaTable.dbc` remain unsupported.
 
 Implemented since: the creature mover (`PathMover.For`, from the template's `InhabitType`); navmesh raycast and random
 points (`NavMeshQuery.Raycast`, `NavMeshQuery.TryRandomPointAround`, reached through `MapCollision.MeshPoints`;
 creature wander and flee points use them); background tile reads (vmap and mmap prefetch when a grid approaches,
 `ICollisionTilePrefetch`, and `PathOptions.NonBlockingTiles`); DBC collision heights on units
-(`LocomotionState.CollisionHeight`, used for the swim depth). The base seam already had `MapCollision.GetHeight`
+(`LocomotionState.CollisionHeight`, used for the swim depth, and `Unit.CollisionHeight` / `MapCollision.ObjectTargetHeight`
+in line of sight, `Object.cpp:1766-1781`). The base seam already had `MapCollision.GetHeight`
 (terrain and model floors, the first search of `GetHeightStatic`) and `MapCollision.IsOutdoors` (the MOGP exterior flag).
 
 ## Verification status

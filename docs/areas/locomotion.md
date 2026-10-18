@@ -20,7 +20,7 @@ below cites the file and lines it was verified against. Everything is retail by 
 | 9 | knockback and player pull | delivered |
 | 10-12 | liquid-environment-flags, mirror-timers-hazards, water-breathing-auras | delivered together |
 | - | movement-flag-tests (opt-in anticheat flag tests) | not in this lane: the anticheat area cross-checked vmangos `HandleFlagTests` and scores its own flag checks (water walk, hover, slow fall, levitating, swim-fly), on by default in log-only mode, see [anticheat](anticheat.md) |
-| - | collision-height-dbc | delivered later, outside this lane: with the developer's own CreatureDisplayInfo / CreatureModelData files (`Creatures:CreatureDisplayInfoDbcPath`, `Creatures:CreatureModelDataDbcPath`) a unit's collision height is its model's, otherwise 2 yards; tested with synthetic files only, see [native model initialization](../integration/native-model-initialization.md) |
+| - | collision-height-dbc | delivered later, outside this lane: with the developer's own CreatureDisplayInfo / CreatureModelData files (`Creatures:CreatureDisplayInfoDbcPath`, `Creatures:CreatureModelDataDbcPath`) a unit's model collision height (`LocomotionState.CollisionHeight`) is its model's, otherwise 2 yards, and `Unit.CollisionHeight` multiplies it by the unit's scale override (`TransformScale` / `Creature.NativeScaleOverride`) for line of sight; tested with synthetic files only, see [native model initialization](../integration/native-model-initialization.md) |
 
 No schema, store or data module changed anywhere in the lane (nothing it keeps is persisted: speeds, falls, breath timers and pending acks are rebuilt at login, as in
 vmangos), so the Characters/World schema versions did not move and the MariaDB/PostgreSQL provider rule is not triggered. The tests that need terrain write synthetic `.map`
@@ -156,16 +156,38 @@ breath, fatigue, lava and slime pulses of `MapEnvironment` (slices 10-12) call.
   (`Unit.cpp:5147-5160`).
 * The damage is `MapCombat.DealDamage(player, player, ...)` (self damage: no combat, no threat). A player who dies loses
   10% durability on worn items (`DurabilityLossAll(0.10, false)`) and receives the empty `SMSG_DURABILITY_DAMAGE_DEATH`
-  (`:760-766`, "confirmed on classic that dying from lava, fatigue and drowning causes durability loss").
+  (`:765-771`, "confirmed on classic that dying from lava, fatigue and drowning causes durability loss").
 * vmangos quirk kept: a self kill has the player as its own tap, so `SetPvPDeath(true)` (`Unit.cpp:1180`); the base's
   `MapCombat.Kill` already does the same. Whether retail marks an environmental death as PvP (corpse type, reclaim
   delay) is not provable from the references: open question.
 
-**Limit (seam):** absorb, resist and immunity come from the spell combat rules (`IsImmuneToDamage`,
-`CalculateDamageAbsorbAndResist`), which are not on this branch. `IEnvironmentalDamageMitigation` is the seam
-(`LocomotionEnvironment.RegisterMitigation`); the default mitigates nothing, so lava is not reduced by fire resistance
-and fire immunity does not protect until that lane registers an implementation. `DealDamageMods` (`:763`) is not
-ported: it only changes damage for GM-like invulnerability states and game masters are excluded already.
+**Mitigation (seam):** absorb, resist and immunity come from the spell combat rules through
+`IEnvironmentalDamageMitigation` (`LocomotionEnvironment.RegisterMitigation`), which the daemon's
+`EnvironmentalMitigationFeature` (`ArcaneCore.World/Locomotion/EnvironmentalMitigationFeature.cs`) backs with
+`SpellEnvironmentalMitigation` (`Spells/SpellEnvironmentalMitigation.cs`) over its spell system. Immunity is
+`ImmunityRules.IsImmuneToDamage` with no spell (vmangos `Unit.cpp:5404-5439`: a damage immunity, or a school immunity
+whose polarity applies to a harmful spell). For lava, fire and slime the player is its own caster in
+`CalculateDamageAbsorbAndResist(this, mask, DIRECT_DAMAGE, damage, .., nullptr)` (`Unit.cpp:1920-2202`): a player
+immune to the school by any school immunity absorbs all of it (`:1929-1933`); otherwise its own resistance gives the
+resist (`:1938-1953`, `SpellCaster.cpp:882-925`: no level difference, its own MOD_TARGET_RESISTANCE auras count, a
+vulnerability adds damage; `ISchoolResistRoll` on `VanillaSpellCombatRules`, the chance and outcome of a direct spell
+hit), and `SpellSystem.AbsorbDamage` (school absorbs, mana shields, damage splitting) takes the rest. A world with no
+registration keeps `NoEnvironmentalMitigation`, which mitigates nothing. After the mitigation and before the log,
+`MapCombat.DealDamageMods` (`Combat/MapCombat.DamageMods.cs`; vmangos `SpellCaster::DealDamageMods`,
+`SpellCaster.cpp:1774-1787`, called at `Player.cpp:756` with the player on both sides) zeroes the damage of a player on a
+taxi flight (`UnitFlags.TaxiFlight`) or of a priest under Spirit of Redemption (aura 27827, asked of the map's spell
+system) and adds it to the absorb, so the log shows 0 damage and the whole hit absorbed. Its other clauses (a dead
+victim, an evading creature) cannot apply to a living player. Only environmental damage calls it so far: vmangos also
+runs it for melee, spell, periodic, damage-shield, split and proc damage, which do not here.
+
+**The spell effect:** `SPELL_EFFECT_ENVIRONMENTAL_DAMAGE` (`SpellSystem.EffectEnvironmentalDamage`,
+`Spells/SpellSystem.Combat.cs`; vmangos `Spell::EffectEnvironmentalDMG`, `SpellEffects.cpp:286-304`) sends a player target
+through `EnvironmentalDamage.Apply` as `DAMAGE_FIRE`, whatever the spell's school (`:292-295`), with the spell system's own
+`SpellEnvironmentalMitigation`: fire immunity, resist and absorbs, `SMSG_ENVIRONMENTAL_DAMAGE_LOG` (no
+`SMSG_SPELLNONMELEEDAMAGELOG`), self damage that never crits, and a death that costs 10% durability even when another
+player cast the spell. Any other unit takes no damage: the spell's school is resisted and absorbed with the spell
+(shields are spent) and the caster's set gets `SMSG_SPELLNONMELEEDAMAGELOG` with what is left (`:296-303`,
+`SpellCaster.cpp:1098-1104`).
 ## Slice 4: fall-damage (delivered)
 
 `FallObserver` (`Locomotion/Falling/FallObserver.cs`, `[MovementObserver(Order = 20)]`, a `Before` observer because
@@ -185,8 +207,10 @@ ported: it only changes damage for GM-like invulnerability states and game maste
   (slice 3: log, self damage, durability and death consequences). The 14.57 gate, not the formula's own zero (13.48
   yards), is what first yields damage. Worked values are in `FallDamageTests` (z 14.56 -> 0, 14.57 at 1000 hp -> 19,
   30 at 2000 hp -> 594, 40 at 3000 hp -> 1432, 75 at 3000 hp -> 3000 capped).
-* **Seam:** `takenMod` (the physical damage-taken-percent auras, `:20854`) belongs to the spell combat rules and is 1 until
-  `LocomotionEnvironment.RegisterFallModifiers` is used (`IFallDamageModifiers`). Safe Fall, Hover and Feather Fall are
+* **Seam:** `takenMod` is the product of the physical (misc mask 1) MOD_DAMAGE_PERCENT_TAKEN auras (`:20854-20855`,
+  `GetTotalAuraMultiplierByMiscMask`), answered by `SpellEnvironmentalMitigation` through `IFallDamageModifiers`
+  (`LocomotionEnvironment.RegisterFallModifiers`, the same daemon feature); 1 in a world with no registration. Physical
+  immunity stops a fall in `EnvironmentalDamage` (slice 3). Safe Fall, Hover and Feather Fall are
   read from the aura ledger, which `MovementFlagAuras` (slice 2) fills; any other lane's aura of those types is not seen
   unless it records itself in the ledger.
 * **Not delivered:** `SetJumpInitialSpeed` (extrapolation only); the knockback "launched" reset. The knockback-ack fall
@@ -238,8 +262,10 @@ snare, mounts), none of which did anything before.
   aura (8326), which the death lane's ghost form casts through `CombatHooks.ApplyGhostForm` (`World:Death:GhostFormAura`, default
   on); its auras take effect through the same formula with no further change.
 
-Limits: creatures are covered by slice 7; pets and charmed units do not follow the owner's speed (`CallForAllControlledUnits`, no pets on
-this base); the talent speed modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
+Limits: creatures are covered by slice 7; pets and charmed units do not follow the owner's speed: vmangos recomputes them on every change
+(`CallForAllControlledUnits` in `SetSpeedRateReal`, `Unit.cpp:7184`) and a following pet out of combat takes its owner's rate
+(`Unit.cpp:6961-6977`), neither of which `UnitSpeed` ports (the pets area, `Game/Pets`, does not touch speeds); the talent speed
+modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
 changed by any 1.12 aura and is not handled; a speed that is within 0.01 of the sent one is stored as the client reported it
 (vmangos does the same). Unverified against a real 1.12.1 client (packed GUID widths, see slice 1).
 ## Slice 7: speed-rates-creatures (delivered)
@@ -248,7 +274,7 @@ Creatures take the same auras (the speed aura module acts on any unit) and `Unit
 `Unit::UpdateSpeed` (`Unit.cpp:7063-7094`): run and walk are multiplied by the template's `speed_run` (default 1.14286, vmangos
 `DEFAULT_NPC_RUN_SPEED_RATE`) and `speed_walk` (default 1), and the run speed by 0.7, 0.6 or 0.5 while the creature is under
 16%, 11% or 6% health (`SPEED_REDUCTION_HP_*`, `CreatureDefines.h:225-230`; health thresholds `Creature.cpp:971-973`), except
-pets, world bosses and templates with `StaticFlags2 & 0x40` (`CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN`, `CreatureDefines.h:140`;
+world bosses and templates with `StaticFlags2 & 0x40` (`CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN`, `CreatureDefines.h:140`;
 155 of the 10384 classic template rows carry it, 901 have a non-default run rate, per the design survey of `D:\refs\classic-db`).
 A creature is server-moved, so a change is immediate and everyone nearby gets `SMSG_SPLINE_SET_*_SPEED` (packed GUID + f32), no
 handshake (`Unit::SetSpeedRate` third branch, `Unit.cpp:7176-7181`). `Creature.InitializeFields` now sets the template speeds
@@ -258,8 +284,9 @@ takes twice as long to cover 14 yards (1750 ms to 3500 ms in `CreatureSpeedTests
 Limits: vmangos refreshes the three health aura states every creature update but only recomputes the run speed when something
 calls `UpdateSpeed` (a speed aura, fleeing at low health, returning from an assist call, `Creature.cpp:1191,1222,2282`); the
 health used here is the one at the recompute, and the AI lane has to call `UnitSpeed.UpdateSpeed(creature, MoveType.Run)` at
-those moments (no creature AI hooks were edited). Pets of players are normalised to the default run rate in vmangos; no pets
-exist on this base, so that branch is not applied.
+those moments (no creature AI hooks were edited). Not ported: vmangos runs a player's pet at the default run rate instead of its
+template's (`Unit.cpp:7064-7082`) and does not slow a pet when wounded (`:7085`); `UnitSpeed` applies neither branch, so a player's
+pet still takes its template rate and the wounded slowdown.
 ## Slice 8: mount-aura (delivered)
 
 The follow-on mount cast and restriction rules are tracked in [mounts.md](mounts.md).
@@ -284,11 +311,21 @@ the aura dismounts. 126 classic spells carry the aura (108 are item mounts).
 * **New spell-system API** (`Spells/SpellSystem.InterruptFlags.cs`): `RemoveAurasWithInterruptFlags`, `InterruptChannelsWithFlags` (vmangos
   `RemoveAurasWithInterruptFlags`, `InterruptSpellsWithChannelFlags`) and `RemoveAurasByType` (`RemoveSpellsCausingAura`); `SpellAuraInterruptFlags`
   gained `DismountCancels` and `MountCancels` (vmangos `SpellDefines.h:583,594`).
+* **The player's pet** (`SpellSystem.PlayerMounted` / `PlayerDismounted`, raised by `MountService` between the display and the result and handled by
+  `Game/Pets/SummonService.Mounts.cs`): mounting leaves the pet out and greys its bar out with `SMSG_PET_MODE` (enabled byte 0x8, `Pet::SetEnabled`,
+  `Pet.cpp:2362-2377`), as vmangos does with its default `PetUnsummonAtMount = 0` (`Player.cpp:18204-18216`, `World.cpp:820`); dismounting gives the bar
+  back, or brings back a pet that was put away when there is none (`Player.cpp:18248-18251`); a pet that comes back while its owner rides starts greyed
+  out (`Pet::LoadPetFromDB`, `Pet.cpp:401-404`), except during a taxi flight: vmangos loads no pet then (`Pet.cpp:216-221`, `Player.cpp:20944-20945`)
+  and the landing here clears the display without a dismount event, so such a pet stays enabled. `ResetExtraAttacks` (`Player.cpp:18227`) runs before
+  the ok result. The Silithyst drop on mounting is the outdoor-PvP feature's (`World/OutdoorPvP/OutdoorPvPFeature.cs`, on the Mounted aura holder).
 
-Not delivered (the systems are not on this base): unsummoning or disabling the pet on mount and resummoning on dismount (`Player.cpp:18205-18218,18245-18250`),
-the disallowed shapeshift form refusal (only for mounts without a spell), `ResetExtraAttacks`, the Silithyst drop on mounting. **Taxi**: `TaxiFlightSystem`
-sets and clears the mount display itself and vmangos removes the Mounted aura when a flight starts (`ActivateTaxiPathTo`); here an aura mount is not removed
-at taxi start, so the display is overwritten for the flight and cleared at its end while the aura stays: the taxi code needs the spell system to remove it.
+Not delivered: `PetUnsummonAtMount` is not a setting (the pet always stays out, the vmangos default). The branches of `Player::Mount` for a mount without
+a spell (a taxi or GM mount: the disallowed shapeshift refusal, `Player.cpp:18185-18190`, and putting the pet away, `:18201-18203`) do not apply, because
+only the mount aura calls `MountService.Mount`. **Taxi**: `TaxiFlightSystem`
+sets and clears the mount display itself; as in vmangos `ActivateTaxiPathTo` (`Player.cpp:17863-17869`, `:17889-17893`), a flight master refuses a mounted player
+(`PlayerAlreadyMounted`) and a scripted or spell flight first removes the Mounted aura (`NpcServicesFeature` gives `TaxiFlightSystem` a `beforeFlight` that calls
+`SpellSystem.RemoveAurasByType(player, AuraType.Mounted)`), while the pet is not put away for the flight and brought back on landing
+(vmangos `TaxiHandler.cpp:120` mounts without a spell; `FlightPathMovementGenerator::Finalize`, `WaypointMovementGenerator.cpp:362`, dismounts).
 ## Slice 9: knockback (delivered)
 
 `SPELL_EFFECT_KNOCK_BACK` (98, 133 classic spells; 51 are creature casts in dungeons and raids) and `SPELL_EFFECT_PLAYER_PULL` (124, 7 spells) in
@@ -345,7 +382,7 @@ are configurable; no capture proves them.
 on the player a removal keeps it zero), `MOD_WATER_BREATHING` (155, Unending Breath) multiplies it by the product of (100 + amount) / 100. 22 classic spells carry the water auras.
 
 Limits: the liquid kind is the one the `.map` file stores (no `LiquidType.dbc` remap, so liquid area spells such as the Undercity slime aura are not applied) and WMO liquid is not queried
-(the terrain lane's `docs/integration/vmap-los.md`), so lava and water inside buildings are not seen; the collision height is vmangos' fallback of 2 yards for every race
-(`LocomotionState.CollisionHeight`; the swim depth is three quarters of it) unless the developer's CreatureDisplayInfo and CreatureModelData are configured (`Creatures:CreatureDisplayInfoDbcPath` and `Creatures:CreatureModelDataDbcPath`, both required), which give each model its own height; the feign death timer (hunter lane) and the Spirit
+(the terrain lane's `docs/integration/vmap-los.md`), so lava and water inside buildings are not seen; the model collision height is vmangos' fallback of 2 yards for every race
+(`LocomotionState.CollisionHeight`; the swim depth is three quarters of it, and `Unit.CollisionHeight` multiplies it by the unit's scale override for line of sight) unless the developer's CreatureDisplayInfo and CreatureModelData are configured (`Creatures:CreatureDisplayInfoDbcPath` and `Creatures:CreatureModelDataDbcPath`, both required), which give each model its own height; the feign death timer (hunter lane) and the Spirit
 of Redemption form are not handled; the swimming mobs' threat table update on entering water (`updateThreatTables`) belongs to the creature AI. A pulse that kills is handled by the
 next tick's combat update (the updater runs after combat so that combat stays every map's first updater).
