@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
@@ -62,6 +63,13 @@ public static class HostOrigin
 /// <summary>Small JSON helpers shared by the host.</summary>
 internal static class HostJson
 {
+    /// <summary>
+    /// The reader settings every request surface shares (HTTP bodies, WebSocket frames, ctl arguments, script and MCP
+    /// lines, state files): depth-capped and strict about duplicate property names, so a duplicate is a parse error at the
+    /// boundary (400, usage error, script line problem, JSON-RPC -32700) instead of an exception when the object is read.
+    /// </summary>
+    public static readonly JsonDocumentOptions Strict = new() { MaxDepth = 64, AllowDuplicateProperties = false };
+
     public static JsonArray Point(WorldPoint p) => new(p.X, p.Y, p.Z);
 
     public static JsonObject Failure(string command, string code, string message)

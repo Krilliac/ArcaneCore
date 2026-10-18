@@ -105,7 +105,7 @@ internal static class CommandLineArguments
     {
         try
         {
-            return JsonNode.Parse(text, nodeOptions: null, new JsonDocumentOptions { MaxDepth = 64 });
+            return JsonNode.Parse(text, nodeOptions: null, HostJson.Strict);
         }
         catch (Exception e) when (e is JsonException or ArgumentException)
         {
@@ -123,7 +123,7 @@ internal static class CommandLineArguments
             string text = json == "-" ? await standardInput.ReadToEndAsync(cancellationToken).ConfigureAwait(false) : json;
             try
             {
-                args = JsonNode.Parse(text, nodeOptions: null, new JsonDocumentOptions { MaxDepth = 64 }) as JsonObject
+                args = JsonNode.Parse(text, nodeOptions: null, HostJson.Strict) as JsonObject
                     ?? throw new UsageException("--json must be a JSON object");
             }
             catch (Exception e) when (e is JsonException or ArgumentException)
@@ -215,7 +215,7 @@ internal static class ScriptFile
         JsonNode? node;
         try
         {
-            node = JsonNode.Parse(line, nodeOptions: null, new JsonDocumentOptions { MaxDepth = 64 });
+            node = JsonNode.Parse(line, nodeOptions: null, HostJson.Strict);
         }
         catch (Exception e) when (e is JsonException or ArgumentException)
         {

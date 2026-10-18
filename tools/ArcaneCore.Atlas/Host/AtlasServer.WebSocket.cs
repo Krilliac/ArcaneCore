@@ -50,14 +50,18 @@ public sealed partial class AtlasServer
 
     private async Task RunSessionAsync(WebSocket socket, CancellationToken aborted)
     {
+        // Receives are only ever cancelled by the client going away (aborted): cancelling a pending WebSocket receive aborts the
+        // socket, after which no close frame can be sent. The auth timeout and server shutdown instead send a close frame and
+        // let the pending receive return the client's close reply.
         using CancellationTokenSource lifetime = CancellationTokenSource.CreateLinkedTokenSource(aborted, _shutdown.Token);
         CancellationToken ct = lifetime.Token;
+        Task stopping = Task.Delay(Timeout.InfiniteTimeSpan, ct);
         UiConnection? connection = null;
         Task pump = Task.CompletedTask;
         var commands = new List<Task>();
         try
         {
-            if (!await AuthenticateAsync(socket, ct).ConfigureAwait(false))
+            if (!await AuthenticateAsync(socket, stopping, aborted).ConfigureAwait(false))
             {
                 return;
             }
@@ -79,9 +83,17 @@ public sealed partial class AtlasServer
             await connection.SendAsync(hello.ToJsonString(), ct).ConfigureAwait(false);
             pump = PumpEventsAsync(connection, ct);
 
-            while (!ct.IsCancellationRequested)
+            while (true)
             {
-                string? text = await ReceiveTextAsync(socket, ct).ConfigureAwait(false);
+                Task<string?> receive = ReceiveTextAsync(socket, aborted);
+                if (await Task.WhenAny(receive, stopping).ConfigureAwait(false) != receive)
+                {
+                    await connection.CloseOutputAsync(WebSocketCloseStatus.EndpointUnavailable, "the server is stopping").ConfigureAwait(false);
+                    await AwaitCloseReplyAsync(receive).ConfigureAwait(false);
+                    break;
+                }
+
+                string? text = await receive.ConfigureAwait(false);
                 if (text is null)
                 {
                     break;
@@ -93,7 +105,7 @@ public sealed partial class AtlasServer
         }
         catch (OperationCanceledException)
         {
-            // Closing: the client left or the server is stopping.
+            // Closing: the client left.
         }
         catch (WebSocketException e)
         {
@@ -118,19 +130,32 @@ public sealed partial class AtlasServer
     }
 
     /// <summary>Waits up to the auth timeout for <c>{"op":"auth","token":"..."}</c>; closes with 4401 otherwise.</summary>
-    private async Task<bool> AuthenticateAsync(WebSocket socket, CancellationToken ct)
+    private async Task<bool> AuthenticateAsync(WebSocket socket, Task stopping, CancellationToken aborted)
     {
-        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(_options.AuthTimeout);
-        string? first;
+        Task<string?> receive = ReceiveTextAsync(socket, aborted);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(aborted);
+        Task timeout = Task.Delay(_options.AuthTimeout, timeoutSource.Token);
+        Task first = await Task.WhenAny(receive, timeout, stopping).ConfigureAwait(false);
+        await timeoutSource.CancelAsync().ConfigureAwait(false);
+        if (first != receive)
+        {
+            if (!aborted.IsCancellationRequested)
+            {
+                bool stoppingFirst = first == stopping;
+                await CloseOutputQuietlyAsync(
+                    socket,
+                    stoppingFirst ? WebSocketCloseStatus.EndpointUnavailable : (WebSocketCloseStatus)CloseUnauthorized,
+                    stoppingFirst ? "the server is stopping" : "no auth message within the timeout").ConfigureAwait(false);
+                await AwaitCloseReplyAsync(receive).ConfigureAwait(false);
+            }
+
+            return false;
+        }
+
+        string? text;
         try
         {
-            first = await ReceiveTextAsync(socket, timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            await TryCloseAsync(socket, (WebSocketCloseStatus)CloseUnauthorized, "no auth message within the timeout").ConfigureAwait(false);
-            return false;
+            text = await receive.ConfigureAwait(false);
         }
         catch (InvalidDataException)
         {
@@ -138,19 +163,41 @@ public sealed partial class AtlasServer
             return false;
         }
 
-        if (first is not null && TryParseObject(first) is { } message
+        if (text is not null && TryParseObject(text) is { } message
             && message["op"] is JsonValue op && op.TryGetValue(out string? opName) && opName == "auth"
             && message["token"] is JsonValue token && token.TryGetValue(out string? candidate) && TokenMatches(candidate))
         {
             return true;
         }
 
-        if (first is not null)
+        if (text is not null)
         {
             await TryCloseAsync(socket, (WebSocketCloseStatus)CloseUnauthorized, "unauthorized").ConfigureAwait(false);
         }
 
         return false;
+    }
+
+    /// <summary>Gives the client up to 2 s to answer the server's close frame (the pending receive then returns null).</summary>
+    private static async Task AwaitCloseReplyAsync(Task<string?> receive)
+        => await ((Task)receive).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+    /// <summary>Sends a close frame without waiting for the reply; a peer that is already gone is not an error.</summary>
+    internal static async Task CloseOutputQuietlyAsync(WebSocket socket, WebSocketCloseStatus status, string description)
+    {
+        if (socket.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+        {
+            return;
+        }
+
+        try
+        {
+            await socket.CloseOutputAsync(status, description, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is TimeoutException or WebSocketException or ObjectDisposedException or InvalidOperationException)
+        {
+            // The peer is already gone (or not reading); disposing the socket ends the connection.
+        }
     }
 
     private void HandleMessage(UiConnection connection, string text, List<Task> commands, CancellationToken ct)
@@ -294,7 +341,7 @@ public sealed partial class AtlasServer
     {
         try
         {
-            return JsonNode.Parse(text, nodeOptions: null, new JsonDocumentOptions { MaxDepth = 64 }) as JsonObject;
+            return JsonNode.Parse(text, nodeOptions: null, HostJson.Strict) as JsonObject;
         }
         catch (JsonException)
         {

@@ -57,7 +57,32 @@ public sealed class UiConnection
                 throw new WebSocketException(WebSocketError.InvalidState, "The UI connection is closed.");
             }
 
-            await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken).ConfigureAwait(false);
+            // The token only bounds the wait for the gate: cancelling a frame half-way through would abort the WebSocket (no close
+            // handshake possible afterwards), so a started frame is always finished.
+            await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
+    }
+
+    /// <summary>Sends the server's close frame after any frame in flight; the receive loop then reads the peer's reply.</summary>
+    internal async Task CloseOutputAsync(WebSocketCloseStatus status, string description)
+    {
+        using var grace = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            await _sendGate.WaitAsync(grace.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            await AtlasServer.CloseOutputQuietlyAsync(_socket, status, description).ConfigureAwait(false);
         }
         finally
         {

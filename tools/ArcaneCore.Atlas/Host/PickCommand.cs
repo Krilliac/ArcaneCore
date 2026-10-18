@@ -42,6 +42,7 @@ internal static class PickCommand
         double max = invocation.OptionalNumber("maxDistance") ?? DefaultMaxDistance;
         WorldPoint origin;
         WorldPoint direction;
+        double startOffset = 0;
         if (hasRay)
         {
             JsonObject ray = invocation.OptionalObject("ray")!;
@@ -67,9 +68,13 @@ internal static class PickCommand
             PickRay fromCamera = CameraMath.RayThrough(view.Camera, map, ndc[0], ndc[1], aspect, max);
             origin = fromCamera.Origin;
             direction = fromCamera.Direction;
+
+            // A top-down ray starts CameraMath.TopEyeHeight above the target, so maxDistance counts from the target plane.
+            startOffset = view.Camera.Mode == CameraMode.Top ? CameraMath.TopEyeHeight : 0;
         }
 
         ArgReader.Range(invocation, "maxDistance", max, 0.001, LargestMaxDistance);
+        max += startOffset;
         double length = Math.Sqrt((direction.X * direction.X) + (direction.Y * direction.Y) + (direction.Z * direction.Z));
         if (length < 1e-9)
         {

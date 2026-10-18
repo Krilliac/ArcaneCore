@@ -166,7 +166,7 @@ public static class Discovery
     {
         try
         {
-            return DiscoveryRecord.Parse(JsonNode.Parse(File.ReadAllText(file)));
+            return DiscoveryRecord.Parse(JsonNode.Parse(File.ReadAllText(file), nodeOptions: null, HostJson.Strict));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {

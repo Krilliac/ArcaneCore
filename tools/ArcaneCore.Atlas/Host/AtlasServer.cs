@@ -111,7 +111,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
     /// <summary>The bound port (valid after <see cref="StartAsync"/>).</summary>
     public int Port => _port;
 
-    /// <summary>The loopback address clients connect to: <c>http://127.0.0.1:&lt;port&gt;/</c>.</summary>
+    /// <summary>The loopback address clients connect to (scheme <see cref="Uri.UriSchemeHttp"/>, host 127.0.0.1, the bound port, path /).</summary>
     public Uri BaseAddress => new($"{Uri.UriSchemeHttp}://127.0.0.1:{_port}/");
 
     /// <summary>The address a browser opens: the base address with the token in the fragment, which never reaches a request line or log.</summary>
@@ -369,7 +369,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
         JsonObject request;
         try
         {
-            request = JsonNode.Parse(body, nodeOptions: null, new JsonDocumentOptions { MaxDepth = 64 }) as JsonObject
+            request = JsonNode.Parse(body, nodeOptions: null, HostJson.Strict) as JsonObject
                 ?? throw new JsonException("The body must be a JSON object.");
         }
         catch (JsonException e)
@@ -623,6 +623,8 @@ public sealed partial class AtlasServer : IAsyncDisposable
     {
         if (http.Request.ContentLength is { } declared && declared > limit)
         {
+            // The declared body is never read, so the connection cannot be reused for another request.
+            http.Response.Headers.Connection = "close";
             await WriteErrorAsync(http, StatusCodes.Status413PayloadTooLarge, "too-large", $"The body is over {limit} bytes.").ConfigureAwait(false);
             return null;
         }

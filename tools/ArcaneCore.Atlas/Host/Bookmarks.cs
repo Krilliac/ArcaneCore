@@ -214,7 +214,7 @@ public sealed class BookmarkStore
 
         try
         {
-            JsonObject root = JsonNode.Parse(File.ReadAllText(_file))?.AsObject() ?? throw new InvalidDataException("the file is not a JSON object");
+            JsonObject root = JsonNode.Parse(File.ReadAllText(_file), nodeOptions: null, HostJson.Strict)?.AsObject() ?? throw new InvalidDataException("the file is not a JSON object");
             if (root["bookmarks"] is not JsonArray list)
             {
                 throw new InvalidDataException("the file has no 'bookmarks' array");

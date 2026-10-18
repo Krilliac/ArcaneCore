@@ -138,7 +138,7 @@ public sealed class McpServer
         JsonNode? node;
         try
         {
-            node = JsonNode.Parse(line, nodeOptions: null, new JsonDocumentOptions { MaxDepth = 64 });
+            node = JsonNode.Parse(line, nodeOptions: null, HostJson.Strict);
         }
         catch (Exception e) when (e is JsonException or ArgumentException)
         {

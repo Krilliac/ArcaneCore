@@ -22,15 +22,24 @@ public sealed class EmbeddedWebAssets : IWebAssets
 {
     private const string Prefix = "web/";
 
-    private readonly Assembly _assembly;
+    private readonly Func<string, Stream?> _open;
     private readonly Dictionary<string, string> _resourceNames = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, WebAsset> _loaded = new(StringComparer.Ordinal);
 
     public EmbeddedWebAssets(Assembly assembly)
+        : this(NamesOf(assembly), assembly.GetManifestResourceStream)
     {
-        ArgumentNullException.ThrowIfNull(assembly);
-        _assembly = assembly;
-        foreach (string name in assembly.GetManifestResourceNames())
+    }
+
+    /// <summary>The resource table without an assembly (so the name handling can be tested with names MSBuild writes on either platform).</summary>
+    /// <param name="resourceNames">Every manifest resource name; only those under <c>web/</c> are served.</param>
+    /// <param name="open">Opens a resource by its manifest name; null when it does not exist.</param>
+    internal EmbeddedWebAssets(IEnumerable<string> resourceNames, Func<string, Stream?> open)
+    {
+        ArgumentNullException.ThrowIfNull(resourceNames);
+        ArgumentNullException.ThrowIfNull(open);
+        _open = open;
+        foreach (string name in resourceNames)
         {
             if (name.StartsWith(Prefix, StringComparison.Ordinal))
             {
@@ -54,11 +63,17 @@ public sealed class EmbeddedWebAssets : IWebAssets
             return false;
         }
 
-        using Stream stream = _assembly.GetManifestResourceStream(name) ?? throw new InvalidOperationException($"Embedded resource '{name}' is listed but cannot be opened.");
+        using Stream stream = _open(name) ?? throw new InvalidOperationException($"Embedded resource '{name}' is listed but cannot be opened.");
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         asset = _loaded.GetOrAdd(path, new WebAsset(buffer.ToArray(), ContentTypes.For(path)));
         return true;
+    }
+
+    private static string[] NamesOf(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        return assembly.GetManifestResourceNames();
     }
 }
 
