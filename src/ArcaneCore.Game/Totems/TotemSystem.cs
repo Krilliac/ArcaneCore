@@ -207,6 +207,13 @@ public sealed partial class TotemSystem
             }
         }
 
+        // vmangos Totem::UnSummon (Objects/Totem.cpp:124-126): Sentry Totem (entry 3968, spell 6495) has no
+        // totem_spell row; its summon spell puts a DUMMY aura on the owner that goes when the totem is unsummoned.
+        if ((totem.Entry == 3968 || info.SummonSpellId == 6495) && info.SummonSpellId != 0)
+        {
+            _spells.RemoveAuras(info.Owner, info.SummonSpellId);
+        }
+
         if (_slotsByOwner.TryGetValue(info.Owner.Guid, out TotemInfo?[]? slots))
         {
             for (int i = 0; i < slots.Length; i++)

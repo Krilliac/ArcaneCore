@@ -420,5 +420,38 @@ public sealed class GhostVisibilityTests
         Assert.Empty(player.Combat.ThreatenedByInternal);
         Assert.False(player.Combat.IsInCombat);
     }
+
+    [Fact]
+    public void Gaeriyan9299AndGhostAuraCreatures_AreInvisibleToLiving_AndVisibleToGhostsAtAnyDistanceFromCorpse()
+    {
+        using var rig = new Rig();
+        Player living = rig.Add(1, 0, 0);
+        Player dying = rig.Add(2, 5, 0);
+
+        CombatTestUnit gaeriyan = rig.AddCreature(120, 0, NpcFlags.Gossip | NpcFlags.QuestGiver);
+        gaeriyan.SetUInt32(UpdateFields.ObjectFieldEntry, GhostVisibilityRule.GaeriyanEntry);
+
+        CombatTestUnit ghostAuraNpc = rig.AddCreature(125, 0, NpcFlags.QuestGiver);
+        ghostAuraNpc.SetUInt32(UpdateFields.UnitFieldAura, GhostVisibilityRule.SpellGhostAura);
+
+        CombatTestUnit visFlagNpc = rig.AddCreature(130, 0, NpcFlags.QuestGiver);
+        visFlagNpc.SetByte(UpdateFields.UnitFieldBytes1, GhostAuras.VisFlagByte, GhostAuras.VisFlagGhost);
+
+        living.Relocate(115, 0, living.Z, 0f, 0);
+        living.NeedsVisibilityUpdate = true;
+        rig.Tick();
+
+        Assert.False(rig.Sees(living, gaeriyan));
+        Assert.False(rig.Sees(living, ghostAuraNpc));
+        Assert.False(rig.Sees(living, visFlagNpc));
+
+        // dying dies at x=5, releases and walks to x=115 (110 yd from corpse, beyond the 45 yd living-creature range):
+        rig.Release(dying, x: 115);
+
+        Assert.True(rig.Sees(dying, gaeriyan));
+        Assert.True(rig.Sees(dying, ghostAuraNpc));
+        Assert.True(rig.Sees(dying, visFlagNpc));
+        Assert.False(rig.Sees(living, gaeriyan));
+    }
 }
 

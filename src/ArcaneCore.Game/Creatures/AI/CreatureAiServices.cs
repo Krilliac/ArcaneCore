@@ -1,4 +1,4 @@
-﻿using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
@@ -210,6 +210,9 @@ public sealed class CreatureAiFactory
         ["guard_tirisfal"] = static (c, _) => new GuardAI(c),
         ["guard_undercity"] = static (c, _) => new GuardAI(c),
         ["guard_orgrimmar"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Horde, stormwind: false),
+        [Scripts.GuardianOfBlizzardAI.ScriptName] = static (c, _) => new Scripts.GuardianOfBlizzardAI(c),
+        [Scripts.AnachronosTheAncientAI.ScriptName] = static (c, _) => new Scripts.AnachronosTheAncientAI(c),
+        [Instances.Scripts.Classic.HurleyBlackbreathAI.ScriptName] = static (c, _) => new Instances.Scripts.Classic.HurleyBlackbreathAI(c),
     };
 
     /// <summary>
@@ -323,8 +326,11 @@ public sealed class CreatureAiFactory
         [Scripts.TheramoreSparControllerAI.NpcMasterSzigeti] = E(static c => new Scripts.TheramoreSparControllerAI(c)),
         [Scripts.CorkGizeltonAI.Entry] = E(static c => new Scripts.CorkGizeltonAI(c)),
         [Scripts.RiggerGizeltonAI.Entry] = E(static c => new Scripts.RiggerGizeltonAI(c)),
+        [Scripts.GuardianOfBlizzardAI.Entry] = E(static c => new Scripts.GuardianOfBlizzardAI(c)),
+        [Scripts.AnachronosTheAncientAI.Entry] = E(static c => new Scripts.AnachronosTheAncientAI(c)),
         [Instances.Scripts.SunkenTemple.MalfurionStormrageAI.Entry] = E(static c => new Instances.Scripts.SunkenTemple.MalfurionStormrageAI(c)),
         [Instances.Scripts.DireMaul.DreadsteedRitualAI.Entry] = E(static c => new Instances.Scripts.DireMaul.DreadsteedRitualAI(c)),
+        [Instances.Scripts.Classic.HurleyBlackbreathAI.Entry] = E(static c => new Instances.Scripts.Classic.HurleyBlackbreathAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
@@ -363,6 +369,9 @@ public sealed class CreatureAiFactory
         Scripts.MorokkAI.QuestChallengeMorokk,
         Scripts.RingoAI.QuestALittleHelp,
         Scripts.KatranaPrestorGossip.QuestTrueMasters,
+        Scripts.LoramusThalipedesGossip.QuestTheDemonHunter,
+        Scripts.LoramusThalipedesGossip.QuestLoramus,
+        Scripts.AnachronosTheAncientAI.QuestAPawnOnTheEternalBoard,
         Scripts.ToogaAI.QuestTooga,
         Scripts.KindalMoonweaverAI.QuestFreedomForAllCreatures,
         Scripts.WizzlecranksShredderAI.QuestEscape,
@@ -386,6 +395,8 @@ public sealed class CreatureAiFactory
             gossip: new Instances.Scripts.BlackrockDepths.DughalStormwingGossip());
         RegisterNpcScript(Instances.Scripts.BlackrockDepths.TobiasSeecherGossip.ScriptName, nameof(Instances.Scripts.BlackrockDepths.TobiasSeecherGossip),
             gossip: new Instances.Scripts.BlackrockDepths.TobiasSeecherGossip());
+        RegisterNpcScript(Scripts.LoramusThalipedesGossip.ScriptName, nameof(Scripts.LoramusThalipedesGossip),
+            gossip: new Scripts.LoramusThalipedesGossip());
         // Dungeon and raid ScriptNames that bind by name (an EventAI host, a gossip/quest script, an inert trigger AI).
         Instances.Scripts.Uldaman.ArchaerasAddAI.Register(this);
         Instances.Scripts.Naxxramas.GothikAnchorAI.Register(this);

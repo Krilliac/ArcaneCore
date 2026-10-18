@@ -36,6 +36,48 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
 
     private const uint SpiritServiceFlags = (uint)(NpcFlags.SpiritHealer | NpcFlags.SpiritGuide);
 
+    /// <summary>Spell 9036 (Ghost: SPELL_AURA_GHOST), cast on spawn by ghost NPCs such as Gaeriyan (9299) and Franclorn Forgewright (8888).</summary>
+    public const uint SpellGhostAura = 9036;
+
+    /// <summary>Ghost NPCs whose EventAI casts spell 9036 (Ghost) on spawn (vmangos IsInvisibleForAlive).</summary>
+    public const uint GaeriyanEntry = 9299, FranclornForgewrightEntry = 8888, FranclornSpiritEntry = 9542;
+
+    /// <summary>
+    /// Whether <paramref name="target"/> is invisible to the living and visible to ghosts (vmangos <c>Unit::IsInvisibleForAlive</c>,
+    /// Unit.cpp:7703-7710, and <c>Creature::IsVisibleInGridForPlayer</c>, Creature.cpp:2495): spirit healers and guides, units carrying
+    /// <c>UNIT_VIS_FLAGS_GHOST</c> (<see cref="GhostAuras.VisFlagGhost"/>) or the Ghost aura (<see cref="SpellGhostAura"/>), and the
+    /// ghost NPCs Gaeriyan (9299), Franclorn Forgewright (8888) and Franclorn's Spirit (9542).
+    /// </summary>
+    public static bool IsGhostCreature(Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        if ((target.GetUInt32(UpdateFields.UnitNpcFlags) & SpiritServiceFlags) != 0)
+        {
+            return true;
+        }
+
+        if ((target.GetByte(UpdateFields.UnitFieldBytes1, GhostAuras.VisFlagByte) & GhostAuras.VisFlagGhost) != 0)
+        {
+            return true;
+        }
+
+        uint entry = target.GetUInt32(UpdateFields.ObjectFieldEntry);
+        if (entry is GaeriyanEntry or FranclornForgewrightEntry or FranclornSpiritEntry)
+        {
+            return true;
+        }
+
+        for (int i = 0; i < 48; i++)
+        {
+            if (target.GetUInt32(UpdateFields.UnitFieldAura + i) == SpellGhostAura)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <inheritdoc />
     public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
     {
@@ -93,15 +135,15 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
             return true;
         }
 
-        bool spiritService = (target.GetUInt32(UpdateFields.UnitNpcFlags) & SpiritServiceFlags) != 0;
+        bool ghostCreature = IsGhostCreature(target);
         bool viewerLiving = viewer.Combat.DeathState != DeathState.Dead;
         if (viewerLiving)
         {
-            // IsInvisibleForAlive differs between a living viewer and a living spirit service: the living cannot see it.
-            return !(viewer.IsAlive && target.IsAlive && spiritService);
+            // IsInvisibleForAlive differs between a living viewer and a living ghost/spirit-service creature: the living cannot see it.
+            return !(viewer.IsAlive && target.IsAlive && ghostCreature);
         }
 
-        if (spiritService)
+        if (ghostCreature)
         {
             return true;
         }

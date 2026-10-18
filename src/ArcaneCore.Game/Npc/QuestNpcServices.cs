@@ -89,6 +89,9 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         _sink = sink;
         _unixNow = unixNow;
         _logger = logger;
+        _entryGossipScripts[Creatures.Scripts.LoramusThalipedesGossip.Entry] = new Creatures.Scripts.LoramusThalipedesGossip(
+            (p, q) => Ready(p)?.Quests.GetStatus(q) == QuestStatus.Incomplete,
+            AreaExploredOrEventHappens);
     }
 
     // The stores are immutable; the live reload (.reload quest_template, npc_vendor, ...) swaps whole
@@ -271,9 +274,11 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
             return null;
         }
 
-        // Spirit healers and guides are invisible to the living and the only NPCs the dead can use
-        // (vmangos IsInvisibleForAlive / m_isSpiritService; ghosts only see spirit services).
-        bool spiritService = (npc.NpcFlags & (NpcFlags.SpiritHealer | NpcFlags.SpiritGuide)) != 0;
+        // Spirit healers, guides, and ghost NPCs (Gaeriyan 9299, Franclorn Forgewright 8888, SPELL_AURA_GHOST) are invisible
+        // to the living and the only NPCs the dead can use (vmangos IsInvisibleForAlive / m_isSpiritService).
+        bool spiritService = (npc.NpcFlags & (NpcFlags.SpiritHealer | NpcFlags.SpiritGuide)) != 0
+            || npc.Entry is Death.Visibility.GhostVisibilityRule.GaeriyanEntry or Death.Visibility.GhostVisibilityRule.FranclornForgewrightEntry
+            || (player.Map?.FindObject(guid) is Unit unit && Death.Visibility.GhostVisibilityRule.IsGhostCreature(unit));
         if (player.IsAlive == spiritService)
         {
             refusal = spiritService ? InteractRefusal.SpiritServiceAlive : InteractRefusal.DeadNotSpiritService;

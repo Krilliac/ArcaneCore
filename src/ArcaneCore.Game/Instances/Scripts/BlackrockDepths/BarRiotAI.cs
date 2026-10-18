@@ -150,3 +150,121 @@ public sealed class PhalanxAI(Creature creature, BlackrockDepthsInstance instanc
         else remaining -= diffMs;
     }
 }
+
+/// <summary>mangos-classic blackrock_depths/blackrock_depths.cpp npc_hurley_blackbreathAI (Reset, AttackStart, Aggro, WaypointReached, UpdateEscortAI).</summary>
+public sealed class HurleyBlackbreathAI(Creature creature) : EscortAI(creature)
+{
+    public const uint Entry = 9537;
+    public const string ScriptName = "npc_hurley_blackbreath";
+    public const int YellHurleySpawn = -1230041;
+    public const int SayHurleyAggro = -1230042;
+    public const uint SpellDrunkenRage = 14872;
+    public const uint SpellFlameBreath = 9573;
+    public const uint NpcRibblyScrewspigot = 9543;
+    public const uint NpcRibblyCrony = 10043;
+    public const uint NpcBlackbreathCrony = 9541;
+
+    private uint _flameBreathMs;
+    private uint _eventTimerMs = 1000;
+    private bool _enraged;
+
+    protected override void Reset()
+    {
+        if (HasEscortState(EscortState.Escorting | EscortState.Paused))
+        {
+            SetCurrentWaypoint(5);
+            SetEscortPaused(false);
+        }
+        else
+        {
+            _eventTimerMs = 1000;
+        }
+
+        _flameBreathMs = 0;
+        _enraged = false;
+    }
+
+    public override bool AttackStart(Unit target)
+    {
+        if (target is Creature { Entry: NpcRibblyScrewspigot or NpcRibblyCrony })
+        {
+            return false;
+        }
+
+        return base.AttackStart(target);
+    }
+
+    protected override void Aggro(Unit target)
+    {
+        _flameBreathMs = 7000;
+        _enraged = false;
+        System?.SayText(Me, SayHurleyAggro);
+    }
+
+    internal void NotifyWaypointReached(uint pointId) => WaypointReached(pointId);
+
+    protected override void WaypointReached(uint pointId)
+    {
+        switch (pointId)
+        {
+            case 2:
+                System?.SayText(Me, YellHurleySpawn);
+                SetRun(true);
+                break;
+            case 6:
+                SetEscortPaused(true);
+                Me.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc);
+                if (System is { } system)
+                {
+                    foreach (Creature crony in system.CreaturesOfEntryInRange(Me, NpcBlackbreathCrony, 30f))
+                    {
+                        if (crony.IsAlive)
+                        {
+                            crony.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc);
+                        }
+                    }
+                }
+                break;
+        }
+    }
+
+    protected override void UpdateEscortAI(uint diffMs)
+    {
+        if (UpdateVictim() && Victim is { } victim)
+        {
+            if (_flameBreathMs < diffMs)
+            {
+                if (DoCast(victim, SpellFlameBreath) == CreatureCastResult.Ok)
+                {
+                    _flameBreathMs = 10_000;
+                }
+            }
+            else
+            {
+                _flameBreathMs -= diffMs;
+            }
+
+            if (Me.Health * 100UL < Me.MaxHealth * 31UL && !_enraged)
+            {
+                if (DoCast(Me, SpellDrunkenRage) == CreatureCastResult.Ok)
+                {
+                    _enraged = true;
+                }
+            }
+        }
+        else if (_eventTimerMs != 0)
+        {
+            if (_eventTimerMs <= diffMs)
+            {
+                _eventTimerMs = 0;
+                Start(run: false);
+                SetEscortPaused(false);
+            }
+            else
+            {
+                _eventTimerMs -= diffMs;
+            }
+        }
+    }
+}
+

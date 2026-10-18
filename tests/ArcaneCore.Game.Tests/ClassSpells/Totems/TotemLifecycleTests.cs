@@ -197,6 +197,24 @@ public sealed class TotemLifecycleTests
     }
 
     [Fact]
+    public void SentryTotem_RemovesOwnerAura6495_WhenKilledOrReplaced()
+    {
+        using var kit = new TotemKit();
+        (Player shaman, _) = kit.AddPlayer(1, 0, 0);
+
+        kit.Cast(shaman, TotemKit.SentryTotem);
+        Creature sentry = kit.Totems.GetTotem(shaman, TotemSlot.Air)!;
+        Assert.Equal(TotemKit.SentryEntry, sentry.Entry);
+        Assert.True(kit.Spells.HasAura(shaman, TotemKit.SentryTotem));
+
+        sentry.Health = 0;
+        kit.Advance(100);
+
+        Assert.Null(kit.Totems.GetTotem(shaman, TotemSlot.Air));
+        Assert.False(kit.Spells.HasAura(shaman, TotemKit.SentryTotem));
+    }
+
+    [Fact]
     public void SpawnAnimation_ReachesObserversAfterTheyKnowTheTotem_AndDespawnAnimationBeforeItGoes_NeverATotemBar()
     {
         using var kit = new TotemKit();

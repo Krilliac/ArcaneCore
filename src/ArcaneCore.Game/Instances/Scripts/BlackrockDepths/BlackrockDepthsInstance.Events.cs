@@ -133,6 +133,7 @@ public sealed partial class BlackrockDepthsInstance
             creatures.RegisterEntryAi(NpcEmperor, c => new EmperorDagranAI(c, this));
             creatures.RegisterEntryAi(NpcPrincess, c => new MoiraBronzebeardAI(c, this));
             creatures.RegisterEntryAi(NpcPlugger, c => new PluggerAI(c));
+            creatures.RegisterEntryAi(HurleyBlackbreathAI.Entry, c => new HurleyBlackbreathAI(c));
             creatures.RegisterEntryAi(NpcPhalanx, c => new PhalanxAI(c, this));
             creatures.RegisterEntryAi(10096, c => new GrimstoneAI(c, this));
         }

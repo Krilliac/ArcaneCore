@@ -38,6 +38,7 @@ internal sealed class TotemKit : IDisposable
     public const uint SlowEntry = 940007;
     public const uint SilentEntry = 940008;
     public const uint ActiveEntry = 940009;
+    public const uint SentryEntry = 3968;
 
     public TotemKit(TotemOptions? options = null, int summonDurationMs = 60_000)
     {
@@ -47,6 +48,7 @@ internal sealed class TotemKit : IDisposable
             Template(FireEntry, t => t.AIName = "TotemAI"),
             Template(WaterEntry, t => t.AIName = "TotemAI"),
             Template(AirEntry, t => t.AIName = "TotemAI"),
+            Template(SentryEntry, t => t.AIName = "TotemAI"),
             Template(NoSlotEntry, t => t.AIName = "TotemAI"),
             Template(TremorEntry, t => t.AIName = "TotemAI"),
             Template(SlowEntry, t => t.AIName = "TotemAI"),
@@ -63,7 +65,7 @@ internal sealed class TotemKit : IDisposable
                 Summon(WaterTotemSummon, SpellEffectName.SummonTotemSlot3, 42, WaterEntry, summonDurationMs),
                 Summon(AirTotemSummon, SpellEffectName.SummonTotemSlot4, 43, AirEntry, summonDurationMs),
                 Spell(SentryTotem,
-                    Effect(SpellEffectName.SummonTotemSlot4, 100, (SpellImplicitTarget)43, misc: (int)AirEntry) with { Radius = 2 },
+                    Effect(SpellEffectName.SummonTotemSlot4, 100, (SpellImplicitTarget)43, misc: (int)SentryEntry) with { Radius = 2 },
                     Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.Dummy)) with
                 {
                     StartRecoveryCategory = 0, StartRecoveryTime = 0,

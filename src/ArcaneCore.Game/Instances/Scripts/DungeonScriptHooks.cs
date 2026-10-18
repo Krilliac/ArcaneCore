@@ -29,6 +29,11 @@ public static class DungeonScriptHooks
     public static bool OnQuestAccepted(Player player, ObjectGuid giverGuid, uint questId)
     {
         ArgumentNullException.ThrowIfNull(player);
+        if (questId == Creatures.Scripts.AnachronosTheAncientAI.QuestAPawnOnTheEternalBoard)
+        {
+            return Creatures.Scripts.AnachronosTheAncientAI.TryStartFromQuestAccept(player, giverGuid);
+        }
+
         if (player.Map?.FindObject(giverGuid) is not Creature giver) return false;
         return (questId, giver.AI) switch
         {

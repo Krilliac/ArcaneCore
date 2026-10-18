@@ -194,6 +194,11 @@ public sealed partial class QuestNpcServices
 
         if (accepted && Quests.Get(questId) is { } acceptedQuest)
         {
+            if (questId == Creatures.Scripts.AnachronosTheAncientAI.QuestAPawnOnTheEternalBoard)
+            {
+                Creatures.Scripts.AnachronosTheAncientAI.TryStartFromQuestAccept(player, guid);
+            }
+
             QuestAccepted?.Invoke(player, guid, acceptedQuest);
         }
 
