@@ -72,11 +72,79 @@ public sealed class GenericGadgetScriptTests
     [InlineData(50, 13099u)]
     public void NetOMatic_FollowsTheVmangosTable(int roll, uint spell) => Assert.Equal(spell, NetOMaticScript.Pick(roll));
 
+    private static SpellInfo Marker(uint id, SpellImplicitTarget target = SpellImplicitTarget.UnitEnemy) =>
+        Instant(Spell(id, Effect(SpellEffectName.ApplyAura, 0, target, AuraType.Dummy)) with
+        {
+            Duration = new SpellDuration(30_000, 0, 30_000),
+            RangeIndex = 4,
+            Range = new SpellRange(0, 40),
+        });
+
+    private static SpellInfo AtEnemy(uint id) => Instant(Spell(id, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with
+    {
+        RangeIndex = 4,
+        Range = new SpellRange(0, 40),
+    });
+
+    [Fact]
+    public void StingerChargePrimer_ChargesCatalystTargetsWithTheHeavyCharge()
+    {
+        using SpellTestKit kit = Kit(AtEnemy(24150), Marker(25190), Marker(25191), Marker(25187, SpellImplicitTarget.UnitCaster));
+        (Player stinger, _) = kit.AddPlayer(1);
+        (Player plain, _) = kit.AddPlayer(2, 5, 0);
+        (Player catalyst, _) = kit.AddPlayer(3, -5, 0);
+        kit.System.Relations = new FakeRelations { Hostile = { plain.Guid, catalyst.Guid } };
+        Assert.True(kit.System.AddAura(catalyst, 25187));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(stinger, 24150, SpellCastTargets.ForUnit(plain.Guid), triggered: true));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(stinger, 24150, SpellCastTargets.ForUnit(catalyst.Guid), triggered: true));
+
+        Assert.True(kit.System.HasAura(plain, 25190));
+        Assert.False(kit.System.HasAura(plain, 25191));
+        Assert.True(kit.System.HasAura(catalyst, 25191));
+    }
+
+    [Fact]
+    public void DespawnIceBlock_FreesThePlayerFromIcebolt()
+    {
+        using SpellTestKit kit = Kit(AtEnemy(30132), Marker(31800, SpellImplicitTarget.UnitCaster), Marker(28522, SpellImplicitTarget.UnitCaster));
+        (Player sapphiron, _) = kit.AddPlayer(1);
+        (Player frozen, _) = kit.AddPlayer(2, 5, 0);
+        kit.System.Relations = new FakeRelations { Hostile = { frozen.Guid } };
+        Assert.True(kit.System.AddAura(frozen, 31800));
+        Assert.True(kit.System.AddAura(frozen, 28522));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(sapphiron, 30132, SpellCastTargets.ForUnit(frozen.Guid), triggered: true));
+
+        Assert.False(kit.System.HasAura(frozen, 31800));
+        Assert.False(kit.System.HasAura(frozen, 28522));
+    }
+
+    [Fact]
+    public void AuraOfFrost_ChillsMarkedPlayers_AndEndsStealth()
+    {
+        using SpellTestKit kit = Kit(AtEnemy(23185), Marker(23182, SpellImplicitTarget.UnitCaster), Marker(23186, SpellImplicitTarget.UnitCaster),
+            Instant(Spell(1784, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModStealth)) with
+            {
+                Duration = new SpellDuration(-1, 0, -1),
+            }));
+        (Player azuregos, _) = kit.AddPlayer(1);
+        (Player rogue, _) = kit.AddPlayer(2, 5, 0);
+        kit.System.Relations = new FakeRelations { Hostile = { rogue.Guid } };
+        Assert.True(kit.System.AddAura(rogue, 23182));
+        Assert.True(kit.System.AddAura(rogue, 1784));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(azuregos, 23185, SpellCastTargets.ForUnit(rogue.Guid), triggered: true));
+
+        Assert.True(kit.System.HasAura(rogue, 23186));
+        Assert.False(kit.System.HasAura(rogue, 1784));
+    }
+
     [Fact]
     public void EveryGadgetScript_IsDiscovered()
     {
         IEnumerable<uint> ids = SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly).SpellIds;
-        Assert.Superset(new HashSet<uint> { 23074, 23075, 23076, 23133, 23134, 4050, 23453, 23448, 8344, 13006, 13180, 14537, 17009, 13120, 23725 },
+        Assert.Superset(new HashSet<uint> { 23074, 23075, 23076, 23133, 23134, 4050, 23453, 23448, 8344, 13006, 13180, 14537, 17009, 13120, 23725, 24150, 28352, 26626, 28006, 26399, 25754, 26559, 25676, 26457, 25671, 25755, 29182, 29188, 30132, 27687, 27695, 24320, 24590, 26465, 26656, 8897, 23185, 25044 },
             ids.ToHashSet());
     }
 }
