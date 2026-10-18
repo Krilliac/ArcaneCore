@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Numerics;
 using ArcaneCore.World.Bots;
 
@@ -209,25 +208,36 @@ internal readonly record struct FeedView(uint MapId, uint InstanceId, FeedKinds 
 
 /// <summary>
 /// The frames in use, bounded: a capture that finds none free is skipped (and counted as dropped) instead of allocating, so a stalled
-/// connection can pin only a few frames. Any thread.
+/// connection can pin only a few frames. Backed by a fixed array so returning a frame allocates nothing. Any thread.
 /// </summary>
 internal sealed class FramePool(int limit)
 {
-    private readonly ConcurrentStack<FeedFrame> _free = new();
+    private readonly Lock _gate = new();
+    private readonly FeedFrame?[] _free = new FeedFrame?[limit];
+    private int _freeCount;
     private int _created;
 
     /// <summary>A cleared frame holding one reference (the caller's), or null when <c>limit</c> frames are in use.</summary>
     public FeedFrame? Rent()
     {
-        if (!_free.TryPop(out FeedFrame? frame))
+        FeedFrame? frame = null;
+        lock (_gate)
         {
-            if (Interlocked.Increment(ref _created) > limit)
+            if (_freeCount > 0)
             {
-                Interlocked.Decrement(ref _created);
-                return null;
+                frame = _free[--_freeCount];
+                _free[_freeCount] = null;
             }
+            else if (_created < limit)
+            {
+                _created++;
+                frame = new FeedFrame(this);
+            }
+        }
 
-            frame = new FeedFrame(this);
+        if (frame is null)
+        {
+            return null;
         }
 
         frame.AddHolder();
@@ -237,12 +247,18 @@ internal sealed class FramePool(int limit)
     public void Return(FeedFrame frame)
     {
         frame.Clear();
-        _free.Push(frame);
+        lock (_gate)
+        {
+            if (_freeCount < _free.Length)
+            {
+                _free[_freeCount++] = frame;
+            }
+        }
     }
 
     /// <summary>Frames created so far (tests).</summary>
     public int Created => Volatile.Read(ref _created);
 
     /// <summary>Frames waiting for reuse (tests).</summary>
-    public int Free => _free.Count;
+    public int Free => Volatile.Read(ref _freeCount);
 }

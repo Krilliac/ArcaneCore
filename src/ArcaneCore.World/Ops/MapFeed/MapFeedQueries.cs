@@ -178,6 +178,11 @@ internal static class MapFeedQueries
         };
     }
 
+    /// <summary>
+    /// A navigation path from <c>a</c> to <c>b</c> without loading any tile (<see cref="PathOptions.LoadTiles"/> defaults to false). The
+    /// start and end grids must be loaded; an unloaded tile along the search stops the detour search at the loaded boundary and reports the
+    /// partial answer through <see cref="PathResult.Type"/> (<see cref="PathType.Incomplete"/>).
+    /// </summary>
     private static QueryAnswer AnswerPath(Map map, in FeedRequest request)
     {
         if (!PointLoaded(map, request.A.X, request.A.Y, out (int X, int Y) missing)

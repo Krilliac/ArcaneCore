@@ -49,8 +49,9 @@ Server lines besides `hello`:
   the kinds filter), `emitted`, `truncated`, `nonFinite` (entities or paths left out because a coordinate was not a finite number),
   `pathsOmitted`, `dropped` (frames this connection lost to backpressure), `online`, `diffMs`, and the creature system's path counters
   `deferredPaths`, `directFallbackPaths`, `noPathPaths`, `homePathTeleports`.
-* An entity is `{"g":"<16 hex digits>","k":"player|bot|creature|gameobject","e":entry,"n":"name","x":..,"y":..,"z":..,"o":..}` plus,
-  when it has them: `hp` (health percent), `mt` (creature motion: `idle`, `random`, `waypoint`, `confused`, `chase`, `home`, `point`,
+* An entity is `{"g":"<16 hex digits>","k":"player|bot|creature|gameobject","n":"name","x":..,"y":..,"z":..,"o":..}` plus,
+  when it has them: `e` (template entry, emitted for `creature` and `gameobject` only; players and bots have no entry and omit `e`),
+  `hp` (health percent), `mt` (creature motion: `idle`, `random`, `waypoint`, `confused`, `chase`, `home`, `point`,
   `fleeing`, `distract`, `follow`, `formation`, else `unknown`), `tg` (the unit chased, else the selected target), `home` (`[x,y,z]`),
   `sp` (the creature's current spline: `{"id":n,"start":[x,y,z],"pts":[[x,y,z],...],"t0":clockMs,"dur":ms,"run":bool}`, with `"cut":true`
   when its points were cut at 512; `clockMs - t0` is the elapsed time the server itself uses), and `route` (a bot's current route:
@@ -80,12 +81,13 @@ of silence without a subscription close the connection (after the error line). R
 ## Queries
 
 Each query runs once on the world thread through `WorldRuntime.InvokeAsync` (10 s limit) against that map's `MapCollision`. Coordinates
-are checked first: three finite numbers inside the map, else `bad-args`, so collision code never sees anything else. A point (or, for
-`los`, any grid the segment crosses) whose grid or terrain tile is not loaded is refused with `not-loaded`; the feed never loads one.
+are checked first: three finite numbers inside the map, else `bad-args`, so collision code never sees anything else. A point (for `path`,
+both endpoints; for `los`, any grid the segment crosses) whose grid or terrain tile is not loaded is refused with `not-loaded`; the feed
+never loads one.
 
 | Kind | Answer |
 |---|---|
 | `los` | `clear` (the server's line of sight, doodads ignored), `clearDoodads` (doodads counted), `data` (model data loaded), and `hit` (the first model hit) when either is blocked. |
 | `height` | `terrain`, `model` (the model floor below z + 2), `floor` (the server's chosen floor), `outdoors`; null where the data holds no answer. |
-| `path` | `hasPath`, `type` (the path flags), `length`, `pts` (at most 1024, `"cut":true` beyond), `data` (navigation data for the map). Tile reads stay off. |
+| `path` | `hasPath`, `type` (the path flags), `length`, `pts` (at most 1024, `"cut":true` beyond), `data` (navigation data for the map). Tile reads stay off: when an intermediate navmesh tile between the loaded endpoints is not loaded, the search stops at the loaded boundary and reports the partial path in `type` (`"incomplete"`). |
 | `undermap` | `verdict` `ok`, `undermap` (with `depth` in yards) or `unknown`. |

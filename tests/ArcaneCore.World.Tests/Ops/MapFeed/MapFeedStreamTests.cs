@@ -5,10 +5,13 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Bots;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Tests.Ops.Control;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 using static ArcaneCore.World.Tests.Ops.Control.WorldControlPipeTests;
 
@@ -284,6 +287,64 @@ public sealed class MapFeedStreamTests
         Assert.False(entity.TryGetProperty("route", out _));
     }
 
+    private sealed class ThrowingRouteSource : IBotRouteSource
+    {
+        public int CopyRoute(Player bot, Span<Vector3> destination, out BotRouteInfo info)
+            => throw new InvalidOperationException("broken route source");
+    }
+
+    [WindowsFact]
+    public async Task AThrowingRouteSource_OmitsTheRoute_KeepsTheFrame_AndLogsARateLimitedWarningWithoutError()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup { Bots = true, Terrain = false, Options = o => o.MaxHz = 60 });
+        Guid botId = await world.AddBotAsync("Feedfault");
+        ManagedBotRegistry registry = world.Host.WorldServices.GetRequiredService<ManagedBotRegistry>();
+        FeatureHost features = world.Host.WorldServices.GetRequiredService<FeatureHost>();
+        ulong botGuid = await world.Host.OnWorldAsync(() =>
+        {
+            registry.TryGet(botId, out ManagedBot found);
+            return found.Session.Player!.Guid.Value;
+        });
+
+        FeatureResult detached = await features.DetachAsync(nameof(ManagedPlayerbotFeature));
+        Assert.True(detached.Ok, detached.Detail);
+        Assert.Null(registry.RouteSource);
+
+        using (registry.UseRouteSource(new ThrowingRouteSource()))
+        {
+            FeedClient client = await world.ConnectAsync();
+            JsonElement first = await SubscribeAndReadFirstAsync(client, FeedClient.Subscribe(hz: 60));
+
+            JsonElement entity = first.Entity(botGuid);
+            Assert.Equal("bot", entity.GetProperty("k").GetString());
+            Assert.False(entity.TryGetProperty("route", out _));
+            Assert.Equal(1, first.Counters().GetProperty("pathsOmitted").GetInt32());
+            Assert.Equal(1, world.Feed.RouteFaults);
+
+            WorldControlPipeTests.LogEntry warning = Assert.Single(
+                world.FeedLog,
+                e => e.Level == LogLevel.Warning && e.Message.Contains("route source", StringComparison.Ordinal));
+            Assert.Contains("1 so far", warning.Message, StringComparison.Ordinal);
+
+            // Faults 2..99 stay silent; the 100th logs the second warning.
+            List<JsonElement> next = await world.StepFramesAsync(client, 99);
+            Assert.Equal(99, next.Count);
+            Assert.Equal(100, world.Feed.RouteFaults);
+            WorldControlPipeTests.LogEntry[] routeWarnings =
+            [
+                .. world.FeedLog.Where(e => e.Level == LogLevel.Warning && e.Message.Contains("route source", StringComparison.Ordinal)),
+            ];
+            Assert.Equal(2, routeWarnings.Length);
+            Assert.Contains("100 so far", routeWarnings[1].Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(world.Logs.Entries, e => e.Level >= LogLevel.Error);
+        }
+    }
+
     [WindowsFact]
     public async Task TheKindsFilter_LeavesOutWhatWasNotAskedFor_ButTheCountersStillCountIt()
     {
@@ -406,14 +467,33 @@ public sealed class MapFeedStreamTests
 
         // 5 Hz (the default cap): 200 ms apart. The first frame at once, then one in every fourth 50 ms step.
         FeedClient five = await world.ConnectAsync();
-        await SubscribeAndReadFirstAsync(five, FeedClient.Subscribe(hz: 5));
+        JsonElement firstFive = await SubscribeAndReadFirstAsync(five, FeedClient.Subscribe(hz: 5));
         List<JsonElement> fiveFrames = await world.StepFramesAsync(five, 20);
         Assert.Equal(5, fiveFrames.Count);
+        Assert.Equal(200, fiveFrames[0].GetProperty("clockMs").GetInt64() - firstFive.GetProperty("clockMs").GetInt64());
         for (int i = 1; i < fiveFrames.Count; i++)
         {
             Assert.Equal(200, fiveFrames[i].GetProperty("clockMs").GetInt64() - fiveFrames[i - 1].GetProperty("clockMs").GetInt64());
         }
 
+        await UnsubscribeAsync(world, five);
+
+        // When the first tick after subscribing carries 50 ms of game time, the gap to the second frame is still a full 200 ms (4 ticks).
+        await world.Host.OnWorldAsync(() =>
+        {
+            _ = five.SendAsync(FeedClient.Subscribe(hz: 5));
+            SpinWait.SpinUntil(() => world.Feed.SubscriptionCount == 1, TimeSpan.FromSeconds(5));
+            Assert.Equal(1, world.Feed.SubscriptionCount);
+            for (int tick = 0; tick < 5; tick++)
+            {
+                world.Host.World.RunTick(50);
+            }
+
+            return true;
+        });
+        JsonElement tickFirst = await five.ReadOpAsync("frame");
+        JsonElement tickSecond = await five.ReadOpAsync("frame");
+        Assert.Equal(200, tickSecond.GetProperty("clockMs").GetInt64() - tickFirst.GetProperty("clockMs").GetInt64());
         await UnsubscribeAsync(world, five);
 
         // Asking for 60 Hz under a 5 Hz cap gets 5 Hz.

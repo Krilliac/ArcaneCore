@@ -57,6 +57,7 @@ public sealed class WorldMapFeed : IHostedService
     private readonly FramePool _pool;
     private readonly FeedFrame?[] _tickFrames;
     private readonly HashSet<ulong> _botGuids = [];
+    private readonly Action<Exception> _onRouteFault;
     private FeedSubscription[] _subscriptions = [];
     private bool _attached;
     private bool _registryResolved;
@@ -68,6 +69,7 @@ public sealed class WorldMapFeed : IHostedService
     private long _framesCaptured;
     private long _framesDropped;
     private long _captureFaults;
+    private long _routeFaults;
     private long _connections;
     private int _active;
 
@@ -78,6 +80,7 @@ public sealed class WorldMapFeed : IHostedService
         _world = world;
         _services = services;
         _logger = loggerFactory.CreateLogger(LogCategory);
+        _onRouteFault = NoteRouteFault;
 
         // Sized from the limit the options allow (a value outside it keeps the feed off, but the service is still built).
         int connections = Math.Clamp(_options.MaxConnections, 1, WorldMapFeedOptions.MaxMaxConnections);
@@ -146,6 +149,9 @@ public sealed class WorldMapFeed : IHostedService
 
     /// <summary>Captures that threw (the exception was logged and swallowed; tests).</summary>
     internal long CaptureFaults => Volatile.Read(ref _captureFaults);
+
+    /// <summary>Bot route copies that threw (the route was skipped and logged; tests).</summary>
+    internal long RouteFaults => Volatile.Read(ref _routeFaults);
 
     /// <summary>The frame pool (tests).</summary>
     internal FramePool Pool => _pool;
@@ -363,16 +369,24 @@ public sealed class WorldMapFeed : IHostedService
         {
             foreach (FeedSubscription subscription in subscriptions)
             {
-                subscription.AccumulatedMs += diffMs;
-                if (subscription.AccumulatedMs < subscription.IntervalMs)
+                if (subscription.FirstFrame)
                 {
-                    continue;
+                    subscription.FirstFrame = false;
+                    subscription.AccumulatedMs = 0;
                 }
-
-                subscription.AccumulatedMs -= subscription.IntervalMs;
-                if (subscription.AccumulatedMs >= subscription.IntervalMs)
+                else
                 {
-                    subscription.AccumulatedMs = 0; // a long tick does not buy a burst of frames
+                    subscription.AccumulatedMs += diffMs;
+                    if (subscription.AccumulatedMs < subscription.IntervalMs)
+                    {
+                        continue;
+                    }
+
+                    subscription.AccumulatedMs -= subscription.IntervalMs;
+                    if (subscription.AccumulatedMs >= subscription.IntervalMs)
+                    {
+                        subscription.AccumulatedMs = 0; // a long tick does not buy a burst of frames
+                    }
                 }
 
                 try
@@ -446,7 +460,16 @@ public sealed class WorldMapFeed : IHostedService
             _tickFrames[_tickFrameCount++] = frame; // the tick's own holder, released at its end
             try
             {
-                MapFeedCapture.Fill(frame, map, _world, view, _options.MaxEntitiesPerFrame, _botGuids.Count == 0 ? null : _botGuids, _routes, diffMs);
+                MapFeedCapture.Fill(
+                    frame,
+                    map,
+                    _world,
+                    view,
+                    _options.MaxEntitiesPerFrame,
+                    _botGuids.Count == 0 ? null : _botGuids,
+                    _routes,
+                    diffMs,
+                    _onRouteFault);
             }
             catch
             {
@@ -486,6 +509,15 @@ public sealed class WorldMapFeed : IHostedService
     {
         connection.NoteDropped();
         Interlocked.Increment(ref _framesDropped);
+    }
+
+    private void NoteRouteFault(Exception ex)
+    {
+        long faults = Interlocked.Increment(ref _routeFaults);
+        if (faults == 1 || faults % 100 == 0)
+        {
+            _logger.LogWarning(ex, "map feed: the bot route source failed and the route was skipped ({Faults} so far)", faults);
+        }
     }
 
     /// <summary>Collect the managed bots' player guids (so players can be told from bots) and read the route seam, once per tick.</summary>
@@ -585,8 +617,8 @@ public sealed class WorldMapFeed : IHostedService
     }
 
     /// <summary>
-    /// What one connection watches. The settings are fixed; <see cref="AccumulatedMs"/> and <see cref="MapMissingReported"/> belong to the
-    /// world thread (only <see cref="OnUpdated"/> touches them).
+    /// What one connection watches. The settings are fixed; <see cref="FirstFrame"/>, <see cref="AccumulatedMs"/> and
+    /// <see cref="MapMissingReported"/> belong to the world thread (only <see cref="OnUpdated"/> touches them).
     /// </summary>
     private sealed class FeedSubscription(MapFeedConnection connection, uint mapId, uint instanceId, FeedKinds kinds, bool paths, double hz)
     {
@@ -603,8 +635,11 @@ public sealed class WorldMapFeed : IHostedService
         /// <summary>The time between frames in world milliseconds.</summary>
         public long IntervalMs { get; } = Math.Max(1L, (long)Math.Round(1000.0 / hz));
 
-        /// <summary>Time since the last frame; starts at a full interval so the first tick after subscribing captures.</summary>
-        public long AccumulatedMs { get; set; } = Math.Max(1L, (long)Math.Round(1000.0 / hz));
+        /// <summary>True until the first tick after subscribing has run: that tick captures at once and starts <see cref="AccumulatedMs"/> at 0.</summary>
+        public bool FirstFrame { get; set; } = true;
+
+        /// <summary>Time since the last frame; reaches <see cref="IntervalMs"/> after a full interval of game time.</summary>
+        public long AccumulatedMs { get; set; }
 
         public bool MapMissingReported { get; set; }
     }

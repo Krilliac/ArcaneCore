@@ -31,7 +31,8 @@ internal static class MapFeedCapture
         int maxEntities,
         HashSet<ulong>? botGuids,
         IBotRouteSource? routes,
-        uint diffMs)
+        uint diffMs,
+        Action<Exception>? onRouteFault = null)
     {
         CreatureMapSystem? creatureSystem = map.FindUpdater<CreatureMapSystem>();
         GameObjectMapSystem? objectSystem = map.FindUpdater<GameObjectMapSystem>();
@@ -63,7 +64,7 @@ internal static class MapFeedCapture
             counters.HomePathTeleports = creatureSystem.HomePathTeleports;
         }
 
-        FillPlayers(frame, map, view, maxEntities, botGuids, routes);
+        FillPlayers(frame, map, view, maxEntities, botGuids, routes, onRouteFault);
         if (creatureSystem is not null && (view.Kinds & FeedKinds.Creature) != 0)
         {
             FillCreatures(frame, creatureSystem, view, maxEntities);
@@ -75,7 +76,14 @@ internal static class MapFeedCapture
         }
     }
 
-    private static void FillPlayers(FeedFrame frame, Map map, in FeedView view, int maxEntities, HashSet<ulong>? botGuids, IBotRouteSource? routes)
+    private static void FillPlayers(
+        FeedFrame frame,
+        Map map,
+        in FeedView view,
+        int maxEntities,
+        HashSet<ulong>? botGuids,
+        IBotRouteSource? routes,
+        Action<Exception>? onRouteFault)
     {
         foreach (Player player in map.Players)
         {
@@ -116,7 +124,7 @@ internal static class MapFeedCapture
             SetTarget(ref entity, player.Target.Value);
             if (isBot && view.Paths && routes is not null)
             {
-                AddRoute(frame, index, routes, player);
+                AddRoute(frame, index, routes, player, onRouteFault);
             }
         }
     }
@@ -317,10 +325,10 @@ internal static class MapFeedCapture
     }
 
     /// <summary>
-    /// A bot's current route from the playerbot pack's seam. The seam is the pack's code: a failure in it loses this one route (counted),
-    /// never the frame.
+    /// A bot's current route from the playerbot pack's seam. The seam is the pack's code: a failure in it loses this one route (counted
+    /// and rate-limited at Warning), never the frame.
     /// </summary>
-    private static void AddRoute(FeedFrame frame, int index, IBotRouteSource routes, Player bot)
+    private static void AddRoute(FeedFrame frame, int index, IBotRouteSource routes, Player bot, Action<Exception>? onRouteFault)
     {
         int room = MapFeedProtocol.MaxFramePoints - frame.PointCount;
         if (room <= 0)
@@ -340,6 +348,7 @@ internal static class MapFeedCapture
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             frame.Counters.PathsOmitted++;
+            onRouteFault?.Invoke(ex);
             return;
         }
 

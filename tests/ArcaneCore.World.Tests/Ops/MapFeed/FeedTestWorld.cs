@@ -338,7 +338,8 @@ internal static class FeedTerrain
         BinaryPrimitives.WriteUInt32LittleEndian(span[20..], 16u); // height section size
 
         // ref: D:/refs/vmangos@0e3ff01/src/game/Maps/GridMapDefines.h:28-38 (MHGT header: fourcc, flags, gridHeight, gridMaxHeight; 0x1 = no height)
-        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:121-130 (the server's read of that header)
+        // ref: D:/refs/vmangos@0e3ff01/src/game/Maps/GridMap.cpp:38,174 (MAP_HEIGHT_MAGIC = "MHGT", little-endian u32 = 0x5447484D)
+        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:41,121-130 (HeightMagic = 0x5447484D and the server's read of that header)
         BinaryPrimitives.WriteUInt32LittleEndian(span[40..], 0x5447484Du); // "MHGT"
         BinaryPrimitives.WriteUInt32LittleEndian(span[44..], 1u);
         BinaryPrimitives.WriteSingleLittleEndian(span[48..], groundZ);

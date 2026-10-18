@@ -156,11 +156,13 @@ public sealed class PlayerbotFeatureDetachTests
         FeatureHost features = host.WorldServices.GetRequiredService<FeatureHost>();
         (Guid[] ids, _) = await StartBotsAsync(feature, 1);
         Assert.NotNull(registry.SessionPolicy);
+        Assert.NotNull(registry.RouteSource);
         Assert.True(registry.SessionPolicy!.Lean); // the default fidelity
 
         FeatureResult detached = await features.DetachAsync(nameof(ManagedPlayerbotFeature));
         Assert.True(detached.Ok, detached.Detail);
         Assert.Null(registry.SessionPolicy);
+        Assert.Null(registry.RouteSource);
         Assert.True(feature.IsDetaching);
         for (int tick = 0; tick < 20; tick++) await host.World.AdvanceClockAsync(50);
 
@@ -174,6 +176,7 @@ public sealed class PlayerbotFeatureDetachTests
         Assert.True(attached.Ok, attached.Detail);
         Assert.False(feature.IsDetaching);
         Assert.NotNull(registry.SessionPolicy);
+        Assert.NotNull(registry.RouteSource);
         Assert.False(((IPlayerSession)bot.Session).WantsUpdateObjects); // lean again
         Assert.NotNull(await host.World.InvokeAsync(() => feature.FindBrain(ids[0])));
         Assert.True((await feature.CreateAsync("Allowed", 1, 1)).Success);
@@ -250,6 +253,7 @@ public sealed class PlayerbotFeatureDetachTests
         Assert.Equal(subscriptions, status.Subscriptions);
         Assert.False(feature.IsDetaching);
         Assert.NotNull(registry.SessionPolicy);
+        Assert.NotNull(registry.RouteSource);
         // One of each service: the very instances from before, none started beside them.
         Assert.Same(chat, feature.Chat);
         Assert.Same(inProcess, feature.ChatInProcess);
@@ -343,6 +347,15 @@ public sealed class ManagedBotRegistryTests
         public void ReportHang(string phase, string work, string message, long occurrences) { }
     }
 
+    private sealed class Routes : IBotRouteSource
+    {
+        public int CopyRoute(ArcaneCore.Game.Entities.Player bot, Span<System.Numerics.Vector3> destination, out BotRouteInfo info)
+        {
+            info = default;
+            return 0;
+        }
+    }
+
     [Fact]
     public void ASeam_HoldsOneRegistration_AndOnlyItsOwnDisposalClearsIt()
     {
@@ -360,6 +373,20 @@ public sealed class ManagedBotRegistryTests
         Assert.Same(second, registry.HangSink);
         next.Dispose();
         Assert.Null(registry.HangSink);
+
+        var firstRoutes = new Routes();
+        var secondRoutes = new Routes();
+        IDisposable heldRoutes = registry.UseRouteSource(firstRoutes);
+        Assert.Same(firstRoutes, registry.RouteSource);
+        Assert.Throws<InvalidOperationException>(() => registry.UseRouteSource(secondRoutes));
+
+        heldRoutes.Dispose();
+        Assert.Null(registry.RouteSource);
+        IDisposable nextRoutes = registry.UseRouteSource(secondRoutes);
+        heldRoutes.Dispose();
+        Assert.Same(secondRoutes, registry.RouteSource);
+        nextRoutes.Dispose();
+        Assert.Null(registry.RouteSource);
     }
 
     [Fact]
