@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -52,6 +53,19 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
 
     /// <summary>Cancelled when the owner needs the write lock while shared searches hold it for reading, so they stop at their next check.</summary>
     private CancellationTokenSource _sharedCancel = new();
+
+    /// <summary>
+    /// The caller's options with the current shared cancellation token, per options instance (creature options are a few static
+    /// instances): one copy per generation instead of one per search (10 MB per 30 s on live). Swapped with <see cref="_sharedCancel"/>.
+    /// </summary>
+    private sealed class SharedOptions(CancellationToken token)
+    {
+        public CancellationToken Token { get; } = token;
+
+        public ConcurrentDictionary<PathOptions, PathOptions> ByOptions { get; } = new(ReferenceEqualityComparer.Instance);
+    }
+
+    private SharedOptions? _sharedOptions;
 
     private long _sharedSearchesCanceled;
 
@@ -121,7 +135,21 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             }
 
             CancellationToken cancel = Volatile.Read(ref _sharedCancel).Token;
-            PathOptions shared = options.CancellationToken.CanBeCanceled ? options : options with { CancellationToken = cancel };
+            PathOptions shared = options;
+            if (!options.CancellationToken.CanBeCanceled)
+            {
+                SharedOptions? generation = Volatile.Read(ref _sharedOptions);
+                if (generation is null || generation.Token != cancel)
+                {
+                    generation = new SharedOptions(cancel);
+                    Volatile.Write(ref _sharedOptions, generation);
+                }
+
+                shared = generation.ByOptions.Count < 256
+                    ? generation.ByOptions.GetOrAdd(options, static (o, token) => o with { CancellationToken = token }, cancel)
+                    : options with { CancellationToken = cancel };
+            }
+
             cancel.ThrowIfCancellationRequested();
             PathResult result = FindPath(mesh, mapId, start, end, shared);
             QueryLatency.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).Ticks / (TimeSpan.TicksPerMillisecond / 1000));

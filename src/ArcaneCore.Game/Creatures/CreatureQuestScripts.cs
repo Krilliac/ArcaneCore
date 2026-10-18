@@ -263,8 +263,41 @@ public static class CreatureQuestScripts
             quests.Remove(0);
             return quests;
         });
-        return factory is null ? [.. explored] : [.. explored.Union(factory.ScriptedEventQuests)];
+        if (content is null)
+        {
+            return factory is null ? [] : [.. factory.ScriptedEventQuests];
+        }
+
+        if (factory is null)
+        {
+            return explored;
+        }
+
+        // Asked by every quest-credit check (DbScriptQuestCredit): the union is kept per content and factory, and built again only when the
+        // entry scripts registered more quests (43 MB per 30 s on live as a fresh set and array per call).
+        CreditedCache cache = s_credited.GetOrCreateValue(explored);
+        lock (cache)
+        {
+            int count = factory.ScriptedEventQuests.Count;
+            if (!ReferenceEquals(cache.Factory, factory) || cache.Count != count)
+            {
+                cache.Result = [.. explored.Union(factory.ScriptedEventQuests)];
+                cache.Factory = factory;
+                cache.Count = count;
+            }
+
+            return cache.Result;
+        }
     }
+
+    private sealed class CreditedCache
+    {
+        public CreatureAiFactory? Factory;
+        public int Count = -1;
+        public IReadOnlyCollection<uint> Result = [];
+    }
+
+    private static readonly ConditionalWeakTable<IReadOnlySet<uint>, CreditedCache> s_credited = new();
 
     /// <summary>The creature, game object or sharing player on the player's map; anything else (an item) is no world giver.</summary>
     private static WorldObject? Giver(Player player, ObjectGuid guid)

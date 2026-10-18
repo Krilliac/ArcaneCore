@@ -200,19 +200,19 @@ public sealed partial class WorldSession
 
     internal IReadOnlyList<ManagedSessionPacket> DrainManagedPackets(params WorldOpcode[] onlyOpcodes)
     {
-        var selected = new HashSet<WorldOpcode>(onlyOpcodes);
+        // Bots drain several times per think: no set and no list unless something matches (54 MB per 30 s on live).
         lock (_sendLock)
         {
-            var result = new List<ManagedSessionPacket>();
+            List<ManagedSessionPacket>? result = null;
             int count = _managedPackets.Count;
             for (int i = 0; i < count; i++)
             {
                 ManagedSessionPacket packet = _managedPackets.Dequeue();
-                if (selected.Contains(packet.Opcode))
-                { result.Add(packet); _managedPacketBytes -= packet.Payload.Length; }
+                if (Array.IndexOf(onlyOpcodes, packet.Opcode) >= 0)
+                { (result ??= []).Add(packet); _managedPacketBytes -= packet.Payload.Length; }
                 else _managedPackets.Enqueue(packet);
             }
-            return result;
+            return result ?? (IReadOnlyList<ManagedSessionPacket>)[];
         }
     }
 

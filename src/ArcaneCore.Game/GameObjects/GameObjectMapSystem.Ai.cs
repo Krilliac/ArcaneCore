@@ -101,11 +101,25 @@ public sealed partial class GameObjectMapSystem
             return;
         }
 
-        foreach (GameObject go in _objects.Values.ToArray())
+        // A snapshot (an AI may spawn or despawn objects), into a reused buffer: a fresh array per map per tick was 20 MB per 30 s on live.
+        List<GameObject> snapshot = _aiUpdateBuffer is { Count: 0 } idle ? idle : [];
+        _aiUpdateBuffer = null;
+        snapshot.AddRange(_objects.Values);
+        try
         {
-            AiOf(go)?.Update(this, go, diffMs);
+            foreach (GameObject go in snapshot)
+            {
+                AiOf(go)?.Update(this, go, diffMs);
+            }
+        }
+        finally
+        {
+            snapshot.Clear();
+            _aiUpdateBuffer = snapshot;
         }
     }
+
+    private List<GameObject>? _aiUpdateBuffer = [];
 
     /// <summary>
     /// vmangos GameObject::Despawn for a script: a spawned database object goes now and comes back after its respawn time (the loot-state
