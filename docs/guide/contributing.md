@@ -50,10 +50,10 @@ Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors
 
 Every project has a committed `packages.lock.json` beside its `.csproj` (`Directory.Build.props` sets `RestorePackagesWithLockFile`):
 the exact version and content hash of every direct and transitive package. CI (`ci.yml`, `dotnet.yml`), node CI
-(`tools/ops/ci/node-ci.ps1`), the local full gate (`tools/ops/ci/full-suite-gate.ps1`) and the image build
-(`apps/docker/Dockerfile`) restore with `--locked-mode`, so a restore whose package graph differs from the lock files fails (NU1004)
-instead of quietly resolving something new. A test (`PackageLockFileTests`) checks that every project has one and that every scripted
-restore is locked.
+(`tools/ops/ci/node-ci.ps1`), the local full gate (`tools/ops/ci/full-suite-gate.ps1`), the image build
+(`apps/docker/Dockerfile`) and the deploy build (`tools/ops/deploy/build-integrated.sh`) restore with `--locked-mode`, so a restore
+whose package graph differs from the lock files fails (NU1004) instead of quietly resolving something new. A test
+(`PackageLockFileTests`) checks that every project has one and that every scripted restore is locked.
 
 When you add, remove or bump a `PackageReference` (or a project reference that brings packages with it), refresh the lock files with
 the repository SDK and commit every changed `packages.lock.json` in the same commit as the `.csproj` change:
