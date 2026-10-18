@@ -53,7 +53,7 @@ public sealed partial class WorldSession
 
     internal static async Task<WorldSession> CreateManagedAsync(Account owner, int? characterId,
         IServiceProvider services, OpcodeTable opcodes, WorldRuntime world, SessionRegistry registry,
-        WorldSessionOptions options, ILogger logger, CancellationToken cancellationToken = default)
+        WorldSessionOptions options, ILogger logger, CancellationToken cancellationToken = default, Guid? botId = null)
     {
         Account? current = await services.GetRequiredService<IAccountStore>()
             .FindByUsernameAsync(owner.Username, cancellationToken).ConfigureAwait(false);
@@ -65,9 +65,13 @@ public sealed partial class WorldSession
             CharacterRecord? character = await services.GetRequiredService<ICharacterStore>()
                 .GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
             if (character?.AccountId != owner.Id) throw new InvalidOperationException("managed-character-refused");
-            IReadOnlyList<ManagedPlayerbot> registrations = await services.GetRequiredService<IManagedPlayerbotStore>()
-                .LoadAllAsync(cancellationToken).ConfigureAwait(false);
-            if (!registrations.Any(bot => bot.AccountId == owner.Id && bot.CharacterId == id && bot.AccountName == owner.Username))
+            IManagedPlayerbotStore botStore = services.GetRequiredService<IManagedPlayerbotStore>();
+            bool registered = botId is { } bid
+                ? await botStore.FindAsync(bid, cancellationToken).ConfigureAwait(false) is { } found
+                    && found.AccountId == owner.Id && found.CharacterId == id && found.AccountName == owner.Username
+                : (await botStore.LoadAllAsync(cancellationToken).ConfigureAwait(false))
+                    .Any(bot => bot.AccountId == owner.Id && bot.CharacterId == id && bot.AccountName == owner.Username);
+            if (!registered)
                 throw new InvalidOperationException("managed-registration-refused");
         }
         if (registry.Find(owner.Id) is not null) throw new InvalidOperationException("managed-owner-online");

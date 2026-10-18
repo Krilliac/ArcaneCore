@@ -61,18 +61,25 @@ public sealed class GroupModel
             return false;
         }
 
-        bool hit = false;
-        MeshTree.IntersectRay(origin, direction, ref distance, (int primitive, ref float max) =>
+        var callback = new TriangleRayCallback(this, origin, direction);
+        MeshTree.IntersectRay(origin, direction, ref distance, ref callback, stopAtFirstHit);
+        return callback.Hit;
+    }
+
+    private struct TriangleRayCallback(GroupModel model, Vector3 origin, Vector3 direction) : IRayPrimitiveCallback
+    {
+        public bool Hit;
+
+        public bool Invoke(int primitive, ref float max)
         {
-            if ((uint)primitive >= (uint)_triangles.Length || !IntersectTriangle(_triangles[primitive], origin, direction, ref max))
+            if ((uint)primitive >= (uint)model._triangles.Length || !model.IntersectTriangle(model._triangles[primitive], origin, direction, ref max))
             {
                 return false;
             }
 
-            hit = true;
+            Hit = true;
             return true;
-        }, stopAtFirstHit);
-        return hit;
+        }
     }
 
     /// <summary>
@@ -338,18 +345,25 @@ public sealed class WorldModel
             return Groups[0].IntersectRay(origin, direction, ref distance, stopAtFirstHit);
         }
 
-        bool hit = false;
-        GroupTree.IntersectRay(origin, direction, ref distance, (int primitive, ref float max) =>
+        var callback = new GroupRayCallback(Groups, origin, direction, stopAtFirstHit);
+        GroupTree.IntersectRay(origin, direction, ref distance, ref callback, stopAtFirstHit);
+        return callback.Hit;
+    }
+
+    private struct GroupRayCallback(IReadOnlyList<GroupModel> groups, Vector3 origin, Vector3 direction, bool stopAtFirstHit) : IRayPrimitiveCallback
+    {
+        public bool Hit;
+
+        public bool Invoke(int primitive, ref float max)
         {
-            if ((uint)primitive >= (uint)Groups.Count || !Groups[primitive].IntersectRay(origin, direction, ref max, stopAtFirstHit))
+            if ((uint)primitive >= (uint)groups.Count || !groups[primitive].IntersectRay(origin, direction, ref max, stopAtFirstHit))
             {
                 return false;
             }
 
-            hit = true;
+            Hit = true;
             return true;
-        }, stopAtFirstHit);
-        return hit;
+        }
     }
 
     /// <summary>

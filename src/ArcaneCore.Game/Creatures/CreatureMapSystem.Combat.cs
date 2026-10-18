@@ -200,13 +200,16 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// <summary>The taunter (vmangos Unit::GetTauntTarget), else the threat list's pick (ThreatContainer::selectNextVictim).</summary>
     private Unit? PickHostileTarget(Creature creature, UnitCombat combat)
     {
-        Unit? target = combat.Threat.GetTauntTarget(guid => Map.FindObject(guid) as Unit, u => IsValidHostileTarget(creature, u));
+        Unit? target = combat.Threat.HasTauntCasters
+            ? combat.Threat.GetTauntTarget(guid => Map.FindObject(guid) as Unit, u => IsValidHostileTarget(creature, u))
+            : null;
         if (target is null && combat.HasThreatList)
         {
             target = combat.Threat.SelectVictim(
-                u => IsValidHostileTarget(creature, u),
-                u => MapCombat.CanReachWithMeleeAutoAttack(creature, u),
-                u => IsOutOfThreatArea(creature, u),
+                (System: this, Creature: creature),
+                static (s, u) => s.System.IsValidHostileTarget(s.Creature, u),
+                static (s, u) => MapCombat.CanReachWithMeleeAutoAttack(s.Creature, u),
+                static (s, u) => s.System.IsOutOfThreatArea(s.Creature, u),
                 static u => (u.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) != 0);
         }
 

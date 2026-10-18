@@ -171,6 +171,13 @@ public sealed class BihTree
     public void IntersectRay(Vector3 origin, Vector3 direction, ref float maxDistance, RayPrimitiveCallback callback, bool stopAtFirstHit)
     {
         ArgumentNullException.ThrowIfNull(callback);
+        var wrapper = new DelegateRayCallback(callback);
+        IntersectRay(origin, direction, ref maxDistance, ref wrapper, stopAtFirstHit);
+    }
+
+    internal void IntersectRay<TCallback>(Vector3 origin, Vector3 direction, ref float maxDistance, ref TCallback callback, bool stopAtFirstHit)
+        where TCallback : struct, IRayPrimitiveCallback
+    {
         if (_objects.Length == 0 || !(maxDistance > 0))
         {
             return;
@@ -213,7 +220,7 @@ public sealed class BihTree
                     uint count = _tree[node + 1];
                     for (uint i = 0; i < count && offset + i < _objects.Length; i++)
                     {
-                        if (callback((int)_objects[offset + i], ref maxDistance) && stopAtFirstHit)
+                        if (callback.Invoke((int)_objects[offset + i], ref maxDistance) && stopAtFirstHit)
                         {
                             return;
                         }
@@ -286,6 +293,11 @@ public sealed class BihTree
                 break;
             }
         }
+    }
+
+    private readonly struct DelegateRayCallback(RayPrimitiveCallback callback) : IRayPrimitiveCallback
+    {
+        public bool Invoke(int primitive, ref float maxDistance) => callback(primitive, ref maxDistance);
     }
 
     /// <summary>Visit the primitives whose leaves contain the point.</summary>
@@ -435,3 +447,9 @@ public sealed class BihTree
 
 /// <summary>Tests one primitive against the ray; may shorten <paramref name="maxDistance"/>; returns whether it was hit.</summary>
 public delegate bool RayPrimitiveCallback(int primitive, ref float maxDistance);
+
+/// <summary>Struct callback contract for allocation-free <see cref="BihTree.IntersectRay{TCallback}"/> walks.</summary>
+internal interface IRayPrimitiveCallback
+{
+    bool Invoke(int primitive, ref float maxDistance);
+}

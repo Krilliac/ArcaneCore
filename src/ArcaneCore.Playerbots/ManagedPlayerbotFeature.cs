@@ -673,16 +673,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
-            IReadOnlyList<ManagedPlayerbot> registered = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
             // Registration is bounded by MaxRegisteredBots; MaxBots bounds only the bots running at once (StartCoreAsync), so a
             // stopped bot never takes a running slot (the live stress test of 2026-10-08 found 5 stopped bots blocking creation).
-            if (registered.Count >= _options.MaxRegisteredBots)
-                return new(false, "playerbot-registry-full");
+            int knownRegistered = Volatile.Read(ref _snapshot).Length;
+            IReadOnlyList<ManagedPlayerbot>? registered = null;
+            if (knownRegistered == 0 || knownRegistered + 8 >= _options.MaxRegisteredBots || !_spareAccounts.IsEmpty)
+            {
+                registered = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
+                if (registered.Count >= _options.MaxRegisteredBots)
+                    return new(false, "playerbot-registry-full");
+            }
             ICharacterStore characters = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
             if (await characters.IsNameTakenAsync(name, cancellationToken).ConfigureAwait(false)) return new(false, "name-in-use");
             Guid botId = Guid.NewGuid();
             // The empty account of a bot a fleet reset deleted is reused (the provisioning journal is for NEW accounts only).
-            spare = await ClaimSpareAccountAsync(scope.ServiceProvider, registered, cancellationToken).ConfigureAwait(false);
+            spare = registered is not null ? await ClaimSpareAccountAsync(scope.ServiceProvider, registered, cancellationToken).ConfigureAwait(false) : null;
             Account owner;
             if (spare is not null) owner = spare;
             else
@@ -1277,7 +1282,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (owner?.Id != bot.AccountId || owner.Status != AccountStatus.Active
                 || owner.Security != AccountSecurity.Player || owner.SessionKey is not null)
                 return new(false, "owner-refused", bot.BotId);
-            session = await NewSessionAsync(owner, bot.CharacterId, scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+            session = await NewSessionAsync(owner, bot.CharacterId, scope.ServiceProvider, cancellationToken, bot.BotId).ConfigureAwait(false);
             bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = true, State = ManagedPlayerbotState.Starting, ErrorCode = null }, cancellationToken).ConfigureAwait(false);
             var login = new PacketWriter(); login.WriteUInt64((ulong)(uint)bot.CharacterId);
             await session.DispatchManagedSessionAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray()).ConfigureAwait(false);
@@ -1681,10 +1686,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         catch (TaskCanceledException) when (world.IsStopped) { return ReadAll(); }
     }
 
-    private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken)
+    private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken, Guid? botId = null)
     {
         WorldRuntime world = _world ?? throw new InvalidOperationException("playerbot-world-not-attached");
-        return WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, world, registry, sessionOptions.Value, logger, cancellationToken);
+        return WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, world, registry, sessionOptions.Value, logger, cancellationToken, botId);
     }
 
     private async Task StopCoreAsync(ManagedPlayerbot bot, bool preserveDesired, CancellationToken cancellationToken, string? faultCode = null)
@@ -1976,7 +1981,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private void ReportStarvedBots(ActiveBot[] bots, uint now)
     {
-        uint bound = (uint)_options.ThinkStarvedGapMs;
+        uint bound = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
         _oldestSilentMs = 0;
         if (bound == 0) return;
         uint oldest = 0;

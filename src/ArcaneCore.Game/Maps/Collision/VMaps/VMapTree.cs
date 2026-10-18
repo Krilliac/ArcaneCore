@@ -122,24 +122,31 @@ public sealed class VMapTree
     public bool GetIntersectionTime(Vector3 origin, Vector3 direction, ref float maxDistance, bool stopAtFirstHit, bool ignoreM2)
     {
         float distance = maxDistance;
-        bool hit = false;
-        Tree.IntersectRay(origin, direction, ref distance, (int primitive, ref float max) =>
+        var callback = new InstanceRayCallback(_instances, origin, direction, stopAtFirstHit, ignoreM2);
+        Tree.IntersectRay(origin, direction, ref distance, ref callback, stopAtFirstHit);
+        if (callback.Hit)
         {
-            if ((uint)primitive >= (uint)_instances.Length || _instances[primitive] is not { } instance
+            maxDistance = distance;
+        }
+
+        return callback.Hit;
+    }
+
+    private struct InstanceRayCallback(ModelInstance?[] instances, Vector3 origin, Vector3 direction, bool stopAtFirstHit, bool ignoreM2) : IRayPrimitiveCallback
+    {
+        public bool Hit;
+
+        public bool Invoke(int primitive, ref float max)
+        {
+            if ((uint)primitive >= (uint)instances.Length || instances[primitive] is not { } instance
                 || !instance.IntersectRay(origin, direction, ref max, stopAtFirstHit, ignoreM2))
             {
                 return false;
             }
 
-            hit = true;
+            Hit = true;
             return true;
-        }, stopAtFirstHit);
-        if (hit)
-        {
-            maxDistance = distance;
         }
-
-        return hit;
     }
 
     /// <summary>vmangos <c>StaticMapTree::isInLineOfSight</c>.</summary>

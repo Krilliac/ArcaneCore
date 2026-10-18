@@ -405,6 +405,19 @@ public sealed class ThreatList
     {
         ArgumentNullException.ThrowIfNull(isValid);
         ArgumentNullException.ThrowIfNull(isInMeleeRange);
+        return SelectVictim(
+            (isValid, isInMeleeRange, isOutOfArea),
+            static (s, u) => s.isValid(u),
+            static (s, u) => s.isInMeleeRange(u),
+            isOutOfArea is null ? null : static (s, u) => s.isOutOfArea!(u),
+            isLowPriority);
+    }
+
+    /// <summary>Allocation-free overload of <see cref="SelectVictim(Func{Unit, bool}, Func{Unit, bool}, Func{Unit, bool}?, Func{Unit, bool}?)"/> taking caller state with static predicates.</summary>
+    public Unit? SelectVictim<TState>(TState state, Func<TState, Unit, bool> isValid, Func<TState, Unit, bool> isInMeleeRange, Func<TState, Unit, bool>? isOutOfArea = null, Func<Unit, bool>? isLowPriority = null)
+    {
+        ArgumentNullException.ThrowIfNull(isValid);
+        ArgumentNullException.ThrowIfNull(isInMeleeRange);
 
         Resort();
         ThreatEntry? current = _currentVictim is null ? null : Find(_entries, _currentVictim);
@@ -414,13 +427,13 @@ public sealed class ThreatList
             bool allowLowPriority = attempt == 1;
             foreach (ThreatEntry entry in _entries)
             {
-                if (isOutOfArea is not null && isOutOfArea(entry.Target))
+                if (isOutOfArea is not null && isOutOfArea(state, entry.Target))
                 {
                     _currentVictim = null;
                     return null;
                 }
 
-                if (!isValid(entry.Target))
+                if (!isValid(state, entry.Target))
                 {
                     if (ReferenceEquals(entry, current))
                     {
@@ -453,7 +466,7 @@ public sealed class ThreatList
                     break;
                 }
 
-                if (entry.Threat > current.Threat * 1.3f || (entry.Threat > current.Threat * 1.1f && isInMeleeRange(entry.Target)))
+                if (entry.Threat > current.Threat * 1.3f || (entry.Threat > current.Threat * 1.1f && isInMeleeRange(state, entry.Target)))
                 {
                     result = entry;
                     break;

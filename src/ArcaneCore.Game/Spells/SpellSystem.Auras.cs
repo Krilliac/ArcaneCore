@@ -454,11 +454,13 @@ public sealed partial class SpellSystem
     /// <summary>The <c>Auras</c> options (docs/areas/aura-engine.md); retail defaults until the world feature binds the configuration.</summary>
     public AuraOptions AuraOptions { get; set; } = new();
 
+    private static readonly List<SpellAuraHolder> EmptyAuras = [];
+
     /// <summary>The aura holders on a unit (world thread).</summary>
-    public IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit)
+    public List<SpellAuraHolder> GetAuras(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) ? state.AuraHolders : [];
+        return GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) ? state.Auras : EmptyAuras;
     }
 
     /// <summary>Whether <paramref name="unit"/> carries an aura holder of <paramref name="spellId"/> (world thread; allocation-free, hot-path safe).</summary>

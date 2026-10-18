@@ -153,6 +153,13 @@ internal sealed class PlayerbotThinkBudget
 /// </summary>
 internal static class PlayerbotThinkStarvation
 {
+    /// <summary>
+    /// Scales the starvation bound proportionally once the running population exceeds the 1 000-bot design point of the default 30 ms
+    /// per-tick think ceiling; up to 1 000 bots the configured bound stands unchanged.
+    /// </summary>
+    internal static uint EffectiveBoundMs(uint boundMs, int bots)
+        => boundMs == 0 || bots <= 1000 ? boundMs : (uint)Math.Min(int.MaxValue, Math.Ceiling(boundMs * (bots / 1000.0)));
+
     /// <summary>Whether to report now: the bot has been silent for more than <paramref name="boundMs"/> (0 = off) and this episode is not reported yet. Marks it reported.</summary>
     internal static bool ShouldReport(uint nowMs, uint lastThinkMs, uint boundMs, ref bool reported)
     {

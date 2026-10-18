@@ -683,27 +683,47 @@ public sealed class Map
         // vmangos visits cameras in those cells (MessageDistDeliverer::Visit): a player whose view
         // point is here hears the message even when their body is in another cell.
         float searchRadius = range + source.BoundingRadius + _grid.MaxBoundingRadius;
-        var players = new List<Player>();
-        _grid.CollectPlayers(source.X, source.Y, searchRadius, players);
-        var eyes = new List<WorldObject>();
-        _grid.CollectObjects(source.X, source.Y, searchRadius, eyes);
-        foreach (WorldObject eye in eyes)
+        bool useScratch = !_broadcastScratchInUse;
+        if (useScratch) _broadcastScratchInUse = true;
+        List<Player> players = useScratch ? _broadcastPlayersScratch : [];
+        List<WorldObject> eyes = useScratch ? _broadcastEyesScratch : [];
+        try
         {
-            if (UnitControl.ViewerOf(eye) is { } viewer && ReferenceEquals(viewer.Map, this))
+            players.Clear();
+            eyes.Clear();
+            _grid.CollectPlayers(source.X, source.Y, searchRadius, players);
+            _grid.CollectObjects(source.X, source.Y, searchRadius, eyes);
+            foreach (WorldObject eye in eyes)
             {
-                players.Add(viewer);
+                if (UnitControl.ViewerOf(eye) is { } viewer && ReferenceEquals(viewer.Map, this))
+                {
+                    players.Add(viewer);
+                }
+            }
+
+            SortByJoinOrderDistinct(players);
+            foreach (Player player in players)
+            {
+                if (ReferenceEquals(player.Map, this))
+                {
+                    DeliverInRange(player, source, range, opcode, payload, includeSelf, onlyTeam);
+                }
             }
         }
-
-        SortByJoinOrderDistinct(players);
-        foreach (Player player in players)
+        finally
         {
-            if (ReferenceEquals(player.Map, this))
+            if (useScratch)
             {
-                DeliverInRange(player, source, range, opcode, payload, includeSelf, onlyTeam);
+                players.Clear();
+                eyes.Clear();
+                _broadcastScratchInUse = false;
             }
         }
     }
+
+    private readonly List<Player> _broadcastPlayersScratch = [];
+    private readonly List<WorldObject> _broadcastEyesScratch = [];
+    private bool _broadcastScratchInUse;
 
     // Reused by CountPlayersWithin: world thread only, and the collect it holds the list for calls nothing back, so it is never re-entered.
     private readonly List<Player> _countScratch = [];

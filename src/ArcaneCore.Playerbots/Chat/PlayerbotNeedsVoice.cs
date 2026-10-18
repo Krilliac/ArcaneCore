@@ -159,6 +159,8 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
 
     // --- looking for group -------------------------------------------------------------------------------------------------
 
+    private readonly Dictionary<Guid, PlayerbotSocialBot> _byIdScratch = [];
+
     /// <summary>
     /// The bots waiting for partners (<see cref="PlayerbotGroupCoordinator.WaitingBots"/>), by goal and team: the one waiting longest posts
     /// LFG (alone) or LFM with the roles still missing, at most once per <see cref="PlayerbotVoiceOptions.LookingForGroupRepeatSeconds"/>;
@@ -167,7 +169,8 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     private void LookingForGroup(PlayerbotSocialPass pass, PlayerbotChat chat, PlayerbotVoiceOptions options)
     {
         if (services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return;
-        var byId = new Dictionary<Guid, PlayerbotSocialBot>();
+        Dictionary<Guid, PlayerbotSocialBot> byId = _byIdScratch;
+        byId.Clear();
         var wanting = new Dictionary<((PlayerbotGroupGoalKind, uint) Key, Team Team), List<(PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)>>();
         foreach ((Guid id, string _, PlayerbotGroupGoal goal, uint since) in coordinator.WaitingBots)
         {
@@ -177,6 +180,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
             if (!wanting.TryGetValue(key, out var list)) wanting[key] = list = [];
             list.Add((bot, goal, since));
         }
+        byId.Clear();
 
         foreach (var list in wanting.Values)
         {
