@@ -589,7 +589,11 @@ respawns, after which the context is collected. An instance still running an unl
 No discovery scan of the test assembly finds the built-in clash handler: the test builds that registry with `EventAiRegistry.FromHandlers`.
 `ModuleRollbackTests` injects a fault (`ModuleHost.FaultInjection`) after each slot, on a replace of each of three fixture modules
 (HotFixture: opcodes and commands; HotGame: creature AI and hooks; HotScripts: spell, instance and EventAI scripts). In every case
-version 1 is restored with its registrations live, and both old contexts are collected. The class also covers a restore that fails
+version 1 is restored with its registrations live, and both old contexts are collected. The tests' world thread (`ThreadedWorld`) keeps
+the last command it ran reachable until it runs the next, as a world thread's frame may, so "collected" also proves that no queued commit
+closure reaches a retired version (each commit is posted by `ModuleHost.CommitAsync`, whose closure holds only the host and the swap).
+Before 2026-10-18 the test thread dropped it or not depending on the JIT tier its loop ran at, and the restore's closure did reach the
+replaced version: the tests failed when the class ran early in the assembly and passed when it ran late. The class also covers a restore that fails
 too (fully unloaded), a first load and an unload that fail, a throwing `ScriptsChanged` handler, and a registry that went away
 (removals succeed, additions are rejected). `ModuleEventAiRespawnTests` covers the EventAI respawn batches: the cap per tick, combat
 deferral, and that unaffected creatures are not touched. RED proofs: each seam was broken in turn and the tests above failed. The
