@@ -121,17 +121,17 @@ public sealed class TerrainLayerSource : ServerLayerSource
         };
     }
 
-    private static string StorageName(TerrainTile terrain) => terrain.Storage switch
+    internal static string StorageName(TerrainTile terrain) => terrain.Storage switch
     {
         TerrainTile.HeightStorage.Float => "float",
         TerrainTile.HeightStorage.Packed => "packed",
         _ => "none",
     };
 
-    private static bool IsUsable(float height) => float.IsFinite(height) && height > TerrainTile.InvalidHeight;
+    internal static bool IsUsable(float height) => float.IsFinite(height) && height > TerrainTile.InvalidHeight;
 
     /// <summary>A corner height for drawing outlines: the sample, else the grid height when valid, else 0.</summary>
-    private static double DrawHeight(TerrainTile terrain, int row, int col)
+    internal static double DrawHeight(TerrainTile terrain, int row, int col)
     {
         float h = terrain.CornerHeight(row, col);
         if (IsUsable(h))
