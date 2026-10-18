@@ -357,7 +357,19 @@ public sealed class SpellAuraHolder
     /// <summary>The effect slots as a span: <c>foreach</c> over <see cref="Auras"/> boxes an enumerator, hot paths use this.</summary>
     internal ReadOnlySpan<SpellAura?> AuraSpan => _auras;
 
-    public bool HasAura(AuraType type) => _auras.Any(a => a?.Type == type);
+    public bool HasAura(AuraType type)
+    {
+        // A loop, not Any with a lambda capturing 'type': that was a delegate per call, ~35 MB/min on live from bot combat views.
+        foreach (SpellAura? a in _auras)
+        {
+            if (a?.Type == type)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     internal void SetAura(SpellAura aura)
     {

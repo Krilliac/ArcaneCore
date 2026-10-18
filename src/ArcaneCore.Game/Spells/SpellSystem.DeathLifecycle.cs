@@ -20,29 +20,50 @@ public sealed partial class SpellSystem
         // Upstream's registry is gated by the spell_template Custom single-target flag.
         // That content producer is not present here. Restrict this carve-out to the known
         // Hunter's Mark family/flag (SpellClassMask.h:251), not all MOD_STALKED spells.
-        foreach (UnitSpellState state in _states.Values.ToArray())
+        // Every death walked every unit's spell state through ToArray (one array of all units, large-object-heap sized on a
+        // full world) and a Where iterator per unit. Collect the few matches first; most deaths have none.
+        List<(UnitSpellState State, SpellAuraHolder Holder)>? marks = null;
+        foreach (UnitSpellState candidate in _states.Values)
         {
-            if (!state.Unit.IsInWorld || !ReferenceEquals(state.Unit.Map, caster.Map)
-                || !ReferenceEquals(Units.Find(caster, state.Unit.Guid), state.Unit))
+            if (!candidate.Unit.IsInWorld || !ReferenceEquals(candidate.Unit.Map, caster.Map))
             {
                 continue;
             }
 
-            foreach (SpellAuraHolder holder in state.Auras.Where(h => !h.IsRemoved
-                && h.Spell.IsFitToFamily(9, 10) && h.Spell.HasAura(AuraType.ModStalked)
-                && ReferenceEquals(h.CasterOwner.Caster, caster)).ToArray())
+            List<SpellAuraHolder> auras = candidate.Auras;
+            for (int i = 0; i < auras.Count; i++)
             {
-                if (IsQuestSettlementPending(caster) || IsQuestSettlementPending(holder.Target))
+                SpellAuraHolder h = auras[i];
+                if (!h.IsRemoved && h.Spell.IsFitToFamily(9, 10) && h.Spell.HasAura(AuraType.ModStalked)
+                    && ReferenceEquals(h.CasterOwner.Caster, caster))
                 {
-                    if (!_deathAuraRemovals.Any(p => ReferenceEquals(p.Holder, holder)))
-                    {
-                        _deathAuraRemovals.Add(new DeathAuraRemoval(holder, new WeakReference<Unit>(caster)));
-                    }
+                    (marks ??= []).Add((candidate, h));
                 }
-                else
+            }
+        }
+
+        if (marks is null)
+        {
+            return;
+        }
+
+        foreach ((UnitSpellState state, SpellAuraHolder holder) in marks)
+        {
+            if (holder.IsRemoved || !ReferenceEquals(Units.Find(caster, state.Unit.Guid), state.Unit))
+            {
+                continue;
+            }
+
+            if (IsQuestSettlementPending(caster) || IsQuestSettlementPending(holder.Target))
+            {
+                if (!_deathAuraRemovals.Any(p => ReferenceEquals(p.Holder, holder)))
                 {
-                    RemoveHolder(state, holder);
+                    _deathAuraRemovals.Add(new DeathAuraRemoval(holder, new WeakReference<Unit>(caster)));
                 }
+            }
+            else
+            {
+                RemoveHolder(state, holder);
             }
         }
     }

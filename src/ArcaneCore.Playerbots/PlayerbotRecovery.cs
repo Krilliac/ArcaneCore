@@ -1816,8 +1816,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (safe is not null && !safe(spot)) return false;
         if (Vector3.Distance(spot, body) > ReviveSpotMaxYards) return false;
-        foreach (PlayerbotThreat hostile in hostiles)
-            if (hostile.Reaches(spot, ReviveSpotMarginYards + ReviveSpotSlackYards)) return false;
+        for (int i = 0; i < hostiles.Count; i++) // indexed: a foreach over the interface boxed an enumerator per candidate
+            if (hostiles[i].Reaches(spot, ReviveSpotMarginYards + ReviveSpotSlackYards)) return false;
         return true;
     }
 
@@ -1832,22 +1832,44 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     internal static Vector3? FindReviveSpot(Vector3 ghost, Vector3 body, IReadOnlyList<PlayerbotThreat> hostileList,
         Func<Vector3, Vector3?> reach, Func<Vector3, bool>? safe = null)
     {
-        var candidates = new List<Vector3> { body };
-        // Rings every few yards, finely spaced: a camp can leave only a thin slice of the reclaim disc clear.
-        for (float radius = ReviveSpotRingYards; radius <= ReviveSpotMaxYards - 1f; radius += ReviveSpotRingYards)
-            for (int step = 0; step < ReviveSpotAngles; step++)
+        // Pooled scratch (this runs for every camped ghost on every recovery step): candidates in ring order, then the passing
+        // ones sorted nearest-to-ghost first, ties kept in ring order as the former stable OrderBy did.
+        int max = 1 + ((int)((ReviveSpotMaxYards - 1f) / ReviveSpotRingYards) + 1) * ReviveSpotAngles;
+        (float Distance, int Order, Vector3 Spot)[] passing = System.Buffers.ArrayPool<(float, int, Vector3)>.Shared.Rent(max);
+        try
+        {
+            int count = 0;
+            Vector2 ghostFlat = new(ghost.X, ghost.Y);
+            void Consider(Vector3 c, ref int n)
             {
-                float angle = step * 2f * MathF.PI / ReviveSpotAngles;
-                candidates.Add(new Vector3(body.X + (MathF.Cos(angle) * radius), body.Y + (MathF.Sin(angle) * radius), body.Z));
+                if (IsReviveSpot(c, body, hostileList, safe))
+                {
+                    passing[n] = (Vector2.Distance(new Vector2(c.X, c.Y), ghostFlat), n, c);
+                    n++;
+                }
             }
 
-        int queries = 0;
-        foreach (Vector3 candidate in candidates
-            .Where(c => IsReviveSpot(c, body, hostileList, safe))
-            .OrderBy(c => Vector2.Distance(new Vector2(c.X, c.Y), new Vector2(ghost.X, ghost.Y))))
+            Consider(body, ref count);
+            // Rings every few yards, finely spaced: a camp can leave only a thin slice of the reclaim disc clear.
+            for (float radius = ReviveSpotRingYards; radius <= ReviveSpotMaxYards - 1f; radius += ReviveSpotRingYards)
+                for (int step = 0; step < ReviveSpotAngles; step++)
+                {
+                    float angle = step * 2f * MathF.PI / ReviveSpotAngles;
+                    if (count < passing.Length)
+                        Consider(new Vector3(body.X + (MathF.Cos(angle) * radius), body.Y + (MathF.Sin(angle) * radius), body.Z), ref count);
+                }
+
+            Array.Sort(passing, 0, count, ReviveSpotOrder.Instance);
+            int queries = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (++queries > ReviveSpotMaxQueries) break;
+                if (reach(passing[i].Spot) is { } point && IsReviveSpot(point, body, hostileList, safe)) return point;
+            }
+        }
+        finally
         {
-            if (++queries > ReviveSpotMaxQueries) break;
-            if (reach(candidate) is { } point && IsReviveSpot(point, body, hostileList, safe)) return point;
+            System.Buffers.ArrayPool<(float, int, Vector3)>.Shared.Return(passing);
         }
 
         return null;
@@ -2131,5 +2153,17 @@ internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, 
         if (!IgnoresHeight && !other.IgnoresHeight
             && MathF.Max(0f, MathF.Abs(Position.Z - other.Position.Z) - Radii - other.Radii) > CreatureAggro.MaxZDistance) return false;
         return Vector3.Distance(Position, other.Position) < Radius + other.Radius;
+    }
+}
+
+/// <summary>Nearest first, then candidate order (a stable sort for <see cref="PlayerbotRecovery.FindReviveSpot"/>).</summary>
+file sealed class ReviveSpotOrder : IComparer<(float Distance, int Order, System.Numerics.Vector3 Spot)>
+{
+    public static readonly ReviveSpotOrder Instance = new();
+
+    public int Compare((float Distance, int Order, System.Numerics.Vector3 Spot) x, (float Distance, int Order, System.Numerics.Vector3 Spot) y)
+    {
+        int byDistance = x.Distance.CompareTo(y.Distance);
+        return byDistance != 0 ? byDistance : x.Order.CompareTo(y.Order);
     }
 }
