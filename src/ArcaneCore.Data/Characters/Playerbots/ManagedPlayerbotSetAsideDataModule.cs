@@ -60,16 +60,20 @@ public sealed class EfManagedPlayerbotSetAsideStore(CharacterDbContext db) : IMa
                 : row.CharacterId <= 0 || row.Kind is PlayerbotSetAsideKind.SharedEntry or PlayerbotSetAsideKind.SharedQuest)))
             throw new ArgumentException("Invalid or unbounded playerbot set-aside snapshot.", nameof(rows));
 
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<ManagedPlayerbotSetAsideRow>().Where(row => row.BotId == botId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        // The new rows are tracked before the transaction opens (up to 512 entities), so the write lock covers only the delete and the inserts
+        // (this snapshot held it 2-9 s on a starved live host, 2026-10-17). ExecuteDelete never touches the change tracker, so the order does not
+        // change what is written; the finally clears the tracker on every path, including a BEGIN or delete that throws.
         db.Set<ManagedPlayerbotSetAsideRow>().AddRange(rows.Select(row => new ManagedPlayerbotSetAsideRow
         {
             BotId = row.BotId, CharacterId = row.CharacterId, Kind = row.Kind, TargetId = row.TargetId,
             ExpiresUnixMs = row.ExpiresUnixMs, RepeatCount = row.RepeatCount,
         }));
+        db.ChangeTracker.DetectChanges();
         try
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await db.Set<ManagedPlayerbotSetAsideRow>().Where(row => row.BotId == botId)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
