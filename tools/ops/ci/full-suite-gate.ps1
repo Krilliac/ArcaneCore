@@ -11,8 +11,8 @@ param(
 $dotnet = if ($env:DOTNET_ROOT -and (Test-Path (Join-Path $env:DOTNET_ROOT 'dotnet.exe'))) { Join-Path $env:DOTNET_ROOT 'dotnet.exe' } else { 'dotnet' }
 $fail = 0
 # Locked, as in ci.yml: a package graph that differs from the committed lock files fails here (NU1004) instead of being re-resolved
-# and written back into the worktree, which the build's implicit restore would do.
-& $dotnet restore ArcaneCore.slnx --locked-mode -nodeReuse:false -v:minimal
+# and written back into the worktree, which the build's implicit restore would do. -m:2 as the build, to leave the live server headroom.
+& $dotnet restore ArcaneCore.slnx --locked-mode -m:2 -nodeReuse:false -v:minimal
 "RESTORE_EXIT=$LASTEXITCODE"
 if ($LASTEXITCODE -ne 0) { exit 2 }
 & $dotnet build ArcaneCore.slnx --no-restore -m:2 -nodeReuse:false -p:UseSharedCompilation=false -v:minimal

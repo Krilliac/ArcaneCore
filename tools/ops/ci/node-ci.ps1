@@ -64,9 +64,10 @@ W=/root/ci/$runId; rm -rf `$W; mkdir -p `$W/src `$W/logs; cd `$W/src
 tar -xf /mnt/c/NewBuild/arcanecore-ci/$runId.tar && rm -f /mnt/c/NewBuild/arcanecore-ci/$runId.tar
 echo "commit $sha run $runId"
 # Locked, as in ci.yml: a package graph that differs from the committed lock files fails the run here (NU1004) instead of being
-# re-resolved and written back, and the build never runs on a restore that failed.
+# re-resolved and written back, and the build never runs on a restore that failed. The error lines come first: at minimal verbosity
+# the NU1004 line is near the top and the tail is "Restored <project>" lines. A failure with no ' error ' line (no SDK) prints the tail.
 dotnet restore ArcaneCore.slnx --locked-mode > `$W/logs/restore.log 2>&1; rc=`$?; echo "restore rc=`$rc"
-if [ `$rc -ne 0 ]; then tail -20 `$W/logs/restore.log; exit 1; fi
+if [ `$rc -ne 0 ]; then if grep -qE ' error ' `$W/logs/restore.log; then grep -E ' error ' `$W/logs/restore.log | sort -u | head -20; else tail -20 `$W/logs/restore.log; fi; exit 1; fi
 dotnet build ArcaneCore.slnx -c Release --no-restore -nodeReuse:false > `$W/logs/build.log 2>&1; rc=`$?; echo "build rc=`$rc"; grep -E 'Warning\(s\)|Error\(s\)' `$W/logs/build.log | tail -2
 if [ `$rc -ne 0 ]; then grep -E ' error ' `$W/logs/build.log | sort -u | head -20; exit 1; fi
 fail=0
