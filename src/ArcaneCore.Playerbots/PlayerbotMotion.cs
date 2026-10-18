@@ -798,8 +798,8 @@ internal static class PlayerbotMotion
     /// </summary>
     private static uint Lease(PlayerbotOptions options, MotionState state)
     {
-        uint floor = (uint)Math.Max(2000, options.ThinkIntervalMs * 4);
-        uint gap = Math.Min(state.GapMs, MaxGapLeaseMs / 2) * 2;
+        uint floor = (uint)Math.Max(4000, options.ThinkIntervalMs * 8);
+        uint gap = Math.Min(state.GapMs, MaxGapLeaseMs / 3) * 3;
         return Math.Max(floor, gap);
     }
 

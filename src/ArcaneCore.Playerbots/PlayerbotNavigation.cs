@@ -220,7 +220,7 @@ internal static class PlayerbotNavigation
             && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
-    private static readonly float[] HazardDetourYards = [5f, 15f];
+    private static readonly float[] HazardDetourYards = [5f, 15f, 28f];
 
     internal static bool IsUsablePath(PathResult path, int maxPoints, float maxDistance)
         => path.HasPath && (path.Type & (PathType.NotUsingPath | PathType.DestForced | PathType.FlyPath)) == 0

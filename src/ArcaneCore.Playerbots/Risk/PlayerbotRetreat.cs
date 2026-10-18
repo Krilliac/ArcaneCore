@@ -56,7 +56,8 @@ internal sealed class PlayerbotBreadcrumbs
 /// <see cref="MaxMs"/>, when <see cref="MaxExtensions"/> further runs did not shake its pursuers off, or after
 /// <see cref="MaxFailedReplans"/> thinks in a row with no way out in any direction it tries (<see cref="PlanAway"/>). World thread.
 /// </summary>
-internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions options, PlayerbotCombatSpells spells)
+internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions options, PlayerbotCombatSpells spells,
+    PlayerbotHazards? hazards = null)
 {
     internal const uint MaxMs = 60_000;
     internal const int MaxExtensions = 8;
@@ -178,13 +179,33 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         var pursuers = new List<RiskPursuer>(chasing.Length);
         foreach (Creature enemy in chasing) pursuers.Add(new RiskPursuer(enemy.RunSpeed, damagePerSecond(enemy)));
         PlayerbotEscapeKit kit = PlayerbotEscapes.Kit(ReadyEscapes(player, chasing, ignoreUsed: true));
-        // The leash clock counts whole seconds and must be more than LeashExtensionSeconds old (CreatureMapSystem.IsOutOfThreatArea): one
-        // second more than the bare difference.
+        // The leash clock counts whole seconds and must be more than LeashExtensionSeconds old (CreatureMapSystem.IsOutOfThreatArea), and
+        // IsOutOfThreatArea only starts and advances that clock once both creature and target are outside the threat radius (until then
+        // GetLeashFacts reports ClockAgeSeconds = -1). A pursuer without a shorter hard template leash therefore stays in contact for the
+        // run out of the threat area plus the remaining leash extension.
         float leash = 0f;
-        if (fightSeconds is { } fought && float.IsFinite(fought) && chasing.Length > 0)
+        if (chasing.Length > 0)
         {
-            uint extension = player.Map?.FindUpdater<CreatureMapSystem>()?.Options.LeashExtensionSeconds ?? 12u;
-            leash = MathF.Max(0f, extension + 1f - MathF.Max(0f, fought));
+            CreatureMapSystem? creatures = player.Map?.FindUpdater<CreatureMapSystem>();
+            uint extension = creatures?.Options.LeashExtensionSeconds ?? 12u;
+            float botSpeed = MathF.Max(0.1f, player.RunSpeed * kit.SelfSpeed);
+            float runSeconds = yards / botSpeed;
+            if (creatures is not null)
+            {
+                foreach (Creature enemy in chasing)
+                {
+                    if (creatures.GetLeashFacts(enemy, player) is not { } facts) continue;
+                    if (enemy.Template.Leash > 0f && enemy.Template.Leash <= facts.Radius) continue;
+                    float enemyLeash = facts.ClockAgeSeconds >= 0
+                        ? MathF.Max(0f, extension + 1f - facts.ClockAgeSeconds)
+                        : runSeconds + extension + 1f;
+                    leash = MathF.Max(leash, enemyLeash);
+                }
+            }
+            else if (fightSeconds is { } fought && float.IsFinite(fought))
+            {
+                leash = MathF.Max(0f, extension + 1f - MathF.Max(0f, fought));
+            }
         }
 
         float flee = PlayerbotRiskModel.FleeDamageFactor(player.GetFloat(UpdateFields.PlayerDodgePercentage),
@@ -215,15 +236,15 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             if (!_attackStopped) return true;
         }
 
-        // Feign Death holds the bot still until the creatures turn away (moving would end it).
-        if (HasAura(player, PlayerbotEscapes.FeignDeath))
+        // Feign Death or an escape spell cast in progress holds the bot still (moving would cancel either).
+        if (HasAura(player, PlayerbotEscapes.FeignDeath) || IsCasting(player))
         {
             if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(session, player);
             return true;
         }
 
         TryEscape(player);
-        if (HasAura(player, PlayerbotEscapes.FeignDeath)) return true;
+        if (HasAura(player, PlayerbotEscapes.FeignDeath) || IsCasting(player)) return true;
 
         if (_route is null || _route.Complete)
         {
@@ -267,6 +288,9 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         EscapeSituation situation = SituationOf(player, _enemies, out Creature? victim);
         EscapeAction? action = PlayerbotEscapes.Choose(situation, candidate => IsReady(player, known, candidate, victim, ignoreUsed: false));
         if (action is not { } chosen || known[chosen.Spell] is not { } chosenSpell) return;
+        if (chosenSpell.CastTime.Base > 0 && player.Movement.HasFlag(MovementFlags.MaskMoving)
+            && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
+            return;
         if (chosen.FaceAway)
         {
             Vector3 away = Away(player);
@@ -278,21 +302,33 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             _used.Add(chosen.Spell);
     }
 
+    private bool IsCasting(Player player)
+        => session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
+            { State: SpellCastState.Preparing or SpellCastState.Casting };
+
     private bool HasAura(Player player, string name)
         => session.Services.GetService<SpellFeature>() is { } feature
             && feature.System.GetAuras(player).Any(holder => string.Equals(holder.Spell.Name, name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The newest place on the trail outside every enemy's leash and farther from the enemies than the bot is now.</summary>
-    private static Vector3? ChooseGoal(Player player, IReadOnlyList<Vector3> crumbs, IReadOnlyList<(Vector3 Anchor, float Safe)> zones,
+    private Vector3? ChooseGoal(Player player, IReadOnlyList<Vector3> crumbs, IReadOnlyList<(Vector3 Anchor, float Safe)> zones,
         IReadOnlyList<Creature> enemyList)
     {
         Vector3 here = new(player.X, player.Y, player.Z);
         Vector3 enemies = Centroid(player, enemyList, zones);
+        Vector3? fallbackCrumb = null;
+        uint now = session.World.NowMs;
         for (int index = crumbs.Count - 1; index >= 0; index--)
         {
             Vector3 crumb = crumbs[index];
-            if (Safe(crumb, zones) && Vector3.Distance(crumb, enemies) > Vector3.Distance(here, enemies)) return crumb;
+            if (Safe(crumb, zones) && Vector3.Distance(crumb, enemies) > Vector3.Distance(here, enemies))
+            {
+                fallbackCrumb ??= crumb;
+                if (hazards?.FirstOnRoute(player.MapId, [here, crumb], now, strong: true) is null) return crumb;
+            }
         }
+
+        if (fallbackCrumb is not null) return fallbackCrumb;
 
         // No trail out of reach: straight away from the enemies, past the farthest leash.
         float needed = 0;
@@ -330,6 +366,8 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         Vector3 away = Away(player);
         float straight = MathF.Atan2(away.Y, away.X);
         goal = OnGround(player, here + (away * ExtendYards));
+        PlayerbotRoute? fallbackRoute = null;
+        Vector3 fallbackGoal = goal;
         foreach (float degrees in FanDegrees)
         {
             float angle = straight + (degrees * MathF.PI / 180f);
@@ -337,12 +375,47 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
                 : OnGround(player, here + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f) * ExtendYards));
             if (PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) && route is not null)
             {
-                goal = candidate;
-                return route;
+                if (!CrossesNewHazard(player, route))
+                {
+                    goal = candidate;
+                    return route;
+                }
+
+                if (fallbackRoute is null)
+                {
+                    fallbackRoute = route;
+                    fallbackGoal = candidate;
+                }
             }
         }
 
+        if (fallbackRoute is not null)
+        {
+            goal = fallbackGoal;
+            return fallbackRoute;
+        }
+
         return PlayerbotNavigation.TryPlanToward(player, goal, options, out PlayerbotRoute? toward) ? toward : null;
+    }
+
+    private bool CrossesNewHazard(Player player, PlayerbotRoute route)
+    {
+        if (hazards is null || route.Points.Count == 0) return false;
+        uint now = session.World.NowMs;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        foreach (PlayerbotHazard hazard in hazards.Active(player.MapId, now))
+        {
+            if (hazard.Covers(here)) continue;
+            for (int i = 1; i < route.Points.Count; i++)
+            {
+                Vector3 a = route.Points[i - 1], b = route.Points[i];
+                int steps = Math.Max(1, (int)MathF.Ceiling(Vector3.Distance(a, b) / 3f));
+                for (int s = 0; s <= steps; s++)
+                    if (hazard.Covers(Vector3.Lerp(a, b, (float)s / steps))) return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary><paramref name="point"/> on the ground below it (searched from 20 yards above), or as it is where there is none within 30 yards.</summary>
@@ -356,14 +429,18 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     /// <summary>A route to <paramref name="goal"/>: the navigation's, else back along the trail itself.</summary>
     private PlayerbotRoute? Plan(Player player, Vector3 goal, IReadOnlyList<Vector3> crumbs)
     {
-        if (PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? route)
-            || PlayerbotNavigation.TryPlanToward(player, goal, options, out route))
+        if ((PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? route)
+                || PlayerbotNavigation.TryPlanToward(player, goal, options, out route))
+            && route is not null && !CrossesNewHazard(player, route))
             return route;
         int end = -1;
         for (int index = crumbs.Count - 1; index >= 0; index--)
             if (crumbs[index] == goal) { end = index; break; }
-        if (end < 0) return null;
-        return TrailRoute(player, crumbs, end);
+        if (end >= 0 && TrailRoute(player, crumbs, end) is { } trail && !CrossesNewHazard(player, trail))
+            return trail;
+        if (route is not null) return route;
+        if (end >= 0) return TrailRoute(player, crumbs, end);
+        return null;
     }
 
     /// <summary>

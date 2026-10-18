@@ -355,7 +355,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         foreach (uint spellId in spellbook.GetSpells(player))
         {
             if (_refusedUntil.ContainsKey(SpellKey(spellId))
-                || store.Get(spellId) is not { } spell)
+                || store.Get(spellId) is not { } spell
+                || (spell.RequiresSpellFocus != 0 && _refusedUntil.ContainsKey(FocusKey(spell.RequiresSpellFocus))))
                 continue;
 
             if (!HasReagentsAndTools(player, spell))
@@ -386,30 +387,46 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 TargetEntry = distantFocus.Entry;
                 if (_route is null || _routeTarget != distantFocus.Guid)
                 {
-                    PlanOutcome planned = PlayerbotNavigation.PlanExact(
-                        player,
-                        new Vector3(distantFocus.X, distantFocus.Y, distantFocus.Z),
-                        _options,
-                        ref _tileWait,
-                        now,
-                        out _route);
-                    if (planned == PlanOutcome.Pending)
-                        return true;
-                    if (planned == PlanOutcome.Refused || _route is null)
+                    while (distantFocus is not null)
                     {
-                        // A fire in sight that no route reaches (inside a closed building, up a cliff) is no reason to skip the recipe: a cook
-                        // with Basic Campfire, wood and a flint lights one here instead (GitHub #774, ~60/h 'spell focus 4 unreachable' on live).
-                        if (bestSpell.RequiresSpellFocus == CookingFireFocus && TryLightCampfire(player, store, spellbook, now, out bool fallbackHandled))
-                            return fallbackHandled;
-                        SetFocusAside(bestSpell, distantFocus, now);
-                        if (!_session.IsInChaosProbe)
-                            PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} spell focus {bestSpell.RequiresSpellFocus} unreachable");
-                        return false;
+                        TargetEntry = distantFocus.Entry;
+                        PlanOutcome planned = PlayerbotNavigation.PlanExact(
+                            player,
+                            new Vector3(distantFocus.X, distantFocus.Y, distantFocus.Z),
+                            _options,
+                            ref _tileWait,
+                            now,
+                            out _route);
+                        if (planned == PlanOutcome.Pending)
+                            return true;
+                        if (planned != PlanOutcome.Refused && _route is not null)
+                            break;
+
+                        _refusedUntil[distantFocus.Guid.Value] = unchecked(now + FocusBackoffMs);
+                        if (HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, _refusedUntil, out GameObject? nextFocus) || nextFocus is null)
+                        {
+                            // A fire in sight that no route reaches (inside a closed building, up a cliff) is no reason to skip the recipe: a cook
+                            // with Basic Campfire, wood and a flint lights one here instead (GitHub #774, ~60/h 'spell focus 4 unreachable' on live).
+                            if (bestSpell.RequiresSpellFocus == CookingFireFocus && TryLightCampfire(player, store, spellbook, now, out bool fallbackHandled))
+                            {
+                                if (_refusedUntil.ContainsKey(SpellKey(BasicCampfireSpell)))
+                                {
+                                    _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + FocusBackoffMs);
+                                    _refusedUntil[FocusKey(bestSpell.RequiresSpellFocus)] = unchecked(now + FocusBackoffMs);
+                                }
+                                return fallbackHandled;
+                            }
+                            SetFocusAside(bestSpell, distantFocus, now);
+                            if (!_session.IsInChaosProbe)
+                                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} spell focus {bestSpell.RequiresSpellFocus} unreachable");
+                            return false;
+                        }
+                        distantFocus = nextFocus;
                     }
-                    _routeTarget = distantFocus.Guid;
+                    _routeTarget = distantFocus!.Guid;
                 }
 
-                if (PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, now))
+                if (PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
                     return true;
 
                 // The walk is over: when it ended in reach of the focus the recipe is cast now, else the bot gives up on it for a while.
@@ -827,6 +844,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _focusFailures[recipe.RequiresSpellFocus] = Math.Min(failures + 1, 16);
         uint backoff = Math.Min(FocusBackoffMs << Math.Min(failures, 8), MaxFocusBackoffMs);
         _refusedUntil[SpellKey(recipe.Id)] = unchecked(now + backoff);
+        _refusedUntil[FocusKey(recipe.RequiresSpellFocus)] = unchecked(now + backoff);
         _refusedUntil[focus.Guid.Value] = unchecked(now + backoff);
     }
 
@@ -1347,4 +1365,5 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     }
 
     private static ulong SpellKey(uint spellId) => (1UL << 62) | spellId;
+    private static ulong FocusKey(uint focusId) => (1UL << 61) | focusId;
 }

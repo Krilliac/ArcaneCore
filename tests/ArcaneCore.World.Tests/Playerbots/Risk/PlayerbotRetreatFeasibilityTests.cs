@@ -86,10 +86,10 @@ public sealed class PlayerbotRetreatFeasibilityTests
     }
 
     /// <summary>A synthetic spell for the model tests: the figures are inputs here (the derivation from real spell data is <see cref="PlayerbotEscapeSpellDataTests"/>).</summary>
-    private static (EscapeAction Action, SpellInfo? Spell) Ready(string name, EscapeTarget target, int durationMs = 0, AuraType aura = default, int percent = 0)
+    private static (EscapeAction Action, SpellInfo? Spell) Ready(string name, EscapeTarget target, int durationMs = 0, AuraType aura = default, int percent = 0, int castTimeMs = 0)
         => (new EscapeAction(name, target), new SpellInfo
         {
-            Id = 1, Name = name, Duration = new SpellDuration(durationMs, 0, durationMs),
+            Id = 1, Name = name, CastTime = new SpellCastTime(castTimeMs, 0, castTimeMs), Duration = new SpellDuration(durationMs, 0, durationMs),
             Effects = aura == default ? [] : [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = aura, BasePoints = percent - 1, BaseDice = 1 }],
         });
 
@@ -104,6 +104,22 @@ public sealed class PlayerbotRetreatFeasibilityTests
         // The same spell with a duration far short of the run buys nothing.
         PlayerbotEscapeKit brief = PlayerbotEscapes.Kit([Ready(escape, EscapeTarget.Self, 1_000)]);
         Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Fast, brief)), Options).Reason);
+    }
+
+    [Fact]
+    public void AHoldingEscape_CountsItsCastTimeAndTheGapOpenedAgainstSoftLeashExtension()
+    {
+        // 8 s Frost Nova opens 56 yd at 7 yd/s; an 8 yd/s pursuer needs (56 - 5) / 1 = 51 s to close back into melee,
+        // so even a 20.86 s soft-leash clock (7.86 s to 50 yd + 13 s extension) only hits after the hold + gap.
+        PlayerbotEscapeKit nova = PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.FrostNova, EscapeTarget.Self, 8_000)]);
+        var softLeashWithNova = new PlayerbotPursuit(55f, Unit.BaseRunSpeed, [new RiskPursuer(Fast, 60f)], nova, MinContactSeconds: 20.86f);
+        Assert.Equal(0f, PlayerbotRiskModel.RetreatDamage(softLeashWithNova, 60f), 3);
+
+        // A 1.5 s cast-time root takes 1.5 s of blows while standing still (90 damage at 60 dps), then holds for 12 s.
+        PlayerbotEscapeKit roots = PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.EntanglingRoots, EscapeTarget.Victim, 12_000, castTimeMs: 1_500)]);
+        Assert.Equal(1.5f, roots.CastSeconds, 3);
+        var softLeashWithRoots = new PlayerbotPursuit(55f, Unit.BaseRunSpeed, [new RiskPursuer(Fast, 60f)], roots, MinContactSeconds: 20.86f);
+        Assert.Equal(90f, PlayerbotRiskModel.RetreatDamage(softLeashWithRoots, 60f), 3);
     }
 
     [Theory]

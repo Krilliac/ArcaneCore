@@ -96,19 +96,19 @@ public sealed class PlayerbotCadenceTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            // No measured gap: the base lease (2 s).
+            // No measured gap: the base lease (4 s).
             await host.World.InvokeAsync(() =>
             {
                 StartWalk(host, session, 0, 0);
-                Assert.Equal(2000u, PlayerbotMotion.LeaseMsOf(session.Player!));
-                Assert.False(Walking(session, 2500));
+                Assert.Equal(4000u, PlayerbotMotion.LeaseMsOf(session.Player!));
+                Assert.False(Walking(session, 4500));
                 return true;
             });
             await host.World.InvokeAsync(() =>
             {
-                // A 5 s gap: a 10 s lease. Not followed again, the bot stops once it ran out.
+                // A 5 s gap: a 15 s lease. Not followed again, the bot stops once it ran out.
                 StartWalk(host, session, 5000, 4);
-                Assert.True(Walking(session, 9500));
+                Assert.True(Walking(session, 14_500));
                 Assert.False(Walking(session, 1000), "walked on past its lease");
                 Assert.False(PlayerbotMotion.IsActive(session.Player!));
                 return true;

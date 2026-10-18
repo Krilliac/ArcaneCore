@@ -150,7 +150,8 @@ internal static class PlayerbotEscapes
     /// spell, <see cref="SpellInfo.SimpleValue"/> percent), the nearest pursuer's (the speed-reducing aura). A spell that did not
     /// resolve, or lacks the data its kind needs (no duration, no speed aura), buys nothing: no number is ever assumed.
     /// </summary>
-    internal readonly record struct EscapeEffect(float FreeSeconds, bool AllPursuers, float SelfSpeed = 1f, float VictimSpeed = 1f)
+    internal readonly record struct EscapeEffect(float FreeSeconds, bool AllPursuers, float SelfSpeed = 1f, float VictimSpeed = 1f,
+        float CastSeconds = 0f)
     {
         /// <summary>Buys nothing.</summary>
         internal static EscapeEffect None { get; } = new(0f, false);
@@ -166,7 +167,8 @@ internal static class PlayerbotEscapes
                 return new(float.PositiveInfinity, true);
             case EscapeKind.HoldsAll or EscapeKind.HoldsVictim:
                 return spell.Duration.Base > 0
-                    ? new(spell.Duration.Base / 1000f, KindOf(name) == EscapeKind.HoldsAll)
+                    ? new(spell.Duration.Base / 1000f, KindOf(name) == EscapeKind.HoldsAll,
+                        CastSeconds: Math.Max(0, spell.CastTime.Base) / 1000f)
                     : EscapeEffect.None;
             case EscapeKind.SelfSpeed:
             {
@@ -203,7 +205,7 @@ internal static class PlayerbotEscapes
     /// <summary>The escapes of a retreat together: free seconds add up per reach, the fastest self speed and the strongest snare stand.</summary>
     internal static PlayerbotEscapeKit Kit(IEnumerable<(EscapeAction Action, SpellInfo? Spell)> ready)
     {
-        float all = 0f, victim = 0f, self = 1f, snare = 1f;
+        float all = 0f, victim = 0f, self = 1f, snare = 1f, cast = 0f;
         foreach ((EscapeAction action, SpellInfo? spell) in ready)
         {
             EscapeEffect effect = EffectOf(action.Spell, spell);
@@ -211,9 +213,10 @@ internal static class PlayerbotEscapes
             else victim += effect.FreeSeconds;
             self = MathF.Max(self, effect.SelfSpeed);
             snare = MathF.Min(snare, effect.VictimSpeed);
+            cast += effect.CastSeconds;
         }
 
-        return new PlayerbotEscapeKit(all, victim, self, snare);
+        return new PlayerbotEscapeKit(all, victim, self, snare, cast);
     }
 
     /// <summary>The first escape of the class that is ready (<paramref name="ready"/>: known, castable at its target, not used yet).</summary>

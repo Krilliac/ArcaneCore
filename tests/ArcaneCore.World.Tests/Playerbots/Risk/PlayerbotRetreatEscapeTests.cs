@@ -56,4 +56,40 @@ public sealed class PlayerbotRetreatEscapeTests
         Assert.Contains("escapes=" + escape.Replace(' ', '_'), await world.OnWorldAsync(() => world.Brain.RiskReport));
         Assert.Single(await world.OnWorldAsync(() => world.Brain.Risk.Retreat.UsedEscapes.ToArray()));
     }
+
+    [Theory]
+    [InlineData(Class.Druid, PlayerbotEscapes.EntanglingRoots, true, 1500)]
+    [InlineData(Class.Warlock, PlayerbotEscapes.Fear, true, 1500)]
+    public async Task ACastTimeEscape_HoldsStillUntilTheCastFinishes_InsteadOfCancellingOnMove(
+        Class playerClass, string escape, bool atEnemy, uint castTimeMs)
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(991042, health: 500, minDamage: 1, maxDamage: 1), 2, 0));
+        await world.SeeAsync(mob);
+        uint spellId = 991_420 + (uint)playerClass;
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)playerClass);
+            SpellFeature feature = world.Session.Services.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
+            {
+                Id = spellId, Name = escape, CastTime = new SpellCastTime((int)castTimeMs, 0, (int)castTimeMs),
+                Duration = new SpellDuration(10_000, 0, 10_000),
+                Effects = [new SpellEffectInfo
+                {
+                    Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModRoot,
+                    TargetA = atEnemy ? SpellImplicitTarget.UnitEnemy : SpellImplicitTarget.UnitCaster,
+                }],
+            }], [], []);
+            Assert.True(feature.Spellbook.LearnSpell(player, spellId));
+            world.Engage(mob);
+            world.Brain.Risk.StartRetreat(player, [mob], "test");
+            return true;
+        });
+
+        Assert.True(await world.ThinkUntilAsync(4_000, () => world.Session.Services.GetRequiredService<SpellFeature>().System
+            .HasAura(atEnemy ? mob : world.Player, spellId)),
+            $"cast-time escape {escape} never landed: {await world.OnWorldAsync(() => world.Brain.RiskReport)}");
+    }
 }

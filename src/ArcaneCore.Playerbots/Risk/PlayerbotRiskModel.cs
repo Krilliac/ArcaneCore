@@ -105,9 +105,11 @@ internal readonly record struct RiskPursuer(float RunSpeed, float Dps);
 
 /// <summary>
 /// What the escapes a retreat would use (ready now, <see cref="PlayerbotEscapes.Kit"/>) buy together: seconds the pursuers cannot hit
-/// the bot (all of them, or the nearest only), the bot's speed multiplier and the nearest pursuer's (a snare).
+/// the bot (all of them, or the nearest only), the bot's speed multiplier, the nearest pursuer's (a snare), and any cast time spent
+/// standing still before those escapes land.
 /// </summary>
-internal readonly record struct PlayerbotEscapeKit(float AllFreeSeconds, float VictimFreeSeconds, float SelfSpeed, float VictimSpeed)
+internal readonly record struct PlayerbotEscapeKit(float AllFreeSeconds, float VictimFreeSeconds, float SelfSpeed, float VictimSpeed,
+    float CastSeconds = 0f)
 {
     /// <summary>No escape ready.</summary>
     internal static PlayerbotEscapeKit None { get; } = new(0f, 0f, 1f, 1f);
@@ -440,6 +442,7 @@ internal static class PlayerbotRiskModel
         float run = pursuit.EscapeYards / botSpeed;
         float leash = float.IsFinite(pursuit.MinContactSeconds) ? MathF.Max(0f, pursuit.MinContactSeconds) : 0f;
         float flee = float.IsFinite(pursuit.FleeDamageFactor) ? Math.Clamp(pursuit.FleeDamageFactor, 1f, 2.5f) : 1f;
+        float cast = float.IsFinite(kit.CastSeconds) ? MathF.Max(0f, kit.CastSeconds) : 0f;
         float totalDps = 0f;
         foreach (RiskPursuer pursuer in pursuit.Pursuers) totalDps += MathF.Max(0f, pursuer.Dps);
         if (!(totalDps > 0f)) return 0f;
@@ -450,11 +453,30 @@ internal static class PlayerbotRiskModel
             bool nearest = index == 0;
             float speed = (float.IsFinite(pursuer.RunSpeed) && pursuer.RunSpeed > 0f ? pursuer.RunSpeed : float.PositiveInfinity)
                 * (nearest ? kit.VictimSpeed : 1f);
+            float free = kit.AllFreeSeconds + (nearest ? kit.VictimFreeSeconds : 0f);
             // A pursuer starts in melee contact. One as fast as the bot stays there and keeps hitting the whole run (live 2026-10-17: 74% of
             // 'losing' retreats died when equal speed counted as an escape), and past the run's end until its leash clock lets it give up
-            // (live 2026-10-17: still 51% died with the run alone counted); a slower one hits until the gap opens past its reach.
-            float contact = speed >= botSpeed ? MathF.Max(run, leash) : MathF.Min(run, PursuerReachYards / (botSpeed - speed));
-            float exposed = MathF.Max(0f, contact - (kit.AllFreeSeconds + (nearest ? kit.VictimFreeSeconds : 0f)));
+            // (live 2026-10-17: still 51% died with the run alone counted); a slower one hits until the gap opens past its reach. When a
+            // holding escape has a cast time (Entangling Roots, Fear, Howl of Terror), the bot stands still and takes blows during the cast;
+            // once the hold lands, the bot opens a free * botSpeed gap that only a strictly faster pursuer can close after the hold expires.
+            float postEscape;
+            if (free > 0f)
+            {
+                if (free >= run || speed <= botSpeed) postEscape = 0f;
+                else
+                {
+                    float catchUp = float.IsPositiveInfinity(speed)
+                        ? 0f
+                        : MathF.Max(0f, (free * botSpeed) - PursuerReachYards) / (speed - botSpeed);
+                    postEscape = MathF.Max(0f, MathF.Max(run, leash) - free - catchUp);
+                }
+            }
+            else
+            {
+                postEscape = speed >= botSpeed ? MathF.Max(run, leash) : MathF.Min(run, PursuerReachYards / (botSpeed - speed));
+            }
+
+            float exposed = cast + postEscape;
             damage += dpsIn * flee * (MathF.Max(0f, pursuer.Dps) / totalDps) * exposed;
         }
 

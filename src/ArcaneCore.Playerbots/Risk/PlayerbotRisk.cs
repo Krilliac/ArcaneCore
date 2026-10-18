@@ -75,7 +75,7 @@ internal sealed class PlayerbotRisk
         _session = session;
         _options = options;
         _spells = spells;
-        Retreat = new PlayerbotRetreat(session, options, spells);
+        Retreat = new PlayerbotRetreat(session, options, spells, Hazards);
     }
 
     internal bool Enabled => _options.Risk.Enabled;

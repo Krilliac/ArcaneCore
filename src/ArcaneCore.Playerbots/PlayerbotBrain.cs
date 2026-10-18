@@ -1413,16 +1413,37 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     }
 
                     if (_route is not null && !ReferenceEquals(_route, fresh)) AbandonRoute(); // the old route is replaced, not kept
-                    _route = fresh;
                     if (fresh is not null)
                     {
+                        System.Numerics.Vector3 end = fresh.Points[^1];
+                        float endFlat = System.Numerics.Vector2.Distance(new(end.X, end.Y), new(chaseGoal.X, chaseGoal.Y));
+                        bool incomplete = (endFlat > 1f || MathF.Abs(end.Z - chaseGoal.Z) > PlayerbotNavigation.ProjectedEndYards)
+                            && fresh.Distance < _options.MaxRouteYards * 0.9f
+                            && fresh.Points.Count < _options.MaxPathPoints;
+                        if (incomplete)
+                        {
+                            float progress = System.Numerics.Vector2.Distance(new(player.X, player.Y), new(end.X, end.Y));
+                            bool endsShort = !fightingBot && (position == PlayerbotFightPosition.ChaseToMelee
+                                ? endFlat > PlayerbotNavigationAnomalies.PathEndShortYards || MathF.Abs(end.Z - chaseGoal.Z) > PlayerbotNavigation.ProjectedEndYards
+                                : System.Numerics.Vector3.Distance(end, chaseGoal) > _combatSpells.PreferredRange(player));
+                            if (progress < PlayerbotNavigation.PartialProgressYards || endsShort)
+                            {
+                                MarkUnreachable(target);
+                                _target = null;
+                                AbandonRoute();
+                                PlayerbotMovementControl.Stop(_session, player);
+                                if (fightingBot) _goal = PlayerbotGoalKind.Combat;
+                                return;
+                            }
+                        }
+
                         // The loop watch ignores a chase (PlayerbotMotion.Follow); the goal it was planned to is what "the target moved" is
                         // measured from, and a route cut short of it (MaxRouteYards, MaxPathPoints) is re-planned only once mostly walked.
                         fresh.Chase = true;
                         _chaseGoal = chaseGoal;
-                        System.Numerics.Vector3 end = fresh.Points[^1];
-                        _chaseTruncated = System.Numerics.Vector2.Distance(new(end.X, end.Y), new(chaseGoal.X, chaseGoal.Y)) > _options.ChaseReplanYards;
+                        _chaseTruncated = endFlat > _options.ChaseReplanYards;
                     }
+                    _route = fresh;
                 }
 
                 _goal = PlayerbotGoalKind.Grind;
@@ -1844,7 +1865,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         PlayerbotThinkProbe.Phase("stall inventory");
         uint items = 0;
-        foreach (Item item in player.Inventory.AllItems) items += item.Count;
+        foreach (Item item in player.Inventory.AllItems)
+            items = unchecked(items + (item.Count * ((item.Entry * 397u) | 1u)));
         PlayerbotThinkProbe.Phase("stall quests");
         int quests = 0, rewarded = 0;
         uint objectives = 0;
