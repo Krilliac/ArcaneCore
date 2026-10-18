@@ -200,7 +200,7 @@ internal static class BotControlState
         if (session.Services.GetService<QuestNpcFeature>()?.Services is not { } npcs || npcs.StateOf(player) is not { } state) return "Unknown";
         QuestStatusData? data = state.Quests.Get(questId);
         if (data is null) return "None";
-        return data.Rewarded && data.Status is not (QuestStatus.Incomplete or QuestStatus.Complete) ? "Rewarded" : data.Status.ToString();
+        return data.Rewarded && state.Quests.FindSlot(questId) >= QuestConstants.MaxQuestLogSize ? "Rewarded" : data.Status.ToString();
     }
 
     internal static JsonArray Inventory(Player player)

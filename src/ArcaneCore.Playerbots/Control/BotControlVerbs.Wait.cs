@@ -201,12 +201,50 @@ internal static partial class BotControlVerbs
         return max == 0 ? 0 : 100.0 * power / max;
     }
 
+    private static readonly string[] AttachedOps = ["<=", ">=", "!=", "==", "<", ">"];
+
+    private static IEnumerable<string> ExpandAttachedOperators(string[] args)
+    {
+        foreach (string arg in args)
+        {
+            if (IsOp(arg))
+            {
+                yield return arg;
+                continue;
+            }
+
+            string? matchedOp = null;
+            int idx = -1;
+            foreach (string op in AttachedOps)
+            {
+                idx = arg.IndexOf(op, StringComparison.Ordinal);
+                if (idx > 0)
+                {
+                    matchedOp = op;
+                    break;
+                }
+            }
+
+            if (matchedOp is not null)
+            {
+                yield return arg[..idx];
+                yield return matchedOp;
+                string rest = arg[(idx + matchedOp.Length)..];
+                if (rest.Length > 0) yield return rest;
+            }
+            else
+            {
+                yield return arg;
+            }
+        }
+    }
+
     private static async Task<BotControlResult> Wait(BotCall call)
     {
         var result = new BotControlResult("wait");
         double timeout = DefaultWaitSeconds;
         var conditions = new List<Condition>();
-        string[] words = call.Args;
+        string[] words = [.. ExpandAttachedOperators(call.Args)];
         for (int i = 0; i < words.Length;)
         {
             string word = words[i].ToLowerInvariant();

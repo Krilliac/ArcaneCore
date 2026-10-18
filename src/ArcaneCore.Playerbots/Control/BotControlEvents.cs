@@ -105,6 +105,14 @@ internal static class BotControlEvents
             case WorldOpcode.SmsgAttackswingCantAttack: return new("attack-failed", "cannot attack that target", true);
             case WorldOpcode.SmsgInventoryChangeFailure:
                 return new("inventory-failed", I($"equip error {payload[0]}"), payload[0] != 0);
+            case WorldOpcode.SmsgBuyItem:
+            {
+                var r = new PacketReader(payload);
+                ulong vendor = r.ReadUInt64();
+                uint slot = r.ReadUInt32();
+                r.ReadUInt32();
+                return new("bought", I($"slot {slot} x{r.ReadUInt32()} from {Guid(vendor)}"), false);
+            }
             case WorldOpcode.SmsgBuyFailed:
             {
                 var r = new PacketReader(payload);
@@ -239,7 +247,18 @@ internal static class BotControlEvents
                 var r = new PacketReader(payload);
                 ulong trainer = r.ReadUInt64();
                 r.ReadUInt32();
-                return new("trainer-list", I($"{Guid(trainer)} teaches {r.ReadUInt32()} spells"), false);
+                uint count = r.ReadUInt32();
+                var text = new StringBuilder(I($"{Guid(trainer)} teaches {count} spells:"));
+                for (uint i = 0; i < count && i < 40; i++)
+                {
+                    uint spell = r.ReadUInt32();
+                    byte state = r.ReadByte();
+                    uint cost = r.ReadUInt32();
+                    for (int k = 0; k < 29; k++) r.ReadByte();
+                    text.Append(I($" {spell}@{cost}({state})"));
+                }
+
+                return new("trainer-list", text.ToString().TrimEnd(':'), false);
             }
             case WorldOpcode.SmsgLootResponse:
             {
@@ -303,7 +322,11 @@ internal static class BotControlEvents
                 TradeStatusView trade = ScenarioDecoders.TradeStatus(payload);
                 return new("trade", I($"{trade.Status}"), false);
             }
-            case WorldOpcode.SmsgBattlefieldStatus: return new("battlefield-status", I($"{payload.Length} bytes"), false);
+            case WorldOpcode.SmsgBattlefieldStatus:
+            {
+                BattlefieldStatusView bg = ScenarioBattlegrounds.BattlefieldStatus(payload);
+                return new("battlefield-status", bg.MapId == 0 ? I($"slot {bg.QueueSlot}: None") : I($"slot {bg.QueueSlot}: map {bg.MapId} {bg.Status}"), false);
+            }
             default:
                 return Generic(opcode, payload);
         }

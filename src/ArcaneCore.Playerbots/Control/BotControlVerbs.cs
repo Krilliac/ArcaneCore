@@ -111,7 +111,7 @@ internal static partial class BotControlVerbs
         List<Picked> bots;
         if (call.Args.Length > 0)
         {
-            BotCall selection = call.With(call.Verb, call.Args[0], [], string.Empty, call.Flags);
+            BotCall selection = call.With(call.Verb, call.Args[0], [], string.Empty, [.. call.Flags, "--force"]);
             if (Select(selection, out bots) is { } error) return result.Fail(error.Split(':')[0], error);
         }
         else
@@ -124,23 +124,35 @@ internal static partial class BotControlVerbs
             BotOutcome outcome = result.Add(bot.Name);
             BotController? controller = call.Hub.Find(bot.BotId);
             Player? player = call.Feature.FindSession(bot.BotId)?.Player;
-            var data = new JsonObject
+            bool running = call.Feature.IsActive(bot.BotId);
+            string state = controller is not null ? "controlled by " + controller.Owner : running ? "autonomous" : "stopped";
+            if (call.Json)
             {
-                ["botId"] = bot.BotId.ToString("D"),
-                ["running"] = call.Feature.IsActive(bot.BotId),
-                ["controlled"] = controller is not null,
-            };
-            if (controller is not null) data["owner"] = controller.Owner;
-            if (player is not null)
-            {
-                data["map"] = player.MapId;
-                data["level"] = player.Level;
-                data["class"] = player.Class.ToString();
-                data["alive"] = player.IsAlive;
-            }
+                var data = new JsonObject
+                {
+                    ["botId"] = bot.BotId.ToString("D"),
+                    ["running"] = running,
+                    ["controlled"] = controller is not null,
+                };
+                if (controller is not null) data["owner"] = controller.Owner;
+                if (player is not null)
+                {
+                    data["map"] = player.MapId;
+                    data["level"] = player.Level;
+                    data["class"] = player.Class.ToString();
+                    data["alive"] = player.IsAlive;
+                }
 
-            outcome.Data = data;
-            outcome.Success(controller is not null ? "controlled by " + controller.Owner : call.Feature.IsActive(bot.BotId) ? "autonomous" : "stopped");
+                outcome.Data = data;
+                outcome.Success(state);
+            }
+            else
+            {
+                string summary = player is not null
+                    ? I($"{state} map={player.MapId} level={player.Level} class={player.Class} alive={(player.IsAlive ? "true" : "false")} botId={bot.BotId:D}")
+                    : I($"{state} botId={bot.BotId:D}");
+                outcome.Success(summary);
+            }
         }
 
         return result.Say(I($"{bots.Count} bots, {call.Hub.Controlled.Count} controlled"));
@@ -448,40 +460,95 @@ internal static partial class BotControlVerbs
         return outcome.Success();
     }, control: false);
 
-    private static Task<BotControlResult> Quest(BotCall call)
+    private static async Task<BotControlResult> Quest(BotCall call)
     {
         string action = call.Args[0].ToLowerInvariant();
         if (action == "abandon")
         {
-            if (!TryUInt(call.Arg(1), out uint abandoned)) return Task.FromResult(new BotControlResult("quest").Fail("syntax", "quest abandon <quest id>"));
-            return OnBots(call, (view, outcome) =>
+            if (!TryUInt(call.Arg(1), out uint abandoned)) return new BotControlResult("quest").Fail("syntax", "quest abandon <quest id>");
+            return await OnBots(call, (view, outcome) =>
             {
                 if (view.Session!.Services.GetService<Npc.QuestNpcFeature>()?.Services.StateOf(view.Player!) is not { } state) return outcome.Failure("unavailable", "no quest log");
                 int slot = state.Quests.FindSlot(abandoned);
-                if (slot < 0) return outcome.Failure("no-quest", I($"quest {abandoned} is not in the log"));
-                return Act(view, outcome, I($"abandon quest {abandoned}"), (WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot]));
-            });
+                if (slot < 0 || slot >= ArcaneCore.Game.Quests.QuestConstants.MaxQuestLogSize) return outcome.Failure("no-quest", I($"quest {abandoned} is not in the log"));
+                BotOutcome answer = Act(view, outcome, I($"abandon quest {abandoned}"), (WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot]));
+                if (answer.Ok && state.Quests.FindSlot(abandoned) < ArcaneCore.Game.Quests.QuestConstants.MaxQuestLogSize) return outcome.Failure("not-abandoned", I($"quest {abandoned} was not abandoned"));
+                return answer;
+            }).ConfigureAwait(false);
         }
 
         if (action is not ("accept" or "complete" or "reward" or "query" or "hello") || call.Args.Length < 2)
-            return Task.FromResult(new BotControlResult("quest").Fail("syntax", "quest accept|complete|reward|query|hello <npc> [quest] [choice] | abandon <quest>"));
+            return new BotControlResult("quest").Fail("syntax", "quest accept|complete|reward|query|hello <npc> [quest] [choice] | abandon <quest>");
         uint quest = 0, choice = 0;
         if (action != "hello" && (call.Args.Length < 3 || !TryUInt(call.Args[2], out quest)))
-            return Task.FromResult(new BotControlResult("quest").Fail("syntax", "the quest is a quest id"));
-        if (call.Args.Length > 3 && !TryUInt(call.Args[3], out choice)) return Task.FromResult(new BotControlResult("quest").Fail("syntax", "the reward choice is an index"));
-        return OnBots(call, (view, outcome) =>
+            return new BotControlResult("quest").Fail("syntax", "the quest is a quest id");
+        if (call.Args.Length > 3 && !TryUInt(call.Args[3], out choice)) return new BotControlResult("quest").Fail("syntax", "the reward choice is an index");
+        if (action == "reward")
+        {
+            var pending = new List<(Picked Bot, BotOutcome Outcome, Npc.QuestNpcFeature Feature, int CharId, long Mark)>();
+            BotControlResult result = await OnBots(call, (view, outcome) =>
+            {
+                if (BotControlUnits.Resolve(call.World, view.Player!, call.Args[1], out string? missing) is not { } giver) return outcome.Failure("no-unit", missing!);
+                Npc.QuestNpcFeature? feature = view.Session!.Services.GetService<Npc.QuestNpcFeature>();
+                if (feature?.Services.DiagnoseTurnInRefusal(view.Player!, giver.Guid, quest, choice) is { } refusal)
+                    return outcome.Failure("not-rewarded", refusal);
+                long mark = BotController.CurrentSequence;
+                BotOutcome sent = Act(view, outcome, I($"choose reward {choice} of quest {quest}"), (WorldOpcode.CmsgQuestgiverChooseReward, ScenarioPackets.QuestChooseReward(giver.Guid.Value, quest, choice)));
+                if (sent.Ok && feature is not null)
+                    pending.Add((view.Bot, outcome, feature, (int)view.Player!.Guid.Low, mark));
+                return sent;
+            }).ConfigureAwait(false);
+            foreach ((Picked bot, BotOutcome outcome, Npc.QuestNpcFeature feature, int charId, long mark) in pending)
+            {
+                await feature.WaitForSettlementAsync(charId, call.Token).ConfigureAwait(false);
+                await call.World.InvokeAsync(() =>
+                {
+                    BotController? controller = call.Hub.Find(bot.BotId);
+                    WorldSession? session = call.Feature.FindSession(bot.BotId);
+                    Player? player = session?.Player;
+                    if (controller is null || session is null || player is null) return false;
+                    BotOutcome answer = Answer(controller, outcome, I($"choose reward {choice} of quest {quest}"), mark);
+                    if (answer.Ok && BotControlState.QuestStatusOf(session, player, quest) != "Rewarded")
+                        outcome.Failure("not-rewarded", I($"quest {quest} was not rewarded"));
+                    return true;
+                }, call.Token).ConfigureAwait(false);
+            }
+
+            return result;
+        }
+
+        return await OnBots(call, (view, outcome) =>
         {
             if (BotControlUnits.Resolve(call.World, view.Player!, call.Args[1], out string? missing) is not { } giver) return outcome.Failure("no-unit", missing!);
             ulong g = giver.Guid.Value;
-            return action switch
+            long mark = BotController.CurrentSequence;
+            switch (action)
             {
-                "accept" => Act(view, outcome, I($"accept quest {quest}"), (WorldOpcode.CmsgQuestgiverAcceptQuest, ScenarioPackets.GuidUInt32(g, quest))),
-                "complete" => Act(view, outcome, I($"complete quest {quest}"), (WorldOpcode.CmsgQuestgiverCompleteQuest, ScenarioPackets.GuidUInt32(g, quest))),
-                "reward" => Act(view, outcome, I($"choose reward {choice} of quest {quest}"), (WorldOpcode.CmsgQuestgiverChooseReward, ScenarioPackets.QuestChooseReward(g, quest, choice))),
-                "query" => Act(view, outcome, I($"query quest {quest}"), (WorldOpcode.CmsgQuestgiverQueryQuest, ScenarioPackets.GuidUInt32(g, quest))),
-                _ => Act(view, outcome, "quest giver hello " + Describe(giver), (WorldOpcode.CmsgQuestgiverHello, ScenarioPackets.Guid(g))),
-            };
-        });
+                case "accept":
+                {
+                    BotOutcome answer = Act(view, outcome, I($"accept quest {quest}"), (WorldOpcode.CmsgQuestgiverAcceptQuest, ScenarioPackets.GuidUInt32(g, quest)));
+                    if (answer.Ok && BotControlState.QuestStatusOf(view.Session!, view.Player!, quest) is "None" or "unknown")
+                        return outcome.Failure("not-accepted", I($"quest {quest} was not accepted (out of range, or the NPC does not offer it)"));
+                    return answer;
+                }
+                case "complete":
+                {
+                    BotOutcome answer = Act(view, outcome, I($"complete quest {quest}"), (WorldOpcode.CmsgQuestgiverCompleteQuest, ScenarioPackets.GuidUInt32(g, quest)));
+                    if (answer.Ok && !view.Controller!.HasEvent(mark, e => e.Kind is "quest-request-items" or "quest-offer-reward"))
+                        return outcome.Failure("not-completed", I($"quest {quest}: no turn-in dialog opened"));
+                    return answer;
+                }
+                case "query":
+                {
+                    BotOutcome answer = Act(view, outcome, I($"query quest {quest}"), (WorldOpcode.CmsgQuestgiverQueryQuest, ScenarioPackets.GuidUInt32(g, quest)));
+                    if (answer.Ok && !view.Controller!.HasEvent(mark, e => e.Kind == "quest-details"))
+                        return outcome.Failure("no-details", I($"quest {quest}: no quest details returned"));
+                    return answer;
+                }
+                default:
+                    return Act(view, outcome, "quest giver hello " + Describe(giver), (WorldOpcode.CmsgQuestgiverHello, ScenarioPackets.Guid(g)));
+            }
+        }).ConfigureAwait(false);
     }
 
     private static Task<BotControlResult> Loot(BotCall call) => OnBots(call, (view, outcome) =>
@@ -534,9 +601,11 @@ internal static partial class BotControlVerbs
             w.WriteUInt32(entry);
             w.WriteByte((byte)count);
             w.WriteByte(0);
+            long mark = BotController.CurrentSequence;
             uint before = view.Player!.Money;
             BotOutcome answer = Act(view, outcome, I($"buy {count}x {entry} from {Describe(vendor)}"), (WorldOpcode.CmsgBuyItem, w.ToArray()));
-            if (answer.Ok && view.Player.Money == before) return outcome.Failure("not-bought", I($"buy {entry}: the money did not change (not sold there, or out of range)"));
+            if (answer.Ok && !view.Controller!.HasEvent(mark, e => e.Kind == "bought") && view.Player.Money == before)
+                return outcome.Failure("not-bought", I($"buy {entry}: the money did not change (not sold there, or out of range)"));
             return answer;
         });
     }
@@ -554,7 +623,11 @@ internal static partial class BotControlVerbs
             w.WriteUInt64(vendor.Guid.Value);
             w.WriteUInt64(item.Guid.Value);
             w.WriteByte((byte)count);
-            return Act(view, outcome, I($"sell {item.Template.Name} ({entry}) to {Describe(vendor)}"), (WorldOpcode.CmsgSellItem, w.ToArray()));
+            long beforeCount = BotControlState.ItemCount(view.Player!, entry);
+            BotOutcome answer = Act(view, outcome, I($"sell {item.Template.Name} ({entry}) to {Describe(vendor)}"), (WorldOpcode.CmsgSellItem, w.ToArray()));
+            if (answer.Ok && BotControlState.ItemCount(view.Player!, entry) >= beforeCount)
+                return outcome.Failure("not-sold", I($"sell {entry}: the item was not sold"));
+            return answer;
         });
     }
 
@@ -564,10 +637,26 @@ internal static partial class BotControlVerbs
         return OnBots(call, (view, outcome) =>
         {
             if (BotControlUnits.Resolve(call.World, view.Player!, call.Args[0], out string? missing) is not { } trainer) return outcome.Failure("no-unit", missing!);
+            uint spellToBuy = spell;
+            if (trainer is Creature c && view.Session!.Services.GetService<Npc.QuestNpcFeature>()?.Services is { } npcServices
+                && npcServices.Deps.Spells is { } spells)
+            {
+                IReadOnlyList<Kernel.Npc.TrainerSpell> offers = npcServices.Npcs.TrainerSpells(c.Entry);
+                if (offers.All(t => t.Spell != spellToBuy))
+                {
+                    uint match = offers.FirstOrDefault(t => spells.DescribeTrainerSpell(t.Spell)?.LearnedSpell == spellToBuy)?.Spell ?? 0;
+                    if (match != 0) spellToBuy = match;
+                }
+            }
+
             var w = new PacketWriter(12);
             w.WriteUInt64(trainer.Guid.Value);
-            w.WriteUInt32(spell);
-            return Act(view, outcome, I($"train {spell} at {Describe(trainer)}"), (WorldOpcode.CmsgTrainerBuySpell, w.ToArray()));
+            w.WriteUInt32(spellToBuy);
+            long mark = BotController.CurrentSequence;
+            BotOutcome answer = Act(view, outcome, I($"train {spellToBuy} at {Describe(trainer)}"), (WorldOpcode.CmsgTrainerBuySpell, w.ToArray()));
+            if (answer.Ok && !view.Controller!.HasEvent(mark, e => e.Kind == "trained"))
+                return outcome.Failure("not-trained", I($"train {spellToBuy}: no confirmation from server"));
+            return answer;
         });
     }
 
