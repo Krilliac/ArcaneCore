@@ -678,6 +678,7 @@ internal static class PlayerbotElevator
             StartPosition = new Vector3(player.X, player.Y, player.Z),
         };
         Trips.AddOrUpdate(player, trip);
+        PlayerbotMotion.Of(player).ElevatorTrip = trip;
         return trip;
     }
 
@@ -694,6 +695,7 @@ internal static class PlayerbotElevator
         if (!player.IsAlive)
         {
             Trips.Remove(player);
+            if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? deadState)) deadState.ElevatorTrip = null;
             if ((player.Movement.Flags & MovementFlags.OnTransport) != 0 && player.Session is WorldSession session) ClearTransport(session, player);
             return;
         }
@@ -713,6 +715,7 @@ internal static class PlayerbotElevator
                 return;
             default:
                 Trips.Remove(player);
+                if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? cancelState)) cancelState.ElevatorTrip = null;
                 return;
         }
     }
@@ -734,7 +737,11 @@ internal static class PlayerbotElevator
     internal static void Pump(WorldSession session, Player player, uint now)
     {
         if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map) return;
-        if (!Trips.TryGetValue(player, out ElevatorTrip? trip) || trip.Stage is ElevatorStage.Done or ElevatorStage.Failed) return;
+        if (!Trips.TryGetValue(player, out ElevatorTrip? trip) || trip.Stage is ElevatorStage.Done or ElevatorStage.Failed)
+        {
+            if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? endState)) endState.ElevatorTrip = null;
+            return;
+        }
         if (map.MapId != trip.Lift.MapId) return;
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
@@ -960,6 +967,7 @@ internal static class PlayerbotElevator
             StartPosition = at,
         };
         Trips.AddOrUpdate(player, trip);
+        PlayerbotMotion.Of(player).ElevatorTrip = trip;
         return true;
     }
 

@@ -253,7 +253,9 @@ internal static class PlayerbotShip
             return Refuse(out why, $"ship: ship {route.Entry} does not sail");
         }
 
-        Trips.AddOrUpdate(player, new ShipTrip(route, fromA, now, options));
+        var trip = new ShipTrip(route, fromA, now, options);
+        Trips.AddOrUpdate(player, trip);
+        PlayerbotMotion.Of(player).ShipTrip = trip;
         return true;
     }
 
@@ -277,6 +279,7 @@ internal static class PlayerbotShip
         if (!player.IsAlive && !IsAboard(player))
         {
             Trips.Remove(player);
+            if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? deadState)) deadState.ShipTrip = null;
             return TravelLegStep.Idle;
         }
 
@@ -293,7 +296,12 @@ internal static class PlayerbotShip
     /// </summary>
     internal static void Pump(WorldSession session, Player player, uint now)
     {
-        if (!Trips.TryGetValue(player, out ShipTrip? trip) || trip.Stage is ShipStage.ToDock or ShipStage.Done or ShipStage.Failed) return;
+        if (!Trips.TryGetValue(player, out ShipTrip? trip) || trip.Stage is ShipStage.Done or ShipStage.Failed)
+        {
+            if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? endState)) endState.ShipTrip = null;
+            return;
+        }
+        if (trip.Stage == ShipStage.ToDock) return;
         if (trip.Stage == ShipStage.Disembark && trip.SteppedOff) return;
         if (!player.IsAlive || !player.IsInWorld) return;
         if (unchecked(now - trip.LastDriveMs) < StepIntervalMs || unchecked(now - trip.LastPumpMs) < StepIntervalMs) return;
@@ -322,6 +330,7 @@ internal static class PlayerbotShip
         }
 
         Trips.Remove(player);
+        if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? cancelState)) cancelState.ShipTrip = null;
     }
 
     private static TravelLegStep Ended(ShipTrip trip, out string? failure)

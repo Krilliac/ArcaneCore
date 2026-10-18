@@ -187,6 +187,18 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     }
 
     /// <summary>
+    internal bool NeedsBotSnapshot(uint elapsedMs)
+        => _tracked.Count > 0 || unchecked(_scanElapsed + elapsedMs) >= ScanMs;
+
+    internal void AdvanceIdle(uint elapsedMs)
+    {
+        if (_world is null) return;
+        _tick++;
+        if (Feature() is null) return;
+        _scanElapsed = unchecked(_scanElapsed + elapsedMs);
+    }
+
+    /// <summary>
     /// One world tick (world thread): every followed bot's queue machine (its replies are a client's own and never wait for the action
     /// budget), and every <see cref="ScanMs"/> the demand snapshot, the roles in the running matches and the free bots' choices.
     /// </summary>
@@ -197,13 +209,16 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         _tick++;
         foreach (PlayerbotBattlegroundBot bot in bots) _bots[bot.BotId] = bot;
         if (Feature() is not { } feature) return;
-        _gone.Clear();
-        foreach (Guid id in _tracked.Keys)
-            if (!_bots.ContainsKey(id)) _gone.Add(id);
-        foreach (Guid gone in _gone) _tracked.Remove(gone);
-        _advancing.Clear();
-        _advancing.AddRange(_tracked.Values);
-        foreach (Tracked tracked in _advancing) Advance(tracked, feature);
+        if (_tracked.Count > 0)
+        {
+            _gone.Clear();
+            foreach (Guid id in _tracked.Keys)
+                if (!_bots.ContainsKey(id)) _gone.Add(id);
+            foreach (Guid gone in _gone) _tracked.Remove(gone);
+            _advancing.Clear();
+            _advancing.AddRange(_tracked.Values);
+            foreach (Tracked tracked in _advancing) Advance(tracked, feature);
+        }
         _scanElapsed = unchecked(_scanElapsed + elapsedMs);
         if (_scanElapsed < ScanMs) return;
         uint since = _scanElapsed;
@@ -219,18 +234,18 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     internal void ScanAtNextTick() => _scanElapsed = ScanMs;
 
     /// <summary>Whether this coordinator drives <paramref name="botId"/> now (walking to a battlemaster, joining, entering, in a match, leaving).</summary>
-    internal bool Drives(Guid botId) => _tracked.TryGetValue(botId, out Tracked? t) && PlayerbotBattlegroundQueueMachine.Drives(t.Phase);
+    internal bool Drives(Guid botId) => _tracked.Count > 0 && _tracked.TryGetValue(botId, out Tracked? t) && PlayerbotBattlegroundQueueMachine.Drives(t.Phase);
 
     /// <summary>Whether <paramref name="botId"/> has battleground business (any phase but idle): other coordinators leave it alone.</summary>
-    internal bool Holds(Guid botId) => _tracked.ContainsKey(botId);
+    internal bool Holds(Guid botId) => _tracked.Count > 0 && _tracked.ContainsKey(botId);
 
     /// <summary>The followed bot (tests and status).</summary>
-    internal Tracked? Find(Guid botId) => _tracked.GetValueOrDefault(botId);
+    internal Tracked? Find(Guid botId) => _tracked.Count > 0 ? _tracked.GetValueOrDefault(botId) : null;
 
     /// <summary>One driven tick of a bot (world thread, within the shared action budget like the brain).</summary>
     internal void UpdateMember(Guid botId, Player player, uint elapsedMs)
     {
-        if (!_tracked.TryGetValue(botId, out Tracked? t) || t.AI is not { } ai || !_bots.TryGetValue(botId, out PlayerbotBattlegroundBot bot)
+        if (_tracked.Count == 0 || !_tracked.TryGetValue(botId, out Tracked? t) || t.AI is not { } ai || !_bots.TryGetValue(botId, out PlayerbotBattlegroundBot bot)
             || !bot.Session.IsManaged) return;
         switch (t.Phase)
         {
@@ -250,7 +265,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     /// <summary>The goal and target a driven bot reports: <see cref="PlayerbotGoalKind.Battleground"/> (or its corpse run) and its objective.</summary>
     internal (PlayerbotGoalKind Goal, uint TargetEntry)? GoalOf(Guid botId)
-        => _tracked.TryGetValue(botId, out Tracked? t) && PlayerbotBattlegroundQueueMachine.Drives(t.Phase)
+        => _tracked.Count > 0 && _tracked.TryGetValue(botId, out Tracked? t) && PlayerbotBattlegroundQueueMachine.Drives(t.Phase)
             ? (t.AI?.Goal ?? PlayerbotGoalKind.Battleground, t.AI?.TargetEntry ?? 0) : null;
 
     /// <summary>A bot stopped, became scripted or left the world: forget its battleground business (the server keeps its queue or match).</summary>
@@ -259,7 +274,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>The battleground part of a bot's status line: <c>bg=WarsongGulch:inmatch:attacker:taking-flag</c>, or null.</summary>
     internal string? Describe(Guid botId)
     {
-        if (!_tracked.TryGetValue(botId, out Tracked? t)) return null;
+        if (_tracked.Count == 0 || !_tracked.TryGetValue(botId, out Tracked? t)) return null;
         string phase = t.Phase.ToString().ToLowerInvariant();
         return t.Phase == PlayerbotBattlegroundPhase.InMatch
             ? string.Create(CultureInfo.InvariantCulture, $"bg={t.Type}:{phase}:{t.Role.ToString().ToLowerInvariant()}:{t.AI?.Activity ?? "idle"}")

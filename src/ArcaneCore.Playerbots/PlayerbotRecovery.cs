@@ -529,6 +529,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             EscapedLanding = false;
             _refusal = null;
             _keepBody = default;
+            _keepBodySickness = default;
+            _submergedShore = default;
+            _unsafeBodyVerdict = default;
         }
         // A think without budget does nothing, and is no attempt the bounds may count (MinBoundThinks).
         if (session.ManagedBudget is { Remaining: <= 0 }) return false;
@@ -597,7 +600,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // Not once the fallback went back to this body (ResumeCorpseRun): its healer could not be reached, or there was none.
         // Nor, mostly, for a bot the healer would sicken (KeepBodyOverSickness): the corpse run is its way back but for a death loop.
         if (ghost && place == PlayerbotCorpsePlace.ThisMap && corpse is { } bodyOnMap && !_preferSpiritHealer && UnsafeBody is { } judge
-            && _corpseRunResumedFor != bodyOnMap.Guid && HealerOutcomeKnown(player, bodyOnMap) && judge(player, bodyOnMap) is { Reason: not PlayerbotUnsafeBody.None } verdict
+            && _corpseRunResumedFor != bodyOnMap.Guid && HealerOutcomeKnown(player, bodyOnMap)
+            && EvaluateUnsafeBody(player, bodyOnMap, judge, now) is { Reason: not PlayerbotUnsafeBody.None } verdict
             && (verdict.Reason == PlayerbotUnsafeBody.Hazard
                 ? !CanReclaimSubmergedFromDryShore(player, bodyOnMap)
                 : !KeepBodyOverLanding(player, bodyOnMap) && !KeepBodyOverSickness(player, bodyOnMap, verdict.Reason)))
@@ -713,6 +717,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _healerSpawnGoal = null;
         _portalsTried.Clear();
         _healerSpawnsTried.Clear();
+        _keepBody = default;
+        _keepBodySickness = default;
+        _submergedShore = default;
+        _unsafeBodyVerdict = default;
         AreaQueueRequests = 0;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
@@ -737,6 +745,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _healerSpawnGoal = null;
         _portalsTried.Clear();
         _healerSpawnsTried.Clear();
+        _keepBody = default;
+        _keepBodySickness = default;
+        _submergedShore = default;
+        _unsafeBodyVerdict = default;
         ClearWalk();
         PlayerbotMotion.ForgetLoops(player);
         MarkProgress(now);
@@ -1415,11 +1427,36 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// and 45% of their worn items broken: each healer revival weakened the bot, the weakened bot died again, and took the healer again.
     /// </para>
     /// </summary>
+    private (ObjectGuid Body, PlayerbotUnsafeBody Reason, long AtMs, bool Keep) _keepBodySickness;
+    private (ObjectGuid Body, long AtMs, bool CanReclaim) _submergedShore;
+    private (ObjectGuid Body, int VisibleCount, long AtMs, (PlayerbotUnsafeBody Reason, string? Detail) Verdict) _unsafeBodyVerdict;
+
+    private (PlayerbotUnsafeBody Reason, string? Detail) EvaluateUnsafeBody(
+        Player player,
+        Corpse corpse,
+        Func<Player, Corpse, (PlayerbotUnsafeBody Reason, string? Detail)> judge,
+        long now)
+    {
+        if (WithinReclaimDistance(player, corpse))
+            return judge(player, corpse);
+        int visible = player.VisibleObjects.Count;
+        if (_unsafeBodyVerdict.Body == corpse.Guid && _unsafeBodyVerdict.VisibleCount == visible
+            && _unsafeBodyVerdict.AtMs >= 0 && now - _unsafeBodyVerdict.AtMs < KeepBodyRecheckMs)
+            return _unsafeBodyVerdict.Verdict;
+        (PlayerbotUnsafeBody Reason, string? Detail) verdict = judge(player, corpse);
+        _unsafeBodyVerdict = (corpse.Guid, visible, now, verdict);
+        return verdict;
+    }
+
     internal bool KeepBodyOverSickness(Player player, Corpse corpse, PlayerbotUnsafeBody reason)
     {
         if (!PlayerbotSickness.HealerSickens(session, player)) return false;
         if (reason == PlayerbotUnsafeBody.DiedHere
             && (PlayerbotSickness.IsSick(session, player) || LastKillerMaxLevel >= (int)player.Level + 3)) return false;
+        long now = (long)session.World.Uptime.TotalMilliseconds;
+        if (_keepBodySickness.Body == corpse.Guid && _keepBodySickness.Reason == reason
+            && _keepBodySickness.AtMs >= 0 && now - _keepBodySickness.AtMs < KeepBodyRecheckMs)
+            return _keepBodySickness.Keep;
         bool keep = reason switch
         {
             PlayerbotUnsafeBody.DiedHere or PlayerbotUnsafeBody.OutsideHome => true,
@@ -1428,6 +1465,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             PlayerbotUnsafeBody.None => false,
             _ => false,
         };
+        _keepBodySickness = (corpse.Guid, reason, now, keep);
         if (keep && BodyKeptOverSickness == PlayerbotUnsafeBody.None)
         {
             BodyKeptOverSickness = reason;
@@ -1468,11 +1506,16 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     internal bool CanReclaimSubmergedFromDryShore(Player player, Corpse corpse)
     {
         if (player.Map is not { } map) return false;
+        long now = (long)session.World.Uptime.TotalMilliseconds;
+        if (_submergedShore.Body == corpse.Guid && _submergedShore.AtMs >= 0 && now - _submergedShore.AtMs < KeepBodyRecheckMs)
+            return _submergedShore.CanReclaim;
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
         List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
-        return FindReviveSpot(body, body, hostiles, candidate => GroundAt(map, candidate),
+        bool canReclaim = FindReviveSpot(body, body, hostiles, candidate => GroundAt(map, candidate),
             candidate => Vector2.Distance(new Vector2(candidate.X, candidate.Y), new Vector2(body.X, body.Y)) <= SafeReviveMaxRadius
                 && IsDryShore(map, candidate)) is not null;
+        _submergedShore = (corpse.Guid, now, canReclaim);
+        return canReclaim;
     }
 
     /// <summary>A spot inside the reclaim radius of the body clear of every threat round it (the geometry of <see cref="FindReviveSpot"/>).</summary>

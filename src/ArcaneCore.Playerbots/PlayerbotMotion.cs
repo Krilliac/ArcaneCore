@@ -53,6 +53,11 @@ internal static class PlayerbotMotion
     internal sealed class MotionState
     {
         internal WorldRuntime? World;
+        internal WorldSession? Session;
+        internal ArcaneCore.Game.Teleport.TeleportService? Teleports;
+        internal PlayerbotTriggerTracker? TriggerTracker;
+        internal ElevatorTrip? ElevatorTrip;
+        internal ShipTrip? ShipTrip;
         internal PlayerbotRoute? Route;
         internal Map? Map;
         internal Vector3 Anchor;
@@ -79,6 +84,13 @@ internal static class PlayerbotMotion
 
         internal bool Active => Route is not null;
 
+        internal ArcaneCore.Game.Teleport.TeleportService? TeleportsOf(WorldSession session)
+        {
+            if (ReferenceEquals(Session, session)) return Teleports;
+            Session = session;
+            return Teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+        }
+
         internal void Clear()
         {
             Route = null;
@@ -87,6 +99,9 @@ internal static class PlayerbotMotion
     }
 
     internal static MotionState Of(Player player) => States.GetOrCreateValue(player);
+
+    internal static bool TryGetState(Player player, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MotionState? state)
+        => States.TryGetValue(player, out state);
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;
@@ -254,7 +269,7 @@ internal static class PlayerbotMotion
         state.RenewedMs = now;
         state.LeaseMs = Lease(options, state);
         state.Renewals++;
-        PlayerbotAreaTriggers.Begin(session, player, map, current, options);
+        PlayerbotAreaTriggers.Begin(session, player, map, current, options, state.TriggerTracker ??= PlayerbotAreaTriggers.TrackerOf(player));
         // A chase follows a moving target: its destinations are not a back-and-forth (kiting a mob must not blacklist the spot).
         if (!route.Chase && state.Loops.OnRoute(route.Points[^1], now) is { } loop)
         {
@@ -275,13 +290,14 @@ internal static class PlayerbotMotion
         PlayerbotMotionAnomalies.CheckStoredPosition(session, player, now);
         // Between maps the bot's brain does not run; the client half still ends its loading screen (PlayerbotMovementControl).
         if (PlayerbotMovementControl.AcknowledgeTransfer(session, player)) return;
-        PlayerbotElevator.Pump(session, player, now);
         PlayerbotTram.Pump(session, player, now);
-        PlayerbotShip.Pump(session, player, now); // a short stop at a port is not missed between thinks (boarding, stepping off)
-        if (!States.TryGetValue(player, out MotionState? state) || state.Route is not { } route) return;
+        if (!States.TryGetValue(player, out MotionState? state)) return;
+        if (state.ElevatorTrip is not null) PlayerbotElevator.Pump(session, player, now);
+        if (state.ShipTrip is not null) PlayerbotShip.Pump(session, player, now); // a short stop at a port is not missed between thinks (boarding, stepping off)
+        if (state.Route is not { } route) return;
         state.World = session.World;
         if (!CanMove(player) || !player.IsInWorld || player.Map is not { } map || !ReferenceEquals(map, state.Map)
-            || session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true
+            || state.TeleportsOf(session)?.IsBeingTeleported(player) == true
             || player.Locomotion.ActiveSpline is not null
             || (player.Movement.Flags & MovementFlags.Forward) == 0)
         {
@@ -311,13 +327,14 @@ internal static class PlayerbotMotion
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * age / 1000f, state.Heading,
             out int nextPoint, out float heading, out bool arrived, out bool turned);
         if (!Finite(position)) PlayerbotMotionAnomalies.ReportNonFinite(session, player, "the position the route walk computed", now);
+        PlayerbotTriggerTracker tracker = state.TriggerTracker ??= PlayerbotAreaTriggers.TrackerOf(player);
         // A client checks its area triggers every frame; this checks every world tick. Stepping into a volume is reported at
         // once: a heartbeat where the bot is now, then CMSG_AREATRIGGER (PlayerbotAreaTriggers).
-        bool entering = PlayerbotAreaTriggers.WouldEnter(session, player, map, position);
+        bool entering = PlayerbotAreaTriggers.WouldEnter(session, player, map, position, tracker);
         if (arrived)
         {
             StopAt(session, player, state, position, heading, nextPoint, now);
-            if (ReferenceEquals(player.Map, map)) PlayerbotAreaTriggers.Update(session, player, map, position);
+            if (ReferenceEquals(player.Map, map)) PlayerbotAreaTriggers.Update(session, player, map, position, tracker);
             return;
         }
 
@@ -347,7 +364,7 @@ internal static class PlayerbotMotion
         PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now);
         if (state.Loops.OnPosition(valid, travelled, now) is { } loop) GiveUp(session, player, state, loop, now);
         // Last: a trigger may teleport the bot (the next pump then finds it between maps and forgets the route).
-        PlayerbotAreaTriggers.Update(session, player, map, position);
+        PlayerbotAreaTriggers.Update(session, player, map, position, tracker);
     }
 
     /// <summary>

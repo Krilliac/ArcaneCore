@@ -248,6 +248,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>A running bot as the coordinator sees it (<see cref="Update"/>); <see cref="Scripted"/> when a controller holds it.</summary>
     internal readonly record struct PlayerbotGroupBot(Guid BotId, WorldSession Session, PlayerbotBrain Brain, bool Free, bool Scripted = false);
 
+    internal bool NeedsBotSnapshot(uint elapsedMs)
+        => _groups.Count > 0 || _leaderChanges.Count > 0 || unchecked(_scanElapsed + elapsedMs) >= ScanMs;
+
+    internal void AdvanceIdle(uint elapsedMs)
+    {
+        if (_world is null) return;
+        WatchLeaderChanges();
+        _scanElapsed = unchecked(_scanElapsed + elapsedMs);
+    }
+
     /// <summary>
     /// One world tick (world thread): the running bots (<paramref name="bots"/>; <see cref="PlayerbotGroupBot.Free"/> when autonomous and
     /// not in a real player's group), the groups' states, and every <see cref="ScanMs"/> the needs and the matching.
@@ -258,15 +268,18 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         _bots.Clear();
         foreach (PlayerbotGroupBot bot in bots) _bots[bot.BotId] = bot;
         TakeLeaderChanges(); // leader handoffs (PlayerbotGroupCoordinator.Handoff.cs)
-        foreach (BotGroup group in _groups.ToArray())
+        if (_groups.Count > 0)
         {
-            try
+            foreach (BotGroup group in _groups.ToArray())
             {
-                Advance(group);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
+                try
+                {
+                    Advance(group);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
+                }
             }
         }
 
@@ -277,23 +290,23 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     }
 
     /// <summary>Whether the group AI drives <paramref name="botId"/> now (it is a member of a bot-led group).</summary>
-    internal bool Drives(Guid botId) => _memberOf.ContainsKey(botId);
+    internal bool Drives(Guid botId) => _memberOf.Count > 0 && _memberOf.ContainsKey(botId);
 
     /// <summary>Whether <paramref name="botId"/> is in a bot-led group or waits for partners (the battlegrounds coordinator leaves it alone).</summary>
-    internal bool Involves(Guid botId) => _memberOf.ContainsKey(botId) || _waiting.ContainsKey(botId);
+    internal bool Involves(Guid botId) => (_memberOf.Count > 0 && _memberOf.ContainsKey(botId)) || (_waiting.Count > 0 && _waiting.ContainsKey(botId));
 
     /// <summary>One tick of a member's group AI (world thread, within the shared action budget).</summary>
     internal void UpdateMember(Guid botId, Player player, uint elapsedMs)
     {
-        if (!_memberOf.TryGetValue(botId, out BotGroup? group) || group.Find(botId) is not { AI: { } ai } member) return;
+        if (_memberOf.Count == 0 || !_memberOf.TryGetValue(botId, out BotGroup? group) || group.Find(botId) is not { AI: { } ai } member) return;
         ai.Update(player, group, member, elapsedMs);
     }
 
     /// <summary>The group AI of a member (inspection and tests).</summary>
-    internal PlayerbotGroupAI? FindAI(Guid botId) => _memberOf.TryGetValue(botId, out BotGroup? group) ? group.Find(botId)?.AI : null;
+    internal PlayerbotGroupAI? FindAI(Guid botId) => _memberOf.Count > 0 && _memberOf.TryGetValue(botId, out BotGroup? group) ? group.Find(botId)?.AI : null;
 
     /// <summary>The group <paramref name="botId"/> belongs to (tests and status).</summary>
-    internal BotGroup? GroupOf(Guid botId) => _memberOf.GetValueOrDefault(botId);
+    internal BotGroup? GroupOf(Guid botId) => _memberOf.Count > 0 ? _memberOf.GetValueOrDefault(botId) : null;
 
     /// <summary>The goal and activity a member reports: its group AI's.</summary>
     internal (PlayerbotGoalKind Goal, uint TargetEntry)? GoalOf(Guid botId)
@@ -333,10 +346,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>The group part of a bot's status line: <c>group=3:tank:engaging</c>, <c>group=waiting:quest:990700</c>, or null.</summary>
     internal string? Describe(Guid botId)
     {
-        if (_memberOf.TryGetValue(botId, out BotGroup? group) && group.Find(botId) is { } member)
+        if (_memberOf.Count > 0 && _memberOf.TryGetValue(botId, out BotGroup? group) && group.Find(botId) is { } member)
             return string.Create(CultureInfo.InvariantCulture,
                 $"group={group.Id}:{member.Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(group.LeaderBotId == botId ? ":leader" : string.Empty)}{(group.Run is not null ? ":run" : string.Empty)}{(group.Handoff is not null ? ":handoff" : string.Empty)}");
-        if (_waiting.TryGetValue(botId, out Waiting? waiting))
+        if (_waiting.Count > 0 && _waiting.TryGetValue(botId, out Waiting? waiting))
             return string.Create(CultureInfo.InvariantCulture,
                 $"group=waiting:{waiting.Goal.Kind.ToString().ToLowerInvariant()}:{waiting.Goal.Key.Value}:size{waiting.Goal.Size}");
         return null;

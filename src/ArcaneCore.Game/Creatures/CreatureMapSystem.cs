@@ -189,7 +189,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             t = Lap(t, out _timing.CatchUp);
             UpdateLinkedFollowers();
             t = Lap(t, out _timing.Linked);
-            if (!splinePass)
+            if (splinePass)
+            {
+                ApplyPendingActivations();
+            }
+            else
             {
                 UpdateCreatures(diffMs);
             }
@@ -197,24 +201,30 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
         if (splinePass)
         {
-            UpdateCreaturesInPasses(diffMs);
+            UpdateCreaturesInPasses(diffMs, ref t);
+            return;
         }
 
         t = Lap(t, out _timing.Creatures);
         using (Serial())
         {
-            UpdateSpawnGroups();
-            CheckDormantRespawnStuck(diffMs);
-            t = Lap(t, out _timing.SpawnGroups);
-            UpdatePendingAi();
-            t = Lap(t, out _timing.PendingAi);
-            UpdateRelayScripts();
-            t = Lap(t, out _timing.Relay);
-            UpdateForcedDespawns();
-            t = Lap(t, out _timing.Despawns);
-            Map.RunAfterUpdate(_captureNewObservers ??= CaptureNewObservers);
-            Lap(t, out _timing.AfterUpdate);
+            UpdateTail(diffMs, t);
         }
+    }
+
+    private void UpdateTail(uint diffMs, long t)
+    {
+        UpdateSpawnGroups();
+        CheckDormantRespawnStuck(diffMs);
+        t = Lap(t, out _timing.SpawnGroups);
+        UpdatePendingAi();
+        t = Lap(t, out _timing.PendingAi);
+        UpdateRelayScripts();
+        t = Lap(t, out _timing.Relay);
+        UpdateForcedDespawns();
+        t = Lap(t, out _timing.Despawns);
+        Map.RunAfterUpdate(_captureNewObservers ??= CaptureNewObservers);
+        Lap(t, out _timing.AfterUpdate);
     }
 
     /// <summary>The world's serial gate (a no-op outside the parallel maps phase, reentrant when the map already gates this updater).</summary>
@@ -942,14 +952,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// takes the gate in <see cref="Map.OnObjectMoved"/>), outside the serial gate; then the rest of the walk runs inside it with those
     /// verdicts. Same walk, same order of creatures, at any thread count.
     /// </summary>
-    private void UpdateCreaturesInPasses(uint diffMs)
+    private void UpdateCreaturesInPasses(uint diffMs, ref long t)
     {
         uint now = _serverTime();
-        using (Serial())
-        {
-            ApplyPendingActivations();
-        }
-
         _scratchCreatures.Clear();
         _scratchCreatures.AddRange(_creatures.Values);
         int count = _scratchCreatures.Count;
@@ -996,6 +1001,25 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         {
             UpdateCreatures(diffMs, _splineMarks, splitRandomMotion: true);
             PrepareUngatedMotion();
+            if (_ungatedRandom.Count == 0)
+            {
+                try
+                {
+                    foreach (Creature creature in _randomMotionScratch)
+                    {
+                        UpdateRandomMotion(creature, diffMs);
+                    }
+                }
+                finally
+                {
+                    _inCrowdedRandomPass = false;
+                    _randomMotionScratch.Clear();
+                }
+
+                t = Lap(t, out _timing.Creatures);
+                UpdateTail(diffMs, t);
+                return;
+            }
         }
 
         // The wander legs of plain spawn wanderers run outside the gate (map-local: this map's RNG, path budget and job queue, the
@@ -1034,6 +1058,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 _inCrowdedRandomPass = false;
                 _randomMotionScratch.Clear();
             }
+
+            t = Lap(t, out _timing.Creatures);
+            UpdateTail(diffMs, t);
         }
     }
 

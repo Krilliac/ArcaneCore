@@ -253,7 +253,8 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     internal long DeadWaitMs { get; set; } = DefaultDeadWaitMs;
 
-    private PartyServices Services => new(_session);
+    private PartyServices? _services;
+    private PartyServices Services => _services ??= new(_session);
 
     private long _clockOffsetMs;
 
@@ -1873,19 +1874,82 @@ internal sealed class PlayerbotPartyAI
         => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 
     /// <summary>The world features the party AI uses (any may be absent in a minimal host).</summary>
-    private readonly struct PartyServices(WorldSession session)
+    private sealed class PartyServices(WorldSession session)
     {
-        public SocialContext? Social => session.Services.GetService<SocialFeature>() is { } social ? SafeContext(social) : null;
+        private bool _socialResolved, _teleportsResolved, _spellsResolved, _questsResolved, _flightsResolved, _lootResolved;
+        private SocialFeature? _socialFeature;
+        private SocialContext? _socialContext;
+        private TeleportService? _teleports;
+        private SpellFeature? _spells;
+        private ArcaneCore.Game.Npc.QuestNpcServices? _quests;
+        private TaxiFlightSystem? _flights;
+        private GameObjectLootFeature? _lootFeature;
 
-        public TeleportService? Teleports => session.Services.GetService<TeleportFeature>()?.Teleports;
+        public SocialContext? Social
+        {
+            get
+            {
+                if (_socialContext is not null) return _socialContext;
+                if (!_socialResolved)
+                {
+                    _socialFeature = session.Services.GetService<SocialFeature>();
+                    _socialResolved = true;
+                }
 
-        public SpellFeature? Spells => session.Services.GetService<SpellFeature>();
+                return _socialFeature is { } social ? _socialContext = SafeContext(social) : null;
+            }
+        }
 
-        public ArcaneCore.Game.Npc.QuestNpcServices? Quests => session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services;
+        public TeleportService? Teleports
+        {
+            get
+            {
+                if (_teleportsResolved) return _teleports;
+                _teleportsResolved = true;
+                return _teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+            }
+        }
 
-        public TaxiFlightSystem? Flights => session.Services.GetService<NpcServicesFeature>()?.Flights;
+        public SpellFeature? Spells
+        {
+            get
+            {
+                if (_spellsResolved) return _spells;
+                _spellsResolved = true;
+                return _spells = session.Services.GetService<SpellFeature>();
+            }
+        }
 
-        public LootService? LootOf(Map map) => session.Services.GetService<GameObjectLootFeature>()?.FindSystem(map)?.Loot;
+        public ArcaneCore.Game.Npc.QuestNpcServices? Quests
+        {
+            get
+            {
+                if (_questsResolved) return _quests;
+                _questsResolved = true;
+                return _quests = session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services;
+            }
+        }
+
+        public TaxiFlightSystem? Flights
+        {
+            get
+            {
+                if (_flightsResolved) return _flights;
+                _flightsResolved = true;
+                return _flights = session.Services.GetService<NpcServicesFeature>()?.Flights;
+            }
+        }
+
+        public LootService? LootOf(Map map)
+        {
+            if (!_lootResolved)
+            {
+                _lootFeature = session.Services.GetService<GameObjectLootFeature>();
+                _lootResolved = true;
+            }
+
+            return _lootFeature?.FindSystem(map)?.Loot;
+        }
 
         private static SocialContext? SafeContext(SocialFeature social)
         {

@@ -1817,18 +1817,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // Bot-led groups (PlayerbotGroupCoordinator): their states, the needs and the matching, once per tick before any think.
         if (coordinator is { } groups)
         {
-            _groupBotsScratch.Clear();
-            if (_groupBotsScratch.Capacity < bots.Length) _groupBotsScratch.Capacity = bots.Length;
-            foreach (ActiveBot active in bots)
-                if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
-                    _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                        active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true,
-                        Scripted: active.Controller is not null));
-            try { groups.Update(_groupBotsScratch, elapsedMs); }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            if (bots.Length > 64 && !groups.NeedsBotSnapshot(elapsedMs))
             {
-                FaultLedger.Shared.Record("playerbot.feature", ex);
-                logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                groups.AdvanceIdle(elapsedMs);
+            }
+            else
+            {
+                _groupBotsScratch.Clear();
+                if (_groupBotsScratch.Capacity < bots.Length) _groupBotsScratch.Capacity = bots.Length;
+                foreach (ActiveBot active in bots)
+                    if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
+                        _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
+                            active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true,
+                            Scripted: active.Controller is not null));
+                try { groups.Update(_groupBotsScratch, elapsedMs); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("playerbot.feature", ex);
+                    logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                }
             }
             // A group that stalled (PlayerbotGroupCoordinator.WatchStall) is reported like a brain's stall, on its leader: the brains do not
             // think while a group drives them, so this is the only stall line such a group gets (bot QA parses it).
@@ -1844,17 +1851,24 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // so a bot a group took this tick is not free here.
         if (battlegrounds is { } fields)
         {
-            _bgBotsScratch.Clear();
-            if (_bgBotsScratch.Capacity < bots.Length) _bgBotsScratch.Capacity = bots.Length;
-            foreach (ActiveBot active in bots)
-                if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
-                    _bgBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                        active.Controller is null && !active.PartyDriven && coordinator?.Involves(active.Record.BotId) != true));
-            try { fields.Update(_bgBotsScratch, elapsedMs); }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            if (bots.Length > 64 && !fields.NeedsBotSnapshot(elapsedMs))
             {
-                FaultLedger.Shared.Record("playerbot.feature", ex);
-                logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                fields.AdvanceIdle(elapsedMs);
+            }
+            else
+            {
+                _bgBotsScratch.Clear();
+                if (_bgBotsScratch.Capacity < bots.Length) _bgBotsScratch.Capacity = bots.Length;
+                foreach (ActiveBot active in bots)
+                    if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
+                        _bgBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
+                            active.Controller is null && !active.PartyDriven && coordinator?.Involves(active.Record.BotId) != true));
+                try { fields.Update(_bgBotsScratch, elapsedMs); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("playerbot.feature", ex);
+                    logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                }
             }
         }
 
@@ -2687,11 +2701,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// The home line of a running bot: none without a home, <c>suspended</c> while a scripted controller, a party AI, a bot-led group or
     /// the battlegrounds coordinator drives it (they ignore the home), otherwise the brain's report (<see cref="PlayerbotHomeReturn.Report"/>).
     /// </summary>
-    private string? HomeLineOf(ActiveBot active) => !_homes.ContainsKey(active.Record.BotId) ? null
+    private string? HomeLineOf(ActiveBot active) => _homes.IsEmpty || !_homes.ContainsKey(active.Record.BotId) ? null
         : active.Controller is not null || active.PartyDriven || active.GroupDriven || active.BattlegroundDriven ? "suspended" : active.Brain.HomeReport;
 
     /// <summary>The home line of a bot that is not running.</summary>
-    private string? StoppedHome(Guid botId) => _homes.ContainsKey(botId) ? "stopped" : null;
+    private string? StoppedHome(Guid botId) => !_homes.IsEmpty && _homes.ContainsKey(botId) ? "stopped" : null;
 
     /// <summary>The risk line of a running bot (its party AI's while that drives it); none for a scripted bot.</summary>
     private string? RiskOf(ActiveBot active) => active.Controller is not null ? null

@@ -176,34 +176,38 @@ internal static class PlayerbotAreaTriggers
         if (Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker)) tracker.Forget();
     }
 
+    internal static PlayerbotTriggerTracker TrackerOf(Player player) => Trackers.GetValue(player, static _ => new PlayerbotTriggerTracker());
+
     /// <summary>
     /// A route starts at <paramref name="position"/>: note the maps the bot may teleport to, and, when nothing is known for this
     /// map yet, what the bot stands in (no trigger fires), so a volume it walks into from here is an entry.
     /// </summary>
-    internal static void Begin(WorldSession session, Player player, Map map, Vector3 position, PlayerbotOptions options)
+    internal static void Begin(WorldSession session, Player player, Map map, Vector3 position, PlayerbotOptions options,
+        PlayerbotTriggerTracker? tracker = null)
     {
-        PlayerbotTriggerTracker tracker = Trackers.GetValue(player, _ => new PlayerbotTriggerTracker());
+        tracker ??= TrackerOf(player);
         tracker.AllowedMaps = options.AllowedMaps;
         if (!tracker.Knows(map))
-            tracker.Observe(map, map.MapId, position, Index(WorldMaps.Of(session.World), map.MapId).Near(position), fire: false);
+            tracker.Observe(map, map.MapId, position, tracker.Near(session.World, map, position), fire: false);
     }
 
     /// <summary>Whether moving to <paramref name="position"/> enters a trigger the bot is not in (nothing changes).</summary>
-    internal static bool WouldEnter(WorldSession session, Player player, Map map, Vector3 position)
-        => Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker)
-            && tracker.WouldEnter(map, map.MapId, position, Index(WorldMaps.Of(session.World), map.MapId).Near(position));
+    internal static bool WouldEnter(WorldSession session, Player player, Map map, Vector3 position, PlayerbotTriggerTracker? tracker = null)
+        => (tracker is not null || Trackers.TryGetValue(player, out tracker))
+            && tracker.WouldEnter(map, map.MapId, position, tracker.Near(session.World, map, position));
 
     /// <summary>
     /// The bot reported <paramref name="position"/>: send CMSG_AREATRIGGER for each volume it has just entered and may take
     /// (<see cref="MayTake"/>; never refused for lack of the shared action budget: a client always reports its own triggers) and
     /// note the ones it left. Returns the triggers sent.
     /// </summary>
-    internal static IReadOnlyList<uint> Update(WorldSession session, Player player, Map map, Vector3 position)
+    internal static IReadOnlyList<uint> Update(WorldSession session, Player player, Map map, Vector3 position,
+        PlayerbotTriggerTracker? tracker = null)
     {
-        PlayerbotTriggerTracker tracker = Trackers.GetValue(player, _ => new PlayerbotTriggerTracker());
-        WorldMaps maps = WorldMaps.Of(session.World);
-        IReadOnlyList<uint> entered = tracker.Observe(map, map.MapId, position, Index(maps, map.MapId).Near(position), fire: true);
+        tracker ??= TrackerOf(player);
+        IReadOnlyList<uint> entered = tracker.Observe(map, map.MapId, position, tracker.Near(session.World, map, position), fire: true);
         if (entered.Count == 0) return entered;
+        WorldMaps maps = tracker.MapsOf(session.World);
         var sent = new List<uint>(entered.Count);
         foreach (uint trigger in entered)
         {
@@ -330,8 +334,14 @@ internal sealed class PlayerbotTriggerIndex
     internal IReadOnlyList<AreaTriggerTemplate> Near(Vector3 position)
     {
         if (!float.IsFinite(position.X) || !float.IsFinite(position.Y)) return [];
-        return _cells.TryGetValue(Key(Cell(position.X), Cell(position.Y)), out AreaTriggerTemplate[]? here) ? here : _everywhere;
+        return NearCell(Key(Cell(position.X), Cell(position.Y)));
     }
+
+    internal IReadOnlyList<AreaTriggerTemplate> NearCell(long cellKey)
+        => cellKey == long.MinValue ? [] : _cells.TryGetValue(cellKey, out AreaTriggerTemplate[]? here) ? here : _everywhere;
+
+    internal static long CellKeyOf(Vector3 position)
+        => float.IsFinite(position.X) && float.IsFinite(position.Y) ? Key(Cell(position.X), Cell(position.Y)) : long.MinValue;
 
     /// <summary>The radius of a sphere around the trigger's centre that holds the whole volume (a box: half its diagonal).</summary>
     internal static float BoundingRadius(AreaTriggerTemplate trigger)
@@ -354,6 +364,12 @@ internal sealed class PlayerbotTriggerTracker
     private HashSet<uint> _next = [];
     private readonly List<uint> _entered = [];
     private object? _map;
+    private WorldRuntime? _nearWorld;
+    private WorldMaps? _nearMaps;
+    private object? _nearMap;
+    private IReadOnlyCollection<AreaTriggerTemplate>? _nearSource;
+    private long _nearCellKey = long.MinValue;
+    private IReadOnlyList<AreaTriggerTemplate> _nearTriggers = [];
 
     internal IReadOnlyCollection<uint> Inside => _inside;
 
@@ -374,7 +390,29 @@ internal sealed class PlayerbotTriggerTracker
     internal void Forget()
     {
         _map = null;
+        _nearMap = null;
         _inside.Clear();
+    }
+
+    internal WorldMaps MapsOf(WorldRuntime world)
+    {
+        if (ReferenceEquals(_nearWorld, world) && _nearMaps is { } cached) return cached;
+        _nearWorld = world;
+        return _nearMaps = WorldMaps.Of(world);
+    }
+
+    internal IReadOnlyList<AreaTriggerTemplate> Near(WorldRuntime world, Map map, Vector3 position)
+    {
+        long cellKey = PlayerbotTriggerIndex.CellKeyOf(position);
+        if (cellKey == long.MinValue) return [];
+        WorldMaps maps = MapsOf(world);
+        IReadOnlyCollection<AreaTriggerTemplate> source = maps.AreaTriggers;
+        if (ReferenceEquals(_nearMap, map) && ReferenceEquals(_nearSource, source) && _nearCellKey == cellKey)
+            return _nearTriggers;
+        _nearMap = map;
+        _nearSource = source;
+        _nearCellKey = cellKey;
+        return _nearTriggers = PlayerbotAreaTriggers.Index(maps, map.MapId).NearCell(cellKey);
     }
 
     /// <summary>Whether <paramref name="position"/> lies in a volume of <paramref name="triggers"/> the bot is not inside.</summary>

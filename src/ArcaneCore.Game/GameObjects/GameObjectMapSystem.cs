@@ -231,6 +231,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             // The walk's snapshot (respawns and despawns change the map while it runs): the object list, rebuilt only when the object set
             // changed (same order as _objects), so no copy of every object every tick. A reentrant update walks a copy of its own.
             walk = reentrant ? new List<GameObject>(_objects.Values) : WalkList();
+            if (walk.Count == 0)
+            {
+                UpdateRest();
+                return;
+            }
         }
 
         _updateScratchInUse = true;

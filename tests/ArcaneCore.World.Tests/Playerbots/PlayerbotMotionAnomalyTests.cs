@@ -455,7 +455,7 @@ public sealed class PlayerbotMotionAnomalyTests
     public async Task ARouteWhoseLeaseRanOutWithYardsLeft_IsReported()
     {
         await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, routeYards: 200);
-        await scenario.WalkAsync(2500); // 2.5 s with no renewing think: past the 2 s floor of the lease, with 180 yards left
+        await scenario.WalkAsync(4500); // 4.5 s with no renewing think: past the 4 s floor of the lease, with > 165 yards left
         Assert.True(scenario.Capture.Any(Key(Code.LeaseExpired)), scenario.Capture.Describe());
         Assert.Equal(AnomalySeverity.Info, scenario.Capture.Notices.First(n => n.Key == Key(Code.LeaseExpired)).Severity);
     }
