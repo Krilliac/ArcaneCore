@@ -138,9 +138,9 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         Vector3 center = tile.Center(from.Poly);
         for (int e = 0; e < p.VertexCount; e++)
         {
-            ushort nei = p.Neighbours[e];
-            Vector3 a = tile.Vertices[p.Vertices[e]];
-            Vector3 b = tile.Vertices[p.Vertices[(e + 1) % p.VertexCount]];
+            ushort nei = p.Neighbour(e);
+            Vector3 a = tile.Vertices[p.Vertex(e)];
+            Vector3 b = tile.Vertices[p.Vertex((e + 1) % p.VertexCount)];
             if (nei == 0)
             {
                 continue;
@@ -185,7 +185,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         next = default;
         NavMeshTile tile = from.Tile;
         NavPoly p = tile.Polys[from.Poly];
-        ushort nei = p.Neighbours[edge];
+        ushort nei = p.Neighbour(edge);
         if (nei == 0)
         {
             return false;
@@ -675,8 +675,8 @@ public static class NavMeshQuery
         exitT = 1f;
         for (int i = 0, j = p.VertexCount - 1; i < p.VertexCount; j = i++)
         {
-            Vector3 vj = tile.Vertices[p.Vertices[j]];
-            Vector3 vi = tile.Vertices[p.Vertices[i]];
+            Vector3 vj = tile.Vertices[p.Vertex(j)];
+            Vector3 vi = tile.Vertices[p.Vertex(i)];
             float ex = vi.X - vj.X;
             float ez = vi.Z - vj.Z;
             float n = (ez * (start.X - vj.X)) - (ex * (start.Z - vj.Z));

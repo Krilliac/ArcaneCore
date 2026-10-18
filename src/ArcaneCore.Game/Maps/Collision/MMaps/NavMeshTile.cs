@@ -2,10 +2,48 @@ using System.Numerics;
 
 namespace ArcaneCore.Game.Maps.Collision.MMaps;
 
-/// <summary>A navmesh polygon (<c>dtPoly</c>): vertex indices, neighbour entries, flags, area and type.</summary>
-public sealed record NavPoly(ushort[] Vertices, ushort[] Neighbours, ushort Flags, byte Area, byte Type)
+/// <summary>
+/// A navmesh polygon (<c>dtPoly</c>): vertex indices, neighbour entries, flags, area and type. A value inside its tile's polygon
+/// array: the indices live in one array per tile (<see cref="NavMeshFormat.MaxVertsPerPoly"/> vertex slots, then as many neighbour
+/// slots, per polygon). It was a class with two small arrays of its own; with ~1,000 bots on two continents that was 1.6 million
+/// polygon objects and 3.3 million index arrays live in gen2 (gcdump 2026-10-17 20:05 CT), all traced by every full collection
+/// (multithreading plan W9).
+/// </summary>
+public readonly struct NavPoly
 {
-    public int VertexCount => Vertices.Length;
+    private readonly ushort[] _indices;
+    private readonly int _offset;
+    private readonly byte _vertexCount;
+
+    internal NavPoly(ushort[] indices, int offset, byte vertexCount, ushort flags, byte area, byte type)
+    {
+        _indices = indices;
+        _offset = offset;
+        _vertexCount = vertexCount;
+        Flags = flags;
+        Area = area;
+        Type = type;
+    }
+
+    public ushort Flags { get; }
+
+    public byte Area { get; }
+
+    public byte Type { get; }
+
+    public int VertexCount => _vertexCount;
+
+    /// <summary>The vertex indices (into the tile's vertices), <see cref="VertexCount"/> of them. No copy.</summary>
+    public ArraySegment<ushort> Vertices => new(_indices, _offset, _vertexCount);
+
+    /// <summary>The neighbour entries, one per edge (0 wall, internal polygon + 1, or an external-link side). No copy.</summary>
+    public ArraySegment<ushort> Neighbours => new(_indices, _offset + NavMeshFormat.MaxVertsPerPoly, _vertexCount);
+
+    /// <summary>Vertex index <paramref name="i"/> (hot paths: no segment).</summary>
+    internal ushort Vertex(int i) => _indices[_offset + i];
+
+    /// <summary>The neighbour entry of edge <paramref name="i"/> (hot paths: no segment).</summary>
+    internal ushort Neighbour(int i) => _indices[_offset + NavMeshFormat.MaxVertsPerPoly + i];
 
     public bool IsOffMeshConnection => Type == NavMeshFormat.PolyTypeOffMeshConnection;
 }
@@ -201,19 +239,15 @@ public sealed class NavMeshTile
 
         reader.Align4();
         var polys = new NavPoly[polyCount];
+        const int stride = 2 * NavMeshFormat.MaxVertsPerPoly;
+        ushort[] indices = new ushort[polyCount * stride]; // one array for the tile: dtPoly's verts[6] then neis[6], as on disk
         for (int i = 0; i < polyCount; i++)
         {
             reader.ReadUInt32(); // firstLink
-            ushort[] verts = new ushort[NavMeshFormat.MaxVertsPerPoly];
-            ushort[] neis = new ushort[NavMeshFormat.MaxVertsPerPoly];
-            for (int j = 0; j < verts.Length; j++)
+            int at = i * stride;
+            for (int j = 0; j < stride; j++)
             {
-                verts[j] = reader.ReadUInt16();
-            }
-
-            for (int j = 0; j < neis.Length; j++)
-            {
-                neis[j] = reader.ReadUInt16();
+                indices[at + j] = reader.ReadUInt16();
             }
 
             ushort flags = reader.ReadUInt16();
@@ -226,13 +260,13 @@ public sealed class NavMeshTile
 
             for (int j = 0; j < count; j++)
             {
-                if (verts[j] >= vertCount)
+                if (indices[at + j] >= vertCount)
                 {
-                    throw new InvalidDataException($"polygon {i} names vertex {verts[j]} of {vertCount}");
+                    throw new InvalidDataException($"polygon {i} names vertex {indices[at + j]} of {vertCount}");
                 }
             }
 
-            polys[i] = new NavPoly(verts[..count], neis[..count], flags, (byte)(areaAndType & 0x3f), (byte)(areaAndType >> 6));
+            polys[i] = new NavPoly(indices, at, count, flags, (byte)(areaAndType & 0x3f), (byte)(areaAndType >> 6));
         }
 
         reader.Align4();
@@ -533,12 +567,12 @@ public sealed class NavMeshTile
             return position with { Y = GetPolyHeight(poly, position) };
         }
 
-        Vector3 best = Vertices[p.Vertices[0]];
+        Vector3 best = Vertices[p.Vertex(0)];
         float bestDistance = float.MaxValue;
         for (int i = 0, j = p.VertexCount - 1; i < p.VertexCount; j = i++)
         {
-            Vector3 a = Vertices[p.Vertices[j]];
-            Vector3 b = Vertices[p.Vertices[i]];
+            Vector3 a = Vertices[p.Vertex(j)];
+            Vector3 b = Vertices[p.Vertex(i)];
             float t = ClosestT(a, b, position);
             Vector3 c = Vector3.Lerp(a, b, t);
             float d = DistanceXzSquared(c, position);
@@ -579,7 +613,7 @@ public sealed class NavMeshTile
 
         for (int i = 1; i + 1 < p.VertexCount; i++)
         {
-            if (TryTriangleHeight(position, Vertices[p.Vertices[0]], Vertices[p.Vertices[i]], Vertices[p.Vertices[i + 1]], out float h))
+            if (TryTriangleHeight(position, Vertices[p.Vertex(0)], Vertices[p.Vertex(i)], Vertices[p.Vertex(i + 1)], out float h))
             {
                 return h;
             }
@@ -617,10 +651,10 @@ public sealed class NavMeshTile
                 NavPoly p = Polys[i];
                 for (int e = 0; e < p.VertexCount; e++)
                 {
-                    ushort nei = p.Neighbours[e];
+                    ushort nei = p.Neighbour(e);
                     if ((nei & NavMeshFormat.ExternalLink) != 0 && (nei & 0xff) == side)
                     {
-                        edges.Add(new BorderEdge(i, Vertices[p.Vertices[e]], Vertices[p.Vertices[(e + 1) % p.VertexCount]]));
+                        edges.Add(new BorderEdge(i, Vertices[p.Vertex(e)], Vertices[p.Vertex((e + 1) % p.VertexCount)]));
                     }
                 }
             }
@@ -698,7 +732,7 @@ public sealed class NavMeshTile
             NavPoly p = Polys[i];
             for (int e = 0; e < p.VertexCount; e++)
             {
-                if ((p.Neighbours[e] & NavMeshFormat.ExternalLink) != 0)
+                if ((p.Neighbour(e) & NavMeshFormat.ExternalLink) != 0)
                 {
                     keys.Add((i << 3) | e); // ascending: polygon, then edge
                 }
@@ -712,9 +746,9 @@ public sealed class NavMeshTile
     private CrossPortal[] BuildCrossPortals(int poly, int edge, NavMeshTile other)
     {
         NavPoly p = Polys[poly];
-        int side = p.Neighbours[edge] & 0xff;
-        Vector3 a = Vertices[p.Vertices[edge]];
-        Vector3 b = Vertices[p.Vertices[(edge + 1) % p.VertexCount]];
+        int side = p.Neighbour(edge) & 0xff;
+        Vector3 a = Vertices[p.Vertex(edge)];
+        Vector3 b = Vertices[p.Vertex((edge + 1) % p.VertexCount)];
         bool alongZ = side is 0 or 4; // the border is a line of constant x; edges run along z
         float climb = MathF.Max(MathF.Max(WalkableClimb, other.WalkableClimb), 0.5f);
         List<CrossPortal>? found = null;
@@ -762,8 +796,8 @@ public sealed class NavMeshTile
         bool inside = false;
         for (int i = 0, j = p.VertexCount - 1; i < p.VertexCount; j = i++)
         {
-            Vector3 a = Vertices[p.Vertices[i]];
-            Vector3 b = Vertices[p.Vertices[j]];
+            Vector3 a = Vertices[p.Vertex(i)];
+            Vector3 b = Vertices[p.Vertex(j)];
             if (((a.Z > position.Z) != (b.Z > position.Z)) && (position.X < ((b.X - a.X) * (position.Z - a.Z) / (b.Z - a.Z)) + a.X))
             {
                 inside = !inside;
@@ -777,7 +811,7 @@ public sealed class NavMeshTile
     {
         if (index < p.VertexCount)
         {
-            vertex = Vertices[p.Vertices[index]];
+            vertex = Vertices[p.Vertex(index)];
             return true;
         }
 
