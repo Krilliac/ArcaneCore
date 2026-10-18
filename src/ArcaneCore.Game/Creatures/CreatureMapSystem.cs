@@ -461,6 +461,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 $"Creature {creature.Guid} (entry {creature.Entry}) requested path to non-finite destination ({destination.X}, {destination.Y}, {destination.Z}) on map {Map.MapId}");
         }
 
+        _lastPlanQueued = false;
         if (_options.Movement.PathJobs || _pathJobsResolved)
         {
             if (TryPlanPathByJob(creature, destination, toSpawn, chase, out PlannedPath queued))

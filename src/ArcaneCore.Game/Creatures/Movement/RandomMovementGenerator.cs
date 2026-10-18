@@ -59,6 +59,9 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     /// <summary>How long a wander whose point has no path waits before it picks another (1-1.5 s, the wait of the flee and fear generators).</summary>
     public const int NoPathRetryMinMs = FleeingMovementGenerator.NoPathRetryMinMs;
 
+    /// <summary>How soon (ms) a leg whose search went to the path-job pool asks again for the answer.</summary>
+    public const int PathJobRetryMs = 100;
+
     public const int NoPathRetryMaxMs = FleeingMovementGenerator.NoPathRetryMaxMs;
 
     /// <summary>vmangos RandomMovementGenerator constructor default when the spawn has none.</summary>
@@ -128,7 +131,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
-        if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
+        if (mover is ICreaturePathQuery { HasPathBudget: false, CanQueuePathJob: false } budgeted)
         {
             budgeted.NoteDeferred(creature);
             _nextMoveMs = budgeted.IsCrowdedRandomPass ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
@@ -178,7 +181,10 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
         if (plan.Outcome == PathOutcome.Deferred)
         {
-            _nextMoveMs = mover is ICreaturePathQuery { IsCrowdedRandomPass: true } ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            // A leg queued on the path-job pool is usually answered within an update or two: come back for it then, instead of the
+            // budget back-off (which left finished legs unclaimed for up to 10 s and held the per-map job cap full on live, Oct 17).
+            _nextMoveMs = mover is ICreaturePathQuery { LastPlanQueued: true } ? PathJobRetryMs
+                : mover is ICreaturePathQuery { IsCrowdedRandomPass: true } ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
             return true;
         }
 

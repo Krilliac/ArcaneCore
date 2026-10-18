@@ -100,6 +100,32 @@ public sealed class CreaturePathJobTests
     }
 
     [Fact]
+    public void AWanderLegOnAWorker_IsClaimedOnTheNextFewUpdates_NotAfterTheBudgetBackOff()
+    {
+        using Scene s = Start(movementType: 1);
+        s.Paths.Gate.Reset();
+        for (int i = 0; i < 300 && s.System.PathJobsSubmitted == 0; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        Assert.Equal(1, s.System.PathJobsPending);
+        s.Paths.Gate.Set();
+        WaitForPool(s.Jobs!, 1);
+
+        // RandomMovementGenerator.PathJobRetryMs (100 ms), not NoPathRetryMinMs (1 s): three 50 ms updates are enough.
+        for (int i = 0; i < 3 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(50);
+        }
+
+        Assert.True(s.Wolf.IsMoving, "the finished wander leg was not claimed within 150 ms");
+        Assert.Equal(1, s.System.PathJobsApplied);
+        Assert.Equal(0, s.System.PathJobsInFlight);
+    }
+
+    [Fact]
     public void AScriptedMove_WaitsForItsJob_ThenWalksToTheSameDestination()
     {
         using Scene s = Start(movementType: 0);

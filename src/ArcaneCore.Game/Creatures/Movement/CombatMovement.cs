@@ -28,6 +28,18 @@ internal interface ICreaturePathQuery
 
     /// <summary>True when Pass 2 random movement is running on a crowded continent map (&gt;256 active random-wandering creatures).</summary>
     bool IsCrowdedRandomPass => false;
+
+    /// <summary>
+    /// The path-job pool (<c>Creatures:Movement:PathJobs</c>) can take another search for this map now, so an out-of-combat request
+    /// need not wait for this update's synchronous budget.
+    /// </summary>
+    bool CanQueuePathJob => false;
+
+    /// <summary>
+    /// The last <c>PlanPath</c> answered <see cref="Maps.Collision.PathOutcome.Deferred"/> because its search is queued or running on the
+    /// path-job pool (not because the budget was spent): the answer is typically ready by the next update, so ask again soon.
+    /// </summary>
+    bool LastPlanQueued => false;
 }
 
 /// <summary>

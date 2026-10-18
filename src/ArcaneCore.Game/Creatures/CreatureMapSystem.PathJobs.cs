@@ -35,6 +35,11 @@ public sealed partial class CreatureMapSystem
     private long _lastPathJobLogMs;
     private NavJobTotals _lastPathJobLogTotals;
     private long _lastLoggedSubmitted;
+    private int _pathJobsPending;
+    private bool _lastPlanQueued;
+
+    /// <summary>How often (ms) the sweep runs and recounts the jobs still queued or running.</summary>
+    internal const long PathJobSweepMs = 250;
 
     private sealed record PathJobKey(PathOptions Options, bool ToSpawn, bool AnyDestination);
 
@@ -85,6 +90,16 @@ public sealed partial class CreatureMapSystem
     /// <summary>Jobs this map has outstanding (running, queued, or finished and not yet asked for).</summary>
     public int PathJobsInFlight => _creaturePathJobs.Count;
 
+    /// <summary>
+    /// Jobs still queued or running (recounted by each sweep, plus those submitted since). The per-map cap counts these: a finished job
+    /// waiting for its creature to ask again costs no pool time.
+    /// </summary>
+    public int PathJobsPending => _pathJobsPending;
+
+    bool ICreaturePathQuery.CanQueuePathJob => PathJobs is not null && _pathJobsPending < Math.Max(1, _options.Movement.PathJobsMaxInFlightPerMap);
+
+    bool ICreaturePathQuery.LastPlanQueued => _lastPlanQueued;
+
     private bool TryPlanPathByJob(Creature creature, Vector3 destination, bool toSpawn, bool chase, out PlannedPath plan)
     {
         plan = default;
@@ -116,6 +131,7 @@ public sealed partial class CreatureMapSystem
             if (fits && !job.IsDone)
             {
                 PathJobWaits++;
+                _lastPlanQueued = true;
                 plan = PlannedPath.Of(PathOutcome.Deferred);
                 return true;
             }
@@ -140,7 +156,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
-        if (_creaturePathJobs.Count >= Math.Max(1, _options.Movement.PathJobsMaxInFlightPerMap))
+        if (_pathJobsPending >= Math.Max(1, _options.Movement.PathJobsMaxInFlightPerMap))
         {
             PathJobsRejected++;
             return false;
@@ -159,6 +175,8 @@ public sealed partial class CreatureMapSystem
 
         _creaturePathJobs[creature] = next;
         PathJobsSubmitted++;
+        _pathJobsPending++;
+        _lastPlanQueued = true;
         plan = PlannedPath.Of(PathOutcome.Deferred);
         return true;
     }
@@ -182,7 +200,14 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private void SweepPathJobs()
     {
-        if (_creaturePathJobs.Count == 0 || _clockMs - _lastPathJobSweepMs < 1000)
+        if (_creaturePathJobs.Count == 0)
+        {
+            _pathJobsPending = 0;
+            LogPathJobSummary();
+            return;
+        }
+
+        if (_clockMs - _lastPathJobSweepMs < PathJobSweepMs)
         {
             LogPathJobSummary();
             return;
@@ -190,8 +215,14 @@ public sealed partial class CreatureMapSystem
 
         _lastPathJobSweepMs = _clockMs;
         _pathJobSweep.Clear();
+        int pending = 0;
         foreach ((Creature creature, NavJob job) in _creaturePathJobs)
         {
+            if (!job.IsDone)
+            {
+                pending++;
+            }
+
             if (!creature.IsAlive || !creature.IsInWorld || !_creatures.ContainsKey(creature.Guid)
                 || (job.IsDone && _clockMs - job.SubmittedAtMs > PathJobUnclaimedMs))
             {
@@ -202,9 +233,15 @@ public sealed partial class CreatureMapSystem
 
         foreach (Creature creature in _pathJobSweep)
         {
-            _creaturePathJobs.Remove(creature);
+            if (_creaturePathJobs.Remove(creature, out NavJob? dropped) && !dropped.IsDone)
+            {
+                pending--;
+            }
+
             PathJobsStale++;
         }
+
+        _pathJobsPending = Math.Max(0, pending);
 
         _pathJobSweep.Clear();
         LogPathJobSummary();
@@ -226,8 +263,8 @@ public sealed partial class CreatureMapSystem
         double queueMs = window.Completed + window.Canceled + window.Skipped > 0
             ? window.QueueTicks * 1000.0 / Stopwatch.Frequency / (window.Completed + window.Canceled + window.Skipped) : 0;
         _logger.LogInformation(
-            "Creature path jobs on map {MapId}: submitted {Submitted}, applied {Applied}, stale {Stale}, canceled {Canceled}, waits {Waits}, rejected {Rejected}, in flight {InFlight}; pool ({Threads} threads, last minute, all maps): completed {Completed}, canceled {PoolCanceled}, faulted {Faulted}, queued {Queued}, avg search {AvgMs:F2} ms, avg queue wait {QueueMs:F1} ms, slowest search {MaxMs:F1} ms",
-            Map.MapId, PathJobsSubmitted, PathJobsApplied, PathJobsStale, PathJobsCanceled, PathJobWaits, PathJobsRejected, _creaturePathJobs.Count,
+            "Creature path jobs on map {MapId}: submitted {Submitted}, applied {Applied}, stale {Stale}, canceled {Canceled}, waits {Waits}, rejected {Rejected}, in flight {InFlight} ({Pending} pending); pool ({Threads} threads, last minute, all maps): completed {Completed}, canceled {PoolCanceled}, faulted {Faulted}, queued {Queued}, avg search {AvgMs:F2} ms, avg queue wait {QueueMs:F1} ms, slowest search {MaxMs:F1} ms",
+            Map.MapId, PathJobsSubmitted, PathJobsApplied, PathJobsStale, PathJobsCanceled, PathJobWaits, PathJobsRejected, _creaturePathJobs.Count, _pathJobsPending,
             jobs.Threads, window.Completed, window.Canceled, window.Faulted, jobs.Queued, avgMs, queueMs, totals.MaxComputeTicks * 1000.0 / Stopwatch.Frequency);
     }
 }
