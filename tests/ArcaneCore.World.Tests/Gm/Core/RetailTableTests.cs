@@ -144,7 +144,7 @@ public sealed class RetailTableTests
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
         // A packed overview in retail table order ("modify" is listed for its player-level "xprate", vmangos Chat.cpp:630).
         Assert.Equal("Commands (page 1/1)", (await player.ReadChatAsync()).Text);
-        Assert.Equal("modify (1), server (2), commands, dismount, help, save", (await player.ReadChatAsync()).Text);
+        Assert.Equal("modify (1), server (2), commands, dismount, help, save, unstuck", (await player.ReadChatAsync()).Text);
         Assert.StartsWith("Search: .commands <text>", (await player.ReadChatAsync()).Text);
 
         // ".help" alone is the same overview.

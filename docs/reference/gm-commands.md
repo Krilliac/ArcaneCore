@@ -13,10 +13,10 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
-| `Player` | 0 | 7 |
-| `Moderator` | 1 | 25 |
-| `GameMaster` | 3 | 247 |
-| `Administrator` | 6 | 369 |
+| `Player` | 0 | 8 |
+| `Moderator` | 1 | 26 |
+| `GameMaster` | 3 | 248 |
+| `Administrator` | 6 | 370 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -260,6 +260,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.banlist account` | 1 | Moderator | stored level through the map | Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name. |
 | `.banlist character` | 1 | Moderator | stored level through the map | Syntax: .banlist character $Name — accounts with a ban in force owning a character whose name starts with $Name. |
 | `.banlist ip` | 3 | GameMaster | stored level through the map | Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip. |
+| `.unstuck` | 0 | Player | declared retail level | Syntax: .unstuck If you are stuck: alive, you die once Undying Soul expires; as a ghost, you are sent to the nearest graveyard. |
 | `.neargrave` | 3 | GameMaster | stored level through the map | Syntax: .neargrave [alliance\|horde] Find the graveyard nearest to you that serves your zone (for the given team, or any). |
 | `.explorecheat` | 1 | Moderator | stored level through the map | Syntax: .explorecheat #flag - 1 reveals every zone, 0 hides them (vmangos: the effect lands on you). |
 | `.levelup` | 3 | GameMaster | declared retail level | Syntax: .levelup [$playername] [#numberoflevels] Increase/decrease the level of the selected player or the named one (default +1); the experience of the level is reset. |
