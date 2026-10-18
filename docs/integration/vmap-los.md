@@ -29,9 +29,10 @@ the world thread.
 
 * **Spells**: `SpellSystem.CheckCast` calls `SpellLineOfSight.Check` after the unit range check and
   `SpellLineOfSight.CheckDest` after the destination range check (the only edit to the spell area).
-* **Creature AI** (owned elsewhere): a chase/follow generator calls
-  `CreaturePathing.MoveTowards(...)` on each re-path; it walks corner by corner. On
-  `PathType.NoPath` it launches nothing and the AI decides (vmangos evades or moves straight).
+* **Creature AI** (owned elsewhere): the chase/follow generators ask `map.Collision.FindPath`
+  (through `CreatureMapSystem.PlanPath`) on each re-path and launch the whole path as one
+  multi-point spline; they do not use `CreaturePathing.MoveTowards(...)`, which walks corner by
+  corner. On `PathType.NoPath` a chaser launches nothing and the AI decides (vmangos evades or moves straight).
   Without mmaps the path is the straight line, so behaviour is unchanged.
 * **Combat**: `attacker.IsWithinLineOfSight(victim)` where vmangos checks `IsWithinLOSInMap`.
 
@@ -84,15 +85,17 @@ Connectivity comes from the polygon neighbour entries: `neis − 1` inside the t
 across a tile border (joined with the adjacent tile's opposite-side edges where they overlap within
 the walkable climb). Queries:
 
-* nearest polygon in a (3, 5, 3) box, then a (3, 200, 3) box (projected point → `Incomplete`);
+* nearest polygon in a (3, 5, 3) box, then a (3, 200, 3) box (projected end point → `Incomplete`);
   over a polygon only the height beyond the walkable climb counts (as Detour);
 * A* over polygons between portal midpoints with the include/exclude flag filter
-  (`PathOptions`, default include ground/water/magma/slime, exclude steep slopes) and a node
+  (`PathOptions`, default include ground/water/magma/slime, exclude nothing) and a node
   budget (`MaxSearchNodes`); an unreachable goal gives the path to the closest node
   (`Incomplete`, or `NoPath` with `AllowPartial = false`);
 * funnel string-pulling into corners; heights from the detail mesh (or a fan over the polygon);
-* more than `MaxPoints` (74) corners → cut and flagged `Short`;
-* map without `.mmap` → straight line `Normal | NotUsingPath`; start or end off the loaded mesh →
+* more than `MaxPoints` (256) corners → cut and flagged `Short`;
+* map without `.mmap`, or start or end on a tile that is not loaded → straight line
+  `Normal | NotUsingPath` (vmangos' `HaveTiles` shortcut); start or end on a loaded tile but outside
+  the search boxes →
   `NoPath` with a two-point shortcut.
 
 ## Provenance
