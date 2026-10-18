@@ -40,6 +40,8 @@ public sealed class CombatStatAurasTests
     private const uint SwordDamage7 = 989_614;
     private const uint TotalSpirit100 = 989_615;
     private const uint AttackPowerMinus50Stacking = 989_616;
+    private const uint SealOfTheCrusaderLike = 989_617;
+    private const uint Haste40 = 989_618;
 
     private const uint Sword = 989_700;   // one-handed sword, 2.6 s
     private const uint Axe = 989_701;     // one-handed axe
@@ -80,7 +82,9 @@ public sealed class CombatStatAurasTests
         RuleTestSupport.Grant(AttackPowerMinus150, AuraType.ModAttackPower, -150),
         Weapon(RuleTestSupport.Grant(SwordDamage7, AuraType.ModDamageDone, 7, misc: 1), 1 << 7),
         RuleTestSupport.Grant(TotalSpirit100, AuraType.ModTotalStatPercentage, 100, misc: 4),
-        RuleTestSupport.Grant(AttackPowerMinus50Stacking, AuraType.ModAttackPower, -50) with { StackAmount = 3 });
+        RuleTestSupport.Grant(AttackPowerMinus50Stacking, AuraType.ModAttackPower, -50) with { StackAmount = 3 },
+        RuleTestSupport.Grant(SealOfTheCrusaderLike, AuraType.ModAttackspeed, 40) with { SpellFamilyName = 10, SpellFamilyFlags = 1UL << 9 },
+        RuleTestSupport.Grant(Haste40, AuraType.ModAttackspeed, 40));
 
     /// <summary>A level 60 player with str 120, agi 80, sta 100, int 20, spi 100, attached to a stat system.</summary>
     private static Player Player(SpellTestKit kit, uint guid = 1)
@@ -229,6 +233,40 @@ public sealed class CombatStatAurasTests
         kit.System.RemoveAuras(player, Offhand50);
         Assert.Equal(before.min, OffHand(player).Min, Tol);
         Assert.Equal(before.max, OffHand(player).Max, Tol);
+    }
+
+    /// <summary>
+    /// vmangos HandleModAttackSpeed (SpellAuras.cpp:5106-5111): Seal of the Crusader's 40% faster swing comes with -100 * 40 / 140 = -28.57% main-hand
+    /// damage (the same damage per second); any other attack speed aura leaves the damage alone.
+    /// </summary>
+    [Fact]
+    public void SealOfTheCrusader_SwingsFaster_AndHitsTheMainHandForLess()
+    {
+        using SpellTestKit kit = Kit();
+        Player player = Player(kit);
+        player.StatState.SetCanDualWield(true);
+        Equip(player, Sword, InventorySlots.MainHand);
+        Equip(player, OffhandSword, InventorySlots.OffHand);
+        (float min, float max) main = MainHand(player);
+        (float min, float max) off = OffHand(player);
+        uint swing = player.GetUInt32(UpdateFields.UnitFieldBaseattacktime);
+        float factor = 1f + AttackSpeedAuras.SealOfTheCrusaderDamagePercent(40) / 100f;
+        Assert.Equal(100f / 140f, factor, 4);
+
+        Apply(kit, player, Haste40);
+        Assert.Equal(main, MainHand(player));
+        kit.System.RemoveAuras(player, Haste40);
+
+        Apply(kit, player, SealOfTheCrusaderLike);
+
+        Assert.True(player.GetUInt32(UpdateFields.UnitFieldBaseattacktime) < swing, "the seal speeds the swing");
+        Assert.Equal(main.min * factor, MainHand(player).Min, Tol);
+        Assert.Equal(main.max * factor, MainHand(player).Max, Tol);
+        Assert.Equal(off.min, OffHand(player).Min, Tol); // UNIT_MOD_DAMAGE_MAINHAND only
+        kit.System.RemoveAuras(player, SealOfTheCrusaderLike);
+        Assert.Equal(main.min, MainHand(player).Min, Tol);
+        Assert.Equal(main.max, MainHand(player).Max, Tol);
+        Assert.Equal(swing, player.GetUInt32(UpdateFields.UnitFieldBaseattacktime));
     }
 
     [Fact]

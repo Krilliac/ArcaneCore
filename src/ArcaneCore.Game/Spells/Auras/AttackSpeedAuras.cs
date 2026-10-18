@@ -1,8 +1,11 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells.Paladin;
+using ArcaneCore.Game.Stats;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -18,10 +21,11 @@ namespace ArcaneCore.Game.Spells;
 /// <item>Aura 141 only applies to a player whose ranged slot holds a weapon with AmmoType != 0 (thrown weapons carry 4, wands and
 /// no weapon do not). vmangos reverts m_applied for a refused apply; here a per-aura record decides whether removal takes
 /// anything back. It is evaluated once, at apply: swapping the weapon later does not re-evaluate it (vmangos).</item>
+/// <item>Seal of the Crusader (MOD_ATTACKSPEED of a CF_PALADIN_SEAL_OF_THE_CRUSADER spell, SpellAuras.cpp:5106-5111): the faster swing comes with a
+/// TOTAL_PCT of -100 * amount / (amount + 100) on the main-hand damage group, so the damage per second stays the same ("SoC increases attack
+/// speed but reduces damage to maintain the same DPS"): -28.57% for the 40% of every rank.</item>
 /// </list>
-/// Limits: the Seal of the Crusader damage reduction (SpellAuras.cpp:5106-5111) needs the unit-mod TOTAL_PCT ledger of the
-/// main hand and is not applied; the druid shapeshift attack speed override (IsAttackSpeedOverridenShapeShift) belongs to the
-/// druid-forms lane.
+/// Limits: the druid shapeshift attack speed override (IsAttackSpeedOverridenShapeShift) belongs to the druid-forms lane.
 /// </summary>
 public sealed class AttackSpeedAuras : ISpellHandlerModule
 {
@@ -32,7 +36,7 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        system.RegisterAura(AuraType.ModAttackspeed, new AuraHandler((s, h, a, apply) => Apply(s, h, a, apply, WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack, WeaponAttackType.RangedAttack), null));
+        system.RegisterAura(AuraType.ModAttackspeed, new AuraHandler(ApplyAttackSpeed, null));
         system.RegisterAura(AuraType.ModCastingSpeedNotStack, new AuraHandler(ApplyCastingSpeed, null));
         system.RegisterAura(AuraType.ModMeleeHaste, new AuraHandler((s, h, a, apply) => Apply(s, h, a, apply, WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack), null));
         system.RegisterAura(AuraType.ModRangedHaste, new AuraHandler((s, h, a, apply) => Apply(s, h, a, apply, WeaponAttackType.RangedAttack), null));
@@ -100,6 +104,38 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
 
         target.SetFloat(UpdateFields.UnitModCastSpeed, total);
     }
+
+    /// <summary>CF_PALADIN_SEAL_OF_THE_CRUSADER (SpellClassMask.h).</summary>
+    public const int SealOfTheCrusaderBit = 9;
+
+    /// <summary>vmangos HandleModAttackSpeed (SpellAuras.cpp:5093-5112): all three slots, and Seal of the Crusader's damage reduction.</summary>
+    private static void ApplyAttackSpeed(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        bool wasApplied = s_applied.TryGetValue(aura, out _);
+        Apply(system, holder, aura, apply, WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack, WeaponAttackType.RangedAttack);
+        if (apply == wasApplied || !holder.Spell.IsFitToFamily(PaladinSpells.Family, SealOfTheCrusaderBit))
+        {
+            return; // nothing changed (a removal of an aura never applied), or not the seal
+        }
+
+        float reduction = SealOfTheCrusaderDamagePercent(aura.Amount);
+        Unit target = holder.Target;
+        if (target is Player player)
+        {
+            player.StatState.Mods.Apply(UnitMods.DamageMainHand, UnitModifierType.TotalPct, reduction, apply);
+            player.StatState.Maintainer?.UpdateAttackPowerAndDamage(player, ranged: false);
+            return;
+        }
+
+        UnitModLedger.For(target).Apply(UnitMods.DamageMainHand, UnitModifierType.TotalPct, reduction, apply);
+        if (target is Creature creature)
+        {
+            CreatureDamageStats.UpdateMelee(creature, system);
+        }
+    }
+
+    /// <summary>The main-hand damage percent Seal of the Crusader's <paramref name="attackSpeedPercent"/> comes with (SpellAuras.cpp:5109).</summary>
+    public static float SealOfTheCrusaderDamagePercent(float attackSpeedPercent) => -100f * attackSpeedPercent / (attackSpeedPercent + 100f);
 
     private static void ApplyAmmoHaste(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
     {

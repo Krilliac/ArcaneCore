@@ -31,7 +31,7 @@ The hunter lane (wave 2) stays documented in `docs/areas/hunter.md` (corrected b
 ## Deviations from retail that remain
 
 * The 500 ms ranged-slot cast time (`SpellEntry.cpp:511-512`) is missing for spells whose CastTimes row is the all-zero instant row (see `ranged/wand-thrown.md`).
-* Seal of the Crusader's damage reduction, the druid shapeshift attack speed override, the melee analogues of auras 126 / 130 / 112 / 184, the `UNIT_MOD_DAMAGE_RANGED` TOTAL_PCT multiplier of the ranged done bonus, wand partial-resist ranges and the wand global cooldown are not modelled (each is listed in its slice doc).
+* The druid shapeshift attack speed override, the melee analogues of auras 126 / 130 / 112 / 184, the `UNIT_MOD_DAMAGE_RANGED` TOTAL_PCT multiplier of the ranged done bonus, wand partial-resist ranges and the wand global cooldown are not modelled (each is listed in its slice doc).
 * Cancel of the auto-repeat on taxi start and on `SPELL_ATTR_CANCELS_AUTO_ATTACK_COMBAT` casts are not wired.
 * SpellRange.dbc is in no reference: the dead zone and range numbers of Auto Shot (range index 114), Throw (74), wand Shoot (4) are unverified.
 

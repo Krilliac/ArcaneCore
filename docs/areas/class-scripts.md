@@ -153,8 +153,9 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 
 - Stacking: `spell_group` stack rules (Greater Blessing versus Blessing) are not modelled; a rank chain is the spell family plus the spell name. A
   refused weaker party-aura child is built again on the next area update (no handler, slot or packet; vmangos does the same refusal each pulse).
-- Judgement of Light's heal script (the Tier 3 bonus through `m_triggeredByAuraBasePoints`), Illumination, Seal of the Crusader's damage reduction and
-  Blessing of Sacrifice (SPLIT_DAMAGE_PCT, aura engine) are not part of this lane. Hammer of Wrath crits with the spell crit chance, not the melee one.
+- Judgement of Light's heal script (the Tier 3 bonus through `m_triggeredByAuraBasePoints`) and
+  Blessing of Sacrifice (SPLIT_DAMAGE_PCT, aura engine) are not part of this lane. Illumination is a built-in proc case and Seal of the
+  Crusader's main-hand damage reduction is applied with its attack speed (AttackSpeedAuras). Hammer of Wrath crits with the spell crit chance, not the melee one.
 - Bloodthirst does not add MOD_MELEE_ATTACK_POWER_VERSUS; Execute reads the rage at the dummy effect (after the cost, as vmangos' OnCast does).
 - A dead Doomguard is left to its corpse decay (vmangos restarts its timer for the corpse); a summoning ritual destination and Inferno's Enslave
   Demon are not modelled.

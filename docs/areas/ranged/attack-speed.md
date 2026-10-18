@@ -21,7 +21,6 @@ vmangos stores the attack time as a float and truncates on every read, so apply 
 
 ## Limits (recorded, not delivered)
 
-* Seal of the Crusader's main-hand damage reduction (`SpellAuras.cpp:5106-5111`) needs the unit-mod TOTAL_PCT ledger.
 * Druid cat/bear weapon speed override (`IsAttackSpeedOverridenShapeShift`) belongs to the druid-forms lane.
 * Quivers and ammo pouches do not yet apply their equip spell (no ON_EQUIP engine; bag slots 19-22 never reach a hook): aura 141 is wired but only a cast spell can apply it today.
 * The `-100` percent guards are unreachable for auras (a -100 amount takes the negative branch as +100); ported verbatim.
