@@ -99,7 +99,12 @@ pass unmodified). Internally:
 - `TerrainInfo` (one per map id, shared by all its instances) loads tiles on demand,
   reference-counts them for grids (`Load` / `Unload`; `Map` refs a grid's tile when the grid
   is created and unrefs it when it unloads) and frees unreferenced tiles once a minute
-  (`CleanUp`, run once per world tick by `TerrainManager.Update`). It answers `GetHeight`,
+  (`CleanUp`, run once per world tick by `TerrainManager.Update`). Every map of the id holds
+  it (`MapRefCount`: `TerrainManager.Acquire` in the `Map` constructor, `Release` in
+  `Map.UnloadAll`, vmangos `Referencable` / `Map::~Map`); after the last one the manager drops
+  it in the `Update` whose clean-up frees its last tile, and the next instance of the id gets a
+  new one (kept with `GridUnload` off, as vmangos `TerrainManager::UnloadTerrain`). Callers
+  without a map ask `TerrainManager.For` per use instead of keeping it. It answers `GetHeight`,
   `GetAreaFlag`, `GetZoneAndAreaId` (through `AreaTable`), `GetLiquidStatus` (kept only when
   the surface is above the ground, as vmangos `TerrainInfo::getLiquidStatus` without vmaps)
   and `GetWaterOrGroundLevel`.
@@ -237,6 +242,7 @@ and `import` the teleports (docs/areas/content-import.md).
 | Liquid kind | remapped through LiquidType.dbc when loaded | same | — | the `.map` file's flags (no DBC stores in ArcaneCore) |
 | Area flag → area fallback | `GetFlagByMapId` path after `GetGrid` (never null there, so dead) | — | — | not implemented (unreachable in vmangos) |
 | Terrain clean-up first run | random 20–40 s, then every minute | — | — | every minute from start (deterministic) |
+| Terrain of a map id after its last map | deleted with that map, tiles at once (`Map::~Map` → `UnloadTerrain`) | — | — | dropped by the clean-up that frees its last tile (up to a minute later); an instance made meanwhile takes it again |
 | `areatrigger_teleport` / `map_template` columns | also `patch`, `build`, `required_condition`, `ghost_entrance_*` | `required_quest_*`, `required_item*`, … | — | the columns ArcaneCore uses; patch/build filtering, conditions and quest/item requirements need those systems first |
 | Teleport observers set | `ObjectMessageDeliverer`: players in the cells within visibility distance | — | — | observers within visibility distance (clients without the mover ignore the packet anyway) |
 
@@ -246,7 +252,8 @@ and `import` the teleports (docs/areas/content-import.md).
   state machine, eviction, `GridUnload = false`, queries, relocation), `GridMapTests` (the
   `AddObject` seam, observer index, grey zone, grid/terrain lifetime), `TerrainTests`
   (synthetic `.map` files: float/u16/u8 heights, holes, areas, all liquid statuses, bad and
-  truncated files, fail-soft manager, tile ref-counting), `TeleportServiceTests` (near and
+  truncated files, fail-soft manager, tile ref-counting, terrain released after the last
+  instance of its map id), `TeleportServiceTests` (near and
   far flows tick by tick, invalid destinations, logout mid-transfer, instance binding).
 - `tests/ArcaneCore.Data.Tests/MapDataModuleTests.cs`: fresh world DB at the current
   version, v1 → v2 upgrade keeping rows, store round trip — on SQLite, MariaDB and PostgreSQL.

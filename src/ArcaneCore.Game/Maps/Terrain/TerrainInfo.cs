@@ -5,7 +5,8 @@ namespace ArcaneCore.Game.Maps.Terrain;
 /// <summary>
 /// The terrain of one map (vmangos <c>TerrainInfo</c>, GridMap.cpp): its 64 × 64 tiles, loaded
 /// from the data directory the first time a position on them is looked up, reference-counted by
-/// the map's loaded grids, and dropped by a periodic clean-up once unreferenced.
+/// the map's loaded grids, and dropped by a periodic clean-up once unreferenced. The maps of its
+/// map id hold it (<see cref="MapRefCount"/>); <see cref="TerrainManager"/> lets it go after the last one.
 /// <para>
 /// Without terrain data (no data directory, or no file for a tile) a tile reads as vmangos'
 /// empty <c>GridMap</c>: no height (<see cref="TerrainTile.InvalidHeightValue"/>), area flag 0
@@ -24,6 +25,7 @@ public sealed class TerrainInfo
     private readonly TerrainTile?[] _tiles = new TerrainTile?[Size * Size];
     private readonly int[] _refs = new int[Size * Size];
     private long _cleanUpTimerMs = CleanUpIntervalMs;
+    private int _mapRefs;
 
     internal TerrainInfo(uint mapId, TerrainManager manager)
     {
@@ -76,6 +78,44 @@ public sealed class TerrainInfo
 
     /// <summary>The tile's reference count (grids holding it).</summary>
     public int RefCount(int tileX, int tileY) => _refs[(tileX * Size) + tileY];
+
+    /// <summary>
+    /// The maps holding this terrain (vmangos <c>Referencable</c>, GridMap.h:123-130): <see cref="TerrainManager.Acquire"/> counts a
+    /// map in when it is made (<c>Map::Map</c>, Map.cpp:153) and <see cref="TerrainManager.Release"/> counts it out when it is unloaded
+    /// (<c>Map::~Map</c>, Map.cpp:76-78).
+    /// </summary>
+    public int MapRefCount => _mapRefs;
+
+    /// <summary>Count a map in (vmangos <c>Referencable::AddRef</c>).</summary>
+    internal void AddMapRef() => _mapRefs++;
+
+    /// <summary>Count a map out; true when it was the last one (vmangos <c>Referencable::Release</c>).</summary>
+    internal bool ReleaseMapRef()
+    {
+        if (_mapRefs > 0)
+        {
+            _mapRefs--;
+        }
+
+        return _mapRefs == 0;
+    }
+
+    /// <summary>
+    /// Whether a tile is still in memory or referenced by a grid: a terrain is let go only once its clean-up has freed every tile
+    /// (<see cref="TerrainManager.Update"/>).
+    /// </summary>
+    internal bool HoldsAnyTile()
+    {
+        for (int i = 0; i < _tiles.Length; i++)
+        {
+            if (_tiles[i] is not null || _refs[i] > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>vmangos <c>TerrainInfo::Load</c>: reference a tile and make sure it is loaded.</summary>
     public TerrainTile Load(int tileX, int tileY)

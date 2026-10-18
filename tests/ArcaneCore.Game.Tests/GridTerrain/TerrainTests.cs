@@ -334,7 +334,7 @@ public sealed class TerrainTests : IDisposable
 
     /// <summary>
     /// The clean-up belongs to the world, not to a map: once the last instance of a map id is gone its terrain's tiles are still freed
-    /// (vmangos goes further and deletes the unreferenced <c>TerrainInfo</c> with the last map, Map.cpp:77-78, GridMap.cpp:1255-1273).
+    /// (and the <c>TerrainInfo</c> goes with them, <see cref="Terrain_GoesWithTheLastInstanceOfItsMapId_AndTheNextInstanceGetsAWorkingOne"/>).
     /// </summary>
     [Fact]
     public void CleanUp_FreesTheTilesOfAMapId_WhoseInstancesAreAllGone()
@@ -358,5 +358,157 @@ public sealed class TerrainTests : IDisposable
         }
 
         Assert.False(terrain.IsTileLoaded(tileX, tileY));
+    }
+
+    /// <summary>
+    /// vmangos deletes a map id's terrain with its last map: every <c>Map</c> holds its <c>TerrainInfo</c> (taken in <c>Map::Map</c>,
+    /// Map.cpp:127 and :153, <c>Referencable</c>, GridMap.h:123-130), <c>Map::~Map</c> lets go of it (Map.cpp:76-78) and
+    /// <c>TerrainManager::UnloadTerrain</c> erases the one no map holds any more (GridMap.cpp:1255-1273). Here it goes with the clean-up
+    /// that frees its last tile, and the next instance of the map id gets a new terrain that reads the tile files again.
+    /// </summary>
+    [Fact]
+    public void Terrain_GoesWithTheLastInstanceOfItsMapId_AndTheNextInstanceGetsAWorkingOne()
+    {
+        string maps = Directory.CreateDirectory(Path.Combine(_dataDir, "maps")).FullName;
+        (int tileX, int tileY) = TerrainTile.TileOf(X, Y)!.Value;
+        File.WriteAllBytes(Path.Combine(maps, TerrainTile.FileName(0, tileX, tileY)), new MapFileBuilder { GridHeight = 55f }.Build());
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.Options.Maps.DataDirectory = _dataDir;
+        TerrainManager manager = WorldMaps.Of(world).Terrain;
+        Map first = world.GetMap(0, 1);
+        Map second = world.GetMap(0, 2);
+        TerrainInfo terrain = first.Terrain;
+        first.AddObject(new TestUnit(1, X, Y));
+        second.AddObject(new TestUnit(2, X, Y));
+        Assert.Equal(2, terrain.RefCount(tileX, tileY));
+
+        // One instance goes: the other still holds the terrain, so it stays through the clean-up.
+        world.UnloadMap(first);
+        for (int tick = 0; tick < TerrainInfo.CleanUpIntervalMs / 1000; tick++)
+        {
+            world.RunTick(1000);
+        }
+
+        Assert.Same(terrain, manager.For(0));
+        Assert.True(terrain.IsTileLoaded(tileX, tileY));
+
+        // The last one goes: its tile waits for the clean-up's minute, and so does the terrain.
+        world.UnloadMap(second);
+        world.RunTick(0);
+        Assert.Null(world.FindMap(0, 2));
+        Assert.Same(terrain, manager.For(0));
+        Assert.True(terrain.IsTileLoaded(tileX, tileY));
+        for (int tick = 0; tick < TerrainInfo.CleanUpIntervalMs / 1000; tick++)
+        {
+            world.RunTick(1000);
+        }
+
+        Assert.False(terrain.IsTileLoaded(tileX, tileY));
+
+        // The next instance of the map id gets a new terrain: the one the manager hands out, reading the tile file again.
+        Map third = world.GetMap(0, 3);
+        Assert.NotSame(terrain, third.Terrain);
+        Assert.Same(third.Terrain, manager.For(0));
+        int filesBefore = manager.FilesLoaded;
+        third.AddObject(new TestUnit(3, X, Y));
+        Assert.Equal(1, third.Terrain.RefCount(tileX, tileY));
+        Assert.Equal(55f, third.GetHeight(X, Y, 0f));
+        Assert.Equal(filesBefore + 1, manager.FilesLoaded);
+        Assert.Equal(0, terrain.RefCount(tileX, tileY));
+    }
+
+    /// <summary>
+    /// <c>TerrainManager::UnloadTerrain</c> erases only a terrain no map holds (GridMap.cpp:1264-1270): an instance made again before
+    /// the clean-up has freed the released terrain's tiles takes that same terrain, tiles and all, and the terrain stays with it.
+    /// </summary>
+    [Fact]
+    public void ReleasedTerrain_TakenAgainBeforeItsTilesAreFreed_Stays()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        TerrainManager manager = WorldMaps.Of(world).Terrain;
+        Map first = world.GetMap(0, 1);
+        TerrainInfo terrain = first.Terrain;
+        first.AddObject(new TestUnit(1, X, Y));
+        (int tileX, int tileY) = TerrainTile.TileOf(X, Y)!.Value;
+        world.UnloadMap(first);
+        world.RunTick(0);
+        Assert.Equal(0, terrain.MapRefCount);
+
+        Map second = world.GetMap(0, 2);
+        Assert.Same(terrain, second.Terrain);
+        Assert.Equal(1, terrain.MapRefCount);
+        Assert.True(terrain.IsTileLoaded(tileX, tileY));
+        for (int tick = 0; tick < 2 * TerrainInfo.CleanUpIntervalMs / 1000; tick++)
+        {
+            world.RunTick(1000);
+        }
+
+        Assert.False(terrain.IsTileLoaded(tileX, tileY)); // nothing references it: the clean-up still frees the tile
+        Assert.Equal(1, manager.TerrainCount);
+        Assert.Same(terrain, manager.For(0));
+        Assert.Same(terrain, second.Terrain);
+    }
+
+    /// <summary>With <c>GridUnload</c> off vmangos never unloads a terrain (GridMap.cpp:1257-1258); its clean-up still frees the tiles.</summary>
+    [Fact]
+    public void Terrain_StaysAfterItsLastInstance_WithGridUnloadOff()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.Options.Maps.GridUnload = false;
+        TerrainManager manager = WorldMaps.Of(world).Terrain;
+        Map instance = world.GetMap(0, 1);
+        TerrainInfo terrain = instance.Terrain;
+        instance.AddObject(new TestUnit(1, X, Y));
+        (int tileX, int tileY) = TerrainTile.TileOf(X, Y)!.Value;
+
+        world.UnloadMap(instance);
+        for (int tick = 0; tick <= TerrainInfo.CleanUpIntervalMs / 1000; tick++)
+        {
+            world.RunTick(1000);
+        }
+
+        Assert.Null(world.FindMap(0, 1));
+        Assert.Equal(0, terrain.MapRefCount);
+        Assert.False(terrain.IsTileLoaded(tileX, tileY));
+        Assert.Equal(1, manager.TerrainCount);
+        Assert.Same(terrain, world.GetMap(0, 2).Terrain);
+    }
+
+    /// <summary>
+    /// The manager lets a terrain go only once its last map has released it and no tile of it is held: a grid reference left over (an
+    /// unload that failed half way) keeps it. A terrain no map ever held (a <c>.go</c> or a bot lookup asking <c>For</c>) is kept, as
+    /// vmangos keeps a <c>LoadTerrain</c> without a map (only <c>Map::~Map</c> calls <c>UnloadTerrain</c>, Map.cpp:76-78).
+    /// </summary>
+    [Fact]
+    public void Manager_LetsATerrainGo_AfterItsLastMap_OnceNoTileIsHeld()
+    {
+        var manager = new TerrainManager(null);
+        TerrainInfo lookedUp = manager.For(1);
+        lookedUp.GetTile(10, 20);
+        TerrainInfo held = manager.Acquire(0);
+        TerrainInfo alsoHeld = manager.Acquire(0);
+        Assert.Same(held, alsoHeld);
+        Assert.Equal(2, held.MapRefCount);
+        held.Load(10, 20);
+
+        manager.Release(held, gridUnload: true);
+        manager.Update(TerrainInfo.CleanUpIntervalMs);
+        Assert.Same(held, manager.For(0)); // another map still holds it
+
+        manager.Release(held, gridUnload: true);
+        manager.Update(TerrainInfo.CleanUpIntervalMs);
+        Assert.Equal(0, held.MapRefCount);
+        Assert.True(held.IsTileLoaded(10, 20)); // its grid still references the tile
+        Assert.Equal(2, manager.TerrainCount);
+
+        held.Unload(10, 20);
+        manager.Update(TerrainInfo.CleanUpIntervalMs - 1);
+        Assert.Equal(2, manager.TerrainCount); // the tile waits for the clean-up's minute, and so does the terrain
+        manager.Update(1);
+        Assert.False(held.IsTileLoaded(10, 20));
+        Assert.Equal(1, manager.TerrainCount);
+        Assert.Same(lookedUp, manager.For(1));
+        Assert.False(lookedUp.IsTileLoaded(10, 20));
+        Assert.NotSame(held, manager.For(0));
     }
 }

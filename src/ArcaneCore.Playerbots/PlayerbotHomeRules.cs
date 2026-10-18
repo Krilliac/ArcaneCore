@@ -86,12 +86,12 @@ internal sealed class PlayerbotAreaLevelLookup
     internal static PlayerbotAreaLevelLookup FromTerrain(TerrainManager terrain, uint mapId)
     {
         ArgumentNullException.ThrowIfNull(terrain);
-        TerrainInfo? info = null;
         var levels = new Dictionary<ushort, int>();
         AreaTable? cachedAreas = null;
         return new PlayerbotAreaLevelLookup((x, y, z) =>
         {
-            info ??= terrain.For(mapId);
+            // Asked for each lookup, not kept: a map id's terrain goes once its last map is unloaded (TerrainManager.Release).
+            TerrainInfo info = terrain.For(mapId);
             AreaTable areas = terrain.Areas;
             if (!ReferenceEquals(areas, cachedAreas)) { levels.Clear(); cachedAreas = areas; }
             ushort flag = info.GetAreaFlag(x, y, z);

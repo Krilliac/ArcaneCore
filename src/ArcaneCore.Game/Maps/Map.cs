@@ -98,7 +98,8 @@ public sealed class Map
         _world = world;
         _logger = logger;
 
-        _terrain = WorldMaps.Of(world).Terrain.For(mapId);
+        // vmangos Map::Map holds its map id's terrain (Map.cpp:127, :153); UnloadAll lets go of it.
+        _terrain = WorldMaps.Of(world).Terrain.Acquire(mapId);
         _grid = new GridContainer(world.Options.Maps, VisibilityRange) { EvictObject = EvictFromGrid };
 
         // vmangos Map::EnsureGridCreated loads the grid's terrain tile; Map::UnloadGrid unrefs it.
@@ -179,7 +180,7 @@ public sealed class Map
     /// <summary>The map's grids: the spatial index and the grid load/unload lifecycle.</summary>
     public GridContainer Grids => _grid;
 
-    /// <summary>The map's terrain (heights, areas, liquids).</summary>
+    /// <summary>The map's terrain (heights, areas, liquids): its map id's, shared by all its instances and held until the map is unloaded.</summary>
     public TerrainInfo Terrain => _terrain;
 
     /// <summary>The map's <c>map_template</c> row, or null when the map is not registered.</summary>
@@ -1354,16 +1355,30 @@ public sealed class Map
 
     /// <summary>
     /// Unload every grid (objects are evicted, grid/terrain events run) and refuse further
-    /// players — vmangos <c>Map::UnloadAll</c> for a deleted instance. Called by
+    /// players — vmangos <c>Map::UnloadAll</c> for a deleted instance — then let go of the
+    /// terrain (<see cref="TerrainManager.Release"/>, vmangos <c>Map::~Map</c>). Called by
     /// <see cref="WorldRuntime"/> after <see cref="WorldRuntime.MapUnloading"/>.
     /// </summary>
     internal void UnloadAll()
     {
         EnsureWorldThread();
         EnsureNotInUpdatePhase();
+        bool holdsTerrain = !IsUnloaded;
         IsUnloaded = true;
-        _grid.UnloadAll();
-        _afterUpdate.Clear();
+        try
+        {
+            _grid.UnloadAll();
+            _afterUpdate.Clear();
+        }
+        finally
+        {
+            // vmangos Map::~Map (Map.cpp:76-78): after its grids, the map lets go of its map id's terrain. A grid that failed to unload
+            // still references its tile, which keeps the terrain.
+            if (holdsTerrain)
+            {
+                WorldMaps.Of(_world).Terrain.Release(_terrain, _grid.Options.GridUnload);
+            }
+        }
     }
 
     /// <summary>Run <paramref name="action"/> after this map's next update phase (vmangos ScheduleFarTeleport).</summary>
