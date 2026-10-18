@@ -89,6 +89,32 @@ public sealed class RetailTableTests
         Assert.Equal("on", args.Rest);
     }
 
+    // First-prefix resolution makes an entry that comes after a longer sibling it prefixes unreachable, even by its exact
+    // name: .debug gccollect (Gm.Extra, discovered before Ops.Diagnostics) once took every .debug gc that way.
+    [Fact]
+    public void EveryShippedCommand_ResolvesByItsOwnPath()
+    {
+        CommandTable table = ChatCommands.CreateTable();
+        var shadowed = new List<string>();
+        Collect(table, table.Roots, string.Empty, shadowed);
+        Assert.Empty(shadowed);
+    }
+
+    private static void Collect(CommandTable table, IReadOnlyList<ChatCommand> level, string prefix, List<string> shadowed)
+    {
+        foreach (ChatCommand command in level)
+        {
+            string path = prefix.Length == 0 ? command.Name : prefix + " " + command.Name;
+            CommandLookup found = table.Lookup(path, AccountSecurity.Administrator);
+            if (!ReferenceEquals(found.Command, command))
+            {
+                shadowed.Add($".{path} resolves to .{found.Path}");
+            }
+
+            Collect(table, command.SubCommands, path, shadowed);
+        }
+    }
+
     [Fact]
     public void RetailLevels_AreAppliedToTheExistingCommands()
     {

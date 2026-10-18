@@ -109,8 +109,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.honor setrp` | 4 | Administrator | declared retail level | Syntax: .honor setrp #rankpoints Set the rank points of the selected player (or yourself). |
 | `.honor reset` | 4 | Administrator | declared retail level | Syntax: .honor reset Forget all honor of the selected player (or yourself). |
 | `.go` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Teleport to a position. |
-| `.go xyz` | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there. |
 | `.go xy` | 2 | GameMaster | declared retail level | Syntax: .go xy #x #y [#mapid] Teleport to ground or water level at (#x, #y) on the current or specified map. |
+| `.go xyz` | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there. |
 | `.go graveyard` | 2 | GameMaster | declared retail level | Syntax: .go graveyard #graveyardId Teleport to the graveyard with the given WorldSafeLocs.dbc id. |
 | `.go taxinode` | 2 | GameMaster | declared retail level | Syntax: .go taxinode #taxinode Teleport to the flight-path node with the given TaxiNodes.dbc id. |
 | `.go target` | 2 | GameMaster | declared retail level | Syntax: .go target Teleport to the selected creature or player on your map. |
