@@ -22,3 +22,10 @@ The spells lane's FaulkAI (6111c757f) already covers Henze and Narm Faulk, and i
 
 ## Tests
 - Game.Tests `ZoneScriptBatch2|CreatureAiServices|EntryScript`: 16 pass.
+
+## Melodious Rapture 21050 (cmangos spell_scripts.cpp MelodiousRapture): `MelodiousRaptureScript`
+- Quest 6661 Deeprun Rat Roundup was not scripted.
+- The flute's cast check accepts only a Deeprun Rat (13016).
+- On a player cast, the rat becomes an Enthralled Deeprun Rat (13017), casts the 21051 visual and follows the player 0.5-3 yd behind. The player gets the 13017 credit.
+- cmangos's caster check is inverted (it returns early for players), so the intended players-only check is used here.
+

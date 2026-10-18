@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
@@ -87,5 +88,12 @@ public sealed class ZoneScriptBatch22Tests
             Assert.NotNull(ai.FreedSoul);
             Assert.Equal(RestlessSoulAI.NpcFreedSoul, ai.FreedSoul!.Entry);
         }
+    }
+
+    [Fact]
+    public void MelodiousRaptureScriptIsFoundByItsSpellId()
+    {
+        SpellScriptRegistry registry = SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly);
+        Assert.IsType<MelodiousRaptureScript>(registry.Find(MelodiousRaptureScript.SpellMelodiousRapture));
     }
 }
