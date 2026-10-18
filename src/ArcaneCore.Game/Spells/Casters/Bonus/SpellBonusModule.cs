@@ -226,6 +226,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
                 return Math.Max(amount * percent, 0);
             }
 
+            percent *= Shaman.HealingWayRules.TakenMultiplier(spells, target, spell); // Unit.cpp:5347-5355, after the DamageClass None return
             return SpellBonusFormulas.AmountTaken(amount, Sum(target, AuraType.ModHealing, a => (a.MiscValue & mask) != 0)
                 + Paladin.BlessingOfLightRules.TakenBonus(spells, target, spell), coefficient, stack, percent); // class-scripts lane: Unit.cpp:5364-5378
         }
