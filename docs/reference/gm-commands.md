@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 329 |
-| `Administrator` | 6 | 457 |
+| `GameMaster` | 3 | 336 |
+| `Administrator` | 6 | 464 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -75,6 +75,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug mt` | 3 | GameMaster | declared retail level | Syntax: .debug mt Show the multithreading workers: parallel map update threads and counters (parallel ticks, serial-gate entries, contention, owner violations, barrier wait), and the shared path-job pool (threads, queue, completed, faulted, average compute and queue time). |
 | `.debug pathbench` | 3 | GameMaster | declared retail level | Syntax: .debug pathbench [#count] [#radius] Time #count path queries (default 20, at most 100) from you to evenly spread points #radius yards away (default 40, 5-200) on the world thread: min/p50/max/mean time, how many found a full, partial or no path, and the mean path length. |
 | `.debug gccollect` | 6 | Administrator | declared retail level | Syntax: .debug gccollect Force a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server. |
+| `.debug sessions` | 3 | GameMaster | declared retail level | Syntax: .debug sessions [#count] Show the in-world sessions: players and bots, client latency (median, p90, max over the players) and the sessions with the most queued outbound world packets (default 10 rows, at most 60). |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
 | `.debug invariants` | 3 | GameMaster | declared retail level | Syntax: .debug invariants Print the process-wide invariant failure count, policy, and up to 20 recorded invariant violation sites. |
@@ -369,6 +370,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.creature kill` | 3 | GameMaster | stored level through the map | Syntax: .creature kill — kill the selected creature (corpse, then respawn timer). |
 | `.creature respawn` | 3 | GameMaster | stored level through the map | Syntax: .creature respawn — respawn the selected dead creature now. |
 | `.creature delete` | 3 | GameMaster | stored level through the map | Syntax: .creature delete — remove the selected temporary creature. |
+| `.creature despawntemp` | 3 | GameMaster | declared retail level | Syntax: .creature despawntemp [#radius] Remove the temporary creatures (clones, .npc add without save, script summons; not pets, guardians, totems or database spawns) within #radius yards of you (default 30, at most 200). |
 | `.creature clone` | 3 | GameMaster | declared retail level | Syntax: .creature clone [#count] Place #count (default 1, at most 25) temporary copies of the selected creature's template around you. They are not saved and do not respawn. |
 | `.arcane` ... | 3 | GameMaster | stored level through the map | ArcaneCore operator commands (read-only). Syntax: .arcane $subcommand |
 | `.arcane bancheck` | 3 | GameMaster | stored level through the map | Syntax: .arcane bancheck account\|character\|ip $value Show whether an account (by name), the account of a character, or an IP address is blocked from logging in right now. |
@@ -410,6 +412,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.inspect group` | 3 | GameMaster | declared retail level | Syntax: .inspect group Show the selected player's group (or yours): id, raid or party, leader, loot method, and every member with sub-group, assistant flag, online state, map and distance to you. |
 | `.inspect grid` | 3 | GameMaster | declared retail level | Syntax: .inspect grid Show the grid and cell the selected object (or you) is in, whether that grid is loaded and how many grids of the map are loaded, the active cells and the map's largest bounding radius. |
 | `.inspect visibility` | 3 | GameMaster | declared retail level | Syntax: .inspect visibility Show whether the selected object is in your client's visible set and in visibility range, whether you are in its visible set (a player), and the size of both visible sets. |
+| `.inspect loot` | 3 | GameMaster | declared retail level | Syntax: .inspect loot Show the selected creature's loot: owner, permission, recipients, gold and every item with count, quest/per-player flags, looted and roll state. |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.ai` ... | 3 | GameMaster | declared retail level | Syntax: .ai $subcommand Force the selected creature's AI or movement. Type .ai to see the list of possible subcommands. |
 | `.ai evade` | 3 | GameMaster | declared retail level | Syntax: .ai evade Make the selected creature evade: leave combat, clear its threat and go home. |
@@ -424,6 +427,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.ai event` | 3 | GameMaster | declared retail level | Syntax: .ai event #eventtype [#misc] Send an AI event (the EventAI/SmartAI custom event types) to the selected creature, with you as the invoker. |
 | `.ai callhelp` | 3 | GameMaster | declared retail level | Syntax: .ai callhelp [#radius] Make the selected creature call for help within #radius yards (default 10, at most 100); prints how many answered. |
 | `.ai reset` | 3 | GameMaster | declared retail level | Syntax: .ai reset Kill and respawn the selected creature at once, which rebuilds its AI from its template. |
+| `.ai goto` | 3 | GameMaster | declared retail level | Syntax: .ai goto #x #y [#z] [run] Make the selected creature walk (or run) to a point on your map (z defaults to yours). The point must be within 200 yards of it. |
+| `.ai face` | 3 | GameMaster | declared retail level | Syntax: .ai face [#radians] Turn the selected creature to face you, or to an absolute orientation in radians. |
+| `.ai wander` | 3 | GameMaster | declared retail level | Syntax: .ai wander [#radius] Make wandering around its home (default 5 yards, 1-50) the selected creature's default movement, starting now. .ai idle turns it off. |
+| `.ai distract` | 3 | GameMaster | declared retail level | Syntax: .ai distract [#seconds] Make the selected creature stop and look around for #seconds (default 5, at most 60), as a distract spell does. |
 | `.alter` ... | 3 | GameMaster | declared retail level | Syntax: .alter $subcommand Change live state of the selected unit (yourself without a selection). Type .alter to see the list of possible subcommands. |
 | `.alter health` | 3 | GameMaster | declared retail level | Syntax: .alter health #value\|#percent% Set the current health of the selected unit (1 to its maximum; use .die to kill). |
 | `.alter power` | 3 | GameMaster | declared retail level | Syntax: .alter power #value\|#percent% Set the current mana, rage or energy (its own power type) of the selected unit, up to its maximum. |

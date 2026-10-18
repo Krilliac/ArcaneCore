@@ -1,11 +1,14 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Tests.Gm.Inspect;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -19,7 +22,8 @@ public sealed class ExtraCommandTests
     public void NewCommandsHaveTheirSecurityLevels()
     {
         CommandTable table = ChatCommands.CreateTable();
-        foreach (string path in new[] { "inspect auras", "inspect group", "inspect grid", "inspect visibility", "alter auraduration", "alter aurastacks", "debug pathbench" })
+        foreach (string path in new[] { "inspect auras", "inspect group", "inspect grid", "inspect visibility", "alter auraduration", "alter aurastacks", "debug pathbench",
+            "ai goto", "ai face", "ai wander", "ai distract", "creature despawntemp", "inspect loot", "debug sessions" })
         {
             Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
             Assert.NotNull(table.Resolve(path, AccountSecurity.GameMaster));
@@ -120,6 +124,35 @@ public sealed class ExtraCommandTests
         Assert.Contains(bench, l => l.Contains("no path; mean length", StringComparison.Ordinal));
 
         Assert.Contains(await RunAsync(admin, ".debug gccollect"), l => l.StartsWith("Full compacting collection took", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CreatureManipulatorsAndLootAndSessionsAnswer()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient gm = await host.EnterWorldAsync("XAIWOLF", "Xaiwolf", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        CreatureMapSystem system = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().FindSystem(0)!);
+        Creature wolf = await host.OnWorldAsync(() => system.Creatures.Last());
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Xaiwolf")!.Selection = wolf.Guid);
+
+        Assert.Contains(await RunAsync(gm, ".ai goto -8930 -130 run"), l => l.Contains("runs to (-8930.0, -130.0,", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai goto 0 0"), l => l.Contains("yards from Young Wolf; at most 200.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai face 1.5"), l => l.EndsWith("faces 1.50 rad.", StringComparison.Ordinal));
+        Assert.Equal(1.5f, await host.OnWorldAsync(() => wolf.Orientation), 3);
+        Assert.Contains(await RunAsync(gm, ".ai face"), l => l.EndsWith("rad (you).", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai wander 8"), l => l.EndsWith("wanders within 8 yards of its home.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai distract 3"), l => l.EndsWith("is distracted for 3 s.", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".ai wander 99"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, ".inspect loot"), l => l.EndsWith("has no loot.", StringComparison.Ordinal));
+
+        int before = await host.OnWorldAsync(() => system.Creatures.Count);
+        await RunAsync(gm, ".creature clone 3");
+        Assert.Equal(before + 3, await host.OnWorldAsync(() => system.Creatures.Count));
+        Assert.Contains(await RunAsync(gm, ".creature despawntemp 50"), l => l == "Removed 3 temporary creature(s) within 50 yards.");
+        Assert.Equal(before, await host.OnWorldAsync(() => system.Creatures.Count));
+
+        Assert.Contains(await RunAsync(gm, ".debug sessions"), l => l.StartsWith("1 in world: 1 players, 0 bots; latency median", StringComparison.Ordinal));
     }
 
     private static SpellInfo Stacking() => new()
