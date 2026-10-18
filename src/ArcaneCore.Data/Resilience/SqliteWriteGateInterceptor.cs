@@ -124,7 +124,16 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
     private void Attach(DbConnection connection, DbTransaction transaction)
     {
         if (_byConnection.TryGetValue(connection, out SqliteWriteGate.Hold? hold) && !hold.Released)
+        {
             _byTransaction.AddOrUpdate(transaction, hold);
+            if (connection is SqliteConnection sqlite)
+            {
+                // From here on the hold stands for an open SQLite transaction. Code that ends it behind EF's back (the write fence rolls back a transaction it
+                // refuses, straight on the DbTransaction) leaves no event; a waiter then finds the connection back in autocommit and releases the hold.
+                var weak = new WeakReference<SqliteConnection>(sqlite);
+                hold.Probe = () => weak.TryGetTarget(out SqliteConnection? target) && HasTransaction(target);
+            }
+        }
     }
 
     private void EndTransaction(DbTransaction transaction)
@@ -147,6 +156,18 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
     }
 
     public ValueTask<InterceptionResult> ConnectionClosingAsync(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
+    {
+        ReleaseConnection(connection);
+        return new ValueTask<InterceptionResult>(result);
+    }
+
+    public InterceptionResult ConnectionDisposing(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
+    {
+        ReleaseConnection(connection);
+        return result;
+    }
+
+    public ValueTask<InterceptionResult> ConnectionDisposingAsync(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
     {
         ReleaseConnection(connection);
         return new ValueTask<InterceptionResult>(result);
@@ -347,7 +368,12 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
     {
         if (!_options.Enabled || connection is not SqliteConnection sqlite) return null;
         SqliteWriteGate? gate = SqliteWriteGate.For(sqlite.ConnectionString);
-        if (gate is not null && _subscribedGates.TryAdd(gate, true)) gate.StuckReleased += OnStuckReleased;
+        if (gate is not null && _subscribedGates.TryAdd(gate, true))
+        {
+            gate.StuckReleased += OnStuckReleased;
+            gate.DeadReleased += OnDeadReleased;
+        }
+
         return gate;
     }
 
@@ -406,6 +432,11 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         => _logger?.LogError(
             "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} (longer than Database:Sqlite:SingleWriter:MaxHoldMs {MaxHoldMs} ms; a transaction that was never ended?). The next writer now waits on SQLite's own lock",
             Path.GetFileName(hold.Gate.Path), (long)hold.HeldMs, hold.Owner, _options.MaxHoldMs);
+
+    private void OnDeadReleased(SqliteWriteGate.Hold hold)
+        => _logger?.LogWarning(
+            "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} whose transaction had already ended without a commit, rollback or close event (rolled back outside EF?)",
+            Path.GetFileName(hold.Gate.Path), (long)hold.HeldMs, hold.Owner);
 
     /// <summary>The first frame outside the framework and this namespace's interceptors.</summary>
     internal static string CallerHint()

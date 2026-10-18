@@ -196,11 +196,25 @@ public sealed class SqliteWriteGate
         return null;
     }
 
-    /// <summary>Releases the current hold when it is older than <paramref name="maxHoldMs"/> (0: never). True when one was released.</summary>
+    /// <summary>
+    /// Releases the current hold when it is dead (its probe says the transaction it stood for is gone: the connection was closed or disposed, or SQLite is back in
+    /// autocommit mode, e.g. a transaction rolled back by code that bypassed EF) or older than <paramref name="maxHoldMs"/> (0: never). True when one was released.
+    /// </summary>
     internal bool ReleaseIfStuck(int maxHoldMs)
     {
-        if (maxHoldMs <= 0 || Current is not { } holder || holder.HeldMs < maxHoldMs) return false;
+        if (Current is not { } holder) return false;
+        bool dead = holder.Probe is { } probe && SafeProbe(probe) == false;
+        if (!dead && (maxHoldMs <= 0 || holder.HeldMs < maxHoldMs)) return false;
         if (!holder.MarkReleased()) return false;
+        if (dead)
+        {
+            holder.Dead = true;
+            Interlocked.Increment(ref _deadTotal);
+            Exit(holder);
+            DeadReleased?.Invoke(holder);
+            return true;
+        }
+
         holder.Forced = true;
         Interlocked.Increment(ref _forcedTotal);
         lock (_stats) _forced++;
@@ -211,6 +225,26 @@ public sealed class SqliteWriteGate
 
     /// <summary>Raised (on the waiter's thread) when a hold older than the max hold was released; the interceptor logs it.</summary>
     internal event Action<Hold>? StuckReleased;
+
+    /// <summary>Raised (on the waiter's thread) when a hold whose transaction had already ended was released; the interceptor logs it.</summary>
+    internal event Action<Hold>? DeadReleased;
+
+    private long _deadTotal;
+
+    /// <summary>Lifetime number of holds released because their transaction had already ended without the interceptor seeing it.</summary>
+    public long DeadTotal => Interlocked.Read(ref _deadTotal);
+
+    private static bool SafeProbe(Func<bool> probe)
+    {
+        try
+        {
+            return probe();
+        }
+        catch (Exception)
+        {
+            return true; // cannot tell: keep it (the max hold still applies)
+        }
+    }
 
     private void Exit(Hold hold)
     {
@@ -254,6 +288,15 @@ public sealed class SqliteWriteGate
 
         /// <summary>Whether a waiter released it because it outlived the max hold.</summary>
         public bool Forced { get; internal set; }
+
+        /// <summary>Whether a waiter released it because its transaction had already ended.</summary>
+        public bool Dead { get; internal set; }
+
+        /// <summary>
+        /// Set by the owner once the hold stands for an open transaction: returns false when that transaction is gone (connection closed or disposed, SQLite back in
+        /// autocommit). Waiters call it from their own threads; it must only read state. Null: no liveness check (the max hold still applies).
+        /// </summary>
+        public Func<bool>? Probe { get; set; }
 
         /// <summary>Whether it has been released.</summary>
         public bool Released => Volatile.Read(ref _released) != 0;

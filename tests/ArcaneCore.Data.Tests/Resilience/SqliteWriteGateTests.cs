@@ -156,6 +156,29 @@ public sealed class SqliteWriteGateTests : IDisposable
     }
 
     [Fact]
+    public async Task ATransactionRolledBackBehindEfsBack_IsReleasedByTheNextWaiter_WithinAboutASecond()
+    {
+        string connection = ConnectionString("behind.db");
+        SqliteWriteGateInterceptor gate = Gate(new SqliteSingleWriterOptions { Enabled = true, WaitMs = 4000, StatsIntervalMs = 0, WarnWaitMs = 0 });
+        await using (GateDb db = Create(connection, gate)) await db.Database.EnsureCreatedAsync();
+
+        await using GateDb rogue = Create(connection, gate);
+        await using var transaction = await rogue.Database.BeginTransactionAsync();
+        // The write fence refuses a stale owner exactly like this: straight on the ADO.NET transaction, no EF event.
+        await Microsoft.EntityFrameworkCore.Storage.DbContextTransactionExtensions.GetDbTransaction(transaction).RollbackAsync();
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await using (GateDb next = Create(connection, gate))
+        {
+            await using var second = await next.Database.BeginTransactionAsync();
+            await second.CommitAsync();
+        }
+
+        Assert.True(watch.ElapsedMilliseconds < 2500, $"the next writer waited {watch.ElapsedMilliseconds} ms");
+        Assert.True(SqliteWriteGate.For(connection)!.DeadTotal >= 1);
+    }
+
+    [Fact]
     public async Task AHoldOlderThanMaxHold_IsReleasedByTheNextWaiter()
     {
         string connection = ConnectionString("stuck.db");
