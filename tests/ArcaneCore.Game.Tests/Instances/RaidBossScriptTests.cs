@@ -887,6 +887,22 @@ public sealed class RaidBossScriptTests
         Assert.Single(raid.Caster.Casts, c => c.Spell == GurubashiBatRiderAI.UnstableConcoction);
     }
 
+    // mangos-classic boss_arlokk.cpp npc_zulian_prowlerAI.
+    [Fact]
+    public void ZulianProwler_SummonedOneSneaksToTheWallShield_AndTheSummonedAreCappedAtForty()
+    {
+        using var raid = new Raid(309, ZulianProwlerAI.Entry, engage: false);
+        var ai = Assert.IsType<ZulianProwlerAI>(raid.Boss.AI);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ZulianProwlerAI.Sneak && c.Target == raid.Boss);
+        Assert.False(ai.MoveToAidPending);
+        var point = Assert.IsType<PointMovementGenerator>(raid.Boss.Motion.Top);
+        Assert.Equal(ZulianProwlerAI.PointWallShield, point.Id);
+
+        for (int i = 0; i < 45; i++) raid.Creatures.SpawnTemporary(Template(ZulianProwlerAI.Entry), 2 + i, 0, 50, 0);
+        Assert.Equal(ZulianProwlerAI.MaxSummonedAlive,
+            raid.Creatures.Creatures.Count(c => c.Entry == ZulianProwlerAI.Entry && c.Spawn is null && c.IsAlive));
+    }
+
     // mangos-classic zulgurubScripts.cpp WyvernStingAura.
     [Fact]
     public void WyvernSting_ExpiryCastsTheDot_ButADispelDoesNot()

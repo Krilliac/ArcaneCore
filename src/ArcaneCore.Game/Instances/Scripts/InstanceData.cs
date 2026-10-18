@@ -219,6 +219,14 @@ public abstract partial class InstanceData : IMapUpdater
     /// </summary>
     public virtual bool OnGameObjectUse(Player player, GameObject go) => false;
 
+    /// <summary>
+    /// ScriptDev2 QuestRewarded script of a game object (vmangos <c>QuestRewarded_go_*</c>): <paramref name="player"/> was rewarded
+    /// <paramref name="questId"/> at <paramref name="go"/> in this instance; the quest's CompleteScript runs after it.
+    /// </summary>
+    public virtual void OnGameObjectQuestRewarded(Player player, GameObject go, uint questId)
+    {
+    }
+
     /// <summary>cmangos CONDITION_INSTANCE_SCRIPT: the instance decides a loot or gossip condition.</summary>
     public virtual bool CheckConditionCriteriaMeet(Player player, uint conditionId) => false;
 

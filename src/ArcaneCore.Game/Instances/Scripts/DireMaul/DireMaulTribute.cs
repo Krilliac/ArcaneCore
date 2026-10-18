@@ -33,7 +33,7 @@ public sealed partial class DireMaulInstance
 
     public override void OnCreatureCreate(Creature creature)
     {
-        if (creature.Template.Entry is NpcKingGordok or NpcKromcrush or NpcChorush)
+        if (creature.Template.Entry is NpcKingGordok or NpcKromcrush or NpcChorush or NpcSlipkik)
         {
             StoreCreature(creature);
         }

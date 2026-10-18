@@ -102,6 +102,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             (ZulGurubInstance, SoulflayerAI.Entry) => new SoulflayerAI(creature),
             (ZulGurubInstance, GurubashiBatRiderAI.Entry) => new GurubashiBatRiderAI(creature),
+            (ZulGurubInstance, ZulianProwlerAI.Entry) => new ZulianProwlerAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),
             (NaxxramasInstance raid, 16573) => new NaxxramasCryptGuardAI(creature, raid),

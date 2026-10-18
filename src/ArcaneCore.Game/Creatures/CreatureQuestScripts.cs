@@ -201,6 +201,20 @@ public static class CreatureQuestScripts
                 }
             }
         }
+        else if (giver is GameObject go && go.Map?.FindUpdater<Instances.Scripts.InstanceData>() is { } instanceData)
+        {
+            // A game object's QuestRewarded script (ScriptDevAI OnQuestRewarded(Player*, GameObject*, Quest const*)), before the DB script.
+            try
+            {
+                instanceData.OnGameObjectQuestRewarded(player, go, quest.Id);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("gameobject-quest-script", ex);
+                log.LogError(ex, "{Site} hook of instance {Instance} failed (quest {Quest}, object entry {Entry}); the quest carries on",
+                    RewardSite, instanceData.GetType().Name, quest.Id, go.Entry);
+            }
+        }
 
         // The creature's hook never claims a quest, so the DB script always runs (Player.cpp:12712-12713).
         if (quest.Template.CompleteScript != 0 && giver is not null && player.Map is { } map && systemOf(map) is { } system)

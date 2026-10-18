@@ -45,6 +45,9 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
             case GoNorthLibraryDoor:
             case GoGordokTribute:
                 break;
+            case GoFixedTrap:
+                RegisterFixedTrapAi();
+                break;
             case GoCrumbleWall:
                 OpenIf(go, _wallDestroyed || Encounters[TypeAlzzin] == EncounterState.Done);
                 break;

@@ -128,3 +128,43 @@ public sealed class WyvernStingAuraModule : ISpellHandlerModule
     }
 }
 
+
+/// <summary>
+/// mangos-classic eastern_kingdoms/zulgurub/boss_arlokk.cpp npc_zulian_prowlerAI (15101). Every prowler casts Sneak (22766) when it
+/// spawns. One summoned by Arlokk's triggers (Summon Zulian Prowlers 24247, so a temporary creature) then walks to the wall shield in
+/// front of the altar (aArlokkWallShieldPos, zulgurub.h) to join the fight; once more than 40 summoned prowlers are alive the new one
+/// despawns at once. The reference keeps its GUID list per AI, so its count never passes 1; the cap is applied over the map here, as the
+/// comment in the reference intends.
+/// </summary>
+public sealed class ZulianProwlerAI : RaidBossAI
+{
+    public const uint Entry = 15101;
+    public const uint Sneak = 22766;
+    public const uint PointWallShield = 1;
+    public const int MaxSummonedAlive = 40;
+    public static readonly (float X, float Y, float Z) WallShieldPos = (-11494.76f, -1627.56f, 41.30f);
+
+    private bool _moveToAid;
+
+    public ZulianProwlerAI(Creature creature) : base(creature, null) => _moveToAid = creature.Spawn is null;
+
+    /// <summary>True while the summoned prowler has not yet been sent to the wall shield.</summary>
+    public bool MoveToAidPending => _moveToAid;
+
+    public override void OnRespawn()
+    {
+        base.OnRespawn();
+        if (!(System?.HasAura(Me, Sneak) ?? true)) Cast(Sneak, Me, triggered: true);
+        if (!_moveToAid || System is not { } system) return;
+        _moveToAid = false;
+        int alive = system.Creatures.Count(c => c.Entry == Entry && c.Spawn is null && c.IsAlive);
+        if (alive > MaxSummonedAlive)
+        {
+            system.ForcedDespawn(Me, 0);
+            return;
+        }
+
+        Me.Motion.Clear();
+        Me.Motion.MovePoint(PointWallShield, WallShieldPos.X, WallShieldPos.Y, WallShieldPos.Z, run: false);
+    }
+}
