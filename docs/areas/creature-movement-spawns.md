@@ -60,9 +60,10 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
   collection per call (per-thread scratch lists; `NavMeshPointQueryTests` measures the allocation), read no tile, never throw, and answer
   "unavailable" (no mesh for the map, tile not loaded, centre more than 3 yd from a polygon) without drawing any random numbers.
   Wander (`RandomMovementGenerator`) takes the point from `ICreatureMover.TryGetRandomMeshPoint` (around the spawn point, within the wander
-  distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with `FindPath` + `MovePath`, so a townsfolk or
+  distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with `FindPath` + `MovePath`, whose search keeps
+  off steep slopes too (`MoveSplineInit.h:129-130`; confused and flee legs the same, see collision-pathing.md), so a townsfolk or
   guard no longer cuts through a house. That path search counts against the per-tick creature path budget; on exhaustion the leg waits
-  for the next update (see "No path, no straight line" below). Flee (`FleeingMovementGenerator.MoveAway`) casts the leg
+  1-1.5 s, 4-10 s in a crowded wander pass (see "No path, no straight line" below). Flee (`FleeingMovementGenerator.MoveAway`) casts the leg
   with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
   (vmangos `Map::GetWalkHitPosition` from `FleeingMovementGenerator.cpp:108`); a leg that would be shorter than 1 yd (a wall right in
   front) is not issued: another direction is drawn, up to 4 times, and if all are blocked the creature stays and tries again after its
@@ -308,7 +309,7 @@ comment that "vmangos goes straight on NOPATH" described only the authored-route
 | Partial path (`Incomplete`) | walked to the point nearest the target, then stands; unreachable as before | - |
 | Flee / fear, confused | waits 1-1.5 s, then a new point (`FleeingMovementGenerator.cpp:60-63`, `FearMovementGenerator.cpp:43-46`; confused: ArcaneCore's choice, vmangos ConfusedMovementGenerator.cpp:72-86 checks no path) | retries next update |
 | Home / evade | teleport home (`NearTeleportTo`, `HomeMovementGenerator.cpp:58-71`); a partial path teleports too; `Direct` runs | retries; teleports after 3 s |
-| Random wander | the leg is skipped, a new point 1-1.5 s later | skips mesh/height sampling when `HasPathBudget` is false and retries 1-1.5 s later |
+| Random wander | the leg is skipped, a new point 1-1.5 s later, the wait doubling for each further leg in a row without a path up to 16-24 s (`RandomMovementGenerator.NoPathRetryDelay`) | skips mesh/height sampling when `HasPathBudget` is false and no path job can be queued, and retries 1-1.5 s later (4-10 s in a crowded wander pass); a leg queued on the path-job pool asks again after 100 ms |
 | Waypoint, point, formation, scripted `MoveTo` (authored) | straight line, as vmangos (`MoveSplineInit::Move(PathFinder*)` takes the shortcut of a NOPATH finder); counted in `DirectFallbackPaths` | retries next update (scripted moves wait in a per-map queue served first in the next update) |
 | Charge (spell) | a NON-triggered cast fails with SPELL_FAILED_NOPATH when the caster is on the ground (not in water, within 1.6 yd of the floor) and the path to the target is NoPath or Incomplete (vmangos Spell.cpp:5909-5934). Unlike vmangos, which runs CheckCast for triggered casts too but tests NOPATH only under strict, a triggered charge skips the check; it then makes no move on NoPath (PointMovementGenerator.cpp:237-238). A caster in water, or a swimmer charging a target in water, is exempt from the check AND gets the straight line from `ChargePath` (vmangos' swimming shortcut, PathFinder.cpp:197-201): both read `ForcedMovement.ChargeSwims`, so a cast that passes always launches a spline. A whole path that ends short of the contact point (target 0.5-7 yd off the mesh) is walked to its end, then straight on only with line of sight. The path uses the caster's locomotion (player mover, creature InhabitType) | not budgeted |
 
