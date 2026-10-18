@@ -4,9 +4,10 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>
-/// Supply chain: every project restores against a committed packages.lock.json and every scripted restore (CI and the Dockerfile)
-/// runs in locked mode, so a package graph that differs from the lock files fails the restore (OpenSSF Scorecard Pinned-Dependencies,
-/// "nugetCommand not pinned by hash"). docs/guide/contributing.md says how to update the lock files.
+/// Supply chain: every project restores against a committed packages.lock.json and every scripted restore (CI, node CI, the local
+/// full gate and the Dockerfile) runs in locked mode, so a package graph that differs from the lock files fails the restore
+/// (OpenSSF Scorecard Pinned-Dependencies, "nugetCommand not pinned by hash"). docs/guide/contributing.md says how to update the
+/// lock files.
 /// </summary>
 public sealed class PackageLockFileTests
 {
@@ -35,6 +36,8 @@ public sealed class PackageLockFileTests
     [InlineData(".github/workflows/ci.yml")]
     [InlineData(".github/workflows/dotnet.yml")]
     [InlineData("apps/docker/Dockerfile")]
+    [InlineData("tools/ops/ci/node-ci.ps1")]
+    [InlineData("tools/ops/ci/full-suite-gate.ps1")]
     public void EveryScriptedRestore_RunsInLockedMode(string file)
     {
         string[] restores = [.. Regex.Matches(RepoRoot.ReadText(file), @"dotnet restore[^\r\n&]*").Select(m => m.Value.TrimEnd(' ', '\\'))];

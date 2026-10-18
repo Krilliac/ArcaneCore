@@ -49,7 +49,8 @@ Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors
 ### Package lock files
 
 Every project has a committed `packages.lock.json` beside its `.csproj` (`Directory.Build.props` sets `RestorePackagesWithLockFile`):
-the exact version and content hash of every direct and transitive package. CI (`ci.yml`, `dotnet.yml`) and the image build
+the exact version and content hash of every direct and transitive package. CI (`ci.yml`, `dotnet.yml`), node CI
+(`tools/ops/ci/node-ci.ps1`), the local full gate (`tools/ops/ci/full-suite-gate.ps1`) and the image build
 (`apps/docker/Dockerfile`) restore with `--locked-mode`, so a restore whose package graph differs from the lock files fails (NU1004)
 instead of quietly resolving something new. A test (`PackageLockFileTests`) checks that every project has one and that every scripted
 restore is locked.

@@ -4,7 +4,7 @@
   PostgreSQL 16 services and connection strings as the hosted runners.
 
 .DESCRIPTION
-  Ships `git archive <commit>` to the node, then runs restore, Release build (warnings are errors via Directory.Build.props),
+  Ships `git archive <commit>` to the node, then runs a locked restore, Release build (warnings are errors via Directory.Build.props),
   each suite (tests/ci/<Suite>.slnf, -m:1) and the Rest-only MockClient self-test. Suites run one after another in one job,
   not as a matrix. Each suite's summary lines and exit codes are printed, and the full logs stay on the node under
   /root/ci/<sha>/logs. One-time node setup (mariadb-server, postgresql-16, .NET 10 SDK in /opt/dotnet, root/arcane and arcane/arcane
@@ -63,7 +63,10 @@ service postgresql status >/dev/null 2>&1 || service postgresql start >/dev/null
 W=/root/ci/$runId; rm -rf `$W; mkdir -p `$W/src `$W/logs; cd `$W/src
 tar -xf /mnt/c/NewBuild/arcanecore-ci/$runId.tar && rm -f /mnt/c/NewBuild/arcanecore-ci/$runId.tar
 echo "commit $sha run $runId"
-dotnet restore ArcaneCore.slnx > `$W/logs/restore.log 2>&1; echo "restore rc=`$?"
+# Locked, as in ci.yml: a package graph that differs from the committed lock files fails the run here (NU1004) instead of being
+# re-resolved and written back, and the build never runs on a restore that failed.
+dotnet restore ArcaneCore.slnx --locked-mode > `$W/logs/restore.log 2>&1; rc=`$?; echo "restore rc=`$rc"
+if [ `$rc -ne 0 ]; then tail -20 `$W/logs/restore.log; exit 1; fi
 dotnet build ArcaneCore.slnx -c Release --no-restore -nodeReuse:false > `$W/logs/build.log 2>&1; rc=`$?; echo "build rc=`$rc"; grep -E 'Warning\(s\)|Error\(s\)' `$W/logs/build.log | tail -2
 if [ `$rc -ne 0 ]; then grep -E ' error ' `$W/logs/build.log | sort -u | head -20; exit 1; fi
 fail=0

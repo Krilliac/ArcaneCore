@@ -1,14 +1,21 @@
-# Local full gate for a worktree: builds the solution, then runs every test suite and the MockClient self-test against that build.
+# Local full gate for a worktree: restores the solution in locked mode, builds it, then runs every test suite and the MockClient
+# self-test against that build.
 # Run it from the worktree root, normally through the build-slot gate so it waits its turn and runs at BelowNormal:
 #   pwsh -NoProfile -File tools/ops/ci/run-in-slot.ps1 -Lane <name> -WorkDir <worktree> -Command 'pwsh -NoProfile -File tools/ops/ci/full-suite-gate.ps1'
-# Prints BUILD_EXIT, SUITE_EXIT <suite>=<rc> per suite and SELFTEST_EXIT. Exit 0 = all passed, 1 = a suite or the self-test failed,
-# 2 = the build failed (nothing ran: a failed build must never read as "0 failures"). dotnet comes from DOTNET_ROOT, else PATH.
+# Prints RESTORE_EXIT, BUILD_EXIT, SUITE_EXIT <suite>=<rc> per suite and SELFTEST_EXIT. Exit 0 = all passed, 1 = a suite or the
+# self-test failed, 2 = the restore or the build failed (nothing ran: a failed build must never read as "0 failures"). dotnet comes
+# from DOTNET_ROOT, else PATH.
 param(
     [string[]]$Suites = @('World', 'Game', 'Data', 'Kernel', 'Realm', 'MockClient', 'Cryptography')
 )
 $dotnet = if ($env:DOTNET_ROOT -and (Test-Path (Join-Path $env:DOTNET_ROOT 'dotnet.exe'))) { Join-Path $env:DOTNET_ROOT 'dotnet.exe' } else { 'dotnet' }
 $fail = 0
-& $dotnet build ArcaneCore.slnx -m:2 -nodeReuse:false -p:UseSharedCompilation=false -v:minimal
+# Locked, as in ci.yml: a package graph that differs from the committed lock files fails here (NU1004) instead of being re-resolved
+# and written back into the worktree, which the build's implicit restore would do.
+& $dotnet restore ArcaneCore.slnx --locked-mode -nodeReuse:false -v:minimal
+"RESTORE_EXIT=$LASTEXITCODE"
+if ($LASTEXITCODE -ne 0) { exit 2 }
+& $dotnet build ArcaneCore.slnx --no-restore -m:2 -nodeReuse:false -p:UseSharedCompilation=false -v:minimal
 "BUILD_EXIT=$LASTEXITCODE"
 if ($LASTEXITCODE -ne 0) { exit 2 }
 foreach ($s in $Suites) {
