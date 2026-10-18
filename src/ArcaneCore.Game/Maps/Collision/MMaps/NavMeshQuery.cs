@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace ArcaneCore.Game.Maps.Collision.MMaps;
 
@@ -139,11 +140,9 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         for (int e = 0; e < p.VertexCount; e++)
         {
             ushort nei = p.Neighbour(e);
-            Vector3 a = tile.Vertices[p.Vertex(e)];
-            Vector3 b = tile.Vertices[p.Vertex((e + 1) % p.VertexCount)];
             if (nei == 0)
             {
-                continue;
+                continue; // a wall
             }
 
             if ((nei & NavMeshFormat.ExternalLink) == 0)
@@ -151,6 +150,9 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
                 int index = nei - 1;
                 if (index < tile.Polys.Length && index != from.Poly)
                 {
+                    // The edge's vertices are read only for an internal neighbour (a wall or a tile-border link does not use them).
+                    Vector3 a = tile.Vertices[p.Vertex(e)];
+                    Vector3 b = tile.Vertices[p.Vertex((e + 1) % p.VertexCount)];
                     (Vector3 l, Vector3 r) = Orient(center, a, b);
                     into.Add(new NavNeighbour(new NavPolyRef(tile, index), l, r, 0));
                 }
@@ -347,11 +349,18 @@ public static class NavMeshQuery
     internal const int SmallSearchNodes = 4096;
 
     /// <summary>Reusable A* state; <see cref="Begin"/> clears it (capacity is kept).</summary>
+    /// <para>
+    /// Nodes and closed flags are plain arrays read by reference and the index is keyed by a <c>long</c> (tile search id, polygon, cross
+    /// side): live runs a Debug (unoptimized) build, where every <c>List&lt;Node&gt;</c> indexer copied a 64-byte node and every
+    /// <c>(NavPolyRef, byte)</c> key hashed and compared through generated record-struct calls (Oct 17 sample: the search was 13% of
+    /// the world thread, bot and creature A* together).
+    /// </para>
     private sealed class SearchScratch
     {
-        public readonly List<Node> Nodes = [];
-        public readonly Dictionary<(NavPolyRef, byte), int> Index = [];
-        public readonly List<bool> Closed = [];
+        public Node[] Nodes = new Node[64];
+        public bool[] Closed = new bool[64];
+        public int Count;
+        public readonly Dictionary<long, int> Index = [];
         public readonly PriorityQueue<int, float> Open = new();
         public readonly List<NavNeighbour> Neighbours = [];
         public bool InUse;
@@ -359,9 +368,8 @@ public static class NavMeshQuery
         public void Begin()
         {
             InUse = true;
-            Nodes.Clear();
+            Count = 0;
             Index.Clear();
-            Closed.Clear();
             Open.Clear();
             Neighbours.Clear();
         }
@@ -370,31 +378,53 @@ public static class NavMeshQuery
         {
             InUse = false;
             // Do not pin a far tile's polygons (NavPolyRef holds the tile) until the next query.
-            Nodes.Clear();
+            Array.Clear(Nodes, 0, Count);
+            Count = 0;
             Index.Clear();
             Neighbours.Clear();
         }
+
+        /// <summary>Appends a node (open, not closed) and answers its index.</summary>
+        public int Add(in Node node)
+        {
+            if (Count == Nodes.Length)
+            {
+                Array.Resize(ref Nodes, Count * 2);
+                Array.Resize(ref Closed, Count * 2);
+            }
+
+            Nodes[Count] = node;
+            Closed[Count] = false;
+            return Count++;
+        }
     }
+
+    /// <summary>The index key of a polygon reached across <paramref name="crossSide"/>: unique per tile object, like the former (NavPolyRef, byte).</summary>
+    private static long NodeKey(NavMeshTile tile, int poly, byte crossSide)
+        => ((long)tile.SearchId << 32) | ((long)(uint)poly << 8) | crossSide;
 
     private static (List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> Corridor, bool Complete) Search(
         NavMesh mesh, NavPolyRef start, Vector3 startPos, NavPolyRef end, Vector3 endPos, PathOptions options, SearchScratch scratch)
     {
-        List<Node> nodes = scratch.Nodes;
-        Dictionary<(NavPolyRef, byte), int> index = scratch.Index;
-        List<bool> closed = scratch.Closed; // closed[i]: node i is closed (the former HashSet<int>, one flag per node)
+        Dictionary<long, int> index = scratch.Index;
         PriorityQueue<int, float> open = scratch.Open;
         List<NavNeighbour> neighbours = scratch.Neighbours;
-        nodes.Add(new(start, -1, startPos, 0, Vector3.Distance(startPos, endPos) * HeuristicScale, default, default));
-        closed.Add(false);
-        index[(start, 0)] = 0;
-        open.Enqueue(0, nodes[0].Total);
+        NavMeshTile endTile = end.Tile;
+        int endPoly = end.Poly;
+        int maxNodes = options.MaxSearchNodes;
+        NavTerrain include = options.EffectiveIncludeFlags;
+        NavTerrain exclude = options.ExcludeFlags;
+        CancellationToken cancel = options.CancellationToken;
+        scratch.Add(new Node(start, -1, startPos, 0, Vector3.Distance(startPos, endPos) * HeuristicScale, default, default));
+        index[NodeKey(start.Tile, start.Poly, 0)] = 0;
+        open.Enqueue(0, scratch.Nodes[0].Total);
         int best = 0;
-        float bestHeuristic = nodes[0].Total;
-        int goal = start == end ? 0 : -1;
+        float bestHeuristic = scratch.Nodes[0].Total;
+        int goal = ReferenceEquals(start.Tile, endTile) && start.Poly == endPoly ? 0 : -1;
         int expansions = 0;
         bool capped = false;
 
-        int maxExpansions = (int)Math.Min(int.MaxValue, (long)MaxExpansionsPerNode * Math.Max(1, options.MaxSearchNodes));
+        int maxExpansions = (int)Math.Min(int.MaxValue, (long)MaxExpansionsPerNode * Math.Max(1, maxNodes));
         while (goal < 0 && open.TryDequeue(out int current, out float priority))
         {
             if (expansions >= maxExpansions)
@@ -407,50 +437,59 @@ public static class NavMeshQuery
 
             if ((expansions & 31) == 0)
             {
-                options.CancellationToken.ThrowIfCancellationRequested();
+                cancel.ThrowIfCancellationRequested();
             }
 
             // A node re-queued at a lower total leaves its older, dearer entry behind.
-            if (closed[current] || priority > nodes[current].Total)
+            if (scratch.Closed[current] || priority > scratch.Nodes[current].Total)
             {
                 continue;
             }
 
-            closed[current] = true;
+            scratch.Closed[current] = true;
             expansions++;
-            Node node = nodes[current];
-            if (node.Poly == end)
+            // A copy: the arrays may grow (and move) while this node's neighbours are added.
+            Node node = scratch.Nodes[current];
+            NavMeshTile nodeTile = node.Poly.Tile;
+            int nodePoly = node.Poly.Poly;
+            if (ReferenceEquals(nodeTile, endTile) && nodePoly == endPoly)
             {
                 goal = current;
                 break;
             }
 
-            NavPolyRef? parent = node.Parent >= 0 ? nodes[node.Parent].Poly : null;
+            NavMeshTile? parentTile = node.Parent >= 0 ? scratch.Nodes[node.Parent].Poly.Tile : null;
+            int parentPoly = node.Parent >= 0 ? scratch.Nodes[node.Parent].Poly.Poly : -1;
             mesh.CollectNeighbours(node.Poly, neighbours);
-            foreach ((NavPolyRef next, Vector3 left, Vector3 right, byte crossSide) in neighbours)
+            ReadOnlySpan<NavNeighbour> around = CollectionsMarshal.AsSpan(neighbours);
+            for (int n = 0; n < around.Length; n++)
             {
+                ref readonly NavNeighbour neighbour = ref around[n];
                 if ((expansions & 31) == 0)
                 {
-                    options.CancellationToken.ThrowIfCancellationRequested();
+                    cancel.ThrowIfCancellationRequested();
                 }
 
-                if (next == parent || !next.Tile.Passes(next.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
+                NavMeshTile nextTile = neighbour.To.Tile;
+                int nextPoly = neighbour.To.Poly;
+                if ((ReferenceEquals(nextTile, parentTile) && nextPoly == parentPoly) || !nextTile.Passes(nextPoly, include, exclude))
                 {
                     continue;
                 }
 
-                bool known = index.TryGetValue((next, crossSide), out int existing);
-                if (!known && nodes.Count >= options.MaxSearchNodes)
+                long key = NodeKey(nextTile, nextPoly, neighbour.CrossSide);
+                bool known = index.TryGetValue(key, out int existing);
+                if (!known && scratch.Count >= maxNodes)
                 {
                     capped = true;
                     continue;
                 }
 
                 // Detour fixes a node's position at the portal it was first reached through.
-                Vector3 position = known ? nodes[existing].Position : (left + right) * 0.5f;
+                Vector3 position = known ? scratch.Nodes[existing].Position : (neighbour.Left + neighbour.Right) * 0.5f;
                 float cost = node.Cost + Vector3.Distance(node.Position, position);
                 float heuristic;
-                if (next == end)
+                if (ReferenceEquals(nextTile, endTile) && nextPoly == endPoly)
                 {
                     cost += Vector3.Distance(position, endPos);
                     heuristic = 0;
@@ -463,21 +502,19 @@ public static class NavMeshQuery
                 float total = cost + heuristic;
                 if (known)
                 {
-                    if (total >= nodes[existing].Total)
+                    if (total >= scratch.Nodes[existing].Total)
                     {
                         continue;
                     }
 
-                    closed[existing] = false; // Detour reopens a closed node a cheaper route reaches.
-                    nodes[existing] = new Node(next, current, position, cost, total, left, right);
+                    scratch.Closed[existing] = false; // Detour reopens a closed node a cheaper route reaches.
+                    scratch.Nodes[existing] = new Node(neighbour.To, current, position, cost, total, neighbour.Left, neighbour.Right);
                     open.Enqueue(existing, total);
                 }
                 else
                 {
-                    existing = nodes.Count;
-                    index[(next, crossSide)] = existing;
-                    nodes.Add(new Node(next, current, position, cost, total, left, right));
-                    closed.Add(false);
+                    existing = scratch.Add(new Node(neighbour.To, current, position, cost, total, neighbour.Left, neighbour.Right));
+                    index[key] = existing;
                     open.Enqueue(existing, total);
                 }
 
@@ -489,12 +526,14 @@ public static class NavMeshQuery
             }
         }
 
-        options.CancellationToken.ThrowIfCancellationRequested();
+        cancel.ThrowIfCancellationRequested();
         bool complete = goal >= 0;
-        PathSearchCounters.RecordSearch(nodes.Count, expansions, capped);
+        int count = scratch.Count;
+        PathSearchCounters.RecordSearch(count, expansions, capped);
         var corridor = new List<(NavPolyRef, Vector3, Vector3)>();
+        Node[] nodes = scratch.Nodes;
         // A reopened node can leave a stale parent chain; never walk more links than there are nodes.
-        for (int i = complete ? goal : best; i >= 0 && corridor.Count < nodes.Count; i = nodes[i].Parent)
+        for (int i = complete ? goal : best; i >= 0 && corridor.Count < count; i = nodes[i].Parent)
         {
             corridor.Add((nodes[i].Poly, nodes[i].Left, nodes[i].Right));
         }

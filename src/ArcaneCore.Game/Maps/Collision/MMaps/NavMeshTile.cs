@@ -65,6 +65,11 @@ public sealed class NavMeshTile
     /// <summary>The most a leaf's quantized box may fall short of its polygon's own box before the BV tree is not used (see <see cref="TryVerifyBvTree"/>).</summary>
     private const int MaxBvSlack = 4;
 
+    private static int s_nextSearchId;
+
+    /// <summary>A process-unique id of this tile object, for the A* node index key (NavMeshQuery); a reloaded tile gets a new one.</summary>
+    internal readonly int SearchId = Interlocked.Increment(ref s_nextSearchId);
+
     private readonly Vector3[] _polyLow;
 
     
