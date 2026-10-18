@@ -179,7 +179,7 @@ Cutpurses and Mangy Wolves that the pull estimate rightly avoided (`reason=too-s
 
 Every route a living bot is given (`PlayerbotNavigation.TryPlan` / `TryPlanToward`: quest givers and objectives, trainers, vendors,
 quest travel, exploring, approaches) is checked, sampled every 2 yards, against the hazards it does not already stand in. One that
-passes through a hazard is replaced by a way round it: a corner before it and one past it, its radius plus 5 or 15 yards off to
+passes through a hazard is replaced by a way round it: a corner before it and one past it, its radius plus 5, 15 or 28 yards off to
 either side, each leg on the navigation mesh (or stepped over the terrain where the mesh has none); with none, the route is refused.
 Each leg of such a route keeps its own proof (`PlayerbotRoute.LegsNavigated`): the motion skips the floor and line-of-sight checks only
 on the mesh's legs, never on a stepped one that follows a mesh leg (it used to take the first leg's proof for the whole route). The goal then does what it does with any route it

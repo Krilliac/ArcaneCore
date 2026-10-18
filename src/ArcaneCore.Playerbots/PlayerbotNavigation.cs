@@ -222,6 +222,9 @@ internal static class PlayerbotNavigation
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
     private static readonly float[] HazardDetourYards = [5f, 15f, 28f];
 
+    /// <summary>How many offsets the hazard detours try (<see cref="HazardDetourYards"/>), each on either side of the hazard.</summary>
+    internal static int HazardDetourOffsets => HazardDetourYards.Length;
+
     internal static bool IsUsablePath(PathResult path, int maxPoints, float maxDistance)
         => path.HasPath && (path.Type & (PathType.NotUsingPath | PathType.DestForced | PathType.FlyPath)) == 0
             && path.Points.Count <= maxPoints
