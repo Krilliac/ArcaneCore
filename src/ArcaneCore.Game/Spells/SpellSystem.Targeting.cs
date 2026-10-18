@@ -369,8 +369,9 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// Line of sight between two units for area and chain targets, through the vmap-los seam
-    /// (<c>map.Collision</c>, eye height on both ends; no collision data means visible), honouring
-    /// IGNORE_LINE_OF_SIGHT. Explicit targets are checked by <see cref="SpellLineOfSight"/> in CheckCast.
+    /// (<c>map.Collision</c>, vmangos <c>from->IsWithinLOSInMap(to)</c>: from <paramref name="from"/>'s collision height to
+    /// 1 yd above <paramref name="to"/>; no collision data means visible), honouring IGNORE_LINE_OF_SIGHT. Explicit targets are
+    /// checked by <see cref="SpellLineOfSight"/> in CheckCast.
     /// </summary>
     public bool IsInLineOfSight(SpellInfo spell, Unit from, Unit to)
     {
@@ -381,7 +382,11 @@ public sealed partial class SpellSystem
             || (from.Map is { } map && map.Collision.IsWithinLineOfSight(from, to));
     }
 
-    /// <summary>Line of sight from an area centre (a point raised to eye height) to a unit (vmangos Spell::CheckTarget from the AoE centre).</summary>
+    /// <summary>
+    /// Line of sight from an area centre to a unit, both ends raised by <see cref="MapCollision.DefaultEyeHeight"/> (the eye of a unit
+    /// without model data). This port's choice, with no vmangos counterpart: vmangos asks the original caster,
+    /// <c>i_originalCaster->IsWithinLOSInMap(unit)</c> (Spell.cpp:8109).
+    /// </summary>
     private static bool IsInLineOfSightFromPoint(SpellInfo spell, Map map, float x, float y, float z, Unit to)
         => spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight)
             || map.Collision.IsInLineOfSight(x, y, z + MapCollision.DefaultEyeHeight, to.X, to.Y, to.Z + MapCollision.DefaultEyeHeight);

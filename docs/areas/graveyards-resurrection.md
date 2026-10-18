@@ -89,7 +89,8 @@ the existing `DurabilityLossEnable` item option gates the points, not the packet
 
 Effects 18 (`RESURRECT`, a percent, dithered) and 113 (`RESURRECT_NEW`, health and mana from the spell) offer the dead player a
 resurrection (SpellEffects.cpp:209-263, 5228-5251): a corpse target resolves to its owner on any map (Spell.cpp:3109-3118), the cast
-check wants the corpse in the caster's map and in its line of sight (Spell.cpp:5780-5790), a second request while one is pending is ignored,
+check wants the corpse in the caster's map and the caster in the corpse's line of sight (Spell.cpp:5780-5790, `corpse->IsWithinLOSInMap(m_caster)`:
+from 1 yd above the corpse to 1 yd above the caster), a second request while one is pending is ignored,
 and `SMSG_RESURRECT_REQUEST` is sent (caster guid, name only for non-player casters, sickness byte = caster is a spirit healer,
 delayed byte = no `AttributesEx3 0x10`: Rebirth is instant). `CMSG_RESURRECT_RESPONSE` accepts only the player that asked
 (MiscHandler.cpp:605-622); accepting teleports the ghost to a **player** resurrector first (a dungeon instance it is no longer bound to is

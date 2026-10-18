@@ -158,7 +158,8 @@ public sealed class DebugDrawCommands : ICommandGroup
         return z > TerrainTile.InvalidHeight ? z : null;
     }
 
-    private static Vector3 Eye(WorldObject obj) => new(obj.X, obj.Y, obj.Z + MapCollision.DefaultEyeHeight);
+    /// <summary>Where <paramref name="obj"/> looks from in line of sight: its collision height up (vmangos IsWithinLOSAtPosition, Object.cpp:1770).</summary>
+    private static Vector3 Eye(WorldObject obj) => new(obj.X, obj.Y, obj.Z + MapCollision.EyeHeightOf(obj));
 
     private static bool Los(CommandContext context, string args)
     {
@@ -173,8 +174,8 @@ public sealed class DebugDrawCommands : ICommandGroup
             return true;
         }
 
-        Vector3 from = Eye(context.Player);
-        Vector3 to = Eye(target);
+        // The segment the server tests (vmangos IsWithinLOSInMap): from your eye to 1 yd above the target.
+        (Vector3 from, Vector3 to) = MapCollision.LineOfSightSegment(context.Player, target);
         float total = Vector3.Distance(from, to);
         float spacing = Spacing(context);
         var markers = new List<DebugMarkerRequest>();
@@ -187,7 +188,7 @@ public sealed class DebugDrawCommands : ICommandGroup
 
         if (map.Collision.IsInLineOfSight(from.X, from.Y, from.Z, to.X, to.Y, to.Z))
         {
-            string label = F($"line of sight to {NameOf(target)} CLEAR, {total:F1} yd (eye height {MapCollision.DefaultEyeHeight:F0} yd, doodads ignored)");
+            string label = F($"line of sight to {NameOf(target)} CLEAR, {total:F1} yd (from {from.Z - context.Player.Z:F1} yd up to {to.Z - target.Z:F1} yd above the target, doodads ignored)");
             lines.Add(Prefix + label);
             markers.Add(new DebugMarkerRequest(DebugMarkerKind.LosClear, to, label + " - target end", Emphasis: true));
             foreach (Vector3 point in DebugDrawGeometry.SampleSegment(from, to, spacing, MaxLinePoints, SkipNearInvoker).SkipLast(1))

@@ -144,10 +144,11 @@ public sealed partial class DebugDrawCommandTests
         List<ParsedMarker> created = los.Created;
         Assert.NotEmpty(created);
         Assert.All(created, m => Assert.Equal(DebugMarkerKind.LosClear, m.Kind));
-        // The far end (at the wolf's eye) has a glow companion: the green crystal and the green aura at the same spot.
-        var wolfEye = new Vector3(WolfAt.X, WolfAt.Y, WolfAt.Z + MapCollision.DefaultEyeHeight);
-        Assert.Contains(created, m => m.DisplayId == 2972 && Vector3.Distance(m.Position, wolfEye) < 0.01f);
-        Assert.Contains(created, m => m.DisplayId == 3993 && Vector3.Distance(m.Position, wolfEye) < 0.01f);
+        // The far end has a glow companion: the green crystal and the green aura at the same spot, where the server's sight line ends,
+        // 1 yd above the wolf (vmangos WorldObject::GetLosCheckPosition, Object.cpp:1777-1781).
+        var wolfEnd = new Vector3(WolfAt.X, WolfAt.Y, WolfAt.Z + 1f);
+        Assert.Contains(created, m => m.DisplayId == 2972 && Vector3.Distance(m.Position, wolfEnd) < 0.01f);
+        Assert.Contains(created, m => m.DisplayId == 3993 && Vector3.Distance(m.Position, wolfEnd) < 0.01f);
         // No marker inside the invoker.
         Assert.All(created, m => Assert.True(Vector2.Distance(new Vector2(m.Position.X, m.Position.Y), new Vector2(-8949.95f, -132.49f)) >= DebugDrawCommands.SkipNearInvoker - 0.01f));
 

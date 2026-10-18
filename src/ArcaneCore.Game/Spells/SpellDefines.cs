@@ -307,9 +307,6 @@ public static class SpellConstants
     /// </summary>
     public const float ConeArc = MathF.PI / 2.0f;
 
-    /// <summary>Eye height added to both ends of a line-of-sight query (vmangos WorldObject::IsWithinLOSInMap: + 2.0 yd).</summary>
-    public const float LineOfSightHeight = 2.0f;
-
     /// <summary>Spell.dbc PreventionType SPELL_PREVENTION_TYPE_SILENCE (interruptible by SPELL_EFFECT_INTERRUPT_CAST).</summary>
     public const uint PreventionTypeSilence = 1;
 

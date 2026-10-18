@@ -257,8 +257,9 @@ public static class ForcedMovement
                 {
                     corners.Add(destination);
                 }
-                else if (collision.LineOfSight.IsInLineOfSight(map.MapId, path.End + new Vector3(0, 0, MapCollision.DefaultEyeHeight),
-                    destination + new Vector3(0, 0, MapCollision.DefaultEyeHeight)))
+                // Both ends are the charger, standing at the path end and at the destination: its eye at both (vmangos has no such check).
+                else if (collision.LineOfSight.IsInLineOfSight(map.MapId, path.End + new Vector3(0, 0, unit.CollisionHeight),
+                    destination + new Vector3(0, 0, unit.CollisionHeight)))
                 {
                     corners.Add(destination);
                 }

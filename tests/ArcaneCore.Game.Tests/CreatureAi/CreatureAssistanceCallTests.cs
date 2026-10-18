@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -93,6 +94,21 @@ public sealed class CreatureAssistanceCallTests
         s.Map.Combat.DealDamage(s.Player, s.Caller, 1, direct: false);
 
         Assert.Equal(0, s.System.PendingAssistCount);
+    }
+
+    [Fact]
+    public void TheCallerMustSeeTheHelper_NotTheHelperTheCaller()
+    {
+        // vmangos CallOfHelpCreatureInRangeDo and AnyAssistCreatureInRangeCheck (Maps/GridNotifiers.h:995, :1043): i_funit->IsWithinLOSInMap(u),
+        // the caller looking from its 2 yd eye to 1 yd above the helper (Object.cpp:1754-1781). A 1.5 yd wall 0.7 yd in front of the helper
+        // is above the caller's line there (1.1 yd); the helper's own line to the caller would pass it at 1.9 yd.
+        var s = AssistSetup(Template(), helperX: 17);
+        using WorldRuntime world = s.World;
+        Assert.True(s.System.CanAssist(s.Helper, s.Caller, s.Player, 10f));
+
+        using VMapWall wall = VMapWall.AcrossX(world, 16.3f, 0f, 83.5f, 1.5f);
+
+        Assert.False(s.System.CanAssist(s.Helper, s.Caller, s.Player, 10f));
     }
 
     [Fact]

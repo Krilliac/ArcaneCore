@@ -227,7 +227,8 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
         MapCollision collision = map.Collision;
         return new Destination(anchor.MapId, new Vector3(anchor.X, anchor.Y, anchor.Z), anchor.Orientation, anchor,
             (x, y, z) => collision.GetHeight(x, y, z),
-            slot => collision.IsInLineOfSight(anchor.X, anchor.Y, anchor.Z + MapCollision.DefaultEyeHeight, slot.X, slot.Y, slot.Z + MapCollision.DefaultEyeHeight));
+            // From the anchor's eye to the slot raised by the default 2 yd, the eye of the bot that will stand there (vmangos IsWithinLOS).
+            slot => collision.IsWithinLineOfSight(anchor, slot.X, slot.Y, slot.Z));
     }
 
     /// <summary>

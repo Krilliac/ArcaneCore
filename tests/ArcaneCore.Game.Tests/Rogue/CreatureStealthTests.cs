@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stealth;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -117,6 +119,27 @@ public sealed class CreatureStealthTests
 
             registry.SetVisibility(rogue, StealthVisibility.NoDetect);
             Assert.False(services.CanCreatureSee(mob, rogue, out _));
+        }
+    }
+
+    [Fact]
+    public void LineOfSight_RunsFromTheStealthedUnitsEye_ToTwoYardsAboveTheCreature()
+    {
+        // vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6457-6460): the stealthed unit asks IsWithinLOS(viewPoint), from its own collision height
+        // to the creature's position raised by the default 2 yd (Object.h:607). A 1.5 yd wall 0.4 yd from a 1 yd rogue is above that line
+        // (1.13 yd there). From a 2 yd eye the line is flat at 2 yd and passes, though the creature's own line (2 yd at the creature, 1 yd at
+        // the rogue) would be under the wall.
+        (SpellTestKit kit, StealthServices services, _, Player rogue, CombatTestUnit mob) = Setup(3.2f);
+        using (kit)
+        {
+            kit.System.CastSpell(rogue, Stealth, SpellCastTargets.ForSelf(), triggered: true);
+            using VMapWall wall = VMapWall.AcrossX(kit.World, 0.4f, 0f, 83.5f, 1.5f);
+
+            rogue.Locomotion.CollisionHeight = 1.0f;
+            Assert.False(services.CanCreatureSee(mob, rogue, out _));
+
+            rogue.Locomotion.CollisionHeight = 2.0f;
+            Assert.True(services.CanCreatureSee(mob, rogue, out _));
         }
     }
 

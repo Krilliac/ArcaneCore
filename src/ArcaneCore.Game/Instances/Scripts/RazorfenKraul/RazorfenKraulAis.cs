@@ -98,14 +98,21 @@ public sealed class SnufflenoseGopherAi : CreatureAI, IScriptedPetAi
     public override void OnKilledUnit(Unit victim) => _pet.OnKilledUnit(victim);
     public override bool AttackStart(Unit target) => _pet.AttackTarget(target);
 
-    /// <summary>DoFindNewTubber: the nearest unspawned tubber within 40 yd that may be dug up (GO_FLAG_INTERACT_COND) and is in sight.</summary>
+    /// <summary>
+    /// DoFindNewTubber: the nearest unspawned tubber within 40 yd that may be dug up (GO_FLAG_INTERACT_COND) and is in sight. The tubber
+    /// looks at the gopher's owner, or at the gopher without one (vmangos npc_snufflenose_gopherAI::IsValidTuber,
+    /// razorfen_kraul.cpp:271-279: <c>tuber->IsWithinLOSInMap(viewPoint)</c>). An unspawned tubber is out of the map here (vmangos keeps
+    /// it in the world until it respawns), so the gopher's map answers for it.
+    /// </summary>
     public bool FindNewTubber()
     {
-        if (Me.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects) return false;
+        if (Me.Map is not { } map || map.FindUpdater<GameObjectMapSystem>() is not { } objects) return false;
+        Unit viewPoint = Me.GetOwner() ?? Me;
         GameObject? tubber = objects.GameObjects
             .Where(go => go.Entry == BlueleafTubber && DistanceSq(go, Me) <= SearchRange * SearchRange)
             .OrderBy(go => DistanceSq(go, Me))
-            .FirstOrDefault(go => !go.IsSpawned && (go.Flags & GameObjectFlags.InteractCond) != 0 && Me.IsWithinLineOfSight(go));
+            .FirstOrDefault(go => !go.IsSpawned && (go.Flags & GameObjectFlags.InteractCond) != 0
+                && map.Collision.IsWithinLineOfSight(go, viewPoint));
         if (tubber is null) return false;
         _target = tubber.Guid;
         // The pet forgets where it was following, so PetAI walks it back to its owner once it is done here (ScriptedPetAI re-follows).

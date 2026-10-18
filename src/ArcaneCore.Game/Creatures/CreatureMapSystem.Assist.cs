@@ -127,7 +127,8 @@ public sealed partial class CreatureMapSystem
     /// vmangos Creature::CanAssistTo plus the assistance search filters: another living, idle,
     /// non-civilian creature with an AI that fights, attackable flags, within
     /// <paramref name="radius"/> of the caller (3D, both radii), allowed by the hostility seam
-    /// (same faction by default), able to attack the enemy and in line of sight of the caller.
+    /// (same faction by default), able to attack the enemy and in the caller's line of sight (the caller looks at the helper,
+    /// vmangos AnyAssistCreatureInRangeCheck: <c>i_funit->IsWithinLOSInMap(u)</c>, GridNotifiers.h:1043).
     /// </summary>
     public bool CanAssist(Creature helper, Creature caller, Unit enemy, float radius)
     {
@@ -137,7 +138,7 @@ public sealed partial class CreatureMapSystem
         float range = radius + helper.BoundingRadius + caller.BoundingRadius;
         return CanAssistNow(helper, caller, enemy)
             && DistanceSquared(helper, caller) <= range * range
-            && InLineOfSight(helper, caller);
+            && InLineOfSight(caller, helper);
     }
 
     // CanAssistTo is rechecked when the delayed call executes. Radius and sight belong to

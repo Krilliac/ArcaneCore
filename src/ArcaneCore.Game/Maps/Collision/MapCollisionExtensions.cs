@@ -18,8 +18,9 @@ public static class MapCollisionExtensions
     extension(WorldObject source)
     {
         /// <summary>
-        /// vmangos <c>WorldObject::IsWithinLOSInMap</c>: true when no static model blocks the view
-        /// (or there is no collision data). Objects outside a map are only in sight of themselves.
+        /// vmangos <c>WorldObject::IsWithinLOSInMap</c>: true when no static model blocks the view from this
+        /// object's eye to the target's check position (<see cref="MapCollision.IsWithinLineOfSight(WorldObject, WorldObject)"/>),
+        /// or there is no collision data. Objects outside a map are only in sight of themselves.
         /// </summary>
         public bool IsWithinLineOfSight(WorldObject target)
         {

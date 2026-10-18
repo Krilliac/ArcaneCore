@@ -60,8 +60,11 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   (`ISpellTargetRelations`, default = the map's `CombatHooks`), line of sight from the area
   centre, `CANT_TARGET_SELF` honoured, `MaxAffectedTargets` keeps a random subset.
 - Line of sight: the vmap-los seam ([vmap-los.md](vmap-los.md)). Area and chain targets use
-  `map.Collision` (`IsWithinLineOfSight` unit to unit, `IsInLineOfSight` from the area centre,
-  both ends at `MapCollision.DefaultEyeHeight`); without collision data everything is visible.
+  `map.Collision` (`IsWithinLineOfSight` unit to unit, from the first unit's collision height to
+  1 yd above the second as vmangos `IsWithinLOSInMap`; `IsInLineOfSight` from the area centre,
+  both ends at `MapCollision.DefaultEyeHeight`, which has no vmangos counterpart: vmangos asks
+  the original caster, Spell.cpp:8109). A player's persistent area aura looks from 1 yd above
+  its dynamic object (GridNotifiersImpl.h:153). Without collision data everything is visible.
   Explicit units and destinations are checked in CheckCast by vmap-los's `SpellLineOfSight`
   (non-triggered casts only, as vmangos). `SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT` skips both. The
   earlier spells-owned `ILineOfSight` seam was removed in favour of

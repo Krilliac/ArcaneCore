@@ -17,7 +17,8 @@ public static class SummonPosition
         if (caster.Map is not { } map) return destination;
 
         MapCollision collision = map.Collision;
-        float eye = MapCollision.DefaultEyeHeight;
+        // vmangos halfHeight (Object.cpp:2152): the rays run at the caster's collision height.
+        float eye = caster.CollisionHeight;
         uint inhabit = caster is Creature creature ? creature.Template.InhabitType : 3u;
         var mover = new PathMover((inhabit & 1) != 0, (inhabit & 2) != 0, (inhabit & 4) != 0, caster is Player);
         PathResult path = collision.FindPath(origin, destination + new Vector3(0, 0, eye),
