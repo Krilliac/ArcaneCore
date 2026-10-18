@@ -16,8 +16,8 @@ namespace ArcaneCore.World.Gm.Character;
 /// <summary>
 /// The <c>.reset</c> root (vmangos resetCommandTable, Chat.cpp:913-923; the root is SEC_GAMEMASTER, :1213) with its talent
 /// sub-commands: <c>.reset talents [$name]</c> (SEC_GAMEMASTER, :919; HandleResetTalentsCommand, CharacterCommands.cpp:3892-3915)
-/// and <c>.reset all talents</c> (SEC_ADMINISTRATOR, :921; HandleResetAllCommand, :3969-3986). <c>honor</c>, <c>level</c>,
-/// <c>spells</c>, <c>stats</c> and <c>items</c> are not provided.
+/// and <c>.reset all talents</c> (SEC_ADMINISTRATOR, :921; HandleResetAllCommand, :3969-3986). <c>honor</c> and <c>level</c> are
+/// <see cref="ResetHonorLevelExtension"/>, <c>spells</c> and <c>stats</c> are ResetSpellExtension; <c>items</c> is not provided.
 /// <para>
 /// Differences (docs/areas/talents.md): the reset-at-login request is kept in <c>character_at_login</c>, not in
 /// <c>characters.character_flags</c>; <c>.reset all</c> requires the word <c>talents</c> (vmangos resets talents whatever the

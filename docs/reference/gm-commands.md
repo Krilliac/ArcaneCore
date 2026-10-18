@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 254 |
-| `Administrator` | 6 | 376 |
+| `Administrator` | 6 | 378 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -176,6 +176,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.reset` ... | 3 | GameMaster | declared retail level | Syntax: .reset $subcommand Type .reset to see the list of possible subcommands or .help reset $subcommand to see info on subcommands. |
 | `.reset talents` | 3 | GameMaster | declared retail level | Syntax: .reset talents [$playername] Remove all talents of the selected player or the named one (online now, or at the next login when offline), for free. |
 | `.reset all` | 6 | Administrator | declared retail level | Syntax: .reset all talents Request a free talent reset of every character at its next login. |
+| `.reset honor` | 5 | Administrator | declared retail level | Syntax: .reset honor [$playername] Forget all honor of the selected or named player. |
+| `.reset level` | 5 | Administrator | declared retail level | Syntax: .reset level [$playername] Set the selected or named player back to the start level with no experience. |
 | `.reset spells` | 5 | Administrator | declared retail level | Syntax: .reset spells — replace the selected player's spellbook with race/class defaults and rewarded quest spells. |
 | `.reset stats` | 5 | Administrator | declared retail level | Syntax: .reset stats [$playername] — reapply the current level's base stats. |
 | `.server` ... | 0 | Player | stored level through the map | Server status. |
