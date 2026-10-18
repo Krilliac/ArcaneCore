@@ -158,6 +158,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
+        spell = AutoSelectRankForTarget(player, spell, targets);
         if ((targets.Mask & SpellCastTargetFlags.TradeItem) != 0 && TradeEnchantmentRequest is { } deferred)
         {
             SpellCastResult result = deferred(player, spellId, targets);
@@ -1402,7 +1403,7 @@ public sealed partial class SpellSystem
             }
         }
 
-        SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict);
+        SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict, castItem);
         if (targetRules != SpellCastResult.CastOk)
         {
             return targetRules;
@@ -1614,7 +1615,7 @@ public sealed partial class SpellSystem
     /// Spell::CheckCast / CheckTarget): party- and raid-only targets must be in the caster's
     /// group, and a client-requested dispel-only spell needs something to dispel.
     /// </summary>
-    private SpellCastResult CheckTargetRules(Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool strict)
+    private SpellCastResult CheckTargetRules(Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool strict, Item? castItem = null)
     {
         if (!NeedsUnitTarget(spell) || (unitTarget ?? (targets.Mask == SpellCastTargetFlags.Self ? caster : null)) is not { } target)
         {
@@ -1631,6 +1632,12 @@ public sealed partial class SpellSystem
         if (group != SpellCastResult.CastOk)
         {
             return group;
+        }
+
+        SpellCastResult lowLevel = CheckLowLevelBuff(caster, spell, target, castItem);
+        if (lowLevel != SpellCastResult.CastOk)
+        {
+            return lowLevel;
         }
 
         if (strict && IsDispelOnly(spell)

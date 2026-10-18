@@ -89,6 +89,11 @@ public sealed partial class SpellSystem
 
             foreach ((Unit unit, float multiplier) in units)
             {
+                if (SkipsLowLevelGroupBuffTarget(cast, unit, unitTarget))
+                {
+                    continue;
+                }
+
                 if (!result.TryGetValue(unit, out SpellTargetEntry? entry))
                 {
                     entry = new SpellTargetEntry();

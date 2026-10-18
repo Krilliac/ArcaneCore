@@ -130,6 +130,9 @@ public enum SpellAttributesEx2 : uint
 
     /// <summary>vmangos SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT.</summary>
     IgnoreLineOfSight = 0x00000004,
+
+    /// <summary>vmangos SPELL_ATTR_EX2_ALLOW_LOW_LEVEL_BUFF (bit 3): no SPELL_FAILED_LOWLEVEL for a too-high rank on a low-level target.</summary>
+    AllowLowLevelBuff = 0x00000008,
     DoNotReportSpellFailure = 0x00000080,
 
     /// <summary>vmangos SPELL_ATTR_EX2_CANT_CRIT.</summary>

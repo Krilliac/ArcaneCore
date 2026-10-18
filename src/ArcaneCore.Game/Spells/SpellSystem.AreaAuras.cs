@@ -4,6 +4,9 @@ namespace ArcaneCore.Game.Spells;
 
 public sealed partial class SpellSystem
 {
+    /// <summary>vmangos SPELL_ATTR_EX3_ONLY_ON_PLAYER (AttributesEx3 bit 8).</summary>
+    private const uint AreaAuraOnlyOnPlayer = 0x00000100;
+
     /// <summary>
     /// SPELL_EFFECT_APPLY_AREA_AURA_PARTY (vmangos Spell::EffectApplyAreaAura): the caster gets the
     /// aura as its source; <see cref="UpdateAreaAuras"/> spreads it to party members in range.
@@ -90,12 +93,21 @@ public sealed partial class SpellSystem
                     continue;
                 }
 
-                if (GetAuras(member).Any(h => !h.IsRemoved && h.Spell.Id == source.Spell.Id))
+                // vmangos AreaAura::Update (SpellAuras.cpp:750-790): a member gets the rank its level allows (SelectAuraRankForLevel), with
+                // that rank's simple effect value, and nothing when even the first rank is too high or the aura is for players only.
+                if (SelectAuraRankForLevel(source.Spell, member.Level) is not { } actual
+                    || ((actual.AttributesEx3 & AreaAuraOnlyOnPlayer) != 0 && member is not Player))
                 {
                     continue;
                 }
 
-                var child = new SpellAuraHolder(source.Spell, member, source.CasterGuid, source.CasterLevel, source.CasterOwner,
+                if (GetAuras(member).Any(h => !h.IsRemoved && (h.Spell.Id == source.Spell.Id || h.Spell.Id == actual.Id)))
+                {
+                    continue;
+                }
+
+                bool lowerRank = !ReferenceEquals(actual, source.Spell);
+                var child = new SpellAuraHolder(actual, member, source.CasterGuid, source.CasterLevel, source.CasterOwner,
                     source.IsPermanent ? -1 : Math.Max(source.Duration, 1))
                 {
                     AreaParent = source,
@@ -106,7 +118,8 @@ public sealed partial class SpellSystem
                     {
                         uint amplitude = aura.Type == AuraType.ModPowerRegen
                             ? source.Spell.Effects[aura.EffectIndex].Amplitude : aura.Amplitude;
-                        child.SetAura(new SpellAura(aura.EffectIndex, aura.Type, aura.Amount, amplitude, aura.MiscValue, member.PowerType));
+                        int amount = lowerRank ? actual.Effects[aura.EffectIndex].BasePoints + actual.Effects[aura.EffectIndex].BaseDice : aura.Amount;
+                        child.SetAura(new SpellAura(aura.EffectIndex, aura.Type, amount, amplitude, aura.MiscValue, member.PowerType));
                     }
                 }
 
