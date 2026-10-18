@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
@@ -20,10 +21,14 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
 {
     private const int MaxEntryScan = 128;
     private const uint BackoffMs = 2_000;
+    private const uint TrainerQuoteMemoMs = 5_000;
+    private const int MaxQuoteMemos = 128;
+    private static readonly ConditionalWeakTable<CreatureContent, TrainerRowCache> CachedTrainerRows = new();
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly List<Destination> _destinations = [];
     private readonly HashSet<uint> _blockedSpawns = [];
+    private readonly Dictionary<uint, (uint Until, uint Level, uint Money, uint Limit)> _noTrainerOffer = [];
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this controller's plans.</summary>
     private TileWait _tileWait;
@@ -183,7 +188,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     private void Refresh(Player player, uint mapId, NpcTemplateMetadataLookup? metadata, QuestNpcServices services)
     {
         CreatureContent? content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
-        if (content is null) { ClearRoute(); _destinations.Clear(); return; }
+        if (content is null) { ClearRoute(); _destinations.Clear(); _noTrainerOffer.Clear(); return; }
         if (_metadataRead && _mapId == mapId && ReferenceEquals(_content, content)
             && _contentVersion == content.DefinitionsVersion && ReferenceEquals(_metadata, metadata)
             && _eventStamp == PlayerbotTownGoals.ActiveEventStamp(_session.Services)) return;
@@ -191,7 +196,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         ClearRoute();
         _mapId = mapId; _content = content; _contentVersion = content.DefinitionsVersion; _metadata = metadata; _metadataRead = true;
         _eventStamp = PlayerbotTownGoals.ActiveEventStamp(_session.Services);
-        _destinations.Clear(); _blockedSpawns.Clear(); TargetEntry = 0;
+        _destinations.Clear(); _blockedSpawns.Clear(); _noTrainerOffer.Clear(); TargetEntry = 0;
         // The trainer fields are the imported creature_template columns (CreatureNpcMetadataDataModule), with a configured
         // NpcServices:NpcTemplates row replacing an entry's. Filter class compatibility before the bounded spawn cap; unrelated
         // trainer rows must not crowd a valid class trainer out of the route index.
@@ -212,34 +217,79 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     }
 
     /// <summary>The service fields of every creature template in entry order, a configured override in place of the imported row.</summary>
-    internal static IEnumerable<NpcTemplateMetadata> TrainerRows(CreatureContent content, NpcTemplateMetadataLookup? metadata)
+    internal static IReadOnlyList<NpcTemplateMetadata> TrainerRows(CreatureContent content, NpcTemplateMetadataLookup? metadata)
     {
-        foreach (CreatureTemplate template in content.Templates.OrderBy(t => t.Entry))
+        TrainerRowCache cache = CachedTrainerRows.GetOrCreateValue(content);
+        return cache.GetRows(content, metadata);
+    }
+
+    private sealed class TrainerRowCache
+    {
+        private readonly object _gate = new();
+        private int _version = -1;
+        private NpcTemplateMetadataLookup? _metadata;
+        private NpcTemplateMetadata[]? _rows;
+
+        public IReadOnlyList<NpcTemplateMetadata> GetRows(CreatureContent content, NpcTemplateMetadataLookup? metadata)
         {
-            yield return metadata?.MetadataFor(template.Entry) ?? new NpcTemplateMetadata
+            lock (_gate)
             {
-                Entry = template.Entry,
-                GossipMenuId = template.GossipMenuId,
-                TrainerType = (TrainerType)template.TrainerType,
-                TrainerClass = template.TrainerClass,
-                TrainerRace = template.TrainerRace,
-                TrainerSpell = template.TrainerSpell,
-            };
+                if (_rows is not null && _version == content.DefinitionsVersion && ReferenceEquals(_metadata, metadata))
+                    return _rows;
+
+                var list = new List<NpcTemplateMetadata>();
+                foreach (CreatureTemplate template in content.Templates.OrderBy(t => t.Entry))
+                {
+                    list.Add(metadata?.MetadataFor(template.Entry) ?? new NpcTemplateMetadata
+                    {
+                        Entry = template.Entry,
+                        GossipMenuId = template.GossipMenuId,
+                        TrainerType = (TrainerType)template.TrainerType,
+                        TrainerClass = template.TrainerClass,
+                        TrainerRace = template.TrainerRace,
+                        TrainerSpell = template.TrainerSpell,
+                    });
+                }
+
+                NpcTemplateMetadata[] rows = [.. list];
+                _version = content.DefinitionsVersion;
+                _metadata = metadata;
+                _rows = rows;
+                return rows;
+            }
         }
     }
 
     private bool HasAffordableSpell(Player player, QuestNpcServices services, Destination destination)
     {
         if (!PlayerbotWorldDestinations.IsPresent(player, destination.Spawn)) return false;
-        if (Suspensions?.IsEntrySuspended(destination.Entry, _session.World.NowMs) == true) return false;
-        if (Suspensions?.IsTrainingSuspended(_session.World.NowMs) == true) return false;
+        uint now = _session.World.NowMs;
+        if (Suspensions?.IsEntrySuspended(destination.Entry, now) == true) return false;
+        if (Suspensions?.IsTrainingSuspended(now) == true) return false;
         if (!CanApproachTrainer(player, services, _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates, destination.FactionTemplate)) return false;
+        uint? spendable = Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player);
+        uint limit = spendable ?? player.Money;
+        if (_noTrainerOffer.TryGetValue(destination.Entry, out var memo)
+            && unchecked((int)(memo.Until - now)) > 0
+            && memo.Level == player.Level && memo.Money == player.Money && memo.Limit == limit)
+        {
+            return false;
+        }
+
         NpcInfo hint = new(ObjectGuid.WithEntry(HighGuid.Unit, destination.Entry, destination.Spawn.Guid), destination.Entry,
             destination.Spawn.Guid, NpcFlags.Trainer, destination.Spawn.MapId, destination.Spawn.X, destination.Spawn.Y,
             destination.Spawn.Z, 0, true, false, false, false, 0,
             TrainerType.Class, destination.TrainerClass, 0, 0, destination.FactionId);
-        return services.GetClassTrainerQuote(player, hint, 0, Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player)) is
-            { TeachingSpell: not 0, LearnedSpell: not 0, Cost: var cost } && player.Money >= cost;
+        if (services.GetClassTrainerQuote(player, hint, 0, spendable) is
+            { TeachingSpell: not 0, LearnedSpell: not 0, Cost: var cost } && player.Money >= cost)
+        {
+            _noTrainerOffer.Remove(destination.Entry);
+            return true;
+        }
+
+        if (_noTrainerOffer.Count >= MaxQuoteMemos) _noTrainerOffer.Clear();
+        _noTrainerOffer[destination.Entry] = (unchecked(now + TrainerQuoteMemoMs), player.Level, player.Money, limit);
+        return false;
     }
 
     private NpcInfo? FindVisibleUsefulTrainer(Player player, QuestNpcServices services)

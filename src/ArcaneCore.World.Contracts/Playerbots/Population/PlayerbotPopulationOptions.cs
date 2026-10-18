@@ -86,7 +86,7 @@ public sealed class PlayerbotPopulationOptions
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// The number of managed bots to keep running (0..1000). The effective target is the lower of this and <c>World:Playerbots:MaxBots</c>.
+    /// The number of managed bots to keep running (0..5000). The effective target is the lower of this and <c>World:Playerbots:MaxBots</c>.
     /// Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and
     /// what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a
     /// band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are

@@ -20,13 +20,13 @@ public sealed class PlayerbotOptions
     public bool RestoreOnStartup { get; set; }
 
     /// <summary>The highest <see cref="MaxBots"/> accepted (docs/integration/perf-limits-20261008.md has the measurement behind it).</summary>
-    public const int MaxBotsCeiling = 1000;
+    public const int MaxBotsCeiling = 5000;
 
     /// <summary>The highest <see cref="MaxRegisteredBots"/> accepted.</summary>
     public const int MaxRegisteredBotsCeiling = 10_000;
 
     /// <summary>
-    /// The most managed bots running at once (0..1000, <see cref="MaxBotsCeiling"/>). Only running bots take a slot: a stopped,
+    /// The most managed bots running at once (0..5000, <see cref="MaxBotsCeiling"/>). Only running bots take a slot: a stopped,
     /// faulted or quarantined bot does not, and a start beyond the cap is refused with "playerbot-capacity" (a quarantine retry
     /// or startup restore that finds no slot waits for one). Live through <c>.reload config</c>: raising it lets more bots start
     /// at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped.
@@ -50,7 +50,7 @@ public sealed class PlayerbotOptions
     public int ThinkIntervalMs { get; set; } = 500;
 
     /// <summary>
-    /// The most managed client actions all bots may send in one world tick (1..64). The tick's think time is bounded separately, by
+    /// The most managed client actions all bots may send in one world tick (1..512). The tick's think time is bounded separately, by
     /// <see cref="ThinkBudgetMinMs"/>..<see cref="ThinkBudgetMaxMs"/> (<c>PlayerbotThinkBudget</c>): with about 1000 bots the action budget must not be the first limit a
     /// tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks.
     /// </summary>
@@ -252,7 +252,7 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}: MaxRegisteredBots must be 0..{MaxRegisteredBotsCeiling}.");
         if (MaxBulkCommand is < 1 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBulkCommand must be 1..{MaxBotsCeiling}.");
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
-        if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
+        if (MaxActionsPerTick is < 1 or > 512) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..512.");
         if (!double.IsFinite(ThinkBudgetMinMs) || ThinkBudgetMinMs is < 1 or > 200)
             throw new InvalidOperationException($"{SectionName}: ThinkBudgetMinMs must be 1..200.");
         if (!double.IsFinite(ThinkBudgetMaxMs) || ThinkBudgetMaxMs < ThinkBudgetMinMs || ThinkBudgetMaxMs > 200)

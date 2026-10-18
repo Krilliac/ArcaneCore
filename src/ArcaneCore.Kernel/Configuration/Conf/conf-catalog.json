@@ -16463,7 +16463,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The most managed client actions all bots may send in one world tick (1..64). The tick's think time is bounded separately, by `ThinkBudgetMinMs`..`ThinkBudgetMaxMs` (`PlayerbotThinkBudget`): with about 1000 bots the action budget must not be the first limit a tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks.",
+      "meaning": "The most managed client actions all bots may send in one world tick (1..512). The tick's think time is bounded separately, by `ThinkBudgetMinMs`..`ThinkBudgetMaxMs` (`PlayerbotThinkBudget`): with about 1000 bots the action budget must not be the first limit a tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -16479,7 +16479,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The most managed bots running at once (0..1000, `MaxBotsCeiling`). Only running bots take a slot: a stopped, faulted or quarantined bot does not, and a start beyond the cap is refused with \"playerbot-capacity\" (a quarantine retry or startup restore that finds no slot waits for one). Live through `.reload config`: raising it lets more bots start at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped.",
+      "meaning": "The most managed bots running at once (0..5000, `MaxBotsCeiling`). Only running bots take a slot: a stopped, faulted or quarantined bot does not, and a start beyond the cap is refused with \"playerbot-capacity\" (a quarantine retry or startup restore that finds no slot waits for one). Live through `.reload config`: raising it lets more bots start at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -17911,7 +17911,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns.",
+      "meaning": "The number of managed bots to keep running (0..5000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

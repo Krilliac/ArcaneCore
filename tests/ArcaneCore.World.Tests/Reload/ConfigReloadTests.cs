@@ -363,7 +363,7 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal(400, playerbots.MaxBots);
         Assert.Equal(600, playerbots.MaxRegisteredBots);
 
-        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxBots": 1001 } } }""");
+        File.WriteAllText(path, $$"""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxBots": {{PlayerbotOptions.MaxBotsCeiling + 1}} } } }""");
         ReloadResult refused = await coordinator.ReloadAsync("config");
         Assert.NotEqual(ReloadStatus.Applied, refused.Status);
         Assert.Equal(400, playerbots.MaxBots);

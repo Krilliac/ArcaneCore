@@ -35,8 +35,9 @@ public sealed class PlayerbotPopulationCommandTests
         Assert.Equal(7, world.Population.TargetOnline);
 
         // Out of range (above MaxBotsCeiling, below 0): refused with the range, the value unchanged.
-        line = await SayAsync(admin, ".playerbot population target 1001", l => l.Contains("refused", StringComparison.Ordinal));
-        Assert.Equal($"Population target 1001 refused: it must be 0..{PlayerbotOptions.MaxBotsCeiling}.", line);
+        int aboveCeiling = PlayerbotOptions.MaxBotsCeiling + 1;
+        line = await SayAsync(admin, $".playerbot population target {aboveCeiling}", l => l.Contains("refused", StringComparison.Ordinal));
+        Assert.Equal($"Population target {aboveCeiling} refused: it must be 0..{PlayerbotOptions.MaxBotsCeiling}.", line);
         Assert.Equal(7, world.Population.TargetOnline);
         line = await SayAsync(admin, ".playerbot population target -1", l => l.Contains("refused", StringComparison.Ordinal));
         Assert.Equal($"Population target -1 refused: it must be 0..{PlayerbotOptions.MaxBotsCeiling}.", line);

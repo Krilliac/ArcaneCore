@@ -59,6 +59,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private readonly PlayerbotQuestTripFeasibility _trip = new();
     private readonly PlayerbotNavigationAnomalies.TripWatch _tripWatch = new();
     private readonly List<DestinationEntry> _entries = [];
+    private readonly List<DestinationEntry> _giverCatalog = [];
+    private readonly List<DestinationEntry> _advisoryEntries = [];
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly Dictionary<uint, uint> _farBlockedUntil = [];
     private readonly Dictionary<uint, uint> _visited = [];
@@ -71,6 +73,20 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private uint _level;
     private float _cachedMaxDeliveryYards;
     private PlayerbotHomeArea? _cachedHome;
+    private bool _giverCatalogValid;
+    private uint _giverMapId;
+    private int _giverContentVersion = -1;
+    private CreatureContent? _giverContent;
+    private QuestStore? _giverQuests;
+    private QuestRewardMode _giverRewardMode;
+    private uint[] _giverRewardQuestIds = [];
+    private uint _giverLevel;
+    private float _giverMaxDeliveryYards;
+    private PlayerbotHomeArea? _giverHome;
+    private LootContent? _giverLoot;
+    private byte _giverClass;
+    private byte _giverRace;
+    private uint _giverFaction;
     private uint _preferredEntry = uint.MaxValue;
     private uint _returnQuestId;
     private PlayerbotRoute? _route;
@@ -194,16 +210,37 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         // Use the same static quest/map cache as Update, while rechecking
         // live quest state below so stale rows never become ownership.
-        RefreshEntries(player, map.MapId, 0, 0);
+        // When tracking a specific creature or quest return (_preferredEntry != 0 or _returnQuestId != 0),
+        // read the advisory giver window without clobbering the active route or blocked spawns.
+        List<DestinationEntry> candidates;
+        CreatureContent? content;
+        if ((_preferredEntry == 0 || _preferredEntry == uint.MaxValue) && _returnQuestId == 0)
+        {
+            RefreshEntries(player, map.MapId, 0, 0);
+            candidates = _entries;
+            content = _content;
+        }
+        else
+        {
+            RefreshAdvisoryEntries(player, map.MapId, out content);
+            candidates = _advisoryEntries;
+        }
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         PlayerNpcState? state = services?.StateOf(player);
         LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         bool blockedEligible = false;
         bool liveEligible = false;
-        foreach (DestinationEntry entry in _entries.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
+        HashSet<(uint Entry, bool InHome)>? ineligible = null;
+        foreach (DestinationEntry entry in candidates.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
             if (Suspended(entry.Entry) || !IsPresent(player, entry.Spawn)) continue;
-            if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, _content, GiverInHome(entry.Spawn), out _)) continue;
+            bool inHome = GiverInHome(entry.Spawn);
+            if (ineligible?.Contains((entry.Entry, inHome)) == true) continue;
+            if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, content, inHome, out _))
+            {
+                (ineligible ??= []).Add((entry.Entry, inHome));
+                continue;
+            }
             liveEligible = true;
             // A visible eligible giver belongs to ordinary interaction handling.
             // Do not let this advisory seam steal it for travel.
@@ -212,8 +249,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // The trip ended in sight of its NPC. When the quest-giver controller has nothing here, the quest is set aside
                 // so the bot does not walk out of sight and be sent back for it (SettleArrival); another quest of the NPC may remain.
                 SettleArrival(player, entry.Entry);
-                if (Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, _content, GiverInHome(entry.Spawn), out _))
+                if (Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, content, inHome, out _))
                     return false;
+                (ineligible ??= []).Add((entry.Entry, inHome));
                 continue;
             }
             if (IsBlocked(entry.Spawn.Guid, now))
@@ -456,6 +494,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         bool attempted = false;
         bool waterJourneys = WaterJourneysAllowed(player);
         (uint Entry, uint Quest, Vector3 To)? waterGoal = null;
+        HashSet<(uint Entry, bool InHome)>? ineligible = null;
         foreach (DestinationEntry entry in _entries
             .Where(entry => !IsBlocked(entry.Spawn.Guid, now) && IsPresent(player, entry.Spawn))
             .Where(entry => preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry)
@@ -464,8 +503,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             if (++scanned > MaxEntryScan) break;
             if (Suspended(entry.Entry)) continue;
+            bool inHome = GiverInHome(entry.Spawn);
+            if (ineligible?.Contains((entry.Entry, inHome)) == true) continue;
             if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot,
-                    Home, _content, GiverInHome(entry.Spawn), out uint questId)) continue;
+                    Home, _content, inHome, out uint questId))
+            {
+                (ineligible ??= []).Add((entry.Entry, inHome));
+                continue;
+            }
             if (questId == 0 && preferredCreatureEntry != 0) questId = preferredQuestId;
             // A spawn of another map (or with no place) is no destination: the entries are listed per map, so this is a content or cache fault.
             if (PlayerbotNavigationAnomalies.DestinationFault(map.MapId, player.FactionTemplate, entry.Spawn, 0, null, wantsFriendly: false) is { } badSpawn)
@@ -1346,6 +1391,59 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         // Quest givers and enders of the quests the server settles (Quests:RewardMode): every supported quest by default,
         // the allowlist only under AllowlistOnly. The nearest spawns win, whatever the quest ids.
+        EnsureGiverCatalog(player, mapId, content, services, quests, mode, allowed, level, maxDeliveryYards);
+        SelectNearestGivers(player, _entries, out bool truncated, out float farthestKeptSq, out float giverNearestDroppedSq);
+        RememberEntryList(player, truncated, farthestKeptSq, giverNearestDroppedSq);
+        KeepCarriedRoute(player, carriedRoute, carriedSpawn, carriedTarget);
+    }
+
+    private void RefreshAdvisoryEntries(Player player, uint mapId, out CreatureContent? content)
+    {
+        content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
+        QuestStore? quests = services?.Quests;
+        _advisoryEntries.Clear();
+        if (content is null || quests is null || services is null) return;
+        QuestRewardMode mode = services.Options.RewardMode;
+        uint[] allowed = services.Options.OrdinaryRewardQuestIds;
+        uint level = player.Level;
+        float maxDeliveryYards = Home is null ? _options.MaxDeliveryYards : 0;
+        EnsureGiverCatalog(player, mapId, content, services, quests, mode, allowed, level, maxDeliveryYards);
+        SelectNearestGivers(player, _advisoryEntries, out _, out _, out _);
+    }
+
+    private void EnsureGiverCatalog(Player player, uint mapId, CreatureContent content, QuestNpcServices services,
+        QuestStore quests, QuestRewardMode mode, uint[] allowed, uint level, float maxDeliveryYards)
+    {
+        LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
+        if (_giverCatalogValid && _giverMapId == mapId
+            && ReferenceEquals(_giverContent, content) && _giverContentVersion == content.DefinitionsVersion
+            && ReferenceEquals(_giverQuests, quests) && ReferenceEquals(_giverHome, Home)
+            && ReferenceEquals(_giverLoot, loot)
+            && _giverRewardMode == mode && _giverLevel == level
+            && _giverMaxDeliveryYards == maxDeliveryYards
+            && _giverClass == (byte)player.Class && _giverRace == (byte)player.Race && _giverFaction == player.FactionTemplate
+            && _giverRewardQuestIds.SequenceEqual(allowed))
+        {
+            return;
+        }
+
+        _giverCatalogValid = true;
+        _giverMapId = mapId;
+        _giverContent = content;
+        _giverContentVersion = content.DefinitionsVersion;
+        _giverQuests = quests;
+        _giverHome = Home;
+        _giverLoot = loot;
+        _giverRewardMode = mode;
+        _giverLevel = level;
+        _giverMaxDeliveryYards = maxDeliveryYards;
+        _giverClass = (byte)player.Class;
+        _giverRace = (byte)player.Race;
+        _giverFaction = player.FactionTemplate;
+        _giverRewardQuestIds = [.. allowed];
+        _giverCatalog.Clear();
+
         HashSet<uint> givers = [];
         PlayerbotHomeArea? area = Home;
         foreach (uint questId in CandidateQuests(services, level))
@@ -1361,24 +1459,35 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             givers.UnionWith(quests.CreatureStartersOf(questId));
             givers.UnionWith(quests.CreatureEndersOf(questId));
         }
-        List<DestinationEntry> giverSpawns = givers.Order()
-            .SelectMany(entry => content.GetSpawns(mapId, entry)
-                .Where(spawn => IsDestinationEntry(content, quests, spawn, 0) && (area is null || area.Contains(spawn)))
-                .Select(spawn => new DestinationEntry(entry, spawn)))
-            .OrderBy(entry => DistanceSquared(player, entry.Spawn)).ThenBy(entry => entry.Spawn.Guid)
-            .ToList();
-        int keep = Math.Min(MaxEntryScan, giverSpawns.Count);
-        float farthestKeptSq = 0f;
+
+        foreach (uint entry in givers.Order())
+        {
+            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, entry))
+            {
+                if (!IsDestinationEntry(content, quests, spawn, 0) || (area is not null && !area.Contains(spawn))) continue;
+                _giverCatalog.Add(new DestinationEntry(entry, spawn));
+            }
+        }
+    }
+
+    private void SelectNearestGivers(Player player, List<DestinationEntry> target, out bool truncated, out float farthestKeptSq, out float nearestDroppedSq)
+    {
+        _giverCatalog.Sort((a, b) =>
+        {
+            int cmp = DistanceSquared(player, a.Spawn).CompareTo(DistanceSquared(player, b.Spawn));
+            return cmp != 0 ? cmp : a.Spawn.Guid.CompareTo(b.Spawn.Guid);
+        });
+        int keep = Math.Min(MaxEntryScan, _giverCatalog.Count);
+        farthestKeptSq = 0f;
         for (int i = 0; i < keep; i++)
         {
-            float distanceSq = DistanceSquared(player, giverSpawns[i].Spawn);
+            float distanceSq = DistanceSquared(player, _giverCatalog[i].Spawn);
             if (distanceSq > farthestKeptSq) farthestKeptSq = distanceSq;
-            _entries.Add(giverSpawns[i]);
+            target.Add(_giverCatalog[i]);
         }
 
-        bool truncated = giverSpawns.Count > keep;
-        RememberEntryList(player, truncated, farthestKeptSq, truncated ? DistanceSquared(player, giverSpawns[keep].Spawn) : float.PositiveInfinity);
-        KeepCarriedRoute(player, carriedRoute, carriedSpawn, carriedTarget);
+        truncated = _giverCatalog.Count > keep;
+        nearestDroppedSq = truncated ? DistanceSquared(player, _giverCatalog[keep].Spawn) : float.PositiveInfinity;
     }
 
     /// <summary>Where the nearest-<see cref="MaxEntryScan"/> list was chosen, and whether a farther spawn was dropped.</summary>
