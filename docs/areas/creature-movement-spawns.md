@@ -60,13 +60,13 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
   collection per call (per-thread scratch lists; `NavMeshPointQueryTests` measures the allocation), read no tile, never throw, and answer
   "unavailable" (no mesh for the map, tile not loaded, centre more than 3 yd from a polygon) without drawing any random numbers.
   Wander (`RandomMovementGenerator`) takes the point from `ICreatureMover.TryGetRandomMeshPoint` (around the spawn point, within the wander
-  distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with `FindPath` + `MovePath`, so a townsfolk or
+  distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with `PlanPath` + `MovePath`, so a townsfolk or
   guard no longer cuts through a house. That path search counts against the per-tick creature path budget; on exhaustion the leg waits
-  for the next update (see "No path, no straight line" below). Flee (`FleeingMovementGenerator.MoveAway`) casts the leg
+  1-1.5 s (4-10 s in a crowded wander pass, more than 256 wandering creatures in the update) and tries again (see "No path, no straight line" below). Flee (`FleeingMovementGenerator.MoveAway`) casts the leg
   with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
   (vmangos `Map::GetWalkHitPosition` from `FleeingMovementGenerator.cpp:108`); a leg that would be shorter than 1 yd (a wall right in
   front) is not issued: another direction is drawn, up to 4 times, and if all are blocked the creature stays and tries again after its
-  pause. When the query is unavailable both keep the previous choice exactly (terrain-height point, straight `MoveTo`), including the order
+  pause. When the query is unavailable both keep the previous point choice (the terrain-height point) and send it through `PlanPath`, which is the straight line only where there is no mesh data (`Direct`, see "No path, no straight line" below). Off the mesh a wander point whose ground is more than 7 yd from the spawn's z keeps the spawn's z, and a wander leg whose path ends more than 7 yd below or above both the creature and the spawn is skipped like a leg without a path (`MaxFallbackLegDropYards`: a cave or city floor under the terrain); flee has no such bound. Apart from that both keep the order
   of the random draws, so meshless maps and unloaded tiles behave as before. What a creature does when the mesh has no path is
   in "No path, no straight line" below.
   Where this differs from vmangos `Map::GetWalkRandomPosition` (`Map.cpp:3332`): vmangos takes Detour's random point only as a
@@ -308,7 +308,7 @@ comment that "vmangos goes straight on NOPATH" described only the authored-route
 | Partial path (`Incomplete`) | walked to the point nearest the target, then stands; unreachable as before | - |
 | Flee / fear, confused | waits 1-1.5 s, then a new point (`FleeingMovementGenerator.cpp:60-63`, `FearMovementGenerator.cpp:43-46`; confused: ArcaneCore's choice, vmangos ConfusedMovementGenerator.cpp:72-86 checks no path) | retries next update |
 | Home / evade | teleport home (`NearTeleportTo`, `HomeMovementGenerator.cpp:58-71`); a partial path teleports too; `Direct` runs | retries; teleports after 3 s |
-| Random wander | the leg is skipped, a new point 1-1.5 s later | skips mesh/height sampling when `HasPathBudget` is false and retries 1-1.5 s later |
+| Random wander | the leg is skipped, a new point 1-1.5 s later, doubled for each further leg in a row without a path (at most 16-24 s, `RandomMovementGenerator.NoPathRetryDelay`) | skips mesh/height sampling when `HasPathBudget` is false and retries 1-1.5 s later (4-10 s in a crowded wander pass) |
 | Waypoint, point, formation, scripted `MoveTo` (authored) | straight line, as vmangos (`MoveSplineInit::Move(PathFinder*)` takes the shortcut of a NOPATH finder); counted in `DirectFallbackPaths` | retries next update (scripted moves wait in a per-map queue served first in the next update) |
 | Charge (spell) | a NON-triggered cast fails with SPELL_FAILED_NOPATH when the caster is on the ground (not in water, within 1.6 yd of the floor) and the path to the target is NoPath or Incomplete (vmangos Spell.cpp:5909-5934). Unlike vmangos, which runs CheckCast for triggered casts too but tests NOPATH only under strict, a triggered charge skips the check; it then makes no move on NoPath (PointMovementGenerator.cpp:237-238). A caster in water, or a swimmer charging a target in water, is exempt from the check AND gets the straight line from `ChargePath` (vmangos' swimming shortcut, PathFinder.cpp:197-201): both read `ForcedMovement.ChargeSwims`, so a cast that passes always launches a spline. A whole path that ends short of the contact point (target 0.5-7 yd off the mesh) is walked to its end, then straight on only with line of sight. The path uses the caster's locomotion (player mover, creature InhabitType) | not budgeted |
 
@@ -321,9 +321,9 @@ Not copied: vmangos' pet closed-door `CutPathWithDynamicLoS` and `UNIT_STATE_ALL
 (the creature keeps walking the partial path). Maps without a mesh: `WorldCollision.InstallFallback` has no terrain-step `IPathfinder` to
 install (only the seam exists), so they keep the straight line.
 * **Spline smoothing, lateral variation and continuous orientation tracking (`CreatureSplineSmoothing`, `CreatureSpline.PositionAndOrientationAt`)**:
-  Multi-corner `PathOutcome.Mesh` paths returned by `CreatureMapSystem.PlanPath` are post-processed by `CreatureSplineSmoothing.VaryAndSmooth`:
-  1. **Per-creature lateral corridor variation**: on non-home paths `>= 12` yd with `>= 2` corners, interior corners receive a deterministic lateral offset (`±0.85` yd seeded from `creature.Guid.Counter`, tapered to `0` at start and destination) when `IMeshPointQuery.Raycast` and floor height (`<= 1.5` yd delta) confirm the shifted vertex is walkable.
-  2. **Quadratic Bezier corner-cutting**: interior turns `>= 15°` with arms `>= 2` yd are replaced with 3 quadratic Bezier points (`u = 0.25, 0.50, 0.75`, arm `<= 3.5` yd) validated by `IMeshPointQuery.Raycast` and height lookup, capped at `32` spline points and spaced `>= 0.5` yd apart.
+  Multi-corner `PathOutcome.Mesh` paths returned by `CreatureMapSystem.PlanPath`, except a non-home path of an out-of-combat creature whose current motion is `Random` (a wander leg), are post-processed by `CreatureSplineSmoothing.VaryAndSmooth`:
+  1. **Per-creature lateral corridor variation**: on non-home paths `>= 12` yd of an out-of-combat creature with `>= 2` corners, interior corners receive a deterministic lateral offset (`±0.85` yd seeded from `creature.Guid.Counter`, tapered to `0` at start and destination) when `IMeshPointQuery.Raycast` and floor height (`<= 0.85` yd delta) confirm the shifted vertex is walkable.
+  2. **Quadratic Bezier corner-cutting**: interior turns `>= 15°` with arms `>= 2` yd are replaced with 3 quadratic Bezier points (`u = 0.20, 0.50, 0.80`, arm `min(3.5, 0.38 x the shorter leg)` yd; a corner whose arm would be under `1.5` yd is not cut) validated by `IMeshPointQuery.Raycast` and height lookup, capped at `32` spline points and spaced `>= 1.1` yd apart.
   3. **Live segment orientation & corner blending**: `Creature.AdvanceSpline` and `StopSpline` update `creature.Orientation` at every tick via `CreatureSpline.PositionAndOrientationAt` (which blends heading across interior corners within a 1.25-yd window and finishes on `EndOrientation` when `FinalOrientation` is null).
 Tests: `Creatures/NoStraightPathTests.cs`, `Creatures/CreatureSplineSmoothingTests.cs`, plus the updated `UnreachableTargetTests`, `CreaturePathBudgetTests`, `ChargeEffectTests`.
 

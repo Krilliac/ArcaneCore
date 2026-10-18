@@ -10,8 +10,9 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Locomotion;
 
 /// <summary>
-/// Binds the <c>Locomotion</c> configuration section into <see cref="LocomotionOptions"/> (a negative
-/// <c>RateDamageFall</c> falls back to 1, like vmangos setConfigPos) and registers the per-world
+/// Binds the <c>Locomotion</c> configuration section into <see cref="LocomotionOptions"/> (<c>Normalize</c> fixes bad
+/// values: a negative <c>RateDamageFall</c> falls back to 1, like vmangos setConfigPos, <c>EnvironmentalDamageMax</c> is raised
+/// to the minimum, and the ghost and player speed rates are clamped to 0.1-10) and registers the per-world
 /// <see cref="LocomotionEnvironment"/> with the teleport probe the pending-ack timeout needs. The rules themselves
 /// run in the map tick (<c>MapLocomotion</c>) and in the movement handlers (docs/areas/locomotion.md).
 /// </summary>

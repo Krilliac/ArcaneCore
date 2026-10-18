@@ -19,8 +19,8 @@ below cites the file and lines it was verified against. Everything is retail by 
 | 8 | mount-aura | delivered |
 | 9 | knockback and player pull | delivered |
 | 10-12 | liquid-environment-flags, mirror-timers-hazards, water-breathing-auras | delivered together |
-| - | movement-flag-tests (opt-in anticheat flag tests) | not delivered: opt-in hardening, default off in vmangos, not retail behaviour |
-| - | collision-height-dbc | not delivered: needs the developer's client CreatureModelData / CreatureDisplayInfo files, which are not available to test against |
+| - | movement-flag-tests (opt-in anticheat flag tests) | not in this lane: the anticheat area cross-checked vmangos `HandleFlagTests` and scores its own flag checks (water walk, hover, slow fall, levitating, swim-fly), on by default in log-only mode, see [anticheat](anticheat.md) |
+| - | collision-height-dbc | delivered later, outside this lane: with the developer's own CreatureDisplayInfo / CreatureModelData files (`Creatures:CreatureDisplayInfoDbcPath`, `Creatures:CreatureModelDataDbcPath`) a unit's collision height is its model's, otherwise 2 yards; tested with synthetic files only, see [native model initialization](../integration/native-model-initialization.md) |
 
 No schema, store or data module changed anywhere in the lane (nothing it keeps is persisted: speeds, falls, breath timers and pending acks are rebuilt at login, as in
 vmangos), so the Characters/World schema versions did not move and the MariaDB/PostgreSQL provider rule is not triggered. The tests that need terrain write synthetic `.map`
@@ -33,10 +33,8 @@ tiles to a temporary directory; none touches a database.
 * Slime damage (`Locomotion:SlimeDamage`, off), breath and fatigue base duration (60 s) and the lava tick (605 to 610 every 2 s): reference defaults, not proven.
 * Knock back vertical speed: vmangos divides the effect value as an integer, mangos-classic as a float (57 gives 5 or 5.7).
 * An environmental death marks the player as a PvP death in vmangos (a self kill is its own tap); retail behaviour of the corpse type and reclaim delay is unknown.
-* The ghost's +25% run and swim speed (Ghost aura 8326) waits for the death lane's `ApplyGhostForm`; the speed formula already honours the aura.
-* WMO liquid (lava and slime inside buildings, canals), `LiquidType.dbc` remaps and real model collision heights depend on collision/client data lanes.
+* WMO liquid (lava and slime inside buildings, canals) and `LiquidType.dbc` remaps depend on collision/client data lanes.
 * Server-driven player movement: Charge, Blink (Leap) and the face-caster teleport are delivered by `ForcedMovement` without a stepped player spline (the charger is relocated at once and the spline is sent for the clients), see [transform-and-charge.md](transform-and-charge.md); a server-stepped player spline is still not designed.
-* Taxi: an aura mount is not removed when a flight starts (needs the spell system in `TaxiFlightSystem`).
 ## Slice 1: loco-foundation (delivered)
 
 ### What it does
@@ -104,8 +102,8 @@ Only options whose rule is delivered exist; keys for undelivered rules would be 
   a real-client capture settles it. The handshake therefore needs a real-client check before it can
   be called retail-verified.
 * The client's movement block is applied with the same `ApplyClientMovement` as any movement;
-  a later heartbeat without the Root flag still overwrites the stored flag until the flag-authority
-  slice (not delivered in this wave if listed under "not done" in the report) lands.
+  a later heartbeat without the Root flag no longer overwrites the stored flag: the flag-authority
+  observer of slice 2 (`FlagAuthorityObserver`) puts the server's Root flag back.
 
 ## Slice 2: flag-auras-and-authority (delivered)
 
@@ -134,17 +132,19 @@ Only options whose rule is delivered exist; keys for undelivered rules would be 
   (`HandleMoverRelocation`, `MovementHandler.cpp:1067-1071`). Every other flag stays the client's own.
 * **Ghost water walk** now goes through the handshake (`MapCombat.SetGhost` and the login restore call
   `MovementControl.Order`), so the ghost's `WaterWalking` flag follows the ack. The ghost aura (8326: aura 95,
-  run +25%, swim +25%) is still not cast: `CombatHooks.ApplyGhostForm` is the death lane's seam and a no-op on the
-  base, so the ghost speed bonus waits for it (and for the speed slice, not delivered).
+  run +25%, swim +25%) is cast at spirit release by the death lane's ghost form (`CombatHooks.ApplyGhostForm` asks
+  the seam `GhostFormFeature` registers; `World:Death:GhostFormAura`, default on, see
+  [graveyards and resurrection](graveyards-resurrection.md)), and the speed slice (6) applies its bonus.
 
 Limits: login restore of `PlayerFlags.Ghost` without the aura sends the order unconditionally (kept from the base);
 the 1.12 client's acceptance of the packed-GUID layouts is unverified (see slice 1). The stricter flag tests of
-vmangos' anticheat (`MovementAnticheat.cpp:750-870`) are not delivered (opt-in hardening, default off in vmangos).
+vmangos' anticheat (`MovementAnticheat.cpp:750-870`) are not in this lane: the anticheat area scores its own flag
+checks ([anticheat](anticheat.md)).
 ## Slice 3: environmental-damage (delivered)
 
 `EnvironmentalDamage.Apply(world, player, type, damage)` (`Locomotion/Hazards/EnvironmentalDamage.cs`) is vmangos
 `Player::EnvironmentalDamage` (`Player.cpp:713-775`). It is the primitive the fall observer, the void check and the
-(not delivered) breath/fatigue/lava pulses call; nothing else in this lane deals environmental damage yet.
+breath, fatigue, lava and slime pulses of `MapEnvironment` (slices 10-12) call.
 
 * A dead player or a game master takes nothing and gets no packet.
 * Immunity per school returns 0 without a packet: fire for lava and fire, nature for slime, physical for exhausted,
@@ -189,8 +189,8 @@ ported: it only changes damage for GM-like invulnerability states and game maste
   `LocomotionEnvironment.RegisterFallModifiers` is used (`IFallDamageModifiers`). Safe Fall, Hover and Feather Fall are
   read from the aura ledger, which `MovementFlagAuras` (slice 2) fills; any other lane's aura of those types is not seen
   unless it records itself in the ledger.
-* **Not delivered:** `SetJumpInitialSpeed` (extrapolation only); the knockback "launched" reset and the knockback-ack fall
-  reset (no knockback in this wave). The transport branches compare the block's transport fields; ships exist since the
+* **Not delivered:** `SetJumpInitialSpeed` (extrapolation only); the knockback "launched" reset. The knockback-ack fall
+  reset came with slice 9 (`KnockbackAckHandler` ends the fall in progress). The transport branches compare the block's transport fields; ships exist since the
   transport lane ([transports](transports.md)), whose passengers' blocks carry the ship GUID and offset they compare. Real clients report fall time and z in their own way: damage numbers were checked
   against the formula, not against a 1.12.1 client.
 ## Slice 5: undermap-void (delivered)
@@ -207,7 +207,7 @@ still sent to the graveyard. `RepopAtGraveyard` is the death lane's hook: it ask
 
 Not delivered: antiundermap1 (`UndermapRecall`, `:1105-1127`: more than 100 yards below the ground height while
 falling, return to the last safe position, Warsong Gulch below z = 250). It needs a safe-position record and the ground
-height under the player from the collision and pathfinding lanes.
+height under the player; both exist now (`Player.LastSafePosition`, saved by `MovementHandlers` as vmangos `SaveNoUndermapPosition`, and `map.Collision.GetHeight`), but the recall itself is not written.
 ## Slice 6: speed-rates-players (delivered)
 
 The speed auras change a player's speeds through the order/ack handshake (vmangos `Unit::UpdateSpeed`,
@@ -235,8 +235,8 @@ snare, mounts), none of which did anything before.
 * **Ghost rate**: `Locomotion:GhostRunSpeedWorld` / `GhostRunSpeedBattleground` (vmangos `Death.Ghost.RunSpeed.World` /
   `.Battleground`, `World.cpp:777-778`, default 1, range 0.1 to 10 as `setConfigMinMax`) multiply a player whose death state is
   CORPSE (read literally, `Unit.cpp:7040-7046`; at 1 it does nothing). The ghost's real +25% run and swim comes from the Ghost
-  aura (8326), which `CombatHooks.ApplyGhostForm` (the death lane's seam, a no-op on this base) would have to cast: when it does,
-  these auras take effect through the same formula with no further change.
+  aura (8326), which the death lane's ghost form casts through `CombatHooks.ApplyGhostForm` (`World:Death:GhostFormAura`, default
+  on); its auras take effect through the same formula with no further change.
 
 Limits: creatures are covered by slice 7; pets and charmed units do not follow the owner's speed (`CallForAllControlledUnits`, no pets on
 this base); the talent speed modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
@@ -346,6 +346,6 @@ on the player a removal keeps it zero), `MOD_WATER_BREATHING` (155, Unending Bre
 
 Limits: the liquid kind is the one the `.map` file stores (no `LiquidType.dbc` remap, so liquid area spells such as the Undercity slime aura are not applied) and WMO liquid is not queried
 (the terrain lane's `docs/integration/vmap-los.md`), so lava and water inside buildings are not seen; the collision height is vmangos' fallback of 2 yards for every race
-(`LocomotionState.CollisionHeight`; the swim depth is three quarters of it), real model heights need the client's CreatureModelData; the feign death timer (hunter lane) and the Spirit
+(`LocomotionState.CollisionHeight`; the swim depth is three quarters of it) unless the developer's CreatureDisplayInfo and CreatureModelData are configured (`Creatures:CreatureDisplayInfoDbcPath` and `Creatures:CreatureModelDataDbcPath`, both required), which give each model its own height; the feign death timer (hunter lane) and the Spirit
 of Redemption form are not handled; the swimming mobs' threat table update on entering water (`updateThreatTables`) belongs to the creature AI. A pulse that kills is handled by the
 next tick's combat update (the updater runs after combat so that combat stays every map's first updater).
