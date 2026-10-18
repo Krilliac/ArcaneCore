@@ -186,6 +186,27 @@ public sealed class CreaturePathJobTests
     }
 
     [Fact]
+    public void WithPathJobsFollow_AFollowSearchesOnAWorker_AndTheFollowerSetsOff()
+    {
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        int worldThread = Environment.CurrentManagedThreadId;
+        s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
+        s.Player.Relocate(0, 20, s.Player.Z, 0, 0);
+
+        for (int i = 0; i < 200 && s.System.PathJobsApplied == 0; i++)
+        {
+            s.World.RunTick(50);
+            Thread.Sleep(1);
+        }
+
+        Assert.True(s.System.PathJobsApplied >= 1, "no follow answer from the pool was applied");
+        Assert.NotEmpty(s.Paths.SharedThreads);
+        Assert.DoesNotContain(worldThread, s.Paths.SharedThreads);
+        Assert.True(s.Wolf.IsMoving, "the follower did not set off on the pool's path");
+    }
+
+    [Fact]
     public void WithTheSettingOff_EverySearchStaysOnTheMapThread()
     {
         using Scene s = Start(movementType: 1, jobs: false);

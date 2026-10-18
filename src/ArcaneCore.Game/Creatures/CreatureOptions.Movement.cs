@@ -82,6 +82,14 @@ public sealed class CreatureMovementOptions
     /// past it a request is searched synchronously under the per-update budget, as without jobs.
     /// </summary>
     public int PathJobsMaxInFlightPerMap { get; set; } = 512;
+
+    /// <summary>
+    /// <c>Creatures:Movement:PathJobsFollow</c>: out-of-combat follow searches (pets and escorts following their leader) go to the path-job
+    /// pool too (<see cref="PathJobs"/> must be on). The follower keeps its current spline until the answer arrives (one or two updates);
+    /// an answer whose destination is within <c>CreatureMapSystem.PathJobFollowTolerance</c> (1 yd) of the re-asked one still applies,
+    /// since a leader on the move shifts the follow point every update. Chase stays synchronous.
+    /// </summary>
+    public bool PathJobsFollow { get; set; }
 }
 
 /// <summary>The default movement of a waypoint creature without a path (<see cref="CreatureMovementOptions.MissingWaypointPathFallback"/>).</summary>

@@ -1372,6 +1372,22 @@
       "isCollection": false
     },
     {
+      "path": "Auras:HeartbeatResist",
+      "section": "Auras",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Crowd control of over 10 s breaks early on a heartbeat roll (vmangos SpellAuraHolder::CalculateHeartBeat and Update, SpellAuras.cpp:7252-7295, 8114-8143): a player escapes on a curve that reaches 50% at 12 s and 99% at 15 s, a creature resists every 5 s at the caster's spell miss chance. Default true, the vmangos rule. False keeps every such aura for its full duration (the engine's behaviour before).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#auras",
+      "isCollection": false
+    },
+    {
       "path": "Auras:PeriodicCatchUp",
       "section": "Auras",
       "type": "bool",
@@ -3162,6 +3178,22 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "`Creatures:Movement:PathJobs`: run the navmesh searches of out-of-combat creature moves (wander, waypoint, point and scripted moves, evade/home returns of walkers) on a pool of path-job threads instead of the map's update (multithreading plan W5). The answer is the same search over the same loaded tiles; the creature starts the move on a later update, as it does today when the per-update search budget is spent. Chase, follow, flee, confused, formation, pet and flier searches stay synchronous. Off by default; read when the map's creature system starts.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#creatures",
+      "isCollection": false
+    },
+    {
+      "path": "Creatures:Movement:PathJobsFollow",
+      "section": "Creatures",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "`Creatures:Movement:PathJobsFollow`: out-of-combat follow searches (pets and escorts following their leader) go to the path-job pool too (`PathJobs` must be on). The follower keeps its current spline until the answer arrives (one or two updates); an answer whose destination is within `CreatureMapSystem.PathJobFollowTolerance` (1 yd) of the re-asked one still applies, since a leader on the move shifts the follow point every update. Chase stays synchronous.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#creatures",
       "isCollection": false

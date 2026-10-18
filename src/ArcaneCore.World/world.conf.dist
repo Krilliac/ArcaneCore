@@ -28,7 +28,7 @@
 #
 #   ANTICHEAT                   44 keys
 #   AUCTIONHOUSEBOT             39 keys
-#   AURAS                       4 keys
+#   AURAS                       5 keys
 #   AUTOBROADCAST               3 keys
 #   BANS                        7 keys
 #   BATTLEGROUND                8 keys
@@ -38,7 +38,7 @@
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
-#   CREATURES                   67 keys
+#   CREATURES                   68 keys
 #   DATABASE                    30 keys
 #   DIAGNOSTICS                 13 keys
 #   ECONOMY                     29 keys
@@ -1123,6 +1123,22 @@ Auras.DamageProcCancelsAura = false
 #        Docs: docs/reference/configuration.md#auras
 #
 Auras.HarmfulAurasExpireOffline = false
+
+#
+#    Auras.HeartbeatResist
+#        Description: Crowd control of over 10 s breaks early on a heartbeat roll (vmangos
+#                     SpellAuraHolder::CalculateHeartBeat and Update, SpellAuras.cpp:7252-7295,
+#                     8114-8143): a player escapes on a curve that reaches 50% at 12 s and 99% at 15
+#                     s, a creature resists every 5 s at the caster's spell miss chance. Default
+#                     true, the vmangos rule. False keeps every such aura for its full duration (the
+#                     engine's behaviour before).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#auras
+#
+Auras.HeartbeatResist = true
 
 #
 #    Auras.PeriodicCatchUp
@@ -2493,6 +2509,23 @@ Creatures.Movement.PathJobThreads = 4
 #        Docs: docs/reference/configuration.md#creatures
 #
 Creatures.Movement.PathJobs = false
+
+#
+#    Creatures.Movement.PathJobsFollow
+#        Description: Creatures:Movement:PathJobsFollow: out-of-combat follow searches (pets and
+#                     escorts following their leader) go to the path-job pool too (PathJobs must be
+#                     on). The follower keeps its current spline until the answer arrives (one or
+#                     two updates); an answer whose destination is within
+#                     CreatureMapSystem.PathJobFollowTolerance (1 yd) of the re-asked one still
+#                     applies, since a leader on the move shifts the follow point every update.
+#                     Chase stays synchronous.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#creatures
+#
+Creatures.Movement.PathJobsFollow = false
 
 #
 #    Creatures.Movement.PathJobsMaxInFlightPerMap

@@ -206,6 +206,13 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         IReadOnlyList<Vector3> path = mover is ICreaturePathQuery query
             ? query.FindPath(creature, destination, out reachable)
             : mover.FindPath(creature, destination);
+        if (path.Count == 0 && mover is ICreaturePathQuery { LastPlanQueued: true })
+        {
+            // The search went to the path-job pool (Creatures:Movement:PathJobsFollow): keep the current spline and come back for the
+            // answer on the next update. Not aimed yet, so the next update asks again rather than waiting for the target to move.
+            _recheckMs = 0;
+            return;
+        }
 
         // PATHFIND_NOPATH (path is empty, TargetedMovementGenerator.cpp:188-189): no move. The creature stands (or runs out the spline it
         // has) and the re-check in RecheckMs asks again; meanwhile IsReachable is false, which feeds the unreachable-target evade.

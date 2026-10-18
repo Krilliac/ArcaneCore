@@ -24,6 +24,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>How far (yd) a re-asked destination may lie from the job's for the job's path to still apply.</summary>
     internal const float PathJobDestinationTolerance = 0.25f;
 
+    /// <summary>How far (yd) a re-asked follow point may lie from the job's for the job's path to still apply (<c>PathJobsFollow</c>).</summary>
+    internal const float PathJobFollowTolerance = 1f;
+
     /// <summary>A finished job nobody asked for within this long (ms) is dropped by the sweep.</summary>
     internal const long PathJobUnclaimedMs = 10_000;
 
@@ -103,18 +106,22 @@ public sealed partial class CreatureMapSystem
     private bool TryPlanPathByJob(Creature creature, Vector3 destination, bool toSpawn, bool chase, out PlannedPath plan)
     {
         plan = default;
+        // An out-of-combat follow (a pet behind its owner, an escort behind its leader) may go to the pool with PathJobsFollow; a chase never.
+        bool follow = chase && !toSpawn && _options.Movement.PathJobsFollow && creature.Motion.CurrentType == MovementGeneratorType.Follow
+            && !creature.Combat.IsInCombat;
         if (PathJobs is not { } jobs
-            || chase
-            || creature.IsPet
+            || (chase && !follow)
+            || (creature.IsPet && !follow)
             || (creature.Combat.IsInCombat && !toSpawn)
-            || creature.Motion.CurrentType is MovementGeneratorType.Chase or MovementGeneratorType.Follow or MovementGeneratorType.Fleeing
+            || (!follow && creature.Motion.CurrentType is MovementGeneratorType.Follow)
+            || creature.Motion.CurrentType is MovementGeneratorType.Chase or MovementGeneratorType.Fleeing
                 or MovementGeneratorType.Confused or MovementGeneratorType.Formation
             || Map.Collision.PathfinderForMap is not ISharedPathSearch shared)
         {
             return false;
         }
 
-        PathOptions options = PathOptionsFor(creature, toSpawn);
+        PathOptions options = PathOptionsFor(creature, toSpawn, chase);
         if (options.Mover is { CanFly: true } || options.LoadTiles || options.NonBlockingTiles || !shared.CanSearchShared(Map.MapId))
         {
             return false;
@@ -122,12 +129,13 @@ public sealed partial class CreatureMapSystem
 
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         bool anyDestination = !toSpawn && IsWanderLeg(creature);
+        float destinationTolerance = follow ? PathJobFollowTolerance : PathJobDestinationTolerance;
         if (_creaturePathJobs.TryGetValue(creature, out NavJob? job))
         {
             var key = (PathJobKey)job.Tag!;
             bool fits = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination
                 && Vector3.DistanceSquared(job.Start, start) <= PathJobStartTolerance * PathJobStartTolerance
-                && (anyDestination || Vector3.DistanceSquared(job.Destination, destination) <= PathJobDestinationTolerance * PathJobDestinationTolerance);
+                && (anyDestination || Vector3.DistanceSquared(job.Destination, destination) <= destinationTolerance * destinationTolerance);
             if (fits && !job.IsDone)
             {
                 PathJobWaits++;
