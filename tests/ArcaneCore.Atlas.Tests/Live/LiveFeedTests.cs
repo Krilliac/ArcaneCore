@@ -629,6 +629,140 @@ public sealed class LiveFeedTests
         Assert.Equal(2, statuses[1]!["pid"]!.GetValue<int>());
     }
 
+    [Theory]
+    [InlineData("mismatch")]
+    [InlineData("hangup")]
+    [InlineData("cancelled")]
+    [InlineData("exception")]
+    public async Task AFailedConnect_KeepsTheWorkingConnection_AndSaysNothingAboutIt(string failureKind)
+    {
+        string nameA = FakeFeedServer.NewName();
+        string nameB = FakeFeedServer.NewName();
+        await using var rig = new LiveRig(o => o with
+        {
+            PipeNameFor = pid => pid switch
+            {
+                1 => nameA,
+                2 => nameB,
+                _ => string.Empty,
+            },
+        });
+        FakeFeedServer a = rig.NewServer(nameA);
+        FakeFeedServer b = rig.NewServer(nameB);
+        await rig.ConnectAsync(pid: 1, Wire.Hello(pid: 1), a);
+        await a.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+        string detailBefore = rig.Feed.Status()["detail"]!.GetValue<string>();
+        rig.Log.Drain(EventHub.Topics.LiveStatus);
+
+        switch (failureKind)
+        {
+            case "mismatch":
+            {
+                (FakeFeedServer _, Task<JsonObject> connect) = await rig.BeginConnectAsync(pid: 2, server: b);
+                await b.AnswerHelloAsync(Wire.Hello(protocol: 2, pid: 2));
+                CommandException e = await FailureOf(connect);
+                Assert.Equal(CommandException.Failed, e.Code);
+                Assert.Contains("protocol 2", e.Message, StringComparison.Ordinal);
+                break;
+            }
+            case "hangup":
+            {
+                (FakeFeedServer _, Task<JsonObject> connect) = await rig.BeginConnectAsync(pid: 2, server: b);
+                _ = await b.ReadAsync();
+                b.Drop();
+                CommandException e = await FailureOf(connect);
+                Assert.Equal(CommandException.Unavailable, e.Code);
+                break;
+            }
+            case "cancelled":
+            {
+                using var cts = new CancellationTokenSource();
+                Task accept = b.AcceptAsync();
+                Task<JsonObject> connect = rig.Feed.ConnectAsync(2, cts.Token);
+                await accept;
+                _ = await b.ReadAsync();
+                await cts.CancelAsync();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+                break;
+            }
+            case "exception":
+            {
+                await Assert.ThrowsAsync<ArgumentException>(() => rig.Feed.ConnectAsync(3, CancellationToken.None));
+                break;
+            }
+        }
+
+        JsonObject status = rig.Feed.Status();
+        Assert.True(rig.Feed.IsConnected);
+        Assert.Equal(1, status["pid"]!.GetValue<int>());
+        Assert.Equal(detailBefore, status["detail"]!.GetValue<string>());
+        Assert.Equal(new ulong[] { 1 }, rig.Feed.Store.Snapshot().Select(s => s.Entity.Id));
+        Assert.Empty(rig.Log.Drain(EventHub.Topics.LiveStatus));
+
+        await a.WriteAsync(Wire.Frame(0, 0, 2, Wire.Entity("1", "creature", 4, 5, 6), Wire.Entity("2", "creature", 7, 8, 9)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+        Assert.Equal(new ulong[] { 1, 2 }, rig.Feed.Store.Snapshot().Select(s => s.Entity.Id).Order());
+    }
+
+    [Fact]
+    public async Task AFailedConnectWhenDisconnected_RecordsPreciseDetailForCancellationAndUnexpectedExceptions()
+    {
+        await using var rig = new LiveRig(o => o with { PipeNameFor = pid => pid == 1 ? o.PipeNameFor(pid) : string.Empty });
+        FakeFeedServer server = rig.NewServer();
+        using var cts = new CancellationTokenSource();
+        Task accept = server.AcceptAsync();
+        Task<JsonObject> cancelled = rig.Feed.ConnectAsync(1, cts.Token);
+        await accept;
+        _ = await server.ReadAsync();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        Assert.False(rig.Feed.IsConnected);
+        Assert.Equal("the connection attempt was cancelled", rig.Feed.Status()["detail"]!.GetValue<string>());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => rig.Feed.ConnectAsync(2, CancellationToken.None));
+        Assert.False(rig.Feed.IsConnected);
+        Assert.Equal("the connection attempt failed (ArgumentException)", rig.Feed.Status()["detail"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task AReplacementThatClosesRightAfterHello_RunsTheClosedPath_AndThrowsUnavailable()
+    {
+        string nameA = FakeFeedServer.NewName();
+        string nameB = FakeFeedServer.NewName();
+        await using var rig = new LiveRig(o => o with { PipeNameFor = pid => pid == 1 ? nameA : nameB });
+        FakeFeedServer a = rig.NewServer(nameA);
+        FakeFeedServer b = rig.NewServer(nameB);
+        await rig.ConnectAsync(pid: 1, Wire.Hello(pid: 1), a);
+        await a.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+        rig.Log.Drain(EventHub.Topics.LiveStatus);
+
+        rig.Feed.BeforeSwap = session =>
+        {
+            b.Drop();
+            Assert.True(SpinWait.SpinUntil(() => !session.IsOpen, FakeFeedServer.Patience));
+        };
+
+        (FakeFeedServer _, Task<JsonObject> connect) = await rig.BeginConnectAsync(pid: 2, server: b);
+        await b.AnswerHelloAsync(Wire.Hello(pid: 2));
+        CommandException e = await FailureOf(connect);
+
+        Assert.Equal(CommandException.Unavailable, e.Code);
+        Assert.Contains("right after hello", e.Message, StringComparison.Ordinal);
+        Assert.False(rig.Feed.IsConnected);
+        JsonObject status = rig.Feed.Status();
+        Assert.False(status["connected"]!.GetValue<bool>());
+        Assert.Null(status["pid"]);
+        Assert.Equal("the server closed the connection right after hello.", status["detail"]!.GetValue<string>());
+        Assert.Equal(0, rig.Feed.Store.EntityCount);
+        JsonObject pushed = Assert.Single(rig.Log.Drain(EventHub.Topics.LiveStatus))!.AsObject();
+        Assert.False(pushed["connected"]!.GetValue<bool>());
+        Assert.Equal(2, pushed["pid"]!.GetValue<int>());
+        Assert.Equal("the server closed the connection right after hello.", pushed["detail"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task Disconnect_TellsTheServer_ClosesTheLine_AndForgetsTheSubscriptions()
     {

@@ -105,6 +105,9 @@ public sealed class LiveFeed : IDisposable
         }
     }
 
+    /// <summary>Test hook invoked after hello succeeds and before the session swap lock is taken.</summary>
+    internal Action<FeedSession>? BeforeSwap { get; set; }
+
     /// <summary>
     /// Connects to the feed of process <paramref name="pid"/>, or to the only feed found by discovery when it is null, replacing any
     /// current connection. Subscriptions from the previous connection are asked for again. Returns <see cref="Status"/>.
@@ -152,14 +155,11 @@ public sealed class LiveFeed : IDisposable
                 throw;
             }
 
-            if (!session.IsOpen)
-            {
-                session.Dispose();
-                throw new CommandException(CommandException.Unavailable, "the server closed the connection right after hello.");
-            }
+            BeforeSwap?.Invoke(session);
 
             FeedSession? previous = null;
             bool disposedMeanwhile;
+            bool closedMeanwhile = false;
             lock (_state)
             {
                 disposedMeanwhile = _disposed;
@@ -170,6 +170,15 @@ public sealed class LiveFeed : IDisposable
                     _stats = session.Stats;
                     _connections++;
                     _detail = $"connected to process {(session.Hello?.Pid ?? target).ToString(CultureInfo.InvariantCulture)} on pipe '{session.PipeName}'";
+
+                    // A close that landed before the swap found another session installed and was ignored by OnClosed; one after the swap is
+                    // handled there. Checking under the same lock as the swap leaves no gap between the two.
+                    if (!session.IsOpen)
+                    {
+                        closedMeanwhile = true;
+                        _session = null;
+                        _detail = "the server closed the connection right after hello.";
+                    }
                 }
             }
 
@@ -178,6 +187,21 @@ public sealed class LiveFeed : IDisposable
                 // Dispose ran between the handshake and here; it never saw this session, so closing it is ours to do.
                 session.Dispose();
                 throw new ObjectDisposedException(nameof(LiveFeed));
+            }
+
+            if (closedMeanwhile)
+            {
+                lock (_apply)
+                {
+                    _currentId = 0;
+                    Store.Clear();
+                }
+
+                previous?.Dispose();
+                session.Dispose();
+                _log.LogInformation("map feed connection ended: {Reason}", "the server closed the connection right after hello.");
+                PublishStatus(connected: false, session, "the server closed the connection right after hello.");
+                throw new CommandException(CommandException.Unavailable, "the server closed the connection right after hello.");
             }
 
             lock (_apply)
@@ -747,8 +771,8 @@ public sealed class LiveFeed : IDisposable
         var patch = new JsonObject();
         AddCameraMove(patch, entity);
 
-        // Narrow the check-then-act window: a follow cleared while this frame was being applied must not get one more camera move.
-        if (_view.Current.FollowGuid is null)
+        // Narrow the check-then-act window: a follow cleared or switched while this frame was being applied must not get one more camera move.
+        if (_view.Current.FollowGuid is not { } stillFollowing || !LiveGuid.TryParse(stillFollowing, out ulong stillId) || stillId != id)
         {
             return;
         }
