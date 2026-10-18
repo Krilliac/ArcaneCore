@@ -311,6 +311,8 @@ public sealed class CreatureAiFactory
         [Scripts.CorruptedFurbolgAI.NpcBlackwoodWarrior] = E(static c => new Scripts.CorruptedFurbolgAI(c)),
         [Scripts.CorruptedFurbolgAI.NpcBlackwoodTotemic] = E(static c => new Scripts.CorruptedFurbolgAI(c)),
         [Scripts.TheramoreSparControllerAI.NpcMasterSzigeti] = E(static c => new Scripts.TheramoreSparControllerAI(c)),
+        [Scripts.CorkGizeltonAI.Entry] = E(static c => new Scripts.CorkGizeltonAI(c)),
+        [Scripts.RiggerGizeltonAI.Entry] = E(static c => new Scripts.RiggerGizeltonAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
@@ -355,6 +357,8 @@ public sealed class CreatureAiFactory
         Scripts.AreiAI.QuestAncientSpirit,
         Scripts.OgronAI.QuestQuestioning,
         Scripts.CapturedArkonarinAI.QuestRescueJaedenar,
+        Scripts.CorkGizeltonAI.QuestBodyguardForHire,
+        Scripts.CorkGizeltonAI.QuestGizeltonCaravan,
         Instances.Scripts.BlackrockDepths.MarshalWindsorAI.QuestJailBreak];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
