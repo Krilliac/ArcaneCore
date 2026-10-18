@@ -128,6 +128,44 @@ public sealed class ChestGoldAndConditionTests
         Assert.False(chest.IsSpawned);
     }
 
+    private sealed class LootedOutRecorder : IGameObjectAi
+    {
+        public List<(GameObject Go, Player? Looter)> LootedOut { get; } = [];
+
+        public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+
+        public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs)
+        {
+        }
+
+        public void OnLootedOut(GameObjectMapSystem objects, GameObject go, Player? looter) => LootedOut.Add((go, looter));
+    }
+
+    [Fact]
+    public void Chest_TheScriptHearsTheLootedOutRelease_NotAPartlyLootedOne()
+    {
+        Rig rig = CreateRig([GoSpawn(1, ChestEntry, 3, 0)]);
+        var recorder = new LootedOutRecorder();
+        rig.System.RegisterAi(ChestEntry, recorder);
+        (Player player, FakeSession session) = rig.Join(1);
+        GameObject chest = rig.Single(ChestEntry);
+        session.Clear();
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, chest.Guid));
+        ParsedLootItem jerky = Assert.Single(LootResponse(session).Items);
+        Assert.Equal(Items.InventoryResult.Ok, rig.Loot.TakeItem(player, jerky.Slot));
+        rig.Loot.Release(player, chest.Guid);
+        Assert.Empty(recorder.LootedOut);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, chest.Guid));
+        Assert.True(rig.Loot.TakeMoney(player));
+        rig.Loot.Release(player, chest.Guid);
+
+        (GameObject go, Player? looter) = Assert.Single(recorder.LootedOut);
+        Assert.Same(chest, go);
+        Assert.Same(player, looter);
+    }
+
     [Fact]
     public void Chest_WithoutALootId_PaysNothing_AndAChestWithoutAGoldRangePaysNothing()
     {

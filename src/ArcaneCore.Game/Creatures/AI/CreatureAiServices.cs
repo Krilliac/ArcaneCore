@@ -307,6 +307,7 @@ public sealed class CreatureAiFactory
         [Scripts.SimoneTheSeductressAI.Entry] = E(static c => new Scripts.SimoneTheSeductressAI(c)),
         [Scripts.PreciousTheDevourerAI.Entry] = E(static c => new Scripts.PreciousTheDevourerAI(c)),
         [Scripts.MawsAI.Entry] = E(static c => new Scripts.MawsAI(c)),
+        [Scripts.ColonelKurzenAI.Entry] = E(static c => new Scripts.ColonelKurzenAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>

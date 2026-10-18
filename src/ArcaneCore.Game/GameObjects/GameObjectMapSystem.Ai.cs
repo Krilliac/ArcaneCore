@@ -46,6 +46,15 @@ public interface IGameObjectAi
     void OnRespawn(GameObjectMapSystem objects, GameObject go)
     {
     }
+
+    /// <summary>
+    /// cmangos GameObjectAI::OnLootStateChange(user) for GO_JUST_DEACTIVATED on the loot release path: the last viewer released the
+    /// object's loot and it was looted out (DoLootRelease → SetLootState(GO_JUST_DEACTIVATED, player)). <paramref name="looter"/> is the
+    /// releasing player when known. Defaults to nothing.
+    /// </summary>
+    void OnLootedOut(GameObjectMapSystem objects, GameObject go, Player? looter)
+    {
+    }
 }
 
 /// <summary>

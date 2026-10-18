@@ -1003,6 +1003,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             else
             {
                 go.LootState = GameObjectLootState.JustDeactivated;
+                AiOf(go)?.OnLootedOut(this, go, releaser);
             }
         }
         else if (bag.DurableKey is not null)

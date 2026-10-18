@@ -75,7 +75,16 @@ public sealed class KalimdorWorldMapData : WorldMapData
         {
             StoreCreature(creature);
         }
+        else if (creature.Template.Entry == FelhoundTrackerAi.Entry && !_felhoundRegistered && creature.System is { } system)
+        {
+            // azshara.cpp npc_felhound_tracker is a ScriptedPetAI on the guardian the Azsharite quest item summons: a map entry script, so the
+            // guardian keeps it instead of the generic pet AI (SummonService asks HasEntryAi), as Razorfen Kraul's Snufflenose Gopher does.
+            _felhoundRegistered = true;
+            system.RegisterEntryAi(FelhoundTrackerAi.Entry, c => new FelhoundTrackerAi(c), rebuildExisting: creature.AI is not null);
+        }
     }
+
+    private bool _felhoundRegistered;
 
     public override void OnCreatureDeath(Creature creature)
     {
