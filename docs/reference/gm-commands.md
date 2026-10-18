@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 336 |
-| `Administrator` | 6 | 464 |
+| `GameMaster` | 3 | 345 |
+| `Administrator` | 6 | 473 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -76,6 +76,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug pathbench` | 3 | GameMaster | declared retail level | Syntax: .debug pathbench [#count] [#radius] Time #count path queries (default 20, at most 100) from you to evenly spread points #radius yards away (default 40, 5-200) on the world thread: min/p50/max/mean time, how many found a full, partial or no path, and the mean path length. |
 | `.debug gccollect` | 6 | Administrator | declared retail level | Syntax: .debug gccollect Force a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server. |
 | `.debug sessions` | 3 | GameMaster | declared retail level | Syntax: .debug sessions [#count] Show the in-world sessions: players and bots, client latency (median, p90, max over the players) and the sessions with the most queued outbound world packets (default 10 rows, at most 60). |
+| `.debug scheduler` | 3 | GameMaster | declared retail level | Syntax: .debug scheduler [#count] Show the world tick scheduler (interval, late tolerance, late and skipped ticks, next due) and the deferred work queues: posted world commands, pending teleports, and the maps with the most queued work (delayed unit actions, charm links, AI relocation notices, assist calls, relay and db script steps, arrival relays, script despawns; default 15 maps). |
+| `.debug opcodes` | 3 | GameMaster | declared retail level | Syntax: .debug opcodes [on\|off\|reset\|in\|out\|bytes] [#count] Per-opcode traffic since the last reset: packets and bytes in and out by protocol and opcode, busiest first (by packets in+out, 'in', 'out' or 'bytes'; default 15 rows). Counting runs while a metrics listener is attached or after '.debug opcodes on' (off again with 'off'); 'reset' starts a new window. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
 | `.debug invariants` | 3 | GameMaster | declared retail level | Syntax: .debug invariants Print the process-wide invariant failure count, policy, and up to 20 recorded invariant violation sites. |
@@ -413,6 +415,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.inspect grid` | 3 | GameMaster | declared retail level | Syntax: .inspect grid Show the grid and cell the selected object (or you) is in, whether that grid is loaded and how many grids of the map are loaded, the active cells and the map's largest bounding radius. |
 | `.inspect visibility` | 3 | GameMaster | declared retail level | Syntax: .inspect visibility Show whether the selected object is in your client's visible set and in visibility range, whether you are in its visible set (a player), and the size of both visible sets. |
 | `.inspect loot` | 3 | GameMaster | declared retail level | Syntax: .inspect loot Show the selected creature's loot: owner, permission, recipients, gold and every item with count, quest/per-player flags, looted and roll state. |
+| `.inspect gobject` | 3 | GameMaster | declared retail level | Syntax: .inspect gobject [#guid] Show a game object (the nearest within 30 yards without #guid): template, type, state, loot state, flags, dynamic flags, faction, user, owner, summoning spell, use count, cooldown, auto-close and respawn timers, skill-ups granted, non-zero data fields and its open loot. |
+| `.inspect cooldowns` | 3 | GameMaster | declared retail level | Syntax: .inspect cooldowns List the running spell and category cooldowns of the selected unit (creature or player, yourself without a selection) with the time left. |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.ai` ... | 3 | GameMaster | declared retail level | Syntax: .ai $subcommand Force the selected creature's AI or movement. Type .ai to see the list of possible subcommands. |
 | `.ai evade` | 3 | GameMaster | declared retail level | Syntax: .ai evade Make the selected creature evade: leave combat, clear its threat and go home. |
@@ -444,6 +448,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.alter field` | 6 | Administrator | declared retail level | Syntax: .alter field #index #value\|#hex\|#float f Write a raw update field of the selected unit (sent to the clients that see it). Debugging only: the server may overwrite it at any time. |
 | `.alter auraduration` | 3 | GameMaster | declared retail level | Syntax: .alter auraduration #spellid #seconds Set the remaining time of the selected unit's (or your) aura of #spellid (a spell link works) to #seconds (0 lets it expire now, at most 86400). Permanent auras are not changed. |
 | `.alter aurastacks` | 3 | GameMaster | declared retail level | Syntax: .alter aurastacks #spellid #stacks Set the stack count of the selected unit's (or your) aura of #spellid to #stacks (1 up to the spell's limit); the effect amounts scale with it and an increase refreshes the duration. |
+| `.alter dynflag` | 3 | GameMaster | declared retail level | Syntax: .alter dynflag $flag\|#hex on\|off Set or clear one dynamic flag of the selected unit: Lootable, TrackUnit, Tapped, TappedByPlayer, SpecialInfo, Dead or a hex bit. |
+| `.alter combatreach` | 3 | GameMaster | declared retail level | Syntax: .alter combatreach #yards Set the combat reach of the selected unit (0-50 yards; melee range is built from it). A creature gets its model's value back when it respawns. |
+| `.alter boundingradius` | 3 | GameMaster | declared retail level | Syntax: .alter boundingradius #yards Set the bounding radius of the selected unit (0-50 yards; distances and spell ranges subtract it). |
+| `.alter gostate` | 3 | GameMaster | declared retail level | Syntax: .alter gostate active\|ready\|alternative\|#state [#guid] Set the state of a game object (the nearest within 30 yards without #guid): active opens a door, ready closes it. Its loot state does not change. |
+| `.alter goflag` | 3 | GameMaster | declared retail level | Syntax: .alter goflag $flag\|#hex on\|off [#guid] Set or clear one flag of a game object (the nearest within 30 yards without #guid): InUse, Locked, InteractCond, Transport, NoInteract, NoDespawn, Triggered or a hex bit. |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |

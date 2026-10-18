@@ -118,6 +118,12 @@ public sealed class MapUnitControl : IMapUpdater
     /// action of a player follows it to the next map it enters (<see cref="OnPlayerRemoved"/>, <see cref="OnPlayerAdding"/>); the
     /// action of another unit is dropped when the unit has left the map (despawned or unloaded).
     /// </summary>
+    /// <summary>Delayed unit actions waiting to run on this map (<c>.debug scheduler</c>).</summary>
+    public int PendingCount => _pending.Count;
+
+    /// <summary>Units under a charm or possess link on this map (<c>.debug scheduler</c>).</summary>
+    public int LinkCount => _links.Count;
+
     public void Schedule(Unit unit, uint delayMs, Action action)
     {
         ArgumentNullException.ThrowIfNull(unit);

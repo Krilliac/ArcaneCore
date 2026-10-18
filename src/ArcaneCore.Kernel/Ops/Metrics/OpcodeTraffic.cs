@@ -45,6 +45,24 @@ public sealed class OpcodeTrafficMeter
     public bool Enabled => _packetsIn.Enabled || _packetsOut.Enabled || _bytesIn.Enabled || _bytesOut.Enabled;
 
     /// <summary>
+    /// Count even without a metrics listener (<c>.debug opcodes on</c>, docs/reference/gm-commands.md). Off by default: with no listener
+    /// and this off the recorders return at once.
+    /// </summary>
+    public bool LocalCounting
+    {
+        get => Volatile.Read(ref _localCounting);
+        set => Volatile.Write(ref _localCounting, value);
+    }
+
+    private bool _localCounting;
+
+    /// <summary>True when the recorders count: a listener observes an instrument or <see cref="LocalCounting"/> is on.</summary>
+    public bool Counting => LocalCounting || Enabled;
+
+    /// <summary>The registered tables (a snapshot; thread-safe).</summary>
+    public IReadOnlyList<OpcodeTable> Tables => Volatile.Read(ref _tables);
+
+    /// <summary>
     /// Register a protocol's known opcodes and return the table that counts them.
     /// </summary>
     /// <param name="protocol">The <c>protocol</c> label value; unique per meter.</param>
@@ -188,7 +206,7 @@ public sealed class OpcodeTable
     /// <summary>Count one inbound packet of <paramref name="bytes"/> bytes.</summary>
     public void RecordIn(uint opcode, int bytes)
     {
-        if (!_owner.Enabled)
+        if (!_owner.Counting)
         {
             return;
         }
@@ -201,7 +219,7 @@ public sealed class OpcodeTable
     /// <summary>Count <paramref name="bytes"/> more inbound bytes of a packet already counted by <see cref="RecordIn"/> (multi-part reads).</summary>
     public void RecordInBytes(uint opcode, int bytes)
     {
-        if (!_owner.Enabled)
+        if (!_owner.Counting)
         {
             return;
         }
@@ -212,7 +230,7 @@ public sealed class OpcodeTable
     /// <summary>Count one outbound packet of <paramref name="bytes"/> bytes.</summary>
     public void RecordOut(uint opcode, int bytes)
     {
-        if (!_owner.Enabled)
+        if (!_owner.Counting)
         {
             return;
         }
@@ -232,6 +250,19 @@ public sealed class OpcodeTable
             Volatile.Read(ref _packetsOut[slot]),
             Volatile.Read(ref _bytesOut[slot]));
     }
+
+    /// <summary>Number of slots: slot 0 is <see cref="UnknownLabel"/>, the registered opcodes follow.</summary>
+    public int SlotCount => _labels.Length;
+
+    /// <summary>The <c>opcode</c> label of <paramref name="slot"/>.</summary>
+    public string LabelAt(int slot) => _labels[slot];
+
+    /// <summary>The counters of <paramref name="slot"/> (thread-safe).</summary>
+    public OpcodeCounts ReadSlot(int slot) => new(
+        Volatile.Read(ref _packetsIn[slot]),
+        Volatile.Read(ref _bytesIn[slot]),
+        Volatile.Read(ref _packetsOut[slot]),
+        Volatile.Read(ref _bytesOut[slot]));
 
     internal long[] Counts(Series series) => series switch
     {
