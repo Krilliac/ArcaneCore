@@ -44,6 +44,33 @@ public sealed class PlayerbotCadenceTests
     }
 
     [Fact]
+    public async Task AFightsShortCombatLaneGaps_DoNotShortenTheLeaseOfTheWalkAfterIt()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                for (int i = 0; i < 4; i++) PlayerbotMotion.NoteThinkGap(player, 5000);
+                uint before = PlayerbotMotion.ThinkGapMs(player);
+                // A fight: twenty combat-lane thinks 400 ms apart leave the main lane's gap as it was.
+                for (int i = 0; i < 20; i++) PlayerbotMotion.NoteThinkGap(player, 400, combatLane: true);
+                Assert.Equal(before, PlayerbotMotion.ThinkGapMs(player));
+                // A starved combat lane (a longer gap) still raises it.
+                PlayerbotMotion.NoteThinkGap(player, 9000, combatLane: true);
+                Assert.True(PlayerbotMotion.ThinkGapMs(player) > before);
+                // Main-lane thinks still lower it.
+                for (int i = 0; i < 20; i++) PlayerbotMotion.NoteThinkGap(player, 400);
+                Assert.InRange(PlayerbotMotion.ThinkGapMs(player), 1u, 1000u);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task ABotThatThinksEveryFiveSeconds_KeepsWalkingPastTheOldTwoSecondLease()
     {
         await using WorldTestHost host = WorldTestHost.Start();

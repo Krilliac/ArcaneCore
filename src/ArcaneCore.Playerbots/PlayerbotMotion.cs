@@ -806,12 +806,17 @@ internal static class PlayerbotMotion
     /// <summary>
     /// A think of this bot ran <paramref name="sinceLast"/> ms after its previous one: fold it into the smoothed gap (an exponentially
     /// weighted average, weight 1/4). A gap of 0 (two thinks in one clock reading) is no measure; the first measured gap is taken as is.
+    /// A think of the combat lane (<paramref name="combatLane"/>: fighting, dead or a ghost, thought for every CombatThinkIntervalMs) only
+    /// raises the average: its short gaps said nothing of the rotation the bot returns to after the fight, and the lease they left (2 s)
+    /// stopped the bot's next walk long before its next think (live 2026-10-17: about a third of bot-motion/lease-expired-midroute lines
+    /// had a think gap under 1 s while the main lane's p95 gap was 4 to 8 s).
     /// </summary>
-    internal static void NoteThinkGap(Player player, uint sinceLast)
+    internal static void NoteThinkGap(Player player, uint sinceLast, bool combatLane = false)
     {
         if (sinceLast == 0 || sinceLast > int.MaxValue) return;
         MotionState state = Of(player);
         uint sample = Math.Min(sinceLast, MaxGapLeaseMs);
+        if (combatLane && state.GapMs != 0 && sample <= state.GapMs) return;
         state.GapMs = state.GapMs == 0 ? sample : (uint)((state.GapMs * 3L + sample + 2) / 4);
     }
 

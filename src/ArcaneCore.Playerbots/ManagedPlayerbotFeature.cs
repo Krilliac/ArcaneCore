@@ -2009,8 +2009,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
             if (active.GapPrimed)
             {
-                _cadence.RecordGap(sinceLast, IsCombatLane(active));
-                if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast);
+                bool combatLane = IsCombatLane(active);
+                _cadence.RecordGap(sinceLast, combatLane);
+                if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast, combatLane);
             }
 
             active.GapPrimed = true;
