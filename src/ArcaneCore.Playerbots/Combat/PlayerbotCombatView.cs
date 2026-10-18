@@ -122,11 +122,19 @@ internal static class PlayerbotCombatView
             petFightingCrowdControlled = pet.Combat.Victim is { } petVictim && system.HasAuraPetShouldAvoidBreaking(petVictim, pet);
         }
 
-        bool canCallPet = player.Class == Class.Hunter && player.PetGuid.IsEmpty
-            && session.Services.GetService<PetsFeature>()?.Service.TryGetCachedCurrentPet(player, out _) == true;
+        ArcaneCore.Kernel.Characters.Pets.PersistentPetSnapshot? cachedPet = null;
+        bool hasCachedPet = player.Class == Class.Hunter && player.PetGuid.IsEmpty
+            && session.Services.GetService<PetsFeature>()?.Service.TryGetCachedCurrentPet(player, out cachedPet) == true
+            && cachedPet is not null;
+        if (hasCachedPet && cachedPet!.Health == 0)
+        {
+            petStatus = RotationPetStatus.Dead;
+        }
+
+        bool canCallPet = hasCachedPet && cachedPet!.Health > 0;
 
         RotationUnit? tameCandidate = null;
-        if (player.Class == Class.Hunter && player.PetGuid.IsEmpty && !canCallPet && !player.Combat.IsInCombat
+        if (player.Class == Class.Hunter && player.PetGuid.IsEmpty && !hasCachedPet && !player.Combat.IsInCombat
             && spells.Has(PlayerbotHunterRotation.TameBeast) && map is not null
             && FindTameCandidate(session, player, map) is { } beast)
         {

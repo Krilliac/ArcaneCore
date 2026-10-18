@@ -63,7 +63,7 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
     /// </summary>
     internal static RotationAction? Pet(RotationState s) => s.Pet switch
     {
-        RotationPetStatus.Dead when s.PetUnit is { } dead => Do(s, RevivePet, dead),
+        RotationPetStatus.Dead => Do(s, RevivePet, s.PetUnit ?? s.Self),
         RotationPetStatus.None when s.CanCallPet => Do(s, CallPet, s.Self),
         // A hunter that never tamed (or abandoned) a pet tames a beast standing in reach (vmangos PartyBotAI tames for a pet-less bot).
         RotationPetStatus.None when s.TameCandidate is { } beast && !s.IsMoving => Do(s, TameBeast, beast),

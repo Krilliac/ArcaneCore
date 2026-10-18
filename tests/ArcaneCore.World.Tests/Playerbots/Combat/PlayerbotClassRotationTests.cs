@@ -128,6 +128,8 @@ public sealed class PlayerbotClassRotationTests
         var pet = new RotationUnit { Guid = new ObjectGuid(0xF140000000000099UL), Distance = 2f, Health = 0, MaxHealth = 100, IsAlive = false };
         Assert.Equal("Revive Pet", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
             inCombat: false, more: s => { s.Pet = RotationPetStatus.Dead; s.PetUnit = pet; }))));
+        Assert.Equal("Revive Pet", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
+            inCombat: false, more: s => s.Pet = RotationPetStatus.Dead))));
         Assert.Equal("Call Pet", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
             inCombat: false, more: s => s.CanCallPet = true))));
         Assert.Null(Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps, inCombat: false))));

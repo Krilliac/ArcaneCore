@@ -561,8 +561,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
                 return true;
         }
 
-        // A spell with a cast time needs the bot standing (vmangos DoCastSpell stops the mover); instants go while moving.
-        if (spell.GetCastTime(player.Level) > 0 && player.Movement.HasFlag(MovementFlags.MaskMoving)
+        // A spell with a cast time or channel needs the bot standing (vmangos DoCastSpell stops the mover); instants go while moving.
+        if ((spell.IsChanneled || spell.GetCastTime(player.Level) > 0) && player.Movement.HasFlag(MovementFlags.MaskMoving)
             && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
             return true;
 
