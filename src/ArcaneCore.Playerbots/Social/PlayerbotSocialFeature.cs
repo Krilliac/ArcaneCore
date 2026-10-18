@@ -88,7 +88,8 @@ internal sealed class PlayerbotSocialTimings
 /// <summary>Everything one social pass works with (world thread). Bots are gathered on first use, so an event handler's pass costs nothing extra.</summary>
 internal sealed class PlayerbotSocialPass(
     PlayerbotOptions bot, SocialContext social, WorldRuntime world, IServiceProvider services, PlayerbotChat? chat, IReadOnlySet<uint> registered,
-    bool registryLoaded, PlayerbotSocialTimings timings, Random random, long nowMs, long elapsedMs, Func<List<PlayerbotSocialBot>> gather)
+    bool registryLoaded, PlayerbotSocialTimings timings, Random random, long nowMs, long elapsedMs, Func<List<PlayerbotSocialBot>> gather,
+    Dictionary<uint, PlayerbotSocialBot>? byCharacterScratch = null, HashSet<Guid>? botIdsScratch = null)
 {
     private List<PlayerbotSocialBot>? _bots;
     private Dictionary<uint, PlayerbotSocialBot>? _byCharacter;
@@ -122,9 +123,36 @@ internal sealed class PlayerbotSocialPass(
     internal IReadOnlyList<PlayerbotSocialBot> Bots => _bots ??= gather();
 
     /// <summary>The running bots by character id.</summary>
-    internal IReadOnlyDictionary<uint, PlayerbotSocialBot> ByCharacter => _byCharacter ??= Bots.ToDictionary(b => b.Player.Guid.Low);
+    internal IReadOnlyDictionary<uint, PlayerbotSocialBot> ByCharacter => _byCharacter ??= BuildByCharacter();
 
-    internal IReadOnlySet<Guid> BotIds => _ids ??= [.. Bots.Select(b => b.Id)];
+    internal IReadOnlySet<Guid> BotIds => _ids ??= BuildBotIds();
+
+    private Dictionary<uint, PlayerbotSocialBot> BuildByCharacter()
+    {
+        IReadOnlyList<PlayerbotSocialBot> bots = Bots;
+        Dictionary<uint, PlayerbotSocialBot> map = byCharacterScratch ?? new Dictionary<uint, PlayerbotSocialBot>(bots.Count);
+        map.Clear();
+        map.EnsureCapacity(bots.Count);
+        for (int i = 0; i < bots.Count; i++)
+        {
+            PlayerbotSocialBot entry = bots[i];
+            map[entry.Player.Guid.Low] = entry;
+        }
+        return map;
+    }
+
+    private HashSet<Guid> BuildBotIds()
+    {
+        IReadOnlyList<PlayerbotSocialBot> bots = Bots;
+        HashSet<Guid> set = botIdsScratch ?? new HashSet<Guid>(bots.Count);
+        set.Clear();
+        set.EnsureCapacity(bots.Count);
+        for (int i = 0; i < bots.Count; i++)
+        {
+            set.Add(bots[i].Id);
+        }
+        return set;
+    }
 
     internal QuestNpcServices? Quests => services.GetService<QuestNpcFeature>()?.Services;
 
@@ -333,7 +361,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         ManagedPlayerbotFeature? bots = services.GetService<ManagedPlayerbotFeature>();
         HashSet<uint>? registry = Volatile.Read(ref _registry);
         return new PlayerbotSocialPass(_options, social, world, services, bots?.Chat, registry ?? [], registry is not null, Timings, Random, _clockMs,
-            elapsed, () => gatherBots && bots is not null ? Gather(bots) : []);
+            elapsed, () => gatherBots && bots is not null ? Gather(bots) : [],
+            gatherBots ? _byCharacterScratch : null, gatherBots ? _botIdsScratch : null);
     }
 
     private void RunPass(long elapsed)
@@ -359,6 +388,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private readonly List<PlayerbotChannelBot> _channelBotsScratch = [];
     private readonly List<PlayerbotSocialBot> _socialBotsScratch = [];
+    private readonly Dictionary<uint, PlayerbotSocialBot> _byCharacterScratch = [];
+    private readonly HashSet<Guid> _botIdsScratch = [];
 
     /// <summary>
     /// Keep each bot in its zone's world channels (<see cref="PlayerbotChannelMembership"/>) while bot speech is on; with it off the bots

@@ -270,7 +270,7 @@ internal sealed class PlayerbotBank(WorldSession session, PlayerbotOptions optio
         NpcInfo? banker = null;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            if (lookup.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsInCombat: false, IsNotSelectable: false } info
+            if (lookup.Find(player, guid, NpcFlags.Banker) is not { IsAlive: true, IsHostile: false, IsInCombat: false, IsNotSelectable: false } info
                 || (info.NpcFlags & NpcFlags.Banker) == 0 || Suspensions?.IsEntrySuspended(info.Entry, now) == true) continue;
             if (services.InteractableNpc(player, guid, NpcFlags.Banker) is not null)
             {

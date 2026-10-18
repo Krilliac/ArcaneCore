@@ -561,7 +561,7 @@ internal static class PlayerbotTaxi
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (!MayBeFlightMaster(content, guid)) continue;
-            if (lookup.Find(player, guid) is not { IsAlive: true, IsGameObject: false } npc || (npc.NpcFlags & NpcFlags.FlightMaster) == 0) continue;
+            if (lookup.Find(player, guid, NpcFlags.FlightMaster) is not { IsAlive: true, IsGameObject: false } npc || (npc.NpcFlags & NpcFlags.FlightMaster) == 0) continue;
             uint node = index.Nearest(npc.MapId, npc.X, npc.Y, npc.Z, alliance);
             if (node == 0 || TaxiIndex.IsKnown(state.TaxiMask, node)) continue;
             if (memo.AskedUntil.TryGetValue(guid.Value, out uint until) && unchecked((int)(until - now)) > 0) continue;
@@ -1133,7 +1133,7 @@ internal static class PlayerbotTaxi
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (!MayBeFlightMaster(content, guid)) continue;
-            if (lookup.Find(player, guid) is not { IsAlive: true, IsGameObject: false } npc || (npc.NpcFlags & NpcFlags.FlightMaster) == 0) continue;
+            if (lookup.Find(player, guid, NpcFlags.FlightMaster) is not { IsAlive: true, IsGameObject: false } npc || (npc.NpcFlags & NpcFlags.FlightMaster) == 0) continue;
             if (index.Nearest(npc.MapId, npc.X, npc.Y, npc.Z, alliance) != node) continue;
             if (services.InteractableNpc(player, guid, NpcFlags.FlightMaster) is not null) return npc;
         }

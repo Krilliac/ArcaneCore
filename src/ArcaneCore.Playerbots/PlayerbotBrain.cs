@@ -3189,7 +3189,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services is not { } services) return false;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false } info
+            if (services.Deps.Creatures?.Find(player, guid, ArcaneCore.Game.Npc.NpcFlags.Innkeeper) is not { IsAlive: true, IsHostile: false } info
                 || (info.NpcFlags & ArcaneCore.Game.Npc.NpcFlags.Innkeeper) == 0
                 || services.InteractableNpc(player, guid, ArcaneCore.Game.Npc.NpcFlags.Innkeeper) is null) continue;
             var writer = new PacketWriter(8);

@@ -596,7 +596,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         _roomWanted = false;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
+            if (services.Deps.Creatures?.Find(player, guid, NpcFlags.QuestGiver) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
                 || (npc.NpcFlags & NpcFlags.QuestGiver) == 0)
                 continue;
             if (_stage != Stage.None && npc.Guid != _stageNpc)

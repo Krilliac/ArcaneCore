@@ -16,16 +16,22 @@ namespace ArcaneCore.Game.Npc;
 /// </summary>
 public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcReactionSource? reactions = null) : ICreatureLookup
 {
-    public NpcInfo? Find(Player player, ObjectGuid guid)
+    public NpcInfo? Find(Player player, ObjectGuid guid) => Find(player, guid, NpcFlags.None);
+
+    public NpcInfo? Find(Player player, ObjectGuid guid, NpcFlags requiredFlags)
     {
         if (guid.High == HighGuid.GameObject)
         {
-            return FindGameObject(player, guid);
+            return (requiredFlags == NpcFlags.None || (requiredFlags & NpcFlags.QuestGiver) != 0)
+                ? FindGameObject(player, guid, requiredFlags)
+                : null;
         }
 
-        if (!player.IsInWorld || player.Map is not { } map || !player.VisibleObjects.Contains(guid)
+        if (!player.IsInWorld || player.Map is not { } map
             || map.FindObject(guid) is not Creature creature || !creature.IsInWorld
             || !ReferenceEquals(creature.Map, map)
+            || (requiredFlags != NpcFlags.None && ((NpcFlags)creature.NpcFlags & requiredFlags) == 0)
+            || !player.VisibleObjects.Contains(guid)
             || creature.GetUInt64(UpdateFields.UnitFieldCharmedby) != 0
             || !TryHostility(creature, player, out bool hostile))
         {
@@ -49,9 +55,9 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
     /// is never hostile, alive-checked or reputation-gated; the distance rule is applied by the caller (the object's
     /// own per-type interaction distance, <see cref="GameObjectMapSystem.InteractionDistanceFor"/>; Player.cpp:2540-2565 also rejects a dead or taxi-flying player, handled by InteractableNpc).
     /// </summary>
-    private static NpcInfo? FindGameObject(Player player, ObjectGuid guid)
+    private static NpcInfo? FindGameObject(Player player, ObjectGuid guid, NpcFlags requiredFlags)
     {
-        if (!player.IsInWorld || player.Map is not { } map || !player.VisibleObjects.Contains(guid)
+        if (!player.IsInWorld || player.Map is not { } map
             || map.FindObject(guid) is not GameObject go || !go.IsSpawned || !ReferenceEquals(go.Map, map)
             || (go.Flags & GameObjectFlags.NoInteract) != 0)
         {
@@ -59,6 +65,16 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
         }
 
         bool giver = go.Type == GameObjectType.QuestGiver;
+        if (requiredFlags != NpcFlags.None && !giver)
+        {
+            return null;
+        }
+
+        if (!player.VisibleObjects.Contains(guid))
+        {
+            return null;
+        }
+
         return new NpcInfo(go.Guid, go.Entry, go.Spawn?.Guid ?? go.Guid.Low, giver ? NpcFlags.QuestGiver : NpcFlags.None,
             go.MapId, go.X, go.Y, go.Z, go.BoundingRadius, true, false, false, false,
             giver ? go.Template.GetData(QuestGiverGossipIdIndex) : 0, IsGameObject: true,

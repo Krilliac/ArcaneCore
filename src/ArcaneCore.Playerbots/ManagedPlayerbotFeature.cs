@@ -614,8 +614,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
-            foreach (ManagedPlayerbot bot in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId)).Take(_options.MaxBots))
-                await StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore).ConfigureAwait(false);
+            foreach (ManagedPlayerbot[] chunk in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId)).Take(_options.MaxBots).Chunk(32))
+                await Task.WhenAll(chunk.Select(bot => StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore))).ConfigureAwait(false);
     }
 
     public IReadOnlyList<PlayerbotStatus> Snapshot()
@@ -1281,27 +1281,30 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = true, State = ManagedPlayerbotState.Starting, ErrorCode = null }, cancellationToken).ConfigureAwait(false);
             var login = new PacketWriter(); login.WriteUInt64((ulong)(uint)bot.CharacterId);
             await session.DispatchManagedSessionAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray()).ConfigureAwait(false);
-            bool entered = await world.InvokeAsync(() => session.State == SessionState.InWorld
-                && session.Player is { Map: not null } player && PlayerbotMapPolicy.MayStayOnMap(player, _options))
-                .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
-            if (!entered) throw new InvalidOperationException("login-refused");
             // A bot saved over a void (no floor near its height) would log in there again and wander on a stale height: put it on a floor
             // before its brain starts (a near teleport, so like any vmangos near teleport it also applies Honorless Target). Bots only; a real player keeps the saved position (the vmangos login).
-            try
-            {
-                TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
-                PlayerbotLoginFloor.Result settled = await world.InvokeAsync(() => session.Player is { Map: { } botMap } botPlayer
-                        ? PlayerbotLoginFloor.Settle(botPlayer, botMap, world.NowMs, teleports) : new PlayerbotLoginFloor.Result(PlayerbotLoginFloor.Outcome.Kept, default))
-                    .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
-                if (settled.Outcome is PlayerbotLoginFloor.Outcome.MovedToMesh or PlayerbotLoginFloor.Outcome.MovedToHome)
-                    logger.LogInformation("Playerbot {BotId} logged in over a void; placed {Outcome} at {Position}", bot.BotId, settled.Outcome, settled.Position);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not TimeoutException)
-            {
-                // A stalled world thread still fails the login as before; the placement itself is a courtesy: a bug in it must not fault or quarantine a bot that did log in.
-                FaultLedger.Shared.Record("playerbot.login-floor", ex);
-                logger.LogWarning(ex, "Playerbot {BotId} login placement failed; the bot keeps its saved position", bot.BotId);
-            }
+            bool entered = await world.InvokeAsync(() =>
+                {
+                    if (session.State != SessionState.InWorld || session.Player is not { Map: { } botMap } botPlayer
+                        || !PlayerbotMapPolicy.MayStayOnMap(botPlayer, _options))
+                        return false;
+                    try
+                    {
+                        TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+                        PlayerbotLoginFloor.Result settled = PlayerbotLoginFloor.Settle(botPlayer, botMap, world.NowMs, teleports);
+                        if (settled.Outcome is PlayerbotLoginFloor.Outcome.MovedToMesh or PlayerbotLoginFloor.Outcome.MovedToHome)
+                            logger.LogInformation("Playerbot {BotId} logged in over a void; placed {Outcome} at {Position}", bot.BotId, settled.Outcome, settled.Position);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not TimeoutException)
+                    {
+                        // A stalled world thread still fails the login as before; the placement itself is a courtesy: a bug in it must not fault or quarantine a bot that did log in.
+                        FaultLedger.Shared.Record("playerbot.login-floor", ex);
+                        logger.LogWarning(ex, "Playerbot {BotId} login placement failed; the bot keeps its saved position", bot.BotId);
+                    }
+                    return true;
+                })
+                .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+            if (!entered) throw new InvalidOperationException("login-refused");
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
             // The row, scope and session are the core's (ManagedBotRegistry): they outlive a detach of this feature.
             var entry = new ManagedBot(bot, scope, session);
@@ -3055,9 +3058,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken)
     {
         IManagedPlayerbotProvisionStore provisions = provider.GetRequiredService<IManagedPlayerbotProvisionStore>();
+        IReadOnlyList<ManagedPlayerbotProvision> pendingList = await provisions.LoadPendingAsync(cancellationToken).ConfigureAwait(false);
+        if (pendingList.Count == 0) return;
         ICharacterStore characters = provider.GetRequiredService<ICharacterStore>();
         IReadOnlyList<ManagedPlayerbot> registered = await provider.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(cancellationToken).ConfigureAwait(false);
-        foreach (ManagedPlayerbotProvision pending in await provisions.LoadPendingAsync(cancellationToken).ConfigureAwait(false))
+        foreach (ManagedPlayerbotProvision pending in pendingList)
         {
             ManagedPlayerbot? completed = registered.SingleOrDefault(b => b.BotId == pending.BotId && b.AccountId == pending.AccountId && b.AccountName == pending.AccountName);
             if (completed is not null)
@@ -3089,8 +3094,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private static async Task<ManagedPlayerbot?> ResolveAsync(IServiceProvider services, string idOrName, CancellationToken cancellationToken)
     {
-        IReadOnlyList<ManagedPlayerbot> bots = await services.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(cancellationToken).ConfigureAwait(false);
-        if (Guid.TryParse(idOrName, out Guid id)) return bots.SingleOrDefault(b => b.BotId == id);
+        IManagedPlayerbotStore store = services.GetRequiredService<IManagedPlayerbotStore>();
+        if (Guid.TryParse(idOrName, out Guid id)) return await store.FindAsync(id, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ManagedPlayerbot> bots = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
         ICharacterStore characters = services.GetRequiredService<ICharacterStore>();
         foreach (ManagedPlayerbot bot in bots)
             if ((await characters.GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false))?.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase) == true) return bot;

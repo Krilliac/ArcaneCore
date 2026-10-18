@@ -300,6 +300,19 @@ internal sealed class PlayerbotDeferLedger
         return rows;
     }
 
+    /// <summary>The count of live persisted deferrals at <paramref name="now"/> without allocating a list.</summary>
+    internal int LivePersistedCount(long now)
+    {
+        if (_slots is not { } slots) return 0;
+        int count = 0;
+        foreach ((DeferKey key, Slot slot) in slots)
+        {
+            if (Policies[(int)key.Kind].PersistAs >= 0 && slot.Live && slot.UntilMs > now) count++;
+        }
+
+        return count;
+    }
+
     /// <summary>
     /// Put back a deferral read from a save: <paramref name="remainingMs"/> left (0: the deferral is over and only the strikes come
     /// back), <paramref name="strikes"/> strikes, the kind's default wakes. Does not count as a change to save.

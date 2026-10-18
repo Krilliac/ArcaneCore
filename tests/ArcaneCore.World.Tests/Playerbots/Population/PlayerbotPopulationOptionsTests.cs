@@ -95,11 +95,11 @@ public sealed class PlayerbotPopulationOptionsTests : IDisposable
             (o => o.WindowTicks = 20, o => o.WindowTicks = 19, "WindowTicks"),
             (o => o.WindowTicks = 4096, o => o.WindowTicks = 4097, "WindowTicks"), // the tick ring holds 4096
             (o => o.MaxCreatePerMinute = 0, o => o.MaxCreatePerMinute = -1, "MaxCreatePerMinute"),
-            (o => o.MaxCreatePerMinute = 60, o => o.MaxCreatePerMinute = 61, "MaxCreatePerMinute"),
+            (o => o.MaxCreatePerMinute = 600, o => o.MaxCreatePerMinute = 601, "MaxCreatePerMinute"),
             (o => o.MaxStartsPerInterval = 1, o => o.MaxStartsPerInterval = 0, "MaxStartsPerInterval"),
-            (o => o.MaxStartsPerInterval = 100, o => o.MaxStartsPerInterval = 101, "MaxStartsPerInterval"),
+            (o => o.MaxStartsPerInterval = 500, o => o.MaxStartsPerInterval = 501, "MaxStartsPerInterval"),
             (o => o.MaxParksPerInterval = 1, o => o.MaxParksPerInterval = 0, "MaxParksPerInterval"),
-            (o => o.MaxParksPerInterval = 100, o => o.MaxParksPerInterval = 101, "MaxParksPerInterval"),
+            (o => o.MaxParksPerInterval = 500, o => o.MaxParksPerInterval = 501, "MaxParksPerInterval"),
             (o => o.AllianceSharePct = 0, o => o.AllianceSharePct = -1, "AllianceSharePct"),
             (o => o.AllianceSharePct = 100, o => o.AllianceSharePct = 101, "AllianceSharePct"),
             (o => o.ZoneLevelSlack = 0, o => o.ZoneLevelSlack = -1, "ZoneLevelSlack"),
@@ -211,7 +211,7 @@ public sealed class PlayerbotPopulationOptionsTests : IDisposable
         foreach (string bad in new[]
         {
             "\"TargetOnline\": 100000", "\"IntervalSeconds\": 1", "\"TickP95BudgetMs\": 4", "\"ResumeBelowPct\": 100", "\"WindowTicks\": 5000",
-            "\"MaxCreatePerMinute\": 61", "\"MaxStartsPerInterval\": 0", "\"MaxParksPerInterval\": 101", "\"AllianceSharePct\": 101", "\"ZoneLevelSlack\": 11",
+            "\"MaxCreatePerMinute\": 601", "\"MaxStartsPerInterval\": 0", "\"MaxParksPerInterval\": 501", "\"AllianceSharePct\": 101", "\"ZoneLevelSlack\": 11",
             "\"OutlevelMargin\": -1", "\"MaxRelocationsPerInterval\": 51", "\"Classes\": [6]", "\"Classes\": [1, 1]", "\"ExcludedZones\": [5, 5]",
             "\"Bands\": [ { \"MinLevel\": 1, \"MaxLevel\": 20, \"Weight\": 1 }, { \"MinLevel\": 20, \"MaxLevel\": 30, \"Weight\": 1 } ]",
             "\"Bands\": [ { \"MinLevel\": 1, \"MaxLevel\": 20, \"Weight\": 0 } ]",

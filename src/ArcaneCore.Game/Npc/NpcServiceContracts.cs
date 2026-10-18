@@ -82,6 +82,9 @@ public sealed record NpcInfo(
 public interface ICreatureLookup
 {
     NpcInfo? Find(Player player, ObjectGuid guid);
+
+    NpcInfo? Find(Player player, ObjectGuid guid, NpcFlags requiredFlags)
+        => Find(player, guid) is { } info && (requiredFlags == NpcFlags.None || (info.NpcFlags & requiredFlags) != 0) ? info : null;
 }
 
 /// <summary>vmangos InventoryResult values the NPC services interpret (ItemDefines.h).</summary>

@@ -66,7 +66,7 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
         float bestDistance = float.MaxValue;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            NpcInfo? npc = lookup.Find(player, guid);
+            NpcInfo? npc = lookup.Find(player, guid, NpcFlags.Auctioneer);
             if (npc is not { IsAlive: true, IsHostile: false, IsInCombat: false, IsNotSelectable: false } || (npc.NpcFlags & NpcFlags.Auctioneer) == 0)
                 continue;
             bool interactable = services.InteractableNpc(player, guid, NpcFlags.Auctioneer) is not null;

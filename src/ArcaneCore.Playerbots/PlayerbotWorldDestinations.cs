@@ -1397,19 +1397,44 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         KeepCarriedRoute(player, carriedRoute, carriedSpawn, carriedTarget);
     }
 
+    private int _giverCatalogEpoch;
+    private int _advisoryEpoch = -1;
+    private Vector3 _advisoryOrigin;
+    private bool _advisoryListTruncated;
+    private float _advisoryFarthestKeptDistSq;
+    private float _advisoryNearestDroppedDistSq = float.PositiveInfinity;
+
+    private bool AdvisoryListStale(Player player)
+    {
+        if (!_advisoryListTruncated) return false;
+        float moved = Vector3.DistanceSquared(new Vector3(player.X, player.Y, player.Z), _advisoryOrigin);
+        float gap = MathF.Sqrt(_advisoryNearestDroppedDistSq) - MathF.Sqrt(_advisoryFarthestKeptDistSq);
+        if (gap <= 0f) return moved > 0f;
+        float limit = gap * 0.5f;
+        return moved > limit * limit;
+    }
+
     private void RefreshAdvisoryEntries(Player player, uint mapId, out CreatureContent? content)
     {
         content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         QuestStore? quests = services?.Quests;
-        _advisoryEntries.Clear();
-        if (content is null || quests is null || services is null) return;
+        if (content is null || quests is null || services is null)
+        {
+            _advisoryEntries.Clear();
+            _advisoryEpoch = -1;
+            return;
+        }
         QuestRewardMode mode = services.Options.RewardMode;
         uint[] allowed = services.Options.OrdinaryRewardQuestIds;
         uint level = player.Level;
         float maxDeliveryYards = Home is null ? _options.MaxDeliveryYards : 0;
         EnsureGiverCatalog(player, mapId, content, services, quests, mode, allowed, level, maxDeliveryYards);
-        SelectNearestGivers(player, _advisoryEntries, out _, out _, out _);
+        if (_advisoryEpoch == _giverCatalogEpoch && !AdvisoryListStale(player)) return;
+        _advisoryEntries.Clear();
+        SelectNearestGivers(player, _advisoryEntries, out _advisoryListTruncated, out _advisoryFarthestKeptDistSq, out _advisoryNearestDroppedDistSq);
+        _advisoryOrigin = new Vector3(player.X, player.Y, player.Z);
+        _advisoryEpoch = _giverCatalogEpoch;
     }
 
     private void EnsureGiverCatalog(Player player, uint mapId, CreatureContent content, QuestNpcServices services,
@@ -1428,6 +1453,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return;
         }
 
+        _giverCatalogEpoch++;
         _giverCatalogValid = true;
         _giverMapId = mapId;
         _giverContent = content;

@@ -948,7 +948,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _serviceNpcs.Clear();
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            if (lookup.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsInCombat: false } info
+            if (lookup.Find(player, guid, required) is not { IsAlive: true, IsHostile: false, IsInCombat: false } info
                 || (info.NpcFlags & required) == 0 || info.IsNotSelectable
                 || Suspensions?.IsEntrySuspended(info.Entry, now) == true)
                 continue;

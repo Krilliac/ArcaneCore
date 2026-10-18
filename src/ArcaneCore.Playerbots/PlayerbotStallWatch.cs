@@ -426,6 +426,9 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
         return rows;
     }
 
+    /// <summary>Count of live persisted set-asides with time remaining, without allocating an export array.</summary>
+    internal int ActiveExpiringCount(uint nowMs) => Ledger.LivePersistedCount(T(nowMs));
+
     /// <summary>
     /// Put back saved set-asides. A row that ended is dropped (an unreachable quest's keeps its strikes); one longer than its kind allows (a clock set back) is shortened to the
     /// kind's longest (escalated entries last up to <see cref="MaxSuspendMs"/>). A legacy never-expiring unreachable-quest row

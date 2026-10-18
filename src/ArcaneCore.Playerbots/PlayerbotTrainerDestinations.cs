@@ -297,7 +297,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         if (services.Deps.Creatures is not { } lookup) return null;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            NpcInfo? npc = lookup.Find(player, guid);
+            NpcInfo? npc = lookup.Find(player, guid, NpcFlags.Trainer);
             if (npc is { IsAlive: true, IsHostile: false, IsInCombat: false, IsNotSelectable: false }
                 && (npc.NpcFlags & NpcFlags.Trainer) != 0
                 && services.GetClassTrainerQuote(player, npc, 0, Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player)) is not null)
