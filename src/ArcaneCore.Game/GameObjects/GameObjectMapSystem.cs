@@ -287,6 +287,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private bool _walkListStale = true;
     private bool _transportsStale = true;
     private readonly List<GameObject> _transports = [];
+    private readonly List<Player> _trapPlayersScratch = [];
     private int[] _needing = [];
 
     /// <summary>Every tracked object in <c>_objects</c> order, rebuilt when the object set changed (only by a non-reentrant update).</summary>
@@ -327,13 +328,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     /// <summary>
     /// The indexes in <paramref name="walk"/> of the objects this update has work for (<see cref="UpdateObjects"/>), into <paramref name="needing"/>;
-    /// the count. A quiet object (spawned, no loot reset, activation or restock due, not a trap, spell caster or door) would only be read by the
-    /// walk. Reads this map's own objects only, so it may run outside the serial gate. An object another object's work changes later in the same
-    /// walk is seen on the next update.
+    /// the count. A quiet object (spawned, no loot reset, activation or restock due, not a trap, spell caster or door with pending work) would only
+    /// be read by the walk. Reads this map's own objects only, so it may run outside the serial gate. An object another object's work changes later
+    /// in the same walk is seen on the next update.
     /// </summary>
     private int ScanObjects(List<GameObject> walk, int[] needing)
     {
         long clockSeconds = ClockSeconds;
+        int playerCount = Map.PlayerCount;
         int count = 0;
         for (int i = 0; i < walk.Count; i++)
         {
@@ -350,7 +352,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 needs = loot == GameObjectLootState.JustDeactivated
                     || (go.ResetAfterSecond is { } resetAfter && resetAfter < clockSeconds)
                     || (loot == GameObjectLootState.NotReady && go.RestockAfterSecond is { } after && after <= clockSeconds)
-                    || type is GameObjectType.Trap or GameObjectType.SpellCaster or GameObjectType.Door;
+                    || type == GameObjectType.Door
+                    || (type == GameObjectType.SpellCaster && loot == GameObjectLootState.Ready
+                        && go.Template.Charges() is var scCharges and not 0 && go.UseCount >= scCharges)
+                    || (type == GameObjectType.Trap && NeedsTrapUpdate(go, loot, playerCount));
             }
 
             if (needs)
@@ -360,6 +365,34 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         return count;
+    }
+
+    private bool NeedsTrapUpdate(GameObject go, GameObjectLootState loot, int playerCount)
+    {
+        uint charges = go.Template.Charges();
+        if (!go.OwnerGuid.IsEmpty && charges != 0)
+        {
+            return false; // hunter trap: owned by TrapSystem
+        }
+
+        if (!go.TrapArmed)
+        {
+            return true;
+        }
+
+        if (loot != GameObjectLootState.Ready)
+        {
+            return false;
+        }
+
+        if (charges != 0 && go.UseCount >= charges)
+        {
+            return true;
+        }
+
+        return playerCount > 0
+            && go.CooldownUntilMs < _clockMs
+            && Ranged.TrapRules.TriggerRadius(go.Template, Ranged.TrapRadiusSource.Vmangos) > 0f;
     }
 
     private void UpdateObjects(List<GameObject> walk, int[] needing, int count)

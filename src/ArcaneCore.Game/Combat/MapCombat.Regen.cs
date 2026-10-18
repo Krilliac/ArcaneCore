@@ -25,20 +25,31 @@ public sealed partial class MapCombat
             return;
         }
 
-        CombatEnvironment power = CombatEnvironment.For(_world);
+        CombatEnvironment power = Environment;
         bool inCombat = c.IsInCombat;
 
         // vmangos Player::RegenerateAll (Player.cpp:2272-2281): health also regenerates in combat with MOD_REGEN_DURING_COMBAT, MOD_HEALTH_REGEN_IN_COMBAT
         // (Demon Armor) or while polymorphed; rage still only decays out of combat.
-        if (!inCombat || power.HasAuraType(player, AuraType.ModRegenDuringCombat) || power.HasAuraType(player, AuraType.ModHealthRegenInCombat)
-            || power.IsPolymorphed(player))
+        if (!inCombat)
         {
-            RegenerateHealth(player, power, inCombat);
+            if (player.Health < player.MaxHealth)
+            {
+                RegenerateHealth(player, power, inCombat: false);
+            }
 
             // vmangos Player::RegenerateAll (Player.cpp:2278): rage only decays without SPELL_AURA_INTERRUPT_REGEN (Bloodrage).
-            if (!inCombat && !power.HasAuraType(player, AuraType.InterruptRegen))
+            if (GetPower(player, PowerType.Rage) > 0 && !power.HasAuraType(player, AuraType.InterruptRegen))
             {
                 RegeneratePower(player, PowerType.Rage, power);
+            }
+        }
+        else if (player.Health < player.MaxHealth)
+        {
+            bool polymorphed = power.IsPolymorphed(player);
+            bool hasRegenDuringCombat = power.HasAuraType(player, AuraType.ModRegenDuringCombat);
+            if (polymorphed || hasRegenDuringCombat || power.HasAuraType(player, AuraType.ModHealthRegenInCombat))
+            {
+                RegenerateHealthInCombat(player, power, polymorphed, hasRegenDuringCombat);
             }
         }
 
@@ -61,17 +72,76 @@ public sealed partial class MapCombat
             return;
         }
 
+        bool polymorphed = environment.IsPolymorphed(player);
+        if (inCombat || polymorphed)
+        {
+            RegenerateHealthInCombat(
+                player,
+                environment,
+                polymorphed,
+                hasRegenDuringCombat: !polymorphed && environment.HasAuraType(player, AuraType.ModRegenDuringCombat));
+            return;
+        }
+
+        IReadOnlyList<RegenAura> percentAuras = environment.GetRegenAuras(player, AuraType.ModHealthRegenPercent);
+        int[] percentAmounts;
+        if (percentAuras.Count == 0)
+        {
+            percentAmounts = [];
+        }
+        else
+        {
+            percentAmounts = new int[percentAuras.Count];
+            for (int i = 0; i < percentAuras.Count; i++)
+            {
+                percentAmounts[i] = percentAuras[i].Amount;
+            }
+        }
+
         UnitCombat c = player.Combat;
         float add = RegenModifiers.HealthPerTick(
             RegenHealthPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)),
             max,
-            inCombat,
+            false,
             IsStandingUp(player),
-            environment.IsPolymorphed(player),
-            environment.HasAuraType(player, AuraType.ModRegenDuringCombat),
-            environment.GetTotalAuraModifier(player, AuraType.ModRegenDuringCombat),
-            [.. environment.GetRegenAuras(player, AuraType.ModHealthRegenPercent).Select(a => a.Amount)],
+            false,
+            false,
+            0,
+            percentAmounts,
             environment.GetRegenAuras(player, AuraType.ModRegen),
+            environment.GetTotalAuraModifier(player, AuraType.ModHealthRegenInCombat),
+            environment.Options.RateHealth);
+
+        add += c.HealthRegenCarry;
+        c.HealthRegenCarry = add - (int)add;
+        uint gain = (uint)Math.Max(0, (int)add);
+        player.Health = Math.Min(max, cur + gain);
+    }
+
+    private static void RegenerateHealthInCombat(
+        Player player,
+        CombatEnvironment environment,
+        bool polymorphed,
+        bool hasRegenDuringCombat)
+    {
+        uint cur = player.Health;
+        uint max = player.MaxHealth;
+        if (cur >= max)
+        {
+            return;
+        }
+
+        UnitCombat c = player.Combat;
+        float add = RegenModifiers.HealthPerTick(
+            polymorphed ? 0f : RegenHealthPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)),
+            max,
+            true,
+            !polymorphed && IsStandingUp(player),
+            polymorphed,
+            hasRegenDuringCombat,
+            !polymorphed && hasRegenDuringCombat ? environment.GetTotalAuraModifier(player, AuraType.ModRegenDuringCombat) : 0,
+            [],
+            [],
             environment.GetTotalAuraModifier(player, AuraType.ModHealthRegenInCombat),
             environment.Options.RateHealth);
 
@@ -89,6 +159,22 @@ public sealed partial class MapCombat
     {
         uint cur = GetPower(player, power);
         uint max = GetMaxPower(player, power);
+        if (power == PowerType.Rage)
+        {
+            if (cur == 0)
+            {
+                return;
+            }
+        }
+        else if (cur >= max)
+        {
+            if (cur > max)
+            {
+                SetPower(player, power, max);
+            }
+
+            return;
+        }
 
         // Rates and MOD_POWER_REGEN_PERCENT auras (not for mana): vmangos Player::Regenerate, Player.cpp:2292-2328.
         CombatOptions options = environment.Options;
@@ -177,7 +263,7 @@ public sealed partial class MapCombat
         }
 
         c.RegenTimer = CombatConstants.CreatureRegenIntervalMs; // vmangos sets, not adds
-        CombatEnvironment environment = CombatEnvironment.For(_world);
+        CombatEnvironment environment = Environment;
         bool inCombat = c.IsInCombat;
         bool polymorphed = environment.IsPolymorphed(unit);
         bool playerControlled = unit.CharmerOrOwnerGuid.IsPlayer;

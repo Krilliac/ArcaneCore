@@ -360,7 +360,7 @@ public sealed partial class GameObjectMapSystem
             }
         }
 
-        if (trap.LootState != GameObjectLootState.Ready || trap.CooldownUntilMs >= _clockMs)
+        if (trap.LootState != GameObjectLootState.Ready || trap.CooldownUntilMs >= _clockMs || Map.PlayerCount == 0)
         {
             return;
         }
@@ -371,16 +371,32 @@ public sealed partial class GameObjectMapSystem
             return;
         }
 
+        _trapPlayersScratch.Clear();
+        Map.Grids.CollectPlayers(trap.X, trap.Y, radius + MathF.Max(0f, trap.BoundingRadius), _trapPlayersScratch);
+        if (_trapPlayersScratch.Count == 0)
+        {
+            return;
+        }
+
         Player? target = null;
         float best = float.MaxValue;
-        foreach (Player player in Map.Players)
+        IGameObjectAi? ai = null;
+        bool aiResolved = false;
+        for (int i = 0; i < _trapPlayersScratch.Count; i++)
         {
+            Player player = _trapPlayersScratch[i];
             if (!player.IsAlive || !player.IsInWorld || !WithinDistance(trap, player, radius))
             {
                 continue;
             }
 
-            if (AiOf(trap) is { } filter && !filter.AcceptsTrapTarget(this, trap, player))
+            if (!aiResolved)
+            {
+                ai = AiOf(trap);
+                aiResolved = true;
+            }
+
+            if (ai is not null && !ai.AcceptsTrapTarget(this, trap, player))
             {
                 continue;
             }
@@ -393,7 +409,18 @@ public sealed partial class GameObjectMapSystem
             }
         }
 
-        if (target is null || AiOf(trap)?.OnTrapTarget(this, trap, target) == true)
+        _trapPlayersScratch.Clear();
+        if (target is null)
+        {
+            return;
+        }
+
+        if (!aiResolved)
+        {
+            ai = AiOf(trap);
+        }
+
+        if (ai?.OnTrapTarget(this, trap, target) == true)
         {
             return;
         }

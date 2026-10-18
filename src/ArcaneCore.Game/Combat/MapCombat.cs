@@ -28,9 +28,16 @@ public sealed partial class MapCombat : IMapUpdater
     private readonly Action<Player> _onPlayerLoggingOut;
     private readonly Action<Map> _onMapCreated;
     private readonly HashSet<Unit> _units = [];
+    private readonly List<Unit> _unitUpdateScratch = [];
+    private bool _unitUpdateScratchInUse;
+    private readonly List<Unit> _staleAttackersScratch = [];
+    private readonly List<(Unit Holder, bool HasEntry)> _staleThreatHoldersScratch = [];
     private readonly List<Corpse> _corpses = [];
     private readonly Dictionary<Corpse, MapGrid> _corpseGrids = [];
     private CombatHooks? _hooks;
+    private CombatEnvironment? _activeEnvironment;
+
+    private CombatEnvironment Environment => _activeEnvironment ?? CombatEnvironment.For(_world);
 
     internal MapCombat(Map map, WorldRuntime world)
     {
@@ -200,64 +207,106 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
     {
-        RemoveExpiredBones();
-        Player[] players = _map.RentPlayerSnapshot(out int playerCount);
+        CombatEnvironment? previousEnvironment = _activeEnvironment;
+        _activeEnvironment = CombatEnvironment.For(_world);
         try
         {
-            for (int i = 0; i < playerCount; i++)
-            {
-                Player player = players[i];
-                try
-                {
-                    if (player is not null && player.IsInWorld && player.Map is not null && ReferenceEquals(player.Map, _map))
-                    {
-                        UpdateUnit(player, diffMs);
-                    }
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("map-combat", ex);
-                }
-            }
-        }
-        finally
-        {
-            Map.ReturnPlayerSnapshot(players);
-        }
-
-        foreach (Unit unit in _units.ToArray())
-        {
+            RemoveExpiredBones();
+            Player[] players = _map.RentPlayerSnapshot(out int playerCount);
             try
             {
-                if (unit is null || !unit.IsInWorld || unit.Map is null || !ReferenceEquals(unit.Map, _map))
+                for (int i = 0; i < playerCount; i++)
                 {
-                    if (unit is not null)
+                    Player player = players[i];
+                    try
                     {
-                        Forget(unit);
+                        if (player is not null && player.IsInWorld && player.Map is not null && ReferenceEquals(player.Map, _map))
+                        {
+                            UpdateUnit(player, diffMs);
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record("map-combat", ex);
+                    }
+                }
+            }
+            finally
+            {
+                Map.ReturnPlayerSnapshot(players);
+            }
+
+            if (_units.Count > 0)
+            {
+                bool reentrant = _unitUpdateScratchInUse;
+                IReadOnlyList<Unit> units;
+                if (reentrant)
+                {
+                    units = _units.ToArray();
+                }
+                else
+                {
+                    _unitUpdateScratchInUse = true;
+                    _unitUpdateScratch.Clear();
+                    foreach (Unit tracked in _units)
+                    {
+                        _unitUpdateScratch.Add(tracked);
                     }
 
-                    continue;
+                    units = _unitUpdateScratch;
                 }
 
-                UpdateUnit(unit, diffMs);
-                if (IsIdle(unit))
+                try
                 {
-                    _units.Remove(unit);
+                    for (int i = 0; i < units.Count; i++)
+                    {
+                        Unit unit = units[i];
+                        try
+                        {
+                            if (unit is null || !unit.IsInWorld || unit.Map is null || !ReferenceEquals(unit.Map, _map))
+                            {
+                                if (unit is not null)
+                                {
+                                    Forget(unit);
+                                }
+
+                                continue;
+                            }
+
+                            UpdateUnit(unit, diffMs);
+                            if (IsIdle(unit))
+                            {
+                                _units.Remove(unit);
+                            }
+                        }
+                        catch (Exception ex) when (ex is not OutOfMemoryException)
+                        {
+                            FaultLedger.Shared.Record("map-combat", ex);
+                        }
+                    }
                 }
+                finally
+                {
+                    if (!reentrant)
+                    {
+                        _unitUpdateScratch.Clear();
+                        _unitUpdateScratchInUse = false;
+                    }
+                }
+            }
+
+            try
+            {
+                SweepIfDue(diffMs);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("map-combat", ex);
             }
         }
-
-        try
+        finally
         {
-            SweepIfDue(diffMs);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record("map-combat", ex);
+            _activeEnvironment = previousEnvironment;
         }
     }
 
@@ -437,32 +486,58 @@ public sealed partial class MapCombat : IMapUpdater
 
         if (c.AttackersInternal.Count > 0)
         {
-            foreach (Unit attacker in c.AttackersInternal.ToArray())
+            _staleAttackersScratch.Clear();
+            foreach (Unit attacker in c.AttackersInternal)
             {
                 if (!ReferenceEquals(attacker.Combat.Victim, unit) || !IsAliveState(attacker)
                     || (attacker.Map is not null && !ReferenceEquals(attacker.Map, _map)))
                 {
+                    _staleAttackersScratch.Add(attacker);
+                }
+            }
+
+            if (_staleAttackersScratch.Count > 0)
+            {
+                for (int i = 0; i < _staleAttackersScratch.Count; i++)
+                {
+                    Unit attacker = _staleAttackersScratch[i];
+                    bool alive = IsAliveState(attacker);
                     _map.Logger.LogWarning(
                         "combat invariant healed for unit {Guid} on map {MapId}: pruning stale attacker {AttackerGuid} (alive={Alive}, matchesVictim={MatchesVictim}, attackerMap={AttackerMapId})",
-                        unit.Guid, _map.MapId, attacker.Guid, IsAliveState(attacker), ReferenceEquals(attacker.Combat.Victim, unit), attacker.Map?.MapId);
+                        unit.Guid, _map.MapId, attacker.Guid, alive, ReferenceEquals(attacker.Combat.Victim, unit), attacker.Map?.MapId);
                     c.AttackersInternal.Remove(attacker);
-                    ReportHealed(unit, "stale-attacker", $"pruned stale attacker {attacker.Guid.Value} (alive={IsAliveState(attacker)})");
+                    ReportHealed(unit, "stale-attacker", $"pruned stale attacker {attacker.Guid.Value} (alive={alive})");
                     healed = true;
                 }
+
+                _staleAttackersScratch.Clear();
             }
         }
 
         if (c.ThreatenedByInternal.Count > 0)
         {
-            foreach (Unit holder in c.ThreatenedByInternal.ToArray())
+            _staleThreatHoldersScratch.Clear();
+            foreach (Unit holder in c.ThreatenedByInternal)
             {
-                if (!IsAliveState(holder) || !holder.Combat.HasThreatList || !holder.Combat.Threat.Contains(unit)
-                    || (holder.Map is not null && !ReferenceEquals(holder.Map, _map)))
+                bool alive = IsAliveState(holder);
+                bool sameMap = holder.Map is null || ReferenceEquals(holder.Map, _map);
+                bool hasEntry = holder.Combat.HasThreatList && holder.Combat.Threat.Contains(unit);
+                if (!alive || !hasEntry || !sameMap)
                 {
+                    _staleThreatHoldersScratch.Add((holder, hasEntry));
+                }
+            }
+
+            if (_staleThreatHoldersScratch.Count > 0)
+            {
+                for (int i = 0; i < _staleThreatHoldersScratch.Count; i++)
+                {
+                    (Unit holder, bool hasEntry) = _staleThreatHoldersScratch[i];
+                    bool alive = IsAliveState(holder);
                     _map.Logger.LogWarning(
                         "combat invariant healed for unit {Guid} on map {MapId}: pruning stale ThreatenedBy holder {HolderGuid} (alive={Alive}, hasEntry={HasEntry}, holderMap={HolderMapId})",
-                        unit.Guid, _map.MapId, holder.Guid, IsAliveState(holder), holder.Combat.HasThreatList && holder.Combat.Threat.Contains(unit), holder.Map?.MapId);
-                    if (holder.Combat.HasThreatList && holder.Combat.Threat.Contains(unit))
+                        unit.Guid, _map.MapId, holder.Guid, alive, hasEntry, holder.Map?.MapId);
+                    if (hasEntry)
                     {
                         holder.Combat.Threat.Remove(unit);
                     }
@@ -471,9 +546,11 @@ public sealed partial class MapCombat : IMapUpdater
                         c.ThreatenedByInternal.Remove(holder);
                     }
 
-                    ReportHealed(unit, "stale-threat-holder", $"pruned stale threat holder {holder.Guid.Value} (alive={IsAliveState(holder)})");
+                    ReportHealed(unit, "stale-threat-holder", $"pruned stale threat holder {holder.Guid.Value} (alive={alive})");
                     healed = true;
                 }
+
+                _staleThreatHoldersScratch.Clear();
             }
         }
 

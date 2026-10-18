@@ -157,7 +157,7 @@ public sealed partial class MapCombat
         // Regeneration stalled: an alive creature out of combat, below full health, whose health did not move.
         bool regenBad = !isPlayer && alive && !c.IsInCombat && c.Victim is null && unit.Health > 0 && unit.Health < unit.MaxHealth
             && (unit is not ICombatCreature creature || creature.RegeneratesHealth)
-            && !CombatEnvironment.For(_world).IsPolymorphed(unit);
+            && !Environment.IsPolymorphed(unit);
         if (Advance(ref _regenEpisodes, unit, regenBad, elapsed, RegenStalledBudgetMs, unit.Health))
         {
             AnomalyLedger.Shared.Report(AnomalySubsystem, RegenStalledCode, SubjectOf(unit),

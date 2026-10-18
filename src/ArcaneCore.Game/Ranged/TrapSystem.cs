@@ -23,6 +23,10 @@ namespace ArcaneCore.Game.Ranged;
 /// </summary>
 public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
 {
+    private readonly List<SpellCreatedObject> _entries = [];
+    private readonly List<WorldObject> _candidates = [];
+    private readonly HashSet<Unit> _seen = new(ReferenceEqualityComparer.Instance);
+
     /// <summary>
     /// The "hostile" half of the in-combat-or-hostile test (GameObject.cpp:300-302). Retail
     /// (<see cref="TrapHostilityRule.Faction"/>): the map's <see cref="Combat.CombatHooks.IsHostileTo"/>, the faction
@@ -36,79 +40,103 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
 
     public void Update(Map map, uint diffMs)
     {
-        if (map is null || map.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        if (map is null || spells.SpellObjects.Count == 0 || map.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        {
+            return;
+        }
+
+        _entries.Clear();
+        foreach (SpellCreatedObject candidate in spells.SpellObjects.All)
+        {
+            if (candidate?.Object is { Type: GameObjectType.Trap, IsSpawned: true } candidateGo
+                && ReferenceEquals(candidateGo.System, objects)
+                && candidateGo.LootState != GameObjectLootState.JustDeactivated)
+            {
+                _entries.Add(candidate);
+            }
+        }
+
+        if (_entries.Count == 0)
         {
             return;
         }
 
         long clock = objects.ClockMs;
-        foreach (SpellCreatedObject entry in spells.SpellObjects.All.ToArray())
+        try
         {
-            try
+            for (int i = 0; i < _entries.Count; i++)
             {
-                if (entry?.Object is not { } go)
+                SpellCreatedObject entry = _entries[i];
+                try
                 {
-                    continue;
-                }
-
-                if (go.Type != GameObjectType.Trap || !ReferenceEquals(go.System, objects) || !go.IsSpawned
-                    || go.LootState == GameObjectLootState.JustDeactivated)
-                {
-                    continue;
-                }
-
-                if (!entry.Armed)
-                {
-                    // GO_NOT_READY → GO_READY: the arming time (vmangos applies startDelay to every trap).
-                    entry.Armed = true;
-                    if (go.Template.GetData(TrapRules.StartDelayData) is var delay and not 0)
+                    if (entry?.Object is not { } go)
                     {
-                        go.CooldownUntilMs = clock + (delay * 1000L);
+                        continue;
+                    }
+
+                    if (go.Type != GameObjectType.Trap || !ReferenceEquals(go.System, objects) || !go.IsSpawned
+                        || go.LootState == GameObjectLootState.JustDeactivated)
+                    {
+                        continue;
+                    }
+
+                    if (!entry.Armed)
+                    {
+                        // GO_NOT_READY → GO_READY: the arming time (vmangos applies startDelay to every trap).
+                        entry.Armed = true;
+                        if (go.Template.GetData(TrapRules.StartDelayData) is var delay and not 0)
+                        {
+                            go.CooldownUntilMs = clock + (delay * 1000L);
+                        }
+                    }
+
+                    if (go.CooldownUntilMs >= clock)
+                    {
+                        continue;
+                    }
+
+                    uint charges = go.Template.GetData(TrapRules.ChargesData);
+                    float radius = TrapRules.TriggerRadius(go.Template, spells.RangedOptions.Traps.RadiusSource);
+                    if (charges == 0 || radius <= 0 || entry.Owner is null || !entry.Owner.IsInWorld
+                        || entry.Owner.Map is null || !ReferenceEquals(entry.Owner.Map, map))
+                    {
+                        continue; // the environmental branch (no owner, or no charges) is not modelled
+                    }
+
+                    Unit? target = FindTarget(map, go, entry.Owner, radius);
+                    if (target is null)
+                    {
+                        continue;
+                    }
+
+                    if (go.Template.GetData(TrapRules.SpellData) is var spellId and not 0)
+                    {
+                        spells.CastFromObject(entry.Owner, spellId, target, source: (go.X, go.Y, go.Z));
+                    }
+
+                    uint cooldown = go.Template.GetData(TrapRules.CooldownData);
+                    go.CooldownUntilMs = clock + ((cooldown != 0 ? cooldown : TrapRules.DefaultCooldownSeconds) * 1000L);
+                    go.UseCount++;
+                    if (TrapRules.CustomAnimDisplays.Contains(go.Template.DisplayId))
+                    {
+                        map.BroadcastToObservers(go, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0));
+                    }
+
+                    if (go.UseCount >= charges)
+                    {
+                        go.UseCount = 0;
+                        go.LootState = GameObjectLootState.JustDeactivated; // the object system removes it on its next update
                     }
                 }
-
-                if (go.CooldownUntilMs >= clock)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    continue;
-                }
-
-                uint charges = go.Template.GetData(TrapRules.ChargesData);
-                float radius = TrapRules.TriggerRadius(go.Template, spells.RangedOptions.Traps.RadiusSource);
-                if (charges == 0 || radius <= 0 || entry.Owner is null || !entry.Owner.IsInWorld
-                    || entry.Owner.Map is null || !ReferenceEquals(entry.Owner.Map, map))
-                {
-                    continue; // the environmental branch (no owner, or no charges) is not modelled
-                }
-
-                Unit? target = FindTarget(map, go, entry.Owner, radius);
-                if (target is null)
-                {
-                    continue;
-                }
-
-                if (go.Template.GetData(TrapRules.SpellData) is var spellId and not 0)
-                {
-                    spells.CastFromObject(entry.Owner, spellId, target, source: (go.X, go.Y, go.Z));
-                }
-
-                uint cooldown = go.Template.GetData(TrapRules.CooldownData);
-                go.CooldownUntilMs = clock + ((cooldown != 0 ? cooldown : TrapRules.DefaultCooldownSeconds) * 1000L);
-                go.UseCount++;
-                if (TrapRules.CustomAnimDisplays.Contains(go.Template.DisplayId))
-                {
-                    map.BroadcastToObservers(go, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0));
-                }
-
-                if (go.UseCount >= charges)
-                {
-                    go.UseCount = 0;
-                    go.LootState = GameObjectLootState.JustDeactivated; // the object system removes it on its next update
+                    FaultLedger.Shared.Record("map-trap", ex);
                 }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map-trap", ex);
-            }
+        }
+        finally
+        {
+            _entries.Clear();
         }
     }
 
@@ -123,15 +151,20 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
     /// </summary>
     private Unit? FindTarget(Map map, GameObject trap, Unit owner, float radius)
     {
-        var objects = new List<WorldObject>();
-        map.Grids.CollectObjects(trap.X, trap.Y, radius + 5.0f, objects);
-        Unit? best = null;
-        float bestDistance = float.MaxValue;
-        var seen = new HashSet<Unit>(ReferenceEqualityComparer.Instance);
-        foreach (WorldObject obj in objects)
+        _candidates.Clear();
+        map.Grids.CollectObjects(trap.X, trap.Y, radius + 5.0f, _candidates);
+        if (_candidates.Count == 0)
         {
-            if (obj is not Unit unit || !unit.IsInWorld || !ReferenceEquals(unit.Map, map) || !unit.IsAlive || !seen.Add(unit)
-                || ReferenceEquals(unit, owner) || !TrapRules.OwnerMayTrigger(owner, unit))
+            return null;
+        }
+
+        Unit? best = null;
+        float bestDistanceSq = float.MaxValue;
+        _seen.Clear();
+        for (int i = 0; i < _candidates.Count; i++)
+        {
+            if (_candidates[i] is not Unit unit || !unit.IsInWorld || !ReferenceEquals(unit.Map, map) || !unit.IsAlive
+                || ReferenceEquals(unit, owner) || !_seen.Add(unit))
             {
                 continue;
             }
@@ -139,25 +172,26 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
             float dx = trap.X - unit.X;
             float dy = trap.Y - unit.Y;
             float dz = trap.Z - unit.Z;
+            float distSq = (dx * dx) + (dy * dy) + (dz * dz);
             float reach = radius + trap.BoundingRadius + unit.BoundingRadius;
-            if (((dx * dx) + (dy * dy) + (dz * dz)) >= reach * reach)
+            if (!(distSq < reach * reach) || !(distSq < bestDistanceSq))
             {
                 continue;
             }
 
-            if (!spells.Relations.IsHostile(owner, unit) || !(unit.Combat.IsInCombat || IsHostileTo(map, owner, unit)))
+            if (!TrapRules.OwnerMayTrigger(owner, unit)
+                || !spells.Relations.IsHostile(owner, unit)
+                || !(unit.Combat.IsInCombat || IsHostileTo(map, owner, unit)))
             {
                 continue;
             }
 
-            float distance = trap.DistanceTo(unit);
-            if (distance < bestDistance)
-            {
-                best = unit;
-                bestDistance = distance;
-            }
+            best = unit;
+            bestDistanceSq = distSq;
         }
 
+        _candidates.Clear();
+        _seen.Clear();
         return best;
     }
 }

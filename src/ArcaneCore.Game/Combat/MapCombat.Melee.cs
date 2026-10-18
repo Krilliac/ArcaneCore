@@ -201,7 +201,7 @@ public sealed partial class MapCombat
 
         float dx = victim.X - attacker.X;
         float dy = victim.Y - attacker.Y;
-        if (MathF.Sqrt((dx * dx) + (dy * dy)) > CombatConstants.NoFacingChecksDistance
+        if (((dx * dx) + (dy * dy)) > CombatConstants.NoFacingChecksDistance * CombatConstants.NoFacingChecksDistance
             && !HasInArc(attacker, victim, CombatConstants.AutoAttackArc))
         {
             return AttackCheckResult.BadFacing;
@@ -293,19 +293,26 @@ public sealed partial class MapCombat
             return false;
         }
 
-        // ranged (autorepeat lane): vmangos returns here, before any swing timer is looked at, while a non-melee spell is cast
-        // (Unit::UpdateMeleeAttackingState, Unit.cpp:415-421), so the swing happens as soon as the cast ends. The auto-repeat
-        // slot counts as casting for the hook. Combat:CastingConsumesSwing keeps the older behaviour (AttackerStateUpdate below).
-        CombatEnvironment gate = CombatEnvironment.For(_world);
-        if (!gate.Options.CastingConsumesSwing && gate.Options.MeleeCastingBlocksSwing
-            && gate.MeleeSpells is { } castGate && castGate.IsNonMeleeSpellCasted(attacker))
+        bool extraReady = c.HasReadyExtraAttacks;
+        bool baseReady = c.IsAttackReady(WeaponAttackType.BaseAttack);
+        bool offTimerReady = c.IsAttackReady(WeaponAttackType.OffAttack);
+        if (!extraReady && !baseReady && !offTimerReady)
         {
             return false;
         }
 
         bool offhand = HasOffhandWeapon(attacker);
-        if (!c.HasReadyExtraAttacks && !c.IsAttackReady(WeaponAttackType.BaseAttack)
-            && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
+        if (!extraReady && !baseReady && !offhand)
+        {
+            return false;
+        }
+
+        // ranged (autorepeat lane): vmangos returns here, before any swing timer is acted on, while a non-melee spell is cast
+        // (Unit::UpdateMeleeAttackingState, Unit.cpp:415-421), so the swing happens as soon as the cast ends. The auto-repeat
+        // slot counts as casting for the hook. Combat:CastingConsumesSwing keeps the older behaviour (AttackerStateUpdate below).
+        CombatEnvironment gate = Environment;
+        if (!gate.Options.CastingConsumesSwing && gate.Options.MeleeCastingBlocksSwing
+            && gate.MeleeSpells is { } castGate && castGate.IsNonMeleeSpellCasted(attacker))
         {
             return false;
         }
@@ -452,7 +459,7 @@ public sealed partial class MapCombat
             return null;
         }
 
-        CombatEnvironment environment = CombatEnvironment.For(_world);
+        CombatEnvironment environment = Environment;
         if (environment.MeleeSpells is { } spells)
         {
             if (environment.Options.MeleeCastingBlocksSwing && spells.IsNonMeleeSpellCasted(attacker))
@@ -494,7 +501,7 @@ public sealed partial class MapCombat
         // vmangos Unit::GetUnitDodgeChance / GetUnitParryChance / GetUnitBlockChance (Unit.cpp:2474-2550): nothing while stunned
         // (UNIT_STATE_STUNNED proxy) or casting a non-melee spell (IsNonMeleeSpellCasted(false)), and a totem never defends.
         bool victimCanDefend = (victim.UnitFlags & UnitFlags.Stunned) == 0
-            && CombatEnvironment.For(_world).MeleeSpells?.IsNonMeleeSpellCasted(victim) != true
+            && Environment.MeleeSpells?.IsNonMeleeSpellCasted(victim) != true
             && !IsTotem(victim);
 
         SpellSystem? auras = SpellMitigation;
