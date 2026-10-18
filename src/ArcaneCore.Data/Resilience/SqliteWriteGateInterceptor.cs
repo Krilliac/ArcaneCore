@@ -423,9 +423,9 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         GateStats stats = gate.TakeStats();
         if (stats.Acquired == 0 && stats.Timeouts == 0 && stats.Forced == 0) return;
         _logger.LogInformation(
-            "SQLite write gate {File}: {Writes} writes in the last {IntervalS} s, {Contended} queued (wait mean {WaitMeanMs:0.0} ms, max {WaitMaxMs:0} ms), longest hold {HoldMaxMs:0} ms by {HoldOwner}, {Timeouts} timed out, {Forced} stuck holds released; {Waiting} waiting now (lifetime {Total} writes, {TotalTimeouts} timeouts)",
+            "SQLite write gate {File}: {Writes} writes in the last {IntervalS} s, {Contended} queued (wait mean {WaitMeanMs:0.0} ms, max {WaitMaxMs:0} ms), longest hold {HoldMaxMs:0} ms by {HoldOwner}, {Timeouts} timed out, {Forced} stuck holds released; {Waiting} waiting now (lifetime {Total} writes, {TotalTimeouts} timeouts, {TotalDead} ended unseen)",
             Path.GetFileName(stats.Path), stats.Acquired, _options.StatsIntervalMs / 1000, stats.Contended, stats.WaitMsMean, stats.WaitMsMax, stats.HoldMsMax, stats.HoldMaxOwner ?? "-",
-            stats.Timeouts, stats.Forced, stats.Waiting, stats.AcquiredTotal, stats.TimeoutsTotal);
+            stats.Timeouts, stats.Forced, stats.Waiting, stats.AcquiredTotal, stats.TimeoutsTotal, gate.DeadTotal);
     }
 
     private void OnStuckReleased(SqliteWriteGate.Hold hold)
@@ -433,9 +433,11 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
             "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} (longer than Database:Sqlite:SingleWriter:MaxHoldMs {MaxHoldMs} ms; a transaction that was never ended?). The next writer now waits on SQLite's own lock",
             Path.GetFileName(hold.Gate.Path), (long)hold.HeldMs, hold.Owner, _options.MaxHoldMs);
 
+    // Debug, not a warning: the usual case is the window between Microsoft.Data.Sqlite running COMMIT and EF raising TransactionCommitted (live,
+    // 2026-10-17: five per redeploy, 0-534 ms, all CharacterDbContext). The hold is released either way; the lifetime count is on the stats line.
     private void OnDeadReleased(SqliteWriteGate.Hold hold)
-        => _logger?.LogWarning(
-            "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} whose transaction had already ended without a commit, rollback or close event (rolled back outside EF?)",
+        => _logger?.LogDebug(
+            "SQLite write gate {File}: released a hold of {HeldMs} ms by {Owner} whose transaction had already ended before its commit, rollback or close event arrived",
             Path.GetFileName(hold.Gate.Path), (long)hold.HeldMs, hold.Owner);
 
     /// <summary>The first frame outside the framework and this namespace's interceptors.</summary>

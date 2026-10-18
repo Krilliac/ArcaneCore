@@ -211,15 +211,28 @@ database file (`SqliteWriteGate`, an async FIFO semaphore keyed on the full path
 - A hold older than `MaxHoldMs` (default 60 s; a transaction that was never ended) is released by the next waiter and logged at ERROR. That only
   lets the next writer try SQLite's lock itself, as it would without the gate.
 - `WarnWaitMs` (default 1 s) logs a writer that waited long; every `StatsIntervalMs` (default 5 min) each gate logs one INFO line: writes,
-  queued writes, mean and max wait, longest hold and its owner, timeouts, stuck holds released.
+  queued writes, mean and max wait, longest hold and its owner, timeouts, stuck holds released, and the lifetime count of holds whose transaction
+  ended unseen.
+- A hold whose transaction already ended without an event the interceptor saw (the write fence rolls back straight on the `DbTransaction`;
+  more often the gap between Microsoft.Data.Sqlite running `COMMIT` and EF raising `TransactionCommitted`) is found by the next waiter, which
+  asks SQLite whether the connection is back in autocommit (`sqlite3_get_autocommit`), and released at once (DEBUG log, counted as "ended unseen").
 
 The gate does not shorten a slow holder: a transaction held for 3 s by the application still makes everyone wait 3 s
 (`SlowTransactionInterceptor` names those holders). It removes the failures that came from unfair polling, and the wasted sleeps.
+The two worst holders on live, `EfManagedPlayerbotStore.UpdateManyAsync` (a LINQ `ExecuteUpdate` per row) and
+`EfCreatureRespawnStore.SaveAsync` (tracked read, then `SaveChanges`), now run one raw statement per row on SQLite (`SqliteRowCommand`: SQL
+built once from the EF model, values bound through EF's type mappings, still on the EF pipeline so every interceptor sees it), so the lock
+covers the statements rather than EF's per-row query work.
 Another process on the same file (the realm daemon on a shared auth file, a DB tool) still meets SQLite's lock as before.
 
 `SqliteWriteGateTests.ManyConcurrentWriteTransactions_AllCommit_WithoutABusyFailure` runs 16 concurrent EF writers x 25 transactions, each
 holding the lock about 8 ms, against one file with a 300 ms busy timeout (the test runs with the live 5 s write bound). With a 1 s write bound
 **33 of 400 transactions failed as locked with the gate off, none with it on** (Debug build, Nate's PC, 2026-10-17).
+
+Live (enabled at redeploy #4, 8:31 PM CT 2026-10-17): the previous 24 h log had 246 "database is locked" entries (33 writer failures,
+the rest crash-ledger copies), 37 save-backlog warnings (peak 1000 characters, oldest 130 s) and 34 slow transactions. The first minutes with
+the gate (first 6 min): 1700-3800 writes a minute on characters.db, 0.5-2.5% queued, max wait 383 ms and longest hold 535 ms during
+the startup burst, then waits under 100 ms and holds under 200 ms; no timeouts, no locked errors.
 
 ## Spellbook learn batching
 
