@@ -92,6 +92,14 @@ public sealed class UnitCombat
 
     internal uint CombatCheckTimer { get; set; }
 
+    /// <summary>
+    /// Diagnostics for combat/combat-never-left: the member that last put this unit in combat (<see cref="MapCombat.SetInCombatState"/>'s
+    /// caller name, a constant string) and how many times it was put in combat since its flag was last cleared.
+    /// </summary>
+    internal string? LastCombatSetBy { get; set; }
+
+    internal uint CombatSetsSinceClear { get; set; }
+
     /// <summary>The last auto-attack error sent to this player's client (vmangos Player::m_swingErrorMsg).</summary>
     public AttackCheckResult LastSwingError { get; internal set; }
 

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
@@ -1083,8 +1084,11 @@ public sealed partial class MapCombat
         }
     }
 
-    /// <summary>vmangos Unit::SetInCombatState: UNIT_FLAG_IN_COMBAT plus the PvP linger timer (rounded up to the 1.2 s check).</summary>
-    public void SetInCombatState(Unit unit, uint combatTimer)
+    /// <summary>
+    /// vmangos Unit::SetInCombatState: UNIT_FLAG_IN_COMBAT plus the PvP linger timer (rounded up to the 1.2 s check). <paramref name="caller"/>
+    /// is kept for the combat/combat-never-left report (<see cref="UnitCombat.LastCombatSetBy"/>).
+    /// </summary>
+    public void SetInCombatState(Unit unit, uint combatTimer, [CallerMemberName] string caller = "")
     {
         if (IsQuestSettlementPending(unit) || !IsAliveState(unit))
         {
@@ -1100,6 +1104,8 @@ public sealed partial class MapCombat
         }
 
         unit.UnitFlags |= UnitFlags.InCombat;
+        c.LastCombatSetBy = caller;
+        c.CombatSetsSinceClear++;
         Track(unit);
     }
 
@@ -1164,6 +1170,7 @@ public sealed partial class MapCombat
     public static void ClearInCombat(Unit unit)
     {
         unit.Combat.CombatTimer = 0;
+        unit.Combat.CombatSetsSinceClear = 0;
         unit.UnitFlags &= ~(UnitFlags.InCombat | UnitFlags.PetInCombat);
         unit.Combat.InPvpCombat = false;
     }

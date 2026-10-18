@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Combat;
@@ -150,7 +151,7 @@ public sealed partial class MapCombat
         else if (Advance(ref _stuckEpisodes, unit, stuckBad, elapsed, CombatNeverLeftBudgetMs, 0))
         {
             AnomalyLedger.Shared.Report(AnomalySubsystem, CombatNeverLeftCode, SubjectOf(unit),
-                string.Create(CultureInfo.InvariantCulture, $"flagged in combat for {CombatNeverLeftBudgetMs} ms with no victim, attacker or reachable threat holder (threatenedBy={c.ThreatenedByInternal.Count} threatList={c.HasThreatList}){Where(unit)}"));
+                string.Create(CultureInfo.InvariantCulture, $"flagged in combat for {CombatNeverLeftBudgetMs} ms with no victim, attacker or reachable threat holder (threatenedBy={c.ThreatenedByInternal.Count} threatList={c.HasThreatList}); {StuckCombatFacts(unit, c)}{Where(unit)}"));
         }
 
         // Regeneration stalled: an alive creature out of combat, below full health, whose health did not move.
@@ -263,6 +264,35 @@ public sealed partial class MapCombat
         _threatEpisodes?.Remove(unit);
         _stuckEpisodes?.Remove(unit);
         _regenEpisodes?.Remove(unit);
+    }
+
+    /// <summary>
+    /// What a combat/combat-never-left report needs to find the cause: who last put the unit in combat and how often since the flag was
+    /// last cleared, whether the combat timer can end it, and for a creature its entry, summon kind, AI, motion and owner (live 2026-10-18:
+    /// the remaining reports are on player pets, GUID entry = pet number, which the combat timer should have ended).
+    /// </summary>
+    private string StuckCombatFacts(Unit unit, UnitCombat c)
+    {
+        string facts = string.Create(CultureInfo.InvariantCulture,
+            $"set by {c.LastCombatSetBy ?? "?"} x{c.CombatSetsSinceClear}, pvp timer {UsesPvpCombatTimer(unit)} ({c.CombatTimer} ms)");
+        if (unit is not Creatures.Creature creature)
+        {
+            return facts;
+        }
+
+        ObjectGuid ownerGuid = creature.CharmerOrOwnerGuid;
+        string owner = "none";
+        if (!ownerGuid.IsEmpty)
+        {
+            Unit? found = _map.FindPlayer(ownerGuid) ?? _map.FindObject(ownerGuid) as Unit;
+            owner = found is null
+                ? string.Create(CultureInfo.InvariantCulture, $"{ownerGuid} not on this map")
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"{SubjectOf(found)} {found.Combat.DeathState} inCombat={found.Combat.IsInCombat} victim={(found.Combat.Victim is null ? "none" : SubjectOf(found.Combat.Victim))} threatenedBy={found.Combat.ThreatenedByInternal.Count} {MathF.Sqrt(((found.X - unit.X) * (found.X - unit.X)) + ((found.Y - unit.Y) * (found.Y - unit.Y))):F0} yd");
+        }
+
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{facts}; entry {creature.Entry} summon {creature.Summon?.Kind.ToString() ?? "none"} ai {creature.AI?.GetType().Name ?? "none"} motion {creature.Motion.CurrentType} owner {owner}");
     }
 
     /// <summary>Stable identity of a unit for the ledger (no positions or counters).</summary>

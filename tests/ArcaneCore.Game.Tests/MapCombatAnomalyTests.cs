@@ -91,6 +91,26 @@ public sealed class MapCombatAnomalyTests
         Assert.False(b.Any("combat/combat-never-left"));
     }
 
+    /// <summary>
+    /// Live 2026-10-18: combat-never-left kept firing on player pets after the combat-timer fix, with nothing in the report to say what
+    /// put them in combat. The report now names the last <see cref="MapCombat.SetInCombatState"/> caller, how often since the flag was
+    /// cleared, and whether the combat timer can end it.
+    /// </summary>
+    [Fact]
+    public void CombatNeverLeft_NamesWhatPutTheUnitInCombat()
+    {
+        (_, Map map, _, _) = CombatTestKit.CreateWorld();
+        CombatTestUnit stuck = Spawn(map);
+        map.Combat.SetInCombatState(stuck, 0);
+        map.Combat.SetInCombatState(stuck, 0);
+        using AnomalyCapture s = CaptureFor(stuck);
+        map.Combat.Update(60_000);
+        map.Combat.Update(60_000);
+        string detail = Assert.Single(s.Notices).Detail;
+        Assert.Contains($"set by {nameof(CombatNeverLeft_NamesWhatPutTheUnitInCombat)} x2", detail);
+        Assert.Contains("pvp timer False", detail);
+    }
+
     [Fact]
     public void PlayerInCombatOnlyWithAFarHolder_IsReported_NearHolderIsNot()
     {
