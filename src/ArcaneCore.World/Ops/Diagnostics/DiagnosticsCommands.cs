@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Ops.Diagnostics;
 
 /// <summary>
 /// Memory, GC and runtime self-diagnosis commands for a live server, as sub-commands of the existing <c>.debug</c> root (docs/ops/diagnostics.md):
-/// <c>.debug gc</c>, <c>.debug selfcheck</c> and <c>.debug invariants</c> (game master), <c>.debug alloc start|report|stop</c> and <c>.debug dump</c> (administrator).
+/// <c>.debug gc</c>, <c>.debug selfcheck</c> and <c>.debug invariants</c> (game master), <c>.debug gccollect</c>, <c>.debug alloc start|report|stop</c> and <c>.debug dump</c> (administrator).
 /// They have no vmangos equivalent. All of them work from the server console too (it has Administrator authority); none needs a character.
 /// </summary>
 public sealed class DiagnosticsCommands : ICommandExtension
@@ -27,6 +27,10 @@ public sealed class DiagnosticsCommands : ICommandExtension
         new("gc", AccountSecurity.GameMaster,
             "Syntax: .debug gc\nPrint the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode.",
             Gc, RetailLevel: 3),
+        // After gc: a word resolves to the first entry it is a prefix of, so a gccollect listed first would take every .debug gc.
+        new("gccollect", AccountSecurity.Administrator,
+            "Syntax: .debug gccollect\nForce a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server.",
+            GcCollect, RetailLevel: 6),
         new("selfcheck", AccountSecurity.GameMaster,
             "Syntax: .debug selfcheck\nInspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers.",
             SelfCheck, RetailLevel: 3),
@@ -59,6 +63,28 @@ public sealed class DiagnosticsCommands : ICommandExtension
             context.Reply(line);
         }
 
+        return true;
+    }
+
+    private static bool GcCollect(CommandContext context, string args)
+    {
+        if (args.Trim().Length != 0) return false;
+        long before = GC.GetTotalMemory(false);
+        long workingBefore = Environment.WorkingSet;
+        int[] counts = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
+        System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+        long t0 = Stopwatch.GetTimestamp();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        double pause = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+        long after = GC.GetTotalMemory(false);
+        GCMemoryInfo info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+        static string Mb(long bytes) => (bytes / 1048576.0).ToString("F1", CultureInfo.InvariantCulture) + " MiB";
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"Full compacting collection took {pause:F1} ms: managed heap {Mb(before)} -> {Mb(after)} (freed {Mb(Math.Max(0, before - after))}), working set {Mb(workingBefore)} -> {Mb(Environment.WorkingSet)}"));
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"  collections since start: gen0 {GC.CollectionCount(0)} (+{GC.CollectionCount(0) - counts[0]}), gen1 {GC.CollectionCount(1)} (+{GC.CollectionCount(1) - counts[1]}), gen2 {GC.CollectionCount(2)} (+{GC.CollectionCount(2) - counts[2]}); fragmented {Mb(info.FragmentedBytes)}, committed {Mb(info.TotalCommittedBytes)}"));
         return true;
     }
 

@@ -129,8 +129,7 @@ public sealed class ExtraAlterCommands : ICommandExtension
 }
 
 /// <summary>
-/// <c>.debug pathbench [#count] [#radius]</c> (time path queries from you to points around you on the world thread) and
-/// <c>.debug gccollect</c> (administrator: force a full compacting collection and show what it freed). No vmangos equivalent.
+/// <c>.debug pathbench [#count] [#radius]</c>: time path queries from you to points around you on the world thread. No vmangos equivalent.
 /// </summary>
 public sealed class ExtraDebugCommands : ICommandExtension
 {
@@ -144,9 +143,6 @@ public sealed class ExtraDebugCommands : ICommandExtension
         new("pathbench", AccountSecurity.GameMaster,
             "Syntax: .debug pathbench [#count] [#radius]\nTime #count path queries (default 20, at most 100) from you to evenly spread points #radius yards away (default 40, 5-200) on the world thread: min/p50/max/mean time, how many found a full, partial or no path, and the mean path length.",
             PathBench, RetailLevel: 3),
-        new("gccollect", AccountSecurity.Administrator,
-            "Syntax: .debug gccollect\nForce a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server.",
-            GcCollect, RetailLevel: 6),
     ];
 
     private static readonly CultureInfo C = CultureInfo.InvariantCulture;
@@ -198,28 +194,6 @@ public sealed class ExtraDebugCommands : ICommandExtension
             $"{count} path queries at {radius:F0} yd on map {map.MapId} in {elapsed:F1} ms: min {times[0]:F2}, p50 {times[count / 2]:F2}, max {times[^1]:F2}, mean {times.Average():F2} ms"));
         context.Reply(string.Create(C,
             $"  {full} full, {partial} partial, {none} no path; mean length {(found > 0 ? length / found : 0):F1} yd (straight line {radius:F0} yd)"));
-        return true;
-    }
-
-    private static bool GcCollect(CommandContext context, string args)
-    {
-        if (args.Trim().Length != 0) return false;
-        long before = GC.GetTotalMemory(false);
-        long workingBefore = Environment.WorkingSet;
-        int[] counts = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
-        System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-        long t0 = Stopwatch.GetTimestamp();
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-        GC.WaitForPendingFinalizers();
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-        double pause = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
-        long after = GC.GetTotalMemory(false);
-        GCMemoryInfo info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
-        static string Mb(long bytes) => (bytes / 1048576.0).ToString("F1", C) + " MiB";
-        context.Reply(string.Create(C,
-            $"Full compacting collection took {pause:F1} ms: managed heap {Mb(before)} -> {Mb(after)} (freed {Mb(Math.Max(0, before - after))}), working set {Mb(workingBefore)} -> {Mb(Environment.WorkingSet)}"));
-        context.Reply(string.Create(C,
-            $"  collections since start: gen0 {GC.CollectionCount(0)} (+{GC.CollectionCount(0) - counts[0]}), gen1 {GC.CollectionCount(1)} (+{GC.CollectionCount(1) - counts[1]}), gen2 {GC.CollectionCount(2)} (+{GC.CollectionCount(2) - counts[2]}); fragmented {Mb(info.FragmentedBytes)}, committed {Mb(info.TotalCommittedBytes)}"));
         return true;
     }
 }

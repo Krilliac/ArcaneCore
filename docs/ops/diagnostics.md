@@ -11,6 +11,7 @@ All commands extend the `.debug` root, work from the server console (Administrat
 | Command | Permission | Cost |
 |---|---|---|
 | `.debug gc` | Game master (level 3) | Microseconds: runtime counter reads, on the calling thread. |
+| `.debug gccollect` | Administrator (level 6) | Suspends the process for two full blocking, compacting collections (LOH included). |
 | `.debug selfcheck` | Game master (level 3) | Microseconds: runtime, thread-pool, GC, fault-ledger, invariant, tick, and circuit-breaker health check. |
 | `.debug alloc start [seconds=30]` / `report [top=15]` / `stop` | Administrator (level 6) | Measured as noise-level on the world process, see below; only while a sample runs. |
 | `.debug dump [full\|heap\|mini]` | Administrator (level 6), and only when `Ops:Diagnostics:Dumps:Enabled` is set | Suspends the process while it is written. |
@@ -41,6 +42,13 @@ compaction mode), the collection counts and total pause time, and the memory loa
 DATAS is read from the `DOTNET_GCDynamicAdaptationMode` environment variable, then the `System.GC.DynamicAdaptationMode` runtimeconfig knob; when
 neither is set, server GC reports `on (default for server GC)` (the .NET 9+ default) and workstation GC `n/a`. A kind with no collection yet prints
 `none has happened yet`.
+
+## `.debug gccollect`
+
+Forces a full blocking, compacting collection with the LOH compacted once (`GCLargeObjectHeapCompactionMode.CompactOnce`), waits for the pending
+finalizers and collects again, then prints the pause, the managed heap and working set before and after, the collection counts and the fragmented
+and committed bytes of that collection. It is listed after `gc`: a command word resolves to the first `.debug` entry it is a prefix of, so a
+`gccollect` listed first would take every `.debug gc` (an administrator forcing a collection instead, a game master being refused).
 
 ## `.debug alloc start|report|stop`
 
