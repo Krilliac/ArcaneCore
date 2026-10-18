@@ -98,7 +98,7 @@ dead with the pet out of combat, or when the spell duration ends.
 * **Server packets** (`PetPackets`): `SMSG_PET_SPELLS` on summoning a pet (`Player::PetSpellInitialize`,
   `Player.cpp:17354-17398`; a guardian or mini pet gets none) and the empty one (GUID 0) when a pet is
   unsummoned (`Pet.cpp:1085`, `Player.cpp:17507`); `SMSG_PET_MODE` (`Pet::SetEnabled`, the greyed bar of
-  a mounted owner; `PetController.SetEnabled`, to be called by the mount code); `SMSG_PET_ACTION_FEEDBACK`,
+  a mounted owner; `SummonService.SetPetEnabled`, on the owner's mount and dismount); `SMSG_PET_ACTION_FEEDBACK`,
   `SMSG_PET_CAST_FAILED` (1.12 form: u32 spell, u8 2, u8 result), `SMSG_PET_NAME_QUERY_RESPONSE`,
   `SMSG_PET_ACTION_SOUND`, `SMSG_AI_REACTION`. Layouts are the gtker/wow_messages ones
   (`world/pet/*.wowm`, `queries/*pet_name*.wowm`; the name query and its response are checked against the
@@ -190,7 +190,7 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 | experience, quest kill credit, reputation (group-loot-xp, npc-services-quests lanes) | the same killer resolution | `Unit.cpp:1256` |
 | faction and PvP rules (`Combat/FactionCombatHooks.cs`, lines 31-32 list it as missing) | hostility of a pet or totem is its owner's: `Object.cpp:3745-3815`; copy of the owner faction is already on the unit, the player-controlled and PvP flags too | `Object.cpp:3745-3815` |
 | stats (stats-combat-formulas lane) | the owner's stat inheritance for a pet (`Pet::UpdateAllStats`), `CreatureClassLevelStats` for pets without `pet_levelstats` | `Pet.cpp:1274-1480` |
-| mounts (the owner's lane) | `PetController.SetEnabled(pet, false/true)` on mount and dismount (greys the bar) | `Player.cpp:18214`, `18249` |
+| mounts (the owner's lane) | done: `MountService` raises `SpellSystem.PlayerMounted` / `PlayerDismounted` and `SummonService.Mounts.cs` calls `SetPetEnabled(pet, false/true)` (greys the bar), or brings back a pet put away when a dismounted owner has none; a pet loaded while its owner rides starts greyed out, but not during a taxi flight (vmangos loads no pet then; the landing raises no dismount event here) | `Player.cpp:18214`, `18249-18251`, `20944-20945`, `Pet.cpp:216-221`, `401-404` |
 | teleports and logout (teleport, character lanes) | done for teleports (`PetTeleportFollow`, wave 2); a logout keeps the hunter pet through the pet store (P7), a demon is not stored | `UnsummonPetTemporaryIfAny` |
 
 ## Configuration (`Pets`, every default is the retail value)
@@ -269,8 +269,10 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   MovementHandler.cpp:197-198, 274-284). A hunter pet comes back from its current-pet snapshot; a demon or other summoned pet keeps
   its pet number, health, mana, react state, name, spells and bar (held in memory, since demons are not stored). Totems, guardians
   and mini pets are unsummoned and stay gone (vmangos `RemoveFromWorld`); a temporary summon and a dead pet are not brought back (a
-  dead hunter pet stays dead in its snapshot, where Revive Pet finds it; vmangos would reload it as a corpse). Not done: the taxi,
-  mount and possess triggers of the same pair.
+  dead hunter pet stays dead in its snapshot, where Revive Pet finds it; vmangos would reload it as a corpse). A summoned possessed
+  minion puts the pet away for its life (`CharmService.SummonPossessed.cs`), and a dismount brings the pet back when the owner has none
+  (`Player::Unmount`, Player.cpp:18250-18251, `SummonService.Mounts.cs`). Not done: the taxi trigger of the same pair (vmangos mounts
+  the flight without a spell, Player.cpp:18201-18203, and dismounts on landing).
 * **Spirit guide re-summon (wave 2).** `SummonService.AutoReSummonPet` (vmangos `Player::AutoReSummonPet`, Player.cpp:1580-1628) runs
   on `SpellSystem.PlayerSpiritHealed` (SPELL_EFFECT_SPIRIT_HEAL): the last demon or loaded permanent pet (`m_petEntry`, `m_petSpell`)
   comes back when the summoning spell's reagents are in the bags (they are taken); a pet saved dead is brought back to life at full

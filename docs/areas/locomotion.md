@@ -238,8 +238,10 @@ snare, mounts), none of which did anything before.
   aura (8326), which `CombatHooks.ApplyGhostForm` (the death lane's seam, a no-op on this base) would have to cast: when it does,
   these auras take effect through the same formula with no further change.
 
-Limits: creatures are covered by slice 7; pets and charmed units do not follow the owner's speed (`CallForAllControlledUnits`, no pets on
-this base); the talent speed modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
+Limits: creatures are covered by slice 7; pets and charmed units do not follow the owner's speed: vmangos recomputes them on every change
+(`CallForAllControlledUnits` in `SetSpeedRateReal`, `Unit.cpp:7184`) and a following pet out of combat takes its owner's rate
+(`Unit.cpp:6961-6977`), neither of which `UnitSpeed` ports (the pets area, `Game/Pets`, does not touch speeds); the talent speed
+modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
 changed by any 1.12 aura and is not handled; a speed that is within 0.01 of the sent one is stored as the client reported it
 (vmangos does the same). Unverified against a real 1.12.1 client (packed GUID widths, see slice 1).
 ## Slice 7: speed-rates-creatures (delivered)
@@ -248,7 +250,7 @@ Creatures take the same auras (the speed aura module acts on any unit) and `Unit
 `Unit::UpdateSpeed` (`Unit.cpp:7063-7094`): run and walk are multiplied by the template's `speed_run` (default 1.14286, vmangos
 `DEFAULT_NPC_RUN_SPEED_RATE`) and `speed_walk` (default 1), and the run speed by 0.7, 0.6 or 0.5 while the creature is under
 16%, 11% or 6% health (`SPEED_REDUCTION_HP_*`, `CreatureDefines.h:225-230`; health thresholds `Creature.cpp:971-973`), except
-pets, world bosses and templates with `StaticFlags2 & 0x40` (`CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN`, `CreatureDefines.h:140`;
+world bosses and templates with `StaticFlags2 & 0x40` (`CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN`, `CreatureDefines.h:140`;
 155 of the 10384 classic template rows carry it, 901 have a non-default run rate, per the design survey of `D:\refs\classic-db`).
 A creature is server-moved, so a change is immediate and everyone nearby gets `SMSG_SPLINE_SET_*_SPEED` (packed GUID + f32), no
 handshake (`Unit::SetSpeedRate` third branch, `Unit.cpp:7176-7181`). `Creature.InitializeFields` now sets the template speeds
@@ -258,8 +260,9 @@ takes twice as long to cover 14 yards (1750 ms to 3500 ms in `CreatureSpeedTests
 Limits: vmangos refreshes the three health aura states every creature update but only recomputes the run speed when something
 calls `UpdateSpeed` (a speed aura, fleeing at low health, returning from an assist call, `Creature.cpp:1191,1222,2282`); the
 health used here is the one at the recompute, and the AI lane has to call `UnitSpeed.UpdateSpeed(creature, MoveType.Run)` at
-those moments (no creature AI hooks were edited). Pets of players are normalised to the default run rate in vmangos; no pets
-exist on this base, so that branch is not applied.
+those moments (no creature AI hooks were edited). Not ported: vmangos runs a player's pet at the default run rate instead of its
+template's (`Unit.cpp:7064-7082`) and does not slow a pet when wounded (`:7085`); `UnitSpeed` applies neither branch, so a player's
+pet still takes its template rate and the wounded slowdown.
 ## Slice 8: mount-aura (delivered)
 
 The follow-on mount cast and restriction rules are tracked in [mounts.md](mounts.md).
@@ -285,10 +288,20 @@ the aura dismounts. 126 classic spells carry the aura (108 are item mounts).
   `RemoveAurasWithInterruptFlags`, `InterruptSpellsWithChannelFlags`) and `RemoveAurasByType` (`RemoveSpellsCausingAura`); `SpellAuraInterruptFlags`
   gained `DismountCancels` and `MountCancels` (vmangos `SpellDefines.h:583,594`).
 
-Not delivered (the systems are not on this base): unsummoning or disabling the pet on mount and resummoning on dismount (`Player.cpp:18205-18218,18245-18250`),
-the disallowed shapeshift form refusal (only for mounts without a spell), `ResetExtraAttacks`, the Silithyst drop on mounting. **Taxi**: `TaxiFlightSystem`
-sets and clears the mount display itself and vmangos removes the Mounted aura when a flight starts (`ActivateTaxiPathTo`); here an aura mount is not removed
-at taxi start, so the display is overwritten for the flight and cleared at its end while the aura stays: the taxi code needs the spell system to remove it.
+* **The player's pet** (`SpellSystem.PlayerMounted` / `PlayerDismounted`, raised by `MountService` between the display and the result and handled by
+  `Game/Pets/SummonService.Mounts.cs`): mounting leaves the pet out and greys its bar out with `SMSG_PET_MODE` (enabled byte 0x8, `Pet::SetEnabled`,
+  `Pet.cpp:2362-2377`), as vmangos does with its default `PetUnsummonAtMount = 0` (`Player.cpp:18204-18216`, `World.cpp:820`); dismounting gives the bar
+  back, or brings back a pet that was put away when there is none (`Player.cpp:18248-18251`); a pet that comes back while its owner rides starts greyed
+  out (`Pet::LoadPetFromDB`, `Pet.cpp:401-404`), except during a taxi flight: vmangos loads no pet then (`Pet.cpp:216-221`, `Player.cpp:20944-20945`)
+  and the landing here clears the display without a dismount event, so such a pet stays enabled. `ResetExtraAttacks` (`Player.cpp:18227`) runs before
+  the ok result. The Silithyst drop on mounting is the outdoor-PvP feature's (`World/OutdoorPvP/OutdoorPvPFeature.cs`, on the Mounted aura holder).
+
+Not delivered: `PetUnsummonAtMount` is not a setting (the pet always stays out, the vmangos default). The branches of `Player::Mount` for a mount without
+a spell (a taxi or GM mount: the disallowed shapeshift refusal, `Player.cpp:18185-18190`, and putting the pet away, `:18201-18203`) do not apply, because
+only the mount aura calls `MountService.Mount`. **Taxi**: `TaxiFlightSystem` sets and clears the mount display itself; a flight master refuses a mounted
+or shapeshifted player (`QuestNpcServices.Travel.cs`) and a scripted flight removes the Mounted aura first (the `beforeFlight` hook of
+`NpcServicesFeature`, vmangos `ActivateTaxiPathTo`, `Player.cpp:17889-17892`), but the pet is not put away for the flight and brought back on landing
+(vmangos `TaxiHandler.cpp:120` mounts without a spell; `FlightPathMovementGenerator::Finalize`, `WaypointMovementGenerator.cpp:362`, dismounts).
 ## Slice 9: knockback (delivered)
 
 `SPELL_EFFECT_KNOCK_BACK` (98, 133 classic spells; 51 are creature casts in dungeons and raids) and `SPELL_EFFECT_PLAYER_PULL` (124, 7 spells) in

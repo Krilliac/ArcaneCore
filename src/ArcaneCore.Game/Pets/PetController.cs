@@ -641,24 +641,6 @@ public sealed partial class PetController
         _summons.Unsummon(pet);
     }
 
-    /// <summary>
-    /// vmangos Pet::SetEnabled (Pet.cpp:2362-2377): grey the pet's bar out or back in (a mounted owner)
-    /// and tell the owner with SMSG_PET_MODE. The mount code of the owner's lane calls it.
-    /// </summary>
-    public void SetEnabled(Creature pet, bool enabled)
-    {
-        if (pet.Summon?.Charm is not { } charm)
-        {
-            return;
-        }
-
-        charm.Enabled = enabled;
-        if (pet.GetOwner() is Player owner)
-        {
-            owner.Session.Send(WorldOpcode.SmsgPetMode, PetPackets.BuildPetMode(pet, charm));
-        }
-    }
-
     // --- responses (vmangos Unit::SendPet*) ------------------------------------------------------------------
 
     private void InterruptNonMeleeSpells(Creature pet)

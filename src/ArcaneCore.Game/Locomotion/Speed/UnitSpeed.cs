@@ -183,7 +183,8 @@ public static class UnitSpeed
     /// (<c>speed_run</c>, default 1.14286 = <see cref="Creature.DefaultRunSpeedRate"/>; <c>speed_walk</c>, default 1), and a
     /// run speed is multiplied by 0.7, 0.6 or 0.5 while the creature is under 16%, 11% or 6% health, unless it is a world
     /// boss or has the no-wounded-slowdown static flag (:7080-7090; creature.cpp:971-973 sets the three aura states from
-    /// the health percent). Pets of players are normalised to the default run rate in vmangos; there are no pets on this base.
+    /// the health percent). Not ported: vmangos runs a player's pet at the default run rate instead of its template's (:7064-7082)
+    /// and does not slow a pet when wounded (:7085), so here a player's pet still takes its template rate and the wounded slowdown.
     /// <para>
     /// vmangos refreshes the three health aura states every creature update but only recomputes the run speed when
     /// something calls UpdateSpeed (a speed aura, fleeing at low health, returning from an assist call). The health used

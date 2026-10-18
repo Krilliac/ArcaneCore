@@ -69,6 +69,8 @@ public sealed partial class SummonService : ISpellSummonSink
             }
         });
         spells.PlayerSpiritHealed += player => AutoReSummonPet(player); // Spell::EffectSpiritHeal → Player::AutoReSummonPet
+        spells.PlayerMounted += OnOwnerMounted; // Player::Mount → Pet::SetEnabled(false) (SummonService.Mounts.cs)
+        spells.PlayerDismounted += OnOwnerDismounted; // Player::Unmount → Pet::SetEnabled(true) or ResummonPetTemporaryUnSummonedIfAny
         spells.RegisterEffect(SpellEffectName.DismissPet, context =>
         {
             if (context.Caster is Player player && player.Class == Class.Hunter
