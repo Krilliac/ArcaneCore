@@ -338,7 +338,9 @@ public sealed class SocialFeature(
 
     private void OnVisibleAuraSlotChanged(Unit target, byte slot)
     {
-        if (target.GetCharmerOrOwnerPlayer() is { } owner && ReferenceEquals(owner.GetPet(), target))
+        if (target is Player player)
+            Context.Groups.MarkAuraChanged(player, slot);
+        else if (target.GetCharmerOrOwnerPlayer() is { } owner && ReferenceEquals(owner.GetPet(), target))
             Context.Groups.MarkPetAuraChanged(owner, slot);
     }
 

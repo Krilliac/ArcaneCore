@@ -129,7 +129,7 @@ public static class GroupPackets
         => BuildPartyMemberStats(GroupMemberStatsSnapshot.Capture(player), mask);
 
     internal static byte[] BuildPartyMemberStats(
-        GroupMemberStatsSnapshot stats, GroupUpdateFlags mask, GroupMemberStatsSnapshot? previous = null)
+        GroupMemberStatsSnapshot stats, GroupUpdateFlags mask, GroupMemberStatsSnapshot? previous = null, GroupAuraSlotMasks forced = default)
     {
         var writer = new PacketWriter(64);
         writer.WritePackedGuid(stats.Guid.Value);
@@ -182,12 +182,12 @@ public static class GroupPackets
 
         if ((mask & GroupUpdateFlags.Auras) != 0)
         {
-            WriteAuras(writer, stats.Auras, previous?.Auras, 0, 32);
+            WriteAuras(writer, stats.Auras, previous?.Auras, 0, 32, forced.Positive);
         }
 
         if ((mask & GroupUpdateFlags.AurasNegative) != 0)
         {
-            WriteAuras(writer, stats.Auras, previous?.Auras, 32, 16);
+            WriteAuras(writer, stats.Auras, previous?.Auras, 32, 16, forced.Negative);
         }
 
         if ((mask & GroupUpdateFlags.PetGuid) != 0)
@@ -233,13 +233,13 @@ public static class GroupPackets
         if ((mask & GroupUpdateFlags.PetAuras) != 0)
         {
             WriteAuras(writer, stats.PetAuras,
-                previous is not null && previous.PetGuid == stats.PetGuid ? previous.PetAuras : null, 0, 32);
+                previous is not null && previous.PetGuid == stats.PetGuid ? previous.PetAuras : null, 0, 32, forced.PetPositive);
         }
 
         if ((mask & GroupUpdateFlags.PetAurasNegative) != 0)
         {
             WriteAuras(writer, stats.PetAuras,
-                previous is not null && previous.PetGuid == stats.PetGuid ? previous.PetAuras : null, 32, 16);
+                previous is not null && previous.PetGuid == stats.PetGuid ? previous.PetAuras : null, 32, 16, forced.PetNegative);
         }
 
         return writer.ToArray();
@@ -251,11 +251,12 @@ public static class GroupPackets
     /// <summary>
     /// D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:636-657,719-754:
     /// u32 positive mask or u16 negative mask,
-    /// followed by one u16 spell id per set bit. A delta includes a cleared slot with id zero.
+    /// followed by one u16 spell id per set bit. A delta includes a cleared slot with id zero. <paramref name="forcedBits"/> are the slots
+    /// marked by Unit::UpdateAuraForGroup, sent with their current id even when the snapshot did not change.
     /// </summary>
-    private static void WriteAuras(PacketWriter writer, uint[] current, uint[]? previous, int start, int count)
+    private static void WriteAuras(PacketWriter writer, uint[] current, uint[]? previous, int start, int count, uint forcedBits = 0)
     {
-        uint bits = 0;
+        uint bits = previous is null ? 0 : forcedBits & (count == 32 ? uint.MaxValue : (1u << count) - 1);
         for (int i = 0; i < count; i++)
         {
             int slot = start + i;
@@ -352,3 +353,6 @@ public static class GroupPackets
 
     private static byte Flags(GroupMemberSlot slot) => (byte)(slot.SubGroup | (slot.Assistant ? 0x80 : 0));
 }
+
+/// <summary>Per-slot aura bits marked by vmangos Unit::UpdateAuraForGroup since the last stats pass (own and pet, positive 0-31 and negative 32-47).</summary>
+internal readonly record struct GroupAuraSlotMasks(uint Positive = 0, ushort Negative = 0, uint PetPositive = 0, ushort PetNegative = 0);

@@ -24,6 +24,7 @@ public sealed partial class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _sentStats = [];
     private readonly HashSet<ObjectGuid> _pendingPetName = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
+    private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingAuras = [];
     private uint _nextId = 1;
 
     /// <summary>
@@ -170,10 +171,27 @@ public sealed partial class GroupManager(SocialContext context)
     {
         ArgumentNullException.ThrowIfNull(player);
         if (GetGroup(player.Guid) is null || player.GetPet() is null || slot >= SpellSystem.MaxAuras) return;
-        _pendingPetAuras.TryGetValue(player.Guid, out (uint Positive, ushort Negative) masks);
+        MarkSlot(_pendingPetAuras, player.Guid, slot);
+    }
+
+    /// <summary>
+    /// vmangos Unit::UpdateAuraForGroup (Unit.cpp) for a grouped player's own visible aura slot: GROUP_UPDATE_FLAG_AURAS (slots 0-31) or
+    /// _AURAS_NEGATIVE (32-47) and the slot's bit go out with the next out-of-range stats pass, so a slot that changed and changed back
+    /// inside one pass (a buff replaced and re-cast) is still re-sent with its current spell id.
+    /// </summary>
+    public void MarkAuraChanged(Player player, byte slot)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (GetGroup(player.Guid) is null || slot >= SpellSystem.MaxAuras) return;
+        MarkSlot(_pendingAuras, player.Guid, slot);
+    }
+
+    private static void MarkSlot(Dictionary<ObjectGuid, (uint Positive, ushort Negative)> pending, ObjectGuid guid, byte slot)
+    {
+        pending.TryGetValue(guid, out (uint Positive, ushort Negative) masks);
         if (slot < SpellSystem.MaxPositiveAuras) masks.Positive |= 1u << slot;
         else masks.Negative |= (ushort)(1u << (slot - SpellSystem.MaxPositiveAuras));
-        _pendingPetAuras[player.Guid] = masks;
+        pending[guid] = masks;
     }
 
     // --- invites -------------------------------------------------------------------------------
@@ -718,6 +736,7 @@ public sealed partial class GroupManager(SocialContext context)
         UninviteFromGroup(player.Guid);
         _pendingPetName.Remove(player.Guid);
         _pendingPetAuras.Remove(player.Guid);
+        _pendingAuras.Remove(player.Guid);
         _sentStats.Remove(player.Guid);
         if (GetGroup(player.Guid) is { } group)
         {
@@ -755,14 +774,22 @@ public sealed partial class GroupManager(SocialContext context)
             {
                 changed |= GroupUpdateFlags.PetName;
             }
+            var forced = new GroupAuraSlotMasks();
             if (_pendingPetAuras.Remove(guid, out (uint Positive, ushort Negative) auraMasks))
             {
                 if (auraMasks.Positive != 0) changed |= GroupUpdateFlags.PetAuras;
                 if (auraMasks.Negative != 0) changed |= GroupUpdateFlags.PetAurasNegative;
+                forced = forced with { PetPositive = auraMasks.Positive, PetNegative = auraMasks.Negative };
+            }
+            if (_pendingAuras.Remove(guid, out (uint Positive, ushort Negative) ownMasks))
+            {
+                if (ownMasks.Positive != 0) changed |= GroupUpdateFlags.Auras;
+                if (ownMasks.Negative != 0) changed |= GroupUpdateFlags.AurasNegative;
+                forced = forced with { Positive = ownMasks.Positive, Negative = ownMasks.Negative };
             }
             if (changed != GroupUpdateFlags.None)
             {
-                SendStatsOutOfRange(group, player, now, changed, before);
+                SendStatsOutOfRange(group, player, now, changed, before, forced);
             }
         }
 
@@ -921,6 +948,7 @@ public sealed partial class GroupManager(SocialContext context)
         bool current = ForgetMembership(guid, group);
         _pendingPetName.Remove(guid);
         _pendingPetAuras.Remove(guid);
+        _pendingAuras.Remove(guid);
         _sentStats.Remove(guid);
         bool leaderChanged = group.LeaderGuid == guid;
         if (leaderChanged)
@@ -969,6 +997,7 @@ public sealed partial class GroupManager(SocialContext context)
 
             _pendingPetName.Remove(guid);
             _pendingPetAuras.Remove(guid);
+            _pendingAuras.Remove(guid);
             _sentStats.Remove(guid);
             if (context.World.FindOnlinePlayer(guid) is { } player)
             {
@@ -1074,7 +1103,7 @@ public sealed partial class GroupManager(SocialContext context)
 
     private void SendStatsOutOfRange(
         Group group, Player player, GroupMemberStatsSnapshot stats, GroupUpdateFlags mask,
-        GroupMemberStatsSnapshot? previous = null)
+        GroupMemberStatsSnapshot? previous = null, GroupAuraSlotMasks forced = default)
     {
         byte[]? packet = null;
         foreach (GroupMemberSlot member in group.Members)
@@ -1085,7 +1114,7 @@ public sealed partial class GroupManager(SocialContext context)
                 continue;
             }
 
-            packet ??= GroupPackets.BuildPartyMemberStats(stats, mask, previous);
+            packet ??= GroupPackets.BuildPartyMemberStats(stats, mask, previous, forced);
             mate.Session.Send(WorldOpcode.SmsgPartyMemberStats, packet);
         }
     }
