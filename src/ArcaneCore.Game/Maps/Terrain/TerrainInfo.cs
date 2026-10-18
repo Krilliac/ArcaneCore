@@ -121,8 +121,8 @@ public sealed class TerrainInfo
     /// <summary>
     /// The ground height under a position, or <see cref="TerrainTile.InvalidHeightValue"/> where
     /// there is no data (vmangos <c>TerrainInfo::GetHeightStatic</c> without vmaps: the raw
-    /// <c>.map</c> surface; <paramref name="z"/> only matters to the vmap search ArcaneCore
-    /// does not have yet).
+    /// <c>.map</c> surface; <paramref name="z"/> only matters to the vmap search, which
+    /// <c>MapCollision.GetHeight</c> runs on top of this; this method and <c>Map.GetHeight</c> skip it).
     /// </summary>
     public float GetHeight(float x, float y, float z)
     {

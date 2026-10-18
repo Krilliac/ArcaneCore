@@ -24,8 +24,15 @@ the behaviour in your own code, and never copy their code or data into this repo
 
 ## Layout
 
-- `src/ArcaneCore.Kernel`, `Protocol`, `Cryptography`, `Data`, `Game` (the world simulation), `World` (the world daemon: handlers, features, commands) and `Realm` (the logon daemon).
-- `tests/` has one project per source project, plus `ArcaneCore.MockClient.Tests` and `hotmodule-fixtures`. `tools/` holds the command-line tools. `docs/` is this documentation.
+- `src/ArcaneCore.Kernel`, `Protocol`, `Cryptography`, `Data`, `Game` (the world simulation), `World` (the world daemon:
+  handlers, features, commands), `World.Contracts` (the versioned feature and bot interfaces the World and the bot pack
+  share), `Playerbots` (the bot pack, its own assembly), `Gateway` (the client socket daemon in front of a worker-mode
+  World) and `Realm` (the logon daemon).
+- `tests/` has a project for each source project except `Protocol` (covered by the Game and World tests),
+  `World.Contracts` and `Playerbots` (covered by the World tests), plus `ArcaneCore.MockClient.Tests`,
+  `ArcaneCore.Data.ProcessRunner` (a helper process the Data tests start), `ThirdParty` (imported DotRecast and
+  wow_messages sources the tests build against), `hotmodule-fixtures` and `ci` (the CI solution filters). `tools/`
+  holds the command-line tools. `docs/` is this documentation.
 - Prefer new files and narrow, additive edits to shared files (spell system, player, inventory, quest NPC, the world runtime and session). Integration notes for a feature go in `docs/integration/`.
 
 ## Build and test

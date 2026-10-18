@@ -125,12 +125,12 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     /// (left/right as seen from inside <paramref name="from"/>): internal neighbours share the edge;
     /// border edges join the adjacent tile's edges on the opposite side where they overlap.
     /// <c>CrossSide</c> is Detour's <c>link.side &gt;&gt; 1</c> for a tile-border link and 0 inside the tile.
-    /// </summary>
     /// <para>
     /// Appends to <paramref name="into"/> (cleared first) in the order a lazy enumeration would yield: the A* search expands tens
     /// of thousands of polygons per bot query, and an iterator per expansion was the largest allocation of the live bot tick
     /// (docs/integration/tick-perf-20261011.md).
     /// </para>
+    /// </summary>
     internal void CollectNeighbours(NavPolyRef from, List<NavNeighbour> into)
     {
         into.Clear();
@@ -406,13 +406,15 @@ public static class NavMeshQuery
     /// <summary>Searches with at most this many nodes share the small per-thread scratch; larger ones use their own.</summary>
     internal const int SmallSearchNodes = 4096;
 
-    /// <summary>Reusable A* state; <see cref="Begin"/> clears it (capacity is kept).</summary>
+    /// <summary>
+    /// Reusable A* state; <see cref="Begin"/> clears it (capacity is kept).
     /// <para>
     /// Nodes and closed flags are plain arrays read by reference and the index is keyed by a <c>long</c> (tile search id, polygon, cross
     /// side): live runs a Debug (unoptimized) build, where every <c>List&lt;Node&gt;</c> indexer copied a 64-byte node and every
     /// <c>(NavPolyRef, byte)</c> key hashed and compared through generated record-struct calls (Oct 17 sample: the search was 13% of
     /// the world thread, bot and creature A* together).
     /// </para>
+    /// </summary>
     private sealed class SearchScratch
     {
         public Node[] Nodes = new Node[64];

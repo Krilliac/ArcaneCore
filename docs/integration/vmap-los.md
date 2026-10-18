@@ -47,6 +47,7 @@ the world thread.
 | `EnableLineOfSight` | `true` | vmangos `vmap.enableLOS`. |
 | `EnableHeight` | `true` | vmangos `vmap.enableHeight` (also gates area info). |
 | `EnablePathfinding` | `true` | vmangos `mmap.enabled`. |
+| `NavTileReadConcurrency` | `2` | The most `NNNXXYY.mmtile` files bots' path searches read at the same time, in the background. At least 1. |
 
 A directory that does not exist keeps the default service (logged once at startup).
 
@@ -140,6 +141,7 @@ None.
 
 ## Suggested next slice
 
-Creature chase/follow generator using `CreaturePathing` (creature AI area); combat
-`IsWithinLineOfSight` checks for melee/ranged; WMO liquid and `WMOAreaTable` lookups; game-object
-LOS; `findSmoothPath` stepping.
+Combat `IsWithinLineOfSight` checks for melee/ranged; WMO liquid and `WMOAreaTable` lookups;
+game-object LOS; `findSmoothPath` stepping. (The creature chase/follow generator listed here before
+is done: it paths through `CreatureMapSystem.PlanPath`, see
+[How other areas use it](#how-other-areas-use-it).)

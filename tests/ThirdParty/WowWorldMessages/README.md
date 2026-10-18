@@ -4,4 +4,4 @@ This is the `WowWorldMessages/src/vanilla` generated source at gtker/wow_message
 
 The original project targets .NET 8 and references WowSrp and OneOf packages. The local test build is offline and uses `Compat/Header.cs` for plaintext vanilla framing and `Compat/OneOf*.cs` for generated union values. It does not implement encrypted headers. The only source edit to the imported code is the `#if false` around Wrath achievement helpers in `src/ReadUtils.cs`. TBC and Wrath files are absent. The generated vanilla packet layouts and server opcode switch are unmodified.
 
-Only `ArcaneCore.World.Tests` and `ArcaneCore.MockClient.Tests` reference this project. The World host observes payloads before header encryption; the opcode reader consumes a reconstructed plaintext vanilla header and must reach the end of the frame.
+Only `ArcaneCore.World.Tests`, `ArcaneCore.MockClient.Tests` and the `tools/ArcaneCore.Sniff` tool reference this project. The World host observes payloads before header encryption; the opcode reader consumes a reconstructed plaintext vanilla header and must reach the end of the frame.

@@ -101,7 +101,9 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
 ## What's left
 
 - Respawn times are not persisted (`creature_respawn`). They live in memory and survive grid unloads but not restarts.
-- No terrain or navmesh Z (seam: `ICreatureHeightProvider`) and no line-of-sight.
+- Creature point heights come from the `ICreatureHeightProvider` default, `MapCreatureHeightProvider`: the `.map` terrain
+  height, without vmap floors. Paths come from the navmesh ([creature movement](creature-movement-spawns.md)) and line of
+  sight from the vmaps ([collision and pathing](collision-pathing.md)).
 - Not driven yet:
   - Equipment / virtual items (items area)
   - Auras from the addon
