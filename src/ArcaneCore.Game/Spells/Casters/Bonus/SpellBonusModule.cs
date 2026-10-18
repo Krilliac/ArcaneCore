@@ -194,7 +194,8 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
 
             uint typeMask = target.CreatureTypeMask();
             benefit += Sum(caster, AuraType.ModFlatSpellDamageVersus, a => ((uint)a.MiscValue & typeMask) != 0);
-            flat = Sum(caster, AuraType.ModDamageDoneCreature, a => ((uint)a.MiscValue & typeMask) != 0);
+            flat = Sum(caster, AuraType.ModDamageDoneCreature, a => ((uint)a.MiscValue & typeMask) != 0)
+                + OverrideClassScriptDamageBonus(caster, spell, amount, modOp == SpellModOp.Dot);
             percent = spell.EquippedItemClass == -1
                 ? SpellBonusFormulas.MultiplicativePercent(ItemIndependentAmounts(caster, AuraType.ModDamagePercentDone, mask))
                 : 1.0f;
@@ -211,6 +212,52 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         float done = SpellBonusFormulas.AmountDone(amount, flat, benefit, coefficient, stack, percent);
         float modified = spells.ModFloat(caster, spell, modOp, done);
         return modified > 0 ? modified : 0;
+    }
+
+    /// <summary>
+    /// vmangos SpellCaster::SpellDamageBonusDone (SpellCaster.cpp:1627-1661): SPELL_AURA_OVERRIDE_CLASS_SCRIPTS on the caster (or its owner)
+    /// for 4418 (Increased Shock Damage), 4554 (Increased Lightning Damage) and 4555 (Improved Moonfire / Idol of the Moon).
+    /// </summary>
+    private float OverrideClassScriptDamageBonus(Unit caster, SpellInfo spell, float amount, bool overTime)
+    {
+        Unit owner = Pets.OwnerLinks.GetOwner(caster) ?? caster;
+        float bonus = 0f;
+        foreach (SpellAuraHolder holder in spells.GetAuras(owner))
+        {
+            if (holder.IsRemoved || holder.Spell.SpellFamilyName != spell.SpellFamilyName)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is null || aura.Type != AuraType.OverrideClassScripts
+                    || (spells.AffectMask(holder.Spell, aura.EffectIndex) & spell.SpellFamilyFlags) == 0)
+                {
+                    continue;
+                }
+
+                switch (aura.MiscValue)
+                {
+                    case 4418: // Increased Shock Damage
+                    case 4554: // Increased Lightning Damage
+                        bonus += aura.Amount;
+                        break;
+                    case 4555: // Improved Moonfire (Idol of the Moon)
+                    {
+                        uint divisor = overTime ? 100u * SpellCoefficients.AuraMaxTicks(spell) : 800u;
+                        if (divisor != 0 && amount > 0)
+                        {
+                            bonus += (uint)(aura.Amount * (int)amount) / divisor;
+                        }
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        return bonus;
     }
 
     /// <summary>vmangos Unit::SpellDamageBonusTaken / SpellHealingBonusTaken.</summary>

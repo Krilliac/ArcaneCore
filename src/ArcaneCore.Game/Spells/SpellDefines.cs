@@ -135,6 +135,9 @@ public enum SpellAttributesEx2 : uint
     AllowLowLevelBuff = 0x00000008,
     DoNotReportSpellFailure = 0x00000080,
 
+    /// <summary>vmangos SPELL_ATTR_EX2_SPECIAL_TAMING_FLAG (SpellDefines.h:916, bit 10): Hunter Taming Rod spells.</summary>
+    SpecialTamingFlag = 0x00000400,
+
     /// <summary>vmangos SPELL_ATTR_EX2_CANT_CRIT.</summary>
     CantCrit = 0x20000000,
 }

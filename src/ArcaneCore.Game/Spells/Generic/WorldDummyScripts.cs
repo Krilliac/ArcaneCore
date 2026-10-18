@@ -163,6 +163,65 @@ public sealed class TestFetidSkullScript : ISpellScript
     }
 }
 
+/// <summary>
+/// Dummy Trigger 13567 (vmangos SpellEffects.cpp:821-836): when triggered by Persistent Shield (26467), the caster casts Persistent Shield (26470)
+/// on the target with the effect's damage as custom base points.
+/// </summary>
+[SpellScript(13567)]
+public sealed class DummyTriggerScript : ISpellScript
+{
+    public const uint PersistentShieldAura = 26467, PersistentShieldEffect = 26470;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Cast.TriggeringSpell?.Id == PersistentShieldAura)
+        {
+            context.System.CastCustomSpell(
+                context.Caster,
+                PersistentShieldEffect,
+                ReferenceEquals(context.Caster, context.Target) ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(context.Target.Guid),
+                context.Value);
+        }
+    }
+}
+
+/// <summary>Holiday Cheer 26074 (vmangos SpellEffects.cpp:1240-1242): client-side visual only.</summary>
+[SpellScript(26074)]
+public sealed class HolidayCheerScript : ISpellScript
+{
+    public void OnEffectExecute(SpellEffectContext context) => ArgumentNullException.ThrowIfNull(context);
+}
+
+/// <summary>
+/// RC Tank Control 24936 (vmangos SpellEffects.cpp:3988-3996): finds the nearest living Steam Tonk (15328) within 5 yd of the caster, sets it to run
+/// (<c>SetWalk(false)</c>) and casts Tonk Control (24937) on it.
+/// </summary>
+[SpellScript(24936)]
+public sealed class RcTankControlScript : ISpellScript
+{
+    public const uint SteamTonkEntry = 15328, TonkControlSpell = 24937;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Caster.Map?.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return;
+        }
+
+        Creature? tonk = creatures.Creatures
+            .Where(c => c.Entry == SteamTonkEntry && c.IsAlive && WorldDummyHelpers.Dist(context.Caster, c) <= 5f)
+            .OrderBy(c => WorldDummyHelpers.Dist(context.Caster, c))
+            .FirstOrDefault();
+        if (tonk is not null)
+        {
+            creatures.SetScriptRun(tonk, true);
+            GadgetCasts.Cast(context, context.Caster, tonk, TonkControlSpell);
+        }
+    }
+}
+
 internal static class WorldDummyCasts
 {
     /// <summary>vmangos Creature::ForcedDespawn(ms) for a creature target; other units are left alone.</summary>

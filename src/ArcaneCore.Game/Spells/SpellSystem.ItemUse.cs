@@ -84,7 +84,15 @@ public sealed partial class SpellSystem
         {
             _itemUseDispatches.Pop();
             if (dispatch.PendingConsume && !dispatch.ReagentCleared && ReferenceEquals(item.Inventory, player.Inventory))
+            {
                 player.Inventory.ConsumeItemUse(item);
+                if (!ReferenceEquals(item.Inventory, player.Inventory)
+                    && GetState(player.Guid)?.CurrentCast is { } currentCast
+                    && ReferenceEquals(currentCast.CastItem, item))
+                {
+                    currentCast.CastItem = null;
+                }
+            }
         }
     }
 

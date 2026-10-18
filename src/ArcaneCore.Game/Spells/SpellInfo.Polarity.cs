@@ -36,6 +36,50 @@ public sealed partial record SpellInfo
     public int SimpleValue(int effectIndex) => _effects[effectIndex].BasePoints + _effects[effectIndex].BaseDice;
 
     /// <summary>
+    /// vmangos IsFriendlyTarget (SpellEntry.h:188-216): helpful, party or raid target modes.
+    /// </summary>
+    public static bool IsFriendlyTarget(uint target) => target switch
+    {
+        (uint)SpellImplicitTarget.UnitCaster
+            or (uint)SpellImplicitTarget.UnitFriendNearCaster
+            or (uint)SpellImplicitTarget.UnitCasterPet
+            or 14 // TARGET_PLAYER_FRIEND_NYI
+            or (uint)SpellImplicitTarget.EnumUnitsPartyWithinCasterRange
+            or (uint)SpellImplicitTarget.UnitFriend
+            or 27 // TARGET_UNIT_CASTER_MASTER
+            or 29 // TARGET_ENUM_UNITS_FRIEND_AOE_AT_DYNOBJ_LOC
+            or (uint)SpellImplicitTarget.EnumUnitsFriendAoeAtSrcLoc
+            or (uint)SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc
+            or (uint)SpellImplicitTarget.EnumUnitsPartyAoeAtSrcLoc
+            or (uint)SpellImplicitTarget.EnumUnitsPartyAoeAtDestLoc
+            or (uint)SpellImplicitTarget.UnitParty
+            or (uint)SpellImplicitTarget.UnitFriendAndParty
+            or (uint)SpellImplicitTarget.UnitFriendChainHeal
+            or (uint)SpellImplicitTarget.EnumUnitsRaidWithinCasterRange
+            or (uint)SpellImplicitTarget.UnitRaid
+            or 58 // TARGET_UNIT_RAID_NEAR_CASTER
+            or 59 // TARGET_ENUM_UNITS_FRIEND_IN_CONE
+            or 61 // TARGET_UNIT_RAID_AND_CLASS
+            or 62 // TARGET_PLAYER_RAID_NYI
+            => true,
+        _ => false,
+    };
+
+    /// <summary>vmangos SpellEntry::IsFriendlyTarget() (SpellEntry.h:1066-1073).</summary>
+    public bool IsFriendlyTarget()
+    {
+        for (int i = 0; i < _effects.Length; i++)
+        {
+            if (IsFriendlyTarget((uint)_effects[i].TargetA) || IsFriendlyTarget((uint)_effects[i].TargetB))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// vmangos IsPositiveTarget (SpellEntry.h:218-240). Ids are plain numbers because the shared enum does not name them all.
     /// </summary>
     public static bool IsPositiveTarget(uint targetA, uint targetB)

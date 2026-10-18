@@ -436,13 +436,17 @@ public sealed partial class SpellSystem
 
     /// <summary>vmangos Unit::RemoveAurasByCasterSpell.</summary>
     public void RemoveAurasByCaster(Unit target, uint spellId, ObjectGuid caster)
+        => RemoveAurasByCaster(target, spellId, caster, AuraRemoveMode.Default);
+
+    /// <summary>vmangos Unit::RemoveAurasByCasterSpell with an explicit removal mode (e.g. <see cref="AuraRemoveMode.Channel"/>).</summary>
+    public void RemoveAurasByCaster(Unit target, uint spellId, ObjectGuid caster, AuraRemoveMode mode)
     {
         ArgumentNullException.ThrowIfNull(target);
         if (!IsQuestSettlementPending(target) && GetState(target.Guid) is { } state && ReferenceEquals(state.Unit, target))
         {
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == spellId && h.CasterGuid == caster).ToArray())
             {
-                RemoveHolder(state, holder);
+                RemoveHolder(state, holder, mode);
             }
         }
     }
@@ -650,7 +654,12 @@ public sealed partial class SpellSystem
 
         if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
         {
-            RemoveHolder(state, holder, AuraRemoveMode.Expire);
+            AuraRemoveMode expireMode = holder.Spell.IsChanneled
+                && ResolveAuraCaster(holder) is { } channelCaster
+                && channelCaster.GetUInt32(UpdateFields.UnitChannelSpell) == holder.Spell.Id
+                ? AuraRemoveMode.Channel
+                : AuraRemoveMode.Expire;
+            RemoveHolder(state, holder, expireMode);
             if ((!holder.IsRemoved || state.Auras.Contains(holder)) && !holder.ExpiredReported)
             {
                 holder.ExpiredReported = true;

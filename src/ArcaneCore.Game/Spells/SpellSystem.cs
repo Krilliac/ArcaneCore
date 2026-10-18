@@ -828,9 +828,17 @@ public sealed partial class SpellSystem
         if (!cast.IsTriggered && cast.CastItem is { } consumed && caster is Player owner)
         {
             if (CurrentItemUseDispatch(consumed) is { } dispatch)
+            {
                 dispatch.PendingConsume = true;
+            }
             else
+            {
                 owner.Inventory.ConsumeItemUse(consumed);
+                if (!owner.Inventory.OwnsItemAt(consumed, cast.ItemBag, cast.ItemSlot))
+                {
+                    cast.CastItem = null; // vmangos Spell::TakeCastItem -> ClearCastItem (Spell.cpp:5045-5047)
+                }
+            }
         }
 
         if (cast.State != SpellCastState.Casting)
@@ -998,18 +1006,18 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>The auras a channel placed on its caster and its target (vmangos SendChannelUpdate(0), Spell.cpp: AURA_REMOVE_BY_CHANNEL).</summary>
-    private void RemoveChannelAuras(SpellCast cast)
+    private void RemoveChannelAuras(SpellCast cast, AuraRemoveMode mode = AuraRemoveMode.Default)
     {
-        RemoveAurasByCaster(cast.Caster, cast.Spell.Id, cast.Caster.Guid);
+        RemoveAurasByCaster(cast.Caster, cast.Spell.Id, cast.Caster.Guid, mode);
         if (ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell) is { } target && target != cast.Caster)
         {
-            RemoveAurasByCaster(target, cast.Spell.Id, cast.Caster.Guid);
+            RemoveAurasByCaster(target, cast.Spell.Id, cast.Caster.Guid, mode);
         }
 
         // Arcane Missiles redirects its aura while retaining the original request target.
         if (cast.MagnetTarget is { } magnet && !ReferenceEquals(magnet, cast.Caster))
         {
-            RemoveAurasByCaster(magnet, cast.Spell.Id, cast.Caster.Guid);
+            RemoveAurasByCaster(magnet, cast.Spell.Id, cast.Caster.Guid, mode);
         }
     }
 
@@ -1638,6 +1646,47 @@ public sealed partial class SpellSystem
         if (lowLevel != SpellCastResult.CastOk)
         {
             return lowLevel;
+        }
+
+        // vmangos Spell::CheckTarget (Spell.cpp:5748-5770): SPELL_ATTR_EX2_SPECIAL_TAMING_FLAG (Taming Rod 19548/19674/etc.)
+        // requires a player caster and fails with SPELL_FAILED_ALREADY_BEING_TAMED if the target already has a SpecialTamingFlag dummy aura.
+        if (spell.HasAttribute(SpellAttributesEx2.SpecialTamingFlag))
+        {
+            if (caster is not Player)
+            {
+                return SpellCastResult.BadTargets;
+            }
+
+            if (GetAuras(target).Any(h => !h.IsRemoved && h.Spell.HasAttribute(SpellAttributesEx2.SpecialTamingFlag) && h.Spell.HasAura(AuraType.Dummy)))
+            {
+                return SpellCastResult.AlreadyBeingTamed;
+            }
+        }
+
+        // vmangos Spell::CheckCast (Spell.cpp:6256-6273): Anti-Venom / Strong Anti-Venom / Powerful Anti-Venom
+        // reject with SPELL_FAILED_HIGHLEVEL when every poison aura on the target exceeds the item's max poison spellLevel.
+        uint maxDispelLevel = MaxDispelSpellLevel(spell);
+        if (maxDispelLevel > 0)
+        {
+            bool hasPoison = false;
+            bool hasDispellableLevelPoison = false;
+            foreach (SpellAuraHolder holder in GetAuras(target))
+            {
+                if (!holder.IsRemoved && holder.Spell.Dispel == 4)
+                {
+                    hasPoison = true;
+                    if (holder.Spell.SpellLevel <= maxDispelLevel)
+                    {
+                        hasDispellableLevelPoison = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasPoison && !hasDispellableLevelPoison)
+            {
+                return SpellCastResult.Highlevel;
+            }
         }
 
         if (strict && IsDispelOnly(spell)

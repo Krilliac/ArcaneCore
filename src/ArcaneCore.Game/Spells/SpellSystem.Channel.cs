@@ -18,6 +18,7 @@ public sealed partial class SpellSystem
             return false;
         }
 
+        RemoveChannelAuras(cast, AuraRemoveMode.Channel);
         EndChannel(cast, interrupted: false);
         Finish(cast);
         return true;

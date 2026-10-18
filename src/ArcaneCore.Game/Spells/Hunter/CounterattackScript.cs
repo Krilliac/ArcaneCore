@@ -80,6 +80,27 @@ public sealed class HunterScriptsModule : ISpellHandlerModule
         [24133] = 24135,
     };
 
+    /// <summary>
+    /// Hunter "Taming the Beast" quest chain channel dummy auras → completion spells (vmangos Aura::HandleAuraDummy, SpellAuras.cpp:1816-1870).
+    /// When the channel finishes (<see cref="AuraRemoveMode.Channel"/>) and both caster and target are alive, the caster casts the completion spell
+    /// on the target.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<uint, uint> TamingRodSpells = new Dictionary<uint, uint>
+    {
+        [19548] = 19597, // Tame Adult Plainstrider
+        [19674] = 19677, // Tame Armored Scorpid
+        [19687] = 19676, // Tame Nightsaber Stalker
+        [19688] = 19678, // Tame Prairie Stalker
+        [19689] = 19679, // Tame Surf Crawler
+        [19692] = 19680, // Tame Swoop
+        [19693] = 19684, // Tame Webwood Lurker
+        [19694] = 19681, // Tame Dire Mottled Boar
+        [19696] = 19682, // Tame Strigid Screecher
+        [19697] = 19683, // Tame Barbed Crawler
+        [19699] = 19685, // Tame Greater Timberstrider
+        [19700] = 19686, // Tame Nightstalker
+    };
+
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
@@ -89,6 +110,19 @@ public sealed class HunterScriptsModule : ISpellHandlerModule
 
     private static void OnHolderRemoved(SpellSystem system, SpellAuraHolder holder)
     {
+        if (TamingRodSpells.TryGetValue(holder.Spell.Id, out uint tamedSpell))
+        {
+            if (holder.RemoveMode == AuraRemoveMode.Channel
+                && system.AuraCaster(holder) is { IsAlive: true } tamingCaster
+                && holder.Target.IsAlive
+                && system.Store.Get(tamedSpell) is not null)
+            {
+                system.CastSpellTriggeredByAura(tamingCaster, tamedSpell, SpellCastTargets.ForUnit(holder.Target.Guid), holder.Spell);
+            }
+
+            return;
+        }
+
         if (holder.Auras[0] is null || !WyvernStingDots.TryGetValue(holder.Spell.Id, out uint dotSpell)
             || system.AuraCaster(holder) is not Player caster || system.Store.Get(dotSpell) is null)
         {

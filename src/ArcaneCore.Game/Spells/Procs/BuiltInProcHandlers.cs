@@ -81,7 +81,7 @@ internal static class BuiltInProcHandlers
     /// Corrupted Healing, and the Dreamwalker Rejuvenation/Regrowth set bonuses). The talent coverage report reads it: an aura 112 talent whose
     /// script number nothing reads is not handled.
     /// </summary>
-    internal static IReadOnlySet<int> HandledClassScripts { get; } = new HashSet<int> { 4309, 836, 988, 989, 4086, 4087, 3656, 4533, 4537 };
+    internal static IReadOnlySet<int> HandledClassScripts { get; } = new HashSet<int> { 4309, 836, 988, 989, 4086, 4087, 3656, 4533, 4537, 4418, 4554, 4555 };
 
     public static Dictionary<AuraType, AuraProcHandler> Create() => new()
     {
@@ -189,6 +189,15 @@ internal static class BuiltInProcHandlers
                 basePoints0 = (int)(c.Amount * 15 / 100);
                 target = c.Target;
                 triggerSpellId = 26470;
+                break;
+            case 31255: // Deadly Swiftness (Rank 1, UnitAuraProcHandler.cpp:1195-1204): when dealing damage to a target at or below 20% health.
+                if (c.Target is not { } swiftnessVictim || swiftnessVictim.Health > swiftnessVictim.MaxHealth / 5)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                target = c.Owner;
+                triggerSpellId = 22588;
                 break;
         }
 

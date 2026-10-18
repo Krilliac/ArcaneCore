@@ -20,11 +20,17 @@ public sealed partial class SpellSystem
         bool checkFaction = dispelSpell is null || !DispelRules.IgnoresFaction(dispelSpell);
         bool friendly = checkFaction && Relations.IsFriendly(caster, target);
         uint mask = DispelRules.MaskFor(miscValue);
+        uint maxLevel = MaxDispelSpellLevel(dispelSpell);
         var candidates = new List<(SpellAuraHolder, int)>();
         foreach (SpellAuraHolder holder in GetAuras(target))
         {
             uint type = holder.Spell.Dispel;
             if (holder.IsRemoved || holder.Spell.IsPassive || type == 0 || type > 31 || (mask & (1u << (int)type)) == 0)
+            {
+                continue;
+            }
+
+            if (maxLevel > 0 && holder.Spell.SpellLevel > maxLevel)
             {
                 continue;
             }
@@ -47,6 +53,15 @@ public sealed partial class SpellSystem
 
         return candidates;
     }
+
+    /// <summary>vmangos Spell::CheckCast (Spell.cpp:6256-6273): maximum poison spellLevel dispellable by Anti-Venom (7932), Strong Anti-Venom (7933) and Powerful Anti-Venom (23786).</summary>
+    internal static uint MaxDispelSpellLevel(SpellInfo? dispelSpell) => dispelSpell?.Id switch
+    {
+        7932 => 25,
+        7933 => 35,
+        23786 => 60,
+        _ => 0,
+    };
 
     /// <summary>
     /// SPELL_EFFECT_DISPEL (vmangos Spell::EffectDispel, SpellEffects.cpp:2456-2610): Shield Slam only
