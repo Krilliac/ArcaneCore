@@ -311,8 +311,21 @@ public static class NavMeshQuery
         options.CancellationToken.ThrowIfCancellationRequested();
         // The node list, index, closed flags, open queue and neighbour buffer are reused across queries on this thread (a bot query
         // grows them to up to 32 768 nodes); a nested query (a tile loader that paths) gets fresh ones.
-        SearchScratch scratch = t_scratch is { InUse: false } cached ? cached : new SearchScratch();
-        t_scratch ??= scratch;
+        // A search with a large node pool (a far bot query) grows its index to tens of thousands of entries, and clearing a dictionary
+        // clears its whole bucket array: small searches (creatures, 2048 nodes) kept paying for that on every query (Dictionary.Clear
+        // was 2.5% of the live world thread, Oct 17). Small and large searches keep separate scratch.
+        bool large = options.MaxSearchNodes > SmallSearchNodes;
+        SearchScratch? cachedScratch = large ? t_largeScratch : t_scratch;
+        SearchScratch scratch = cachedScratch is { InUse: false } cached ? cached : new SearchScratch();
+        if (large)
+        {
+            t_largeScratch ??= scratch;
+        }
+        else
+        {
+            t_scratch ??= scratch;
+        }
+
         scratch.Begin();
         try
         {
@@ -326,6 +339,12 @@ public static class NavMeshQuery
 
     [ThreadStatic]
     private static SearchScratch? t_scratch;
+
+    [ThreadStatic]
+    private static SearchScratch? t_largeScratch;
+
+    /// <summary>Searches with at most this many nodes share the small per-thread scratch; larger ones use their own.</summary>
+    internal const int SmallSearchNodes = 4096;
 
     /// <summary>Reusable A* state; <see cref="Begin"/> clears it (capacity is kept).</summary>
     private sealed class SearchScratch

@@ -66,6 +66,12 @@ public sealed class NavMeshTile
     private const int MaxBvSlack = 4;
 
     private readonly Vector3[] _polyLow;
+
+    
+
+    /// <summary>Each polygon's vertex average (<see cref="Center"/>), worked out once: every A* expansion asks for it (3.6% of the live world thread, Oct 17).</summary>
+
+    private readonly Vector3[] _polyCenter;
     private readonly Vector3[] _polyHigh;
     private readonly BvNode[]? _bv;
     private readonly float _bvQuantFactor;
@@ -90,18 +96,24 @@ public sealed class NavMeshTile
         DetailTriangles = detailTriangles;
         _polyLow = new Vector3[polys.Length];
         _polyHigh = new Vector3[polys.Length];
+        _polyCenter = new Vector3[polys.Length];
         for (int i = 0; i < polys.Length; i++)
         {
             Vector3 lo = new(float.MaxValue);
             Vector3 hi = new(float.MinValue);
-            foreach (ushort v in polys[i].Vertices)
+            Vector3 sum = Vector3.Zero;
+            NavPoly poly = polys[i];
+            for (int j = 0; j < poly.VertexCount; j++)
             {
-                lo = Vector3.Min(lo, vertices[v]);
-                hi = Vector3.Max(hi, vertices[v]);
+                Vector3 v = vertices[poly.Vertex(j)];
+                lo = Vector3.Min(lo, v);
+                hi = Vector3.Max(hi, v);
+                sum += v;
             }
 
             _polyLow[i] = lo;
             _polyHigh[i] = hi;
+            _polyCenter[i] = sum / poly.VertexCount; // the same sum, in the same order, as the former per-call Center
         }
 
         if (TryVerifyBvTree(bvNodes, bvQuantFactor, out int slack, out int used))
@@ -628,16 +640,7 @@ public sealed class NavMeshTile
         return (float)(sum / p.VertexCount);
     }
 
-    public Vector3 Center(int poly)
-    {
-        Vector3 sum = Vector3.Zero;
-        foreach (ushort v in Polys[poly].Vertices)
-        {
-            sum += Vertices[v];
-        }
-
-        return sum / Polys[poly].VertexCount;
-    }
+    public Vector3 Center(int poly) => _polyCenter[poly];
 
     /// <summary>The edges of this tile's polygons that lie on a border side, for joining with the neighbour tile.</summary>
     internal List<BorderEdge> GetBorderEdges(int side)
