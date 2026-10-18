@@ -78,9 +78,14 @@ public sealed class DebugQueueCommands : ICommandExtension
         return true;
     }
 
-    private sealed record Baseline(Dictionary<(string Protocol, int Slot), OpcodeCounts> Counts, long At);
+    private sealed record Baseline(IReadOnlyDictionary<(string Protocol, int Slot), OpcodeCounts> Counts, long At);
 
-    private static Baseline? _baseline;
+    /// <summary>
+    /// The start of the <c>.debug opcodes</c> window: a snapshot never changed after it is built, replaced whole by 'on' and 'reset'.
+    /// Commands run on the world thread (console, RA) and, while maps update in parallel, on map threads (a player's chat in the
+    /// Packets stage), so the reference is volatile; two resets racing keep either window.
+    /// </summary>
+    private static volatile Baseline? _baseline;
 
     private static Dictionary<(string, int), OpcodeCounts> Snapshot()
     {
