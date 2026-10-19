@@ -613,7 +613,7 @@ needs to leave and rejoin a running world. The six playerbot features are detach
 feature is pinned. Nothing detaches unless an Administrator runs `.feature detach|attach`, so on a default server the
 features attach once at start and stop at shutdown as before.
 
-* **Contracts assembly** `src/ArcaneCore.World.Contracts` (default load context, `ContractsVersion.Current = 1`):
+* **Contracts assembly** `src/ArcaneCore.World.Contracts` (default load context, `ContractsVersion.Current = 2` since the map feed's `IBotRouteSource`; 1 before it):
   `IWorldFeature` (moved here, namespace unchanged), `IDetachableWorldFeature` with `DetachKind` (`Pinned`, `Stateless`,
   `Handover`), `QuiesceAsync`, `Detach(FeatureHandover)` and `AttachFrom(world, handover?, subscriptions)`;
   `FeatureHandover` (named values of core or contract types; a type from a collectible assembly is refused);

@@ -186,7 +186,7 @@ of the proposal: the bag is a parameter of `AttachFrom` (`AttachFrom(world, hand
 must own it to dispose it on detach. Public API:
 
 - Assembly `ArcaneCore.World.Contracts` (new project, referenced by World, default context):
-  - `ArcaneCore.World.Contracts.ContractsVersion`: `const int Current = 1`, `static bool IsCompatible(int builtAgainst)`
+  - `ArcaneCore.World.Contracts.ContractsVersion`: `const int Current = 2` (1 before `IBotRouteSource`), `static bool IsCompatible(int builtAgainst)`
     (exact match).
   - `ArcaneCore.World.Features.IWorldFeature` (moved from World, namespace and members unchanged).
   - `ArcaneCore.World.Features.DetachKind { Pinned, Stateless, Handover }`.

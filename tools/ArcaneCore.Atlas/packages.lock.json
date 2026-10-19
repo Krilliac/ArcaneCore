@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net11.0": {
+      "arcanecore.game": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Kernel": "[1.0.0, )",
+          "ArcaneCore.Protocol": "[1.0.0, )"
+        }
+      },
+      "arcanecore.kernel": {
+        "type": "Project"
+      },
+      "arcanecore.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Kernel": "[1.0.0, )"
+        }
+      },
+      "dotrecast.core": {
+        "type": "Project"
+      },
+      "dotrecast.detour": {
+        "type": "Project",
+        "dependencies": {
+          "DotRecast.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

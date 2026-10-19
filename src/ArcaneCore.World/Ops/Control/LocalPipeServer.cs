@@ -24,6 +24,9 @@ internal static partial class LocalPipeServer
     private const uint PipeWait = 0x00000000;
     private const uint PipeRejectRemoteClients = 0x00000008;
 
+    /// <summary>The most instances <see cref="Create(string, PipeSecurity, uint, bool)"/> accepts (255 is PIPE_UNLIMITED_INSTANCES, which no caller here wants).</summary>
+    public const uint MaxFiniteInstances = 254;
+
     /// <summary><c>FILE_PIPE_REJECT_REMOTE_CLIENTS</c> in <c>FILE_PIPE_LOCAL_INFORMATION.NamedPipeType</c> (ntifs.h).</summary>
     private const uint FilePipeRejectRemoteClients = 0x00000002;
 
@@ -36,9 +39,25 @@ internal static partial class LocalPipeServer
     /// (whoever created it), <see cref="IOException"/> for any other failure.
     /// </summary>
     public static NamedPipeServerStream Create(string name, PipeSecurity security)
+        => Create(name, security, maxInstances: 1, firstInstance: true);
+
+    /// <summary>
+    /// A local-only, asynchronous byte pipe like <see cref="Create(string, PipeSecurity)"/> that allows <paramref name="maxInstances"/>
+    /// instances of the name (1 to <see cref="MaxFiniteInstances"/>; every instance of one name must pass the same limit). The first
+    /// instance (<paramref name="firstInstance"/> true) carries <c>FILE_FLAG_FIRST_PIPE_INSTANCE</c>, so a name another process created
+    /// first is refused instead of joined. A further instance (<paramref name="firstInstance"/> false) has no such flag: it joins the name,
+    /// and the system admits it only while the first instance's descriptor grants the caller the right to create instances and the limit
+    /// is not reached (otherwise the call fails with <see cref="UnauthorizedAccessException"/> or <see cref="IOException"/>). A caller
+    /// that creates all <paramref name="maxInstances"/> itself, before it serves any client, therefore holds every slot of the name: nobody
+    /// else can add an instance, and a client beyond the limit finds the pipe busy. The map feed uses this for its connection limit
+    /// (<c>World:Control:MapFeed</c>); the control pipe stays one instance.
+    /// </summary>
+    public static NamedPipeServerStream Create(string name, PipeSecurity security, uint maxInstances, bool firstInstance)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(security);
+        ArgumentOutOfRangeException.ThrowIfZero(maxInstances);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maxInstances, MaxFiniteInstances);
         byte[] descriptor = security.GetSecurityDescriptorBinaryForm();
         SafePipeHandle handle;
         unsafe
@@ -53,9 +72,9 @@ internal static partial class LocalPipeServer
                 };
                 handle = CreateNamedPipeW(
                     @"\\.\pipe\" + name,
-                    PipeAccessDuplex | FileFlagFirstPipeInstance | FileFlagOverlapped,
+                    PipeAccessDuplex | (firstInstance ? FileFlagFirstPipeInstance : 0) | FileFlagOverlapped,
                     PipeTypeByte | PipeReadModeByte | PipeWait | PipeRejectRemoteClients,
-                    maxInstances: 1,
+                    maxInstances,
                     outBufferSize: 0,
                     inBufferSize: 0,
                     defaultTimeout: 0,

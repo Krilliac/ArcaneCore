@@ -89,6 +89,8 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Grids, maps and terrain | [grid-terrain](areas/grid-terrain.md) |
 | Collision and pathing | [collision-pathing](areas/collision-pathing.md) |
 | GM debug drawing (`.debug vis`: LoS, paths, waypoints, cells) | [debug-draw](areas/debug-draw.md) |
+| Atlas 3D map, collision, navmesh and live world visualizer (`arcane-atlas`) | [atlas](areas/atlas.md) |
+| World daemon live map feed (`\\.\pipe\arcanecore-mapfeed-{pid}`) | [map-feed](areas/map-feed.md) |
 | Locomotion, falls and environment | [locomotion](areas/locomotion.md) |
 | Anticheat (movement checks, scores, escalation, violation log) | [anticheat](areas/anticheat.md) |
 | World state and exploration | [world-state](areas/world-state.md) |

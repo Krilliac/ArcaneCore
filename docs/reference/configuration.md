@@ -77,6 +77,7 @@ How to read the tables:
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
+- [`World:Control:MapFeed`](#worldcontrolmapfeed)
 - [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
 - [`World:Duel`](#worldduel)
@@ -1149,6 +1150,15 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `World:Console:Enabled` | `bool` | `true` | - | Accept typed GM commands at the daemon's console window when standard input is an interactive console. The commands run on the world thread with Administrator authority and no character. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
+
+## `World:Control:MapFeed`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:MapFeed:Enabled` | `bool` | `false` | - | Serve the map feed on a local Windows named pipe. A connected tool may watch one map at a time (players, bots, creatures, game objects, creature splines, bot routes, loaded grids) and ask for line of sight, ground height, a navigation path or an under-map verdict between two points of a map; nothing it sends changes the world, and a question never loads a tile. The pipe admits only the account the daemon runs as and SYSTEM, refuses network clients, and is not created on other operating systems. While nobody is subscribed the feed does no work on the world thread. Default off. |
+| `World:Control:MapFeed:MaxConnections` | `int` | `2` | - | The most tools connected at once: one pipe instance each, all created at start. A tool beyond the limit finds the pipe busy and is not served. 1 to 16. |
+| `World:Control:MapFeed:MaxEntitiesPerFrame` | `int` | `4096` | - | The most entities one frame carries. Players and bots come first, then creatures (moving ones before idle ones) and game objects; the rest are counted as truncated in the frame. 16 to 65536. |
+| `World:Control:MapFeed:MaxHz` | `int` | `5` | - | The most frames per second any subscription gets; a tool asking for more is given this rate. 1 to 60. |
 
 ## `World:Control:Pipe`
 

@@ -352,6 +352,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (handover is not null) RestoreHandover(handover, world);
         subscriptions.OnUpdated(world, Update);
         subscriptions.Add(BotRegistry.UseSessionPolicy(new SessionPolicy(_options)));
+        subscriptions.Add(BotRegistry.UseRouteSource(new PlayerbotRouteSource())); // the map feed reads the route a bot walks (docs/areas/map-feed.md)
         if (services.GetService<IWorldLifecycleHooks>() is { } hooks)
         {
             // The world host runs these (WorldHost): the restore once the world is started, the shutdown before it stops.
