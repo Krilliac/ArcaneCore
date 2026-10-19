@@ -380,13 +380,13 @@ internal sealed class PlayerbotZoneLookup
     internal static PlayerbotZoneLookup FromTerrain(TerrainManager terrain, uint mapId)
     {
         ArgumentNullException.ThrowIfNull(terrain);
-        // Everything here runs on the first lookup, on the world thread (TerrainManager.For is world-thread only).
-        TerrainInfo? info = null;
+        // The lookups run on the world thread (TerrainManager.For is world-thread only).
         var zones = new Dictionary<ushort, uint>();
         AreaTable? cachedAreas = null;
         return new PlayerbotZoneLookup((x, y, z) =>
         {
-            info ??= terrain.For(mapId);
+            // Asked for each lookup, not kept: a map id's terrain goes once its last map is unloaded (TerrainManager.Release).
+            TerrainInfo info = terrain.For(mapId);
             // The area table can be replaced (content reload): the cache belongs to the table it was filled from.
             AreaTable areas = terrain.Areas;
             if (!ReferenceEquals(areas, cachedAreas)) { zones.Clear(); cachedAreas = areas; }
