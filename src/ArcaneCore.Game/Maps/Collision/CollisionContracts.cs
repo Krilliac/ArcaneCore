@@ -357,3 +357,21 @@ public interface ICollisionTilePrefetch
     /// <summary>Start reading the tile's data in the background (no effect when it is loaded or already on its way).</summary>
     void Prefetch(uint mapId, int tileX, int tileY);
 }
+
+/// <summary>
+/// Optional: a collision service that can load a tile for a question about a place no grid may cover (a bot choosing the landing beside
+/// a lift far from it). The service holds such tiles among a bounded number per map and releases the one asked for longest ago to make
+/// room; a grid created on one takes it over and releases it with itself. The grid hooks are not for this:
+/// <see cref="ICollisionTileLifecycle.OnTileLoaded"/> makes the tile the grid's, held outside that bound until a grid on it unloads.
+/// vmangos has no such call: any terrain lookup loads the tile's vmap and mmap with its <c>GridMap</c> (<c>TerrainInfo::GetGrid</c>,
+/// GridMap.cpp:1132-1144 and 1146-1194), and the clean-up unloads them once a minute while no grid references the tile
+/// (<c>TerrainInfo::CleanUpGrids</c>, GridMap.cpp:759-790). World coordinates; world thread.
+/// </summary>
+public interface ICollisionTileDemand
+{
+    /// <summary>
+    /// Load the tile under (<paramref name="x"/>, <paramref name="y"/>) unless it is loaded, and hold it on demand; a tile held on demand
+    /// counts as asked for now, and one a grid holds is left to the grid. False when no data is loaded there.
+    /// </summary>
+    bool LoadTileOnDemand(uint mapId, float x, float y);
+}

@@ -8,8 +8,8 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// <summary>
 /// The vmap-backed <see cref="ILineOfSight"/> (vmangos <c>VMapManager2</c>): one
 /// <see cref="VMapTree"/> per map, created from <c>NNN.vmtree</c> on first use, tiles loaded and
-/// released with the map's grids (<see cref="ICollisionTileLifecycle"/>), model files shared
-/// between spawns and maps.
+/// released with the map's grids (<see cref="ICollisionTileLifecycle"/>) or loaded for a question about a place no grid covers
+/// (<see cref="ICollisionTileDemand"/>, at most <see cref="MaxOnDemandTiles"/> per map), model files shared between spawns and maps.
 /// <para>
 /// Missing data is normal and reads as open (a map without a vmtree, a tile without a vmtile);
 /// unreadable or corrupt files are logged once and also read as open — never an exception into
@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLifecycle, ICollisionTilePrefetch, ICollisionTileDemand
 {
     private readonly string _directory;
     private readonly ILogger _logger;
@@ -27,6 +27,12 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     // Tiles whose load was attempted and whose vmtile file does not exist (vmangos StaticMapTree::LoadMapTile: loaded, empty). Kept apart from
     // VMapTree.IsTileLoaded, which keeps meaning "a model tile was read" (anti-cheat HasModels uses it). Cleared on unload.
     private readonly HashSet<(uint MapId, int X, int Y)> _emptyTiles = [];
+
+    // Tiles LoadTileOnDemand loaded that no grid holds (an empty one too: releasing it forgets that it is empty), each with when it was
+    // last asked for; the lowest is released first.
+    private readonly Dictionary<(uint MapId, int X, int Y), long> _onDemand = [];
+    private long _onDemandAsks;
+
     private readonly Dictionary<string, WorldModel?> _models = new(StringComparer.Ordinal);
 
     // Prefetch (TilePrefetchCache): parsed tile spawn lists, the models they need that were not cached yet (parsed on the pool), and
@@ -122,13 +128,93 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     public void UnloadTile(uint mapId, int tileX, int tileY)
     {
         _emptyTiles.Remove((mapId, tileX, tileY)); // a reload tries the file again
+        _onDemand.Remove((mapId, tileX, tileY));
         if (_trees.GetValueOrDefault(mapId) is { } tree)
         {
             tree.RemoveTile((tileX, tileY));
         }
     }
 
-    void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY) => LoadTile(mapId, tileX, tileY);
+    void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY)
+    {
+        _onDemand.Remove((mapId, tileX, tileY)); // the grid holds it now
+        LoadTile(mapId, tileX, tileY);
+    }
+
+    /// <summary>
+    /// The most model tiles kept loaded per map for <see cref="LoadTileOnDemand"/> beyond those the grids hold; the one asked for longest
+    /// ago is released first. The lifts the bots ride stand on few tiles (Kalimdor's four lifts on four), so this bounds the worst case.
+    /// </summary>
+    public const int MaxOnDemandTiles = 16;
+
+    /// <summary>Tiles loaded on demand and not held by a grid (tests and inspection).</summary>
+    public int OnDemandTileCount => _onDemand.Count;
+
+    /// <summary>
+    /// <see cref="ICollisionTileDemand.LoadTileOnDemand"/>: the models of the terrain tile under (<paramref name="x"/>,
+    /// <paramref name="y"/>), held on demand among at most <see cref="MaxOnDemandTiles"/> of its map. Answers as <see cref="LoadTile"/>
+    /// does: false for a tile without models or without a usable file, true on an untiled map (its models came with the tree).
+    /// </summary>
+    public bool LoadTileOnDemand(uint mapId, float x, float y)
+    {
+        if (Terrain.TerrainTile.TileOf(x, y) is not { } tile || GetTree(mapId) is not { } tree)
+        {
+            return false;
+        }
+
+        if (!tree.IsTiled)
+        {
+            return true;
+        }
+
+        (uint, int, int) key = (mapId, tile.X, tile.Y);
+        if (tree.IsTileLoaded(tile.X, tile.Y) || _emptyTiles.Contains(key))
+        {
+            // Held on demand: asked for now. A tile a grid holds is not in the table and stays the grid's.
+            if (_onDemand.ContainsKey(key))
+            {
+                _onDemand[key] = ++_onDemandAsks;
+            }
+
+            return tree.IsTileLoaded(tile.X, tile.Y);
+        }
+
+        MakeOnDemandRoom(mapId);
+        bool loaded = LoadTile(mapId, tile.X, tile.Y);
+        if (loaded || _emptyTiles.Contains(key))
+        {
+            _onDemand[key] = ++_onDemandAsks;
+        }
+
+        return loaded;
+    }
+
+    /// <summary>With <see cref="MaxOnDemandTiles"/> of the map held on demand, release the one asked for longest ago.</summary>
+    private void MakeOnDemandRoom(uint mapId)
+    {
+        int held = 0;
+        (uint MapId, int X, int Y) oldest = default;
+        long oldestAsk = long.MaxValue;
+        foreach (((uint MapId, int X, int Y) tile, long ask) in _onDemand)
+        {
+            if (tile.MapId != mapId)
+            {
+                continue;
+            }
+
+            held++;
+            if (ask < oldestAsk)
+            {
+                oldest = tile;
+                oldestAsk = ask;
+            }
+        }
+
+        if (held >= MaxOnDemandTiles)
+        {
+            UnloadTile(oldest.MapId, oldest.X, oldest.Y);
+        }
+    }
 
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;

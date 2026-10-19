@@ -25,7 +25,7 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
 public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch,
-    ISharedMeshPointQuery
+    ISharedMeshPointQuery, ICollisionTileDemand
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -357,6 +357,18 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         _gridTiles.Remove((mapId, tileX, tileY));
         RemoveOnDemand((mapId, tileX, tileY));
         UnloadTile(mapId, tileX, tileY);
+    }
+
+    /// <summary>
+    /// <see cref="ICollisionTileDemand.LoadTileOnDemand"/>: the navigation tile under (<paramref name="x"/>, <paramref name="y"/>), loaded
+    /// as one query with <see cref="PathOptions.LoadTiles"/> loads it (read on the calling thread when it is not resident) and held among
+    /// the <see cref="MaxOnDemandTiles"/> of its map. False when there is no usable tile there or no mesh for the map.
+    /// </summary>
+    public bool LoadTileOnDemand(uint mapId, float x, float y)
+    {
+        _queryStamp++;
+        _queryLoads = 0;
+        return EnsureTile(mapId, new Vector3(x, y, 0f), nonBlocking: false);
     }
 
     /// <summary>

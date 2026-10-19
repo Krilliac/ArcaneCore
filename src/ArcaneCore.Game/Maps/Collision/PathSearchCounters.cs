@@ -4,8 +4,9 @@ namespace ArcaneCore.Game.Maps.Collision;
 
 /// <summary>
 /// What the navigation-mesh searches of the calling thread have cost so far: searches run, A* nodes created, nodes expanded,
-/// navigation tiles read on demand (<see cref="PathOptions.LoadTiles"/>) and the time those reads took. Thread-static and only ever
-/// added to, so a caller takes <see cref="Current"/> before and after a piece of work and subtracts (a bot's think, one query).
+/// navigation tiles read on demand (<see cref="PathOptions.LoadTiles"/>, <see cref="ICollisionTileDemand"/>) and the time those reads
+/// took. Thread-static and only ever added to, so a caller takes <see cref="Current"/> before and after a piece of work and subtracts
+/// (a bot's think, one query).
 /// Each search adds a few integer increments; nothing allocates.
 /// </summary>
 public static class PathSearchCounters

@@ -406,6 +406,25 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     public bool IsOutdoors(float x, float y, float z)
         => !_services.LineOfSight.TryGetAreaInfo(Map.MapId, x, y, z, out ModelAreaInfo info) || info.IsOutdoors;
 
+    /// <summary>
+    /// Load the model and navigation tiles under (<paramref name="x"/>, <paramref name="y"/>) for a question about a place no grid may
+    /// cover (a bot choosing the landing beside a lift far from it), through the services that can (<see cref="ICollisionTileDemand"/>):
+    /// each holds them among its bounded tiles loaded on demand, and a grid created there takes them over. Never through the grid hooks
+    /// (<see cref="ICollisionTileLifecycle"/>), which would hold them as a grid's until a grid on the tile unloads. Nothing outside the map.
+    /// </summary>
+    public void LoadTilesOnDemand(float x, float y)
+    {
+        if (_services.LineOfSight is ICollisionTileDemand models)
+        {
+            models.LoadTileOnDemand(Map.MapId, x, y);
+        }
+
+        if (_services.Pathfinder is ICollisionTileDemand mesh && !ReferenceEquals(mesh, _services.LineOfSight))
+        {
+            mesh.LoadTileOnDemand(Map.MapId, x, y);
+        }
+    }
+
     public void Update(Map map, uint diffMs)
     {
     }
