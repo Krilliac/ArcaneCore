@@ -120,7 +120,7 @@ internal static class CommandLineArguments
         JsonObject args = [];
         if (json is not null)
         {
-            string text = json == "-" ? await standardInput.ReadToEndAsync(cancellationToken).ConfigureAwait(false) : json;
+            string text = (json == "-" ? await standardInput.ReadToEndAsync(cancellationToken).ConfigureAwait(false) : json).TrimStart('\uFEFF');
             try
             {
                 args = JsonNode.Parse(text, nodeOptions: null, HostJson.Strict) as JsonObject
@@ -178,7 +178,7 @@ internal static class ScriptFile
         string[] lines = text.Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
-            string line = lines[i].Trim();
+            string line = lines[i].Trim().TrimStart('\uFEFF');
             if (line.Length == 0)
             {
                 continue;

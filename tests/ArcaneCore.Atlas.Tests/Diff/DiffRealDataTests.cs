@@ -68,14 +68,29 @@ public sealed class DiffRealDataTests(ITestOutputHelper output) : IDisposable
     }
 
     [ClientTerrainRealFact]
-    public async Task DiffNav_Goldshire_MatchesEveryPolygonBetweenServerAndDotRecast()
+    public async Task DiffModels_BootyBay_GiantGoblinStatueAndAllModelsMatchWithZeroGeometryMismatch()
+    {
+        // Booty Bay tile (0, 58, 30) contains Goblinstatuebooty.m2 (spawnId 120780) at 23.62x scale (ScaleRaw = 24186).
+        JsonObject data = await InvokeOkAsync("diff.models", """{"map":0,"x":58,"y":30,"radius":0}""");
+        output.WriteLine(data.ToJsonString());
+
+        Assert.Equal(1, data["tilesCompared"]!.GetValue<int>());
+        Assert.Equal(0L, data["unexplainedCount"]!.GetValue<long>());
+        Assert.Equal(0L, data["totals"]!["geometryMismatches"]!.GetValue<long>());
+        Assert.True(data["totals"]!["matchedSpawns"]!.GetValue<long>() > 0);
+    }
+
+    [ClientTerrainRealFact]
+    public async Task DiffNav_Goldshire_MatchesEveryPolygonAndCrossTilePortalBetweenServerAndDotRecast()
     {
         JsonObject data = await InvokeOkAsync("diff.nav", """{"map":0,"x":49,"y":31,"radius":0}""");
         output.WriteLine(data.ToJsonString());
 
         Assert.Equal(1, data["tilesCompared"]!.GetValue<int>());
         Assert.Equal(0L, data["unexplainedCount"]!.GetValue<long>());
+        Assert.Equal(0L, data["totals"]!["portalSlabClimbRule"]!.GetValue<long>());
         Assert.True(data["totals"]!["groundPolygonsMatched"]!.GetValue<long>() > 0);
+        Assert.True(data["totals"]!["portalsMatched"]!.GetValue<long>() > 0);
 
         Assert.True(_context.Layers.TryGet(LayerIds.DiffNav, out ILayerSource source));
         LayerBuild build = source.Build(LayerIds.DiffNav, Goldshire, CancellationToken.None);

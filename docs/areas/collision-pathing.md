@@ -56,12 +56,20 @@ A start or end on a Detour tile that is not loaded answers a straight line typed
 (`PathInfo::HaveTiles`, `PathFinder.cpp:99-105`, `695-706`) instead of `NoPath`. `NoPath` stays for a loaded
 tile without a usable polygon.
 
-### Corridor selection follows Detour findPath (NavMeshQuery.FindCorridor)
+### Corridor selection, cross-tile portals, and detail heights follow Detour (NavMeshQuery, NavMeshTile)
 
 The A* search keeps the node rules of `dtNavMeshQuery::findPath`
 (`D:\refs\vmangos\dep\recastnavigation\Detour\Source\DetourNavMeshQuery.cpp`). A node is a polygon plus the
 tile side crossed into it. Its position stays at the first portal midpoint. A cheaper route reopens a closed
-node, the parent polygon is not expanded, and the goal's heuristic is zero. Before this change the corridor
+node, the parent polygon is not expanded, and the goal's heuristic is zero. Cross-tile portal linking in
+`NavMesh.TryOverlap`, `NavMeshTile.BuildCrossPortals`, and `NavMesh.CollectNeighbours` matches `dtNavMesh::connectExtLinks`
+(`DetourNavMesh.cpp:31-112, 300-351, 416-428`): `calcSlabEndPoints` projects border edges onto the tile's `Z` or `X` slab axis
+within `0.01f` of the border, `overlapSlabs` shrinks horizontal slab endpoints by `px = 0.01f` and checks vertical slab overlap
+at `minx`/`maxx` against `(climb * 2)^2`, `BuildCrossPortals` emits at most one portal per target polygon (`DetourNavMesh.cpp:347`),
+and `CollectNeighbours` walks each edge's portals in Detour's prepended `firstLink` order. Point-to-polygon
+projection in `NavMeshTile.ClosestPointOnPoly` and `NavMeshTile.GetPolyHeight` matches `closestPointOnDetailEdges`
+(`DetourNavMesh.cpp:621-674, 718-758`), clamping exterior points onto detail-mesh boundary edges and falling back to internal
+detail edges when a point inside a polygon falls on a seam between detail triangles. Before this change the corridor
 matched Detour's on 53 of 256 complete real-tile pairs; it now matches on 254. The DotRecast oracle and its
 numbers are in `docs/integration/detour-oracle-20261008.md`.
 

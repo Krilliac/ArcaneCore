@@ -581,10 +581,18 @@ public sealed class NavMeshTile
     public Vector3 ClosestPointOnPoly(int poly, Vector3 position, out bool over)
     {
         NavPoly p = Polys[poly];
-        over = ContainsXz(p, position);
+        over = !p.IsOffMeshConnection && ContainsXz(p, position);
         if (over)
         {
             return position with { Y = GetPolyHeight(poly, position) };
+        }
+
+        // ref: vmangos@0e3ff01/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:756-758 (closestPointOnDetailEdges<true> when outside a ground polygon)
+        if (!p.IsOffMeshConnection
+            && poly < Details.Length
+            && TryClosestPointOnDetailEdges(p, Details[poly], position, onlyBoundary: true, out Vector3 detailBest))
+        {
+            return detailBest;
         }
 
         Vector3 best = Vertices[p.Vertex(0)];
@@ -616,7 +624,7 @@ public sealed class NavMeshTile
             for (int t = 0; t < detail.TriangleCount; t++)
             {
                 long index = ((long)detail.TriangleBase + t) * 4;
-                if (index + 3 > DetailTriangles.Length)
+                if (index + 3 >= DetailTriangles.Length)
                 {
                     break;
                 }
@@ -628,6 +636,12 @@ public sealed class NavMeshTile
                 {
                     return h;
                 }
+            }
+
+            // ref: vmangos@0e3ff01/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:718-725 (fallback to closestPointOnDetailEdges<false> when on an edge)
+            if (TryClosestPointOnDetailEdges(p, detail, position, onlyBoundary: false, out Vector3 detailEdge))
+            {
+                return detailEdge.Y;
             }
         }
 
@@ -754,6 +768,7 @@ public sealed class NavMeshTile
         return Interlocked.CompareExchange(ref _externalEdges, built, null) ?? built;
     }
 
+    // ref: vmangos@0e3ff01/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:317-349 (findConnectingPolys breaks after the first matching edge of each target polygon)
     private CrossPortal[] BuildCrossPortals(int poly, int edge, NavMeshTile other)
     {
         NavPoly p = Polys[poly];
@@ -763,11 +778,14 @@ public sealed class NavMeshTile
         bool alongZ = side is 0 or 4; // the border is a line of constant x; edges run along z
         float climb = MathF.Max(MathF.Max(WalkableClimb, other.WalkableClimb), 0.5f);
         List<CrossPortal>? found = null;
+        int lastPoly = -1;
         foreach (BorderEdge candidate in other.GetBorderEdges((side + 4) & 7))
         {
-            if (NavMesh.TryOverlap(a, b, candidate.A, candidate.B, alongZ, climb, out Vector3 pa, out Vector3 pb))
+            if (candidate.Poly != lastPoly
+                && NavMesh.TryOverlap(a, b, candidate.A, candidate.B, alongZ, climb, out Vector3 pa, out Vector3 pb))
             {
                 (found ??= []).Add(new CrossPortal(candidate.Poly, pa, pb));
+                lastPoly = candidate.Poly;
             }
         }
 
@@ -816,6 +834,80 @@ public sealed class NavMeshTile
         }
 
         return inside;
+    }
+
+    // ref: vmangos@0e3ff01/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:621-674 (closestPointOnDetailEdges<onlyBoundary>)
+    // ref: vmangos@0e3ff01/dep/recastnavigation/Detour/Include/DetourNavMesh.h:145-148, 330-333 (DT_DETAIL_EDGE_BOUNDARY = 0x01, dtGetDetailTriEdgeFlags)
+    private bool TryClosestPointOnDetailEdges(NavPoly p, NavPolyDetail detail, Vector3 position, bool onlyBoundary, out Vector3 closest)
+    {
+        closest = default;
+        if (detail.TriangleCount == 0)
+        {
+            return false;
+        }
+
+        const int AnyBoundaryEdge = (1 << 0) | (1 << 2) | (1 << 4);
+        float bestDistance = float.MaxValue;
+        float bestT = 0;
+        Vector3 bestA = default;
+        Vector3 bestB = default;
+        bool found = false;
+
+        for (int t = 0; t < detail.TriangleCount; t++)
+        {
+            long index = ((long)detail.TriangleBase + t) * 4;
+            if (index + 3 >= DetailTriangles.Length)
+            {
+                break;
+            }
+
+            byte triFlags = DetailTriangles[index + 3];
+            if (onlyBoundary && (triFlags & AnyBoundaryEdge) == 0)
+            {
+                continue;
+            }
+
+            byte idx0 = DetailTriangles[index];
+            byte idx1 = DetailTriangles[index + 1];
+            byte idx2 = DetailTriangles[index + 2];
+            if (!TryDetailVertex(p, detail, idx0, out Vector3 v0)
+                || !TryDetailVertex(p, detail, idx1, out Vector3 v1)
+                || !TryDetailVertex(p, detail, idx2, out Vector3 v2))
+            {
+                continue;
+            }
+
+            for (int k = 0, j = 2; k < 3; j = k++)
+            {
+                byte idxJ = j switch { 0 => idx0, 1 => idx1, _ => idx2 };
+                byte idxK = k switch { 0 => idx0, 1 => idx1, _ => idx2 };
+                if (((triFlags >> (j * 2)) & 0x1) == 0 && (onlyBoundary || idxJ < idxK))
+                {
+                    continue;
+                }
+
+                Vector3 vj = j switch { 0 => v0, 1 => v1, _ => v2 };
+                Vector3 vk = k switch { 0 => v0, 1 => v1, _ => v2 };
+                float edgeT = ClosestT(vj, vk, position);
+                Vector3 c = Vector3.Lerp(vj, vk, edgeT);
+                float d = DistanceXzSquared(c, position);
+                if (d < bestDistance)
+                {
+                    bestDistance = d;
+                    bestT = edgeT;
+                    bestA = vj;
+                    bestB = vk;
+                    found = true;
+                }
+            }
+        }
+
+        if (found)
+        {
+            closest = Vector3.Lerp(bestA, bestB, bestT);
+        }
+
+        return found;
     }
 
     private bool TryDetailVertex(NavPoly p, NavPolyDetail detail, byte index, out Vector3 vertex)

@@ -35,7 +35,7 @@ public sealed record AtlasPaths(string? TerrainData, string? ClientRoot)
             problems.Add($"Terrain data directory '{TerrainData}' has none of maps, vmaps or mmaps.");
         }
 
-        if (ClientRoot is not null && ClientDataDirectory is null)
+        if (ClientRoot is not null && ClientDataDirectory is null && !DirectoryClientFiles.LooksExtracted(ClientRoot))
         {
             problems.Add($"Client directory '{ClientRoot}' has no Data folder.");
         }

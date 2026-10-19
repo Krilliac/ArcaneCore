@@ -173,8 +173,12 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
             // The overlap of this edge with the neighbour's border edges is fixed by the two tiles' geometry; it is worked out once per
             // edge (NavMeshTile.GetCrossPortals) rather than by scanning every border edge of the neighbour per expansion.
-            foreach (CrossPortal portal in tile.GetCrossPortals(from.Poly, e, other))
+            // Detour's connectExtLinks (DetourNavMesh.cpp:416-428) prepends each connecting polygon to poly->firstLink, so a border
+            // edge's external links are walked in reverse candidate order.
+            CrossPortal[] portals = tile.GetCrossPortals(from.Poly, e, other);
+            for (int i = portals.Length - 1; i >= 0; i--)
             {
+                CrossPortal portal = portals[i];
                 (Vector3 l, Vector3 r) = Orient(center, portal.A, portal.B);
                 into.Add(new NavNeighbour(new NavPolyRef(other, portal.Poly), l, r, (byte)(side >> 1)));
             }
@@ -242,28 +246,80 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     private static (Vector3 Left, Vector3 Right) Orient(Vector3 inside, Vector3 a, Vector3 b)
         => Cross(inside, a, b) < 0 ? (a, b) : (b, a);
 
+    // ref: vmangos@0e3ff01/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:31-112, 300-351 (calcSlabEndPoints, overlapSlabs, findConnectingPolys)
     internal static bool TryOverlap(Vector3 a, Vector3 b, Vector3 c, Vector3 d, bool alongZ, float climb, out Vector3 pa, out Vector3 pb)
     {
         pa = pb = default;
         float fixedA = alongZ ? a.X : a.Z;
         float fixedC = alongZ ? c.X : c.Z;
-        if (MathF.Abs(fixedA - fixedC) > 0.1f || MathF.Abs((alongZ ? b.X : b.Z) - fixedA) > 0.1f)
+        if (MathF.Abs(fixedA - fixedC) > 0.01f || MathF.Abs((alongZ ? b.X : b.Z) - fixedA) > 0.01f)
         {
             return false;
         }
 
-        float a0 = alongZ ? a.Z : a.X, a1 = alongZ ? b.Z : b.X, c0 = alongZ ? c.Z : c.X, c1 = alongZ ? d.Z : d.X;
-        float low = MathF.Max(MathF.Min(a0, a1), MathF.Min(c0, c1));
-        float high = MathF.Min(MathF.Max(a0, a1), MathF.Max(c0, c1));
-        if (high - low < 0.01f)
+        float a0 = alongZ ? a.Z : a.X, a1 = alongZ ? b.Z : b.X;
+        float c0 = alongZ ? c.Z : c.X, c1 = alongZ ? d.Z : d.X;
+        float amin0, amin1, amax0, amax1;
+        if (a0 < a1)
+        {
+            amin0 = a0;
+            amin1 = a.Y;
+            amax0 = a1;
+            amax1 = b.Y;
+        }
+        else
+        {
+            amin0 = a1;
+            amin1 = b.Y;
+            amax0 = a0;
+            amax1 = a.Y;
+        }
+
+        float bmin0, bmin1, bmax0, bmax1;
+        if (c0 < c1)
+        {
+            bmin0 = c0;
+            bmin1 = c.Y;
+            bmax0 = c1;
+            bmax1 = d.Y;
+        }
+        else
+        {
+            bmin0 = c1;
+            bmin1 = d.Y;
+            bmax0 = c0;
+            bmax1 = c.Y;
+        }
+
+        const float px = 0.01f;
+        float minx = MathF.Max(amin0 + px, bmin0 + px);
+        float maxx = MathF.Min(amax0 - px, bmax0 - px);
+        if (minx > maxx)
         {
             return false;
         }
 
+        float ad = (amax1 - amin1) / (amax0 - amin0);
+        float ak = amin1 - (ad * amin0);
+        float bd = (bmax1 - bmin1) / (bmax0 - bmin0);
+        float bk = bmin1 - (bd * bmin0);
+        float aminy = (ad * minx) + ak;
+        float amaxy = (ad * maxx) + ak;
+        float bminy = (bd * minx) + bk;
+        float bmaxy = (bd * maxx) + bk;
+        float dmin = bminy - aminy;
+        float dmax = bmaxy - amaxy;
+        float thr = (climb * 2f) * (climb * 2f);
+        if ((dmin * dmax) >= 0f && (dmin * dmin) > thr && (dmax * dmax) > thr)
+        {
+            return false;
+        }
+
+        float low = MathF.Max(amin0, bmin0);
+        float high = MathF.Min(amax0, bmax0);
         pa = PointAt(a, b, alongZ, low);
         pb = PointAt(a, b, alongZ, high);
-        float mid = (low + high) * 0.5f;
-        return MathF.Abs(PointAt(a, b, alongZ, mid).Y - PointAt(c, d, alongZ, mid).Y) <= climb;
+        return true;
     }
 
     private static Vector3 PointAt(Vector3 a, Vector3 b, bool alongZ, float coordinate)

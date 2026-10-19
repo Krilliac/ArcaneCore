@@ -287,6 +287,55 @@ public sealed class MapFeedStreamTests
         Assert.False(entity.TryGetProperty("route", out _));
     }
 
+    private sealed class CutRouteSource : IBotRouteSource
+    {
+        public const int MaxPathPoints = 512;
+
+        public int CopyRoute(Player bot, Span<Vector3> destination, out BotRouteInfo info)
+        {
+            for (int i = 0; i < destination.Length; i++)
+            {
+                destination[i] = new Vector3(bot.X + i, bot.Y, bot.Z);
+            }
+
+            info = new BotRouteInfo(Next: MaxPathPoints + 42, Flags: BotRouteFlags.Navigated);
+            return MaxPathPoints + 100;
+        }
+    }
+
+    [WindowsFact]
+    public async Task ABotWithACutRoute_ClampsNextToTheShippedPoints()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup { Bots = true, Terrain = false });
+        Guid botId = await world.AddBotAsync("Feedcut");
+        ManagedBotRegistry registry = world.Host.WorldServices.GetRequiredService<ManagedBotRegistry>();
+        FeatureHost features = world.Host.WorldServices.GetRequiredService<FeatureHost>();
+        ulong botGuid = await world.Host.OnWorldAsync(() =>
+        {
+            registry.TryGet(botId, out ManagedBot found);
+            return found.Session.Player!.Guid.Value;
+        });
+
+        FeatureResult detached = await features.DetachAsync(nameof(ManagedPlayerbotFeature));
+        Assert.True(detached.Ok, detached.Detail);
+
+        using (registry.UseRouteSource(new CutRouteSource()))
+        {
+            FeedClient client = await world.ConnectAsync();
+            JsonElement frame = await SubscribeAndReadFirstAsync(client, FeedClient.Subscribe());
+            JsonElement route = frame.Entity(botGuid).GetProperty("route");
+
+            Assert.True(route.GetProperty("cut").GetBoolean());
+            Assert.Equal(CutRouteSource.MaxPathPoints, route.GetProperty("pts").GetArrayLength());
+            Assert.Equal(CutRouteSource.MaxPathPoints, route.GetProperty("next").GetInt32());
+        }
+    }
+
     private sealed class ThrowingRouteSource : IBotRouteSource
     {
         public int CopyRoute(Player bot, Span<Vector3> destination, out BotRouteInfo info)

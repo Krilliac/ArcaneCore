@@ -697,7 +697,8 @@ internal static class NavDiff
                     {
                         if (Distance(sA, sB) < 0.025)
                         {
-                            // ref: D:\refs\vmangos\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:259-292 (OverlapSlabs shrinks horizontal slab ends by px=0.01f)
+                            // ref: D:\refs\vmangos\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:259-292 (OverlapSlabs shrinks horizontal slab ends by px=0.01f;
+                            // NavMesh.TryOverlap now applies the same px=0.01f shrink on production tiles, kept for synthetic/older portal tables)
                             report.PortalSlabClimbRule++;
                             report.NoteExpected("portal-slab-climb-rule");
                             continue;
@@ -754,7 +755,8 @@ internal static class NavDiff
                     NavLink link = refLinks[i];
                     if (otherServer is not null && otherServer.GetBorderEdges(oppositeSide).Any(be => be.Poly == link.TargetPolyIndex))
                     {
-                        // ref: D:\refs\vmangos\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:259-292 (OverlapSlabs checks 2*walkableClimb at slab endpoints vs server NavMesh.TryOverlap 1*walkableClimb at slab midpoint)
+                        // ref: D:\refs\vmangos\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:259-292 (OverlapSlabs checks 2*walkableClimb at slab endpoints;
+                        // NavMesh.TryOverlap now matches Detour on production tiles, kept for synthetic/custom portal tables)
                         report.PortalSlabClimbRule++;
                         report.NoteExpected("portal-slab-climb-rule");
                         continue;

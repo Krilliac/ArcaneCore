@@ -372,7 +372,7 @@ internal static class MapFeedCapture
         ref FeedEntity entity = ref frame.Entities[index];
         entity.RouteOffset = offset;
         entity.RouteCount = copy;
-        entity.RouteNext = info.Next;
+        entity.RouteNext = Math.Clamp(info.Next, 0, copy);
         entity.RouteFlags = info.Flags;
         entity.Parts |= FeedEntityParts.Route;
         if (copy < total)

@@ -55,7 +55,7 @@ Server lines besides `hello`:
   `fleeing`, `distract`, `follow`, `formation`, else `unknown`), `tg` (the unit chased, else the selected target), `home` (`[x,y,z]`),
   `sp` (the creature's current spline: `{"id":n,"start":[x,y,z],"pts":[[x,y,z],...],"t0":clockMs,"dur":ms,"run":bool}`, with `"cut":true`
   when its points were cut at 512; `clockMs - t0` is the elapsed time the server itself uses), and `route` (a bot's current route:
-  `{"pts":[...],"next":i,"flags":["meshEndedShort","partialToGoal","chase","navigated","questReturn"]}`, `"cut":true` past 512 points).
+  `{"pts":[...],"next":i,"flags":["meshEndedShort","partialToGoal","chase","navigated","questReturn"]}`, `"cut":true` past 512 points with `next` clamped to `0..pts.length`).
   Players and bots come first, then creatures that move or are in an active motion, then the other creatures, then game objects.
 * `result`: `{"op":"result","id":n,"ok":true,"kind":"...",...}` or `{"op":"result","id":n,"ok":false,"code":"...","message":"..."}`.
 * `error`: `{"op":"error","code":"...","message":"..."}` for a line that is not a query.

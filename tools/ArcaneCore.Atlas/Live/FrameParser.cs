@@ -420,10 +420,9 @@ internal static class FrameParser
             return false;
         }
 
-        // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/MapFeedCapture.cs (AddRoute: copy = Math.Min(total, capacity), RouteNext = info.Next
-        // unchanged, RouteCut only when copy < total); still true at claude/atlas-l1@7b4992f41 MapFeedJson.cs:442 (WriteRoute writes next as-is).
-        // A cut route ships only its first points while next still indexes the full route (the daemon's capture does not rebase it), so a
-        // next past the shipped points is legitimate there and means "past every shipped corner"; on an uncut route it is a corrupt index.
+        // ref: src/ArcaneCore.World/Ops/MapFeed/MapFeedCapture.cs (AddRoute clamps RouteNext = Math.Clamp(info.Next, 0, copy)).
+        // Older or synthetic cut-route frames may still send next indexing the full uncut route (> points.Count), which means
+        // "past every shipped corner"; we clamp it here for defensive compatibility, while on an uncut route it remains a corrupt index.
         if (!TryOptionalInteger(o["next"], 0, cut ? int.MaxValue : points.Count, 0, out long next))
         {
             problem = "route.next is not an index into route.pts";

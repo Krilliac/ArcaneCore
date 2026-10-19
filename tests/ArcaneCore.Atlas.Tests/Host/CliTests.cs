@@ -120,11 +120,15 @@ public sealed class CommandLineArgumentsTests
     }
 
     [Fact]
-    public async Task TheJsonObjectCanComeFromStandardInput()
+    public async Task TheJsonObjectCanComeFromStandardInput_WithOrWithoutAUtf8Bom()
     {
         JsonObject args = await CommandLineArguments.BuildAsync([], "-", new StringReader("""{"a":[1,2]}"""), CancellationToken.None);
+        JsonObject bomStdin = await CommandLineArguments.BuildAsync([], "-", new StringReader("\uFEFF{\"a\":[1,2]}"), CancellationToken.None);
+        JsonObject bomArg = await CommandLineArguments.BuildAsync([], "\uFEFF{\"a\":3}", TextReader.Null, CancellationToken.None);
 
         Assert.Equal("""{"a":[1,2]}""", args.ToJsonString());
+        Assert.Equal("""{"a":[1,2]}""", bomStdin.ToJsonString());
+        Assert.Equal("""{"a":3}""", bomArg.ToJsonString());
         Assert.Empty(await CommandLineArguments.BuildAsync([], null, TextReader.Null, CancellationToken.None));
     }
 
@@ -155,14 +159,16 @@ public sealed class CommandLineArgumentsTests
 public sealed class ScriptFileTests
 {
     [Fact]
-    public void EachNonBlankLineIsAStep_NumberedByItsLine_WhateverTheLineEndings()
+    public void EachNonBlankLineIsAStep_NumberedByItsLine_WhateverTheLineEndingsOrLeadingUtf8Bom()
     {
-        IReadOnlyList<ScriptStep> steps = ScriptFile.Parse("\r\n{\"command\":\"status\"}\r\n\r\n  {\"command\":\"camera.goto\",\"args\":{\"x\":1}}  \r\n{\"command\":\"help\",\"args\":{}}");
+        IReadOnlyList<ScriptStep> steps = ScriptFile.Parse("\uFEFF\r\n{\"command\":\"status\"}\r\n\r\n  {\"command\":\"camera.goto\",\"args\":{\"x\":1}}  \r\n{\"command\":\"help\",\"args\":{}}");
+        IReadOnlyList<ScriptStep> bomFirstLine = ScriptFile.Parse("\uFEFF{\"command\":\"status\"}");
 
         Assert.Equal(new[] { 2, 4, 5 }, steps.Select(s => s.Line));
         Assert.Equal(new[] { "status", "camera.goto", "help" }, steps.Select(s => s.Command));
         Assert.Empty(steps[0].Args);
         Assert.Equal("""{"x":1}""", steps[1].Args.ToJsonString());
+        Assert.Equal("status", Assert.Single(bomFirstLine).Command);
     }
 
     [Fact]
@@ -436,19 +442,24 @@ public sealed class CliVerbTests
         string envData = Path.Combine(rig.State.Root, "env-data");
         string optionData = Path.Combine(rig.State.Root, "option-data");
         string client = Path.Combine(rig.State.Root, "client");
+        string extractedClient = Path.Combine(rig.State.Root, "client-extract");
         Directory.CreateDirectory(Path.Combine(envData, "maps"));
         Directory.CreateDirectory(Path.Combine(optionData, "maps"));
         Directory.CreateDirectory(Path.Combine(client, "Data"));
+        Directory.CreateDirectory(Path.Combine(extractedClient, "World"));
         rig.Env[AtlasPaths.TerrainEnvironmentVariable] = envData;
 
         CliResult fromEnvironment = await rig.RunAsync("run", "--compact", "status");
         CliResult overridden = await rig.RunAsync("run", "--compact", "--data", optionData, "--client", client, "status");
+        CliResult extracted = await rig.RunAsync("run", "--compact", "--data", optionData, "--client", extractedClient, "status");
 
         Assert.Equal(envData, fromEnvironment.Json().Str("data.paths.terrainData"));
         Assert.Null(fromEnvironment.Json().At("data.paths.clientRoot"));
         Assert.Equal(optionData, overridden.Json().Str("data.paths.terrainData"));
         Assert.Equal(client, overridden.Json().Str("data.paths.clientRoot"));
         Assert.Empty(overridden.Json().At("data.problems")!.AsArray());
+        Assert.Equal(extractedClient, extracted.Json().Str("data.paths.clientRoot"));
+        Assert.Empty(extracted.Json().At("data.problems")!.AsArray());
     }
 
     [Fact]

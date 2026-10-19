@@ -155,18 +155,19 @@ public static class PlacementTransform
         => new(MapMid - world.X, MapMid - world.Y, world.Z);
 
     /// <summary>
-    /// The multiplier for an M2 placement scale. A MDDF stores a u16 where 1024 means 1.0; a value already turned into a
-    /// multiplier (anything under 16, since no real doodad is scaled below 1/64) is kept as is.
+    /// The multiplier for an M2 placement scale. A MDDF stores a u16 where 1024 means 1.0 (so any <c>u16 / 1024.0</c>
+    /// multiplier is strictly below 64, while no 1.12.1 doodad has raw <c>u16 &lt; 102</c>); a value already turned into a
+    /// multiplier (<c>&lt; 64</c>) is kept as is.
     /// </summary>
     public static double M2Scale(double placementScale)
     {
-        // ref: vmangos@0e3ff01/contrib/vmap_extractor/vmapextract/model.cpp:166 (sc = scale / 1024.0f)
+        // ref: vmangos@0e3ff01/contrib/vmap_extractor/vmapextract/model.cpp:166 (sc = scale / 1024.0f; u16 max 65535 / 1024.0 < 64.0)
         if (!double.IsFinite(placementScale) || placementScale <= 0)
         {
             return 1;
         }
 
-        return placementScale >= 16 ? placementScale / 1024.0 : placementScale;
+        return placementScale >= 64 ? placementScale / 1024.0 : placementScale;
     }
 
     /// <summary>

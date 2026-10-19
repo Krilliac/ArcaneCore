@@ -361,11 +361,14 @@ public sealed class NavMeshBroadPhaseTests(ITestOutputHelper output)
         bool alongZ = side is 0 or 4;
         float climb = MathF.Max(MathF.Max(tile.WalkableClimb, other.WalkableClimb), 0.5f);
         var result = new List<(int, Vector3, Vector3)>();
+        int lastPoly = -1;
         foreach (BorderEdge candidate in other.GetBorderEdges((side + 4) & 7))
         {
-            if (NavMesh.TryOverlap(a, b, candidate.A, candidate.B, alongZ, climb, out Vector3 pa, out Vector3 pb))
+            if (candidate.Poly != lastPoly
+                && NavMesh.TryOverlap(a, b, candidate.A, candidate.B, alongZ, climb, out Vector3 pa, out Vector3 pb))
             {
                 result.Add((candidate.Poly, pa, pb));
+                lastPoly = candidate.Poly;
             }
         }
 
@@ -520,8 +523,10 @@ public sealed class NavMeshBroadPhaseTests(ITestOutputHelper output)
 
                     int side = nei & 0xff;
                     NavMeshTile other = mesh.GetTile(tile.X + NavMeshFormat.SideOffset(side)!.Value.Dx, tile.Y + NavMeshFormat.SideOffset(side)!.Value.Dy)!;
-                    foreach ((int toPoly, Vector3 pa, Vector3 pb) in ScanPortals(tile, poly, e, other))
+                    var portals = ScanPortals(tile, poly, e, other);
+                    for (int i = portals.Count - 1; i >= 0; i--)
                     {
+                        (int toPoly, Vector3 pa, Vector3 pb) = portals[i];
                         (Vector3 l, Vector3 r) = NavMeshQuery_Orient(center, pa, pb);
                         expected.Add(new NavNeighbour(new NavPolyRef(other, toPoly), l, r, (byte)(side >> 1)));
                         crossings++;
@@ -533,6 +538,95 @@ public sealed class NavMeshBroadPhaseTests(ITestOutputHelper output)
         }
 
         Assert.True(crossings > 10);
+    }
+
+    [Fact]
+    public void TryOverlap_MatchesDetourOverlapSlabs_ForSlopedAndNarrowEdges()
+    {
+        const float Climb = 1.6f;
+
+        // Sloped border edges whose vertical gap at the overlap midpoint is 1.8 yd (> 1 * Climb) but at the lower endpoint is 0.4 yd (<= 2 * Climb):
+        // Detour's overlapSlabs connects them because (dmin * dmin) <= (climb * 2)^2.
+        Vector3 a0 = new(10f, 0.0f, 0f);
+        Vector3 a1 = new(10f, 2.0f, 10f);
+        Vector3 b0 = new(10f, 0.4f, 0f);
+        Vector3 b1 = new(10f, 5.2f, 10f);
+        Assert.True(NavMesh.TryOverlap(a0, a1, b0, b1, alongZ: true, Climb, out Vector3 pa, out Vector3 pb));
+        Assert.Equal(0f, pa.Z, 4);
+        Assert.Equal(10f, pb.Z, 4);
+
+        // Horizontal overlap of 0.015 yd (< 2 * px = 0.02f): Detour's px = 0.01f endpoint shrink rejects the narrow touch.
+        Vector3 narrowA0 = new(10f, 0f, 0f);
+        Vector3 narrowA1 = new(10f, 0f, 5.015f);
+        Vector3 narrowB0 = new(10f, 0f, 5.000f);
+        Vector3 narrowB1 = new(10f, 0f, 10.0f);
+        Assert.False(NavMesh.TryOverlap(narrowA0, narrowA1, narrowB0, narrowB1, alongZ: true, Climb, out _, out _));
+
+        // Perpendicular distance from tile border > 0.01f is rejected.
+        Vector3 farB0 = new(10.02f, 0f, 0f);
+        Vector3 farB1 = new(10.02f, 0f, 10f);
+        Assert.False(NavMesh.TryOverlap(a0, a1, farB0, farB1, alongZ: true, Climb, out _, out _));
+    }
+
+    [Fact]
+    public void GetCrossPortals_DeduplicatesTargetPolygon_WhenNeighbourHasMultipleCollinearBorderEdges()
+    {
+        // Matches 0013430.mmtile poly 9373 across from 0013330.mmtile polys 438/441: a degenerate border polygon whose vertices
+        // lie on Recast x = 4 (side 4) and whose multiple edges carry DT_EXT_LINK | 4 must produce at most one CrossPortal from tile A.
+        NavMeshTile a = NavMeshTile.Parse((new CellTile(0, 0, 0, 0, 1, 1, 4) { LinkedSides = [0] }).Build());
+        byte[] rawB = (new CellTile(1, 0, 0, 4, 1, 1, 4) { LinkedSides = [4] }).Build();
+        // Move vertex 2 of poly 0 in rawB onto the Recast x = 4 border at (4, 0, 2) and mark edge 1 as DT_EXT_LINK | 4 in addition to edge 0,
+        // so both edge 0 ((4,0,0)->(4,0,4)) and edge 1 ((4,0,4)->(4,0,2)) lie on the x = 4 border and overlap tile A's edge 2 (side 0).
+        const int VertsOffset = 100;
+        const int PolysOffset = 100 + (4 * 12);
+        BitConverter.GetBytes(4f).CopyTo(rawB, VertsOffset + (2 * 12) + 0);
+        BitConverter.GetBytes(0f).CopyTo(rawB, VertsOffset + (2 * 12) + 4);
+        BitConverter.GetBytes(2f).CopyTo(rawB, VertsOffset + (2 * 12) + 8);
+        BitConverter.GetBytes((ushort)(NavMeshFormat.ExternalLink | 4)).CopyTo(rawB, PolysOffset + 16 + (0 * 2));
+        BitConverter.GetBytes((ushort)(NavMeshFormat.ExternalLink | 4)).CopyTo(rawB, PolysOffset + 16 + (1 * 2));
+        NavMeshTile b = NavMeshTile.Parse(rawB);
+
+        CrossPortal[] portals = a.GetCrossPortals(0, 2, b);
+        Assert.Single(portals);
+        Assert.Equal(0, portals[0].Poly);
+    }
+
+    [Fact]
+    public void ClosestPointOnPoly_ProjectsOntoDetailBoundaryEdges_WhenOutsidePolygon()
+    {
+        // A 1x1 cell polygon over [0, 4] x [0, 4] whose coarse vertices sit at Y = 0, while its detail mesh adds a peaked boundary
+        // vertex at (2, 1.5, 0) on the Z = 0 edge: querying outside the polygon at (2, 0, -1) must project onto the detail boundary
+        // at Y = 1.5, matching Detour's closestPointOnDetailEdges<true>.
+        byte[] raw = new CellTile(0, 0, 0, 0, 1, 1, 4).Build();
+        // CellTile(1,1) layout: 100 B header + 4 verts (48 B) + 1 poly (32 B) + 4 links (64 B) = 244 B before detailMeshes (12 B) + detailTris (8 B).
+        const int DetailMeshesOffset = 100 + (4 * 12) + (1 * 32) + (4 * 16);
+        byte[] withDetailVert = new byte[raw.Length + 12];
+        Array.Copy(raw, 0, withDetailVert, 0, DetailMeshesOffset + 12);
+        BitConverter.GetBytes(1).CopyTo(withDetailVert, 40); // DetailVertCount = 1
+        BitConverter.GetBytes(2).CopyTo(withDetailVert, 44); // DetailTriCount = 2
+        withDetailVert[DetailMeshesOffset + 8] = 1; // vertCount = 1
+        withDetailVert[DetailMeshesOffset + 9] = 2; // triCount = 2
+        int dvOffset = DetailMeshesOffset + 12;
+        BitConverter.GetBytes(2f).CopyTo(withDetailVert, dvOffset);
+        BitConverter.GetBytes(1.5f).CopyTo(withDetailVert, dvOffset + 4);
+        BitConverter.GetBytes(0f).CopyTo(withDetailVert, dvOffset + 8);
+        int dtOffset = dvOffset + 12;
+        withDetailVert[dtOffset + 0] = 3;
+        withDetailVert[dtOffset + 1] = 4;
+        withDetailVert[dtOffset + 2] = 0;
+        withDetailVert[dtOffset + 3] = 0b0001_01; // edges (v3->v4) and (v4->v0) are boundary edges
+        withDetailVert[dtOffset + 4] = 0;
+        withDetailVert[dtOffset + 5] = 4;
+        withDetailVert[dtOffset + 6] = 2;
+        withDetailVert[dtOffset + 7] = 0;
+
+        NavMeshTile tile = NavMeshTile.Parse(withDetailVert);
+        Vector3 outside = new(2f, 0f, -1f);
+        Vector3 closest = tile.ClosestPointOnPoly(0, outside, out bool posOverPoly);
+        Assert.False(posOverPoly);
+        Assert.Equal(2f, closest.X, 3);
+        Assert.Equal(1.5f, closest.Y, 3);
+        Assert.Equal(0f, closest.Z, 3);
     }
 
     private static (Vector3 Left, Vector3 Right) NavMeshQuery_Orient(Vector3 inside, Vector3 a, Vector3 b)
