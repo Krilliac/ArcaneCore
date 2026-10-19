@@ -29,19 +29,19 @@ public static class RealmResilienceServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(configuration);
         services.AddDatabaseResilience(configuration);
 
-        Decorate<IAccountStore>(services, static (inner, guard) => new GuardedAccountStore(inner, guard), required: true);
-        Decorate<IRealmStore>(services, static (inner, guard) => new GuardedRealmStore(inner, guard), required: true);
-        Decorate<IBanStore>(services, static (inner, guard) => new GuardedBanStore(inner, guard), required: false);
+        Decorate<IAccountStore>(services, static calls => new GuardedAccountStore(calls), required: true);
+        Decorate<IRealmStore>(services, static calls => new GuardedRealmStore(calls), required: true);
+        Decorate<IBanStore>(services, static calls => new GuardedBanStore(calls), required: false);
         return services;
     }
 
     /// <summary>
     /// Move the last registration of <typeparamref name="TService"/> under <see cref="InnerStoreKey"/> (same lifetime,
     /// same implementation or factory) and register the decorator in its place; the decorator resolves the inner
-    /// store lazily from the same scope.
+    /// store per call, from a scope that call owns (<see cref="GuardedCalls{TStore}"/>).
     /// </summary>
     private static void Decorate<TService>(
-        IServiceCollection services, Func<Func<TService>, DatabaseGuard, TService> decorate, bool required)
+        IServiceCollection services, Func<GuardedCalls<TService>, TService> decorate, bool required)
         where TService : class
     {
         ServiceDescriptor? existing = services.LastOrDefault(d => d.ServiceType == typeof(TService) && !d.IsKeyedService);
@@ -71,7 +71,7 @@ public static class RealmResilienceServiceCollectionExtensions
 
         services.Add(new ServiceDescriptor(
             typeof(TService),
-            sp => decorate(() => sp.GetRequiredKeyedService<TService>(InnerStoreKey), sp.GetRequiredService<DatabaseGuard>()),
+            sp => decorate(new GuardedCalls<TService>(sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<DatabaseGuard>())),
             existing.Lifetime));
     }
 }

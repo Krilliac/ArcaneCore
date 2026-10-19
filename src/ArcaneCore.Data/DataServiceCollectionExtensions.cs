@@ -178,8 +178,8 @@ public static class DataServiceCollectionExtensions
     /// The component's configured connection options, with the SQLite busy timeout CLAMPED (not rejected) to the database guard's
     /// per-call deadline (<c>Resilience:Database:QueryTimeoutMs</c>) when the guard is registered, enabled and has a deadline.
     /// Why: against a locked file the guard's pessimistic timeout (<see cref="DatabaseGuard.TimeoutStrategyFor"/>) answers on time, but
-    /// the abandoned call keeps waiting inside SQLite's busy handler and disposing its scope blocks until it returns, so a busy timeout
-    /// longer than the deadline lengthens every refusal by the difference. The clamp is silent because the configured value stays
+    /// the abandoned call keeps waiting inside SQLite's busy handler, and closing its connection meanwhile can block until that wait returns,
+    /// so a busy timeout longer than the deadline lengthens such a block by the difference. The clamp is silent because the configured value stays
     /// valid on its own (it is simply bounded by the stricter deadline); hosts without a guard keep the configured value.
     /// </summary>
     private static DatabaseConnectionOptions ResolveGuarded(IServiceProvider provider, DatabaseComponent component)

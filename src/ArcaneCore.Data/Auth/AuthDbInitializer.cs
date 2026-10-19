@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Schema.Upgrade;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.EntityFrameworkCore;
@@ -26,11 +27,13 @@ public sealed class AuthDbInitializer(IServiceProvider services, ILogger<AuthDbI
             cancellationToken,
             async ct =>
             {
-                // Expired bans are cleaned at startup like realmd (Main.cpp:213-215) and mangosd (World.cpp:1818-1820).
-                Kernel.Accounts.IBanStore? bans = scope.ServiceProvider.GetService<Kernel.Accounts.IBanStore>();
-                if (bans is not null)
+                // Expired bans are cleaned at startup like realmd (Main.cpp:213-215) and mangosd (World.cpp:1818-1820), on this
+                // context: inside the schema lock every write must use the lock's connection, and the IBanStore the container
+                // hands out may not (the logon daemon's guarded stores run each call in a DI scope of its own, whose connection
+                // would wait for the lock's SQLite write transaction until the query timeout).
+                if (scope.ServiceProvider.GetService<Kernel.Accounts.IBanStore>() is not null)
                 {
-                    await bans.PurgeExpiredAsync(ct).ConfigureAwait(false);
+                    await new EfBanStore(db, scope.ServiceProvider.GetService<TimeProvider>()).PurgeExpiredAsync(ct).ConfigureAwait(false);
                 }
 
                 RealmSeedOptions? seed = scope.ServiceProvider.GetService<IOptions<RealmSeedOptions>>()?.Value;

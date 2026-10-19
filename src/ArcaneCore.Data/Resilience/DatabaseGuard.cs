@@ -86,9 +86,12 @@ public sealed class DatabaseGuard
     /// deadline is, so for <see cref="DatabaseProvider.Sqlite"/> the guard stops waiting on its own
     /// (<see cref="TimeoutStrategy.Pessimistic"/>) and answers the refusal on time. The cost, documented in
     /// docs/ops/resilience.md: the abandoned call keeps its thread-pool thread until SQLite gives up or the lock is
-    /// released, its result is discarded, and disposing its scope (the connection it still uses) may block until that
-    /// statement returns, SQLite serialising the calls on one connection (measured only after the lock release: under
-    /// 5 s). SQLite is the zero-setup development and test engine; a bounded answer is worth one parked thread there.
+    /// released, its result is discarded, and until then it still runs inside its context and connection, so nothing
+    /// else may use them. The caller must give each pessimistic call a scope the call itself disposes when it ends:
+    /// the contexts are pooled (<see cref="DataServiceCollectionExtensions.AddAuthDatabase"/>), and disposing the
+    /// caller's scope would hand the busy context to the next lease, which EF then refuses ("A second operation was
+    /// started on this context instance"). The logon daemon's guarded stores do that (GuardedCalls in ArcaneCore.Realm).
+    /// SQLite is the zero-setup development and test engine; a bounded answer is worth one parked thread there.
     /// </summary>
     public static TimeoutStrategy TimeoutStrategyFor(DatabaseProvider provider)
         => provider == DatabaseProvider.Sqlite ? TimeoutStrategy.Pessimistic : TimeoutStrategy.Cooperative;
