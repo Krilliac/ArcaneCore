@@ -218,7 +218,11 @@ public sealed class PlayerbotWarsongPlayWorldTests
 
     /// <summary>
     /// Four Alliance bots against a Horde player: every bot has a duty every think (the carrier, defenders, the rest at the enemy flag or the
-    /// middle), the defender fights the Horde player once it stands in the Alliance flag room, nobody is idle, and the flag goes across.
+    /// middle), the defender fights the Horde player once it stands in the Alliance flag room, nobody is idle, no objective is given up as a
+    /// loop, and the flag goes across. Both used to fail now and then, depending on where the fight left the bots: a bot that chased the
+    /// intruder between two walks to its objective had the objective refused by the loop watch for a minute (the fight's walk was not
+    /// planned as a chase), and a defender that held its room and was then sent to the middle was idle at once (its still time under the
+    /// old duty counted under the new one).
     /// </summary>
     [Fact]
     public async Task FourBots_EachHasADuty_TheDefenderFightsTheIntruder_AndTheFlagGoesAcross()
@@ -236,6 +240,12 @@ public sealed class PlayerbotWarsongPlayWorldTests
                 await context.AutonomousAsync(allies[i]);
             }
 
+            // The idle reports name the bot, its duty and what it stood still at: the failure message carries them.
+            using AnomalyCapture captureA = await CaptureAsync(allies[0]);
+            using AnomalyCapture captureB = await CaptureAsync(allies[1]);
+            using AnomalyCapture captureC = await CaptureAsync(allies[2]);
+            using AnomalyCapture captureD = await CaptureAsync(allies[3]);
+            AnomalyCapture[] captures = [captureA, captureB, captureC, captureD];
             ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bgfourh", BattlegroundType.WarsongGulch, Content.HordeWsgMaster);
             PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
             await PortScriptedAsync(context, horde, 489, (Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z));
@@ -259,8 +269,14 @@ public sealed class PlayerbotWarsongPlayWorldTests
             });
 
             await context.StepAsync("the flag goes across", () => WaitExplainedAsync(context, "captured", () => wsg.TeamScore(Team.Alliance) >= 1, TimeSpan.FromSeconds(120), allies));
+            // Each bot's loop watch (PlayerbotMotion): a fight between two walks to an objective is no back-and-forth to give the objective up for.
+            string loops = await context.ReadAsync(() => string.Join(" | ", allies.Select(a => a.RequirePlayer()).Select(p =>
+                $"{p.Name} loops {PlayerbotMotion.LoopCount(p)} refused [{(PlayerbotMotion.TryGetState(p, out PlayerbotMotion.MotionState? motion) ? string.Join("; ", motion.Blacklist.Select(b => b.Destination)) : "")}]")));
+            int looped = await context.ReadAsync(() => allies.Sum(a => PlayerbotMotion.LoopCount(a.RequirePlayer())));
+            ScenarioContext.ExpectEqual(0, looped, "objectives given up as loops: " + loops);
             int idle = await context.ReadAsync(() => allies.Sum(a => coordinator.Find(a.BotId)?.AI?.IdleThinks ?? 0));
-            ScenarioContext.ExpectEqual(0, idle, "idle thinks: " + string.Join(" | ", allies.Select(a => coordinator.Describe(a.BotId))));
+            ScenarioContext.ExpectEqual(0, idle, "idle thinks: " + string.Join(" | ", allies.Select(a => coordinator.Describe(a.BotId)))
+                + Environment.NewLine + string.Join(Environment.NewLine, captures.Select(c => c.Describe())) + Environment.NewLine + loops);
         });
     }
 

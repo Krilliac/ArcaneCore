@@ -240,6 +240,13 @@ internal static class PlayerbotWarsongTactics
     internal static bool IsIdle(bool alive, bool inCombat, uint stillMs, float goalDistance, float arrivedYards, float nearestEnemyYards)
         => alive && !inCombat && stillMs >= IdleLimitMs && (goalDistance > arrivedYards || nearestEnemyYards <= IdleEnemyYards);
 
+    /// <summary>
+    /// A distance advantage no larger than a guard post's radius (<see cref="PlayerbotBattlegroundAI.GuardYards"/>) is a tie (broken by guid,
+    /// as <see cref="Plan"/> promises): a teammate that stepped out a think or a heartbeat earlier from the same spot, or an attacker walking
+    /// past a defender already holding its room within <see cref="PlayerbotBattlegroundAI.GuardYards"/>, does not take its duty.
+    /// </summary>
+    internal const float SamePlaceYards = PlayerbotBattlegroundAI.GuardYards;
+
     private static PlayerbotWsgMember? Nearest(List<PlayerbotWsgMember> pool, Vector3 to)
     {
         PlayerbotWsgMember? best = null;
@@ -247,7 +254,7 @@ internal static class PlayerbotWarsongTactics
         foreach (PlayerbotWsgMember bot in pool)
         {
             float distance = Vector3.Distance(bot.At, to);
-            if (distance < nearest || (distance == nearest && best is { } b && bot.Guid.Value < b.Guid.Value))
+            if (distance + SamePlaceYards < nearest || (MathF.Abs(distance - nearest) <= SamePlaceYards && best is { } b && bot.Guid.Value < b.Guid.Value))
             {
                 nearest = distance;
                 best = bot;

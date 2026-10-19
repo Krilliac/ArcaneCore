@@ -118,7 +118,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// <summary>The Warsong Gulch order of the last think (inspection and tests).</summary>
     internal PlayerbotWsgOrder? Order { get; private set; }
 
-    /// <summary>How long the bot has stood still at its decisions in the match (inspection and tests).</summary>
+    /// <summary>How long the bot has stood still at its decisions in the match, under its current Warsong Gulch duty (inspection and tests).</summary>
     internal uint StillMs { get; private set; }
 
     /// <summary>The bot was idle at its last think (<see cref="PlayerbotWarsongTactics.IsIdle"/>; inspection and tests).</summary>
@@ -134,6 +134,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     private uint _inMatchIdleMs;
     private uint _rangedIdleMs;
     private Vector3? _lastThinkAt;
+    private PlayerbotWsgDuty? _stillDuty;
     private bool _reportedObjectiveUnreachable;
     private bool _reportedIdleInMatch;
 
@@ -152,6 +153,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         _inMatchIdleMs = 0;
         _rangedIdleMs = 0;
         _lastThinkAt = null;
+        _stillDuty = null;
         StillMs = 0;
         IdleNow = false;
         Order = null;
@@ -239,6 +241,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             _inMatchIdleMs = 0;
             StillMs = 0;
             _lastThinkAt = null;
+            _stillDuty = null;
             IdleNow = false;
             // Not before the gates open, nor after the end: the server refuses a reclaim outside a running match (vmangos
             // HandleReclaimCorpseOpcode, the BattleGround status check) and resurrects everyone at the end.
@@ -364,7 +367,11 @@ internal sealed partial class PlayerbotBattlegroundAI
         Vector3 here = Position(player);
         bool still = _lastThinkAt is { } last && Vector3.Distance(last, here) < PlayerbotWarsongTactics.StillYards;
         _lastThinkAt = here;
-        StillMs = still ? unchecked(StillMs + Math.Max(1u, interval)) : 0;
+        // The still clock is the duty's: a defender that held its room for 15 s and is then sent to the middle (a teammate came nearer
+        // the room and took the defence) stood at its old goal, not at its new one; it is idle only if it stays put under the new duty.
+        bool sameDuty = Order?.Duty == _stillDuty;
+        _stillDuty = Order?.Duty;
+        StillMs = still && sameDuty ? unchecked(StillMs + Math.Max(1u, interval)) : 0;
         if (Order is not { } order)
         {
             IdleNow = false;
@@ -664,7 +671,7 @@ internal sealed partial class PlayerbotBattlegroundAI
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
-                if (!WalkTo(player, Position(target), interval, toward: false)) _target = null;
+                if (!WalkTo(player, Position(target), interval, toward: false, chase: true)) _target = null;
                 return;
         }
 
@@ -783,7 +790,11 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// <summary>Walk towards <paramref name="goal"/>, planning again when it moved more than 2 yards since the last plan.</summary>
     /// <param name="toward">A far goal: a partial route towards it is fine (<see cref="PlayerbotNavigation.TryPlanToward"/>).</param>
     /// <param name="what">What the goal is, for the refusal's report (the walk to a battlemaster is no battleground objective).</param>
-    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward, string what = "battleground objective")
+    /// <param name="chase">The goal is an enemy the bot closes on (<see cref="PlayerbotRoute.Chase"/>), planned as the brain plans its chase:
+    /// the loop watch does not count its ends. Without it a fight in the bot's own flag room between two walks to its objective (the enemy
+    /// stand, the middle) read as a back-and-forth (A, B, A) and the loop watch refused the objectives for a minute: three of four bots stood
+    /// beside the Alliance flag room for 60 s with every route to the enemy flag and the middle refused.</param>
+    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward, string what = "battleground objective", bool chase = false)
     {
         if (Vector3.Distance(Position(player), goal) <= 1.5f)
         {
@@ -795,7 +806,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             PlanOutcome planned = toward
                 ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
-                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route);
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route, chase: chase);
             if (planned != PlanOutcome.Route || _route is null)
             {
                 _route = null;
@@ -841,7 +852,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     private bool Act(WorldOpcode opcode, byte[] payload, bool budgeted = true)
         => Groups.PlayerbotGroupCoordinator.Act(_session, opcode, payload, budgeted);
 
-    private static Vector3 Position(WorldObject o) => new(o.X, o.Y, o.Z);
+    private static Vector3 Position(WorldObject o) => o is Player p ? PlayerbotMotion.CurrentPosition(p) : new(o.X, o.Y, o.Z);
 
     private static float Distance(WorldObject a, WorldObject b) => Vector3.Distance(Position(a), Position(b));
 }
