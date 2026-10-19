@@ -54,7 +54,7 @@ public sealed class DamageDurabilityRoutingTests
         Assert.Equal(expectedDamage, delivery.Damage);
         Assert.False(delivery.DurabilityLoss);
         Assert.True(delivery.Periodic);
-        Assert.True(delivery.StartsCombat);
+        Assert.False(delivery.StartsCombat); // DOT damage that is not a channel links no combat (Unit.cpp:696-717)
     }
 
     private sealed record Delivery(Unit Target, uint Damage, bool Periodic, bool StartsCombat, bool DurabilityLoss);
@@ -65,12 +65,16 @@ public sealed class DamageDurabilityRoutingTests
         public List<Delivery> Deliveries { get; } = [];
 
         public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic)
-            => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat: true, durabilityLoss: true);
+            => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat: true, critical: false, durabilityLoss: true);
 
         public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat)
-            => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, durabilityLoss: true);
+            => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical: false, durabilityLoss: true);
 
-        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool durabilityLoss)
+        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical)
+            => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical, durabilityLoss: true);
+
+        // The durability flag is the eighth argument: a seven-argument overload would be the interface's critical one.
+        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical, bool durabilityLoss)
         {
             Deliveries.Add(new Delivery(victim, damage, periodic, startsCombat, durabilityLoss));
             return _health.DealSpellDamage(caster, victim, spell, damage, periodic);

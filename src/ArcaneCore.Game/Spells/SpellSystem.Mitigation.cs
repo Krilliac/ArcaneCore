@@ -21,9 +21,22 @@ public sealed partial class SpellSystem
     /// <param name="damage">The damage after armor, crit and partial resist.</param>
     /// <param name="spell">The damaging spell, null for white damage.</param>
     public uint AbsorbDamage(Unit? attacker, Unit target, uint schoolMask, uint damage, SpellInfo? spell) =>
-        AbsorbDamage(attacker, target, schoolMask, damage, spell, allowSplit: true);
+        AbsorbDamage(attacker, target, schoolMask, damage, spell, periodic: false);
 
-    private uint AbsorbDamage(Unit? attacker, Unit target, uint schoolMask, uint damage, SpellInfo? spell, bool allowSplit)
+    /// <summary>
+    /// <see cref="AbsorbDamage(Unit?, Unit, uint, uint, SpellInfo?)"/> for damage of a known type: <paramref name="periodic"/> is a damage over
+    /// time tick (vmangos damagetype DOT), which only the split part's damage log tells apart (Unit.cpp:2138, 2176).
+    /// </summary>
+    /// <param name="attacker">Whoever deals the damage (the split damage is dealt by them to the split target).</param>
+    /// <param name="target">The unit taking the damage.</param>
+    /// <param name="schoolMask">The damage school mask.</param>
+    /// <param name="damage">The damage after armor, crit and partial resist.</param>
+    /// <param name="spell">The damaging spell, null for white damage.</param>
+    /// <param name="periodic">Whether the damage is a damage over time tick.</param>
+    public uint AbsorbDamage(Unit? attacker, Unit target, uint schoolMask, uint damage, SpellInfo? spell, bool periodic) =>
+        AbsorbDamage(attacker, target, schoolMask, damage, spell, periodic, allowSplit: true);
+
+    private uint AbsorbDamage(Unit? attacker, Unit target, uint schoolMask, uint damage, SpellInfo? spell, bool periodic, bool allowSplit)
     {
         ArgumentNullException.ThrowIfNull(target);
         if (damage == 0 || !target.IsAlive)
@@ -41,7 +54,7 @@ public sealed partial class SpellSystem
         AbsorbByManaShields(target, schoolMask, ref remaining);
         if (allowSplit)
         {
-            SplitDamage(attacker, target, schoolMask, spell, ref remaining);
+            SplitDamage(attacker, target, schoolMask, spell, periodic, ref remaining);
         }
 
         return damage - (uint)remaining;
@@ -146,11 +159,16 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// vmangos HandleSplitDamage (Unit.cpp:2086-2177): flat split auras send up to their amount of what remains to
+    /// vmangos HandleSplitDamage (Unit.cpp:2086-2181): flat split auras send up to their amount of what remains to
     /// the living caster of the aura (not the target itself, not a dead one), after that caster's own absorbs when it
-    /// does not split itself; percent split auras send that share of what remains. The split damage is dealt as damage over time.
+    /// does not split itself; percent split auras send that share of what remains. The attacker deals the split part to that caster as damage
+    /// over time (Unit.cpp:2140, 2179), so Unit::DealDamage's ShouldEnterCombat (Unit.cpp:696-717) links no combat and pulses no PvP
+    /// flag unless the aura's spell is a channel, and the damage is a player's (no threat): a hostile hit on a sacrificed target does not
+    /// put the paladin in combat with the attacker, nor does lava on a sacrificed player (its own attacker, Player.cpp:723-728) put it and
+    /// its paladin in combat with each other. The attacker sends the log: the split part before the caster's health, SPELL_HIT_TYPE_SPLIT,
+    /// periodic when <paramref name="periodic"/> (Unit.cpp:2138, 2176; SpellCaster.cpp:1098-1114).
     /// </summary>
-    private void SplitDamage(Unit? attacker, Unit target, uint schoolMask, SpellInfo? spell, ref int remaining)
+    private void SplitDamage(Unit? attacker, Unit target, uint schoolMask, SpellInfo? spell, bool periodic, ref int remaining)
     {
         foreach (SpellAuraHolder holder in GetAuras(target).ToArray())
         {
@@ -172,7 +190,7 @@ public sealed partial class SpellSystem
                     splitted = (uint)Math.Max(part, 0);
                     if (!HasLiveAura(splitTo, AuraType.SplitDamageFlat))
                     {
-                        splitAbsorbed = AbsorbDamage(attacker, splitTo, schoolMask, splitted, spell, allowSplit: false);
+                        splitAbsorbed = AbsorbDamage(attacker, splitTo, schoolMask, splitted, spell, periodic: true, allowSplit: false);
                         splitted -= splitAbsorbed;
                     }
                 }
@@ -183,11 +201,11 @@ public sealed partial class SpellSystem
                 }
 
                 Unit source = attacker ?? target;
+                SendToSet(source, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(splitTo.Guid, source.Guid,
+                    holder.Spell.Id, splitted, SpellSchoolMasks.FirstSchoolIn(schoolMask), hitInfo: SpellHitTypeSplit, periodic: periodic), includeSelf: true);
                 uint dealt = Damage.DealSpellDamage(source, splitTo, holder.Spell, splitted,
-                    periodic: true, startsCombat: true, critical: false, durabilityLoss: false);
+                    periodic: true, startsCombat: holder.Spell.IsChanneled, critical: false, durabilityLoss: false);
                 OnDamageTaken(splitTo, source, dealt, periodic: true, splitAbsorbed);
-                SendToSet(source, WorldOpcode.SmsgSpellnonmeleedamagelog,
-                    SpellPackets.BuildSpellNonMeleeDamageLog(splitTo.Guid, source.Guid, holder.Spell.Id, dealt, SpellSchoolMasks.FirstSchoolIn(schoolMask)), includeSelf: true);
             }
         }
     }

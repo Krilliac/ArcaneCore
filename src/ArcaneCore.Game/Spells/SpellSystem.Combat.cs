@@ -17,6 +17,9 @@ public sealed partial class SpellSystem
     /// <summary>SMSG_SPELLNONMELEEDAMAGELOG hit info SPELL_HIT_TYPE_CRIT (vmangos SpellHitType).</summary>
     public const uint SpellHitTypeCrit = 0x2;
 
+    /// <summary>SMSG_SPELLNONMELEEDAMAGELOG hit info SPELL_HIT_TYPE_SPLIT: the split part of a damage split (vmangos SpellDefines.h:221).</summary>
+    public const uint SpellHitTypeSplit = 0x8;
+
     /// <summary>Hit, crit, resist and armor rules for spell landing (default <see cref="SpellCombatRules.Neutral"/>; the world daemon installs <see cref="VanillaSpellCombatRules"/>).</summary>
     public ISpellCombatRules CombatRules { get; set; } = SpellCombatRules.Neutral;
 

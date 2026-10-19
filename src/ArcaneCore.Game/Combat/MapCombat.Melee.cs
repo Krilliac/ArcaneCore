@@ -815,7 +815,7 @@ public sealed partial class MapCombat
                 RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true, CombatEnvironment.For(_world));
             }
 
-            LinkHostileHit(attacker, victim, combatLink, threatSpell);
+            LinkHostileHit(attacker, victim, combatLink, direct, threatSpell);
 
             if (enterCombat && !suppressedSpellThreat)
             {
@@ -851,7 +851,7 @@ public sealed partial class MapCombat
             DamageTaken?.Invoke(attacker, victim, damage);
         }
 
-        LinkHostileHit(attacker, victim, combatLink, threatSpell);
+        LinkHostileHit(attacker, victim, combatLink, direct, threatSpell);
 
         if (direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
         {
@@ -1121,16 +1121,18 @@ public sealed partial class MapCombat
     /// vmangos Unit::DealDamage's combat link, or the out-of-combat PvP flag when that link is skipped.
     /// A hunter trap's hit on a player does not start combat (Spell.cpp:1650) but
     /// <see cref="SetOutOfCombatWithVictim"/> still refreshes the attacker's flag (Spell.cpp:1688-1692).
-    /// A damage shield does neither (Unit::DealDamage ShouldEnterCombat, Unit.cpp:704).
+    /// A damage shield does neither (Unit::DealDamage ShouldEnterCombat, Unit.cpp:704), nor does damage over time that is not a channel
+    /// (<paramref name="direct"/> false: a DoT tick, SpellAuras.cpp:5921, or the split part of a damage split, Unit.cpp:2140, 2179): that
+    /// refresh is the spell hit's (Spell.cpp:1260, 1684, 1692), and Unit::DealDamage itself never calls SetOutOfCombatWithVictim.
     /// </summary>
-    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, SpellInfo? threatSpell)
+    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, bool direct, SpellInfo? threatSpell)
     {
         if (combatLink)
         {
             SetInCombatWithAggressor(victim, attacker);
             SetInCombatWithVictim(attacker, victim);
         }
-        else if (!ReferenceEquals(attacker, victim) && threatSpell?.HasAura(AuraType.DamageShield) != true)
+        else if (direct && !ReferenceEquals(attacker, victim) && threatSpell?.HasAura(AuraType.DamageShield) != true)
         {
             SetOutOfCombatWithVictim(attacker, victim);
         }
