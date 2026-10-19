@@ -252,6 +252,21 @@ public sealed class VMapTests
     }
 
     [Fact]
+    public void IllConditionedTriangle_IsNoHit_AsVmangosIntersectTriangleHasIt()
+    {
+        // A 1 mm sliver met head-on: the ray/triangle determinant is 1e-6, under vmangos' IntersectTriangle EPS of 1e-5
+        // (WorldModel.cpp:39, :48), so vmangos reports no hit there. The same ray through a full-size triangle hits.
+        var sliver = new GroupModel(Vector3.Zero, new Vector3(1e-3f), 0, 1, [new(0, 0, 0), new(1e-3f, 0, 0), new(0, 1e-3f, 1e-3f)], [new(0, 1, 2)]);
+        float d = 10;
+        Assert.False(sliver.IntersectRay(new Vector3(2e-4f, 2e-4f, 1), -Vector3.UnitZ, ref d, stopAtFirstHit: false));
+        Assert.Equal(10f, d);
+
+        var full = new GroupModel(Vector3.Zero, Vector3.One, 0, 1, [new(0, 0, 0), new(1, 0, 0), new(0, 1, 1)], [new(0, 1, 2)]);
+        Assert.True(full.IntersectRay(new Vector3(0.2f, 0.2f, 1), -Vector3.UnitZ, ref d, stopAtFirstHit: false));
+        Assert.Equal(0.8f, d, 4);
+    }
+
+    [Fact]
     public void ModelFile_RoundTrips_WithLiquidAndEmptyGroups()
     {
         var liquid = new WmoLiquid(1, 1, new Vector3(1, 2, 3), 4, [1, 2, 3, 4], [0]);

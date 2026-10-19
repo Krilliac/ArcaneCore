@@ -50,7 +50,7 @@ internal sealed class BotTerrainBenchmarkFactAttribute : FactAttribute
 /// For each step of <see cref="BotTerrainBenchmarkFactAttribute.Variable"/> the bots are topped up, left to spread out for
 /// <c>ARCANECORE_BOT_BENCH_WARMUP_SECONDS</c> (default 20) and measured for <c>ARCANECORE_BOT_BENCH_HOLD_SECONDS</c> (default 60):
 /// tick work (whole <c>RunTick</c>, nearest-rank), its phases, the map sub-phases (packets, heartbeats, each map updater,
-/// visibility, values, flush, grid state machine, terrain clean-up, deferred work), grid lifecycle work (grids created / loaded /
+/// visibility, values, flush, grid state machine, deferred work), grid lifecycle work (grids created / loaded /
 /// unloaded and the time their handlers took), the managed-bot feature, the world thread's allocation, GC and the slowest ticks.
 /// Optional: <c>ARCANECORE_BOT_BENCH_SETTINGS</c> (a settings file without a <c>Database</c> section: client DBC paths),
 /// <c>ARCANECORE_BOT_BENCH_CSV</c> (append one row per step), <c>ARCANECORE_BOT_BENCH_ALLOC_TYPES=1</c> (allocation sample by type),
@@ -272,7 +272,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
     private sealed class TickSample
     {
         public long Micros, Bytes, Commands, Maps, Features, BotFeature;
-        public long Packets, Heartbeat, Simulation, Visibility, Values, Flush, Cleanup, Grid, Terrain, Deferred;
+        public long Packets, Heartbeat, Simulation, Visibility, Values, Flush, Cleanup, Grid, Deferred;
         public long GridCreateMicros, GridLoadMicros, GridUnloadMicros, GridsCreated, GridsLoaded, GridsUnloaded, NearCheckObjects;
         public long Players, Moved;
         public readonly Dictionary<string, long> Updaters = new(StringComparer.Ordinal);
@@ -281,7 +281,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         public void Clear()
         {
             Micros = Bytes = Commands = Maps = Features = BotFeature = 0;
-            Packets = Heartbeat = Simulation = Visibility = Values = Flush = Cleanup = Grid = Terrain = Deferred = 0;
+            Packets = Heartbeat = Simulation = Visibility = Values = Flush = Cleanup = Grid = Deferred = 0;
             GridCreateMicros = GridLoadMicros = GridUnloadMicros = GridsCreated = GridsLoaded = GridsUnloaded = NearCheckObjects = 0;
             Players = Moved = 0;
             Updaters.Clear();
@@ -293,7 +293,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             total.Micros += Micros; total.Bytes += Bytes; total.Commands += Commands; total.Maps += Maps; total.Features += Features;
             total.BotFeature += BotFeature; total.Packets += Packets; total.Heartbeat += Heartbeat; total.Simulation += Simulation;
             total.Visibility += Visibility; total.Values += Values; total.Flush += Flush; total.Cleanup += Cleanup; total.Grid += Grid;
-            total.Terrain += Terrain; total.Deferred += Deferred; total.GridCreateMicros += GridCreateMicros; total.GridLoadMicros += GridLoadMicros;
+            total.Deferred += Deferred; total.GridCreateMicros += GridCreateMicros; total.GridLoadMicros += GridLoadMicros;
             total.GridUnloadMicros += GridUnloadMicros; total.GridsCreated += GridsCreated; total.GridsLoaded += GridsLoaded;
             total.GridsUnloaded += GridsUnloaded; total.NearCheckObjects += NearCheckObjects; total.Players += Players; total.Moved += Moved;
             foreach ((string name, long micros) in Updaters)
@@ -306,7 +306,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             => string.Create(CultureInfo.InvariantCulture,
                 $"{Micros / 1000.0:F1} ms: commands {Commands / 1000.0:F1}, maps {Maps / 1000.0:F1} (packets {Packets / 1000.0:F1}, heartbeat {Heartbeat / 1000.0:F1}, "
                 + $"updaters {string.Join("/", Updaters.Where(u => u.Value >= 1000).OrderByDescending(u => u.Value).Select(u => $"{u.Key} {u.Value / 1000.0:F1}"))}, "
-                + $"visibility {Visibility / 1000.0:F1}, values {Values / 1000.0:F1}, flush {Flush / 1000.0:F1}, grid {Grid / 1000.0:F1}, terrain {Terrain / 1000.0:F1}, deferred {Deferred / 1000.0:F1}; "
+                + $"visibility {Visibility / 1000.0:F1}, values {Values / 1000.0:F1}, flush {Flush / 1000.0:F1}, grid {Grid / 1000.0:F1}, deferred {Deferred / 1000.0:F1}; "
                 + $"grids +{GridsCreated}c/{GridsLoaded}l -{GridsUnloaded} create {GridCreateMicros / 1000.0:F1} load {GridLoadMicros / 1000.0:F1} unload {GridUnloadMicros / 1000.0:F1}), "
                 + $"features {Features / 1000.0:F1} (bots {BotFeature / 1000.0:F1}); {Bytes / 1024} KiB [{string.Join("; ", SlowMaps)}]");
     }
@@ -323,7 +323,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
                 + $"{Total.Commands / n / 1000:F3},{Total.Maps / n / 1000:F3},{Ms(MapsSorted, 95)},{Total.Features / n / 1000:F3},{Total.BotFeature / n / 1000:F3},{Ms(BotSorted, 95)},"
                 + $"{Total.Packets / n / 1000:F3},{Total.Heartbeat / n / 1000:F3},{(Total.Simulation - Total.Packets - Total.Heartbeat) / n / 1000:F3},"
                 + $"{Total.Visibility / n / 1000:F3},{Total.Values / n / 1000:F3},{Total.Flush / n / 1000:F3},{Total.Cleanup / n / 1000:F3},"
-                + $"{Total.Grid / n / 1000:F3},{Total.Terrain / n / 1000:F3},{Total.Deferred / n / 1000:F3},"
+                + $"{Total.Grid / n / 1000:F3},{Total.Deferred / n / 1000:F3},"
                 + $"{Total.GridsCreated},{Total.GridsLoaded},{Total.GridsUnloaded},{Total.GridCreateMicros / 1000.0:F1},{Total.GridLoadMicros / 1000.0:F1},{Total.GridUnloadMicros / 1000.0:F1},"
                 + $"{Total.Bytes / n / 1024:F1},{MapsBytes / n / 1024:F1},{FeaturesBytes / n / 1024:F1},{BotBytes / n / 1024:F1},"
                 + $"{gen0},{gen1},{gen2},{pauseMs:F0},{cores:F2},{Total.Players / n:F0},{Total.Moved / n:F0},{rampSeconds:F1}");
@@ -354,7 +354,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
     private sealed class Recorder
     {
         public const string Header = "label,bots,ticks,mean_ms,p50_ms,p95_ms,p99_ms,max_ms,commands_ms,maps_ms,maps_p95_ms,features_ms,botfeature_ms,botfeature_p95_ms,"
-            + "packets_ms,heartbeat_ms,updaters_ms,visibility_ms,values_ms,flush_ms,cleanup_ms,grid_ms,terrain_ms,deferred_ms,"
+            + "packets_ms,heartbeat_ms,updaters_ms,visibility_ms,values_ms,flush_ms,cleanup_ms,grid_ms,deferred_ms,"
             + "grids_created,grids_loaded,grids_unloaded,grid_create_ms_total,grid_load_ms_total,grid_unload_ms_total,"
             + "alloc_kib,maps_alloc_kib,features_alloc_kib,botfeature_alloc_kib,gen0,gen1,gen2,gc_pause_ms,process_cores,players,moved,ramp_s";
 
@@ -378,7 +378,6 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _current.Flush += d.FlushMicros;
             _current.Cleanup += d.CleanupMicros;
             _current.Grid += d.GridMicros;
-            _current.Terrain += d.TerrainMicros;
             _current.Deferred += d.DeferredMicros;
             _current.GridsCreated += d.Grids.Created;
             _current.GridsLoaded += d.Grids.Loaded;

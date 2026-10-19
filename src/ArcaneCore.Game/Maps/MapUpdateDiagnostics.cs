@@ -40,9 +40,9 @@ internal sealed class MapUpdateDiagnostics
     /// <summary>Per-updater simulation time, in attach order (only filled when diagnostics are on).</summary>
     internal List<(IMapUpdater Updater, long Micros)> Updaters { get; } = [];
 
-    // Sub-phases of the cleanup: the grid state machine (unloads), the terrain clean-up, the deferred actions.
+    // Sub-phases of the cleanup: the grid state machine (unloads), the deferred actions. The terrain clean-up is the world's, once per
+    // tick (TerrainManager.Update), and counts in the tick's maps phase, not in any one map's update.
     internal long GridMicros { get; private set; }
-    internal long TerrainMicros { get; private set; }
     internal long DeferredMicros { get; private set; }
 
     /// <summary>Grid lifecycle work during this map update (deltas of the map's <see cref="Grid.GridContainer"/> counters).</summary>
@@ -63,7 +63,7 @@ internal sealed class MapUpdateDiagnostics
     internal void Reset()
     {
         SimulationMicros = VisibilityMicros = ValuesMicros = FlushMicros = CleanupMicros = 0;
-        PacketsMicros = HeartbeatMicros = ActiveCellsMicros = GridMicros = TerrainMicros = DeferredMicros = 0;
+        PacketsMicros = HeartbeatMicros = ActiveCellsMicros = GridMicros = DeferredMicros = 0;
         _heartbeatPlayersTicks = 0;
         Players = MovedObjects = ChangedObjects = NewObjects = 0;
         VisibilityCandidates = 0;
@@ -99,7 +99,6 @@ internal sealed class MapUpdateDiagnostics
     internal void EndValues() { ValuesMicros = ElapsedMicros(); Begin(); }
     internal void EndFlush() { FlushMicros = ElapsedMicros(); Begin(); }
     internal void EndGrid() => GridMicros = Sub();
-    internal void EndTerrain() => TerrainMicros = Sub();
     internal void EndDeferred() => DeferredMicros = Sub();
     internal void Complete()
     {
@@ -155,7 +154,6 @@ internal sealed class MapUpdateDiagnostics
         }
 
         sb.Append("; cleanup: grids ").Append(Ms(GridMicros))
-            .Append(", terrain ").Append(Ms(TerrainMicros))
             .Append(", deferred ").Append(Ms(DeferredMicros))
             .Append("; grid lifecycle: created ").Append(Grids.Created).Append(", loaded ").Append(Grids.Loaded)
             .Append(", unloaded ").Append(Grids.Unloaded)
@@ -192,11 +190,11 @@ internal sealed class MapUpdateDiagnostics
     /// The <paramref name="count"/> largest sub-phases of the update, longest first (slow path only: it allocates). Names say which
     /// subsystem the time belongs to: session packets (bots send theirs through the same queue), player heartbeats, creature AI and
     /// unit heartbeats (AI timers, auras and regeneration run in a unit's heartbeat), each map updater by its subsystem, visibility
-    /// and relocation, values, flush, grid lifecycle, terrain and deferred work.
+    /// and relocation, values, flush, grid lifecycle and deferred work.
     /// </summary>
     internal Contributor[] TopContributors(int count)
     {
-        var all = new List<Contributor>(Updaters.Count + 10)
+        var all = new List<Contributor>(Updaters.Count + 9)
         {
             new("session packets", PacketsMicros),
             new("player heartbeats", HeartbeatPlayersMicros),
@@ -205,7 +203,6 @@ internal sealed class MapUpdateDiagnostics
             new("values updates", ValuesMicros),
             new("flush", FlushMicros),
             new("grid lifecycle", GridMicros),
-            new("terrain cleanup", TerrainMicros),
             new("deferred work", DeferredMicros),
         };
         foreach ((IMapUpdater updater, long micros) in Updaters)

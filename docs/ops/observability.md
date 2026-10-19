@@ -101,8 +101,9 @@ Sub-phases come from the existing `MapUpdateDiagnostics` seams: session packets 
 (timed per player with a `Stopwatch` pair, only while the slow-map warning is on), creature AI and unit heartbeats (AI timers,
 auras and regeneration run in a unit's heartbeat; the remainder of the heartbeat phase), each map updater by subsystem
 (creature AI, movement, collision and pathing, combat, pets, ...), visibility and relocation, values, flush, grid lifecycle,
-terrain cleanup, deferred work. Playerbot *brains* are world features, not map work: they appear in the hang line's
-`top features` list, not here.
+deferred work. The terrain clean-up is not map work either: it runs once per tick for the whole world after the maps (one map
+id's terrain serves all its instances) and counts in the tick's maps phase. Playerbot *brains* are world features, not map work:
+they appear in the hang line's `top features` list, not here.
 
 ## Silent catches
 

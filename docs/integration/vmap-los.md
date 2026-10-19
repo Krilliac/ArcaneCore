@@ -14,7 +14,7 @@ Namespace `ArcaneCore.Game.Maps.Collision`:
 | `IPathfinder` | World-wide path queries (vmangos `PathFinder`): `FindPath(mapId, start, end, PathOptions?)` → `PathResult(PathType, Points)`. |
 | `OpenLineOfSight`, `StraightLinePathfinder` | Defaults without data: everything in sight; straight line flagged `Normal` + `NotUsingPath`. |
 | `WorldCollision.Of(world)` | Side table holding the world's two services; `Install(los, pathfinder)` replaces them. |
-| `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(a, b)` (eye height 2 yd), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`. |
+| `MapCollision` (`map.Collision`) | Default map updater: `IsInLineOfSight`, `IsWithinLineOfSight(a, b)` (eye height 2 yd), `FindPath`, `GetHeight` (terrain + models, vmangos `GetHeightStatic`), `IsOutdoors`. Forwards grid create/unload to services implementing `ICollisionTileLifecycle`; the services serve every instance of a map id, so an unload is forwarded only once no instance has a grid on the tile (the map id's terrain reference count, as vmangos `TerrainInfo::CleanUpGrids` decides). |
 | `unit.IsWithinLineOfSight(other)` | Extension for spells/AI/combat. |
 | `ICollisionTileLifecycle` | Optional: services that want grid create/unload forwarded as terrain tile indices. |
 | `ICollisionTileDemand` | Optional: services that load a tile for a question about a place no grid covers (`MapCollision.LoadTilesOnDemand(x, y)`: a bot choosing the landing beside a lift far from it). Each holds such tiles among a bounded number per map (`VMapManager.MaxOnDemandTiles` 16, `NavMeshPathfinder.MaxOnDemandTiles` 56, shared with path queries that load tiles), releases the one asked for longest ago to make room, and leaves a tile a grid holds to the grid; a grid created on one takes it over. Never the grid hooks, which would hold the tile until a grid on it unloads. vmangos has no such call: any terrain lookup loads the tile's vmap and mmap (`TerrainInfo::GetGrid`, GridMap.cpp:1132-1144), and the minute's clean-up unloads them while no grid references the tile (`CleanUpGrids`, GridMap.cpp:759-790). |
@@ -68,7 +68,7 @@ y; z unchanged).
 | BIH | f32[3] low, f32[3] high, u32 n + u32 node words, u32 m + u32 object indices. Node: axis bits 30–31 (3 = leaf), BVH2 bit 29, 29-bit offset; leaf: count in word 1; inner: clip planes in words 1–2. A node with an empty left side stores offset = right child − 3 and a left clip of −inf (vmangos `BIH::subdivide`), so its offset can equal the node itself; the "children follow their parent" guard applies to the child actually entered. |
 
 Pieces: `BihTree` (reader, builder for fixtures, bounds-checked ray/point traversal), `WorldModel`
-/ `GroupModel` (Möller–Trumbore ray/triangle, enclosing-group floor), `ModelInstance` (rotation
+/ `GroupModel` (Möller–Trumbore ray/triangle with vmangos' determinant cut-off of 1e-5, enclosing-group floor), `ModelInstance` (rotation
 Rz(rot.y)·Ry(rot.x)·Rx(rot.z), scale), `VMapTree` (per-map slots, refcounted tiles),
 `VMapManager` (`ILineOfSight` + `ICollisionTileLifecycle` + `ICollisionTileDemand`). M2 doodads do not break line of
 sight but count for heights and object hits. Model names must be plain file names.

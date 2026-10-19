@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.WorldData;
@@ -303,5 +304,59 @@ public sealed class TerrainTests : IDisposable
         terrain.CleanUp(1);
         Assert.False(terrain.IsTileLoaded(10, 20));
         Assert.Equal(0, terrain.RefCount(10, 20));
+    }
+
+    /// <summary>
+    /// One <see cref="TerrainInfo"/> serves every instance of a map id (vmangos <c>Map::Map</c> takes it from
+    /// <c>sTerrainMgr.LoadTerrain(id)</c>, Map.cpp:127), and vmangos cleans every map id's terrain once per world update
+    /// (<c>TerrainManager::Update</c>, GridMap.cpp:1275-1280, at the end of <c>World::Update</c>, World.cpp:2147-2149): the minute
+    /// does not shrink with the number of instances.
+    /// </summary>
+    [Fact]
+    public void CleanUp_RunsOncePerWorldTick_HoweverManyInstancesShareTheTerrain()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map first = world.GetMap(0, 1);
+        Map second = world.GetMap(0, 2);
+        TerrainInfo terrain = first.Terrain;
+        Assert.Same(terrain, second.Terrain);
+        terrain.GetTile(11, 20); // on-demand, unreferenced
+
+        for (int tick = 1; tick < TerrainInfo.CleanUpIntervalMs / 1000; tick++)
+        {
+            world.RunTick(1000);
+        }
+
+        Assert.True(terrain.IsTileLoaded(11, 20), "59 s of world time: not a full minute yet");
+        world.RunTick(1000);
+        Assert.False(terrain.IsTileLoaded(11, 20));
+    }
+
+    /// <summary>
+    /// The clean-up belongs to the world, not to a map: once the last instance of a map id is gone its terrain's tiles are still freed
+    /// (vmangos goes further and deletes the unreferenced <c>TerrainInfo</c> with the last map, Map.cpp:77-78, GridMap.cpp:1255-1273).
+    /// </summary>
+    [Fact]
+    public void CleanUp_FreesTheTilesOfAMapId_WhoseInstancesAreAllGone()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map instance = world.GetMap(0, 1);
+        TerrainInfo terrain = instance.Terrain;
+        instance.AddObject(new TestUnit(1, X, Y)); // its grid references the tile
+        (int tileX, int tileY) = TerrainTile.TileOf(X, Y)!.Value;
+        Assert.Equal(1, terrain.RefCount(tileX, tileY));
+
+        world.UnloadMap(instance);
+        world.RunTick(0);
+        Assert.Null(world.FindMap(0, 1));
+        Assert.Equal(0, terrain.RefCount(tileX, tileY));
+        Assert.True(terrain.IsTileLoaded(tileX, tileY));
+
+        for (int tick = 0; tick < TerrainInfo.CleanUpIntervalMs / 1000; tick++)
+        {
+            world.RunTick(1000);
+        }
+
+        Assert.False(terrain.IsTileLoaded(tileX, tileY));
     }
 }

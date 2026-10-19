@@ -14,7 +14,7 @@ namespace ArcaneCore.Game.Maps.Collision;
 /// <c>TerrainInfo::GetHeightStatic</c>). Attached to every map as a default updater; reach it with
 /// <c>map.Collision</c>. When the services implement <see cref="ICollisionTileLifecycle"/> the
 /// map's grid creation and unloading are forwarded to them (vmangos loads vmap/mmap tiles with
-/// the grid).
+/// the grid); an unload only when no instance of the map id still has a grid on the tile.
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
 [DefaultMapUpdater(Order = 1000)]
@@ -496,6 +496,15 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
         try
         {
             (int tx, int ty) = TerrainTile.TileOf(coord);
+            // The services hold one tree and one navmesh per map id for every instance of it, and so does the terrain: vmangos unloads a
+            // tile's vmaps and mmaps only once no grid of any instance references the tile (TerrainInfo::CleanUpGrids, GridMap.cpp:769-785).
+            // The map's own terrain handler, subscribed in its constructor and so run before this one, has already dropped this grid's
+            // reference: a count left over is another instance's grid on the same tile.
+            if (Map.Terrain.RefCount(tx, ty) > 0)
+            {
+                return;
+            }
+
             ForEachLifecycle(l => l.OnTileUnloaded(Map.MapId, tx, ty));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
