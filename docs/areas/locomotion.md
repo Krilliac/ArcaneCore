@@ -161,11 +161,33 @@ vmangos' anticheat (`MovementAnticheat.cpp:750-870`) are not delivered (opt-in h
   `MapCombat.Kill` already does the same. Whether retail marks an environmental death as PvP (corpse type, reclaim
   delay) is not provable from the references: open question.
 
-**Limit (seam):** absorb, resist and immunity come from the spell combat rules (`IsImmuneToDamage`,
-`CalculateDamageAbsorbAndResist`), which are not on this branch. `IEnvironmentalDamageMitigation` is the seam
-(`LocomotionEnvironment.RegisterMitigation`); the default mitigates nothing, so lava is not reduced by fire resistance
-and fire immunity does not protect until that lane registers an implementation. `DealDamageMods` (`:763`) is not
-ported: it only changes damage for GM-like invulnerability states and game masters are excluded already.
+**Mitigation (seam):** absorb, resist and immunity come from the spell combat rules through
+`IEnvironmentalDamageMitigation` (`LocomotionEnvironment.RegisterMitigation`), which the daemon's
+`EnvironmentalMitigationFeature` (`ArcaneCore.World/Locomotion/EnvironmentalMitigationFeature.cs`) backs with
+`SpellEnvironmentalMitigation` (`Spells/SpellEnvironmentalMitigation.cs`) over its spell system. Immunity is
+`ImmunityRules.IsImmuneToDamage` with no spell (vmangos `Unit.cpp:5404-5439`: a damage immunity, or a school immunity
+whose polarity applies to a harmful spell). For lava, fire and slime the player is its own caster in
+`CalculateDamageAbsorbAndResist(this, mask, DIRECT_DAMAGE, damage, .., nullptr)` (`Unit.cpp:1920-2202`): a player
+immune to the school by any school immunity absorbs all of it (`:1929-1933`); otherwise its own resistance gives the
+resist (`:1938-1953`, `SpellCaster.cpp:882-925`: no level difference, its own MOD_TARGET_RESISTANCE auras count, a
+vulnerability adds damage; `ISchoolResistRoll` on `VanillaSpellCombatRules`, the chance and outcome of a direct spell
+hit), and `SpellSystem.AbsorbDamage` (school absorbs, mana shields, damage splitting) takes the rest. A world with no
+registration keeps `NoEnvironmentalMitigation`, which mitigates nothing. After the mitigation and before the log,
+`MapCombat.DealDamageMods` (`Combat/MapCombat.DamageMods.cs`; vmangos `SpellCaster::DealDamageMods`,
+`SpellCaster.cpp:1774-1787`, called at `Player.cpp:756` with the player on both sides) zeroes the damage of a player on a
+taxi flight (`UnitFlags.TaxiFlight`) or of a priest under Spirit of Redemption (aura 27827, asked of the map's spell
+system) and adds it to the absorb, so the log shows 0 damage and the whole hit absorbed. Its other clauses (a dead
+victim, an evading creature) cannot apply to a living player. Only environmental damage calls it so far: vmangos also
+runs it for melee, spell, periodic, damage-shield, split and proc damage, which do not here.
+
+**The spell effect:** `SPELL_EFFECT_ENVIRONMENTAL_DAMAGE` (`SpellSystem.EffectEnvironmentalDamage`,
+`Spells/SpellSystem.Combat.cs`; vmangos `Spell::EffectEnvironmentalDMG`, `SpellEffects.cpp:286-304`) sends a player target
+through `EnvironmentalDamage.Apply` as `DAMAGE_FIRE`, whatever the spell's school (`:292-295`), with the spell system's own
+`SpellEnvironmentalMitigation`: fire immunity, resist and absorbs, `SMSG_ENVIRONMENTAL_DAMAGE_LOG` (no
+`SMSG_SPELLNONMELEEDAMAGELOG`), self damage that never crits, and a death that costs 10% durability even when another
+player cast the spell. Any other unit takes no damage: the spell's school is resisted and absorbed with the spell
+(shields are spent) and the caster's set gets `SMSG_SPELLNONMELEEDAMAGELOG` with what is left (`:296-303`,
+`SpellCaster.cpp:1098-1104`).
 ## Slice 4: fall-damage (delivered)
 
 `FallObserver` (`Locomotion/Falling/FallObserver.cs`, `[MovementObserver(Order = 20)]`, a `Before` observer because
@@ -185,8 +207,10 @@ ported: it only changes damage for GM-like invulnerability states and game maste
   (slice 3: log, self damage, durability and death consequences). The 14.57 gate, not the formula's own zero (13.48
   yards), is what first yields damage. Worked values are in `FallDamageTests` (z 14.56 -> 0, 14.57 at 1000 hp -> 19,
   30 at 2000 hp -> 594, 40 at 3000 hp -> 1432, 75 at 3000 hp -> 3000 capped).
-* **Seam:** `takenMod` (the physical damage-taken-percent auras, `:20854`) belongs to the spell combat rules and is 1 until
-  `LocomotionEnvironment.RegisterFallModifiers` is used (`IFallDamageModifiers`). Safe Fall, Hover and Feather Fall are
+* **Seam:** `takenMod` is the product of the physical (misc mask 1) MOD_DAMAGE_PERCENT_TAKEN auras (`:20854-20855`,
+  `GetTotalAuraMultiplierByMiscMask`), answered by `SpellEnvironmentalMitigation` through `IFallDamageModifiers`
+  (`LocomotionEnvironment.RegisterFallModifiers`, the same daemon feature); 1 in a world with no registration. Physical
+  immunity stops a fall in `EnvironmentalDamage` (slice 3). Safe Fall, Hover and Feather Fall are
   read from the aura ledger, which `MovementFlagAuras` (slice 2) fills; any other lane's aura of those types is not seen
   unless it records itself in the ledger.
 * **Not delivered:** `SetJumpInitialSpeed` (extrapolation only); the knockback "launched" reset and the knockback-ack fall

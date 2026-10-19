@@ -151,6 +151,8 @@ the original wave-3 closeout findings.
 - Real 1.12.1 client captures: root-family GUID packing, 50/40 yd duel boundary, slime damage, knockback vertical speed rounding, lava tick values, environmental PvP death.
 - Who casts Ghost aura 8326; who owns server-driven player splines; WMO liquid / LiquidType remaps; taxi mount-aura removal.
 - `IEnvironmentalDamageMitigation` / `IFallDamageModifiers` need real registrations when the spell combat-rules lane lands.
+  Answered (2026-10-18, branch `claude/fix-env-damage-mitigation`, 6947d801a): the daemon's `EnvironmentalMitigationFeature`
+  registers one `SpellEnvironmentalMitigation` over its spell system for both seams (docs/areas/locomotion.md, slice 3).
 - `PickpocketSpells` / `DisenchantSpells` throw on a second registration of effects 71/99, and TRANS_DOOR handlers must chain via `GetEffectHandler`: later lanes must respect attach order.
 - Retail source for expired money-only mail and delete-with-attachment behaviour.
 - `GhostPersistenceTests.LogoutWhileDead_RelogsAsAGhostAtTheBody` was reported intermittently red by the economy lane (death lane owns it).

@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Rules;
@@ -198,16 +199,36 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (vmangos Spell::EffectEnvironmentalDMG): school damage
-    /// that cannot crit.
+    /// SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (vmangos Spell::EffectEnvironmentalDMG, SpellEffects.cpp:286-304), which never crits. A player
+    /// takes the value as fire from the world, whatever the spell's school (Player::EnvironmentalDamage(DAMAGE_FIRE),
+    /// <see cref="EnvironmentalDamage.Apply(Player, EnvironmentalDamageType, uint, IEnvironmentalDamageMitigation)"/> with this system's
+    /// auras): fire immunity, resist and absorbs, SMSG_ENVIRONMENTALDAMAGELOG, self damage and the 10% durability loss of a death. Any other
+    /// unit only has the spell's school resisted and absorbed (CalculateDamageAbsorbAndResist with the spell) and the caster's set gets
+    /// SMSG_SPELLNONMELEEDAMAGELOG: vmangos deals it no damage.
     /// </summary>
     private void EffectEnvironmentalDamage(SpellEffectContext context)
     {
-        if (context.Target.IsAlive && context.Value > 0)
+        if (!context.Target.IsAlive || context.Value <= 0)
         {
-            DealDirectDamage(context.Caster, context.Target, context.Spell, (uint)context.Value, allowCrit: false);
+            return;
         }
+
+        uint amount = (uint)context.Value;
+        if (context.Target is Player player)
+        {
+            EnvironmentalDamage.Apply(player, EnvironmentalDamageType.Fire, amount, _environmentalMitigation ??= new SpellEnvironmentalMitigation(this));
+            return;
+        }
+
+        SpellInfo spell = context.Spell;
+        uint resisted = ApplyResist(context.Caster, context.Target, spell, ref amount, periodic: false);
+        uint absorbed = AbsorbDamage(context.Caster, context.Target, spell.SchoolMask(), amount, spell);
+        SendToSet(context.Caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
+            context.Target.Guid, context.Caster.Guid, spell.Id, amount - absorbed, spell.School, absorbed: absorbed, resisted: resisted), includeSelf: true);
     }
+
+    /// <summary>The environmental damage answers of this system's auras for <see cref="EffectEnvironmentalDamage"/> (created on first use).</summary>
+    private SpellEnvironmentalMitigation? _environmentalMitigation;
 
     /// <summary>
     /// SPELL_EFFECT_HEALTH_LEECH (vmangos Spell::EffectHealthLeech): school damage, then the caster
