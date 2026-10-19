@@ -39,7 +39,8 @@ function Test-OpsCommandLine {
     if ($Line.Length -gt $script:OpsMaxCommandLength) { return "a command line is longer than $($script:OpsMaxCommandLength) characters" }
     if ($Line.StartsWith('#')) {
         if ($Line -match '^#waitfor\b') {
-            # '#waitfor <seconds 1..99999> <regex>': wait until a log line written after this point matches; the run fails at the timeout.
+            # '#waitfor <seconds 1..99999> <regex>': wait until a log line written after this point matches (the mock's echo of a sent
+            # command does not count); the run fails at the timeout.
             if ($Line -notmatch '^#waitfor\s+([1-9]\d{0,4})\s+(\S.*)$') { return "bad waitfor directive '$Line' (use '#waitfor <seconds 1..99999> <regex>')" }
             try { [void][regex]::new($Matches[2]) } catch { return "bad waitfor pattern in '$Line': $($_.Exception.Message)" }
             return $null
@@ -215,11 +216,28 @@ function Get-OpsStatusWaitLine {
     return "#waitfor $Seconds \bPlayerbot status end: \d+"
 }
 
+function Get-OpsMockEchoPattern {
+    <#
+    .SYNOPSIS
+      The regex of the line arcane-mock live logs for each chat line it sends, '<HH:mm:ss.fff> [<endpoint>] > <text>' (MockClient
+      LiveSession.ExchangeAsync), with the text in group 1, for one log line without its line break. $Endpoint is the session's local
+      endpoint from its 'IN WORLD' line (IPv4 or '[::1]:port'); without one, any IPv4 or bracketed IPv6 endpoint is accepted. Replies
+      are '< ' lines, and a multi-line reply's continuation lines are written raw without a timestamp, so they never match, even when
+      they look like '[x] > y'.
+    #>
+    param([string]$Endpoint)
+    $endpointPattern = if ($Endpoint) { [regex]::Escape($Endpoint) } else { '(?:\[[0-9A-Fa-f:.]+\]|[0-9.]+):\d+' }
+    return "^\d{2}:\d{2}:\d{2}\.\d{3} \[$endpointPattern\] > (.*)$"
+}
+
 function Wait-OpsLogMatch {
     <#
     .SYNOPSIS
       Polls the log file for text written after byte $StartOffset that matches $Pattern; $true when found, $false at the timeout or
       when $IsAlive (a script block) turns false. The file is opened shared, so the writer keeps going. Fails closed: no match is $false.
+      Lines that match $SkipLinePattern (each line without its line break) are left out first, and the rest is matched as it was
+      written; run-gm-commands passes the mock's echo of a sent command (Get-OpsMockEchoPattern), so the command never stands in for
+      the reply it waits for.
     #>
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -227,8 +245,10 @@ function Wait-OpsLogMatch {
         [Parameter(Mandatory)][int]$TimeoutSeconds,
         [long]$StartOffset = 0,
         [scriptblock]$IsAlive = { $true },
-        [int]$PollMilliseconds = 250)
+        [int]$PollMilliseconds = 250,
+        [string]$SkipLinePattern)
     $regex = [regex]::new($Pattern)
+    $skip = if ($SkipLinePattern) { [regex]::new($SkipLinePattern) } else { $null }
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ($true) {
         $text = ''
@@ -244,6 +264,11 @@ function Wait-OpsLogMatch {
             finally { $stream.Dispose() }
         }
         catch [System.IO.IOException] { $text = '' }
+        if ($null -ne $skip) {
+            # Split after each '\n', so the lines kept are joined back with their own line breaks (CRLF on Windows) and a pattern can
+            # still span them; a last line still being written has no break yet and is tested as it is.
+            $text = -join ($text -split '(?<=\n)').Where({ -not $skip.IsMatch($_.TrimEnd([char]13, [char]10)) })
+        }
         if ($regex.IsMatch($text)) { return $true }
         if (-not (& $IsAlive) -or [DateTime]::UtcNow -ge $deadline) { return $false }
         Start-Sleep -Milliseconds $PollMilliseconds
