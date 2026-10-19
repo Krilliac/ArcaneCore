@@ -219,8 +219,11 @@ All of these are minimal and additive unless stated otherwise.
     characters version.
 - Docs: `docs/integration/grid-terrain.md` no longer lists `WorldMaps.Instances`.
   `docs/areas/grid-terrain.md` (the `InstanceRegistry` bullet) and `docs/CLUSTERING_DESIGN.md`
-  (line 82, "shares a Map among dungeon instances") still describe the removed stub. They
-  were left untouched to keep this PR's shared edits small; this file supersedes them.
+  (line 82, "shares a Map among dungeon instances") still described the removed stub. They
+  were left untouched to keep this PR's shared edits small. Both were corrected later
+  (commit `835668a1d`): `docs/areas/grid-terrain.md` now says the stub is gone, and
+  `CLUSTERING_DESIGN.md` says each instance has its own Map (its rewrite in `d8ceda647` is
+  recorded in [cluster-m15-0.md](cluster-m15-0.md#corrections-made-to-clustering_designmd)).
 
 ## Coordination with other round-2 branches
 

@@ -34,10 +34,12 @@ namespace ArcaneCore.World.Ops.RemoteAdmin;
 /// Commands: one line each, without the leading '.', run on the world thread exactly like a console line but with the account's security
 /// (every command is checked against it, and GM-audited as <c>RA:NAME</c>). In automation mode (an <c>@</c> login, or <c>@auto on</c>) each
 /// command's reply lines are followed by exactly one <c>#done ok</c> or <c>#done error &lt;reason&gt;</c> (reasons: unknown-command,
-/// unknown-subcommand, security, syntax, exception, timeout, world-timeout, or the command's own, e.g. a <c>.botctl</c> code); <c>@id TAG
-/// command</c> echoes TAG after <c>#done</c>. A command that holds itself open (<c>.botctl wait</c>/<c>run</c>) is done when its work is.
+/// unknown-subcommand, security, syntax, needs-player, exception, timeout, world-timeout, empty, or the command's own, e.g. a <c>.botctl</c>
+/// code); <c>@id TAG command</c> echoes TAG after <c>#done</c>. A command that holds itself open (<c>.botctl wait</c>/<c>run</c>) is done
+/// when its work is, or reported <c>#done error timeout</c> after <see cref="RemoteAdminOptions.CommandTimeoutSeconds"/> while it goes on.
 /// Lines starting <c>#event</c> are pushed asynchronously (<c>.botctl stream</c>). <c>@ping</c> answers <c>#pong</c>; <c>quit</c> closes.
-/// Commands of one connection run one at a time.
+/// Commands of one connection run one at a time, except that one still running after the command timeout (<c>#done error timeout</c> in
+/// automation mode) goes on while the next lines run.
 /// </para>
 /// </summary>
 public sealed class RemoteAdminServer : IHostedService

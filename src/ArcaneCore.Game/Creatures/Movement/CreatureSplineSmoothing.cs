@@ -12,8 +12,8 @@ namespace ArcaneCore.Game.Creatures;
 /// corners of paths <c>&gt;= 12</c> yards when verified walkable via <see cref="IMeshPointQuery.Raycast"/> and height lookup,
 /// preventing groups of chasing or patrolling NPCs from stacking onto a single 1D wire.</description></item>
 /// <item><description><b>Quadratic Bezier corner-cutting spline smoothing</b>: replaces sharp interior polygon-portal
-/// turns (<c>&gt;= 15°</c>) with 3 smooth Bezier arc points (<c>u = 0.25, 0.50, 0.75</c>) verified against the navmesh
-/// and terrain height, keeping total points bounded (<c>&lt;= 32</c>) and spaced <c>&gt;= 0.5</c> yards apart for
+/// turns (<c>&gt;= 15°</c>) with 3 smooth Bezier arc points (<c>u = 0.20, 0.50, 0.80</c>) verified against the navmesh
+/// and terrain height, keeping total points bounded (<c>&lt;= 32</c>) and spaced <c>&gt;= 1.1</c> yards apart for
 /// <c>SMSG_MONSTER_MOVE</c>'s 11/11/10-bit quarter-yard offset packing.</description></item>
 /// </list>
 /// </summary>

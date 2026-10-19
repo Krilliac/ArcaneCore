@@ -28,7 +28,7 @@ Each was checked against the base tree before editing.
 
 | Line (before) | Was | Verified fact | Change |
 |---|---|---|---|
-| 82 | "`InstanceRegistry` assigns memory-only bindings and shares a Map among dungeon instances" | `InstanceRegistry` is gone from `src` (no match in `*.cs`); `WorldRuntime._maps` is keyed by `(MapId, InstanceId)` (`WorldRuntime.cs:20,191-201`); `InstanceManager` creates a Map per instance with a local id counter (`InstanceManager.cs:53,689`). The removal is recorded in `docs/integration/instances.md:164-183`, which also says this line was left stale | Rewritten; also records that only saves and character binds are durable |
+| 82 | "`InstanceRegistry` assigns memory-only bindings and shares a Map among dungeon instances" | `InstanceRegistry` is gone from `src` (no match in `*.cs`); `WorldRuntime._maps` is keyed by `(MapId, InstanceId)` (`WorldRuntime.cs:20,191-201`); `InstanceManager` creates a Map per instance with a local id counter (`InstanceManager.cs:53,689`). The removal is recorded in `docs/integration/instances.md` (section "Shared-file edits"), which also says this line was left stale | Rewritten; also records that only saves and character binds are durable |
 | 93 | "Core/social queues can exhaust retries and drop writes" | The **core** queue does not drop: after 3 attempts it keeps the snapshot (`CharacterSaveQueue.cs:313,323`), merges it into the next save (`:203-206`) and throws at stop if undrained (`:251-254`). The queues that drop are social (`SocialWriteQueue.cs:79-82`), reputation (`ReputationWriteQueue.cs:97-100`) and instance (`InstanceWriteQueue.cs:99-102`). The real core gap is that the enqueue returns `void` (`IPlayerSession.cs:38`) | Rewritten; lists all seven write mechanisms |
 | 88-90 | ID allocators: item, guild, group | Also instance ids (`InstanceManager.cs:53`) and mail/auction/item-text ids (`EconomyFeature.cs:89-93`); group counter starts at 1 and is never seeded (`GroupManager.cs:20`) | Added |
 | 7-8 | Whole inventory "checked against" `e06d4e4` | Only the bullets named above were re-read at `c3dea16` | Added a sentence saying which |
@@ -164,8 +164,9 @@ contending on one database, MySQL (CI has MariaDB 10.11 and PostgreSQL 16 only,
 
 ## Left for the lead
 
-- `docs/areas/grid-terrain.md:111-114` still describes the removed `InstanceRegistry`
-  stub. `instances.md:181-183` already says so. Left alone because this slice was
-  limited to the cluster documents.
+- `docs/areas/grid-terrain.md:111-114` (at the base) still described the removed `InstanceRegistry`
+  stub. `instances.md` ("Shared-file edits") already said so. Left alone because this slice was
+  limited to the cluster documents. Since corrected (commit `835668a1d`): `grid-terrain.md` now
+  says the stub is gone.
 - `docs/integration/economy.md` is a stub that predates its own lane (it describes
   itself as a work in progress); outside this slice.

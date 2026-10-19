@@ -44,10 +44,12 @@ every deliberate difference sits behind the `Auras` configuration section (class
   (`spell_group` rows and `spell_template.custom` are vmangos world-DB data); the simplified rule in `docs/areas/spells.md` stands. `SpellInfo.CustomFlags`
   (POSITIVE/NEGATIVE bits) is the data seam and is empty until a data source fills it.
 - `UpdateAuraForGroup` party aura slots, area aura rank selection and
-  pet/owner areas, channel aura rules (per-second cost, range), heartbeat resist of crowd control,
+  pet/owner areas, channel aura rules (per-second cost, range),
   interrupt sources (`Moving`, `Turning`, `Interacting`, ... have no trigger), holder permanence rules for passive-with-visual spells.
-- Polymorph health regeneration (the transform aura exists now, `transform-and-charge.md`), spell modifier auras, percent stat auras,
-  skill auras, creature spawn addon auras: owned by other wave-4 lanes or unscheduled; each row in the matrix names the owner.
+  (Heartbeat resist of crowd control, listed here before, is delivered: the "Crowd control heartbeats" row above.)
+- Creature spawn addon auras (`creature_addon` has no aura column here): owned by another lane or unscheduled. Polymorph health
+  regeneration (`MapCombat.Regen.cs`), spell modifier auras (`Spells/Mods/SpellModModule.cs`), percent stat auras (`PercentStatAuras.cs`)
+  and skill auras (`SkillAuras.cs`), listed here before, are delivered.
 
 ## Support matrix
 

@@ -90,7 +90,7 @@ public sealed class CommandContext
     }
 
     /// <summary>
-    /// A remote administration invoker (RA, docs/operators/remote-admin.md): console-like (no player, replies to
+    /// A remote administration invoker (RA, docs/ops/remote-admin.md): console-like (no player, replies to
     /// <paramref name="output"/>, which must be thread-safe) but with the logged-in account's <paramref name="security"/>, audited as
     /// <paramref name="invokerName"/>. <paramref name="lifetime"/> is cancelled when the connection closes, so long-running commands
     /// (waits, scripts, event streams) stop with it.

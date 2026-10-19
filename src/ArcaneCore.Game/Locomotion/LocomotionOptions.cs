@@ -6,9 +6,10 @@ namespace ArcaneCore.Game.Locomotion;
 
 /// <summary>
 /// The <c>Locomotion</c> configuration section. Every default is the vmangos value (vmangos is the
-/// retail reference); a deliberate deviation would be a non-default value of one of these keys.
+/// retail reference), or retail's 1 for the player speed and turn rates, which vmangos has no key for; a deliberate
+/// deviation would be a non-default value of one of these keys.
 /// Only the keys whose rule is implemented are listed: a key for an undelivered rule would be a stub
-/// (docs/areas/locomotion-foundation.md lists what is not delivered).
+/// (docs/areas/locomotion.md lists what is not delivered).
 /// </summary>
 public sealed class LocomotionOptions
 {

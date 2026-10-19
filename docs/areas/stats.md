@@ -229,7 +229,7 @@ break and repair with and without an active BASE_PCT aura.
   lane w2-combat-stats (section "Combat stat auras"): the regeneration tick reads the live spirit, the spell damage display fields follow every stat
   change, and weapon-restricted parry auras count for a fitting main hand.
 - A druid who changes power type keeps the percent on the old power's group until the aura ends (the reference re-evaluates per power type).
-- The support matrix table in `aura-engine.md` still lists these rows as Unsupported; it is regenerated at integration (`AuraSupportBaseline.cs` is the source).
+- ~~The support matrix table in `aura-engine.md` still lists these rows as Unsupported; it is regenerated at integration (`AuraSupportBaseline.cs` is the source).~~ Done: the matrix in `aura-engine.md` lists all sixteen rows as Handler (`AuraSupportBaseline.cs` is the source).
 
 ## Combat stat auras (wave 2 lane `combat-stats`)
 

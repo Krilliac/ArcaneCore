@@ -126,7 +126,7 @@ exists elsewhere in the tree for start-up loads, but these two are per-gameplay-
 
 ### F5 (Low) The owner / charmer "always sees" clause of the dropped invisibility rule is not in the kept rule
 `StealthVisibilityRule.CanSee` (`src/ArcaneCore.Game/Stealth/StealthVisibilityRule.cs:36-100`) has no `CharmerOrOwnerGuid == viewer.Guid` early return;
-the dropped `InvisibilityVisibilityRule` had it (git: claude/vw5-warlock-mage-utility:src/ArcaneCore.Game/Stealth/InvisibilityVisibilityRule.cs).
+the dropped `InvisibilityVisibilityRule` had it (git: 3d59b4751:src/ArcaneCore.Game/Stealth/InvisibilityVisibilityRule.cs, the claude/vw5-warlock-mage-utility commit that added it).
 Consequence: an invisible pet or charmed unit is hidden from its own owner unless the owner holds a matching detection aura. vmangos
 `IsVisibleForOrDetect` returns true for the owner/charmer before the invisibility test. The integrator flagged "compare" without doing it; the result
 is: Hunter's Mark and group-mate clauses present, owner clause missing. Add the clause (one `if` before the Hunter's Mark check) with a test.

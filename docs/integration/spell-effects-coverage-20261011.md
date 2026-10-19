@@ -72,7 +72,7 @@ Production: `src/ArcaneCore.Game/Spells/Warlock/CreateHealthstoneScript.cs`,
 `src/ArcaneCore.Game/Spells/SpellDefines.cs`, and
 `src/ArcaneCore.Game/Spells/SpellSystem.Targeting.cs`.
 
-Tests: `tests/ArcaneCore.Game.Tests/ClassSpells/CreateHealthstoneSpellTests.cs`,
+Tests: `tests/ArcaneCore.Game.Tests/ClassSpells/CreateHealthstoneSpellTests.cs` (dropped as a duplicate in ffca97a71; the kept tests are `tests/ArcaneCore.Game.Tests/Spells/CreateHealthstoneScriptTests.cs`),
 `tests/ArcaneCore.Game.Tests/Spells/PersistentAreaAuraTests.cs`, and
 `tests/ArcaneCore.World.Tests/Playerbots/Qa/PlayerbotQaSpellCoverageRealContentTests.cs`.
 

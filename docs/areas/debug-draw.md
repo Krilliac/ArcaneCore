@@ -13,7 +13,7 @@ All are under `.debug vis`, need a `GameMaster` account (retail level 3), and ar
 
 | Command | Draws | Data source |
 |---|---|---|
-| `.debug vis los` | Dots from your eye to the selected unit's eye (2 yards up, as `IsWithinLOS`): green when clear; when blocked, red up to the hit, a shard and cannon-target reticle at the hit, small red jewels for the hidden rest | `map.Collision.IsInLineOfSight` and `ILineOfSight.TryGetObjectHit(-0.5)` (vmaps; doodads ignored, as unit LoS) |
+| `.debug vis los` | Dots along `MapCollision.LineOfSightSegment(context.Player, target)`, from your collision height (`EyeHeightOf(player)`) to 1 yard above the selected target (`ObjectTargetHeight`, as `IsWithinLOSInMap`): green when clear; when blocked, red up to the hit, a shard and cannon-target reticle at the hit, small red jewels for the hidden rest | `map.Collision.IsInLineOfSight` (doodads ignored, as unit LoS) and `ILineOfSight.TryGetObjectHit(-0.5)` for the hit (doodads count there, so the hit can be on a doodad in front of the model that blocks); both vmaps |
 | `.debug vis path` | The corners (blue crystal + glow) and dots of the path from you to the selected unit; red corners when it is `Incomplete`, `NoPath` or `NotUsingPath` (no navmesh: a straight line). Chat names the `PathType` and which pathfinder answered | `map.Collision.FindPath(..., Mover = PathMover.Player)`, the same seam creatures use (`WorldCollision.PathfinderFor`) |
 | `.debug vis waypoints` | The selected creature's waypoint nodes (yellow crystal + glow) and the loop between them; chat lists point, position, wait and run | `CreatureContent.ResolveWaypointPath` (`creature_movement`, else `creature_movement_template`), as the waypoint generator |
 | `.debug vis cells [#r]` | Flags on the cell corners (33.33 yards) within r cells (default 2, at most 5: 121 flags); a Horde flag where a grid corner (533.33 yards) is | `GridDefines`; each corner on the floor from `map.Collision.GetHeight` (at your height when no floor is known) |
@@ -50,7 +50,8 @@ prints that marker's line again, prefixed by the drawing (`[path] path corner 3/
 - **Bounds.** `MaxMarkersPerGm` (default 300; a glow companion counts) caps what one GM's client holds: a new drawing removes the
   oldest drawings to fit, and a drawing bigger than the cap is cut (key markers are listed first, so they survive). Each command
   is also bounded on its own: 60 dots per line, 120 fill dots per path, 100 waypoints, 121 cell corners, 36 ring points, 50 spawns.
-  No marker is placed within 3 yards of the GM.
+  Only the dots of a line of sight or collision ray short of the target or a hit, the path's dots and the path's first corner skip
+  the 3 yards nearest the GM; the other markers are placed where they fall (the height marker right under the GM).
 
 ## Look
 
@@ -111,8 +112,8 @@ built-in ids exist with the model paths in the table above, and each model's `.m
   layout is byte-for-byte the one a real object gets), the look of each model and glow, the hover
   name and right-click on a goober marker, and how the client renders markers past its far clip. The fork's models were chosen in
   a client; the new ones (2971, 2770, 1268, 263, 1308, 5913, 6431, 363) were only checked to exist in the DBC.
-- Markers are solid only if their model has collision; the 3-yard gap around the GM is the fork's guard against standing inside
-  one.
+- Markers are solid only if their model has collision; the 3-yard gap that the line, ray and path dots and the path's
+  first corner keep from the GM is the fork's guard against standing inside one.
 - Line of sight is the vmap static-model test (doodads ignored), not dynamic game objects such as doors.
 - The path is computed for a walking, swimming player mover; a creature's own path (fliers, swimmers, the no-mmap terrain-step
   fallback the creature lane may install) can differ.

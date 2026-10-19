@@ -301,9 +301,10 @@ Recorded so no one assumes them:
   `UpdateAreaDependentAuras` (spell_area), `DismountCheck`, zone scripts, group/guild zone refresh beyond `Player.ZoneId`.
 - PvP: battlegrounds, taxi flights, capture points and flag carriers (see the PvP section).
 - WMO sub-area names and the `IsOutdoors` flag: `TerrainInfo.GetAreaFlag` returns the tile cell value only (no WMO
-  override, no per-map fallback flag), and `CollisionContracts.ModelAreaInfo.MogpExterior` tests MOGP flag `0x8` where vmangos
-  and mangos-classic test `0x8000` (`GridMap.cpp:875-878`, `:887-889`). Changing it needs a real extracted vmap sample to
-  confirm which bit the files carry; that sample was not available, so the constant is untouched (pathfinding-collision lane).
+  override, no per-map fallback flag). `ModelAreaInfo.IsOutdoors` (`CollisionContracts.cs`) tests MOGP flag `0x8000` (`ModelAreaInfo.MogpExterior`) as vmangos
+  and mangos-classic do (`GridMap.cpp:875-878`, `:887-889`; it was `0x8`, see
+  [collision and pathing](collision-pathing.md#path-contract-follows-vmangos-collisioncontracts-pathmover)), and
+  `MapCollision.IsOutdoors` uses it, still without WMOAreaTable.dbc.
 - The first-login cinematic and "explore after the cinematic ends": there is no cinematic data, so the first explore check
   runs right after the map add (same XP and packet, no camera sequence).
 - The 108 default world-state pairs (sniffed retail data under GPL; supply a file).

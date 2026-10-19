@@ -19,7 +19,7 @@ console line, but with the security level of the login, and the GM audit records
 | `MaxFailedLogins` | `3` | Wrong logins per connection before it closes. |
 | `FailedLoginDelayMs` | `1000` | Delay after each wrong login. |
 | `MaxLineLength` | `16384` | The longest accepted line, in bytes. |
-| `CommandTimeoutSeconds` | `1800` | The longest a long-running command (`.botctl wait`, `.botctl run`) is waited for. |
+| `CommandTimeoutSeconds` | `1800` | The longest a long-running command (`.botctl wait`, `.botctl run`) is waited for. Then RA stops waiting (`#done error timeout` in automation mode) and reads the next line; the command itself keeps running until it ends or the connection closes, and its later reply lines still arrive. |
 
 ## Logging in
 
@@ -57,8 +57,9 @@ Other protocol lines:
 | `@auto on` / `@auto off` | `#done ok` |
 | `quit`, `exit`, `logout`, `@quit` | `+Bye.`, then the connection closes. The server keeps running. |
 
-The commands of one connection run one at a time, in order. A command that holds itself open (`.botctl wait`, `.botctl run`,
-`.botctl sleep`) is `#done` only when its work is done. Lines starting with `#event` can arrive at any time on a connection that turned on
+The commands of one connection run one at a time, in order, except that a command reported `#done error timeout` goes on in the
+background while the next lines run. A command that holds itself open (`.botctl wait`, `.botctl run`, `.botctl sleep`) is `#done`
+only when its work is done, or after `CommandTimeoutSeconds` with `#done error timeout`. Lines starting with `#event` can arrive at any time on a connection that turned on
 `.botctl stream`. A leading `.` on commands is optional.
 
 ## Example

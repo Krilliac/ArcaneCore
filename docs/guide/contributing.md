@@ -24,8 +24,15 @@ the behaviour in your own code, and never copy their code or data into this repo
 
 ## Layout
 
-- `src/ArcaneCore.Kernel`, `Protocol`, `Cryptography`, `Data`, `Game` (the world simulation), `World` (the world daemon: handlers, features, commands) and `Realm` (the logon daemon).
-- `tests/` has one project per source project, plus `ArcaneCore.MockClient.Tests` and `hotmodule-fixtures`. `tools/` holds the command-line tools. `docs/` is this documentation.
+- `src/ArcaneCore.Kernel`, `Protocol`, `Cryptography`, `Data`, `Game` (the world simulation), `World` (the world daemon:
+  handlers, features, commands), `World.Contracts` (the versioned feature and bot interfaces the World and the bot pack
+  share), `Playerbots` (the bot pack, its own assembly), `Gateway` (the client socket daemon in front of a worker-mode
+  World) and `Realm` (the logon daemon).
+- `tests/` has a project for each source project except `Protocol` (covered by the Game and World tests),
+  `World.Contracts` and `Playerbots` (covered by the World tests), plus `ArcaneCore.MockClient.Tests`,
+  `ArcaneCore.Data.ProcessRunner` (a helper process the Data tests start), `ThirdParty` (imported DotRecast and
+  wow_messages sources the tests build against), `hotmodule-fixtures` and `ci` (the CI solution filters). `tools/`
+  holds the command-line tools. `docs/` is this documentation.
 - Prefer new files and narrow, additive edits to shared files (spell system, player, inventory, quest NPC, the world runtime and session). Integration notes for a feature go in `docs/integration/`.
 
 ## Build and test
@@ -62,13 +69,16 @@ the repository SDK and commit every changed `packages.lock.json` in the same com
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --force-evaluate
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/hotmodule-template/GmCommands/GmCommands.csproj --force-evaluate
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/ops/diag/exception-probe/ArcaneCore.ExceptionProbe.csproj --force-evaluate
+& "$env:USERPROFILE\.dotnet\dotnet.exe" restore tools/ops/diag/alloc-probe/ArcaneCore.AllocProbe.csproj --force-evaluate
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --locked-mode
 ```
 
 The solution restore also covers the hot-module fixtures (`tests/hotmodule-fixtures`, reached through the World test project's
-references); the two tools outside the solution need their own line. A change in a library such as `ArcaneCore.Data` rewrites the lock
-file of every project that references it, so expect several files to change. The last line repeats CI's check. A new project gets its
-lock file from its first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
+references) and the projects under `tests/ThirdParty` (reached through the Game, World and MockClient test projects'
+references); each tool with a lock file that is outside the solution and referenced by nothing in it needs its own line, and `PackageLockFileTests` checks
+that the recipe lists exactly those. A change in a library such as `ArcaneCore.Data` rewrites the lock file of every project that
+references it, so expect several files to change. The last line repeats CI's check. A new project gets its lock file from its
+first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
 `tools/hotcode-spike` opts out of the repository props (its own `Directory.Build.props`) and has no lock file.
 
 ### Other checks on a pull request

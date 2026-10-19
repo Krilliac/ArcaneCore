@@ -19,7 +19,8 @@ public sealed class MapOptions
     public int GridCleanUpDelayMs { get; set; } = 5 * 60 * 1000;
 
     /// <summary>
-    /// Radius around players (and active objects) whose grids are loaded and kept alive
+    /// Radius around players whose grids are loaded (an active non-player object loads only its own grid; a grid stays
+    /// active while something active is within the visibility range of it)
     /// (vmangos <c>Map::m_gridActivationDistance</c>, initialised from
     /// <c>Visibility.Distance.Continents</c> = 100).
     /// </summary>
@@ -44,9 +45,9 @@ public sealed class MapOptions
     public bool UpdateActiveCellsOnly { get; set; } = true;
 
     /// <summary>
-    /// How far beyond <see cref="GridActivationDistance"/> a player (or active object) looks for grids that do not exist yet, so
+    /// How far beyond <see cref="GridActivationDistance"/> a player looks for grids that do not exist yet, so
     /// their terrain, vmap and navmesh tiles are read and parsed on the thread pool before the grid is created
-    /// (<see cref="GridContainer.GridApproaching"/>); other objects look half as far. 0 turns the prefetch off. An ArcaneCore
+    /// (<see cref="GridContainer.GridApproaching"/>); other objects, active ones included, look half this distance around themselves. 0 turns the prefetch off. An ArcaneCore
     /// addition (vmangos reads the tiles inside the update): it changes when the files are read, not what is loaded or when.
     /// </summary>
     public float GridPrefetchDistance { get; set; } = 200f;

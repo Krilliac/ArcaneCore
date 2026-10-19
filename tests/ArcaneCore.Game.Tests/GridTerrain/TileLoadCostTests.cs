@@ -11,7 +11,9 @@ namespace ArcaneCore.Game.Tests.GridTerrain;
 /// <summary>
 /// What creating one grid costs the world thread on real data, split by loader: the terrain <c>.map</c> tile, the vmap tile (its
 /// models included the first time they are needed) and the navmesh tile. Opt-in (<c>ARCANECORE_TILE_LOAD_COST=1</c> and
-/// <c>ARCANECORE_TEST_TERRAIN_DIR</c>); wall time is only reported (docs/integration/tick-scaling-20261009.md).
+/// <c>ARCANECORE_TEST_TERRAIN_DIR</c>); wall time is only reported. The loads are synchronous, as when no tile prefetch
+/// (<c>World:Maps:GridPrefetchDistance</c>) has finished: the cold terrain/collision load docs/integration/perf-tick-20261008.md
+/// measured as the largest stall.
 /// </summary>
 [Collection("World tick load")]
 public sealed class TileLoadCostTests(ITestOutputHelper output)

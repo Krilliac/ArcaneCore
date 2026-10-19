@@ -10,6 +10,8 @@ unfinished parts documented as limits).
 |---|---|
 | [Installation and first run](guide/installation.md) | Build, databases, realm list, first account, content import, `check-config`, starting both daemons, connecting a client, the development runner. |
 | [Operating a realm](guide/operations.md) | Start, stop and restart, backups and upgrades, bans, monitoring, and the release caveats (which defaults are not retail, what is not delivered). |
+| [Configuration files](guide/configuration.md) | The `world.conf` and `realm.conf` files in the style of `mangosd.conf`: the generated `.conf.dist` templates and how to use them. |
+| [Running in Docker](guide/docker.md) | The multi-stage Dockerfile and the compose file: the database, both daemons, one-shot tools and an optional monitoring profile. |
 | [Configuration reference](reference/configuration.md) | Every configuration key with its type, default, `.reload config` behaviour and meaning. **Generated from the code**; a test fails when the page is stale. |
 | [GM command reference](reference/gm-commands.md) | Every chat command with the account level it needs and which stored account reaches it. **Generated.** |
 | [Opcode coverage](reference/opcodes.md) | Build-5875 CMSG handler status and SMSG emission observed by the wave 8 wire oracle. **Generated.** |
@@ -17,16 +19,21 @@ unfinished parts documented as limits).
 | [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Logging](ops/logging.md) | The `Logging:ArcaneCore` provider: colour or plain console, rolling text file, JSON lines, what reloads live, and the fail-closed checks. |
 | [Observability](ops/observability.md) | The client-rejection log, the duplicate outbound packet detector and slow-tick host/GC/subsystem attribution, with their `Ops:Observability` and `Ops:Watchdog:HostLoad` keys. |
+| [Server metrics](ops/metrics.md) | The `Ops:Metrics` export of both daemons to Prometheus and/or an OpenTelemetry collector (off by default): the series, per-opcode traffic, scraping both daemons and the Grafana dashboard. |
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |
 | [Invariants and crash handling](ops/invariants.md) | The `Diagnostics` section: invariant policy and counters, what ends the process on an unhandled exception (exit 70 or abort), the crash report, and every invariant the code asserts. |
 | [Resilience](ops/resilience.md) | Circuit breakers, retries, bulkheads and timeouts: what the daemons do when a database is slow or gone, the `Resilience` options, exit code 6, and how a write queue adopts the primitives. |
 | [Runtime health watchdogs](ops/watchdog.md) | The `Ops:Watchdog` monitors: world-tick overruns and hangs, memory pressure, thread-pool starvation, the systemd/file heartbeat and the counters registry. |
 | [Memory and GC diagnostics](ops/diagnostics.md) | GC pause attribution on slow ticks, `.debug gc`, the sampling allocation profiler `.debug alloc`, the gated process dump `.debug dump` (`Ops:Diagnostics:Dumps`), and the recipe for a GC-pause TickHang. |
 | [Operator tooling](ops/tooling.md) | The scripts in `tools/ops/` (bot provisioning, GM command runner, RSI digests, live deploy, diagnostics, Node1 CI, and LLM review jobs), their `ARCANECORE_*` environment variables, and which scripts touch a live server. |
+| [Provisioning bots and boosted characters](ops/bot-provisioning.md) | `tools/ops/provision-bots.ps1` (N playerbots at level L in zone Z) and a boosted character for an account through `.pdump`; both change the live server, so start with a dry run. |
+| [Remote administration (RA)](ops/remote-admin.md) | The world daemon's TCP command console (`World:RemoteAdmin`, on by default, loopback only): account or token login, the account's security level, automation mode with one `#done` line per command, and its options. |
+| [Headless bot control](ops/botctl.md) | `.botctl`: drive playerbots from the console, the control pipe or RA to test a feature in game without a client; bot selectors, verbs, results and the client scripts for agents. |
 | [Redeploy prefers hot reload](ops/redeploy.md) | How `tools/ops/live/redeploy.ps1` plans a redeploy (None, Hot, Restart, Blocked), the deploy record, the hot apply through the World's control pipe and when it falls back to the hard restart. |
 | [Wiring audit](ops/wiring-audit.md) | `.server wiring` and the start-up summary line: client opcodes with no handler, options asked for but never configured, config checks `check-config` does not run, handlers on server-only opcodes; the CI guards behind them. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Realm PIN, TOTP and client integrity](security/realm-pin-integrity.md) | Account login factors, Administrator commands, and opt-in client integrity checks. |
+| [Logon auto-patcher](ops/autopatch.md) | `Auth:AutoPatch` (off by default): a client whose build is not 5875 gets an MPQ patch over the logon connection instead of "version invalid". |
 | [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
 | [Anticheat](areas/anticheat.md) | The server-side movement checks, the score and escalation (log, GM alert, rubberband, kick, autoban), the `AntiCheat` options and the `.anticheat` commands. |
@@ -105,6 +112,7 @@ Each area page has a Delivered section, its limits, and the references it follow
   [latest handoff](integration/claude-handoff-20261003.md) for the state of the tree.
 - The security review notes in [security/](security/): [net/auth findings](security/codex-net-auth.md),
   [game logic findings](security/codex-game-logic.md), [persistence and I/O findings](security/codex-findings.md).
+- The [exception audit](ops/exception-audit.md): every `catch` in `src/**` with a heuristic, unverified verdict (a 2026-10-12 snapshot).
 
 ## Keeping the generated pages current
 

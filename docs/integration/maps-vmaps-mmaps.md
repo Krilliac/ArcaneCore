@@ -39,23 +39,24 @@ What substitutes for the data when `World:Maps:DataDirectory` is empty:
 
 - **Line of sight**: `OpenLineOfSight` — always clear (spells and melee through walls).
 - **Pathing**: `StraightLinePathfinder` — a straight line flagged `NotUsingPath`; creatures chase in
-  straight lines (`CreaturePathing`).
+  straight lines (`CreatureMapSystem.PlanPath` answers `Direct`, the straight line, where there is no mesh).
 - **Heights**: none. `GetHeight` returns `TerrainTile.InvalidHeightValue`; falling, under-map and
   liquid observers have nothing to compare against; the client's reported positions and zone are
   trusted.
 - **Playerbots** (what Codex built for collision): `PlayerbotNavigation.TryPlan` uses an mmap path
-  when there is one and checks every corner's height and line of sight. Without mmaps it falls back
+  when there is one and takes the mesh's corners without re-testing them against the collision data (the mesh proves each leg walkable); only the points `PlayerbotRouteSmoothing` adds when it offsets or rounds the route are checked for a floor and line of sight. Without mmaps it falls back
   to `TryTerrainRoute`: a straight line probed every yard, each probe needing a valid floor height
   within one yard of the previous one (no cliffs) and a clear line of sight. That fallback **needs
   `.map` heights** — without any terrain data every bot route is refused and bots stand still.
-  `PlayerbotMotion` (this lane) validates each reported position the same way (floor within 2 yd,
-  line of sight) and snaps it to the floor.
+  `PlayerbotMotion` (this lane) validates each reported position on a stepped leg the same way
+  (floor within 2 yd, line of sight) and snaps it to the floor. A position on a mesh leg is never
+  refused for its height or line of sight: it is snapped to a floor within 4 yd when there is one.
 
 Observed on this machine (read only, 2026-10-07):
 
 - The running world server (`work/verification/wave84-build-artifacts`) ships `appsettings.json` with
   `World:Maps:DataDirectory`, `VMapDirectory` and `MMapDirectory` empty. Since bots do move live, the
-  data is presumably supplied by an environment override (`World__Maps__DataDirectory`, e.g.
+  data is presumably supplied by an environment override (`World__Maps__DataDirectory`) or a generated run-directory `appsettings.json` (as from
   `scripts/dev-runner.ps1 -ContentDir`); the world log's first `Terrain:` line says which
   ("reading .map files from …" or "no data directory configured"). Worth confirming.
   (Later on 2026-10-07: the live profile's `World:Maps:DataDirectory` points at an earlier maps-only
@@ -171,7 +172,7 @@ What they check (expected values come from the world database, not from the file
 - every continent `.mmtile` parses with distinct Detour tile coordinates; a navmesh path walks out
   of the abbey around its walls, and one crosses tiles from Northshire to the Goldshire inn;
 - 4900 random height / line-of-sight / area queries over Stormwind, Ironforge, Undercity,
-  Goldshire, Northshire, Booty Bay, Orgrimmar, Thunder Bluff, Darnassus, two start valleys and six
+  Goldshire, Northshire, Booty Bay, Orgrimmar, Thunder Bluff, Darnassus, three start valleys and six
   dungeons agree with vmangos' own `VMapManager2` (`tools/terrain/vmap-oracle`) on the same files:
   0 mismatches (914 model heights, 1019 blocked rays, 583 inside WMO groups).
 

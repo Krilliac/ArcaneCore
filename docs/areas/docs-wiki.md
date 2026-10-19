@@ -22,6 +22,8 @@ a missing file or an unreadable repository root fails, it never skips):
 **Guards over all documentation:** every relative link and heading anchor in every markdown file resolves (`DocsLinkTests`); every configuration key named in backticks in any page exists in the catalog, with an
 allow-list of keys that are designed but not delivered, each with its reason (`DocKeyAuditTests`); a source scan finds every `GetSection`, `Configure<T>`, string-literal indexer and `ConfigKey` constant in `src` and `tools`
 and requires it to be covered by the catalog or the exception table, so a lane that binds a new section without documenting it fails with the file and the key (`ConfigReferenceTests`).
+Every `docs/...md` path and `#anchor` that code, scripts, project files and workflows cite resolves too, with the exact case CI's
+file system needs (`CodeDocReferenceTests`).
 
 **Drift fixed** (each was wrong at the lane base, and a test now ties the statement to the code): README and the M1 acceptance page told operators to enable `Auth:AutocreateAccounts` without saying it is off in the shipped
 configuration and not retail; `docs/security/hardening.md` gave `WriterDrainGrace` as 5 s in one place and `00:00:00` (wait forever, the code default) in another, and listed the pre-auth deadline and the inbound queue bounds as
