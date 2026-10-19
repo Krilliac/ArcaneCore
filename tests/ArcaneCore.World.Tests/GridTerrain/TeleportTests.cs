@@ -136,6 +136,7 @@ public sealed class TeleportTests
     [InlineData(".tele Nowhere", "Target map or coordinates is invalid (X: 1.000000 Y: 1.000000 MapId: 99)")]
     [InlineData(".go xyz 100 100", "Target map or coordinates is invalid (X: 100.000000 Y: 100.000000 MapId: 0)")] // no terrain data
     [InlineData(".go xyz 99999 0 0", "Target map or coordinates is invalid (X: 99999.000000 Y: 0.000000 MapId: 0)")]
+    [InlineData(".go xy 100 100 1", "Target map or coordinates is invalid (X: 100.000000 Y: 100.000000 MapId: 1)")] // the 1 is #mapid, not .go xyz's #z
     public async Task Commands_ExplainWhyTheyCannotTeleport(string command, string reply)
     {
         await using WorldTestHost host = WorldTestHost.Start();

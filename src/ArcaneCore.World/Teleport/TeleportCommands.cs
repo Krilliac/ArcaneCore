@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -13,8 +14,8 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Teleport;
 
 /// <summary>
-/// <c>.tele</c> and <c>.go xyz</c> (vmangos TeleportCommands.cpp; security levels from the
-/// cmangos-classic / vmangos command tables: both SEC_MODERATOR).
+/// <c>.tele</c>, <c>.go xy</c> and <c>.go xyz</c> (vmangos TeleportCommands.cpp; security levels from the
+/// cmangos-classic / vmangos command tables: all SEC_MODERATOR).
 /// </summary>
 public sealed class TeleportCommands : ICommandGroup
 {
@@ -36,6 +37,10 @@ public sealed class TeleportCommands : ICommandGroup
         ]),
         new ChatCommand("go", AccountSecurity.Moderator, "Teleport to a position.", Children:
         [
+            // Before xyz, as in the vmangos .go table: a word resolves to the first entry it is a prefix of, so an xy after xyz is never reached.
+            new ChatCommand("xy", AccountSecurity.Moderator,
+                "Syntax: .go xy #x #y [#mapid]\nTeleport to ground or water level at (#x, #y) on the current or specified map.",
+                GoXy, RetailLevel: 2),
             new ChatCommand("xyz", AccountSecurity.Moderator, "Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there.", GoXyz),
         ]),
     ];
@@ -152,6 +157,38 @@ public sealed class TeleportCommands : ICommandGroup
                 });
             }
         });
+    }
+
+    // .go xy x y [mapid]: vmangos HandleGoXYCommand, to the ground or water surface.
+    private static bool GoXy(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractFloat(out float x) || !args.ExtractFloat(out float y))
+        {
+            return false;
+        }
+
+        uint mapId = context.Player.MapId;
+        if (!args.IsEmpty && (!args.ExtractUInt32(out mapId) || !args.IsEmpty))
+        {
+            return false;
+        }
+
+        TeleportFeature feature = Feature(context);
+        if (!GridDefines.IsValidMapCoord(x) || !GridDefines.IsValidMapCoord(y) || !feature.Maps.Registry.Contains(mapId))
+        {
+            ReplyInvalid(context, x, y, mapId);
+            return true;
+        }
+
+        float ground = feature.Maps.Terrain.For(mapId).GetWaterOrGroundLevel(x, y, GridDefines.MaxHeight);
+        if (ground <= TerrainTile.InvalidHeight)
+        {
+            ReplyInvalid(context, x, y, mapId);
+            return true;
+        }
+
+        return GoHelper(context, mapId, x, y, ground, context.Player.Orientation);
     }
 
     // .go xyz x y [z [mapid]]. vmangos HandleGoXYZCommand requires z; cmangos-classic makes it

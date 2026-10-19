@@ -66,6 +66,14 @@ everything; a Moderator (1) can `.gm chat` and `.recall` but not `.gm` or `.kick
 ArcaneCore already refused that, and weakening it would conflict with the standing security rule, so the default
 stays strict. Strong checks (mute/unmute) are strict in both. Set `false` for the vmangos behaviour.
 
+With `ExactNameFirst = false` a sub-command listed after a longer sibling it prefixes cannot be reached, not even by
+its exact name. Sub-commands keep their declaration order, and an `ICommandExtension`'s children are appended after
+the root's own, extensions in full type-name order: `.debug gccollect` (`Gm.Extra`) once came before `.debug gc`
+(`Ops.Diagnostics`) and took every `.debug gc`, and `.go xy` (an extension) came after `.go xyz` and was never reached.
+Declare a name before every longer sibling it prefixes, as vmangos does (`xy`, `xyz`, `xyzo`, `Chat.cpp:406-408`).
+`RetailTableTests.EveryShippedCommand_ResolvesByItsOwnPath` looks every shipped command up by its own path and
+fails when another entry answers.
+
 ## Shared-file edits (for the integrator)
 
 * `Commands/CommandTable.cs`, `Commands/ICommandGroup.cs` rewritten: `ChatCommand` gained trailing optional
