@@ -139,19 +139,9 @@ internal static class MapFeedProtocol
     {
         request = default;
         error = default;
-        JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(line, DocumentOptions);
-        }
-        catch (JsonException)
-        {
-            error = new FeedError(BadJson, "the line is not valid JSON");
-            return false;
-        }
-
-        using (document)
-        {
+            using JsonDocument document = JsonDocument.Parse(line, DocumentOptions);
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
@@ -190,6 +180,12 @@ internal static class MapFeedProtocol
             }
 
             error = new FeedError(UnknownOp, "unknown op; the ops are hello, subscribe, unsubscribe and query");
+            return false;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            request = default;
+            error = new FeedError(BadJson, "the line is not valid JSON");
             return false;
         }
     }

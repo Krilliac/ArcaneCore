@@ -54,6 +54,20 @@ internal static class FrameParser
 
     public static bool TryParseHello(JsonObject root, [NotNullWhen(true)] out HelloInfo? hello, [NotNullWhen(false)] out string? problem)
     {
+        try
+        {
+            return TryParseHelloCore(root, out hello, out problem);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            hello = null;
+            problem = $"hello contains invalid JSON text or duplicate keys: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryParseHelloCore(JsonObject root, [NotNullWhen(true)] out HelloInfo? hello, [NotNullWhen(false)] out string? problem)
+    {
         hello = null;
         if (!TryInteger(root["protocol"], 0, int.MaxValue, out long protocol))
         {
@@ -119,6 +133,24 @@ internal static class FrameParser
         [NotNullWhen(true)] out ParsedFrame? parsed,
         [NotNullWhen(false)] out string? problem)
     {
+        try
+        {
+            return TryParseFrameCore(root, receivedTimestamp, out parsed, out problem);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            parsed = null;
+            problem = $"frame contains invalid JSON text or duplicate keys: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryParseFrameCore(
+        JsonObject root,
+        long receivedTimestamp,
+        [NotNullWhen(true)] out ParsedFrame? parsed,
+        [NotNullWhen(false)] out string? problem)
+    {
         parsed = null;
         if (!TryInteger(root["map"], 0, uint.MaxValue, out long map))
         {
@@ -157,6 +189,15 @@ internal static class FrameParser
             {
                 problem = "frame counters is not an object";
                 return false;
+            }
+
+            _ = counterObject.Count;
+            foreach ((_, JsonNode? val) in counterObject)
+            {
+                if (val is JsonValue v && v.GetValueKind() == JsonValueKind.String)
+                {
+                    _ = v.GetValue<string>();
+                }
             }
 
             counters = (JsonObject)counterObject.DeepClone();
@@ -531,7 +572,15 @@ internal static class FrameParser
     public static bool TryString(JsonNode? node, [NotNullWhen(true)] out string? value)
     {
         value = null;
-        return node is JsonValue v && v.GetValueKind() == JsonValueKind.String && v.TryGetValue(out value);
+        try
+        {
+            return node is JsonValue v && v.GetValueKind() == JsonValueKind.String && v.TryGetValue(out value);
+        }
+        catch (InvalidOperationException)
+        {
+            value = null;
+            return false;
+        }
     }
 
     private static bool TryBool(JsonNode? node, out bool value)

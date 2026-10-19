@@ -81,7 +81,7 @@ public sealed class GeometryChunk
             throw new InvalidDataException($"{LayerId} {Tile}: an index points past the {vertices} vertices.");
         }
 
-        if (Positions.Any(p => !float.IsFinite(p)))
+        if (!Origin.IsFinite || Positions.Any(p => !float.IsFinite(p)))
         {
             throw new InvalidDataException($"{LayerId} {Tile}: a position is not finite.");
         }
@@ -306,52 +306,81 @@ public static class GeometryWire
             BinaryPrimitives.ReadDoubleLittleEndian(data[8..]),
             BinaryPrimitives.ReadDoubleLittleEndian(data[16..]),
             BinaryPrimitives.ReadDoubleLittleEndian(data[24..]));
-        int vertices = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(data[32..]));
-        int triangles = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(data[36..]));
-        int lines = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(data[40..]));
-        int points = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(data[44..]));
+        uint verticesU = BinaryPrimitives.ReadUInt32LittleEndian(data[32..]);
+        uint trianglesU = BinaryPrimitives.ReadUInt32LittleEndian(data[36..]);
+        uint linesU = BinaryPrimitives.ReadUInt32LittleEndian(data[40..]);
+        uint pointsU = BinaryPrimitives.ReadUInt32LittleEndian(data[44..]);
+        uint maxWords = (uint)(data.Length - HeaderBytes) / 4u;
+        if (verticesU > maxWords / 3u || trianglesU > maxWords / 4u || linesU > maxWords / 3u || pointsU > maxWords / 2u)
+        {
+            throw new InvalidDataException("ATG1 chunk is truncated.");
+        }
+
+        int vertices = (int)verticesU;
+        int triangles = (int)trianglesU;
+        int lines = (int)linesU;
+        int points = (int)pointsU;
         int offset = HeaderBytes;
-        float[] positions = ReadFloats(data, ref offset, checked(vertices * 3));
-        uint[] tri = ReadUInts(data, ref offset, checked(triangles * 3));
+        float[] positions = ReadFloats(data, ref offset, vertices * 3);
+        uint[] tri = ReadUInts(data, ref offset, triangles * 3);
         uint[] triAttr = ReadUInts(data, ref offset, triangles);
-        uint[] lin = ReadUInts(data, ref offset, checked(lines * 2));
+        uint[] lin = ReadUInts(data, ref offset, lines * 2);
         uint[] linAttr = ReadUInts(data, ref offset, lines);
         uint[] pts = ReadUInts(data, ref offset, points);
         uint[] ptsAttr = ReadUInts(data, ref offset, points);
-        int jsonBytes = checked((int)ReadUInts(data, ref offset, 1)[0]);
-        if (jsonBytes < 0 || offset + jsonBytes != data.Length)
+        uint jsonBytesU = ReadUInts(data, ref offset, 1)[0];
+        if (jsonBytesU > (uint)(data.Length - offset) || offset + (int)jsonBytesU != data.Length)
         {
             throw new InvalidDataException("ATG1 metadata length does not match the chunk size.");
         }
 
-        JsonObject meta = JsonNode.Parse(data.Slice(offset, jsonBytes))?.AsObject()
-            ?? throw new InvalidDataException("ATG1 metadata is not a JSON object.");
-        JsonArray tile = meta["tile"]?.AsArray() ?? throw new InvalidDataException("ATG1 metadata has no tile.");
-        var attributes = new Dictionary<uint, JsonObject>();
-        if (meta["attributes"] is JsonObject table)
+        int jsonBytes = (int)jsonBytesU;
+        GeometryChunk chunk;
+        try
         {
-            foreach ((string key, JsonNode? value) in table)
+            JsonObject meta = JsonNode.Parse(data.Slice(offset, jsonBytes))?.AsObject()
+                ?? throw new InvalidDataException("ATG1 metadata is not a JSON object.");
+            JsonArray tile = meta["tile"]?.AsArray() ?? throw new InvalidDataException("ATG1 metadata has no tile.");
+            if (tile.Count < 3 || tile[0] is null || tile[1] is null || tile[2] is null)
             {
-                attributes[uint.Parse(key, System.Globalization.CultureInfo.InvariantCulture)] = value?.AsObject().DeepClone().AsObject() ?? [];
+                throw new InvalidDataException("ATG1 metadata tile must have 3 elements.");
             }
+
+            var attributes = new Dictionary<uint, JsonObject>();
+            if (meta["attributes"] is JsonObject table)
+            {
+                foreach ((string key, JsonNode? value) in table)
+                {
+                    attributes[uint.Parse(key, System.Globalization.CultureInfo.InvariantCulture)] = value?.AsObject().DeepClone().AsObject() ?? [];
+                }
+            }
+            else if (meta["attributes"] is not null)
+            {
+                throw new InvalidDataException("ATG1 metadata attributes must be a JSON object.");
+            }
+
+            chunk = new GeometryChunk
+            {
+                LayerId = meta["layer"]?.GetValue<string>() ?? throw new InvalidDataException("ATG1 metadata has no layer."),
+                Tile = new TileKey(tile[0]!.GetValue<uint>(), tile[1]!.GetValue<int>(), tile[2]!.GetValue<int>()),
+                Part = meta["part"]?.GetValue<int>() ?? 0,
+                Origin = origin,
+                Positions = positions,
+                Triangles = tri,
+                TriangleAttributes = triAttr,
+                Lines = lin,
+                LineAttributes = linAttr,
+                Points = pts,
+                PointAttributes = ptsAttr,
+                Attributes = attributes,
+                Stats = meta["stats"]?.DeepClone().AsObject() ?? [],
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or OverflowException or ArgumentException)
+        {
+            throw new InvalidDataException("ATG1 metadata is malformed.", ex);
         }
 
-        var chunk = new GeometryChunk
-        {
-            LayerId = meta["layer"]?.GetValue<string>() ?? throw new InvalidDataException("ATG1 metadata has no layer."),
-            Tile = new TileKey(tile[0]!.GetValue<uint>(), tile[1]!.GetValue<int>(), tile[2]!.GetValue<int>()),
-            Part = meta["part"]?.GetValue<int>() ?? 0,
-            Origin = origin,
-            Positions = positions,
-            Triangles = tri,
-            TriangleAttributes = triAttr,
-            Lines = lin,
-            LineAttributes = linAttr,
-            Points = pts,
-            PointAttributes = ptsAttr,
-            Attributes = attributes,
-            Stats = meta["stats"]?.DeepClone().AsObject() ?? [],
-        };
         chunk.Validate();
         return chunk;
     }

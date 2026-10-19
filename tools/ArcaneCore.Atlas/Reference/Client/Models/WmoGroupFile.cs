@@ -380,14 +380,15 @@ public sealed class WmoGroupFile
 
         long vertexCount = (long)xverts * yverts;
         long tileCount = (long)xtiles * ytiles;
-        if (headerSize + (vertexCount * 8) + tileCount > payload.Length)
+        int remaining = payload.Length - headerSize;
+        if (vertexCount > remaining / 8 || tileCount > remaining - (vertexCount * 8))
         {
             throw new InvalidDataException($"WMO group: MLIQ grid ({xverts}x{yverts} vertices, {xtiles}x{ytiles} tiles) needs more bytes than the chunk's {payload.Length}.");
         }
 
         Vector3 corner = ReadVector(payload[16..]);
         ushort material = BinaryPrimitives.ReadUInt16LittleEndian(payload[28..]);
-        var heights = new float[vertexCount];
+        var heights = new float[(int)vertexCount];
         for (int i = 0; i < heights.Length; i++)
         {
             heights[i] = BinaryPrimitives.ReadSingleLittleEndian(payload[(headerSize + (8 * i) + 4)..]);

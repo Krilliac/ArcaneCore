@@ -207,11 +207,20 @@ public static class MmapTileReader
     private static void ValidateIndices(DtMeshData mesh)
     {
         DtMeshHeader h = mesh.header;
+        if (!float.IsFinite(h.bmin.X) || !float.IsFinite(h.bmin.Y) || !float.IsFinite(h.bmin.Z)
+            || !float.IsFinite(h.bmax.X) || !float.IsFinite(h.bmax.Y) || !float.IsFinite(h.bmax.Z)
+            || h.bmin.X > h.bmax.X || h.bmin.Y > h.bmax.Y || h.bmin.Z > h.bmax.Z
+            || !float.IsFinite(h.bvQuantFactor) || h.bvQuantFactor < 0
+            || !float.IsFinite(h.walkableHeight) || !float.IsFinite(h.walkableRadius) || !float.IsFinite(h.walkableClimb))
+        {
+            throw new InvalidDataException("Detour tile header bounds or parameters are invalid");
+        }
+
         for (int i = 0; i < mesh.polys.Length; i++)
         {
             DtPoly p = mesh.polys[i];
             bool offMesh = p.GetPolyType() == DtPolyTypes.DT_POLYTYPE_OFFMESH_CONNECTION;
-            if (p.vertCount > NavMeshFormat.MaxVertsPerPoly || (p.vertCount < 3 && !offMesh))
+            if (p.vertCount > NavMeshFormat.MaxVertsPerPoly || p.vertCount < (offMesh ? 2 : 3))
             {
                 throw new InvalidDataException($"polygon {i} has {p.vertCount} vertices");
             }

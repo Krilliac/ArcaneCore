@@ -272,7 +272,8 @@ public sealed class NavMeshTile
             ushort flags = reader.ReadUInt16();
             byte count = reader.ReadByte();
             byte areaAndType = reader.ReadByte();
-            if (count > NavMeshFormat.MaxVertsPerPoly || (count < 3 && (areaAndType >> 6) != NavMeshFormat.PolyTypeOffMeshConnection))
+            bool offMesh = (areaAndType >> 6) == NavMeshFormat.PolyTypeOffMeshConnection;
+            if (count > NavMeshFormat.MaxVertsPerPoly || count < (offMesh ? 2 : 3))
             {
                 throw new InvalidDataException($"polygon {i} has {count} vertices");
             }

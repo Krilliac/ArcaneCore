@@ -150,6 +150,22 @@ public sealed record ViewState(
     public static ViewState FromJson(JsonObject json)
     {
         ArgumentNullException.ThrowIfNull(json);
+        try
+        {
+            return FromJsonCore(json);
+        }
+        catch (CommandException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
+        {
+            throw Bad(ex.Message);
+        }
+    }
+
+    private static ViewState FromJsonCore(JsonObject json)
+    {
         JsonObject camera = Obj(json, "camera");
         double[] target = Triple(camera, "target");
         double distance = Num(camera, "distance", CameraState.MinDistance, CameraState.MaxDistance);
