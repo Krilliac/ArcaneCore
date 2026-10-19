@@ -4,6 +4,7 @@ using ArcaneCore.Game.Death.Resurrection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -230,6 +231,29 @@ public sealed class ResurrectionSpellTests
         WorldCollision.Of(kit.World).Install(new FakeLineOfSight { WallX = 5 });
         Assert.Equal(SpellCastResult.LineOfSight, kit.System.CastSpell(caster, Percentage, targets, true));
         Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
+    }
+
+    /// <summary>
+    /// vmangos Spell::CheckCast (Spell.cpp:5786) asks the corpse: <c>corpse->IsWithinLOSInMap(m_caster)</c>. A corpse is not a unit, so it looks
+    /// from 1 yd (Object.cpp:1770) to 1 yd above the caster (:1777-1781): a 1.5 yd wall a yard from the caster blocks that flat line, though the
+    /// caster's own line (2 yd at the caster) would clear it.
+    /// </summary>
+    [Fact]
+    public void CorpseTarget_SightIsFromTheCorpse_OneYardUpAtBothEnds()
+    {
+        using var kit = new SpellTestKit(Resurrection(Percentage, SpellEffectName.Resurrect, 20));
+        Requests(kit);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10);
+        target.Map!.Combat.KillPlayer(target);
+        Assert.True(target.Map!.Combat.RepopPlayer(target));
+        var targets = new SpellCastTargets
+        {
+            Mask = SpellCastTargetFlags.CorpseAlly | SpellCastTargetFlags.Unit, Corpse = target.Combat.Corpse!.Guid, Unit = target.Guid,
+        };
+        using VMapWall wall = VMapWall.AcrossX(kit.World, 1f, 0f, 83.5f, 1.5f);
+
+        Assert.Equal(SpellCastResult.LineOfSight, kit.System.CastSpell(caster, Percentage, targets, true));
     }
 
     [Theory]

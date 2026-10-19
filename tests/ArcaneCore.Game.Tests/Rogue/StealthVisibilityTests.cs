@@ -1,8 +1,10 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stealth;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -414,6 +416,28 @@ public sealed class StealthVisibilityTests
         Assert.Equal(0, rig.Registry.Count);
         Assert.Equal(StealthVisibility.On, rig.Registry.VisibilityOf(rig.Rogue));
         Assert.False(rig.Registry.AnyHidden); // the visibility rule goes back to its no-lookup fast path
+    }
+
+    [Fact]
+    public void DetectionSight_RunsFromTheStealthedUnitsEye_ToTwoYardsAboveTheCamera()
+    {
+        // vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6457-6460): the stealthed unit asks IsWithinLOS(viewPoint), from its own collision
+        // height to the camera's position raised by the default 2 yd (Object.h:607). A 1.5 yd wall 0.4 yd from a 1 yd rogue is above that
+        // line (1.08 yd there); from a 2 yd eye the line is flat at 2 yd and passes, though the viewer's line to the rogue's check position
+        // (2 yd at the viewer, 1 yd at the rogue) would be under the wall.
+        using var rig = new Rig(viewerDistance: 5f);
+        rig.Viewer.Level = 1;
+        rig.Rogue.Level = 1;
+        rig.Viewer.Relocate(0f, 0f, 83.5f, 0f, 0);
+        rig.Stealthed();
+        var rule = new StealthVisibilityRule(rig.Kit.System, rig.Registry);
+        using VMapWall wall = VMapWall.AcrossX(rig.Kit.World, 4.6f, 0f, 83.5f, 1.5f);
+
+        rig.Rogue.Locomotion.CollisionHeight = 1.0f;
+        Assert.False(rule.CanSee(rig.Viewer, rig.Rogue, alreadyVisible: false, detect: true));
+
+        rig.Rogue.Locomotion.CollisionHeight = 2.0f;
+        Assert.True(rule.CanSee(rig.Viewer, rig.Rogue, alreadyVisible: false, detect: true));
     }
 
     [Fact]

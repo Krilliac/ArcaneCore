@@ -94,6 +94,8 @@ public sealed class StealthServices(SpellSystem spells, StealthRegistry registry
             return false;
         }
 
-        return creature.Map is not { } map || map.Collision.IsWithinLineOfSight(creature, target);
+        // vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6457-6460): the stealthed unit asks IsWithinLOS(creature's position), from its own
+        // collision height to the creature raised by the default 2 yd (Object.h:607).
+        return creature.Map is not { } map || map.Collision.IsWithinLineOfSight(target, creature.X, creature.Y, creature.Z);
     }
 }

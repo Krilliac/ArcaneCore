@@ -53,8 +53,10 @@ when it inspects a prefix.
     corners after the start go into one multi-point SMSG_MONSTER_MOVE (vmangos
     `MoveSplineInit::MovebyPath`). On `PathType.NoPath` the creature goes straight, as vmangos
     chase does outside instances.
-  - Aggro on sight and assistance use `map.Collision.IsWithinLineOfSight` (`ILineOfSight`, eye
-    height 2 yd).
+  - Aggro on sight and assistance use `map.Collision.IsWithinLineOfSight` (`ILineOfSight`): from
+    the viewer's collision height to 1 yd above the other unit (vmangos `IsWithinLOSInMap`,
+    Object.cpp:1754-1781). For assistance the calling creature looks at the helper
+    (GridNotifiers.h:1043).
   - Without vmaps or mmaps the defaults (`OpenLineOfSight`, `StraightLinePathfinder`) keep the
     old behaviour. `WorldCollision.Of(world).Install(...)` swaps them, which is what the
     collision feature and the tests do.

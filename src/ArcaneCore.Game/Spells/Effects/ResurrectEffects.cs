@@ -104,7 +104,8 @@ public sealed class ResurrectEffects : ISpellHandlerModule
             return SpellCastResult.BadTargets;
         }
 
-        return !context.Spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight) && !map.Collision.IsWithinLineOfSight(context.Caster, corpse)
+        // vmangos Spell.cpp:5786 asks the corpse: corpse->IsWithinLOSInMap(m_caster), from 1 yd above the corpse to 1 yd above the caster.
+        return !context.Spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight) && !map.Collision.IsWithinLineOfSight(corpse, context.Caster)
             ? SpellCastResult.LineOfSight
             : SpellCastResult.CastOk;
     }

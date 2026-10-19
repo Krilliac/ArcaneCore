@@ -226,11 +226,15 @@ public sealed class LocomotionState
     /// <summary>The factor on the breath time (vmangos Player::m_environmentBreathingMultiplier): 0 with a Water Breathing aura, 1 otherwise.</summary>
     public float BreathingMultiplier { get; set; } = 1.0f;
 
+    /// <summary>vmangos' model collision height before any model data is read (Unit.cpp:117) or when the model has none (:9384).</summary>
+    public const float DefaultCollisionHeight = 2.0f;
+
     /// <summary>
     /// The unit's model collision height in yards (vmangos Unit::m_modelCollisionHeight, Unit.cpp:9380-9386). Without the client's
-    /// CreatureModelData it is vmangos' fallback of 2 yards for every race; the swim depth is three quarters of it.
+    /// CreatureModelData it is vmangos' fallback of 2 yards for every race; the swim depth is three quarters of it. Line of sight
+    /// looks from <see cref="Entities.Unit.CollisionHeight"/>, this height times the unit's scale override.
     /// </summary>
-    public float CollisionHeight { get; set; } = 2.0f;
+    public float CollisionHeight { get; set; } = DefaultCollisionHeight;
 
     /// <summary>The place the liquid flags were last evaluated for (null: never), so a tick only asks the terrain again after a move.</summary>
     internal (Maps.Map Map, float X, float Y, float Z)? LastEnvironmentSample { get; set; }

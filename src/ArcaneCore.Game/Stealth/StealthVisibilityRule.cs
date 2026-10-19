@@ -106,8 +106,9 @@ public sealed class StealthVisibilityRule : IVisibilityRule
             return alreadyVisible;
         }
 
-        // vmangos Unit.cpp:6455-6460: CanDetectStealthOf gets GetDistance3dToCenter(viewPoint), then LOS is from that
-        // same camera. The body's position is only the facing arc inside the formula.
+        // vmangos Unit.cpp:6455-6460: CanDetectStealthOf gets GetDistance3dToCenter(viewPoint), then the stealthed unit asks
+        // IsWithinLOS(viewPoint's position): from its own collision height to that camera raised by the default 2 yd (Object.h:607).
+        // The body's position is only the facing arc inside the formula.
         WorldObject eye = viewer.ViewPoint;
         float dx = eye.X - unit.X;
         float dy = eye.Y - unit.Y;
@@ -118,7 +119,7 @@ public sealed class StealthVisibilityRule : IVisibilityRule
             return false;
         }
 
-        return viewer.Map is not { } map || map.Collision.IsWithinLineOfSight(eye, unit);
+        return viewer.Map is not { } map || map.Collision.IsWithinLineOfSight(unit, eye.X, eye.Y, eye.Z);
     }
 
     // No lambdas here: capturing 'viewer' in CanSee made the compiler allocate a closure on every visibility check (~19 MB/min on live).

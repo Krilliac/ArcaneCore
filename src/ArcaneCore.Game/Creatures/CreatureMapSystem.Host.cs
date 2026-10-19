@@ -409,7 +409,10 @@ public sealed partial class CreatureMapSystem
             creature.AI?.OnMeleeHitReceived(hit);
     }
 
-    /// <summary>vmangos IsWithinLOSInMap through the map's <see cref="ILineOfSight"/> (<c>map.Collision</c>, eye height; open without vmaps).</summary>
+    /// <summary>
+    /// vmangos <c>from->IsWithinLOSInMap(to)</c> through the map's <see cref="ILineOfSight"/> (<c>map.Collision</c>: from
+    /// <paramref name="from"/>'s collision height to 1 yd above <paramref name="to"/>, so the order matters; open without vmaps).
+    /// </summary>
     private bool InLineOfSight(WorldObject from, WorldObject to) => Map.Collision.IsWithinLineOfSight(from, to);
 
     private static float DistanceSquared(WorldObject a, WorldObject b)

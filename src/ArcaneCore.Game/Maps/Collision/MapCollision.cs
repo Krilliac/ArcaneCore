@@ -24,11 +24,22 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     public const float DefaultHeightSearch = 50.0f;
 
     /// <summary>
-    /// Eye height used for object-to-object line of sight when a unit has no collision height
-    /// (vmangos <c>WorldObject::IsWithinLOS</c> raises both ends by about two yards so the
-    /// ground itself never blocks).
+    /// How far above a point it is looked at: vmangos <c>WorldObject::IsWithinLOS</c> and <c>IsWithinLOSAtPosition</c> default
+    /// <c>targetHeight</c> to 2 (Object.h:607-611). It equals the collision height of a unit without model data
+    /// (<see cref="global::ArcaneCore.Game.Locomotion.LocomotionState.DefaultCollisionHeight"/>), so the area-centre check of spell targeting, which stands in for no
+    /// object, raises both its ends by it.
     /// </summary>
     public const float DefaultEyeHeight = 2.0f;
+
+    /// <summary>
+    /// vmangos <c>WorldObject::GetLosCheckPosition</c> (Object.cpp:1777-1781): an object is looked at 1 yard above its position.
+    /// A game object looks at the centre of its model bounds instead (GameObject.cpp:2385-2423), which needs the display bounds
+    /// (<c>gameobject_display_info_addon</c>) or the game object models this codebase does not load, so it takes this fallback.
+    /// </summary>
+    public const float ObjectTargetHeight = 1.0f;
+
+    /// <summary>vmangos <c>WorldObject::IsWithinLOSAtPosition</c> (Object.cpp:1770): an object that is not a unit looks from 1 yard above its position.</summary>
+    public const float ObjectEyeHeight = 1.0f;
 
     /// <summary>vmangos <c>TerrainInfo::GetHeightStatic</c> looks for the floor from this far above the point.</summary>
     private const float FloorProbeOffset = 2.0f;
@@ -87,8 +98,10 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     }
 
     /// <summary>
-    /// vmangos <c>WorldObject::IsWithinLOSInMap</c>: line of sight between two objects of this
-    /// map, both ends raised to eye height. Objects in another map are never in sight.
+    /// vmangos <c>WorldObject::IsWithinLOSInMap</c> (Object.cpp:1754-1764): line of sight from <paramref name="source"/>'s eye
+    /// (<see cref="EyeHeightOf"/>) to <paramref name="target"/>'s check position (<see cref="ObjectTargetHeight"/> above it), the
+    /// segment <see cref="LineOfSightSegment"/> gives. The ends differ, so the question is not symmetric: ask it from the object
+    /// vmangos asks it from. Objects in another map are never in sight; objects within each other's bounding radius always are.
     /// </summary>
     public bool IsWithinLineOfSight(WorldObject source, WorldObject target)
     {
@@ -104,16 +117,50 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             return false;
         }
 
-        return IsInLineOfSight(
-            source.X, source.Y, source.Z + DefaultEyeHeight,
-            target.X, target.Y, target.Z + DefaultEyeHeight);
+        // IsWithinDist(obj, 0.0f) (Object.cpp:1759-1760): objects within each other's bounding radius (3D) are in sight without a ray.
+        float dx = source.X - target.X;
+        float dy = source.Y - target.Y;
+        float dz = source.Z - target.Z;
+        float touching = source.BoundingRadius + target.BoundingRadius;
+        if ((dx * dx) + (dy * dy) + (dz * dz) < touching * touching)
+        {
+            return true;
+        }
+
+        (Vector3 from, Vector3 to) = LineOfSightSegment(source, target);
+        return IsInLineOfSight(from.X, from.Y, from.Z, to.X, to.Y, to.Z);
     }
 
-    /// <summary>Line of sight from an object (at eye height) to a point (raised the same, vmangos <c>IsWithinLOS</c>).</summary>
-    public bool IsWithinLineOfSight(WorldObject source, float x, float y, float z)
+    /// <summary>
+    /// vmangos <c>WorldObject::IsWithinLOS</c> (Object.h:607-610): line of sight from <paramref name="source"/>'s eye
+    /// (<see cref="EyeHeightOf"/>) to the point <paramref name="targetHeight"/> above (<paramref name="x"/>, <paramref name="y"/>,
+    /// <paramref name="z"/>), by default <see cref="DefaultEyeHeight"/> as there.
+    /// </summary>
+    public bool IsWithinLineOfSight(WorldObject source, float x, float y, float z, float targetHeight = DefaultEyeHeight)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return IsInLineOfSight(source.X, source.Y, source.Z + DefaultEyeHeight, x, y, z + DefaultEyeHeight);
+        return IsInLineOfSight(source.X, source.Y, source.Z + EyeHeightOf(source), x, y, z + targetHeight);
+    }
+
+    /// <summary>
+    /// The segment <see cref="IsWithinLineOfSight(WorldObject, WorldObject)"/> tests: from <paramref name="source"/>'s eye to
+    /// <paramref name="target"/>'s check position.
+    /// </summary>
+    public static (Vector3 From, Vector3 To) LineOfSightSegment(WorldObject source, WorldObject target)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        return (new Vector3(source.X, source.Y, source.Z + EyeHeightOf(source)), new Vector3(target.X, target.Y, target.Z + ObjectTargetHeight));
+    }
+
+    /// <summary>
+    /// How far above its position an object looks from (vmangos <c>IsWithinLOSAtPosition</c>, Object.cpp:1770): a unit's
+    /// <see cref="Unit.CollisionHeight"/>, else <see cref="ObjectEyeHeight"/>.
+    /// </summary>
+    public static float EyeHeightOf(WorldObject viewer)
+    {
+        ArgumentNullException.ThrowIfNull(viewer);
+        return viewer is Unit unit ? unit.CollisionHeight : ObjectEyeHeight;
     }
 
     /// <summary>

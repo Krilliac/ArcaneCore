@@ -375,6 +375,13 @@ public sealed partial class Creature : Unit, ICombatCreature
     public float CreatureRunSpeed => BaseRunSpeed * (Template.SpeedRun > 0 ? Template.SpeedRun : DefaultRunSpeedRate);
 
     /// <summary>
+    /// vmangos <c>m_nativeScaleOverride = scale</c> (Creature.cpp:399-404): the scale <see cref="InitializeFields"/> chose, the
+    /// template's display scale or else the display's own. The model collision height is already scaled by the object scale over the
+    /// display's (Unit.cpp:9386), so for a creature drawn at a scale other than its display's vmangos applies that ratio twice.
+    /// </summary>
+    private protected override float NativeCollisionScale => NativeScaleOverride > 0 ? NativeScaleOverride : NativeScale;
+
+    /// <summary>
     /// (Re)initialize every template-derived field — used at creation and at respawn, as vmangos
     /// re-runs UpdateEntry/SelectLevel when a creature respawns.
     /// </summary>

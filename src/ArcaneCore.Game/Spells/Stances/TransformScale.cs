@@ -17,6 +17,9 @@ public static class TransformScale
         public float Native { get; } = native;
 
         public float Override { get; set; } = native;
+
+        /// <summary>Whether a transformation's scale is applied (<see cref="Set"/>), not the native one (<see cref="Reset"/>, or never set).</summary>
+        public bool Transformed { get; set; }
     }
 
     private static readonly ConditionalWeakTable<Unit, State> s_states = new();
@@ -51,7 +54,35 @@ public static class TransformScale
     public static void Set(Unit unit, float scale, SpellSystem? spells = null)
     {
         ArgumentNullException.ThrowIfNull(unit);
+        Apply(unit, Of(unit, spells), scale, transformed: true);
+    }
+
+    /// <summary>Back to the native scale.</summary>
+    public static void Reset(Unit unit, SpellSystem? spells = null)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
         State state = Of(unit, spells);
+        Apply(unit, state, state.Native, transformed: false);
+    }
+
+    /// <summary>
+    /// The scale of the transformation applied to <paramref name="unit"/> (vmangos <c>m_nativeScaleOverride</c> after
+    /// <c>SetTransformScale</c>), or false when none is: never set, or reset to the native scale.
+    /// </summary>
+    internal static bool TryGetTransformation(Unit unit, out float scale)
+    {
+        if (s_states.TryGetValue(unit, out State? state) && state.Transformed)
+        {
+            scale = state.Override;
+            return true;
+        }
+
+        scale = 0f;
+        return false;
+    }
+
+    private static void Apply(Unit unit, State state, float scale, bool transformed)
+    {
         if (scale == 0 || state.Override == 0)
         {
             return;
@@ -64,8 +95,6 @@ public static class TransformScale
         }
 
         state.Override = scale;
+        state.Transformed = transformed;
     }
-
-    /// <summary>Back to the native scale.</summary>
-    public static void Reset(Unit unit, SpellSystem? spells = null) => Set(unit, GetNative(unit, spells), spells);
 }

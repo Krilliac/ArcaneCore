@@ -213,6 +213,31 @@ public abstract partial class Unit : WorldObject
         }
     }
 
+    /// <summary>
+    /// vmangos <c>Unit::GetCollisionHeight</c> (Unit.h:542): the model collision height (<c>m_modelCollisionHeight</c>,
+    /// <see cref="global::ArcaneCore.Game.Locomotion.LocomotionState.CollisionHeight"/>) times <c>m_nativeScaleOverride</c>, which is
+    /// the scale of the transformation applied (<c>SetTransformScale</c>, Unit.cpp:10967-10976;
+    /// <see cref="global::ArcaneCore.Game.Spells.TransformScale"/>) or else <see cref="NativeCollisionScale"/>. The height a unit
+    /// looks from in line of sight (Object.cpp:1770).
+    /// </summary>
+    public float CollisionHeight
+    {
+        get
+        {
+            float model = global::ArcaneCore.Game.Locomotion.LocomotionStates.TryGet(this, out global::ArcaneCore.Game.Locomotion.LocomotionState state)
+                ? state.CollisionHeight
+                : global::ArcaneCore.Game.Locomotion.LocomotionState.DefaultCollisionHeight;
+            float scale = global::ArcaneCore.Game.Spells.TransformScale.TryGetTransformation(this, out float transform) ? transform : NativeCollisionScale;
+            return model * scale;
+        }
+    }
+
+    /// <summary>
+    /// <c>m_nativeScaleOverride</c> while no transformation is applied: 1 (Unit.h:486; a player keeps it), which a creature
+    /// replaces with the scale it was created with.
+    /// </summary>
+    private protected virtual float NativeCollisionScale => 1.0f;
+
     /// <summary>UNIT_FIELD_BYTES_0: race, class, gender, power type (vmangos Unit::GetRace etc.).</summary>
     public Race Race => (Race)GetByte(UpdateFields.UnitFieldBytes0, 0);
 

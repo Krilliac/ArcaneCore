@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Game.Spells.PersistentAreaAuras;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Kernel.Diagnostics;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -121,6 +122,20 @@ public sealed class PersistentAreaAuraTests : IDisposable
         _kit.Advance(100);
         Assert.NotNull(Holder(_enemy, BlizzardTarget));
         Assert.Null(Holder(_friend, BlizzardTarget));
+    }
+
+    [Fact]
+    public void APlayersGroundObject_LooksAtItsTargets_FromOneYardUp()
+    {
+        // vmangos DynamicObjectUpdater::VisitHelper (GridNotifiersImpl.h:151-154): i_dynobject.IsWithinLOSInMap(target) for a player's ground
+        // object. It is not a unit, so it looks from 1 yd (Object.cpp:1770) to 1 yd above the target (:1777-1781): a 1.5 yd wall halfway to
+        // the enemy keeps the aura off it.
+        using VMapWall wall = VMapWall.AcrossX(_kit.World, 1.5f, 0f, 83.5f, 1.5f);
+
+        Cast(Consecration);
+        _kit.Advance(100);
+
+        Assert.Null(Holder(_enemy, Consecration));
     }
 
     [Fact]

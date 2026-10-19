@@ -58,6 +58,10 @@ public sealed class CollisionSeamTests
         Assert.IsType<StraightLinePathfinder>(map.Collision.Pathfinder);
     }
 
+    /// <summary>
+    /// vmangos WorldObject::IsWithinLOSInMap (Object.cpp:1754-1781): from the viewer's collision height (2 yd without model data) to
+    /// 1 yd above the target.
+    /// </summary>
     [Fact]
     public void ObjectLineOfSight_UsesEyeHeight_AndRejectsOtherMaps()
     {
@@ -73,8 +77,8 @@ public sealed class CollisionSeamTests
 
         Assert.True(a.IsWithinLineOfSight(b));
         (Vector3 from, Vector3 to) = Assert.Single(probe.Calls);
-        Assert.Equal(a.Z + MapCollision.DefaultEyeHeight, from.Z);
-        Assert.Equal(b.Z + MapCollision.DefaultEyeHeight, to.Z);
+        Assert.Equal(a.Z + 2f, from.Z);
+        Assert.Equal(b.Z + 1f, to.Z);
 
         Assert.True(a.IsWithinLineOfSight(a));
         Assert.False(a.IsWithinLineOfSight(c));
@@ -138,7 +142,7 @@ public sealed class CollisionSeamTests
         }
     }
 
-    private sealed class RecordingLineOfSight : ILineOfSight
+    internal sealed class RecordingLineOfSight : ILineOfSight
     {
         public List<(Vector3 From, Vector3 To)> Calls { get; } = [];
 

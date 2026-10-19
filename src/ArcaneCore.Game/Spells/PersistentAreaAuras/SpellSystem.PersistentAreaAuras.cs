@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells.PersistentAreaAuras;
 using ArcaneCore.Game.Spells.Rules.Immunity;
@@ -197,8 +198,10 @@ public sealed partial class SpellSystem
             return;
         }
 
-        // Must check LoS with the target to prevent casting through objects by targeting the floor. Let creatures cheat.
-        if (caster is Player && !IsInLineOfSightFromPoint(spell, map, dynamic.X, dynamic.Y, dynamic.Z, target))
+        // Must check LoS with the target to prevent casting through objects by targeting the floor. Let creatures cheat. vmangos asks the
+        // object (GridNotifiersImpl.h:153, i_dynobject.IsWithinLOSInMap(target)): from 1 yd above it, not a unit (Object.cpp:1770), to 1 yd
+        // above the target (:1777-1781). IGNORE_LINE_OF_SIGHT is honoured here as for the other area targets; vmangos does not test it.
+        if (caster is Player && !spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight) && !map.Collision.IsWithinLineOfSight(dynamic, target))
         {
             return;
         }
