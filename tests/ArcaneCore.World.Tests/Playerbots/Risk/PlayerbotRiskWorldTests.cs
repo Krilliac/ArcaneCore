@@ -214,13 +214,17 @@ public sealed class PlayerbotRiskWorldTests
 
     /// <summary>
     /// A fight the bot is about to win is finished, though the bot is hurt below its retreat threshold: the creature at 10% health.
-    /// The same bot, as hurt, against the same creature at full health, retreats (so the first half is not vacuous).
+    /// The same bot, as hurt, against the same creature at full health, retreats (so the first half is not vacuous). The creature
+    /// runs slower than the bot (4.2 yards a second against 7), so that retreat always gets away. From one that outruns the bot a
+    /// retreat is counted hit for the run plus the 13 seconds before the leash clock lets go, and the hurt bot is held
+    /// cornered-no-escape whenever the damage rolls seen so far make that more than 90% of its health
+    /// (<see cref="PlayerbotRetreatFeasibilityWorldTests"/>): the second half then fought on to its death in 3 to 6 runs of 15.
     /// </summary>
     [Fact]
     public async Task ANearlyWonFight_IsNotAbandoned_AFreshOneAtTheSameHealthIs()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
-        CreatureTemplate template = RiskTestWorld.Template(991031, health: 400, minDamage: 1, maxDamage: 2);
+        CreatureTemplate template = RiskTestWorld.Template(991031, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 0.6f);
         Creature nearlyDead = await world.OnWorldAsync(() => world.Spawn(template, 2, 0));
         await world.SeeAsync(nearlyDead);
         await world.OnWorldAsync(() =>

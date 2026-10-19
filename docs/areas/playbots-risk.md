@@ -90,6 +90,15 @@ stand. Then `time to kill = enemies' health / damage dealt`, `time to die = bot 
 * A single enemy at or below `NearlyWonHealthPct` (20%) is finished unless the bot would die in less than half the time it needs.
 * Winning (`time to die x Tolerance >= time to kill`): fight on.
 * Losing: retreat at `RetreatHealthPct` (35%) or when the bot would die within 4 seconds; until then fight on (`behind`).
+  A retreat that would not break contact before it kills the bot is no way out, and the bot fights on (`cornered-no-escape`,
+  `PlayerbotRiskModel.RetreatSucceeds`): the damage predicted on the run must stay under 90% of the bot's health. A pursuer at
+  least as fast as the bot (speed_run 1.14286 is 8 yards a second, an unbuffed bot 7) keeps hitting for the whole run and on
+  until its leash clock is more than `LeashExtensionSeconds` (12) whole seconds old; that clock starts only once both are out of
+  its threat area (vmangos `IsOutOfThreatArea`), so a bot that turns to run in contact is counted hit for the run plus 13 seconds
+  (`PlayerbotRetreat.Assess`). A slower pursuer hits until the gap passes its reach (about 5 yards). Blows from behind land
+  `1 / (1 - avoidance)` times as often (no dodge, parry or block); a ready root, stun, fear or stealth takes the seconds it holds
+  off, a snare or a speed buff changes the speeds compared, and an escape's cast time is spent under the blows
+  (`PlayerbotRetreatFeasibilityTests`, `PlayerbotRetreatFeasibilityWorldTests`).
 
 The report then reads `fight ttk=9.4s ttd=28.2s decision=fight reason=winning`.
 

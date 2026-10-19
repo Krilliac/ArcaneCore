@@ -273,7 +273,8 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
 
         var invariants = new List<InvariantFailure>
         {
-            new("Step", "D:\\src\\MoveSpline.cs", 88, 2, "spline index out of range"),
+            // A full caller path in this platform's separators, as [CallerFilePath] gives it: on Linux "D:\src\MoveSpline.cs" is one file name.
+            new("Step", Path.GetFullPath(Path.Combine("src", "MoveSpline.cs")), 88, 2, "spline index out of range"),
         };
         var feed = new PlayerbotQaFaultFeed(ledger, () => invariants, anomalyLedger);
 
