@@ -52,14 +52,15 @@ public abstract class WorldMapData : ScriptedInstance
 
     /// <summary>
     /// cmangos WorldObject::GetRandomPoint(x, y, z, distance): a point within <paramref name="radius"/> yards around the given one, put on
-    /// the ground near its height (the given height where the terrain has none).
+    /// the floor near its height, terrain or a static model (UpdateAllowedPositionZ, Object.cpp:1624, asks Map::GetHeight with vmaps,
+    /// Map.cpp:2758-2765); the given height where no floor is known.
     /// </summary>
     protected (float X, float Y, float Z) RandomPointAround(float x, float y, float z, float radius)
     {
         double angle = Random.NextDouble() * Math.PI * 2, distance = Random.NextDouble() * radius;
         float px = x + (float)(distance * Math.Cos(angle)), py = y + (float)(distance * Math.Sin(angle));
-        float ground = Instance.GetHeight(px, py, z + 2f);
-        return (px, py, ground > ArcaneCore.Game.Maps.Terrain.TerrainTile.InvalidHeight && Math.Abs(ground - z) <= 10f ? ground : z);
+        float? ground = MapCreatureHeightProvider.Floor(Instance, px, py, z + 2f);
+        return (px, py, ground is { } floor && Math.Abs(floor - z) <= 10f ? floor : z);
     }
 
     /// <summary>The world map script of a continent (cmangos ScriptMgr's per-map <c>GetInstanceData</c>), or null for a map without one.</summary>

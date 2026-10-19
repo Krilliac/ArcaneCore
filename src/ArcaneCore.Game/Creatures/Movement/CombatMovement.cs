@@ -488,7 +488,8 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
         float z;
 
         // vmangos FleeingMovementGenerator (:108 -> Map::GetWalkHitPosition): the leg is walked on the navmesh, capped at 30 yd and cut
-        // where the mesh ends or a steep slope begins. Without mesh data for the spot the terrain-height point stays.
+        // where the mesh ends or a steep slope begins. Without mesh data for the spot the point stays, on the floor there (terrain or a
+        // static model).
         Vector3 from = new(creature.X, creature.Y, creature.Z);
         float cut = Math.Min(distance, MeshFleeCap);
         if (mover.TryRaycastMesh(creature, from, new Vector3(creature.X + (cut * MathF.Cos(angle)), creature.Y + (cut * MathF.Sin(angle)), creature.Z), out Vector3 reached))

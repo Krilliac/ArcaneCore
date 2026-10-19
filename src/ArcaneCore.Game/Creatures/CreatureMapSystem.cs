@@ -371,9 +371,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     {
         if (_ungatedMotion)
         {
-            if (_height is MapCreatureHeightProvider && mapId == Map.MapId && Map.TryGetLoadedHeight(x, y, out float height))
+            // Without model data MapCreatureHeightProvider's answer is the terrain height, read here from a tile in memory. With models it
+            // needs the world's vmap trees (world-thread state): in the gate.
+            if (_ungatedTerrainFloor && _height is MapCreatureHeightProvider && mapId == Map.MapId && Map.TryGetLoadedHeight(x, y, out float height))
             {
-                return float.IsFinite(height) && height > TerrainTile.InvalidHeight ? height : null; // MapCreatureHeightProvider's answer
+                return MapCreatureHeightProvider.Known(height); // MapCreatureHeightProvider's answer
             }
 
             using (Serial())
@@ -1117,6 +1119,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     private bool _ungatedNoMesh;
     private ISharedPathSearch? _ungatedPathSearch;
     private bool _ungatedCanSearch;
+    private bool _ungatedTerrainFloor;
 
     /// <summary>
     /// Whether the creature's Random motion may run outside the gate: a plain wander (no expiry, so its update never pops the generator
@@ -1127,10 +1130,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     /// <summary>
     /// In the gate, before the ungated wander pass: the owner-only lookups it needs are made here (the map's pathfinder, whether its
-    /// navmesh is known, the path-job pool), so the pass itself never reads the navmesh table or a terrain file.
+    /// navmesh is known, the path-job pool, whether model floors exist), so the pass itself never reads the navmesh table or a terrain file.
     /// </summary>
     private void PrepareUngatedMotion()
     {
+        _ungatedTerrainFloor = !Map.Collision.LineOfSight.Enabled; // MapCollision.GetHeight asks no model then
         IMeshPointQuery? meshPoints = Map.Collision.MeshPoints;
         _ungatedNoMesh = meshPoints is null;
         _ungatedMeshPoints = meshPoints as ISharedMeshPointQuery;

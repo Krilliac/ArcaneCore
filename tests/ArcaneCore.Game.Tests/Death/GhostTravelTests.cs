@@ -1,12 +1,18 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Death.Travel;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Tests.Collision;
+using ArcaneCore.Game.Tests.GridTerrain;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using Xunit;
@@ -35,9 +41,11 @@ public sealed class GhostTravelTests
 
     private sealed class Rig : IDisposable
     {
-        public Rig()
+        /// <param name="configure">Runs before any map exists (terrain directory, collision services).</param>
+        public Rig(Action<WorldRuntime>? configure = null)
         {
             World = TestWorld.CreateRuntime();
+            configure?.Invoke(World);
             DeathHooks.Register(World, new DeathHooks(new DeathOptions(), new FixedDeathClock(T)));
             WorldMaps.Of(World).Load(Content);
             Session = new FakeSession(9);
@@ -76,8 +84,35 @@ public sealed class GhostTravelTests
 
         var reply = Parse(MapCombat.BuildCorpseQuery(rig.Player));
 
-        float ground = rig.World.GetMap(0).GetHeight(-230f, 1570f, GridDefines.MaxHeight);
+        float ground = rig.World.GetMap(0).Collision.GetHeight(-230f, 1570f, GridDefines.MaxHeight);
         Assert.Equal((1, 0, -230f, 1570f, ground, 33u), reply);
+    }
+
+    [Fact]
+    public void TheEntranceGround_IsTheTopModelFloorThere_NotTheTerrainUnderIt()
+    {
+        // vmangos QueryHandler.cpp:187 asks TerrainInfo::GetHeightStatic(x, y, MAX_HEIGHT) with vmaps on (its default, GridMap.h:152): from
+        // that height the search reaches down to the terrain and the model floor above it wins (GridMap.cpp:833-866). A platform 40 yd up.
+        using var models = new VMapFixture();
+        models.Place("platform", VMapFixture.Box(new Vector3(-5, -5, -0.5f), new Vector3(5, 5, 0.5f)), new Vector3(-230f, 1570f, 40f));
+        models.Write(0);
+        (int tileX, int tileY) = TerrainTile.TileOf(-230f, 1570f)!.Value;
+        string terrain = Path.Combine(models.Directory, "terrain");
+        Directory.CreateDirectory(Path.Combine(terrain, "maps"));
+        File.WriteAllBytes(Path.Combine(terrain, "maps", TerrainTile.FileName(0, tileX, tileY)), new MapFileBuilder { GridHeight = 0f }.Build());
+        var vmaps = new VMapManager(models.Directory);
+        using var rig = new Rig(world =>
+        {
+            world.Options.Maps.DataDirectory = terrain;
+            WorldCollision.Of(world).Install(lineOfSight: vmaps);
+        });
+        Assert.True(vmaps.LoadTile(0, tileX, tileY));
+        rig.GhostWithBodyOn(33);
+
+        (byte found, int map, float x, float y, float z, uint corpseMap) = Parse(MapCombat.BuildCorpseQuery(rig.Player));
+
+        Assert.Equal((1, 0, -230f, 1570f, 33u), (found, map, x, y, corpseMap));
+        Assert.Equal(40.5f, z, 3);
     }
 
     [Fact]

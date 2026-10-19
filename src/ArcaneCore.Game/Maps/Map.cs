@@ -364,7 +364,12 @@ public sealed class Map
     /// <summary>Any object in the map (players included) by GUID.</summary>
     public WorldObject? FindObject(ObjectGuid guid) => _objects.GetValueOrDefault(guid);
 
-    /// <summary>Ground height under a position (<see cref="TerrainInfo.GetHeight"/>).</summary>
+    /// <summary>
+    /// The terrain height under a position (<see cref="TerrainInfo.GetHeight"/>): vmangos <c>TerrainInfo::GetHeightStatic</c> with
+    /// <c>useVmaps = false</c> (GridMap.cpp:815, 823-824, 871), no model floor. The floor of vmangos' default <c>Map::GetHeight</c>
+    /// (<c>vmap = true</c>, Map.cpp:3407-3411), terrain and static models, is <c>map.Collision.GetHeight</c>
+    /// (<see cref="Collision.MapCollision.GetHeight"/>), which creature points use.
+    /// </summary>
     public float GetHeight(float x, float y, float z) => _terrain.GetHeight(x, y, z);
 
     /// <summary><see cref="GetHeight"/> from a terrain tile already in memory (any thread; false when the tile would have to be loaded).</summary>

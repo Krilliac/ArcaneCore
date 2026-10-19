@@ -306,7 +306,7 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
 * **Guardian level scaling.** The engineering-trinket level (`SpellEffects.cpp:2824-2832`) needs the
   skills lane's skill values; a guardian's stats follow its template, not `InitStatsForLevel` (only its
   owner-flag tail runs).
-* **Random points** use a uniform disc at the terrain height (or the centre's Z), as the creature
+* **Random points** use a uniform disc at the floor height (terrain or a static model, `MapCreatureHeightProvider`; or the centre's Z), as the creature
   wander does, instead of the navmesh walk query of `GetRandomPoint` (`Object.cpp:1991-2063`).
 * **Summon limit.** vmangos `SummonCreature` refuses once the summoner has too many active summons
   (`GetCreatureSummonLimit`, `Object.cpp:2445`, `2557`); not modelled for wild summons.

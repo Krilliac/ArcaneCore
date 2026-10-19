@@ -300,8 +300,8 @@ public sealed partial class SummonService
 
     /// <summary>
     /// vmangos WorldObject::GetRandomPoint (Object.cpp:1991-2063): below 0.1 yd the centre itself.
-    /// Without a navmesh walk query the point is uniform over the disc at the terrain height (or the
-    /// centre's Z), as the creature wander does (docs/integration/pets.md).
+    /// Without a navmesh walk query the point is uniform over the disc at the floor height (terrain or a
+    /// static model; or the centre's Z), as the creature wander does (docs/integration/pets.md).
     /// </summary>
     private (float X, float Y, float Z) RandomPoint(CreatureMapSystem creatures, float centerX, float centerY, float centerZ, float distance)
     {
