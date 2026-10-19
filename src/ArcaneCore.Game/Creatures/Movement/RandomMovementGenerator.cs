@@ -22,10 +22,13 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// <para>
 /// Point choice (docs/areas/creature-movement-spawns.md): like vmangos (<c>Creature::GetRandomPoint</c>, <c>MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES</c>)
-/// the point is a navmesh point within the wander distance (<see cref="ICreatureMover.TryGetRandomMeshPoint"/>) reached by a mesh path; where no
-/// mesh is loaded it is uniform over the wander disc at the height provider's ground Z (or the spawn Z), walked straight (the pathfinder's
-/// answer for a map or tile without mesh data). A leg with no path (the point is off the mesh) is skipped and tried again 1-1.5 s later; a leg
-/// the path budget cannot serve waits for the next update. Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
+/// the point is a navmesh point within the wander distance (<see cref="ICreatureMover.TryGetRandomMeshPoint"/>) reached by a mesh path, both
+/// off steep slopes (the leg's search excludes them, MoveSplineInit.h:129-130); where no mesh is loaded it is uniform over the wander disc at
+/// the height provider's ground Z (or the spawn Z), walked straight (the pathfinder's answer for a map or tile without mesh data). A leg with
+/// no path (the point is off the mesh, or a point drawn off the mesh whose path ends on another storey) is skipped and tried again 1-1.5 s
+/// later, the wait doubling for each further leg in a row without a path up to 16-24 s (<see cref="NoPathRetryDelay"/>). A leg the path
+/// budget cannot serve, or whose tiles are still loading, waits 1-1.5 s (4-10 s in a crowded wander pass); one queued on the path-job pool
+/// asks again after 100 ms (<see cref="PathJobRetryMs"/>). Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
 /// </para>
 /// </summary>
 internal sealed class RandomMovementGenerator : ICreatureMovementGenerator

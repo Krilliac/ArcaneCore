@@ -34,8 +34,8 @@ public readonly record struct PathMover(bool CanWalk, bool CanSwim, bool CanFly,
     /// <summary>
     /// The navmesh polygon flags this mover may use (vmangos <c>createFilter</c>): ground when it
     /// walks; water when it swims, plus magma and slime for creatures ("creatures don't take
-    /// environmental damage"). Steep slopes are never excluded here: vmangos excludes them only for
-    /// fear, flee, confused and random movement (<see cref="PathOptions.ExcludeFlags"/>).
+    /// environmental damage"). Steep slopes are never excluded here: vmangos excludes them only from the
+    /// path search of fear, flee, confused and random movement (<see cref="PathOptions.ExcludeFlags"/>).
     /// </summary>
     public NavTerrain IncludeFlags
     {

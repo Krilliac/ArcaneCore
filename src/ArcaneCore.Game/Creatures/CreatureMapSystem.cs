@@ -387,7 +387,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         return _height.GetHeight(mapId, x, y, z);
     }
 
-    /// <summary>Wander, flee and fear choose their points with steep slopes excluded (vmangos RandomMovementGenerator.cpp:52, FleeingMovementGenerator.cpp:54).</summary>
+    /// <summary>
+    /// Wander, flee and fear choose their points with steep slopes excluded (vmangos Map::GetWalkRandomPosition, Map.cpp:3351-3353, and
+    /// Map::GetWalkHitPosition, Map.cpp:3212-3224); their path searches exclude them too (<see cref="AvoidsSteepSlopes"/>).
+    /// </summary>
     private static readonly PathOptions MeshPointOptions = new() { ExcludeFlags = NavTerrain.SteepSlopes };
 
     bool ICreatureMover.TryGetRandomMeshPoint(Creature creature, Vector3 center, float radius, out Vector3 point)
@@ -776,7 +779,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     private static readonly PathOptions[] s_moverOptions = BuildMoverOptions(0f);
     private static readonly PathOptions[] s_spawnOptions = BuildMoverOptions(PathOptions.VmangosEndTolerance);
-    private static readonly PathOptions[] s_wanderOptions = BuildMoverOptions(0f, WanderMaxSearchNodes);
+    private static readonly PathOptions[] s_wanderOptions = BuildMoverOptions(0f, WanderMaxSearchNodes, excludeSteepSlopes: true);
+    private static readonly PathOptions[] s_offSlopeOptions = BuildMoverOptions(0f, excludeSteepSlopes: true);
 
     /// <summary>
     /// The A* node cap of an out-of-combat random-movement leg. The leg goes to a point within the wander distance (vmangos
@@ -790,7 +794,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     private static readonly PathOptions[] s_chaseOptions = BuildMoverOptions(0f, wideEndSearch: true);
 
-    private static PathOptions[] BuildMoverOptions(float tolerance, int maxSearchNodes = PathOptions.DefaultMaxSearchNodes, bool wideEndSearch = false)
+    private static PathOptions[] BuildMoverOptions(
+        float tolerance, int maxSearchNodes = PathOptions.DefaultMaxSearchNodes, bool wideEndSearch = false, bool excludeSteepSlopes = false)
     {
         var all = new PathOptions[16]; // InhabitType bits 0-2, plus 8 for a pet
         for (uint inhabit = 0; inhabit < all.Length; inhabit++)
@@ -801,6 +806,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 EndTolerance = tolerance,
                 MaxSearchNodes = maxSearchNodes,
                 WideEndSearch = wideEndSearch,
+                ExcludeFlags = excludeSteepSlopes ? NavTerrain.SteepSlopes : NavTerrain.Empty,
+                ExcludeOnlyInSearch = excludeSteepSlopes,
             };
         }
 
@@ -812,13 +819,26 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// exception (a hole in the mesh is a flying shortcut, not NoPath) and a walker keeps off water it cannot swim. A return home
     /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance. A chase or follow (<paramref name="chase"/>) looks for its
     /// destination's polygon in cmangos' wider box too (<see cref="PathOptions.WideEndSearch"/>): a target off the mover's mesh (swimming,
-    /// for a creature that cannot swim) is approached to the nearest usable point, unreachable, instead of not at all.
+    /// for a creature that cannot swim) is approached to the nearest usable point, unreachable, instead of not at all. A random, confused
+    /// or fleeing leg keeps off steep slopes (<see cref="AvoidsSteepSlopes"/>).
     /// </summary>
     private static PathOptions PathOptionsFor(Creature creature, bool toSpawn, bool chase = false)
         => (toSpawn ? s_spawnOptions
             : chase ? s_chaseOptions
             : IsWanderLeg(creature) ? s_wanderOptions
+            : AvoidsSteepSlopes(creature) ? s_offSlopeOptions
             : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+
+    /// <summary>
+    /// A leg of the motions whose vmangos path search excludes steep slopes: random (<c>MOVE_EXCLUDE_STEEP_SLOPES</c>,
+    /// RandomMovementGenerator.cpp:52, read by MoveSplineInit.h:129-130), confused (ConfusedMovementGenerator.cpp:79), and fear and flee
+    /// (FearMovementGenerator.cpp:38, FleeingMovementGenerator.cpp:56), each through <c>PathFinder::ExcludeSteepSlopes</c>
+    /// (PathFinder.h:88). Every other creature path (chase, home, waypoint, point, follow) excludes nothing
+    /// (PathInfo::createFilter, PathFinder.cpp:657-677). The exclusion is the search's only (<see cref="PathOptions.ExcludeOnlyInSearch"/>):
+    /// a creature standing on a slope is located there and paths off it. Keyed on the current motion, as <see cref="IsWanderLeg"/> is.
+    /// </summary>
+    private static bool AvoidsSteepSlopes(Creature creature)
+        => creature.Motion.CurrentType is MovementGeneratorType.Random or MovementGeneratorType.Confused or MovementGeneratorType.Fleeing;
 
     /// <summary>How near its spawn point a creature counts as home already, so a failed search there is no unreachable home.</summary>
     internal const float AtHomeYards = 0.5f;

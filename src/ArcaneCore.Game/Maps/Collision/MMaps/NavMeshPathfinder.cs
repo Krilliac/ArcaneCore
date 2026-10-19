@@ -1184,11 +1184,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         NavMesh mesh, Vector3 position, PathOptions options, float tolerance, out NavPolyRef poly, out Vector3 onMesh, out bool far, bool wide = false)
     {
         far = false;
+        NavTerrain include = options.EffectiveIncludeFlags;
+        // ExcludeOnlyInSearch: vmangos getPolyByLocation locates by the include flags alone (PathFinder.cpp:145-157).
+        NavTerrain exclude = options.ExcludeOnlyInSearch ? NavTerrain.Empty : options.ExcludeFlags;
         if (tolerance > 0)
         {
             // vmangos FindWalkPoly (PathFinder.cpp:128-141): extents {5, 10, 5}, and a polygon whose nearest point is more than 3 above the query point is refused;
             // "far" is the farFromPoly test of BuildPolyPath (3D distance past tolerance).
-            if (!mesh.TryFindNearestPoly(position, new Vector3(5, 10, 5), options, out poly, out onMesh) || onMesh.Y > position.Y + 3.0f)
+            if (!mesh.TryFindNearestPoly(position, new Vector3(5, 10, 5), include, exclude, out poly, out onMesh) || onMesh.Y > position.Y + 3.0f)
             {
                 far = true;
                 return false;
@@ -1198,14 +1201,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return true;
         }
 
-        if (mesh.TryFindNearestPoly(position, NearExtents, options, out poly, out onMesh))
+        if (mesh.TryFindNearestPoly(position, NearExtents, include, exclude, out poly, out onMesh))
         {
             far = NavMeshTile.DistanceXzSquared(onMesh, position) > 0.01f || MathF.Abs(onMesh.Y - position.Y) > NearExtents.Y;
             return true;
         }
 
         far = true;
-        if (mesh.TryFindNearestPoly(position, FarExtents, options, out poly, out onMesh))
+        if (mesh.TryFindNearestPoly(position, FarExtents, include, exclude, out poly, out onMesh))
         {
             return true;
         }
@@ -1213,7 +1216,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         // cmangos PathFinder::getPolyByLocation's second, wider box (FarPolySearchBound): the destination is off the usable mesh (a
         // walker's target swimming off a shore: the water polygons under it are not in the walker's filter), and the path goes to the
         // nearest usable polygon within it, incomplete (BuildPolyPath farFromPoly, PathFinder.cpp:452-475).
-        return wide && mesh.TryFindNearestPoly(position, WideExtents, options, out poly, out onMesh);
+        return wide && mesh.TryFindNearestPoly(position, WideExtents, include, exclude, out poly, out onMesh);
     }
 
     /// <summary>Reads a navmesh file's bytes (null when it does not exist); the disk unless a test substitutes it. Runs on the world thread or, for background tile reads, on the pool.</summary>

@@ -16,7 +16,8 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// Limits: the point is uniform over the disc at the height provider's ground Z (or the anchor Z), with no navmesh
 /// reachability test (the reference routes it through the frame's RandomPoint); the route goes through
-/// <see cref="ICreatureMover.PlanPath"/>: with no path (the point is in a wall or a house) the creature waits 1-1.5 s and picks another point
+/// <see cref="ICreatureMover.PlanPath"/>, whose search keeps off steep slopes (vmangos ConfusedMovementGenerator.cpp:79,
+/// <c>PathFinder::ExcludeSteepSlopes</c>): with no path (the point is in a wall or a house) the creature waits 1-1.5 s and picks another point
 /// (ArcaneCore's choice, not vmangos': ConfusedMovementGenerator.cpp:72-86 checks no path).
 /// Thread affinity: world thread (the creature's map). Allocation: one object per confuse application; a leg allocates
 /// what the mover's path does, at most once per 800 ms.

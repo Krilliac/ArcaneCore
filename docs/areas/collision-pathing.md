@@ -27,9 +27,16 @@ is refused with a message that names the cMaNGOS generator; vmangos reads only v
 * `PathMover` (CanWalk, CanSwim, CanFly, IsPlayer) in `PathOptions.Mover` derives the polygon include
   flags exactly like `PathInfo::createFilter` (`PathFinder.cpp:657-675`): ground when it walks; water when
   it swims, plus magma and slime for creatures. `PathOptions.EffectiveIncludeFlags` is what queries use.
-* Default `ExcludeFlags` is empty. vmangos excludes steep slopes only for fear, flee, confused and random
-  movement (`FearMovementGenerator.cpp:38`, `RandomMovementGenerator.cpp:52`); callers that need that set
-  `ExcludeFlags = NavTerrain.SteepSlopes`.
+* Default `ExcludeFlags` is empty (`PathInfo::createFilter`, `PathFinder.cpp:657-677`). vmangos excludes steep
+  slopes from the path search of random, confused, fear and flee movement only (`RandomMovementGenerator.cpp:52`
+  through `MoveSplineInit.h:129-130`, `ConfusedMovementGenerator.cpp:79`, `FearMovementGenerator.cpp:38`,
+  `FleeingMovementGenerator.cpp:56`, each `PathFinder::ExcludeSteepSlopes`, `PathFinder.h:88`).
+  `CreatureMapSystem.PathOptionsFor` gives those creature legs `ExcludeFlags = NavTerrain.SteepSlopes` with
+  `ExcludeOnlyInSearch`: vmangos locates the start and end polygons by the include flags alone
+  (`getPolyByLocation`, `PathFinder.cpp:145-157`) and Detour's `findPath` filters only the polygons it enters
+  (`DetourNavMeshQuery.cpp:1037`), so a creature standing on a slope still paths off it. Other queries that set
+  `ExcludeFlags` (the bots') also keep their endpoints off the excluded polygons. Tests:
+  `Creatures/SteepSlopeLegTests.cs`.
 * `MaxPoints` 256 (`PathFinder.h:39`), `MaxSearchNodes` 2048 (`MoveMap.cpp:350`).
 * `ModelAreaInfo.MogpExterior` is 0x8000 (`GridMap.cpp:875-878`; mangos-classic `GridMap.cpp:887-890`); it was 0x8.
 

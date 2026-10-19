@@ -242,11 +242,22 @@ public sealed record PathOptions
     public NavTerrain EffectiveIncludeFlags => Mover?.IncludeFlags ?? IncludeFlags;
 
     /// <summary>
-    /// Polygons with any of these flags are avoided. vmangos excludes nothing by default
-    /// (PathFinder.cpp:657-675); fear, flee, confused and random movement exclude
-    /// <see cref="NavTerrain.SteepSlopes"/> (FearMovementGenerator.cpp:38, RandomMovementGenerator.cpp:52).
+    /// Polygons with any of these flags are avoided. vmangos excludes nothing by default (PathInfo::createFilter,
+    /// PathFinder.cpp:657-677); random, confused, fear and flee movement exclude <see cref="NavTerrain.SteepSlopes"/> from their path
+    /// search (RandomMovementGenerator.cpp:52 through MoveSplineInit.h:129-130, ConfusedMovementGenerator.cpp:79,
+    /// FearMovementGenerator.cpp:38, FleeingMovementGenerator.cpp:56), and so do those creature legs here
+    /// (<c>CreatureMapSystem.PathOptionsFor</c>, with <see cref="ExcludeOnlyInSearch"/>).
     /// </summary>
     public NavTerrain ExcludeFlags { get; init; } = NavTerrain.Empty;
+
+    /// <summary>
+    /// Whether <see cref="ExcludeFlags"/> only keeps the search out of its polygons, the start and end polygons being located by the
+    /// include flags alone: vmangos <c>getPolyByLocation</c> builds its own filter from the include flags (PathFinder.cpp:145-157) and
+    /// Detour <c>findPath</c> applies the query filter only to the polygons it enters (DetourNavMeshQuery.cpp:1037), so a creature
+    /// standing on a steep slope still paths off it. Off by default: the endpoints of the other queries (the bots') keep off the
+    /// excluded polygons too.
+    /// </summary>
+    public bool ExcludeOnlyInSearch { get; init; }
 
     /// <summary>Most points in a result (start included); longer paths are cut and flagged <see cref="PathType.Short"/>.</summary>
     public int MaxPoints { get; init; } = DefaultMaxPoints;

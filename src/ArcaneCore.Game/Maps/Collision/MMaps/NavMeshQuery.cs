@@ -101,6 +101,10 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
     /// <summary>The nearest passable polygon within <paramref name="extents"/> of a Recast position (Detour <c>findNearestPoly</c>).</summary>
     public bool TryFindNearestPoly(Vector3 center, Vector3 extents, PathOptions options, out NavPolyRef poly, out Vector3 nearest)
+        => TryFindNearestPoly(center, extents, options.EffectiveIncludeFlags, options.ExcludeFlags, out poly, out nearest);
+
+    /// <summary>The nearest polygon within <paramref name="extents"/> of a Recast position that passes the given include and exclude flags.</summary>
+    public bool TryFindNearestPoly(Vector3 center, Vector3 extents, NavTerrain include, NavTerrain exclude, out NavPolyRef poly, out Vector3 nearest)
     {
         poly = default;
         nearest = center;
@@ -108,7 +112,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         foreach (NavMeshTile tile in _tiles.Values)
         {
             if (tile.Overlaps(center, extents)
-                && tile.TryFindNearestPoly(center, extents, options.EffectiveIncludeFlags, options.ExcludeFlags, out int index, out Vector3 point, out float d)
+                && tile.TryFindNearestPoly(center, extents, include, exclude, out int index, out Vector3 point, out float d)
                 && d < best)
             {
                 best = d;
