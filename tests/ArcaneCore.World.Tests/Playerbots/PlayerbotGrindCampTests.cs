@@ -394,10 +394,13 @@ public sealed class PlayerbotGrindCampTests
             return true;
         });
         Assert.True(await camp.ThinkAsync());
-        await camp.Host.World.AdvanceClockAsync(500); // the walk is a heartbeat, not the think itself
+        await camp.Host.World.AdvanceClockAsync(500);
         await camp.Host.World.InvokeAsync(() =>
         {
             var player = camp.Session.Player!;
+            // The walk is a heartbeat, not the think itself: the managed feature pumps every running bot's motion each tick, and this
+            // session is not one of its bots, so the test pumps it (the think only started the walk).
+            PlayerbotMotion.Pump(camp.Session, player, camp.Host.World.NowMs);
             float dx = player.X - x, dy = player.Y - y;
             Assert.True(dy < -1f, $"the bot should step south toward the dropped spawn, dy={dy:F2}");
             Assert.True(MathF.Abs(dx) < 1f, $"a stale list sends the bot west toward the old cluster, dx={dx:F2}");

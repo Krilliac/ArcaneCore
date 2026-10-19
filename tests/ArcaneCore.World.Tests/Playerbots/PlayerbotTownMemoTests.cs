@@ -259,8 +259,15 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// The queries one refused plan makes on <see cref="HazardPathfinder"/>: its direct query, then for each hazard detour offset
+    /// (<see cref="PlayerbotNavigation.HazardDetourOffsets"/>, 5, 15 and 28 yards) on either side of the hazard the corner before it,
+    /// answered from the start, and the leg past it, refused. Thirteen (nine while the detours had two offsets).
+    /// </summary>
+    private static int RefusedPlanQueries => 1 + (PlayerbotNavigation.HazardDetourOffsets * 2 * 2);
+
+    /// <summary>
     /// The repair trip stops planning to further NPCs in a think once the think has made <see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>
-    /// queries, and the next think goes on. Each refused plan here runs the hazard detours (one direct query and eight detour queries).
+    /// queries, and the next think goes on. Each refused plan here runs the hazard detours (<see cref="RefusedPlanQueries"/>).
     /// The managed feature runs every think inside a <see cref="PlayerbotThinkProbe"/> (ManagedPlayerbotFeature.Think), the budget's source.
     /// </summary>
     [Fact]
@@ -269,8 +276,8 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true);
         (int queries, int plans) = await world.ThinkAsync(withProbe: true);
         output.WriteLine($"think 1: {queries} queries, {plans} plans");
-        Assert.Equal(2, plans); // 9 queries after the first plan, 18 (over 16) after the second: no third
-        Assert.InRange(queries, PlayerbotTownGoals.MaxRepairQueriesPerThink, PlayerbotTownGoals.MaxRepairQueriesPerThink + 9);
+        Assert.Equal(2, plans); // 13 queries after the first plan, 26 (over 16) after the second: no third
+        Assert.InRange(queries, PlayerbotTownGoals.MaxRepairQueriesPerThink, PlayerbotTownGoals.MaxRepairQueriesPerThink + RefusedPlanQueries);
         (int next, int nextPlans) = await world.ThinkAsync(withProbe: true);
         Assert.True(nextPlans >= 1 && next > 0, "the next think planned nothing");
     }
@@ -287,7 +294,8 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
     /// <summary>
     /// The live shape (live-w34-r1: 114 path queries per slow town think, refused plans running their fallbacks), on the production
     /// set-up: a guarded bot, a hazard on the way to every repair NPC, every detour refused. Seven minutes of game time: no think
-    /// makes more than a plan past the budget (before: three plans, 27 queries), and the rests between empty rounds grow.
+    /// makes more than a plan past the budget (before: all three plans), and the rests between empty rounds grow (at most 50 refused
+    /// plans).
     /// </summary>
     [Fact]
     public async Task RepairTrip_RefusedPlansWithHazardDetours_StayWithinTheThinkBudget()
@@ -302,7 +310,7 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         }
 
         output.WriteLine($"BENCH repair-trip hazards: {thinks} thinks, {total} queries ({(double)total / thinks:F2}/think), worst think {worst}");
-        Assert.True(worst <= PlayerbotTownGoals.MaxRepairQueriesPerThink + 9, $"a think made {worst} queries");
-        Assert.True(total <= 450, $"{total} queries in {thinks} thinks");
+        Assert.True(worst <= PlayerbotTownGoals.MaxRepairQueriesPerThink + RefusedPlanQueries, $"a think made {worst} queries");
+        Assert.True(total <= 50 * RefusedPlanQueries, $"{total} queries in {thinks} thinks");
     }
 }
