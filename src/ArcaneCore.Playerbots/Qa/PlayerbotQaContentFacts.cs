@@ -86,7 +86,7 @@ internal sealed class NoQaContentFacts : IQaContentFacts
 
 /// <summary>
 /// The production facts: <see cref="CreatureWorldFeature.Content"/> (an immutable, volatile-swapped store that other threads may read),
-/// <see cref="QuestNpcServices.Quests"/> (a volatile read of the immutable quest store) and the creature AI factory's registrations (read-only
+/// <see cref="ArcaneCore.Game.Npc.QuestNpcServices.Quests"/> (a volatile read of the immutable quest store) and the creature AI factory's registrations (read-only
 /// dictionaries after start-up). The features are looked up on every call, so content installed or reloaded later is seen. Thread-safe.
 /// </summary>
 internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaContentFacts

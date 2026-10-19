@@ -4,8 +4,8 @@ using System.Text.RegularExpressions;
 namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>
-/// Reads the <c>///</c> summary of a property from C# source text. The assemblies carry no XML documentation
-/// (GenerateDocumentationFile is off, and turning it on would trip CS1591 under warnings-as-errors), so the page text is
+/// Reads the <c>///</c> summary of a property from C# source text. No XML documentation sits beside the assemblies
+/// (it is generated only so the build checks crefs, and stays in obj: CopyDocumentationFileToOutputDirectory is off), so the page text is
 /// taken from the source. Only members declared directly in the type's own body are matched, so a nested class
 /// with a same-named property cannot be confused with its parent; partial classes are searched in every file.
 /// </summary>

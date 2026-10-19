@@ -20,7 +20,7 @@ internal sealed class ManualTimeProvider(long unixSeconds) : TimeProvider
 
 /// <summary>
 /// A world host whose human warrior knows spell 7266 "Duel" (classic-db spell_template: Effect1 83, TargetA 25, EffectMiscValue 21680; range and duration are
-/// synthetic) and whose game object content has the Duel Flag (gameobject_template 21680, type 16). The duel clock is <see cref="Clock"/>.
+/// synthetic) and whose game object content has the Duel Flag (gameobject_template 21680, type 16). The duel clock is <see cref="NewClock"/>.
 /// </summary>
 internal static class DuelWorldHost
 {

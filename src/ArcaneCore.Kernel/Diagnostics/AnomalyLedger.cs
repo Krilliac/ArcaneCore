@@ -26,7 +26,7 @@ public enum AnomalySeverity
 /// caught; this ledger counts the silent failures, so "the bot just turned back" becomes a counted, logged, inspectable line.
 /// <para>
 /// Key: <c>subsystem/code</c>, both normalised (<see cref="Normalise"/>: trimmed, lower case, spaces to '-', at most
-/// <see cref="MaxNameLength"/> characters), e.g. <c>bot-elevator/board-missed</c>. A <paramref name="subject"/> passed to
+/// <see cref="MaxNameLength"/> characters), e.g. <c>bot-elevator/board-missed</c>. A <c>subject</c> passed to
 /// <see cref="Report"/> is the stable identity of what failed (<c>bot Thrall (guid 1234)</c>, <c>creature 3100 spawn 812</c>): the
 /// ledger counts distinct subjects per key (up to <see cref="MaxTrackedSubjects"/>), so positions, timings and other changing context
 /// belong in <c>detail</c>, never in the subject.

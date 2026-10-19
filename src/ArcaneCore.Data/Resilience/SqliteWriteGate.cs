@@ -13,7 +13,7 @@ namespace ArcaneCore.Data.Resilience;
 /// instead of racing for it. Readers never take it (WAL readers do not block the writer).
 /// <para>
 /// Bounded like the lock it replaces: a waiter gives up after its connection's write bound and fails with SQLite's own busy error (code 5), so callers that retain
-/// and retry a locked write behave exactly as before, but the message names the holder. A hold that outlives <see cref="MaxHoldMs"/> (a leaked transaction) is
+/// and retry a locked write behave exactly as before, but the message names the holder. A hold that outlives <see cref="SqliteSingleWriterOptions.MaxHoldMs"/> (a leaked transaction) is
 /// released by the next waiter that finds it and logged; that only lets the next writer try SQLite itself, as it would without the gate.
 /// </para>
 /// One instance per normalized file path, shared process-wide (<see cref="For"/>). Thread-safe.

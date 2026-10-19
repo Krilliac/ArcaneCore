@@ -403,7 +403,7 @@ internal static class JsonTestExtensions
 
 internal static class Wait
 {
-    /// <summary>Polls until <paramref name="condition"/> holds; fails the test after <paramref name="timeout"/>.</summary>
+    /// <summary>Polls until <paramref name="condition"/> holds; fails the test after <paramref name="timeoutMs"/>.</summary>
     public static async Task UntilAsync(Func<bool> condition, string what, int timeoutMs = 10_000)
     {
         using var timeout = new CancellationTokenSource(timeoutMs);

@@ -284,11 +284,6 @@ public sealed class TalentEffectCoverageTests
     }
 
     /// <summary>
-    /// A DUMMY or OVERRIDE_CLASS_SCRIPTS talent read outside the script registries counts as handled only while its rule still reads it: every
-    /// <see cref="TalentEffectCoverage.ExternalReaders"/> site must hold a code line matching its pattern, so removing the read (or the rule) fails
-    /// here instead of leaving the talent reported as handled.
-    /// </summary>
-    /// <summary>
     /// Build 5875 talents whose OVERRIDE_CLASS_SCRIPTS effect is read by a rule outside the registries (Improved Scorpid Sting, Improved Drain Mana,
     /// Illumination, Pyroclasm) or by nothing at all in vmangos (Arcane Concentration: its proc trigger is the talent) are not reported as gaps.
     /// </summary>
@@ -309,6 +304,11 @@ public sealed class TalentEffectCoverageTests
         Assert.True(TalentEffectCoverage.HasConsumer(kit.System, spell, spell.Effects[0]));
     }
 
+    /// <summary>
+    /// A DUMMY or OVERRIDE_CLASS_SCRIPTS talent read outside the script registries counts as handled only while its rule still reads it: every
+    /// <see cref="TalentEffectCoverage.ExternalReaders"/> site must hold a code line matching its pattern, so removing the read (or the rule) fails
+    /// here instead of leaving the talent reported as handled.
+    /// </summary>
     [Fact]
     public void EveryExternalReader_StillHasItsReadingLine()
     {

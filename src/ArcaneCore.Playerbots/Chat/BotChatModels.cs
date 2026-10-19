@@ -327,7 +327,7 @@ public sealed record BotChatModeration(BotChatModerationVerdict Verdict, string?
 
 /// <summary>
 /// A model provider's transport (the Anthropic Messages API or an OpenAI-compatible chat completions endpoint). Called only from the
-/// chat worker, never on the world thread. <paramref name="apiKey"/> is null for a keyless endpoint; implementations never log it.
+/// chat worker, never on the world thread. <c>apiKey</c> is null for a keyless endpoint; implementations never log it.
 /// </summary>
 public interface IBotChatClient
 {

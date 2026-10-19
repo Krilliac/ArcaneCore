@@ -196,8 +196,9 @@ public sealed class PendingMovementChanges
     /// <summary>
     /// The oldest change's timeout (vmangos Unit::CheckPendingMovementChanges, Unit.cpp:6619-6665). Once it
     /// is older than <paramref name="ackTimeMs"/> (times five while teleporting) it is popped; a change that a
-    /// newer change of the same type has superseded is only dropped, anything else is passed to
-    /// <paramref name="enforce"/> (the server applies it). Returns the change that was enforced, if any.
+    /// newer change of the same type has superseded is only dropped (<paramref name="dropped"/>), anything else is
+    /// returned for the caller to enforce (<see cref="MovementControl.Enforce"/>: the server applies it). Returns the
+    /// change to enforce, if any.
     /// </summary>
     public PendingMovementChange? CheckTimeout(uint ackTimeMs, bool teleporting, out bool dropped)
     {

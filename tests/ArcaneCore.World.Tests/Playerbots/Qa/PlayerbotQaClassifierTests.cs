@@ -8,11 +8,6 @@ namespace ArcaneCore.World.Tests.Playerbots.Qa;
 public sealed class PlayerbotQaClassifierTests
 {
     /// <summary>
-    /// A stall logged as made outside the bot's home is classified <see cref="QaCause.OutsideHome"/> before any content check (its target
-    /// may well be missing too, but the bot was not supposed to be there), and is its own finding: the same stall inside the home keeps its
-    /// old key and cause.
-    /// </summary>
-    /// <summary>
     /// A shared set-aside carries the position of the first stall behind it (for the report), but the bots that set it aside may have been
     /// anywhere: its spawn check stays on every map. Stalls on map 0 and the objective creatures only on map 1 are not missing data (review
     /// of #145: the map-0 check would have relabelled already-published set-aside issues).
@@ -35,6 +30,11 @@ public sealed class PlayerbotQaClassifierTests
         Assert.Contains("on any map", none.Detail, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A stall logged as made outside the bot's home is classified <see cref="QaCause.OutsideHome"/> before any content check (its target
+    /// may well be missing too, but the bot was not supposed to be there), and is its own finding: the same stall inside the home keeps its
+    /// old key and cause.
+    /// </summary>
     [Fact]
     public void AStallOutsideTheHome_IsOutsideHome_AndItsOwnFinding()
     {

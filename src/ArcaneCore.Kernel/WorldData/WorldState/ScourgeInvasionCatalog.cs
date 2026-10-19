@@ -188,14 +188,14 @@ public interface IScourgeInvasionStateStore
         CancellationToken cancellationToken = default);
     Task<bool> RestartZoneAsync(uint zoneId, long nowUnix, CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// mangos-classic StartNewCityAttackIfTime: claims a due capital attack and saves its next 45-60 minute time. False when the
-    /// invasion is off or the attack is not due, so two callers cannot both summon.
-    /// </summary>
     /// <summary>PallidHorrorAI::JustDied: the capital is defended; its next attack is saved 45-60 minutes out.</summary>
     Task<bool> CityAttackDefeatedAsync(uint zoneId, long nowUnix, int nextAttackSeconds, CancellationToken cancellationToken = default)
         => Task.FromResult(false);
 
+    /// <summary>
+    /// mangos-classic StartNewCityAttackIfTime: claims a due capital attack and saves its next 45-60 minute time. False when the
+    /// invasion is off or the attack is not due, so two callers cannot both summon.
+    /// </summary>
     Task<bool> ClaimCityAttackAsync(uint zoneId, long nowUnix, int nextAttackSeconds, CancellationToken cancellationToken = default)
         => Task.FromResult(false);
 }

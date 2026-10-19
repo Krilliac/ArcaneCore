@@ -120,7 +120,7 @@ internal static class BattlegroundBotTestContent
     public const uint BerserkBuffSpell = 23505;
 
     /// <summary>
-    /// The Warsong Gulch buffs of <see cref="WsgBuffs"/>: a restoration buff 20 yards south of the Alliance start (graveyard 769) and a
+    /// The Warsong Gulch buffs of <see cref="BattlegroundBotTestWorld.StartWithWsgBuffsAsync"/>: a restoration buff 20 yards south of the Alliance start (graveyard 769) and a
     /// berserking buff 20 yards north of it. The places are test fixtures (classic-db's are 90004-90007 around the middle of the real map).
     /// </summary>
     public static readonly Vector3 RestorationBuffAt = new(AllianceFlag.X - 15f, AllianceFlag.Y - 20f, WsgFloor);

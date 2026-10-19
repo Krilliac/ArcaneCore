@@ -14,7 +14,7 @@ namespace ArcaneCore.Realm.Ops.ServerConsole;
 /// <c>quit</c>/<c>shutdown</c>/<c>exit</c> (graceful host stop).
 /// <para>
 /// Threading: the realm has no world thread. <see cref="ExecuteAsync"/> runs on the console reader thread; each command opens
-/// its own DI scope for the stores and awaits them there. Output lines are written through <paramref name="output"/> with the
+/// its own DI scope for the stores and awaits them there. Output lines are written through <c>output</c> with the
 /// <see cref="Prefix"/>; passwords are never echoed.
 /// </para>
 /// </summary>

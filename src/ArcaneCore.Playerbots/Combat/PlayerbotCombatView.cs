@@ -251,7 +251,6 @@ internal static class PlayerbotCombatView
         return state;
     }
 
-    /// <summary>A snapshot of <paramref name="unit"/> as <paramref name="bot"/> sees it.</summary>
     private const float TameReach = 28f;
     private const uint TameScanIntervalMs = 5_000;
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, uint> s_lastTameScan = new();
@@ -288,6 +287,7 @@ internal static class PlayerbotCombatView
         return best;
     }
 
+    /// <summary>A snapshot of <paramref name="unit"/> as <paramref name="bot"/> sees it.</summary>
     internal static RotationUnit Describe(SpellSystem system, Player bot, Unit unit, GroupManager? groups)
     {
         var auras = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

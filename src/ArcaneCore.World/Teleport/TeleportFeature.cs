@@ -28,10 +28,10 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
     private TeleportService? _service;
     private WorldMaps? _maps;
 
-    /// <summary>The teleport state machine (available after <see cref="Attach"/>).</summary>
     /// <summary>The teleport service, or null before the feature attached (<c>.debug scheduler</c>).</summary>
     public TeleportService? TeleportsIfAttached => _service;
 
+    /// <summary>The teleport state machine (available after <see cref="Attach"/>).</summary>
     public TeleportService Teleports => _service ?? throw new InvalidOperationException("the teleport feature is not attached");
 
     /// <summary>The world's map services (available after <see cref="Attach"/>).</summary>

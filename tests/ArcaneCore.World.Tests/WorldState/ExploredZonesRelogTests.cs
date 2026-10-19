@@ -12,7 +12,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.WorldState;
 
-/// <summary>Registers an in-memory <see cref="IExploredZonesStore"/> for the host started inside <see cref="Use"/>.</summary>
+/// <summary>Registers an in-memory <see cref="IExploredZonesStore"/> for the host started inside <see cref="Start"/>.</summary>
 internal sealed class ExploredZonesTestServices : IWorldTestServices
 {
     public static readonly AsyncLocal<MemoryExploredZonesStore?> Current = new();

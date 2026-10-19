@@ -48,7 +48,7 @@ public sealed partial class PetController
         return Math.Min(lastCost + Gold, 10 * Gold);
     }
 
-    /// <summary>The price of untraining <paramref name="pet"/> now.</summary>
+    /// <summary>The price of untraining <paramref name="charm"/> now.</summary>
     public uint ResetCost(CharmInfo charm) => ResetCost(charm.ResetTalentsCost, charm.ResetTalentsTime, UnixNow());
 
     /// <summary>

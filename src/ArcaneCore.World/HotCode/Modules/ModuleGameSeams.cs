@@ -748,7 +748,7 @@ public sealed class ModuleGameSeams
 /// <param name="EventAiCreatures">Creatures whose EventAI still has a row bound to a replaced or removed event handler.</param>
 public readonly record struct ModuleRetiredGame(int InstanceMaps, int EventAiCreatures);
 
-/// <summary>What <see cref="ModuleGameSeams.Commit"/> did.</summary>
+/// <summary>What <see cref="ModuleGameSeams.Complete"/> did.</summary>
 /// <param name="CreaturesSwitched">Creatures that got a new AI object now.</param>
 /// <param name="CreaturesDeferred">Creatures in combat that keep the old AI for now.</param>
 /// <param name="HookObjects">Script hook objects removed plus added.</param>

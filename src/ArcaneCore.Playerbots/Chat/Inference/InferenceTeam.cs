@@ -2,7 +2,7 @@ using System.Runtime.ExceptionServices;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
 
-/// <summary>One piece of parallel work: items [<paramref name="start"/>, <paramref name="end"/>) on worker <paramref name="worker"/> (0 = the caller).</summary>
+/// <summary>One piece of parallel work: items [<c>start</c>, <c>end</c>) on worker <c>worker</c> (0 = the caller).</summary>
 internal interface IInferenceJob
 {
     void Execute(int worker, int start, int end);

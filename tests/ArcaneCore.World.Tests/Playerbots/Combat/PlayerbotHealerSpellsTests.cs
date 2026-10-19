@@ -238,7 +238,7 @@ public sealed class PlayerbotHealerSpellsTests
         await h.Host.WaitForWorldAsync(() => h.Bot.Player!.Health >= botBefore + 20 || h.Bot.Player.Health == h.Bot.Player.MaxHealth, "the bot heals itself");
     }
 
-    /// <summary>A bot of <paramref name="botClass"/> with the given spells in the store and book, and wounded-able friends (grouped with it).</summary>
+    /// <summary>A bot of <c>botClass</c> with the given spells in the store and book, and wounded-able friends (grouped with it).</summary>
     private sealed class Healers : IAsyncDisposable
     {
         private bool _stopped;

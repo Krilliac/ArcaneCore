@@ -26,8 +26,8 @@ public sealed partial class CreatureMapSystem
     /// <see cref="Evaded"/> is raised once per evade, the escort's and the follower's included. When the AI's evade hook takes the movement
     /// over (an escort or follower running back to the combat start, an AV rider rejoining its formation), the linked-creature and
     /// spawn-group evade events (cMaNGOS LINKING_EVENT_EVADE, CREATURE_GROUP_EVENT_EVADE) are raised for an escort and not for a follower,
-    /// as in the sources (<see cref="AI.CreatureAI.TakeOverEvadeRaisesEvadeEvents"/>). A script's own evade that replaces this one
-    /// (<see cref="AI.CreatureAI.OnEnterEvadeMode"/> returning true) is not an engine evade and raises them only through a nested call.
+    /// as in the sources (<see cref="CreatureAI.TakeOverEvadeRaisesEvadeEvents"/>). A script's own evade that replaces this one
+    /// (<see cref="CreatureAI.OnEnterEvadeMode"/> returning true) is not an engine evade and raises them only through a nested call.
     /// </summary>
     /// <param name="reason">Who asked (the calling member by default; a script names itself): kept with the evade-loop report.</param>
     public void EnterEvadeMode(Creature creature, [System.Runtime.CompilerServices.CallerMemberName] string reason = "")
@@ -157,7 +157,7 @@ public sealed partial class CreatureMapSystem
     private readonly HashSet<Creature> _takeOverEvadeEvents = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
-    /// Leave combat where the creature stands, for a script's own evade (<see cref="AI.CreatureAI.OnEnterEvadeMode"/>): the source's
+    /// Leave combat where the creature stands, for a script's own evade (<see cref="CreatureAI.OnEnterEvadeMode"/>): the source's
     /// <c>SetLootRecipient(nullptr); CombatStop(false); MovementExpired(true)</c> (mangos-classic wailing_cavernsScripts.cpp:174-191). The loot
     /// tap goes, every fight stops and the threat list is cleared, the per-fight AI state is reset and the chase is dropped. Unlike
     /// <see cref="EnterEvadeMode"/> the cast or channel in progress and the auras stay, the creature is not sent home and is not left in

@@ -18,7 +18,7 @@ public sealed partial class MapCombat
     /// tabard, no weapon, since the weapon wears on the hit done), still uniform within the pool, so every successful percent roll
     /// wears a piece of armor (docs/areas/items.md, deliberate difference). Nothing is drawn when no armor is worn. Called from
     /// <see cref="DealDamage"/> on the survivor path only, so the killing blow wears nothing and the 10% death penalty
-    /// (<see cref="ApplyDeathDurabilityLoss"/>) is untouched. Self damage (environment) counts as taken damage here as it does in
+    /// (<see cref="ApplyDeathDurability"/>) is untouched. Self damage (environment) counts as taken damage here as it does in
     /// the reference. World thread only; allocation free (one float roll, a stack-allocated slot list, one integer roll on a hit).
     /// </summary>
     private void RollHitTakenDurability(Unit victim)

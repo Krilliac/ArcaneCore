@@ -196,6 +196,9 @@ public sealed partial class SpellSystem
         return restored;
     }
 
+    /// <summary>SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE (vmangos SpellDefines.h:988).</summary>
+    internal const uint AttributeEx4AuraExpiresOffline = 0x00000004;
+
     /// <summary>
     /// Re-apply persisted auras on a unit that has entered its map (vmangos Player::_LoadAuras,
     /// re-implemented). Ownership follows docs/integration/aura-caster-ownership.md: an aura the
@@ -206,9 +209,6 @@ public sealed partial class SpellSystem
     /// their remaining time. Unknown or passive spells, expired rows, and effect indices whose
     /// spell effect is no longer an aura are skipped. Returns the holders restored.
     /// </summary>
-    /// <summary>SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE (vmangos SpellDefines.h:988).</summary>
-    internal const uint AttributeEx4AuraExpiresOffline = 0x00000004;
-
     public IReadOnlyList<SpellAuraHolder> RestoreAuras(Unit unit, IEnumerable<PersistedAura> auras, long nowUnixMs)
     {
         ArgumentNullException.ThrowIfNull(unit);

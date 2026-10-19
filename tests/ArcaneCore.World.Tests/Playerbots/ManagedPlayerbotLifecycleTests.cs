@@ -822,11 +822,11 @@ public sealed class ManagedPlayerbotLifecycleTests
         }
     }
 
-    /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
     internal sealed class OneActionFaultMarkerException(string message) : InvalidOperationException(message);
 
     internal sealed class CommandFaultMarkerException(string message) : InvalidOperationException(message);
 
+    /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
     internal sealed class ThrowingController(int faults, string message = "fixture-action-fault", Func<string, Exception>? make = null) : IPlayerbotController
     {
         private int _remaining = faults;

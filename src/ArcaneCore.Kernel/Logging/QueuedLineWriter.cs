@@ -18,7 +18,7 @@ namespace ArcaneCore.Kernel.Logging;
 /// </para>
 /// <para>
 /// Ownership: the inner writer belongs to this object and is disposed with it. <see cref="Dispose"/> drains what is queued
-/// (bounded by <paramref name="shutdownDrain"/>) and flushes, so a clean shutdown loses nothing. Allocation: the rings and their
+/// (bounded by <c>shutdownDrain</c>) and flushes, so a clean shutdown loses nothing. Allocation: the rings and their
 /// slots are allocated once; a line costs one <see cref="ArrayPool{T}"/> rent on the producer and a return on the writer thread.
 /// </para>
 /// </summary>

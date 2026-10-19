@@ -7,7 +7,7 @@ namespace ArcaneCore.World.Tests.Battlegrounds;
 /// <summary>
 /// A Warsong Gulch ground flag is clicked with vmangos <c>IsWithinDistInMap(go, 10)</c> (BattleGroundWS.cpp:404, 439): 3D, the player's
 /// bounding radius plus <c>DEFAULT_WORLD_OBJECT_SIZE</c> (GameObject::GetObjectBoundingRadius), and a strict less-than (Object.cpp:1738-1751).
-/// Center-to-center <c><= 10</c> refuses a pickup the reference accepts.
+/// Center-to-center <c>&lt;= 10</c> refuses a pickup the reference accepts.
 /// </summary>
 public sealed class WarsongFlagRangeTests
 {

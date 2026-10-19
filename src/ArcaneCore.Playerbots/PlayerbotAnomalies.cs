@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Playerbots;
 /// that ended at the wrong level, a route through a wall, a stall) reports here so the subsystem, the subject and the bot's place are
 /// written the same way everywhere.
 /// <para>
-/// Subsystem: <c>bot-</c> + <paramref name="area"/> (<c>bot-elevator</c>, <c>bot-tram</c>, <c>bot-nav</c>...). Subject: <c>bot Name (guid
+/// Subsystem: <c>bot-</c> + <c>area</c> (<c>bot-elevator</c>, <c>bot-tram</c>, <c>bot-nav</c>...). Subject: <c>bot Name (guid
 /// HEX)</c>, stable per bot, so <see cref="AnomalySnapshot.DistinctSubjects"/> says how many bots hit the key. Detail: the caller's
 /// text, then <c>| map M at x,y,z</c>.
 /// </para>

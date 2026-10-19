@@ -203,8 +203,8 @@ internal static class BotControlDispatch
     internal readonly record struct Picked(Guid BotId, string Name);
 
     /// <summary>
-    /// The bots <paramref name="selector"/> names (docs/ops/botctl.md, "Naming bots"), or the error. World thread (the filters read
-    /// the live players). More than <see cref="PlayerbotOptions.MaxBulkCommand"/> bots need <c>--force</c>.
+    /// The bots the selector of <paramref name="call"/> names (<see cref="BotCall.Selector"/>; docs/ops/botctl.md, "Naming bots"), or the
+    /// error. World thread (the filters read the live players). More than <see cref="PlayerbotOptions.MaxBulkCommand"/> bots need <c>--force</c>.
     /// </summary>
     internal static string? Select(BotCall call, out List<Picked> bots)
     {

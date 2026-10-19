@@ -202,9 +202,9 @@ public static class EasternPlaguelandsCatalog
     /// <summary>EP_PWT_FlightMaster: William Kielar.</summary>
     public static readonly OutdoorPvPSpawn PlaguewoodFlightMaster = S(17209, 2987.5f, -3049.11f, 120.126f, 5.75959f);
 
-    /// <summary>EP_CGT_SpiritOfVictory.</summary>
     /// <summary>The Spirit of Victory's PATH_FROM_SPECIAL path id (vmangos SummonSpiritOfVictory; the creature's own entry).</summary>
     public const uint SpiritOfVictoryPath = 18039;
 
+    /// <summary>EP_CGT_SpiritOfVictory.</summary>
     public static readonly OutdoorPvPSpawn CrownGuardSpiritOfVictory = S(18039, 1856.58f, -3714.72f, 194.637f, 0.762214f);
 }

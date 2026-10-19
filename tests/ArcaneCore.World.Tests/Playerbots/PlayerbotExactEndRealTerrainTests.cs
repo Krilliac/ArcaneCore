@@ -10,7 +10,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     /// Bot QA #784 (live 2026-10-17 05:01, bots Tupizeir, Mokou and Dreirndreido, each several times): the destination below the road west
     /// of Goldshire has no walkable polygon near it, and the mesh's exact answer ended on the road 12.4 yards away and 9 yards up. The exact
     /// plan took it, the bot walked to the road, stood out of reach and planned it again. An exact plan refuses such an answer now
-    /// (<see cref="PlayerbotNavigation.ExactEndYards"/>); a plan toward the goal still closes on it as far as the mesh goes.
+    /// (<see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/>); a plan toward the goal still closes on it as far as the mesh goes.
     /// </summary>
     [RealTerrainBotFact]
     public async Task AnExactPlan_ToAnOffMeshSpotBelowTheGoldshireRoad_IsRefused()

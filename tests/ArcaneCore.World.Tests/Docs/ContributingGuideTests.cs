@@ -74,6 +74,21 @@ public sealed class ContributingGuideTests
         Assert.Contains(runLines, l => l.Contains("-m:1", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A cref that names nothing, a <c>paramref</c> that names a gone parameter and badly formed doc XML fail the build only while the
+    /// compiler reads the doc comments, which it does when the documentation file is generated. The guide says so, and where the files
+    /// go; <see cref="DocCommentGateTests"/> pins the gate itself.
+    /// </summary>
+    [Fact]
+    public void BrokenDocComments_FailTheBuild_BecauseDocumentationIsGenerated()
+    {
+        string props = RepoRoot.ReadText("Directory.Build.props");
+        Assert.Contains("<GenerateDocumentationFile>true</GenerateDocumentationFile>", props, StringComparison.Ordinal);
+        Assert.Contains("<CopyDocumentationFileToOutputDirectory>false</CopyDocumentationFileToOutputDirectory>", props, StringComparison.Ordinal);
+        Assert.Contains("(the `.xml` files stay in `obj`, out of build, publish and deploy output)", Text, StringComparison.Ordinal);
+        Assert.Contains("(CS1574)", Text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void EverySeamInterfaceNamed_ExistsAsAType()
     {

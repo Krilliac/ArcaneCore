@@ -62,7 +62,7 @@ internal static class PlayerbotSickness
     /// player's stat ledger (<see cref="UnitModLedger"/>: <c>((base x BasePct) + (pre - base)) x TotalPct</c>, the reference's order,
     /// <see cref="PercentStatAuras"/>), and the health that stamina gives (<see cref="ExperienceFormulas.HealthBonusFromStamina"/>,
     /// Player::GetHealthBonusFromStamina) is added back. Everything else stays as it is: broken gear gives no stats with or without
-    /// the sickness. <see cref="Player.MaxHealth"/> itself when the bot is not sick.
+    /// the sickness. <see cref="Unit.MaxHealth"/> itself when the bot is not sick.
     /// </summary>
     internal static uint UnsickenedMaxHealth(WorldSession session, Player player)
     {

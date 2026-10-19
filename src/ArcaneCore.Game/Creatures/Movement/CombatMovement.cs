@@ -36,7 +36,7 @@ internal interface ICreaturePathQuery
     bool CanQueuePathJob => false;
 
     /// <summary>
-    /// The last <c>PlanPath</c> answered <see cref="Maps.Collision.PathOutcome.Deferred"/> because its search is queued or running on the
+    /// The last <c>PlanPath</c> answered <see cref="PathOutcome.Deferred"/> because its search is queued or running on the
     /// path-job pool (not because the budget was spent): the answer is typically ready by the next update, so ask again soon.
     /// </summary>
     bool LastPlanQueued => false;

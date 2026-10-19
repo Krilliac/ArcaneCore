@@ -127,14 +127,14 @@ public sealed partial class SpellSystem
 
     // --- client requests ---------------------------------------------------------------
 
+    /// <summary>World-owned deferred trade request; no ordinary cast executes before acceptance.</summary>
+    public Func<Player, uint, SpellCastTargets, SpellCastResult>? TradeEnchantmentRequest { get; set; }
+
     /// <summary>
     /// CMSG_CAST_SPELL (vmangos WorldSession::HandleCastSpellOpcode): unknown spells, spells the
     /// player does not know and passive spells are ignored (logged, no reply); a negative spell
     /// explicitly aimed at oneself fails with BAD_TARGETS; everything else is prepared.
     /// </summary>
-    /// <summary>World-owned deferred trade request; no ordinary cast executes before acceptance.</summary>
-    public Func<Player, uint, SpellCastTargets, SpellCastResult>? TradeEnchantmentRequest { get; set; }
-
     public SpellCastResult HandleCastRequest(Player player, uint spellId, SpellCastTargets targets)
     {
         ArgumentNullException.ThrowIfNull(player);

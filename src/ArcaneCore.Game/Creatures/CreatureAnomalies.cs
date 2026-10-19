@@ -61,7 +61,7 @@ public static class CreatureAnomalies
     /// <summary>Duration (ms) a creature may remain in combat with no valid target/threat before reporting stuck-in-combat.</summary>
     public const uint StuckInCombatEmptyMs = 10_000;
 
-    /// <summary>Extra grace (ms) beyond <see cref="CreatureMapSystem.UnreachableTargetEvadeMs"/> before an un-evaded unreachable target is reported.</summary>
+    /// <summary>Extra grace (ms) beyond <see cref="CreatureOptions.UnreachableTargetEvadeMs"/> before an un-evaded unreachable target is reported.</summary>
     public const uint StuckInCombatUnreachableGraceMs = 5_000;
 
     /// <summary>Overdue elapsed time (ms) past a due respawn deadline on a loaded, unblocked grid before reporting respawn/stuck.</summary>

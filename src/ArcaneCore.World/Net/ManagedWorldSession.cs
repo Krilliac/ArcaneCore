@@ -74,7 +74,7 @@ public sealed partial class WorldSession
     bool IPlayerSession.IsPlayerbot => IsPlayerbot;
     internal ManagedActionBudget? ManagedBudget { get; set; }
 
-    /// <summary>True while <see cref="Playerbots.Chaos.PlayerbotChaosEngine"/> is dispatching a synthetic probe on this session.</summary>
+    /// <summary>True while <c>Playerbots.Chaos.PlayerbotChaosEngine</c> is dispatching a synthetic probe on this session.</summary>
     internal bool IsInChaosProbe { get; set; }
 
     /// <summary>

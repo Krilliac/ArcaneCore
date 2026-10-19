@@ -44,7 +44,7 @@ internal static class PersistAnomalies
 }
 
 /// <summary>
-/// Watches the persist reports and, for each one, asks another thread to run <paramref name="query"/> (a queue call that takes the queue's gate)
+/// Watches the persist reports and, for each one, asks another thread to run <c>query</c> (a queue call that takes the queue's gate)
 /// while the report is still being made on the reporting thread. A query that cannot finish means the reporting thread holds the gate.
 /// </summary>
 internal sealed class GateProbe : IDisposable

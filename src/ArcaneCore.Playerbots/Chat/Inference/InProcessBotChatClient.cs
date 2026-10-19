@@ -285,7 +285,6 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
 
     // --- status -------------------------------------------------------------------------------------------------------------
 
-    /// <summary>The counters (tests, the status line).</summary>
     /// <summary>Compute the system rules every prompt starts with once, into the prefix cache (a failure only costs the reuse). Returns (tokens, ms).</summary>
     private (int Tokens, double Ms) WarmSharedPrefix(InProcessChatEngine engine)
     {
@@ -313,6 +312,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
             options.Temperature, options.TopK, options.TopP, options.MinP, options.RepetitionPenalty, options.RepetitionWindow, options.StopSequences?.Count ?? 0);
     }
 
+    /// <summary>The counters (tests, the status line).</summary>
     internal InProcessChatStats Stats()
     {
         double prefill, decode;

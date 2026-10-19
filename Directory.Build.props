@@ -14,7 +14,19 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <InvariantGlobalization>true</InvariantGlobalization>
     <Deterministic>true</Deterministic>
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- XML documentation is generated so the compiler resolves every <see cref> and <paramref> in the doc comments: with it off, a cref to
+         a renamed or moved member rots silently. A cref that resolves to nothing (CS1574), badly formed XML (CS1570), a <param> or
+         <paramref> naming a parameter that is gone (CS1572, CS1734) and the like are then build errors under TreatWarningsAsErrors.
+         The .xml files stay in obj (CopyDocumentationFileToOutputDirectory=false), so neither bin, publish output nor a deploy copied
+         from either carries them, and nothing reads them. (PublishDocumentationFile=false alone kept out only each project's own file:
+         the referenced projects' files, beside their dlls in bin, were copied into every referencing bin and publish folder.) Three codes
+         stay off because they are noise, not rot: CS1591 (public member without a comment), CS1573 (some parameters documented, others
+         not) and CS0419 (a cref to an overloaded method written without a signature; the compiler picks one overload). The vendored
+         tests/ThirdParty projects turn generation off in their own csproj, as they do for warnings-as-errors and code style.
+         tests/ArcaneCore.World.Tests/Docs/DocCommentGateTests.cs fails when anything turns the gate off or silences a doc code. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <CopyDocumentationFileToOutputDirectory>false</CopyDocumentationFileToOutputDirectory>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS0419</NoWarn>
     <!-- Supply chain: every project restores against its committed packages.lock.json (exact versions plus content hashes of the
          whole transitive graph). CI (ci.yml, dotnet.yml), the Dockerfile, node CI (tools/ops/ci/node-ci.ps1), the local full gate
          (tools/ops/ci/full-suite-gate.ps1) and the deploy build (tools/ops/deploy/build-integrated.sh) restore with locked mode, so a
