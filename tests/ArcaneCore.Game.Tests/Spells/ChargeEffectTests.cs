@@ -4,7 +4,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
@@ -308,6 +310,29 @@ public sealed class ChargeEffectTests
         WorldCollision.Of(kit.World).Install(new Obstacles { Floor = _ => Z }, new FixedPath { Type = PathType.Incomplete });
 
         Assert.Equal(SpellCastResult.Nopath, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+    }
+
+    [Theory]
+    [InlineData(0f, 0f, SpellCastResult.CastOk)]   // 4.5 yd beside the mesh: inside FindWalkPoly's 5 yd box and within 7 yd, a whole path
+    [InlineData(10f, 15f, SpellCastResult.Nopath)] // on a model floor 15 above the mesh: no polygon within 10 yd, NOPATH
+    public void Charge_FromACasterOffTheMesh_IsCheckedFromTheStartPolygonVmangosFinds(float casterX, float aboveMesh, SpellCastResult expected)
+    {
+        // vmangos Spell::CheckCast (Spell.cpp:5909-5934) asks PathInfo for the caster's path, which looks for the start polygon as it looks
+        // for the target's (getPolyByLocation, PathFinder.cpp:188-189; FindWalkPoly, :128-142).
+        using SpellTestKit kit = Kit();
+        using var fixture = new NavMeshFixture();
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, 31, 31, new CellTile(0, 0, 4.5f, 0, 10, 5) { Height = (_, _) => Z - aboveMesh }); // x [4.5, 24.5), y [0, 10)
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(0, 31, 31));
+        (Player caster, _) = kit.AddPlayer(1, casterX, 5);
+        (Player target, _) = kit.AddPlayer(2, 20, 5);
+        target.Relocate(20, 5, Z - aboveMesh, 0, 1);
+        kit.Spellbook.Teach(caster, Charge);
+        WorldCollision.Of(kit.World).Install(new Obstacles { Floor = x => x < 15 ? Z : Z - aboveMesh }, nav);
+
+        Assert.Equal(expected, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+        Assert.Equal(expected == SpellCastResult.CastOk ? 20f - Gap(caster, target) : casterX, caster.X, 2);
     }
 
     [Fact]

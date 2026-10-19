@@ -102,6 +102,41 @@ public sealed partial class NoStraightPathTests
         Assert.False(scene.Wolf.IsMoving);
         Assert.Equal(homeX, scene.Wolf.X, 2);
     }
+
+    [Theory]
+    [InlineData(44.5f, 0f)]   // 4.5 yd beside the mesh
+    [InlineData(44f, 4.5f)]   // 4 beside and 4.5 above: 3D distance 6.0
+    public void Home_FromAStartOffTheMeshWithinSevenYards_RunsHome(float x, float z)
+    {
+        // vmangos locates the start of the way home as it locates the home point (getPolyByLocation, PathFinder.cpp:188-189): 5 yd around,
+        // whole within 7 yd (3D), so the creature runs home instead of teleporting.
+        using var scene = new Scene(x: x, y: 30, z: z);
+        scene.Wolf.Motion.MoveTargetedHome(new CreatureHome(30, 30, 0, 1f));
+
+        Assert.Equal(0, scene.Creatures.HomePathTeleports);
+        Assert.True(scene.Wolf.IsMoving);
+        Vector3 end = scene.Wolf.Spline!.Points[^1];
+        Assert.Equal(30f, end.X, 2);
+        Assert.Equal(30f, end.Y, 2);
+    }
+
+    [Theory]
+    [InlineData(30f, 8f)]     // 8 above the mesh: past farFromPoly (an incomplete path, PathFinder.cpp:209-235)
+    [InlineData(30f, 15f)]    // above FindWalkPoly's 10 yd: no start polygon
+    [InlineData(30f, -4f)]    // the mesh 4 above: refused ("do not select points over player pos")
+    [InlineData(46f, 0f)]     // beyond the 5 yd box
+    public void Home_FromAStartTooFarFromTheMesh_Teleports(float x, float z)
+    {
+        // vmangos HomeMovementGenerator.cpp:58-71: anything but a NORMAL path home is a teleport, never a walk through the floor or the air.
+        using var scene = new Scene(x: x, y: 30, z: z);
+        scene.Wolf.Motion.MoveTargetedHome(new CreatureHome(30, 32, 0, 1f));
+
+        Assert.Equal(1, scene.Creatures.HomePathTeleports);
+        Assert.False(scene.Wolf.IsMoving);
+        Assert.Equal(32f, scene.Wolf.Y, 2);
+        Assert.Equal(0f, scene.Wolf.Z, 2);
+    }
+
     [Fact]
     public void Home_APointInAnUnreachableArea_Teleports()
     {

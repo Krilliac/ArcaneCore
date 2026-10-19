@@ -293,10 +293,15 @@ public sealed record PathOptions
     public const float VmangosEndTolerance = 7.0f;
 
     /// <summary>
-    /// 0 (default): an endpoint is located within <see cref="MMaps.NavMeshPathfinder.NearExtents"/> (3 yd) and the path is <see cref="PathType.Incomplete"/>
-    /// as soon as it is 0.1 yd off its polygon. Above 0 (vmangos, <see cref="VmangosEndTolerance"/>): the destination is located within 5 yd
-    /// horizontally (PathFinder.cpp:128 FindWalkPoly extents) and is only "far" past this distance, so a point a few yards off the mesh whose
-    /// polygon the corridor reaches is a whole path ending at the nearest mesh point.
+    /// 0 (default): the start and the destination are located within <see cref="MMaps.NavMeshPathfinder.NearExtents"/> (3 yd), then
+    /// <see cref="MMaps.NavMeshPathfinder.FarExtents"/>, and the path is <see cref="PathType.Incomplete"/> as soon as the destination is 0.1 yd
+    /// off its polygon (the start is not graded). Above 0 (vmangos, <see cref="VmangosEndTolerance"/>): both are located as vmangos
+    /// <c>getPolyByLocation</c> locates them (PathFinder.cpp:188-189; FindWalkPoly, :128-142: within 5 yd horizontally and 10 vertically, a
+    /// polygon more than 3 above the point refused, else <see cref="PathType.NoPath"/>) and either is only "far" past this distance
+    /// (farFromPoly, :209-235: the path is incomplete, a flier's the straight line), so a destination a few yards off the mesh whose polygon
+    /// the corridor reaches is a whole path ending at the nearest mesh point, and so is a path from a start a few yards off it. vmangos'
+    /// swimming answers (BuildUnderwaterPath, :167-177 and :213-218; the IsSwimmable shortcut, :199-201; a swimmable end, :234) are not
+    /// modelled here; a charge takes its own (<c>ForcedMovement.ChargeSwims</c>).
     /// </summary>
     public float EndTolerance { get; init; }
 

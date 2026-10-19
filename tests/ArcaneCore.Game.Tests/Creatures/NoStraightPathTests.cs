@@ -61,9 +61,9 @@ public sealed partial class NoStraightPathTests
         private readonly NavMeshFixture? _fixture;
 
         public Scene(float x, float y, IPathfinder? custom = null, byte movementType = 0, float wander = 0, float playerX = 0, float playerY = 0,
-            CreatureTemplate? template = null, Func<int, int, bool>? walkable = null, NavTerrain? terrain = null)
+            CreatureTemplate? template = null, Func<int, int, bool>? walkable = null, NavTerrain? terrain = null, float z = 0)
         {
-            CreatureContent content = Content([template ?? Template()], [Spawn(1, WolfEntry, x, y, z: 0, movementType: movementType, wander: wander)]);
+            CreatureContent content = Content([template ?? Template()], [Spawn(1, WolfEntry, x, y, z: z, movementType: movementType, wander: wander)]);
             (World, _, Creatures) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
             if (custom is null)
             {
