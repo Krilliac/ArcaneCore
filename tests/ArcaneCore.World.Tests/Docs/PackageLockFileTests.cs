@@ -4,9 +4,10 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>
-/// Supply chain: every project restores against a committed packages.lock.json and every scripted restore (CI and the Dockerfile)
-/// runs in locked mode, so a package graph that differs from the lock files fails the restore (OpenSSF Scorecard Pinned-Dependencies,
-/// "nugetCommand not pinned by hash"). docs/guide/contributing.md says how to update the lock files.
+/// Supply chain: every project restores against a committed packages.lock.json and every scripted restore (CI, node CI, the local
+/// full gate, the Dockerfile and the deploy build) runs in locked mode, so a package graph that differs from the lock files fails
+/// the restore (OpenSSF Scorecard Pinned-Dependencies, "nugetCommand not pinned by hash"). docs/guide/contributing.md says how to
+/// update the lock files.
 /// </summary>
 public sealed class PackageLockFileTests
 {
@@ -35,11 +36,24 @@ public sealed class PackageLockFileTests
     [InlineData(".github/workflows/ci.yml")]
     [InlineData(".github/workflows/dotnet.yml")]
     [InlineData("apps/docker/Dockerfile")]
+    [InlineData("tools/ops/ci/node-ci.ps1")]
+    [InlineData("tools/ops/ci/full-suite-gate.ps1")]
+    [InlineData("tools/ops/deploy/build-integrated.sh")]
     public void EveryScriptedRestore_RunsInLockedMode(string file)
     {
         string[] restores = [.. Regex.Matches(RepoRoot.ReadText(file), @"dotnet restore[^\r\n&]*").Select(m => m.Value.TrimEnd(' ', '\\'))];
         Assert.NotEmpty(restores);
         Assert.All(restores, r => Assert.Contains("--locked-mode", r, StringComparison.Ordinal));
+    }
+
+    /// <summary>The deploy build's own build step must not restore again: an implicit restore there is unlocked and would re-resolve.</summary>
+    [Fact]
+    public void TheDeployBuild_BuildsFromItsLockedRestore()
+    {
+        // The command, not prose: the script's header comment says "the dotnet build does not emit".
+        string[] builds = [.. Regex.Matches(RepoRoot.ReadText("tools/ops/deploy/build-integrated.sh"), @"dotnet build \S+\.slnx[^\r\n]*").Select(m => m.Value)];
+        Assert.NotEmpty(builds);
+        Assert.All(builds, b => Assert.Contains("--no-restore", b, StringComparison.Ordinal));
     }
 
     [Fact]

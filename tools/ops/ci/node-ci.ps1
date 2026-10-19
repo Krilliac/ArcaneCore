@@ -4,11 +4,12 @@
   PostgreSQL 16 services and connection strings as the hosted runners.
 
 .DESCRIPTION
-  Ships `git archive <commit>` to the node, then runs restore, Release build (warnings are errors via Directory.Build.props),
+  Ships `git archive <commit>` to the node, then runs a locked restore, Release build (warnings are errors via Directory.Build.props),
   each suite (tests/ci/<Suite>.slnf, -m:1) and the Rest-only MockClient self-test. Suites run one after another in one job,
   not as a matrix. Each suite's summary lines and exit codes are printed, and the full logs stay on the node under
-  /root/ci/<sha>/logs. One-time node setup (mariadb-server, postgresql-16, .NET 10 SDK in /opt/dotnet, root/arcane and arcane/arcane
-  logins) was done 2026-10-10. If the services are not running, this script starts them.
+  /root/ci/<sha>/logs. One-time node setup (mariadb-server, postgresql-16, root/arcane and arcane/arcane logins) was done
+  2026-10-10. /opt/dotnet holds the 10.0.401 and 11.0.100-rc.2 SDKs; the repository's global.json pins 11, so the run uses 11.
+  If the services are not running, this script starts them.
 
 .EXAMPLE
   pwsh tools/ops/ci/node-ci.ps1 -Repo . -Commit d0e3606f
@@ -63,7 +64,11 @@ service postgresql status >/dev/null 2>&1 || service postgresql start >/dev/null
 W=/root/ci/$runId; rm -rf `$W; mkdir -p `$W/src `$W/logs; cd `$W/src
 tar -xf /mnt/c/NewBuild/arcanecore-ci/$runId.tar && rm -f /mnt/c/NewBuild/arcanecore-ci/$runId.tar
 echo "commit $sha run $runId"
-dotnet restore ArcaneCore.slnx > `$W/logs/restore.log 2>&1; echo "restore rc=`$?"
+# Locked, as in ci.yml: a package graph that differs from the committed lock files fails the run here (NU1004) instead of being
+# re-resolved and written back, and the build never runs on a restore that failed. The error lines come first: at minimal verbosity
+# the NU1004 line is near the top and the tail is "Restored <project>" lines. A failure with no ' error ' line (no SDK) prints the tail.
+dotnet restore ArcaneCore.slnx --locked-mode > `$W/logs/restore.log 2>&1; rc=`$?; echo "restore rc=`$rc"
+if [ `$rc -ne 0 ]; then if grep -qE ' error ' `$W/logs/restore.log; then grep -E ' error ' `$W/logs/restore.log | sort -u | head -20; else tail -20 `$W/logs/restore.log; fi; exit 1; fi
 dotnet build ArcaneCore.slnx -c Release --no-restore -nodeReuse:false > `$W/logs/build.log 2>&1; rc=`$?; echo "build rc=`$rc"; grep -E 'Warning\(s\)|Error\(s\)' `$W/logs/build.log | tail -2
 if [ `$rc -ne 0 ]; then grep -E ' error ' `$W/logs/build.log | sort -u | head -20; exit 1; fi
 fail=0
@@ -81,6 +86,9 @@ done
 echo "CI RESULT: `$( [ `$fail -eq 0 ] && echo PASS || echo FAIL )"
 exit `$fail
 "@
+# A here-string keeps the script file's line ends: from a Windows (CRLF) checkout every payload line ends in CR, Linux bash rejects
+# the first line ("set: -\r: invalid option") and every later word ending a line carries the CR. Send LF only.
+$bash = $bash -replace "`r", ''
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bash))
 & $ssh @opts $NodeHost "wsl -d Ubuntu-24.04 -u root -e bash -c `"echo $b64 | base64 -d | bash`"" 2>&1 | ForEach-Object { $_ -replace "`0", '' }
 exit $LASTEXITCODE

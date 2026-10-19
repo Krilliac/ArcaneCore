@@ -16,8 +16,10 @@
     <Deterministic>true</Deterministic>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <!-- Supply chain: every project restores against its committed packages.lock.json (exact versions plus content hashes of the
-         whole transitive graph). CI and the Dockerfile restore with locked mode, so a package graph that differs from the lock file
-         fails the restore instead of silently resolving something new. Updating a package: docs/guide/contributing.md. -->
+         whole transitive graph). CI (ci.yml, dotnet.yml), the Dockerfile, node CI (tools/ops/ci/node-ci.ps1), the local full gate
+         (tools/ops/ci/full-suite-gate.ps1) and the deploy build (tools/ops/deploy/build-integrated.sh) restore with locked mode, so a
+         package graph that differs from the lock file fails the restore instead of silently resolving something new. Updating a
+         package: docs/guide/contributing.md. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
