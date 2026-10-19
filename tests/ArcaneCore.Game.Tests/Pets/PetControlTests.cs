@@ -414,13 +414,13 @@ public sealed class PetControlTests
     }
 
     [Fact]
-    public void SetEnabled_GreysTheBarOut_AndSendsThePetMode()
+    public void SetPetEnabled_GreysTheBarOut_AndSendsThePetMode()
     {
         (PetTestKit kit, Player owner, FakeSession session, Creature pet) = Summoned();
         using (kit)
         {
             session.Clear();
-            kit.Controller.SetEnabled(pet, false);
+            kit.Service.SetPetEnabled(pet, false);
 
             Assert.False(pet.Summon!.Charm!.Enabled);
             // wow_messages smsg_pet_mode.wowm: guid, react, command, 0, enabled byte (0x8 = disabled, vmangos Pet.cpp:2374)
@@ -430,7 +430,7 @@ public sealed class PetControlTests
             kit.Controller.SendPetSpells(owner, pet);
             Assert.Equal(0x8, Packets(session, WorldOpcode.SmsgPetSpells)[0][15]);
 
-            kit.Controller.SetEnabled(pet, true);
+            kit.Service.SetPetEnabled(pet, true);
             Assert.True(pet.Summon.Charm.Enabled);
         }
     }

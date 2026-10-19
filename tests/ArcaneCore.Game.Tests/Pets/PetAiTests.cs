@@ -254,7 +254,7 @@ public sealed class PetAiTests
             kit.Controller.HandleCommand(pet, CommandState.Attack, enemy);
             Assert.Same(enemy, pet.Combat.Victim);
 
-            kit.Controller.SetEnabled(pet, false);
+            kit.Service.SetPetEnabled(pet, false);
             kit.Run(200); // _needToStop: "Stop attacking when player is mounted"
             Assert.Null(pet.Combat.Victim);
             Assert.False(Ai(pet).AttackTarget(enemy));

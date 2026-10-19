@@ -7,7 +7,8 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Pets;
 
 // A pet that is put away for a while and comes back (vmangos Player::UnsummonPetTemporaryIfAny / ResummonPetTemporaryUnSummonedIfAny,
-// Player.cpp:20911-20940, and m_temporaryUnsummonedPetNumber): a far teleport, a near teleport out of the pet's reach.
+// Player.cpp:20911-20940, and m_temporaryUnsummonedPetNumber): a far teleport, a near teleport out of the pet's reach. A dismount also
+// brings it back (Player::Unmount, SummonService.Mounts.cs).
 public sealed partial class SummonService
 {
     private readonly Dictionary<ObjectGuid, TemporarilyUnsummonedPet> _temporarilyUnsummoned = [];
@@ -161,6 +162,7 @@ public sealed partial class SummonService
         }
 
         owner.SetPetGuid(pet.Guid);
+        GreyOutForMountedOwner(owner, charm);
         owner.Session.Send(WorldOpcode.SmsgPetSpells,
             PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         if (_spells is { } auraSpells)
