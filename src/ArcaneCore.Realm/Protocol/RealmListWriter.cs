@@ -15,12 +15,18 @@ public static class RealmListWriter
 {
     public static ReadOnlyMemory<byte> Build(IReadOnlyList<RealmEntry> realms, byte charactersPerRealm)
     {
+        ArgumentNullException.ThrowIfNull(realms);
         var body = new PacketWriter(64 + (realms.Count * 48));
         body.WriteUInt32(0);
         body.WriteByte((byte)realms.Count);
 
         foreach (RealmEntry realm in realms)
         {
+            if (realm is null)
+            {
+                throw new ArgumentException("Realm list cannot contain null entries.", nameof(realms));
+            }
+
             body.WriteUInt32((uint)realm.Type);
             body.WriteByte((byte)realm.Flags);
             body.WriteCString(realm.Name);

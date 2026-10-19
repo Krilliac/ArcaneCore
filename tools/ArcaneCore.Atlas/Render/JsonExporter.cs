@@ -26,6 +26,7 @@ internal static class JsonExporter
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(tiles);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var summary = new ExportSummary();
         summary.Written = OutputPaths.WriteAtomically(
             path,

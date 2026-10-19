@@ -11,6 +11,8 @@ public static class RealmWatchdogServiceCollectionExtensions
     /// <summary>Bind <c>Ops:Watchdog</c> and register the watchdog thread and its monitors.</summary>
     public static IServiceCollection AddRealmWatchdog(this IServiceCollection services, IConfiguration configuration)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
         services.Configure<WatchdogOptions>(configuration.GetSection(WatchdogOptions.SectionName));
         services.AddOpsWatchdog();
         return services;

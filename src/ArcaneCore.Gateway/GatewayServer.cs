@@ -18,15 +18,15 @@ namespace ArcaneCore.Gateway;
 /// with backoff when it is lost or refused). Phase 3a: a lost link drops every client of it, and a client that authenticates
 /// while the link is down is answered AUTH_UNAVAILABLE.
 /// </summary>
-public sealed class GatewayServer(
-    IServiceScopeFactory scopes,
-    IOptions<GatewayOptions> options,
-    ILoggerFactory loggers,
-    IOptions<NetProtectionOptions>? protection = null) : BackgroundService
+public sealed class GatewayServer : BackgroundService
 {
     private static readonly TimeSpan MaxLinkRetryDelay = TimeSpan.FromSeconds(30);
 
-    private readonly ILogger _logger = loggers.CreateLogger<GatewayServer>();
+    private readonly IServiceScopeFactory _scopes;
+    private readonly IOptions<GatewayOptions> _options;
+    private readonly ILoggerFactory _loggers;
+    private readonly IOptions<NetProtectionOptions>? _protection;
+    private readonly ILogger _logger;
     private readonly ConcurrentDictionary<GatewayClientConnection, Task> _connections = new();
     private readonly Guid _incarnation = Guid.NewGuid();
     private TcpListener? _listener;
@@ -37,11 +37,28 @@ public sealed class GatewayServer(
     private volatile IPEndPoint? _linkWorker;
     private long _nextGeneration;
 
-    internal GatewayOptions Options => options.Value;
+    public GatewayServer(
+        IServiceScopeFactory scopes,
+        IOptions<GatewayOptions> options,
+        ILoggerFactory loggers,
+        IOptions<NetProtectionOptions>? protection = null)
+    {
+        ArgumentNullException.ThrowIfNull(scopes);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(options.Value);
+        ArgumentNullException.ThrowIfNull(loggers);
+        _scopes = scopes;
+        _options = options;
+        _loggers = loggers;
+        _protection = protection;
+        _logger = loggers.CreateLogger<GatewayServer>();
+    }
 
-    internal IServiceScopeFactory Scopes => scopes;
+    internal GatewayOptions Options => _options.Value;
 
-    internal ILoggerFactory Loggers => loggers;
+    internal IServiceScopeFactory Scopes => _scopes;
+
+    internal ILoggerFactory Loggers => _loggers;
 
     /// <summary>The one-connection-per-account claim of this gateway.</summary>
     public GatewayAccountClaims Claims { get; } = new();
@@ -91,16 +108,25 @@ public sealed class GatewayServer(
     /// </summary>
     internal long NextGeneration() => Interlocked.Increment(ref _nextGeneration);
 
-    private IPEndPoint ConfiguredWorker() => new(IPAddress.Parse(options.Value.WorkerAddress), options.Value.WorkerPort);
+    private IPEndPoint ConfiguredWorker() => new(IPAddress.Parse(_options.Value.WorkerAddress), _options.Value.WorkerPort);
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
-        GatewayOptions config = options.Value;
+        GatewayOptions config = _options.Value;
         GatewaySessionLinkHost.ThrowIfWeakSecret(config.LinkSecret, "Gateway:LinkSecret"); // fail at start, not in the link loop
+        ArgumentException.ThrowIfNullOrWhiteSpace(config.BindAddress);
+        ArgumentException.ThrowIfNullOrWhiteSpace(config.WorkerAddress);
+        ArgumentOutOfRangeException.ThrowIfLessThan(config.Port, IPEndPoint.MinPort);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(config.Port, IPEndPoint.MaxPort);
+        ArgumentOutOfRangeException.ThrowIfLessThan(config.WorkerPort, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(config.WorkerPort, IPEndPoint.MaxPort);
+        ArgumentOutOfRangeException.ThrowIfNegative(config.MaxConnections);
+        ArgumentOutOfRangeException.ThrowIfNegative(config.MaxConnectionsPerIp);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(config.MaxOutboundBytes);
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
         _listener = listener;
-        Guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp,
+        Guard = new NetGuard(_protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp,
             _logger, bindAddress: IPAddress.Parse(config.BindAddress));
         _logger.LogInformation("Gateway listening on {Endpoint}; worker link to {Worker}:{Port}", listener.LocalEndpoint, config.WorkerAddress, config.WorkerPort);
         return base.StartAsync(cancellationToken);
@@ -136,7 +162,7 @@ public sealed class GatewayServer(
                         return;
                     }
 
-                    var connection = new GatewayClientConnection(this, client, guard, loggers.CreateLogger<GatewayClientConnection>());
+                    var connection = new GatewayClientConnection(this, client, guard, _loggers.CreateLogger<GatewayClientConnection>());
                     _connections[connection] = RunConnectionAsync(connection, lease, stoppingToken);
                 },
                 _logger,
@@ -180,13 +206,13 @@ public sealed class GatewayServer(
 
     private async Task LinkLoopAsync(CancellationToken stoppingToken)
     {
-        GatewayOptions config = options.Value;
+        GatewayOptions config = _options.Value;
         TimeSpan delay = config.LinkRetryDelay > TimeSpan.Zero ? config.LinkRetryDelay : TimeSpan.FromSeconds(1);
         TimeSpan nextDelay = delay;
         while (!stoppingToken.IsCancellationRequested)
         {
             IPEndPoint worker = WorkerEndPoint;
-            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, loggers.CreateLogger<GatewaySessionLinkClient>());
+            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>());
             try
             {
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -253,6 +279,8 @@ public sealed class GatewayAccountClaims
 
     internal void Claim(int accountId, GatewayClientConnection connection)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(accountId);
+        ArgumentNullException.ThrowIfNull(connection);
         GatewayClientConnection? previous = null;
         _byAccount.AddOrUpdate(accountId, connection, (_, existing) =>
         {
@@ -266,6 +294,9 @@ public sealed class GatewayAccountClaims
         }
     }
 
-    internal void Release(int accountId, GatewayClientConnection connection) =>
+    internal void Release(int accountId, GatewayClientConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
         _byAccount.TryRemove(new KeyValuePair<int, GatewayClientConnection>(accountId, connection));
+    }
 }

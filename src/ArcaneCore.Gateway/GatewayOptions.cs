@@ -1,3 +1,4 @@
+using System.Net;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
 
@@ -59,4 +60,81 @@ public sealed class GatewayOptions
 
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
         ClusterRole.Gateway, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion);
+
+    /// <summary>Every problem with the bound values, as <c>Gateway:Key: problem</c> lines; empty when valid.</summary>
+    public IReadOnlyList<string> Validate()
+    {
+        var problems = new List<string>();
+        if (string.IsNullOrWhiteSpace(BindAddress) || !IPAddress.TryParse(BindAddress, out _))
+        {
+            problems.Add($"{SectionName}:BindAddress: must be a valid IP address.");
+        }
+
+        if (Port is < IPEndPoint.MinPort or > IPEndPoint.MaxPort)
+        {
+            problems.Add($"{SectionName}:Port: must be {IPEndPoint.MinPort}..{IPEndPoint.MaxPort}.");
+        }
+
+        if (MaxConnections < 0)
+        {
+            problems.Add($"{SectionName}:MaxConnections: must be 0 (unlimited) or positive.");
+        }
+
+        if (MaxConnectionsPerIp < 0)
+        {
+            problems.Add($"{SectionName}:MaxConnectionsPerIp: must be 0 (unlimited) or positive.");
+        }
+
+        if (PreAuthTimeout < TimeSpan.Zero)
+        {
+            problems.Add($"{SectionName}:PreAuthTimeout: must be 0 (disabled) or positive.");
+        }
+
+        if (MaxOutboundBytes <= 0)
+        {
+            problems.Add($"{SectionName}:MaxOutboundBytes: must be positive.");
+        }
+
+        if (string.IsNullOrWhiteSpace(WorkerAddress) || !IPAddress.TryParse(WorkerAddress, out _))
+        {
+            problems.Add($"{SectionName}:WorkerAddress: must be a valid IP address.");
+        }
+
+        if (WorkerPort is < 1 or > IPEndPoint.MaxPort)
+        {
+            problems.Add($"{SectionName}:WorkerPort: must be 1..{IPEndPoint.MaxPort}.");
+        }
+
+        if (LinkRetryDelay < TimeSpan.Zero)
+        {
+            problems.Add($"{SectionName}:LinkRetryDelay: must not be negative.");
+        }
+
+        if (string.IsNullOrWhiteSpace(NodeId))
+        {
+            problems.Add($"{SectionName}:NodeId: must not be empty.");
+        }
+
+        if (RealmId <= 0)
+        {
+            problems.Add($"{SectionName}:RealmId: must be positive.");
+        }
+
+        if (string.IsNullOrWhiteSpace(ContentRevision))
+        {
+            problems.Add($"{SectionName}:ContentRevision: must not be empty.");
+        }
+
+        if (CharactersSchemaVersion <= 0)
+        {
+            problems.Add($"{SectionName}:CharactersSchemaVersion: must be positive.");
+        }
+
+        if (WorldSchemaVersion <= 0)
+        {
+            problems.Add($"{SectionName}:WorldSchemaVersion: must be positive.");
+        }
+
+        return problems;
+    }
 }

@@ -2,6 +2,8 @@ using ArcaneCore.Data;
 using ArcaneCore.Kernel.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.Gateway;
 
@@ -17,11 +19,22 @@ public static class GatewayServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
         services.AddArcaneCoreLogging(configuration);
-        services.Configure<GatewayOptions>(configuration.GetSection(GatewayOptions.SectionName));
+        services.AddOptions<GatewayOptions>().Bind(configuration.GetSection(GatewayOptions.SectionName)).ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>());
         services.Configure<NetProtectionOptions>(configuration.GetSection(NetProtectionOptions.SectionName));
         services.AddAuthDatabase(configuration);
         services.AddSingleton<GatewayServer>();
         services.AddHostedService(sp => sp.GetRequiredService<GatewayServer>());
         return services;
+    }
+
+    private sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
+    {
+        public ValidateOptionsResult Validate(string? name, GatewayOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            IReadOnlyList<string> problems = options.Validate();
+            return problems.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(problems);
+        }
     }
 }

@@ -35,13 +35,25 @@ public sealed class RealmConsole : IHostedService
         TimeProvider time,
         IHostApplicationLifetime lifetime,
         ILoggerFactory loggerFactory)
-        : this(options, source, new RealmConsoleCommands(scopes, () => logon.ActiveSessions, time, lifetime), loggerFactory)
+        : this(
+            options,
+            source,
+            new RealmConsoleCommands(
+                scopes,
+                (logon ?? throw new ArgumentNullException(nameof(logon))) is var validLogon ? () => validLogon.ActiveSessions : null!,
+                time,
+                lifetime),
+            loggerFactory)
     {
     }
 
     public RealmConsole(
         IOptions<RealmConsoleOptions> options, ConsoleInputSource source, RealmConsoleCommands commands, ILoggerFactory loggerFactory)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(loggerFactory);
         _options = options.Value;
         _source = source;
         _commands = commands;

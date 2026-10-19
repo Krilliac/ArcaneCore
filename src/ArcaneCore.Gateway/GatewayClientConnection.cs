@@ -64,6 +64,10 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
 
     internal GatewayClientConnection(GatewayServer server, TcpClient client, NetGuard guard, ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(server);
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(guard);
+        ArgumentNullException.ThrowIfNull(logger);
         _server = server;
         _client = client;
         _guard = guard;
@@ -86,6 +90,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
 
     public void Kick(string reason)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         Interlocked.CompareExchange(ref _kickReason, reason, null);
         try
         {

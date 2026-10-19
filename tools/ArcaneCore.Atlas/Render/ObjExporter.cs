@@ -27,6 +27,8 @@ internal static class ObjExporter
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(tiles);
+        ArgumentException.ThrowIfNullOrWhiteSpace(objPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mtlPath);
         var summary = new ExportSummary();
         var materials = new SortedDictionary<string, Material>(StringComparer.Ordinal);
         string objTemp = OutputPaths.PrepareTemp(objPath);
@@ -93,6 +95,7 @@ internal static class ObjExporter
     /// <summary>OBJ object and group names: letters, digits, underscore and hyphen only.</summary>
     public static string Sanitize(string name)
     {
+        ArgumentNullException.ThrowIfNull(name);
         var text = new StringBuilder(name.Length);
         foreach (char c in name)
         {
@@ -105,6 +108,7 @@ internal static class ObjExporter
     /// <summary>The object name of a chunk: layer id, map, tile (or <c>global</c>) and, past the first, the part.</summary>
     public static string ObjectName(GeometryChunk chunk)
     {
+        ArgumentNullException.ThrowIfNull(chunk);
         string tile = chunk.Tile.IsGlobal
             ? string.Create(CultureInfo.InvariantCulture, $"{chunk.Tile.MapId}_global")
             : string.Create(CultureInfo.InvariantCulture, $"{chunk.Tile.MapId}_{chunk.Tile.X}_{chunk.Tile.Y}");
@@ -114,10 +118,13 @@ internal static class ObjExporter
 
     /// <summary>The colour key of an attribute id in a chunk, or <see cref="DefaultGroup"/>.</summary>
     public static string ColorKeyOf(GeometryChunk chunk, uint attribute)
-        => chunk.Attributes.TryGetValue(attribute, out JsonObject? table)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+        return chunk.Attributes.TryGetValue(attribute, out JsonObject? table)
             && table["colorKey"] is JsonValue value && value.TryGetValue(out string? key) && !string.IsNullOrEmpty(key)
             ? key
             : DefaultGroup;
+    }
 
     private static void WriteHeader(StreamWriter writer, ExportRequest request, string mtlName)
     {

@@ -19,6 +19,8 @@ internal readonly struct ViewTransform
     public ViewTransform(CameraState camera, int width, int height)
     {
         ArgumentNullException.ThrowIfNull(camera);
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
         Width = width;
         Height = height;
         Eye = CameraMath.Eye(camera);

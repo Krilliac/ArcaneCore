@@ -131,6 +131,7 @@ public sealed class UiHub
     /// <summary>Pushes <c>{"op":"event","topic":...,"data":...}</c> to every connection (non-blocking).</summary>
     public void Broadcast(string topic, JsonNode? data)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         if (_connections.IsEmpty)
         {
             return;

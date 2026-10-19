@@ -57,8 +57,11 @@ public sealed record Bookmark(string Name, uint Map, WorldPoint Target, double D
 
     /// <summary>Whether <paramref name="name"/> is usable: 1 to 64 letters, digits, spaces and . _ - ' characters.</summary>
     public static bool IsValidName(string name)
-        => name.Length is >= 1 and <= 64 && char.IsAsciiLetterOrDigit(name[0])
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return name.Length is >= 1 and <= 64 && char.IsAsciiLetterOrDigit(name[0])
             && name.All(c => char.IsAsciiLetterOrDigit(c) || c is ' ' or '.' or '_' or '-' or '\'');
+    }
 }
 
 /// <summary>
@@ -156,6 +159,7 @@ public sealed class BookmarkStore
 
     public bool TryGet(string name, out Bookmark bookmark)
     {
+        ArgumentNullException.ThrowIfNull(name);
         lock (_gate)
         {
             bookmark = BuiltInBookmarks.All.Concat(_saved).FirstOrDefault(b => string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase))!;
@@ -188,6 +192,7 @@ public sealed class BookmarkStore
     /// <summary>Removes a saved bookmark; false when none has that name. A built-in name is refused.</summary>
     public bool Remove(string name)
     {
+        ArgumentNullException.ThrowIfNull(name);
         lock (_gate)
         {
             if (BuiltInBookmarks.All.Any(b => string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase)))

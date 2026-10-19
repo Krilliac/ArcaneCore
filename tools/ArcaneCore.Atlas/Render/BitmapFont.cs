@@ -143,7 +143,11 @@ internal static class BitmapFont
 
     /// <summary>Width in pixels of <paramref name="text"/> at <paramref name="scale"/> (the last character's trailing blank column is not counted).</summary>
     public static int Measure(string text, int scale)
-        => text.Length == 0 ? 0 : (((text.Length * Advance) - 1) * scale);
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentOutOfRangeException.ThrowIfLessThan(scale, 1);
+        return text.Length == 0 ? 0 : (((text.Length * Advance) - 1) * scale);
+    }
 
     /// <summary>
     /// Draws <paramref name="text"/> with its top-left corner at (<paramref name="x"/>, <paramref name="y"/>), opaque,

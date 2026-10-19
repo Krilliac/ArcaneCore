@@ -14,14 +14,16 @@ public sealed record ClientPatch(string Path, long Size, byte[] Md5);
 /// </summary>
 public sealed class PatchCatalog(Func<AutoPatchOptions> options)
 {
+    private readonly Func<AutoPatchOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly ConcurrentDictionary<(string Path, long Size, DateTime Written), byte[]> _md5 = new();
 
-    public AutoPatchOptions Options => options();
+    public AutoPatchOptions Options => _options();
 
     /// <summary>The patch to offer, or null when patching is off or no readable file matches.</summary>
     public ClientPatch? Find(ushort build, string locale)
     {
-        AutoPatchOptions current = options();
+        ArgumentNullException.ThrowIfNull(locale);
+        AutoPatchOptions current = _options();
         if (!current.Enabled || build == 0 || locale.Length != 4 || !locale.All(char.IsAsciiLetter))
         {
             return null;

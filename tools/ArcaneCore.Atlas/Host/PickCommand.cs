@@ -15,7 +15,9 @@ internal static class PickCommand
     public const double LargestMaxDistance = 20_000;
 
     public static void Register(CommandRegistry registry)
-        => registry.Register(new CommandDefinition(
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        registry.Register(new CommandDefinition(
             "query.pick",
             "Picks the nearest triangle (or line/point within 0.25 yd) along a ray through the cached geometry of the visible layers.",
             [
@@ -27,6 +29,7 @@ internal static class PickCommand
                 new("maxDistance", ArgType.Number, $"Ray length in yards, up to {LargestMaxDistance:0}. Default {DefaultMaxDistance:0}."),
             ],
             Pick));
+    }
 
     private static async Task<JsonNode?> Pick(CommandInvocation invocation, CancellationToken cancellationToken)
     {

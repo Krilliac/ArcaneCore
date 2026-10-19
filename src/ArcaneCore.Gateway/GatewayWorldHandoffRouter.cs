@@ -8,7 +8,18 @@ namespace ArcaneCore.Gateway;
 /// to the promoted world B (<see cref="GatewayServer.RetargetWorkerAsync"/>). Clients connected through the link to A are disconnected and log
 /// in again through B; carrying a live session across (SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD) is not built.
 /// </summary>
-public sealed class GatewayWorldHandoffRouter(GatewayServer gateway, IPEndPoint target) : IWorldHandoffRouter
+public sealed class GatewayWorldHandoffRouter : IWorldHandoffRouter
 {
-    public Task RerouteAsync(CancellationToken cancellationToken) => gateway.RetargetWorkerAsync(target, cancellationToken);
+    private readonly GatewayServer _gateway;
+    private readonly IPEndPoint _target;
+
+    public GatewayWorldHandoffRouter(GatewayServer gateway, IPEndPoint target)
+    {
+        ArgumentNullException.ThrowIfNull(gateway);
+        ArgumentNullException.ThrowIfNull(target);
+        _gateway = gateway;
+        _target = target;
+    }
+
+    public Task RerouteAsync(CancellationToken cancellationToken) => _gateway.RetargetWorkerAsync(_target, cancellationToken);
 }

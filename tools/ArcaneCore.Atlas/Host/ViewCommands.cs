@@ -17,6 +17,7 @@ internal static class ViewCommands
 
     public static void Register(CommandRegistry registry)
     {
+        ArgumentNullException.ThrowIfNull(registry);
         registry.Register(new CommandDefinition("view.get", "The complete current view (map, camera, layer styles, compare mode).", [], ViewGet));
         registry.Register(new CommandDefinition(
             "view.set",

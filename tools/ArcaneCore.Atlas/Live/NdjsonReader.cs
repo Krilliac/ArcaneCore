@@ -35,7 +35,9 @@ internal sealed class NdjsonReader(Stream stream, int maxLineBytes, int bufferSi
     // A carry buffer that grew for one large line is dropped at the next read rather than kept for the life of the connection.
     private const int CarryKeepBytes = 1024 * 1024;
 
-    private readonly byte[] _buffer = new byte[bufferSize];
+    private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+    private readonly int _maxLineBytes = maxLineBytes > 0 ? maxLineBytes : throw new ArgumentOutOfRangeException(nameof(maxLineBytes), maxLineBytes, "The maximum line length must be positive.");
+    private readonly byte[] _buffer = bufferSize > 0 ? new byte[bufferSize] : throw new ArgumentOutOfRangeException(nameof(bufferSize), bufferSize, "The buffer size must be positive.");
     private byte[] _carry = [];
     private int _carryLength;
     private int _start;
@@ -75,7 +77,7 @@ internal sealed class NdjsonReader(Stream stream, int maxLineBytes, int bufferSi
                     }
 
                     long length = (long)_carryLength + nl;
-                    if (length > maxLineBytes)
+                    if (length > _maxLineBytes)
                     {
                         _carryLength = 0;
                         return new NdjsonItem(NdjsonKind.Oversize, default, length);
@@ -111,7 +113,7 @@ internal sealed class NdjsonReader(Stream stream, int maxLineBytes, int bufferSi
                 {
                     _discarded += pending;
                 }
-                else if ((long)_carryLength + pending > maxLineBytes)
+                else if ((long)_carryLength + pending > _maxLineBytes)
                 {
                     _discarding = true;
                     _discarded = (long)_carryLength + pending;
@@ -125,7 +127,7 @@ internal sealed class NdjsonReader(Stream stream, int maxLineBytes, int bufferSi
 
             _start = 0;
             _end = 0;
-            int read = await stream.ReadAsync(_buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            int read = await _stream.ReadAsync(_buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
                 if (_discarding)
@@ -156,7 +158,7 @@ internal sealed class NdjsonReader(Stream stream, int maxLineBytes, int bufferSi
         int needed = _carryLength + count;
         if (needed > _carry.Length)
         {
-            byte[] bigger = new byte[Math.Max(needed, Math.Min(Math.Max(_carry.Length * 2, 4096), maxLineBytes))];
+            byte[] bigger = new byte[Math.Max(needed, Math.Min(Math.Max(_carry.Length * 2, 4096), _maxLineBytes))];
             Buffer.BlockCopy(_carry, 0, bigger, 0, _carryLength);
             _carry = bigger;
         }

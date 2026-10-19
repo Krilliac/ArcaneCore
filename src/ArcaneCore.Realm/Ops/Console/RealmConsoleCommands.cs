@@ -24,11 +24,17 @@ public sealed class RealmConsoleCommands(
     /// <summary>The prefix of every output line.</summary>
     public const string Prefix = "[console] ";
 
-    private readonly DateTimeOffset _started = time.GetUtcNow();
+    private readonly IServiceScopeFactory _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
+    private readonly Func<int> _activeSessions = activeSessions ?? throw new ArgumentNullException(nameof(activeSessions));
+    private readonly TimeProvider _time = time ?? throw new ArgumentNullException(nameof(time));
+    private readonly IHostApplicationLifetime _lifetime = lifetime ?? throw new ArgumentNullException(nameof(lifetime));
+    private readonly DateTimeOffset _started = (time ?? throw new ArgumentNullException(nameof(time))).GetUtcNow();
 
     /// <summary>Run one console line. Never throws for a bad command (a usage line is printed); store failures propagate.</summary>
     public async Task ExecuteAsync(string line, TextWriter output, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(line);
+        ArgumentNullException.ThrowIfNull(output);
         string text = line.Trim();
         if (text.Length > 0 && text[0] is '.' or '!')
         {
@@ -55,14 +61,14 @@ public sealed class RealmConsoleCommands(
                 await PrintRealmListAsync(Say, cancellationToken).ConfigureAwait(false);
                 return;
             case "online":
-                Say($"{activeSessions()} logon session(s) connected");
+                Say($"{_activeSessions()} logon session(s) connected");
                 return;
             case "account":
                 await AccountAsync(words, Say, cancellationToken).ConfigureAwait(false);
                 return;
             case "quit" or "exit" or "shutdown":
                 Say("stopping the realm daemon");
-                lifetime.StopApplication();
+                _lifetime.StopApplication();
                 return;
             default:
                 Say("unknown command '" + words[0] + "'");
@@ -86,9 +92,9 @@ public sealed class RealmConsoleCommands(
 
     private async Task PrintInfoAsync(Action<string> say, CancellationToken cancellationToken)
     {
-        TimeSpan uptime = time.GetUtcNow() - _started;
+        TimeSpan uptime = _time.GetUtcNow() - _started;
         say("uptime: " + string.Create(CultureInfo.InvariantCulture, $"{(int)uptime.TotalDays}d {uptime.Hours:D2}:{uptime.Minutes:D2}:{uptime.Seconds:D2}"));
-        say($"logon sessions: {activeSessions()}");
+        say($"logon sessions: {_activeSessions()}");
         say($"realms: {(await LoadRealmsAsync(cancellationToken).ConfigureAwait(false)).Count}");
     }
 
@@ -105,7 +111,7 @@ public sealed class RealmConsoleCommands(
 
     private async Task<IReadOnlyList<RealmEntry>> LoadRealmsAsync(CancellationToken cancellationToken)
     {
-        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IRealmStore>().GetRealmsAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -131,7 +137,7 @@ public sealed class RealmConsoleCommands(
 
     private async Task CreateAccountAsync(string username, string password, Action<string> say, CancellationToken cancellationToken)
     {
-        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         IAccountStore accounts = scope.ServiceProvider.GetRequiredService<IAccountStore>();
         if (await accounts.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false) is not null)
         {
@@ -148,7 +154,7 @@ public sealed class RealmConsoleCommands(
 
     private async Task SetPasswordAsync(string username, string password, Action<string> say, CancellationToken cancellationToken)
     {
-        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         IAccountStore accounts = scope.ServiceProvider.GetRequiredService<IAccountStore>();
         if (await accounts.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false) is null)
         {
@@ -169,7 +175,7 @@ public sealed class RealmConsoleCommands(
             return;
         }
 
-        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         IAccountStore accounts = scope.ServiceProvider.GetRequiredService<IAccountStore>();
         if (!await accounts.UpdateSecurityAsync(username, security, cancellationToken).ConfigureAwait(false))
         {

@@ -18,6 +18,7 @@ internal static class StatusCommands
 
     public static void Register(CommandRegistry registry)
     {
+        ArgumentNullException.ThrowIfNull(registry);
         registry.Register(new CommandDefinition("status", "Version, mode, data paths, problems, modules, layer sources, cache size and UI connections.", [], Status));
         registry.Register(new CommandDefinition(
             "help",
@@ -47,6 +48,7 @@ internal static class StatusCommands
     /// <summary>The <c>status</c> data (also served unwrapped by <c>GET /api/status</c>).</summary>
     public static JsonObject BuildStatus(AtlasContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
         var problems = new JsonArray([.. context.Problems.Select(p => (JsonNode)p)]);
         if (context.Services.Get<BookmarkStore>()?.LoadProblem is { } bookmarkProblem)
         {
@@ -75,6 +77,7 @@ internal static class StatusCommands
     /// <summary>The <c>layers.list</c> data.</summary>
     public static JsonArray BuildLayers(AtlasContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
         var list = new JsonArray();
         foreach (LayerInfo info in LayerCatalog.All)
         {
@@ -105,6 +108,7 @@ internal static class StatusCommands
     /// <summary>The <c>GET /api/commands</c> entries.</summary>
     public static JsonArray BuildCommandList(CommandRegistry registry)
     {
+        ArgumentNullException.ThrowIfNull(registry);
         var list = new JsonArray();
         foreach (CommandDefinition definition in registry.All)
         {

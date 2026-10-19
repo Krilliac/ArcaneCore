@@ -53,6 +53,7 @@ public sealed class EmbeddedWebAssets : IWebAssets
 
     public bool TryGet(string path, out WebAsset asset)
     {
+        ArgumentNullException.ThrowIfNull(path);
         if (_loaded.TryGetValue(path, out asset!))
         {
             return true;
@@ -81,7 +82,9 @@ public sealed class EmbeddedWebAssets : IWebAssets
 internal static class ContentTypes
 {
     public static string For(string path)
-        => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return Path.GetExtension(path).ToLowerInvariant() switch
         {
             ".html" or ".htm" => "text/html; charset=utf-8",
             ".js" or ".mjs" => "text/javascript; charset=utf-8",
@@ -95,4 +98,5 @@ internal static class ContentTypes
             ".wasm" => "application/wasm",
             _ => "application/octet-stream",
         };
+    }
 }

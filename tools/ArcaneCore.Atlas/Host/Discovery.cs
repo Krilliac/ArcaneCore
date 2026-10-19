@@ -61,6 +61,8 @@ public static class Discovery
     /// <summary>Writes the record atomically; on Unix the file is readable by its owner only because it holds the bearer token.</summary>
     public static string Write(AtlasState state, DiscoveryRecord record)
     {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(record);
         string file = FileFor(state, record.Pid);
         Directory.CreateDirectory(state.InstancesDirectory);
         string temp = $"{file}.{Guid.NewGuid():N}.tmp";
@@ -83,6 +85,8 @@ public static class Discovery
     /// <summary>Deletes the record's file, but only while it still holds this record's token (another run may have replaced it).</summary>
     public static void Delete(AtlasState state, DiscoveryRecord record)
     {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(record);
         string file = FileFor(state, record.Pid);
         try
         {
@@ -140,6 +144,7 @@ public static class Discovery
     /// <summary>Whether the instance's process still runs: it exists, has not exited, and began before the file was written.</summary>
     public static bool IsAlive(DiscoveryRecord record)
     {
+        ArgumentNullException.ThrowIfNull(record);
         try
         {
             using Process process = Process.GetProcessById(record.Pid);

@@ -14,6 +14,8 @@ public static class NetProtectionServiceExtensions
     /// </summary>
     public static IServiceCollection AddNetProtection(this IServiceCollection services, IConfiguration configuration)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
         services.Configure<NetProtectionOptions>(configuration.GetSection(NetProtectionOptions.SectionName));
         return services;
     }

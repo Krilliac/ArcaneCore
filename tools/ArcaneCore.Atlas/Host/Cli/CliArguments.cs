@@ -27,16 +27,26 @@ internal sealed class ParsedArguments
     public IReadOnlyList<string> Positionals { get; }
 
     /// <summary>Whether the option was given.</summary>
-    public bool Has(string name) => _options.ContainsKey(name);
+    public bool Has(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return _options.ContainsKey(name);
+    }
 
     /// <summary>The option's value, or null when it was not given (flags have an empty value).</summary>
-    public string? Value(string name) => _options.GetValueOrDefault(name);
+    public string? Value(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return _options.GetValueOrDefault(name);
+    }
 
     /// <param name="args">Everything after the verb.</param>
     /// <param name="allowed">Option name (with the leading dashes) to whether it takes a value.</param>
     /// <exception cref="UsageException">An option is unknown, repeated, or missing its value.</exception>
     public static ParsedArguments Parse(IReadOnlyList<string> args, IReadOnlyDictionary<string, bool> allowed)
     {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(allowed);
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         var positionals = new List<string>();
         bool optionsEnded = false;
@@ -103,6 +113,7 @@ internal static class CommandLineArguments
     /// </summary>
     public static JsonNode? ParseValue(string text)
     {
+        ArgumentNullException.ThrowIfNull(text);
         try
         {
             return JsonNode.Parse(text, nodeOptions: null, HostJson.Strict);
@@ -117,6 +128,8 @@ internal static class CommandLineArguments
     /// <exception cref="UsageException">The JSON is not an object, a pair is malformed, or a key is given twice.</exception>
     public static async Task<JsonObject> BuildAsync(IEnumerable<string> pairs, string? json, TextReader standardInput, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(pairs);
+        ArgumentNullException.ThrowIfNull(standardInput);
         JsonObject args = [];
         if (json is not null)
         {
@@ -173,6 +186,7 @@ internal static class ScriptFile
     /// <exception cref="UsageException">One or more lines are malformed (the message lists them).</exception>
     public static IReadOnlyList<ScriptStep> Parse(string text)
     {
+        ArgumentNullException.ThrowIfNull(text);
         var steps = new List<ScriptStep>();
         var problems = new List<string>();
         string[] lines = text.Split('\n');

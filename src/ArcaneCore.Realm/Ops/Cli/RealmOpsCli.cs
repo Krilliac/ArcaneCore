@@ -22,11 +22,18 @@ public static class RealmOpsCli
 
     /// <summary>Every problem of the realm's configuration, from every check <see cref="CreateChecks"/> returns.</summary>
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration, CreateChecks());
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return ConfigReport.Run(configuration, CreateChecks());
+    }
 
     /// <summary>Runs the verb of <paramref name="command"/>; the exit code is 78 when check-config finds an error, otherwise the verb's own code.</summary>
     public static int Run(DaemonCommand command, IConfigurationRoot configuration, TextWriter standardOutput, TextWriter standardError)
     {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(standardOutput);
+        ArgumentNullException.ThrowIfNull(standardError);
         if (command.Verb == DaemonCommandLine.WriteConfig)
         {
             return WriteConfigVerb.Run(command, ConfigDaemon.Realm, ConfCatalog.Embedded, configuration, standardOutput, standardError);

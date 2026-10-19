@@ -89,7 +89,11 @@ public sealed class McpServer
     public static IReadOnlyList<string> LegacyVersions { get; } = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
     /// <summary>The tool name of a command: dots become underscores (command names contain no underscore, so this is reversible).</summary>
-    public static string ToolName(string command) => command.Replace('.', '_');
+    public static string ToolName(string command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return command.Replace('.', '_');
+    }
 
     /// <summary>Reads requests until input ends or <paramref name="cancellationToken"/> is cancelled, answering each one.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)

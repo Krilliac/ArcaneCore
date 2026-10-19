@@ -52,6 +52,10 @@ public sealed class LogonServer(
     /// </summary>
     public override Task StartAsync(CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+        ArgumentNullException.ThrowIfNull(logger);
         AuthOptions config = options.Value;
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();

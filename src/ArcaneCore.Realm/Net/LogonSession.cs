@@ -107,6 +107,13 @@ public sealed class LogonSession(
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(accountStore);
+        ArgumentNullException.ThrowIfNull(realmStore);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(remoteEndpoint);
+
         // vmangos MaxSessionDuration (AuthSocket.cpp:76-82): a hard cap on one connection's life.
         using var session = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (options.MaxSessionDurationSeconds > 0)

@@ -33,14 +33,25 @@ public interface ICommandClient
 }
 
 /// <summary>Runs commands in-process against a context composed with <c>headless: true</c> (no UI, no listener).</summary>
-public sealed class LocalCommandClient(AtlasContext context, CommandOrigin origin) : ICommandClient
+public sealed class LocalCommandClient : ICommandClient
 {
+    private readonly AtlasContext _context;
+    private readonly CommandOrigin _origin;
+
+    public LocalCommandClient(AtlasContext context, CommandOrigin origin)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        _context = context;
+        _origin = origin;
+    }
+
     public string Description => "headless";
 
     public async Task<JsonObject> InvokeAsync(string name, JsonObject? args, CancellationToken cancellationToken)
     {
-        CommandResult result = await context.Commands
-            .InvokeAsync(name, args, context.Services, origin, headless: true, cancellationToken)
+        ArgumentNullException.ThrowIfNull(name);
+        CommandResult result = await _context.Commands
+            .InvokeAsync(name, args, _context.Services, _origin, headless: true, cancellationToken)
             .ConfigureAwait(false);
         return result.ToJson();
     }
@@ -49,7 +60,7 @@ public sealed class LocalCommandClient(AtlasContext context, CommandOrigin origi
     public Task<IReadOnlyList<CommandInfo>> ListAsync(CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<CommandInfo>>(
         [
-            .. context.Commands.All
+            .. _context.Commands.All
                 .Where(c => c.Surfaces.HasFlag(CommandSurfaces.Headless))
                 .Select(c => new CommandInfo(c.Name, c.Summary, CommandSchema.InputSchema(c))),
         ]);
@@ -84,6 +95,7 @@ public sealed class RemoteCommandClient : ICommandClient, IDisposable
 
     public async Task<JsonObject> InvokeAsync(string name, JsonObject? args, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(name);
         var body = new JsonObject { ["name"] = name, ["args"] = (args ?? []).DeepClone(), ["origin"] = _origin };
         try
         {

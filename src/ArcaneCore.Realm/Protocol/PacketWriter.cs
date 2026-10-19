@@ -15,6 +15,7 @@ public sealed class PacketWriter
 
     public PacketWriter(int capacity = 128)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
         _buffer = new byte[capacity];
     }
 
@@ -57,6 +58,7 @@ public sealed class PacketWriter
     /// <summary>Write an ASCII string followed by a null terminator.</summary>
     public void WriteCString(string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         int byteCount = Encoding.ASCII.GetByteCount(value);
         EnsureCapacity(byteCount + 1);
         Encoding.ASCII.GetBytes(value, _buffer.AsSpan(_length));

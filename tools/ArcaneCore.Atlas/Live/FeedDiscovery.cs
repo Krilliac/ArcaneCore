@@ -73,6 +73,7 @@ public sealed class PipeFeedDiscovery : IFeedDiscovery
     /// <summary>The process id in a feed pipe name, or false when <paramref name="pipeName"/> is not <c>arcanecore-mapfeed-{digits}</c>.</summary>
     public static bool TryParsePid(string pipeName, out int pid)
     {
+        ArgumentNullException.ThrowIfNull(pipeName);
         pid = 0;
         ReadOnlySpan<char> name = pipeName;
         return name.StartsWith(LiveProtocol.PipePrefix, StringComparison.OrdinalIgnoreCase)

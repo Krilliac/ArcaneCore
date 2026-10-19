@@ -218,6 +218,7 @@ internal static class PlayerbotAlteracValleyTactics
                 continue;
             }
 
+            if ((uint)step >= (uint)d.Nodes.Count) continue;
             AvNode node = d.Nodes[step];
             if (node.AssaultableBy(d.TeamIndex) && node.At is not null && !IsBlocked(d, step))
                 return new AvObjective(AvObjectiveKind.Assault, step, node.At);

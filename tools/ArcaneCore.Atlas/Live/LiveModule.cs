@@ -53,15 +53,30 @@ internal sealed class LiveLayerSource : ILayerSource
     public IReadOnlyList<string> Layers => LiveLayers;
 
     /// <inheritdoc />
-    public IReadOnlyCollection<TileKey> AvailableTiles(string layerId, uint mapId) => [];
+    public IReadOnlyCollection<TileKey> AvailableTiles(string layerId, uint mapId)
+    {
+        ArgumentNullException.ThrowIfNull(layerId);
+        return [];
+    }
 
     /// <inheritdoc />
     public TileStatus PeekStatus(string layerId, TileKey tile)
-        => new(layerId, tile, TileState.NotApplicable, "live layers are drawn from live frames (the live.frame event), not from tiles");
+    {
+        ArgumentNullException.ThrowIfNull(layerId);
+        return new(layerId, tile, TileState.NotApplicable, "live layers are drawn from live frames (the live.frame event), not from tiles");
+    }
 
     /// <inheritdoc />
     public LayerBuild Build(string layerId, TileKey tile, CancellationToken cancellationToken)
-        => LiveLayers.Contains(layerId, StringComparer.Ordinal)
+    {
+        ArgumentNullException.ThrowIfNull(layerId);
+        if (!tile.IsValid)
+        {
+            throw new ArgumentException($"Tile {tile} is outside the map grid.", nameof(tile));
+        }
+
+        return LiveLayers.Contains(layerId, StringComparer.Ordinal)
             ? new LayerBuild(PeekStatus(layerId, tile), [])
             : throw new ArgumentException($"Layer '{layerId}' is not a live layer.", nameof(layerId));
+    }
 }

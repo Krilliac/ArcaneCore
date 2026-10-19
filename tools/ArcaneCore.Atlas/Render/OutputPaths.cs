@@ -25,6 +25,8 @@ internal static class OutputPaths
     /// <exception cref="CommandException"><see cref="CommandException.BadArguments"/> with the reason.</exception>
     public static string Resolve(string command, string requested, string extension, bool allowRelative)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(extension);
         if (string.IsNullOrWhiteSpace(requested))
         {
             throw Bad(command, "argument 'out' must be a file path.");
@@ -81,6 +83,7 @@ internal static class OutputPaths
     /// <exception cref="IOException">The directories of the path lead through more than <see cref="MaxLinks"/> links (a cycle).</exception>
     public static string? FindWorkingTree(string fullPath)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fullPath);
         string directory = Path.GetDirectoryName(fullPath) ?? string.Empty;
         return RootAtOrAbove(directory) ?? RootAtOrAbove(RealDirectory(directory));
     }
@@ -123,6 +126,7 @@ internal static class OutputPaths
     /// <summary>Creates the directory of <paramref name="path"/> and returns an unused sibling name for staging it.</summary>
     public static string PrepareTemp(string path)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         string directory = Path.GetDirectoryName(path) ?? throw new ArgumentException($"'{path}' has no directory.", nameof(path));
         Directory.CreateDirectory(directory);
         return Path.Combine(directory, $"{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");

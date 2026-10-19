@@ -34,6 +34,9 @@ internal sealed class RenderedFrame(Framebuffer buffer, Scene scene, JsonObject 
 /// <param name="cache">The shared tile cache every geometry consumer goes through.</param>
 public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadlessRenderer
 {
+    private readonly LayerRegistry _layers = layers ?? throw new ArgumentNullException(nameof(layers));
+    private readonly LayerCache _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+
     /// <summary>Smallest image edge, pixels.</summary>
     public const int MinDimension = 16;
 
@@ -77,7 +80,7 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
         ArgumentNullException.ThrowIfNull(view);
         ValidateSize(width, height);
         long start = Stopwatch.GetTimestamp();
-        Scene scene = Scene.Build(view, layers, cache, cancellationToken);
+        Scene scene = Scene.Build(view, _layers, _cache, cancellationToken);
         var buffer = new Framebuffer(width, height, Rgb.Background);
         var transform = new ViewTransform(view.Camera, width, height);
         var raster = new Rasterizer(buffer, transform);

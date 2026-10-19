@@ -24,6 +24,8 @@ internal sealed record ExportRequest(uint MapId, double X, double Y, int Radius,
     public static ExportRequest Parse(CommandInvocation invocation, ViewState view, LayerRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(invocation);
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(registry);
         string command = invocation.Definition.Name;
         uint map = invocation.GetMapId("map");
         double? x = invocation.OptionalNumber("x");
@@ -162,6 +164,14 @@ internal static class ExportSource
     /// <see cref="Scene.TilesFor"/>. A tile whose build throws is reported as <see cref="TileState.Rejected"/> with the reason.
     /// </summary>
     public static IEnumerable<ExportTile> Tiles(ExportRequest request, LayerRegistry registry, LayerCache cache, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(cache);
+        return EnumerateTiles(request, registry, cache, cancellationToken);
+    }
+
+    private static IEnumerable<ExportTile> EnumerateTiles(ExportRequest request, LayerRegistry registry, LayerCache cache, CancellationToken cancellationToken)
     {
         var centre = new WorldPoint(request.X, request.Y, 0);
         foreach (LayerInfo layer in request.Layers)

@@ -252,6 +252,7 @@ public static class PlayerbotItemScore
     public static float StyleFactor(ItemTemplate template, PlayerbotStatWeights weights)
     {
         ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(weights);
         return (template.GetInventoryType(), weights.Style) switch
         {
             (InventoryType.TwoHandWeapon, PlayerbotWeaponStyle.OneHandShield) => 0.5f,

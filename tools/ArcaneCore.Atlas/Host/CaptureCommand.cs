@@ -23,7 +23,9 @@ internal static class CaptureCommand
     private static ReadOnlySpan<byte> PngSignature => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     public static void Register(CommandRegistry registry)
-        => registry.Register(new CommandDefinition(
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        registry.Register(new CommandDefinition(
             "capture",
             "Renders the view to a PNG file and returns its path. A connected UI renders it (source ui); otherwise the CPU renderer does (source headless).",
             [
@@ -34,6 +36,7 @@ internal static class CaptureCommand
                 new("view", ArgType.Object, "A view merge patch applied to a copy of the current view (the shared view is not changed)."),
             ],
             Capture));
+    }
 
     /// <summary>Whether <paramref name="data"/> starts with the PNG signature.</summary>
     public static bool IsPng(ReadOnlySpan<byte> data) => data.Length >= 8 && data[..8].SequenceEqual(PngSignature);

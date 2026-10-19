@@ -42,6 +42,10 @@ internal static class Hud
     /// </summary>
     public static void Draw(Framebuffer frame, Rasterizer raster, ViewState view, in ViewTransform transform, Scene scene, int splitX)
     {
+        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(raster);
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(scene);
         int scale = ScaleFor(frame.Height);
         DrawInfoBlock(frame, view, scale);
         DrawCompass(frame, raster, view.Camera, scale);
@@ -56,6 +60,7 @@ internal static class Hud
     /// <summary>The two lines of the top-left block: the camera target's coordinates and the tile (with its .map file name) it lies in.</summary>
     public static (string Coordinates, string Tile) InfoLines(ViewState view)
     {
+        ArgumentNullException.ThrowIfNull(view);
         WorldPoint t = view.Camera.Target;
         string coordinates = string.Create(CultureInfo.InvariantCulture, $"map {view.MapId}  x {t.X:F2}  y {t.Y:F2}  z {t.Z:F2}");
         string tile = WorldGrid.TileOf(view.MapId, t.X, t.Y) is { } key
