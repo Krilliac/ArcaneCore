@@ -100,9 +100,23 @@ public sealed class StealthRegistry
             return;
         }
 
-        foreach (Unit gone in _hiddenUnits.Where(u => isGone(u)).ToArray())
+        List<Unit>? gone = null;
+        foreach (Unit candidate in _hiddenUnits)
         {
-            SetVisibility(gone, StealthVisibility.On);
+            if (isGone(candidate))
+            {
+                (gone ??= []).Add(candidate);
+            }
+        }
+
+        if (gone is null)
+        {
+            return;
+        }
+
+        foreach (Unit unit in gone)
+        {
+            SetVisibility(unit, StealthVisibility.On);
         }
     }
 }

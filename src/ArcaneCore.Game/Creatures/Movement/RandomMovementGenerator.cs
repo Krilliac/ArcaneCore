@@ -270,9 +270,9 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     /// spawns 3564/3574/3576 dipped 2.6–3.2 yd below the cave mesh at z 365.8–368.5 under mesh 368.5–371.7) sink below the mesh
     /// surface. Samples every 4 yards along each segment and raises any point that sits below the local mesh floor.
     /// </summary>
-    private static IReadOnlyList<Vector3> DrapeCornersOverMeshFloor(Creature creature, IReadOnlyList<Vector3> corners)
+    internal static IReadOnlyList<Vector3> DrapeCornersOverMeshFloor(Creature creature, IReadOnlyList<Vector3> corners)
     {
-        if (corners.Count == 0 || creature.Map?.Collision is not { } collision)
+        if (corners.Count == 0 || (creature.Template.InhabitType & 4) != 0 || creature.Map?.Collision is not { } collision)
         {
             return corners;
         }

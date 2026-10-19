@@ -21,6 +21,8 @@ public sealed class StealthDetectionUpdater : IMapUpdater
     private readonly Func<Unit, bool> _isGone;
     private readonly int _periodMs;
     private readonly Dictionary<Player, int> _timers = new(ReferenceEqualityComparer.Instance);
+    private readonly List<Player> _players = [];
+    private readonly List<Unit> _mapStealthed = [];
 
     /// <param name="registry">The stealthed units.</param>
     /// <param name="isGone">A stealthed unit that is not in the world and not in transit: its aura was dropped without a handler.</param>
@@ -54,7 +56,25 @@ public sealed class StealthDetectionUpdater : IMapUpdater
             return;
         }
 
-        foreach (Player player in map.Players.ToArray())
+        _mapStealthed.Clear();
+        using (HashSet<Unit>.Enumerator e = _registry.EnumerateStealthed())
+        {
+            while (e.MoveNext())
+            {
+                Unit unit = e.Current;
+                if (unit is not null && unit.IsInWorld && ReferenceEquals(unit.Map, map))
+                {
+                    _mapStealthed.Add(unit);
+                }
+            }
+        }
+
+        float range = (StealthServices.Find(map)?.Options ?? StealthOptions.Default).MaxPlayerDetectRange;
+        float rangeSq = range * range;
+
+        _players.Clear();
+        _players.AddRange(map.Players);
+        foreach (Player player in _players)
         {
             try
             {
@@ -70,7 +90,7 @@ public sealed class StealthDetectionUpdater : IMapUpdater
 
                 if (diffMs >= (uint)timer)
                 {
-                    Pass(map, player);
+                    Pass(map, player, rangeSq);
                     _timers[player] = _periodMs;
                 }
                 else
@@ -87,19 +107,17 @@ public sealed class StealthDetectionUpdater : IMapUpdater
 
     public void OnPlayerRemoved(Map map, Player player) => _timers.Remove(player);
 
-    private void Pass(Map map, Player player)
+    private void Pass(Map map, Player player, float rangeSq)
     {
         PassesRun++;
         // Player detectors use MaxPlayerDetectRange (StealthDetection; creature detectors use MaxCreatureDetectRange in
         // StealthServices). The distance is the 3D center distance StealthVisibilityRule feeds CanDetectStealthOf, which
         // rejects anything past the cap. A unit the player already sees is still rechecked so it drops on the way out.
-        float range = (StealthServices.Find(map)?.Options ?? StealthOptions.Default).MaxPlayerDetectRange;
-        float rangeSq = range * range;
-        foreach (Unit unit in _registry.Stealthed())
+        foreach (Unit unit in _mapStealthed)
         {
             try
             {
-                if (unit is null || !unit.IsInWorld || unit.Map is null || ReferenceEquals(unit, player) || !ReferenceEquals(unit.Map, map))
+                if (!unit.IsInWorld || unit.Map is null || ReferenceEquals(unit, player) || !ReferenceEquals(unit.Map, map))
                 {
                     continue;
                 }

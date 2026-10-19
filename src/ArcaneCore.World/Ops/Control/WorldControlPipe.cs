@@ -208,7 +208,7 @@ public sealed partial class WorldControlPipe : IHostedService
             {
                 try
                 {
-                    server.Disconnect();
+                    if (server.IsConnected) server.Disconnect();
                 }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
                 {

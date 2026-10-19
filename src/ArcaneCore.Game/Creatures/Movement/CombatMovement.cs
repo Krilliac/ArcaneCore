@@ -223,7 +223,8 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             // A stuck chaser's partial path ends where it already stands: no zero-length spline (and no SMSG_MONSTER_MOVE) every recheck.
             if (Vector3.DistanceSquared(path[^1], new Vector3(creature.X, creature.Y, creature.Z)) > ArrivedEpsilon * ArrivedEpsilon)
             {
-                mover.MovePath(creature, path, Run(creature), SplineFacing.None);
+                IReadOnlyList<Vector3> corners = RandomMovementGenerator.DrapeCornersOverMeshFloor(creature, path);
+                mover.MovePath(creature, corners, Run(creature), SplineFacing.None);
             }
             else if (creature.IsMoving)
             {
@@ -590,7 +591,8 @@ internal sealed class HomeMovementGenerator(CreatureHome home) : ICreatureMoveme
             case PathOutcome.Mesh or PathOutcome.Direct:
                 _waitingForBudget = false;
                 SplineFacing facing = float.IsNaN(home.Orientation) ? SplineFacing.None : SplineFacing.ToAngle(home.Orientation);
-                mover.MovePath(creature, plan.Corners, run: true, facing);
+                IReadOnlyList<Vector3> corners = RandomMovementGenerator.DrapeCornersOverMeshFloor(creature, plan.Corners);
+                mover.MovePath(creature, corners, run: true, facing);
                 return;
             default:
                 _waitingForBudget = false;

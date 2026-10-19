@@ -192,8 +192,8 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
     private static bool HasTransaction(SqliteConnection connection)
     {
         // SqliteConnection keeps its open transaction internally; a command created now inherits nothing, so ask SQLite itself.
-        if (connection.State != System.Data.ConnectionState.Open || connection.Handle is null) return false;
-        return SQLitePCL.raw.sqlite3_get_autocommit(connection.Handle) == 0;
+        if (connection.State != System.Data.ConnectionState.Open || connection.Handle is not { IsClosed: false, IsInvalid: false } handle) return false;
+        return SQLitePCL.raw.sqlite3_get_autocommit(handle) == 0;
     }
 
     // ---- autocommit write statements ----
