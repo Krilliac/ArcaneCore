@@ -125,7 +125,13 @@ internal sealed class TestCatalog : IHotCodeCatalog
     }
 }
 
-/// <summary>Runs posted commands on one dedicated thread, in order (a stand-in for the world thread).</summary>
+/// <summary>
+/// Runs posted commands on one dedicated thread, in order (a stand-in for the world thread). The last command run stays reachable
+/// (<see cref="LastRun"/>) until the next one runs, on purpose: a world thread may keep it (WorldCommit), so a test that proves a module
+/// is collected also proves that no queued closure pins it. Clearing the loop's local did not stop it: while the loop ran as Tier 0 code
+/// a copy of the delegate stayed in its frame, and once it was optimized (Tier 1 after about 30 test worlds, or DOTNET_TC_QuickJitForLoops=0)
+/// it did not, so such a test passed or failed with the JIT tier, i.e. with how many test worlds ran before it (ModuleRollbackTests, 2026-10-18).
+/// </summary>
 internal sealed class ThreadedWorld : IHotCodeWorld, IDisposable
 {
     private readonly BlockingCollection<Action> _queue = [];
@@ -135,18 +141,18 @@ internal sealed class ThreadedWorld : IHotCodeWorld, IDisposable
     {
         _thread = new Thread(() =>
         {
-            // No iterator and no stale local: the last command (a closure over what it swapped) must not
-            // stay reachable while this thread waits, or a test that proves a module is collected measures this loop.
-            Action? command;
-            while (_queue.TryTake(out command, Timeout.Infinite))
+            while (_queue.TryTake(out Action? command, Timeout.Infinite))
             {
+                LastRun = command;
                 command();
-                command = null;
             }
         })
         { IsBackground = true, Name = "test-world" };
         _thread.Start();
     }
+
+    /// <summary>The command this thread ran last, held until it runs the next one.</summary>
+    public Action? LastRun { get; private set; }
 
     public int ThreadId => _thread.ManagedThreadId;
 

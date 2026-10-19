@@ -6,6 +6,7 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Scripting;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Commands;
@@ -137,9 +138,7 @@ public sealed class ModuleScriptSwapTests : IDisposable
     {
         for (int i = 0; i < 80; i++)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            AllocationProbe.CollectBetweenWindows();
             if (host.RetiredStillReferenced == expected)
             {
                 return true;
@@ -328,9 +327,7 @@ public sealed class ModuleScriptSwapTests : IDisposable
     {
         for (int i = 0; i < 80 && context.IsAlive; i++)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            AllocationProbe.CollectBetweenWindows();
             await Task.Delay(25);
         }
 

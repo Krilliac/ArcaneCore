@@ -265,10 +265,10 @@ public sealed class ModuleHost
             _ => ModuleCommit.Unload,
         };
 
-        // The queued closure holds the swap, not the module: the world thread may keep the last command it ran
+        // The queued closure holds the swap, not the module (CommitAsync): the world thread may keep the last command it ran
         // reachable for a while (an unoptimized loop frame), and that must not keep an unloaded module alive.
         var swap = new PendingSwap(existing, prepared, kind);
-        string? error = await WorldCommit.RunAsync(_world, _commitTimeout, () => Apply(swap)).ConfigureAwait(false);
+        string? error = await CommitAsync(swap).ConfigureAwait(false);
         swap.Clear();
         if (error is not null)
         {
@@ -362,7 +362,7 @@ public sealed class ModuleHost
         {
             restored = await Task.Run(() => Build(name, previous.Directory, previous.Bytes)).ConfigureAwait(false);
             var restoreSwap = new PendingSwap(null, restored, ModuleCommit.Restore);
-            restoreError = await WorldCommit.RunAsync(_world, _commitTimeout, () => Apply(restoreSwap)).ConfigureAwait(false);
+            restoreError = await CommitAsync(restoreSwap).ConfigureAwait(false);
             restoreSwap.Clear();
             if (restoreSwap.RollbackError is { } restoreRollback)
             {
@@ -485,6 +485,15 @@ public sealed class ModuleHost
     /// Null in production.
     /// </summary>
     internal Action<ModuleCommit, string>? FaultInjection { get; set; }
+
+    /// <summary>
+    /// Post <paramref name="swap"/>'s commit to the world thread and wait for it (<see cref="WorldCommit"/>). A method of its own so the queued
+    /// closure captures this host and the swap and nothing else. A lambda written in the caller is linked to the caller's other captured
+    /// variables: the restore's closure reached the replaced version (the <c>previous</c> the rebuild captured, through the closure class that
+    /// held this host), so while the world thread still held that last command the replaced version's context could not be collected
+    /// (ModuleRollbackTests, 2026-10-18).
+    /// </summary>
+    private Task<string?> CommitAsync(PendingSwap swap) => WorldCommit.RunAsync(_world, _commitTimeout, () => Apply(swap));
 
     /// <summary>
     /// World thread, start of a tick: swap the old version of the module (if any) for the new one (if any). On a failure after validation every

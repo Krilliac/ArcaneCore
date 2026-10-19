@@ -11,9 +11,10 @@ they see a real 1.12 client. `PlayerbotMotion` is the bot's movement "client":
   any think), independent of `ThinkIntervalMs`, the shared `MaxActionsPerTick` budget and the 8 ms
   per-tick think cap. It sends a heartbeat every 500 ms, one at once when the route turns by more
   than ~10 degrees, and `MSG_MOVE_STOP` on arrival.
-- A route is walked for its lease after the think that last followed it: `max(2000 ms, 4 × ThinkIntervalMs, 2 × the bot's
+- A route is walked for its lease after the think that last followed it: `max(4000 ms, 8 × ThinkIntervalMs, 3 × the bot's
   smoothed think gap)`, the gap term held to 15 s (`PlayerbotMotion.NoteThinkGap`). With ~1000 bots a bot thinks every few
-  seconds, so a fixed 2 s lease stopped every bot well before its next think. A think that gives its route up without starting
+  seconds, so a fixed 2 s lease stopped every bot well before its next think, and `max(2000 ms, 4 × ThinkIntervalMs, 2 × gap)`
+  still let leases run out mid-route (`lease-expired-midroute`; raised 2026-10-17). A think that gives its route up without starting
   another stops the bot (`PlayerbotMotion.SettleAfterThink`); so does a change to or from the party AI, and a controller attaching or detaching. Group and battleground takeovers are not stopped (stopping broke group formation): the group leader's Hold states, a member whose leader is missing, Release, and the battleground coordinator's idle phases stop the bot themselves.
 - An exploring bot whose leg ends before its next expected think is handed the next leg in that think (`PlayerbotNavigation.TryChain`);
   a chase is planned again when the target is more than `ChaseReplanYards` (5) from the place the route was planned to (a route cut short of its target by the route bounds: once 75% of it is walked) or the route is finished.

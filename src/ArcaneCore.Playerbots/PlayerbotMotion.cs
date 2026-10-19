@@ -807,10 +807,11 @@ internal static class PlayerbotMotion
     internal const uint MaxGapLeaseMs = 15_000;
 
     /// <summary>
-    /// How long a route stays walked after the think that last followed it: <c>max(2000, 4 × ThinkIntervalMs, 2 × smoothed think gap)</c>,
+    /// How long a route stays walked after the think that last followed it: <c>max(4000, 8 × ThinkIntervalMs, 3 × smoothed think gap)</c>,
     /// the gap term held to <see cref="MaxGapLeaseMs"/>. Only a think that follows the route again renews it, and with a thousand bots the
     /// rotation (<see cref="PlayerbotThinkRotation"/>) thinks for a bot every few seconds, not every <c>ThinkIntervalMs</c>: a fixed
-    /// lease of 2 s stopped every bot well before its next think and it stood until then (live 2026-10-12: walk 5 s, stop, wait, walk).
+    /// lease of 2 s stopped every bot well before its next think and it stood until then (live 2026-10-12: walk 5 s, stop, wait, walk),
+    /// and <c>max(2000, 4 × ThinkIntervalMs, 2 × gap)</c> still ran out mid-route (lease-expired-midroute, raised 2026-10-17).
     /// A route the brain gives up is stopped by the brain (see <see cref="PlayerbotBrain.TakeRouteAbandoned"/>), not left to the lease.
     /// </summary>
     private static uint Lease(PlayerbotOptions options, MotionState state)
