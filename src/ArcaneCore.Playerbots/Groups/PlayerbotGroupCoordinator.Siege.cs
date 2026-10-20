@@ -466,7 +466,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
     /// <summary>Whether the leader is answering an attacker of its own from this waypoint (<see cref="PlayerbotSiegeRaid.AnsweringMs"/> fresh) and is still within the leash of it.</summary>
     internal static bool IsAnswering(PlayerbotSiegeRaid raid, Vector3 leader, Vector3 waypoint, uint now)
-        => raid.AnsweringMs != 0 && unchecked(now - raid.AnsweringMs) <= PlayerbotSiegeCommander.AnswerFreshMs
+        => raid.AnsweringMs != 0 && unchecked((int)(now - raid.AnsweringMs)) <= PlayerbotSiegeCommander.AnswerFreshMs
             && Vector3.Distance(leader, waypoint) <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards;
 
     /// <summary>
