@@ -1,10 +1,10 @@
 # Prints the x64 the JIT generates for a method while a test filter runs (DOTNET_JitDisasm), to check what the machine does against what
 # the source says.
 #   pwsh -NoProfile -File tools/ops/quality/jit-disasm.ps1 -TestProject tests/ArcaneCore.Game.Tests/ArcaneCore.Game.Tests.csproj `
-#        -Filter 'FullyQualifiedName~SpeedHackDetectorTests' -Method 'SpeedHackDetector:Evaluate' [-FinalCode] [-Configuration Release] [-Summary] [-NoBuild]
-# -Method is a JitDisasm pattern: 'Class:Method', 'Method', or a '*' wildcard ('*Evaluate*'); several are space separated.
+#        -Filter 'FullyQualifiedName~SpeedHackDetectorTests' -Method 'SpeedHackDetector:Feed' [-FinalCode] [-Configuration Release] [-Summary] [-NoBuild]
+# -Method is a JitDisasm pattern: 'Class:Method', 'Method', or a '*' wildcard ('*Feed*'); several are space separated.
 # Only the test host sees the DOTNET_ variables: they travel in a generated .runsettings file, so the build, dotnet test and vstest
-# processes do not JIT-dump. -FinalCode sets DOTNET_TieredCompilation=0 so each method is compiled once, fully optimized; without it the
+# processes do not JIT-dump. -FinalCode sets DOTNET_TieredCompilation=0 so each method is compiled once and not recompiled later (fully optimized for a Release build; a Debug build, the default, is compiled MinOpts and debuggable whatever the tiering, so use -Configuration Release to judge optimized code); without it the
 # first (Tier-0, unoptimized) compile of a method is what is printed first and the optimized one appears only after the method ran
 # 30 times and the background tier-up finished. -Summary also lists every method the JIT compiled (DOTNET_JitDisasmSummary=1).
 # Output is JitStdOutFile in artifacts/jit/<timestamp>/jit.txt, printed here. Exit codes: 0 = disassembly printed, 2 = error (build or
