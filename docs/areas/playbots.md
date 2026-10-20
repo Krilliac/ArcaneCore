@@ -212,6 +212,10 @@ which is exact and needs no path search.
   is set aside. The quest follows only when none of its open objectives (creature, game object, item, as the bot's quest log has them)
   can still be served: for a hunted objective the quests of the log that the entry serves (as a creature objective or an item's dropper)
   are judged, for a giver or ender trip the quest of the trip. Neither counts towards abandoning the quest (`SuspendQuest(..., countsAsSetAside: false)`). Every other planner caller plans as before.
+  The check also names the two components in the `bot-nav/goal-unreachable` anomaly (`RepeatedRefusals` plans in a row refused,
+  `PlayerbotNavigationAnomalies.ObservePlan`): each place's own component whatever the answer, -1 only for the place that is on no walking
+  region. Before, one place on none gave -1 for both, and a goal off the walking mesh (a retreat point in a hillside or in the air) read
+  "bot -1, goal -1" although the bot stood on the continent (bot QA #807).
 - **The skip is reported**: one warning per entry and bot per 600 seconds, `Playerbot <id> (<name>) goal unreachable on foot: goal=G
   target=T quest=Q at x,y,z map M components=a/b` (`ManagedPlayerbotFeature.LogUnreachable`); the goal is the one held when the skip was
   met, and every skip of one think is queued (at most 8 waiting) and logged. Bot QA parses it as its own kind,
