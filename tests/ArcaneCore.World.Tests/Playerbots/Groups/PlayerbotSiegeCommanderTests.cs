@@ -497,6 +497,19 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.True(PlayerbotGroupCoordinator.ShowsProgress(longFight, raid, 500_000));
         Assert.False(PlayerbotGroupCoordinator.ShowsProgress(longFight, raid, 495_000 + PlayerbotSiegeCommander.PushStallMs));
     }
+
+    [Fact]
+    public void AtAWaypoint_MeansOnItsLevel_ALeaderUnderALiftTopIsNotAtIt()
+    {
+        var waypoint = new System.Numerics.Vector3(100f, 50f, 40f);
+        Assert.True(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(103f, 50f, 40f), waypoint));
+        Assert.True(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, 40f + PlayerbotSiegeCommander.WaypointLevelYards), waypoint));
+        // The same XY on the floor of the Undercity lift shaft, about 100 yards below: not at it. Beyond the plane bound is not at it either.
+        Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, -60f), waypoint));
+        Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, 40f + PlayerbotSiegeCommander.WaypointLevelYards + 1f), waypoint));
+        Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f + PlayerbotSiegeCommander.WaypointYards + 1f, 50f, 40f), waypoint));
+        Assert.True(PlayerbotSiegeCommander.WaypointLevelYards < 100f / 2);
+    }
     [Fact]
     public void TheNoProgressAndLagHoldBounds_AreThirtySeconds_TwoYards_AndNinetySeconds()
     {
