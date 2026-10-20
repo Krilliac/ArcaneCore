@@ -152,9 +152,9 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
         // Most creatures of a map have neither a taunter nor a threat list: they skip the lambdas (and their closure) every update.
         Unit? target = combat.Threat.HasTauntCasters || combat.HasThreatList ? PickHostileTarget(creature, combat) : null;
-        if (target is null && noThreatList)
+        if (target is null && noThreatList && combat.Victim is { } currentVictim && IsValidHostileTarget(creature, currentVictim))
         {
-            target = combat.Victim;
+            target = currentVictim;
         }
 
         if (target is not null)
@@ -172,19 +172,19 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             return true;
         }
 
-        if (noThreatList)
+        if (combat.Victim is not null)
         {
-            return false; // like a player: the five second combat timer ends it
+            Map.Combat.AttackStop(creature);
         }
 
-        if (!combat.IsInCombat || combat.Threat.HasTauntCasters || !creature.CharmerGuid.IsEmpty)
+        if (!combat.IsInCombat)
         {
             return false;
         }
 
         if (creature.Motion.CurrentType != MovementGeneratorType.Chase)
         {
-            foreach (Unit attacker in combat.Attackers)
+            foreach (Unit attacker in combat.AttackersInternal)
             {
                 if (ReferenceEquals(attacker.Map, Map) && IsValidHostileTarget(creature, attacker))
                 {
@@ -193,15 +193,30 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             }
         }
 
+        if (!creature.CharmerGuid.IsEmpty)
+        {
+            if (noThreatList)
+            {
+                Map.Combat.CombatStop(creature);
+            }
+
+            return false;
+        }
+
         EnterEvadeMode(creature);
         return false;
     }
+
+    private Func<ObjectGuid, Unit?>? _resolveTauntUnit;
+
+    private Unit? ResolveTauntUnit(ObjectGuid guid)
+        => guid.IsPlayer ? Map.FindPlayer(guid) : Map.FindObject(guid) as Unit;
 
     /// <summary>The taunter (vmangos Unit::GetTauntTarget), else the threat list's pick (ThreatContainer::selectNextVictim).</summary>
     private Unit? PickHostileTarget(Creature creature, UnitCombat combat)
     {
         Unit? target = combat.Threat.HasTauntCasters
-            ? combat.Threat.GetTauntTarget(guid => Map.FindObject(guid) as Unit, u => IsValidHostileTarget(creature, u))
+            ? combat.Threat.GetTauntTarget(_resolveTauntUnit ??= ResolveTauntUnit, u => IsValidHostileTarget(creature, u))
             : null;
         if (target is null && combat.HasThreatList)
         {
@@ -312,6 +327,17 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             return false;
         }
 
+        if (creature.IsEvading)
+        {
+            Map.Combat.CombatStop(creature);
+            if (creature.Combat.HasThreatList)
+            {
+                creature.Combat.Threat.Clear();
+            }
+
+            return true;
+        }
+
         if ((creature.UnitFlags & LostControl) != 0)
         {
             RefreshLeashExtension(creature);
@@ -323,6 +349,58 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             RecordLeashResetAnomaly(creature, "hard leash"); // report-only
             EnterEvadeMode(creature);
             return true;
+        }
+
+        if (creature.CharmerOrOwnerGuid.IsEmpty
+            && !creature.IsTempPacified
+            && creature.AI is not null
+            && (creature.AI is not CritterAI || creature.Motion.CurrentType != MovementGeneratorType.Fleeing)
+            && !HasAnyLivingCombatantOnMap(creature))
+        {
+            EnterEvadeMode(creature);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool HasAnyLivingCombatantOnMap(Creature creature)
+    {
+        UnitCombat combat = creature.Combat;
+        if (combat.Victim is { IsAlive: true } victim && ReferenceEquals(victim.Map, Map))
+        {
+            return true;
+        }
+
+        if (combat.HasThreatList)
+        {
+            IReadOnlyList<ThreatEntry> entries = combat.Threat.Entries;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                Unit target = entries[i].Target;
+                if (target.IsAlive && ReferenceEquals(target.Map, Map))
+                {
+                    return true;
+                }
+            }
+
+            IReadOnlyList<ThreatEntry> offline = combat.Threat.OfflineEntries;
+            for (int i = 0; i < offline.Count; i++)
+            {
+                Unit target = offline[i].Target;
+                if (target.IsAlive && ReferenceEquals(target.Map, Map))
+                {
+                    return true;
+                }
+            }
+        }
+
+        foreach (Unit attacker in combat.AttackersInternal)
+        {
+            if (attacker.IsAlive && ReferenceEquals(attacker.Map, Map))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -382,7 +460,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// </summary>
     private bool UpdateUnreachableTarget(Creature creature, uint diffMs)
     {
-        if (!creature.Combat.IsInCombat || !IsTargetUnreachable(creature))
+        if ((creature.UnitFlags & UnitFlags.InCombat) == 0 || !IsTargetUnreachable(creature))
         {
             creature.TargetNotReachableMs = 0;
             creature.IsEvadingUnreachable = false;

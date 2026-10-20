@@ -12,6 +12,8 @@ export const SHORTCUTS = [
     ['Ctrl K', 'Open the command palette'],
     ['/', 'Go to a coordinate'],
     ['T', 'Top-down view; press again to return'],
+    ['M', 'Cycle terrain & model shading mode (Standard, Relief, Normals, Slope)'],
+    ['K', 'Toggle topographic elevation contour lines'],
     ['F', 'Frame the followed entity, the selection, or what is loaded (Shift: always what is loaded)'],
     ['1 to 8', 'Show or hide a layer group: World, Terrain, Liquid, Collision, Navmesh, Reference, Differences, Live'],
     ['W A S D', 'Move the camera (in orbit and top views over the ground, in fly view along the look direction)'],
@@ -108,6 +110,12 @@ export function installHotkeys({ app, viewport, topbar, toggleRail }) {
                 returnMode = camera.mode;
                 app.setCamera(switchMode(camera, 'top'), { immediate: true });
             }
+        } else if (lower === 'm') {
+            e.preventDefault();
+            topbar.cycleShading?.();
+        } else if (lower === 'k') {
+            e.preventDefault();
+            topbar.toggleContours?.();
         } else if (lower === 'f') {
             e.preventDefault();
             viewport.frameSelection({ all: e.shiftKey });

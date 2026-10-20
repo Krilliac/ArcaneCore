@@ -6,7 +6,7 @@ using ArcaneCore.Atlas.Core;
 namespace ArcaneCore.Atlas.Reference.Client.Models;
 
 /// <summary>
-/// Accumulates one tile's geometry for a layer as one or more <see cref="GeometryChunk"/> parts, each kept under a
+/// Accumulates one tile's geometry for a layer as one or more <c>GeometryChunk</c> parts, each kept under a
 /// size limit so the wire format's 64 MiB cap is never reached. Attribute ids are unique across the parts; each part
 /// describes the ids it uses. Single-threaded (one build).
 /// </summary>
@@ -49,7 +49,7 @@ internal sealed class PartedGeometry(string layerId, TileKey tile, WorldPoint or
 
     /// <summary>
     /// Adds a triangle to <paramref name="builder"/> (the current part) with its three edges as lines, each undirected
-    /// edge once per part, which is what <see cref="GeometryBuilder.AddTriangle"/> does with its own edge set.
+    /// edge once per part, which is what <c>GeometryBuilder.AddTriangle</c> does with its own edge set.
     /// </summary>
     public void AddTriangle(GeometryBuilder builder, uint a, uint b, uint c, uint attribute)
     {
@@ -121,7 +121,6 @@ internal sealed class PartedGeometry(string layerId, TileKey tile, WorldPoint or
     }
 }
 
-/// <summary>Writes planned instances into geometry: world-space triangles with per-instance attributes.</summary>
 /// <summary>Fibonacci hashing of an edge key, so keys that differ only in low bits of both halves spread over the table.</summary>
 internal sealed class EdgeKeyComparer : IEqualityComparer<ulong>
 {
@@ -135,6 +134,7 @@ internal sealed class EdgeKeyComparer : IEqualityComparer<ulong>
     public int GetHashCode(ulong obj) => unchecked((int)((obj * 0x9E3779B97F4A7C15UL) >> 32));
 }
 
+/// <summary>Writes planned instances into geometry: world-space triangles with per-instance attributes.</summary>
 internal static class ModelGeometry
 {
     private const int CheckEvery = 4096;
@@ -224,31 +224,67 @@ internal static class ModelGeometry
         return added;
     }
 
-    /// <summary>Adds an M2 instance's bounding (collision) triangles in the client's winding.</summary>
-    public static int AddM2Collision(PartedGeometry geometry, PlannedM2 m2, CancellationToken cancellationToken)
+    /// <summary>
+    /// Adds an M2 instance's bounding (collision) triangles in the client's winding, or optionally falls back to its visual
+    /// mesh when <paramref name="allowVisualFallback"/> is true and the model has no collision hull.
+    /// </summary>
+    public static int AddM2Collision(PartedGeometry geometry, PlannedM2 m2, CancellationToken cancellationToken, bool allowVisualFallback = false)
     {
         M2ModelFile model = m2.Model;
         if (!model.HasCollisionHull)
         {
+            if (allowVisualFallback && model.HasVisualMesh)
+            {
+                return AddM2Visual(geometry, m2, cancellationToken, subLayer: "m2-visual");
+            }
+
             return 0;
         }
 
-        return AddM2(geometry, m2, model.BoundingVertices, model.BoundingIndices.Select(i => (int)i).ToArray(), model.BoundingTriangleCount, cancellationToken);
+        return AddM2(geometry, m2, model.BoundingVertices, model.BoundingIndices.Select(i => (int)i).ToArray(), model.BoundingTriangleCount, cancellationToken, subLayer: "m2");
     }
 
     /// <summary>Adds an M2 instance's render mesh (view 0).</summary>
     public static int AddM2Render(PartedGeometry geometry, PlannedM2 m2, CancellationToken cancellationToken)
     {
         M2ModelFile model = m2.Model;
+        string subLayer = model.HasCollisionHull ? "m2" : "m2-visual";
         return model.RenderTriangleCount == 0
             ? 0
-            : AddM2(geometry, m2, model.Vertices, model.RenderIndices, model.RenderTriangleCount, cancellationToken);
+            : AddM2(geometry, m2, model.Vertices, model.RenderIndices, model.RenderTriangleCount, cancellationToken, subLayer);
     }
 
-    private static int AddM2(PartedGeometry geometry, PlannedM2 m2, Vector3[] vertices, int[] indices, int triangles, CancellationToken cancellationToken)
+    /// <summary>
+    /// Appends an M2 instance's geometry to <paramref name="geometry"/>: uses the collision hull when present, or falls back
+    /// to the visual mesh (<c>VisualVertices</c> / <c>VisualTriangles</c>) with sub-layer <c>"m2-visual"</c> when
+    /// <c>HasCollision</c> is false and <c>HasVisualMesh</c> is true.
+    /// </summary>
+    public static int AppendM2(PartedGeometry geometry, PlannedM2 m2, CancellationToken cancellationToken = default, bool allowVisualFallback = true)
+        => AddM2Collision(geometry, m2, cancellationToken, allowVisualFallback);
+
+    /// <summary>Adds an M2 instance's visual mesh (<c>VisualVertices</c> and <c>VisualTriangles</c>).</summary>
+    public static int AddM2Visual(PartedGeometry geometry, PlannedM2 m2, CancellationToken cancellationToken = default, string subLayer = "m2-visual")
+    {
+        M2ModelFile model = m2.Model;
+        if (!model.HasVisualMesh)
+        {
+            return 0;
+        }
+
+        return AddM2(geometry, m2, model.VisualVertices, model.RenderIndices, model.VisualTriangles.Length, cancellationToken, subLayer);
+    }
+
+    private static int AddM2(
+        PartedGeometry geometry,
+        PlannedM2 m2,
+        Vector3[] vertices,
+        int[] indices,
+        int triangles,
+        CancellationToken cancellationToken,
+        string subLayer = "m2")
     {
         cancellationToken.ThrowIfCancellationRequested();
-        uint attribute = geometry.Attribute(M2Key(m2), () => M2Attribute(m2, triangles));
+        uint attribute = geometry.Attribute(M2Key(m2, subLayer), () => M2Attribute(m2, triangles, subLayer));
         GeometryBuilder builder = geometry.Writable(triangles * BytesPerTriangle);
         geometry.Describe(builder, attribute);
         uint[] remap = NewRemap(vertices.Length);
@@ -294,8 +330,8 @@ internal static class ModelGeometry
     private static string AttributeKey(PlannedWmo wmo, int group, bool collide)
         => string.Create(CultureInfo.InvariantCulture, $"wmo:{wmo.Placement.UniqueId}:{wmo.Placement.Tile.X}:{wmo.Placement.Tile.Y}:{group}:{(collide ? 'c' : 'r')}");
 
-    private static string M2Key(PlannedM2 m2)
-        => string.Create(CultureInfo.InvariantCulture, $"m2:{(m2.IsWmoDoodad ? 'd' : 'p')}:{m2.UniqueId}:{m2.DoodadIndex}:{m2.Source.Tile.X}:{m2.Source.Tile.Y}");
+    private static string M2Key(PlannedM2 m2, string subLayer)
+        => string.Create(CultureInfo.InvariantCulture, $"m2:{subLayer}:{(m2.IsWmoDoodad ? 'd' : 'p')}:{m2.UniqueId}:{m2.DoodadIndex}:{m2.Source.Tile.X}:{m2.Source.Tile.Y}");
 
     private static JsonObject WmoAttribute(PlannedWmo wmo, int group, bool collide, int triangles, string? groupSkip, string? skip)
     {
@@ -336,11 +372,12 @@ internal static class ModelGeometry
         };
     }
 
-    private static JsonObject M2Attribute(PlannedM2 m2, int triangles)
+    private static JsonObject M2Attribute(PlannedM2 m2, int triangles, string subLayer)
     {
         var attribute = new JsonObject
         {
             ["kind"] = "m2",
+            ["subLayer"] = subLayer,
             ["model"] = m2.ModelPath,
             ["uniqueId"] = m2.UniqueId,
             ["source"] = m2.IsWmoDoodad ? "wmo-doodad" : "mddf",

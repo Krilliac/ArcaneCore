@@ -1817,3 +1817,61 @@ input[type="range"] {
         animation: none !important;
     }
 }
+
+/* ---- Shading controls and live hotspot badges -------------------------------------------------------------- */
+
+.tb-group-shading {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tb-select {
+    height: 28px;
+    padding: 0 8px;
+    font: inherit;
+    font-size: var(--fs-12);
+    color: var(--ink);
+    background: var(--raised);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+
+.tb-select:hover {
+    background: var(--hover);
+}
+
+.hotspot-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.hotspot-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px;
+    font: inherit;
+    font-size: var(--fs-11);
+    color: var(--ink);
+    background: var(--raised);
+    border: 1px solid var(--hairline);
+    border-radius: 11px;
+    cursor: pointer;
+}
+
+.hotspot-badge:hover {
+    background: var(--hover);
+    border-color: var(--accent);
+}
+
+.hotspot-badge-count {
+    color: var(--accent-ink);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+

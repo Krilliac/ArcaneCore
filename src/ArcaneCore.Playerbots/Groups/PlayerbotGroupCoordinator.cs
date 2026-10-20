@@ -139,7 +139,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private readonly Dictionary<(Guid Bot, (PlayerbotGroupGoalKind, uint) Key), uint> _setAside = [];
     private readonly Dictionary<ObjectGuid, uint> _declinedPlayers = [];
     private readonly Dictionary<Guid, PlayerbotGroupBot> _bots = [];
+    private readonly Dictionary<ObjectGuid, Guid> _botByPlayer = [];
     private readonly List<PlayerbotGroupBot> _orderedBots = [];
+    private readonly List<BotGroup> _groupsScratch = [];
+    private readonly List<Member> _membersScratch = [];
+    private readonly List<Guid> _waitingKeysScratch = [];
+    private readonly List<(uint QuestId, QuestStatusData Status)> _questStatusesScratch = new(32);
+    private readonly HashSet<string> _spellNamesScratch = new(StringComparer.Ordinal);
+    private CreatureContent? _dungeonMapsCreatures;
+    private MapRegistry? _dungeonMapsRegistry;
+    private (uint MapId, MapTemplate Instance)[] _dungeonMapsWithSpawns = [];
     private WorldRuntime? _world;
     private uint _scanElapsed = ScanMs;
     private int _nextId = 1;
@@ -217,7 +226,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             _leaderChanges.Clear();
             _leadersWatched = null;
             _bots.Clear();
+            _botByPlayer.Clear();
             _orderedBots.Clear();
+            _groupsScratch.Clear();
+            _membersScratch.Clear();
+            _waitingKeysScratch.Clear();
+            _questStatusesScratch.Clear();
+            _spellNamesScratch.Clear();
             _stalls.Clear();
             _world = null;
             _subscriptions = null;
@@ -251,13 +266,55 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal readonly record struct PlayerbotGroupBot(Guid BotId, WorldSession Session, PlayerbotBrain Brain, bool Free, bool Scripted = false);
 
     internal bool NeedsBotSnapshot(uint elapsedMs)
-        => _groups.Count > 0 || _leaderChanges.Count > 0 || unchecked(_scanElapsed + elapsedMs) >= ScanMs;
+        => (_bots.Count == 0 && _groups.Count > 0) || _leaderChanges.Count > 0 || unchecked(_scanElapsed + elapsedMs) >= ScanMs;
 
     internal void AdvanceIdle(uint elapsedMs)
     {
         if (_world is null) return;
-        WatchLeaderChanges();
+        TakeLeaderChanges();
+        AdvanceGroups();
         _scanElapsed = unchecked(_scanElapsed + elapsedMs);
+    }
+
+    private void AdvanceGroups()
+    {
+        if (_groups.Count == 0) return;
+        _groupsScratch.Clear();
+        _groupsScratch.AddRange(_groups);
+        for (int i = 0; i < _groupsScratch.Count; i++)
+        {
+            BotGroup group = _groupsScratch[i];
+            try
+            {
+                Advance(group);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
+            }
+        }
+    }
+
+    private void RebuildBotSnapshot(IReadOnlyList<PlayerbotGroupBot> bots)
+    {
+        _bots.Clear();
+        _bots.EnsureCapacity(bots.Count);
+        _botByPlayer.Clear();
+        _botByPlayer.EnsureCapacity(bots.Count);
+        _orderedBots.Clear();
+        _orderedBots.EnsureCapacity(bots.Count);
+        bool ordered = true;
+        Guid prev = Guid.Empty;
+        for (int i = 0; i < bots.Count; i++)
+        {
+            PlayerbotGroupBot bot = bots[i];
+            _bots[bot.BotId] = bot;
+            if (bot.Session.Player is { } player) _botByPlayer[player.Guid] = bot.BotId;
+            _orderedBots.Add(bot);
+            if (ordered && bot.BotId.CompareTo(prev) < 0) ordered = false;
+            prev = bot.BotId;
+        }
+        if (!ordered) _orderedBots.Sort(static (a, b) => a.BotId.CompareTo(b.BotId));
     }
 
     /// <summary>
@@ -267,38 +324,17 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal void Update(IReadOnlyList<PlayerbotGroupBot> bots, uint elapsedMs)
     {
         if (_world is null) return; // detached
-        _bots.Clear();
-        _bots.EnsureCapacity(bots.Count);
-        _orderedBots.Clear();
-        _orderedBots.EnsureCapacity(bots.Count);
-        bool ordered = true;
-        Guid prev = Guid.Empty;
-        foreach (PlayerbotGroupBot bot in bots)
-        {
-            _bots[bot.BotId] = bot;
-            _orderedBots.Add(bot);
-            if (ordered && bot.BotId.CompareTo(prev) < 0) ordered = false;
-            prev = bot.BotId;
-        }
-        if (!ordered) _orderedBots.Sort(static (a, b) => a.BotId.CompareTo(b.BotId));
+        uint nextScanElapsed = unchecked(_scanElapsed + elapsedMs);
+        bool scanDue = nextScanElapsed >= ScanMs;
+        // For large bot fleets (> 64), skip rebuilding the 4,500-entry dictionaries on non-scan ticks when the fleet count is unchanged
+        // and no leader handoff is pending; active groups hold live session/brain references and Forget() removes stopped bots immediately.
+        if (scanDue || bots.Count <= 64 || _bots.Count != bots.Count || _leaderChanges.Count > 0)
+            RebuildBotSnapshot(bots);
         TakeLeaderChanges(); // leader handoffs (PlayerbotGroupCoordinator.Handoff.cs)
-        if (_groups.Count > 0)
-        {
-            foreach (BotGroup group in _groups.ToArray())
-            {
-                try
-                {
-                    Advance(group);
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
-                }
-            }
-        }
+        AdvanceGroups();
 
-        _scanElapsed = unchecked(_scanElapsed + elapsedMs);
-        if (_scanElapsed < ScanMs) return;
+        _scanElapsed = nextScanElapsed;
+        if (!scanDue) return;
         _scanElapsed = 0;
         Scan();
     }
@@ -353,6 +389,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>A bot stopped, became scripted or left the world: it leaves its group (or its wait).</summary>
     internal void Forget(Guid botId)
     {
+        if (_bots.Remove(botId, out PlayerbotGroupBot removed) && removed.Session.Player is { } player)
+            _botByPlayer.Remove(player.Guid);
         _waiting.Remove(botId);
         if (_memberOf.TryGetValue(botId, out BotGroup? group)) DropMember(group, botId, "stopped");
     }
@@ -422,25 +460,39 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private void Scan()
     {
         uint now = Now;
-        foreach (((Guid, (PlayerbotGroupGoalKind, uint)) key, uint until) in _setAside.ToArray())
+        foreach (((Guid, (PlayerbotGroupGoalKind, uint)) key, uint until) in _setAside)
             if (unchecked((int)(until - now)) <= 0) _setAside.Remove(key);
-        foreach (var (streakKey, streak) in _failStreaks.ToArray())
+        foreach (var (streakKey, streak) in _failStreaks)
             if (unchecked(now - streak.LastMs) >= FailStreakMemoryMs) _failStreaks.Remove(streakKey);
-        foreach ((ObjectGuid key, uint until) in _declinedPlayers.ToArray())
+        foreach ((ObjectGuid key, uint until) in _declinedPlayers)
             if (unchecked((int)(until - now)) <= 0) _declinedPlayers.Remove(key);
 
-        foreach (Guid waiting in _waiting.Keys.ToArray())
-            if (!_bots.TryGetValue(waiting, out PlayerbotGroupBot bot) || !bot.Free || bot.Session.Player is not { } player || !player.IsInWorld)
-                Unhold(waiting, null);
-
-        foreach (PlayerbotGroupBot bot in _orderedBots)
+        if (_waiting.Count > 0)
         {
+            _waitingKeysScratch.Clear();
+            foreach (Guid waitingKey in _waiting.Keys) _waitingKeysScratch.Add(waitingKey);
+            for (int i = 0; i < _waitingKeysScratch.Count; i++)
+            {
+                Guid waiting = _waitingKeysScratch[i];
+                if (!_bots.TryGetValue(waiting, out PlayerbotGroupBot bot) || !bot.Free || bot.Session.Player is not { } player || !player.IsInWorld)
+                    Unhold(waiting, null);
+            }
+        }
+
+        GroupManager? groupManager = _options.Groups.Enabled ? GroupManagerOrNull() : null;
+        QuestNpcServices? quests = _options.Groups.Enabled ? services.GetService<QuestNpcFeature>()?.Services : null;
+        CreatureContent? creatures = _options.Groups.Enabled ? services.GetService<CreatureWorldFeature>()?.Content : null;
+        WorldMaps? maps = _world is { } world ? WorldMaps.Of(world) : null;
+
+        for (int i = 0; i < _orderedBots.Count; i++)
+        {
+            PlayerbotGroupBot bot = _orderedBots[i];
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || bot.Session.Player is not { IsInWorld: true } player) continue;
             // A mage serving a portal request, or a bot on a mage leg, may stand in the short-lived party of the portal (party-only portals):
             // the coordinator leaves it alone until the service ends (PlayerbotMageService leaves that party itself).
             if (PlayerbotMageService.IsServing(player) || PlayerbotMageService.IsActive(player)) continue;
             if (EvacuateIfStranded(bot, player)) continue;
-            if (!_options.Groups.Enabled || !player.IsAlive || GroupManagerOrNull() is not { } groupManager) continue;
+            if (!_options.Groups.Enabled || !player.IsAlive || groupManager is null) continue;
             // Never a battleground raid: the match owns it (BattlegroundFeature.LeaveBattlegroundRaid takes the bot out when it leaves).
             if (groupManager.GetGroup(player.Guid) is { IsBattlegroundGroup: false } stale && stale.Members.All(m => m.Guid == player.Guid || IsOnlineBot(m.Guid)))
             {
@@ -478,7 +530,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 continue;
             }
 
-            if (FindNeed(bot, player) is { } goal)
+            if (FindNeed(bot, player, quests, creatures, maps) is { } goal)
             {
                 _waiting[bot.BotId] = new Waiting(player.Name, goal, now);
                 bot.Brain.GroupHeld.Add((goal.QuestId, goal.ObjectiveEntry));
@@ -613,48 +665,65 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     }
 
     /// <summary>The bot's group goal now (the first unfinished objective that needs one), or null.</summary>
-    private PlayerbotGroupGoal? FindNeed(PlayerbotGroupBot bot, Player player)
+    private PlayerbotGroupGoal? FindNeed(PlayerbotGroupBot bot, Player player, QuestNpcServices? quests = null, CreatureContent? creatures = null, WorldMaps? maps = null)
     {
-        QuestNpcServices? quests = services.GetService<QuestNpcFeature>()?.Services;
-        CreatureContent? creatures = services.GetService<CreatureWorldFeature>()?.Content;
-        if (_world is not { } world || quests is null || creatures is null || QuestState(player) is not { } state || player.Map is null) return null;
-        WorldMaps maps = WorldMaps.Of(world);
-        if (maps.Registry.Find(player.MapId) is { IsDungeon: true } || maps.Registry.Find(player.MapId) is { IsBattleground: true }) return null;
+        quests ??= services.GetService<QuestNpcFeature>()?.Services;
+        creatures ??= services.GetService<CreatureWorldFeature>()?.Content;
+        if (_world is not { } world || quests is null || creatures is null || player.Map is null) return null;
+        if (quests.StateOf(player) is not { Loaded: true } state) return null;
+        maps ??= WorldMaps.Of(world);
+        if (maps.Registry.Find(player.MapId) is { IsDungeon: true } or { IsBattleground: true }) return null;
 
-        foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
+        uint now = Now;
+        if (state.Quests.Statuses.Count > 0)
         {
-            // A quest of a game event that is not running is not pursued (vmangos Quest::IsActive; PlayerbotQuestGoals).
-            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { IsActive: true } quest) continue;
-            if (bot.Brain.Suspensions.IsQuestSuspended(questId, Now)) continue;
-            int flagged = PlayerbotGroupContent.QuestGroupSize(quest.Template);
-            for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
+            _questStatusesScratch.Clear();
+            foreach ((uint qId, QuestStatusData qStatus) in state.Quests.Statuses)
             {
-                int raw = quest.ReqCreatureOrGOId[index];
-                if (raw <= 0 || status.CreatureOrGOCount[index] >= quest.ReqCreatureOrGOCount[index]) continue;
-                uint entry = (uint)raw;
-                if (GoalFor(player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
+                if (qStatus.Status == QuestStatus.Incomplete)
+                    _questStatusesScratch.Add((qId, qStatus));
             }
+            if (_questStatusesScratch.Count > 1)
+                _questStatusesScratch.Sort(static (a, b) => a.QuestId.CompareTo(b.QuestId));
 
-            // A quest item dropped only inside instances (a dungeon quest that asks for a boss's head and nothing else): the goal is the
-            // creature that drops it, in that instance, like a creature objective. An item with even one dropper outside the instances
-            // (on a continent) is the brain's solo work, as before: it is no goal at all (InstanceOnlyItem).
-            for (int index = 0; index < quest.ReqItemId.Count; index++)
+            for (int qIdx = 0; qIdx < _questStatusesScratch.Count; qIdx++)
             {
-                uint item = quest.ReqItemId[index];
-                if (item == 0 || quest.ReqItemCount[index] == 0 || player.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
-                if (!InstanceOnlyItem(item, creatures, maps)) continue;
-                foreach (uint dropper in DroppersOf(item))
+                (uint questId, QuestStatusData status) = _questStatusesScratch[qIdx];
+                // A quest of a game event that is not running is not pursued (vmangos Quest::IsActive; PlayerbotQuestGoals).
+                if (quests.Quests.Get(questId) is not { IsActive: true } quest) continue;
+                if (bot.Brain.Suspensions.IsQuestSuspended(questId, now)) continue;
+                int flagged = PlayerbotGroupContent.QuestGroupSize(quest.Template);
+                for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
                 {
-                    if (GoalFor(player, maps, creatures, quest, dropper, flagged) is { InInstance: true } goal && !IsSetAside(bot.BotId, goal.Key))
-                        return goal with { ObjectiveItem = item };
+                    int raw = quest.ReqCreatureOrGOId[index];
+                    if (raw <= 0 || status.CreatureOrGOCount[index] >= quest.ReqCreatureOrGOCount[index]) continue;
+                    uint entry = (uint)raw;
+                    if (GoalFor(player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
+                }
+
+                // A quest item dropped only inside instances (a dungeon quest that asks for a boss's head and nothing else): the goal is the
+                // creature that drops it, in that instance, like a creature objective. An item with even one dropper outside the instances
+                // (on a continent) is the brain's solo work, as before: it is no goal at all (InstanceOnlyItem).
+                for (int index = 0; index < quest.ReqItemId.Count; index++)
+                {
+                    uint item = quest.ReqItemId[index];
+                    if (item == 0 || quest.ReqItemCount[index] == 0 || player.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
+                    if (!InstanceOnlyItem(item, creatures, maps)) continue;
+                    IReadOnlyList<uint> droppers = DroppersOf(item);
+                    for (int dIdx = 0; dIdx < droppers.Count; dIdx++)
+                    {
+                        uint dropper = droppers[dIdx];
+                        if (GoalFor(player, maps, creatures, quest, dropper, flagged) is { InInstance: true } goal && !IsSetAside(bot.BotId, goal.Key))
+                            return goal with { ObjectiveItem = item };
+                    }
                 }
             }
         }
 
         // The risk estimate passed over a quest objective as too strong alone but feasible for a few.
-        if (bot.Brain.Risk.GroupSignal is { } signal && signal.MapId == player.MapId && unchecked(Now - signal.AtMs) < 60_000)
+        if (bot.Brain.Risk.GroupSignal is { } signal && signal.MapId == player.MapId && unchecked(now - signal.AtMs) < 60_000)
         {
-            uint questId = signal.QuestId != 0 ? signal.QuestId : QuestFor(player, signal.Entry);
+            uint questId = signal.QuestId != 0 ? signal.QuestId : QuestFor(player, signal.Entry, quests);
             var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Quest, questId, signal.Entry, player.MapId, player.MapId,
                 signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotGroupContent.PartySize), player.Level, signal.Source);
             if (!IsSetAside(bot.BotId, goal.Key)) return goal;
@@ -664,14 +733,52 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     }
 
     /// <summary>The quest in the bot's log that asks for <paramref name="entry"/> (0: none).</summary>
-    private uint QuestFor(Player player, uint entry)
+    private uint QuestFor(Player player, uint entry, QuestNpcServices? quests = null)
     {
-        QuestNpcServices? quests = services.GetService<QuestNpcFeature>()?.Services;
-        if (quests is null || QuestState(player) is not { } state) return 0;
-        foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
-            if (status.Status == QuestStatus.Incomplete && quests.Quests.Get(questId) is { } quest && quest.ReqCreatureOrGOId.Contains((int)entry))
-                return questId;
-        return 0;
+        quests ??= services.GetService<QuestNpcFeature>()?.Services;
+        if (quests is null || quests.StateOf(player) is not { Loaded: true } state) return 0;
+        uint bestQuestId = uint.MaxValue;
+        foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
+        {
+            if (questId < bestQuestId && status.Status == QuestStatus.Incomplete && quests.Quests.Get(questId) is { } quest && quest.ReqCreatureOrGOId.Contains((int)entry))
+                bestQuestId = questId;
+        }
+        return bestQuestId == uint.MaxValue ? 0 : bestQuestId;
+    }
+
+    private (uint MapId, MapTemplate Instance)[] GetDungeonMapsWithSpawns(CreatureContent creatures, MapRegistry registry)
+    {
+        if (ReferenceEquals(_dungeonMapsCreatures, creatures) && ReferenceEquals(_dungeonMapsRegistry, registry))
+            return _dungeonMapsWithSpawns;
+        var list = new List<(uint MapId, MapTemplate Instance)>();
+        foreach (uint mapId in creatures.MapsWithSpawns)
+        {
+            if (registry.Find(mapId) is { IsDungeon: true } instance)
+                list.Add((mapId, instance));
+        }
+        list.Sort(static (a, b) => a.MapId.CompareTo(b.MapId));
+        _dungeonMapsWithSpawns = [.. list];
+        _dungeonMapsCreatures = creatures;
+        _dungeonMapsRegistry = registry;
+        return _dungeonMapsWithSpawns;
+    }
+
+    private static CreatureSpawn NearestSpawn(IReadOnlyList<CreatureSpawn> spawns, float x, float y)
+    {
+        CreatureSpawn best = spawns[0];
+        Vector2 target = new(x, y);
+        float bestDistSq = Vector2.DistanceSquared(new(best.X, best.Y), target);
+        for (int i = 1; i < spawns.Count; i++)
+        {
+            CreatureSpawn candidate = spawns[i];
+            float d2 = Vector2.DistanceSquared(new(candidate.X, candidate.Y), target);
+            if (d2 < bestDistSq)
+            {
+                bestDistSq = d2;
+                best = candidate;
+            }
+        }
+        return best;
     }
 
     /// <summary>
@@ -685,7 +792,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (here.Count > 0)
         {
             if (flagged < 2) return null;
-            CreatureSpawn nearest = here.OrderBy(s => Vector2.DistanceSquared(new(s.X, s.Y), new(player.X, player.Y))).First();
+            CreatureSpawn nearest = NearestSpawn(here, player.X, player.Y);
             var at = new Vector3(nearest.X, nearest.Y, nearest.Z);
             bool raid = quest.Template.Type == PlayerbotGroupContent.QuestTypeRaid;
             if (raid && !_options.Groups.RaidsEnabled) return null;
@@ -693,9 +800,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 player.MapId, player.MapId, at, 0, at, flagged, quest.MinLevel, "quest");
         }
 
-        foreach (uint mapId in creatures.MapsWithSpawns.OrderBy(m => m))
+        (uint MapId, MapTemplate Instance)[] dungeonMaps = GetDungeonMapsWithSpawns(creatures, maps.Registry);
+        for (int i = 0; i < dungeonMaps.Length; i++)
         {
-            if (maps.Registry.Find(mapId) is not { IsDungeon: true } instance) continue;
+            (uint mapId, MapTemplate instance) = dungeonMaps[i];
             IReadOnlyList<CreatureSpawn> inside = creatures.GetSpawns(mapId, entry);
             if (inside.Count == 0) continue;
             if (EntranceTo(maps, player.MapId, mapId, new Vector3(player.X, player.Y, player.Z)) is not { } entrance) continue;
@@ -703,7 +811,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             int size = instance.IsRaid ? Math.Max(PlayerbotGroupContent.InstanceGroupSize(instance), flagged)
                 : Math.Max(flagged >= 2 ? Math.Min(flagged, PlayerbotGroupContent.PartySize) : PlayerbotGroupContent.InstanceGroupSize(instance), 2);
             if (instance.IsRaid && !_options.Groups.RaidsEnabled) return null;
-            CreatureSpawn spawn = inside.OrderBy(s => Vector2.DistanceSquared(new(s.X, s.Y), new(teleport.TargetX, teleport.TargetY))).First();
+            CreatureSpawn spawn = NearestSpawn(inside, teleport.TargetX, teleport.TargetY);
             return new PlayerbotGroupGoal(instance.IsRaid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Dungeon, quest.Id, entry,
                 mapId, player.MapId, new Vector3(entrance.X, entrance.Y, entrance.Z), entrance.Id, new Vector3(spawn.X, spawn.Y, spawn.Z),
                 size, Math.Max(teleport.RequiredLevel, quest.MinLevel), "instance");
@@ -803,10 +911,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     }
 
     /// <summary>The talent role (vmangos AutoAssignRole) from the spell names the bot knows; reads the book, drains no packet.</summary>
-    private static PlayerbotRole TalentRole(WorldSession session, Player player)
+    private PlayerbotRole TalentRole(WorldSession session, Player player)
     {
-        if (session.Services.GetService<Spells.SpellFeature>() is not { } feature) return PlayerbotRoles.Assign(player.Class, _ => false);
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (session.Services.GetService<Spells.SpellFeature>() is not { } feature) return PlayerbotRoles.Assign(player.Class, static _ => false);
+        HashSet<string> names = _spellNamesScratch;
+        names.Clear();
         foreach (uint id in feature.Spellbook.GetSpells(player))
             if (feature.System.Store.Get(id) is { } spell) names.Add(spell.Name);
         return PlayerbotRoles.Assign(player.Class, id => feature.System.Store.Get(id) is { } signature && names.Contains(signature.Name));
@@ -888,9 +997,18 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (_world is not { } world) return;
         uint now = Now;
         // A bot that stopped, became scripted or joined a real player's group leaves this one.
-        foreach (Member member in group.Members.Where(m => !m.Real).ToArray())
-            if (!_bots.TryGetValue(member.BotId, out PlayerbotGroupBot bot) || bot.Session.Player is null)
+        _membersScratch.Clear();
+        for (int i = 0; i < group.Members.Count; i++)
+        {
+            Member m = group.Members[i];
+            if (!m.Real) _membersScratch.Add(m);
+        }
+        for (int i = 0; i < _membersScratch.Count; i++)
+        {
+            Member member = _membersScratch[i];
+            if (!_bots.TryGetValue(member.BotId, out PlayerbotGroupBot bot) || !bot.Free || bot.Session.Player is not { IsInWorld: true })
                 DropMember(group, member.BotId, "gone");
+        }
         if (!_groups.Contains(group)) return;
         if (group.LeaderPlayer(world) is not { } leader)
         {
@@ -907,10 +1025,22 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (group.State != PlayerbotGroupState.Disbanding && group.State != PlayerbotGroupState.Forming && groupManager is not null)
         {
             // A member that left the server group (a real player leaving, a bot kicked) is no longer one.
-            foreach (Member member in group.Members.Where(m => m.Joined && m.Guid != leader.Guid).ToArray())
+            _membersScratch.Clear();
+            for (int i = 0; i < group.Members.Count; i++)
+            {
+                Member m = group.Members[i];
+                if (m.Joined && m.Guid != leader.Guid) _membersScratch.Add(m);
+            }
+            for (int i = 0; i < _membersScratch.Count; i++)
+            {
+                Member member = _membersScratch[i];
                 if (!groupManager.AreInSameGroup(leader.Guid, member.Guid)) DropMember(group, member.BotId, "left", member.Guid);
+            }
             if (!_groups.Contains(group)) return;
-            if (group.Members.Count(m => !m.Real) < 2 && group.Goal.Size >= 2 && !group.Solo)
+            int botMembers = 0;
+            for (int i = 0; i < group.Members.Count; i++)
+                if (!group.Members[i].Real) botMembers++;
+            if (botMembers < 2 && group.Goal.Size >= 2 && !group.Solo)
             {
                 Finish(group, success: false, "too-few");
                 return;
@@ -1574,8 +1704,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     private Guid BotIdOf(ObjectGuid guid)
     {
-        foreach ((Guid botId, PlayerbotGroupBot bot) in _bots)
-            if (bot.Session.Player?.Guid == guid) return botId;
+        if (_botByPlayer.TryGetValue(guid, out Guid botId)) return botId;
+        foreach ((Guid id, PlayerbotGroupBot bot) in _bots)
+            if (bot.Session.Player?.Guid == guid) return id;
         return Guid.Empty;
     }
 

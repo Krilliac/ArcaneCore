@@ -9,8 +9,50 @@ import { buildForm } from './formview.js';
 import { button, keyValues } from './widgets.js';
 
 const MAX_ROWS = 200;
+const HOTSPOT_CELL_YARDS = 150;
+const MAX_HOTSPOTS = 5;
 const KIND_TEXT = { player: 'Player', bot: 'Bot', creature: 'Creature', gameobject: 'Object' };
 const KIND_ORDER = { player: 0, bot: 1, creature: 2, gameobject: 3 };
+
+function isEntityInCombat(e) {
+    return Boolean(e.inCombat || e.combat || e.target || /chase|combat|attack/i.test(e.motion ?? ''));
+}
+
+export function computeHotspots(entities, cellSize = HOTSPOT_CELL_YARDS, limit = MAX_HOTSPOTS) {
+    const cells = new Map();
+    for (const e of entities) {
+        if (!Array.isArray(e.pos) || e.pos.length < 3) {
+            continue;
+        }
+        const cx = Math.floor(e.pos[0] / cellSize);
+        const cy = Math.floor(e.pos[1] / cellSize);
+        const key = `${cx}:${cy}`;
+        let cell = cells.get(key);
+        if (!cell) {
+            cell = { key, cx, cy, count: 0, players: 0, creatures: 0, combat: 0, sumX: 0, sumY: 0, sumZ: 0 };
+            cells.set(key, cell);
+        }
+        cell.count++;
+        if (e.kind === 'player' || e.kind === 'bot') {
+            cell.players++;
+        } else if (e.kind === 'creature') {
+            cell.creatures++;
+        }
+        if (isEntityInCombat(e)) {
+            cell.combat++;
+        }
+        cell.sumX += e.pos[0];
+        cell.sumY += e.pos[1];
+        cell.sumZ += e.pos[2];
+    }
+    return [...cells.values()]
+        .map((c) => ({
+            ...c,
+            center: [c.sumX / c.count, c.sumY / c.count, c.sumZ / c.count],
+        }))
+        .sort((a, b) => b.count - a.count || b.combat - a.combat || b.players - a.players)
+        .slice(0, limit);
+}
 
 export class LivePanel {
     constructor(app, viewport) {
@@ -25,7 +67,7 @@ export class LivePanel {
         this.filter = h('input', {
             class: 'input',
             type: 'search',
-            placeholder: 'Filter by name, entry, guid or motion',
+            placeholder: 'Filter name, guid, entry, combat...',
             spellcheck: false,
             aria: { label: 'Filter entities' },
             on: {
@@ -36,9 +78,15 @@ export class LivePanel {
             },
         });
         this.summary = h('div', { class: 'muted num' });
+        this.hotspotsBox = h('div', { class: 'live-hotspots', hidden: true });
         this.list = h('ul', { class: 'entity-list', role: 'listbox', aria: { label: 'Entities on this map' } });
         this.detail = h('section', { class: 'panel-section' });
-        this.entityBox = h('section', { class: 'panel-section' }, h('h3', { class: 'section-title', text: 'Entities' }), this.filter, this.summary, this.list);
+        this.entityBox = h('section', { class: 'panel-section' },
+            h('h3', { class: 'section-title', text: 'Entities' }),
+            this.filter,
+            this.summary,
+            this.hotspotsBox,
+            this.list);
         this.element = h('div', { class: 'panel-body live', role: 'region', aria: { label: 'Live' } }, this.statusBox, this.subscribeBox, this.detail, this.entityBox);
 
         app.live.on('status', () => this.renderStatus());
@@ -117,7 +165,7 @@ export class LivePanel {
                 ? 'Turn on the map feed in the world server configuration, then press Connect. Live is off by default.'
                 : 'This host has no live.connect command, so live data is not available.') })
             : null;
-        fill(this.statusBox, 
+        fill(this.statusBox,
             h('h3', { class: 'section-title', text: 'Connection' }),
             h('div', { class: 'live-state' }, h('span', { class: `dot ${s.connected ? 'dot-ok' : 'dot-off'}`, aria: { hidden: 'true' } }), h('span', { text: connectedText })),
             empty,
@@ -153,8 +201,34 @@ export class LivePanel {
     }
 
     #entitiesOfMap() {
-        const frame = this.app.live.frameFor(this.app.view.map);
+        const { app } = this;
+        if (typeof app.live?.entities === 'function') {
+            const list = app.live.entities(app.view.map);
+            if (Array.isArray(list)) {
+                return list;
+            }
+        }
+        const frame = app.live.frameFor(app.view.map);
         return frame ? [...frame.entities.values()] : [];
+    }
+
+    #filterMatches(all, text) {
+        const q = String(text ?? '').trim().toLowerCase();
+        if (q === '') {
+            return [...all];
+        }
+        if (q === 'combat' || q === 'in-combat' || q === 'incombat') {
+            return all.filter((e) => isEntityInCombat(e) || filterEntities([e], q).length > 0);
+        }
+        const base = new Set(filterEntities(all, q));
+        if ('combat'.includes(q)) {
+            for (const e of all) {
+                if (isEntityInCombat(e)) {
+                    base.add(e);
+                }
+            }
+        }
+        return [...base];
     }
 
     renderEntities() {
@@ -165,21 +239,48 @@ export class LivePanel {
         const all = this.#entitiesOfMap();
         if (!app.live.status.connected && all.length === 0) {
             this.summary.textContent = '';
+            this.hotspotsBox.hidden = true;
+            clear(this.hotspotsBox);
             fill(this.list, h('li', { class: 'empty-line', text: 'No live data. Connect above to see players, bots, creatures and objects.' }));
             return;
         }
         if (all.length === 0) {
             this.summary.textContent = '';
+            this.hotspotsBox.hidden = true;
+            clear(this.hotspotsBox);
             fill(this.list, h('li', { class: 'empty-line', text: `Connected, but no entities on map ${app.view.map} yet. Pick another map or wait for the next frame.` }));
             return;
         }
-        const counts = { player: 0, bot: 0, creature: 0, gameobject: 0 };
+        const counts = { player: 0, bot: 0, creature: 0, gameobject: 0, combat: 0 };
         for (const e of all) {
-            counts[e.kind]++;
+            counts[e.kind] = (counts[e.kind] ?? 0) + 1;
+            if (isEntityInCombat(e)) {
+                counts.combat++;
+            }
         }
-        this.summary.textContent = `${counts.player} players · ${counts.bot} bots · ${counts.creature} creatures · ${counts.gameobject} objects`;
+        this.summary.textContent = `${counts.player} players · ${counts.bot} bots · ${counts.creature} creatures · ${counts.gameobject} objects · ${counts.combat} in combat`;
+
+        const hotspots = computeHotspots(all);
+        if (hotspots.length > 0) {
+            this.hotspotsBox.hidden = false;
+            fill(this.hotspotsBox,
+                h('div', { class: 'subsection-title muted', text: `Hotspots (${HOTSPOT_CELL_YARDS} yd cells)` }),
+                h('div', { class: 'hotspot-list' }, hotspots.map((spot, idx) => h('button', {
+                    class: 'hotspot-badge',
+                    type: 'button',
+                    title: `Pan camera to (${formatPoint(spot.center, 0)}) — ${spot.count} entities (${spot.players} players, ${spot.creatures} creatures, ${spot.combat} in combat)`,
+                    text: `#${idx + 1} (${Math.round(spot.center[0])}, ${Math.round(spot.center[1])}) · ${spot.count}${spot.combat > 0 ? ` ⚔${spot.combat}` : ''}`,
+                    on: {
+                        click: () => app.setCamera(lookAtPoint(app.view.camera, spot.center, 65), { immediate: true }),
+                    },
+                }))));
+        } else {
+            this.hotspotsBox.hidden = true;
+            clear(this.hotspotsBox);
+        }
+
         const target = app.view.camera.target;
-        const matches = filterEntities(all, this.filterText)
+        const matches = this.#filterMatches(all, this.filterText)
             .map((e) => ({ e, d: Math.hypot(e.pos[0] - target[0], e.pos[1] - target[1]) }))
             .sort((a, b) => KIND_ORDER[a.e.kind] - KIND_ORDER[b.e.kind] || a.d - b.d);
         const shown = matches.slice(0, MAX_ROWS);

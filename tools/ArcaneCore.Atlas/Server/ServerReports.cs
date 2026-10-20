@@ -489,3 +489,73 @@ public sealed record ServerStatus(
             }
         });
 }
+
+/// <summary>One sample along the segment of <c>query.profile</c>.</summary>
+/// <param name="T">Interpolation fraction in <c>0..1</c> from start to end.</param>
+/// <param name="Distance">Planar distance in yards from the start point.</param>
+/// <param name="X">World X coordinate.</param>
+/// <param name="Y">World Y coordinate.</param>
+/// <param name="TerrainZ">Ground height from the terrain file, or null where absent/hole.</param>
+/// <param name="FloorZ">Combined floor height (<c>CollisionZ</c>, else <c>TerrainZ</c>), or null.</param>
+/// <param name="LiquidZ">Liquid surface height, or null without liquid.</param>
+/// <param name="HasLiquid">True when liquid is present at the sample.</param>
+/// <param name="DeltaFloorZ">Signed change in <paramref name="FloorZ"/> from the previous sample (0 on the first sample, or null when either sample has no floor).</param>
+/// <param name="GradeDegrees">Slope angle in degrees from the previous sample, or null on the first sample or when either sample has no floor.</param>
+public sealed record ProfileSample(
+    float T,
+    float Distance,
+    float X,
+    float Y,
+    float? TerrainZ,
+    float? FloorZ,
+    float? LiquidZ,
+    bool HasLiquid,
+    float? DeltaFloorZ,
+    float? GradeDegrees)
+{
+    /// <summary>The sample as JSON.</summary>
+    public JsonObject ToJson() => new()
+    {
+        ["t"] = ReportJson.Number(T),
+        ["distance"] = ReportJson.Number(Distance),
+        ["x"] = ReportJson.Number(X),
+        ["y"] = ReportJson.Number(Y),
+        ["terrainZ"] = ReportJson.Number(TerrainZ),
+        ["floorZ"] = ReportJson.Number(FloorZ),
+        ["liquidZ"] = ReportJson.Number(LiquidZ),
+        ["hasLiquid"] = HasLiquid,
+        ["deltaFloorZ"] = ReportJson.Number(DeltaFloorZ),
+        ["gradeDegrees"] = ReportJson.Number(GradeDegrees),
+    };
+}
+
+/// <summary>The result of <c>query.profile</c>.</summary>
+public sealed record ProfileReport(
+    uint MapId,
+    Vector3 From,
+    Vector3 To,
+    int Steps,
+    float TotalHorizontalDistance,
+    float? MinTerrainZ,
+    float? MaxTerrainZ,
+    float? MinFloorZ,
+    float? MaxFloorZ,
+    float? MaxGradeDegrees,
+    IReadOnlyList<ProfileSample> Samples)
+{
+    /// <summary>The report as JSON without the overlay.</summary>
+    public JsonObject ToJson() => new()
+    {
+        ["map"] = MapId,
+        ["from"] = ServerOverlay.Triple(From),
+        ["to"] = ServerOverlay.Triple(To),
+        ["steps"] = Steps,
+        ["totalHorizontalDistance"] = ReportJson.Number(TotalHorizontalDistance),
+        ["minTerrainZ"] = ReportJson.Number(MinTerrainZ),
+        ["maxTerrainZ"] = ReportJson.Number(MaxTerrainZ),
+        ["minFloorZ"] = ReportJson.Number(MinFloorZ),
+        ["maxFloorZ"] = ReportJson.Number(MaxFloorZ),
+        ["maxGradeDegrees"] = ReportJson.Number(MaxGradeDegrees),
+        ["samples"] = new JsonArray([.. Samples.Select(s => (JsonNode)s.ToJson())]),
+    };
+}

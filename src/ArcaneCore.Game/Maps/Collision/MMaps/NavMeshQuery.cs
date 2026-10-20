@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace ArcaneCore.Game.Maps.Collision.MMaps;
@@ -24,6 +25,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
     public int TileCount => _tiles.Count;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public NavMeshTile? GetTile(int x, int y) => _tiles.GetValueOrDefault((x, y));
 
     /// <summary>
@@ -51,6 +53,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         => _tileLoader is { } loader && _tileLoaderThread == Environment.CurrentManagedThreadId ? loader : null;
 
     /// <summary>The centre of Detour tile (<paramref name="x"/>, <paramref name="y"/>) in Recast space (y 0).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Vector3 TileCenter(int x, int y)
         => new(Parameters.Origin.X + ((x + 0.5f) * Parameters.TileWidth), 0, Parameters.Origin.Z + ((y + 0.5f) * Parameters.TileHeight));
 
@@ -65,6 +68,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         return tx is > int.MinValue and < int.MaxValue && ty is > int.MinValue and < int.MaxValue && GetTile((int)tx, (int)ty) is not null;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsTerrainTileLoaded(int tileX, int tileY) => _byTerrainTile.ContainsKey((tileX, tileY));
 
     /// <summary>Add a tile read for a terrain tile; false when its Detour slot is taken (Detour <c>addTile</c> refuses too).</summary>
@@ -109,7 +113,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         poly = default;
         nearest = center;
         float best = float.MaxValue;
-        foreach (NavMeshTile tile in _tiles.Values)
+        foreach ((_, NavMeshTile tile) in _tiles)
         {
             if (tile.Overlaps(center, extents)
                 && tile.TryFindNearestPoly(center, extents, include, exclude, out int index, out Vector3 point, out float d)
@@ -139,9 +143,13 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     {
         into.Clear();
         NavMeshTile tile = from.Tile;
-        NavPoly p = tile.Polys[from.Poly];
-        Vector3 center = tile.Center(from.Poly);
-        for (int e = 0; e < p.VertexCount; e++)
+        int fromPoly = from.Poly;
+        NavPoly p = tile.Polys[fromPoly];
+        Vector3 center = tile.Center(fromPoly);
+        Vector3[] vertices = tile.Vertices;
+        int polyCount = tile.Polys.Length;
+        int vertCount = p.VertexCount;
+        for (int e = 0; e < vertCount; e++)
         {
             ushort nei = p.Neighbour(e);
             if (nei == 0)
@@ -152,11 +160,12 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
             if ((nei & NavMeshFormat.ExternalLink) == 0)
             {
                 int index = nei - 1;
-                if (index < tile.Polys.Length && index != from.Poly)
+                if (index < polyCount && index != fromPoly)
                 {
                     // The edge's vertices are read only for an internal neighbour (a wall or a tile-border link does not use them).
-                    Vector3 a = tile.Vertices[p.Vertex(e)];
-                    Vector3 b = tile.Vertices[p.Vertex((e + 1) % p.VertexCount)];
+                    int nextEdge = e + 1 < vertCount ? e + 1 : 0;
+                    Vector3 a = vertices[p.Vertex(e)];
+                    Vector3 b = vertices[p.Vertex(nextEdge)];
                     (Vector3 l, Vector3 r) = Orient(center, a, b);
                     into.Add(new NavNeighbour(new NavPolyRef(tile, index), l, r, 0));
                 }
@@ -175,10 +184,10 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
             // edge (NavMeshTile.GetCrossPortals) rather than by scanning every border edge of the neighbour per expansion.
             // Detour's connectExtLinks (DetourNavMesh.cpp:416-428) prepends each connecting polygon to poly->firstLink, so a border
             // edge's external links are walked in reverse candidate order.
-            CrossPortal[] portals = tile.GetCrossPortals(from.Poly, e, other);
+            CrossPortal[] portals = tile.GetCrossPortals(fromPoly, e, other);
             for (int i = portals.Length - 1; i >= 0; i--)
             {
-                CrossPortal portal = portals[i];
+                ref readonly CrossPortal portal = ref portals[i];
                 (Vector3 l, Vector3 r) = Orient(center, portal.A, portal.B);
                 into.Add(new NavNeighbour(new NavPolyRef(other, portal.Poly), l, r, (byte)(side >> 1)));
             }
@@ -201,10 +210,12 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
             return false;
         }
 
+        NavTerrain include = options.EffectiveIncludeFlags;
+        NavTerrain exclude = options.ExcludeFlags;
         if ((nei & NavMeshFormat.ExternalLink) == 0)
         {
             int index = nei - 1;
-            if (index >= tile.Polys.Length || index == from.Poly || !tile.Passes(index, options.EffectiveIncludeFlags, options.ExcludeFlags))
+            if (index >= tile.Polys.Length || index == from.Poly || !tile.Passes(index, include, exclude))
             {
                 return false;
             }
@@ -221,9 +232,11 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
         bool alongZ = side is 0 or 4;
         float along = alongZ ? crossing.Z : crossing.X;
-        foreach (CrossPortal portal in tile.GetCrossPortals(from.Poly, edge, other))
+        CrossPortal[] portals = tile.GetCrossPortals(from.Poly, edge, other);
+        for (int i = 0; i < portals.Length; i++)
         {
-            if (other.Passes(portal.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
+            ref readonly CrossPortal portal = ref portals[i];
+            if (other.Passes(portal.Poly, include, exclude))
             {
                 float low = MathF.Min(alongZ ? portal.A.Z : portal.A.X, alongZ ? portal.B.Z : portal.B.X) - 0.05f;
                 float high = MathF.Max(alongZ ? portal.A.Z : portal.A.X, alongZ ? portal.B.Z : portal.B.X) + 0.05f;
@@ -239,10 +252,12 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     }
 
     /// <summary>2D cross product in the x/z plane (positive: <paramref name="b"/> is counter-clockwise of <paramref name="a"/>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static float Cross(Vector3 apex, Vector3 a, Vector3 b)
         => ((a.X - apex.X) * (b.Z - apex.Z)) - ((a.Z - apex.Z) * (b.X - apex.X));
 
     /// <summary>Order a portal so that, seen from <paramref name="inside"/>, the right point is clockwise of the left.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static (Vector3 Left, Vector3 Right) Orient(Vector3 inside, Vector3 a, Vector3 b)
         => Cross(inside, a, b) < 0 ? (a, b) : (b, a);
 
@@ -322,6 +337,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector3 PointAt(Vector3 a, Vector3 b, bool alongZ, float coordinate)
     {
         float a0 = alongZ ? a.Z : a.X;
@@ -513,6 +529,7 @@ public static class NavMeshQuery
             Corners.Clear();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AdvanceStamp()
         {
             if (++_stamp == int.MaxValue)
@@ -522,9 +539,11 @@ public static class NavMeshQuery
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int BucketOf(long key, int mask)
             => (int)(((ulong)key * 11400714819323198485UL) >> 32) & mask;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetIndex(long key, out int index)
         {
             int bucket = BucketOf(key, _buckets.Length - 1);
@@ -545,6 +564,7 @@ public static class NavMeshQuery
         }
 
         /// <summary>Appends a node (open, not closed), indexes it under <paramref name="key"/>, and answers its index.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Add(long key, in Node node)
         {
             int index = Count;
@@ -595,6 +615,7 @@ public static class NavMeshQuery
     }
 
     /// <summary>The index key of a polygon reached across <paramref name="crossSide"/>: unique per tile object, like the former (NavPolyRef, byte).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long NodeKey(NavMeshTile tile, int poly, byte crossSide)
         => ((long)tile.SearchId << 32) | ((long)(uint)poly << 8) | crossSide;
 
@@ -609,6 +630,7 @@ public static class NavMeshQuery
         NavTerrain include = options.EffectiveIncludeFlags;
         NavTerrain exclude = options.ExcludeFlags;
         CancellationToken cancel = options.CancellationToken;
+        bool canCancel = cancel.CanBeCanceled;
         scratch.Add(
             NodeKey(start.Tile, start.Poly, 0),
             new Node(start, -1, startPos, 0, Vector3.Distance(startPos, endPos) * HeuristicScale, default, default));
@@ -630,7 +652,7 @@ public static class NavMeshQuery
                 break;
             }
 
-            if ((expansions & 31) == 0)
+            if (canCancel && (expansions & 31) == 0)
             {
                 cancel.ThrowIfCancellationRequested();
             }
@@ -643,28 +665,27 @@ public static class NavMeshQuery
 
             scratch.Closed[current] = true;
             expansions++;
-            // A copy: the arrays may grow (and move) while this node's neighbours are added.
-            Node node = scratch.Nodes[current];
-            NavMeshTile nodeTile = node.Poly.Tile;
-            int nodePoly = node.Poly.Poly;
+            // Extract scalar fields before neighbour additions, since scratch.Nodes may grow and relocate.
+            ref readonly Node currentNode = ref scratch.Nodes[current];
+            NavPolyRef nodePolyRef = currentNode.Poly;
+            NavMeshTile nodeTile = nodePolyRef.Tile;
+            int nodePoly = nodePolyRef.Poly;
             if (ReferenceEquals(nodeTile, endTile) && nodePoly == endPoly)
             {
                 goal = current;
                 break;
             }
 
-            NavMeshTile? parentTile = node.Parent >= 0 ? scratch.Nodes[node.Parent].Poly.Tile : null;
-            int parentPoly = node.Parent >= 0 ? scratch.Nodes[node.Parent].Poly.Poly : -1;
-            mesh.CollectNeighbours(node.Poly, neighbours);
+            int nodeParent = currentNode.Parent;
+            Vector3 nodePos = currentNode.Position;
+            float nodeCost = currentNode.Cost;
+            NavMeshTile? parentTile = nodeParent >= 0 ? scratch.Nodes[nodeParent].Poly.Tile : null;
+            int parentPoly = nodeParent >= 0 ? scratch.Nodes[nodeParent].Poly.Poly : -1;
+            mesh.CollectNeighbours(nodePolyRef, neighbours);
             ReadOnlySpan<NavNeighbour> around = CollectionsMarshal.AsSpan(neighbours);
             for (int n = 0; n < around.Length; n++)
             {
                 ref readonly NavNeighbour neighbour = ref around[n];
-                if ((expansions & 31) == 0)
-                {
-                    cancel.ThrowIfCancellationRequested();
-                }
-
                 NavMeshTile nextTile = neighbour.To.Tile;
                 int nextPoly = neighbour.To.Poly;
                 if ((ReferenceEquals(nextTile, parentTile) && nextPoly == parentPoly) || !nextTile.Passes(nextPoly, include, exclude))
@@ -682,9 +703,15 @@ public static class NavMeshQuery
 
                 // Detour fixes a node's position at the portal it was first reached through.
                 Vector3 position = known ? scratch.Nodes[existing].Position : (neighbour.Left + neighbour.Right) * 0.5f;
-                float cost = node.Cost + Vector3.Distance(node.Position, position);
+                float cost = nodeCost + Vector3.Distance(nodePos, position);
+                bool isGoal = ReferenceEquals(nextTile, endTile) && nextPoly == endPoly;
+                if (known && !isGoal && cost >= scratch.Nodes[existing].Cost)
+                {
+                    continue;
+                }
+
                 float heuristic;
-                if (ReferenceEquals(nextTile, endTile) && nextPoly == endPoly)
+                if (isGoal)
                 {
                     cost += Vector3.Distance(position, endPos);
                     heuristic = 0;
@@ -697,13 +724,14 @@ public static class NavMeshQuery
                 float total = cost + heuristic;
                 if (known)
                 {
-                    if (total >= scratch.Nodes[existing].Total)
+                    ref Node existingNode = ref scratch.Nodes[existing];
+                    if (total >= existingNode.Total)
                     {
                         continue;
                     }
 
                     scratch.Closed[existing] = false; // Detour reopens a closed node a cheaper route reaches.
-                    scratch.Nodes[existing] = new Node(neighbour.To, current, position, cost, total, neighbour.Left, neighbour.Right);
+                    existingNode = new Node(neighbour.To, current, position, cost, total, neighbour.Left, neighbour.Right);
                     open.Enqueue(existing, total);
                 }
                 else
@@ -730,7 +758,8 @@ public static class NavMeshQuery
         // A reopened node can leave a stale parent chain; never walk more links than there are nodes.
         for (int i = complete ? goal : best; i >= 0 && corridor.Count < count; i = nodes[i].Parent)
         {
-            corridor.Add((nodes[i].Poly, nodes[i].Left, nodes[i].Right));
+            ref readonly Node n = ref nodes[i];
+            corridor.Add((n.Poly, n.Left, n.Right));
         }
 
         corridor.Reverse();
@@ -801,19 +830,23 @@ public static class NavMeshQuery
     {
         List<NavPolyRef> polys = scratch.Polys;
         float radiusSquared = radius * radius;
+        NavTerrain include = options.EffectiveIncludeFlags;
+        NavTerrain exclude = options.ExcludeFlags;
         polys.Add(start);
         scratch.Seen.Add(start);
         for (int head = 0; head < polys.Count && polys.Count < MaxRandomPointPolys; head++)
         {
             mesh.CollectNeighbours(polys[head], scratch.Neighbours);
-            foreach (NavNeighbour next in scratch.Neighbours)
+            ReadOnlySpan<NavNeighbour> neighbours = CollectionsMarshal.AsSpan(scratch.Neighbours);
+            for (int n = 0; n < neighbours.Length; n++)
             {
                 if (polys.Count >= MaxRandomPointPolys)
                 {
                     break;
                 }
 
-                if (!next.To.Tile.Passes(next.To.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags)
+                ref readonly NavNeighbour next = ref neighbours[n];
+                if (!next.To.Tile.Passes(next.To.Poly, include, exclude)
                     || DistanceSegmentSquaredXz(center, next.Left, next.Right) > radiusSquared
                     || !scratch.Seen.Add(next.To))
                 {
@@ -824,6 +857,7 @@ public static class NavMeshQuery
             }
         }
 
+        ReadOnlySpan<NavPolyRef> polySpan = CollectionsMarshal.AsSpan(polys);
         for (int attempt = 0; attempt < MaxRandomPointAttempts; attempt++)
         {
             double angle = random.NextDouble() * 2 * Math.PI;
@@ -831,8 +865,9 @@ public static class NavMeshQuery
             Vector3 candidate = new(center.X + (float)(distance * Math.Cos(angle)), center.Y, center.Z + (float)(distance * Math.Sin(angle)));
             float bestGap = float.MaxValue;
             float bestHeight = 0;
-            foreach (NavPolyRef poly in polys)
+            for (int i = 0; i < polySpan.Length; i++)
             {
+                NavPolyRef poly = polySpan[i];
                 if (poly.Tile.TryHeightAtXz(poly.Poly, candidate, out float height) && MathF.Abs(height - center.Y) < bestGap)
                 {
                     bestGap = MathF.Abs(height - center.Y);
@@ -853,19 +888,20 @@ public static class NavMeshQuery
 
 
     /// <summary>Squared horizontal distance from <paramref name="p"/> to the segment a–b.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float DistanceSegmentSquaredXz(Vector3 p, Vector3 a, Vector3 b)
     {
         float t = NavMeshTile.ClosestT(a, b, p);
         return NavMeshTile.DistanceXzSquared(Vector3.Lerp(a, b, t), p);
     }
 
-    /// <summary>The result of <see cref="Raycast"/> in Recast space.</summary>
+    /// <summary>The result of <c>Raycast</c> in Recast space.</summary>
     public readonly record struct RayResult(bool Hit, float Fraction, Vector3 Point);
 
     /// <summary>
     /// Walk the mesh surface from <paramref name="start"/> (a point on polygon <paramref name="startPoly"/>) toward <paramref name="end"/>,
     /// horizontally (Detour <c>raycast</c>): the segment leaves each polygon through the edge it crosses, and the walk goes on into the
-    /// polygon beyond that edge (<see cref="NavMesh.TryCrossEdge"/>) until the end is inside the current polygon (fraction 1) or the edge
+    /// polygon beyond that edge (<c>NavMesh.TryCrossEdge</c>) until the end is inside the current polygon (fraction 1) or the edge
     /// is a wall, a polygon the filter refuses or a tile that is not loaded (a hit, at the edge). The point is on the mesh surface.
     /// Builds no collection per call (a test measures the allocation). Recast space.
     /// </summary>
@@ -908,6 +944,7 @@ public static class NavMeshQuery
         return Stop(current, start, dx, dz, reached);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static RayResult Stop(NavPolyRef poly, Vector3 start, float dx, float dz, float t)
     {
         Vector3 at = new(start.X + (dx * t), start.Y, start.Z + (dz * t));
@@ -922,14 +959,16 @@ public static class NavMeshQuery
     {
         NavMeshTile tile = poly.Tile;
         NavPoly p = tile.Polys[poly.Poly];
+        Vector3[] vertices = tile.Vertices;
+        int vertCount = p.VertexCount;
         float tMin = 0f;
         float tMax = 1f;
         edge = -1;
         exitT = 1f;
-        for (int i = 0, j = p.VertexCount - 1; i < p.VertexCount; j = i++)
+        for (int i = 0, j = vertCount - 1; i < vertCount; j = i++)
         {
-            Vector3 vj = tile.Vertices[p.Vertex(j)];
-            Vector3 vi = tile.Vertices[p.Vertex(i)];
+            Vector3 vj = vertices[p.Vertex(j)];
+            Vector3 vi = vertices[p.Vertex(i)];
             float ex = vi.X - vj.X;
             float ez = vi.Z - vj.Z;
             float n = (ez * (start.X - vj.X)) - (ex * (start.Z - vj.Z));
@@ -983,10 +1022,10 @@ public static class NavMeshQuery
     public static List<Vector3> StringPull(Vector3 start, IReadOnlyList<(Vector3 Left, Vector3 Right)> portals, Vector3 end)
     {
         ArgumentNullException.ThrowIfNull(portals);
-        var points = new List<Vector3> { start };
+        int portalCount = portals.Count;
+        var points = new List<Vector3>(portalCount + 2) { start };
         Vector3 apex = start, left = start, right = start;
         int leftIndex = -1, rightIndex = -1;
-        int portalCount = portals.Count;
         for (int i = 0; i <= portalCount; i++)
         {
             (Vector3 nl, Vector3 nr) = i < portalCount ? portals[i] : (end, end);
@@ -1042,10 +1081,23 @@ public static class NavMeshQuery
         points.Add(start);
         Vector3 apex = start, left = start, right = start;
         int leftIndex = -1, rightIndex = -1;
-        int portalCount = Math.Max(0, corridor.Count - 1);
+        ReadOnlySpan<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> corridorSpan = CollectionsMarshal.AsSpan(corridor);
+        int portalCount = Math.Max(0, corridorSpan.Length - 1);
         for (int i = 0; i <= portalCount; i++)
         {
-            (Vector3 nl, Vector3 nr) = i < portalCount ? (corridor[i + 1].Left, corridor[i + 1].Right) : (end, end);
+            Vector3 nl;
+            Vector3 nr;
+            if (i < portalCount)
+            {
+                ref readonly (NavPolyRef Poly, Vector3 Left, Vector3 Right) entry = ref corridorSpan[i + 1];
+                nl = entry.Left;
+                nr = entry.Right;
+            }
+            else
+            {
+                nl = end;
+                nr = end;
+            }
 
             // Right side: tighten when the new right point moves inwards (counter-clockwise).
             if (NavMesh.Cross(apex, right, nr) >= 0)
@@ -1087,6 +1139,7 @@ public static class NavMeshQuery
         AddCorner(points, end);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void AddCorner(List<Vector3> points, Vector3 point)
     {
         if (Vector3.DistanceSquared(points[^1], point) > 1e-6f)

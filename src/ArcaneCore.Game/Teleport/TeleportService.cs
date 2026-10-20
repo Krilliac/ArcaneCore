@@ -51,6 +51,9 @@ public sealed class TeleportService
     private readonly Action<Player> _afterAddToMap;
     private readonly ILogger _logger;
     private readonly Dictionary<ObjectGuid, Pending> _pending = [];
+    private readonly List<Pending> _stallScratch = [];
+    private readonly List<Player> _observerScratch = [];
+    private bool _observerScratchInUse;
 
     /// <param name="world">The world whose players this service teleports.</param>
     /// <param name="beforeAddToMap">Sends the packets that precede the player's create block on a new map (vmangos SendInitialPacketsBeforeAddToMap).</param>
@@ -80,8 +83,10 @@ public sealed class TeleportService
     /// <summary>
     /// H1 outcome check: a teleport that sat in one stage past its budget never completed (the client's MSG_MOVE_TELEPORT_ACK or
     /// MSG_MOVE_WORLDPORT_ACK did not arrive, or the scheduled far teleport never ran). One report per teleport
-    /// (<c>teleport/ack-timeout</c>, <c>teleport/far-stuck</c>); the entry stays so a late ack still completes. Runs once a second from
-    /// the world tick; cost is a walk over the pending teleports (normally none). World thread.
+    /// (<c>teleport/ack-timeout</c>, <c>teleport/far-stuck</c>); the entry stays so a late ack still completes, and if it remains
+    /// unacknowledged past the post-report recovery grace it is enforced or cleaned up so the player does not stay wedged. A playerbot
+    /// whose brain has not acknowledged a same-map teleport within <see cref="BotNearAckFallbackMs"/> completes it on the sweep.
+    /// Runs once a second from the world tick; cost is a walk over the pending teleports (normally none). World thread.
     /// </summary>
     /// <param name="nowMs">The world clock (<see cref="WorldRuntime.NowMs"/>).</param>
     public void CheckStalled(uint nowMs)
@@ -91,34 +96,81 @@ public sealed class TeleportService
             return;
         }
 
-        foreach ((ObjectGuid guid, Pending pending) in _pending)
+        _stallScratch.Clear();
+        foreach ((_, Pending pending) in _pending)
         {
-            if (pending.StallReported)
+            _stallScratch.Add(pending);
+        }
+
+        for (int i = 0; i < _stallScratch.Count; i++)
+        {
+            Pending pending = _stallScratch[i];
+            Player player = pending.Player;
+            ObjectGuid guid = player.Guid;
+            if (!_pending.TryGetValue(guid, out Pending? current) || !ReferenceEquals(current, pending))
             {
                 continue;
             }
 
+            if (IsOrphaned(pending))
+            {
+                _pending.Remove(guid);
+                pending.SourceMap.EndTransit(player);
+                continue;
+            }
+
             uint stageMs = unchecked(nowMs - pending.StageSinceMs);
+            if (stageMs > int.MaxValue)
+            {
+                continue;
+            }
+
+            if (pending.Stage == TeleportStage.Near && player.Session.IsPlayerbot && stageMs >= BotNearAckFallbackMs)
+            {
+                HandleTeleportAck(player, guid.Value);
+                continue;
+            }
+
+            if (pending.StallReported)
+            {
+                uint sinceReportMs = unchecked(nowMs - pending.StallReportedAtMs);
+                if (sinceReportMs <= int.MaxValue)
+                {
+                    if (pending.Stage == TeleportStage.Near && sinceReportMs >= NearAckRecoveryGraceMs)
+                    {
+                        HandleTeleportAck(player, guid.Value);
+                    }
+                    else if (pending.Stage == TeleportStage.FarScheduled && sinceReportMs >= ScheduledRecoveryGraceMs)
+                    {
+                        _pending.Remove(guid);
+                        pending.SourceMap.EndTransit(player);
+                    }
+                }
+
+                continue;
+            }
+
             uint budget = pending.Stage switch
             {
                 TeleportStage.Near => NearAckBudgetMs,
                 TeleportStage.Far => FarAckBudgetMs,
                 _ => ScheduledBudgetMs,
             };
-            if (stageMs < budget || stageMs > int.MaxValue)
+            if (stageMs < budget)
             {
                 continue;
             }
 
             pending.StallReported = true;
-            Player? player = _world.FindOnlinePlayer(guid);
+            pending.StallReportedAtMs = nowMs;
+            Player? online = _world.FindOnlinePlayer(guid) ?? (ReferenceEquals(player.Map, pending.SourceMap) ? player : null);
             string detail = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"teleport stuck in stage {pending.Stage} for {stageMs} ms (budget {budget} ms) from map {pending.SourceMap.MapId} to map {pending.Destination.MapId} at {pending.Destination.X:F1},{pending.Destination.Y:F1},{pending.Destination.Z:F1}");
-            string code = pending.Stage is TeleportStage.Near or TeleportStage.Far ? "ack-timeout" : "far-stuck";
-            if (player is not null)
+            string code = pending.Stage is TeleportStage.Near or TeleportStage.Far ? ServerAnomalies.AckTimeout : ServerAnomalies.FarStuck;
+            if (online is not null)
             {
-                ServerAnomalies.Report(player, ServerAnomalies.Teleport, code, detail);
+                ServerAnomalies.Report(online, ServerAnomalies.Teleport, code, detail);
             }
             else
             {
@@ -126,6 +178,20 @@ public sealed class TeleportService
                     ServerAnomalies.Teleport, code, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"player guid {guid.Value:X}"), detail);
             }
         }
+
+        _stallScratch.Clear();
+    }
+
+    private bool IsOrphaned(Pending pending)
+    {
+        Player player = pending.Player;
+        return pending.Stage switch
+        {
+            TeleportStage.Near or TeleportStage.FarScheduled => !ReferenceEquals(player.Map, pending.SourceMap),
+            TeleportStage.Far or TeleportStage.Arriving => player.Map is not null
+                || (!pending.SourceMap.IsInTransit(player) && _world.FindOnlinePlayer(player.Guid) is null),
+            _ => false,
+        };
     }
 
     /// <summary>Longest a same-map teleport may wait for the client's ack before it is reported (client ack is one round trip).</summary>
@@ -136,6 +202,15 @@ public sealed class TeleportService
 
     /// <summary>Longest a scheduled or arriving far teleport may take (both finish within a tick or two).</summary>
     public const uint ScheduledBudgetMs = 10_000;
+
+    /// <summary>Fallback window after which a think-starved playerbot's pending same-map teleport is acknowledged by the stall sweep.</summary>
+    public const uint BotNearAckFallbackMs = 2_000;
+
+    /// <summary>Grace window after <c>teleport/ack-timeout</c> before an unacknowledged near teleport is enforced on a subsequent sweep.</summary>
+    public const uint NearAckRecoveryGraceMs = 90_000;
+
+    /// <summary>Grace window after <c>teleport/far-stuck</c> before an unexecuted scheduled far teleport is cleared on a subsequent sweep.</summary>
+    public const uint ScheduledRecoveryGraceMs = 30_000;
 
     private const uint StallSweepIntervalMs = 1_000;
     private uint _sinceStallSweepMs;
@@ -314,9 +389,12 @@ public sealed class TeleportService
         if (current.MapId == mapId && !staysAboard && (options & TeleportOptions.ForceFar) == 0)
         {
             bool leavesCombat = (options & TeleportOptions.NotLeaveCombat) == 0;
-            _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default)
+            bool preserveHonorless = _pending.TryGetValue(player.Guid, out Pending? existing)
+                && existing.Stage == TeleportStage.Near
+                && existing.HonorlessTarget;
+            _pending[player.Guid] = new Pending(this, player, destination, TeleportStage.Near, current, default)
             {
-                HonorlessTarget = leavesCombat,
+                HonorlessTarget = leavesCombat || preserveHonorless,
                 StartedMs = _world.NowMs,
                 StageSinceMs = _world.NowMs,
             };
@@ -339,13 +417,13 @@ public sealed class TeleportService
             return true;
         }
 
-        var pending = new Pending(destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
+        var pending = new Pending(this, player, destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
         {
             StartedMs = _world.NowMs,
             StageSinceMs = _world.NowMs,
         };
         _pending[player.Guid] = pending;
-        current.RunAfterUpdate(() => ExecuteTeleportFar(player, pending));
+        current.RunAfterUpdate(pending.ExecuteFar);
         return true;
     }
 
@@ -395,10 +473,11 @@ public sealed class TeleportService
         }
 
         TeleportDestination dest = pending.Destination;
-        SendTeleportToObservers(map, player, dest);
+        byte[]? packet = null;
+        SendTeleportToObservers(map, player, dest, ref packet);
         ArriveNear(player, dest);
         VerifyLanding(player, dest, map.MapId);
-        SendTeleportToObservers(map, player, dest);
+        SendTeleportToObservers(map, player, dest, ref packet);
         UpdateZone(map, player);
 
         // vmangos TeleportPositionRelocation runs the zone (or area) update at once; the 1 s zone timer would leave the world states
@@ -452,7 +531,8 @@ public sealed class TeleportService
 
         pending.Stage = TeleportStage.Arriving;
         pending.StageSinceMs = _world.NowMs;
-        _world.Post(() => CompleteTeleportFar(player, pending));
+        pending.StallReported = false;
+        _world.Post(pending.CompleteFar);
         FarStageReached?.Invoke(player, TeleportStage.Arriving);
         return true;
     }
@@ -517,6 +597,7 @@ public sealed class TeleportService
         pending.Stage = TeleportStage.Far;
         pending.StartedMs = _world.NowMs;
         pending.StageSinceMs = pending.StartedMs;
+        pending.StallReported = false;
         if (ship is not null)
         {
             // Still aboard: the movement block keeps the ship and the offset, and the client loads the new map at its place on
@@ -751,28 +832,63 @@ public sealed class TeleportService
     // players within visibility distance of the mover's current position (Map::MessageBroadcast
     // visits the cells within GetVisibilityDistance), except the mover itself. Only clients that
     // have the mover can apply the packet, so the candidates are its observers.
-    private void SendTeleportToObservers(Map map, Player player, TeleportDestination dest)
+    private void SendTeleportToObservers(Map map, Player player, TeleportDestination dest, ref byte[]? packet)
     {
-        MovementInfo moved = player.Movement;
-        moved.X = dest.X;
-        moved.Y = dest.Y;
-        moved.Z = dest.Z;
-        moved.Orientation = dest.Orientation;
-        moved.Time = _world.NowMs;
-        byte[] packet = TeleportPackets.BuildMoveTeleport(player.Guid, moved);
-        foreach (Player observer in map.ObserversOf(player).ToArray())
+        IReadOnlyCollection<Player> observers = map.ObserversOf(player);
+        if (observers.Count == 0)
         {
-            if (!ReferenceEquals(observer, player) && Map.IsWithinVisibilityDistance(observer, player, alreadyVisible: true))
+            return;
+        }
+
+        bool ownsScratch = !_observerScratchInUse;
+        List<Player> snapshot = ownsScratch ? _observerScratch : [];
+        _observerScratchInUse |= ownsScratch;
+        try
+        {
+            snapshot.Clear();
+            snapshot.AddRange(observers);
+            for (int i = 0; i < snapshot.Count; i++)
             {
-                observer.Session.Send(WorldOpcode.MsgMoveTeleport, packet);
+                Player observer = snapshot[i];
+                if (!ReferenceEquals(observer, player) && Map.IsWithinVisibilityDistance(observer, player, alreadyVisible: true))
+                {
+                    if (packet is null)
+                    {
+                        MovementInfo moved = player.Movement;
+                        moved.X = dest.X;
+                        moved.Y = dest.Y;
+                        moved.Z = dest.Z;
+                        moved.Orientation = dest.Orientation;
+                        moved.Time = _world.NowMs;
+                        packet = TeleportPackets.BuildMoveTeleport(player.Guid, moved);
+                    }
+
+                    observer.Session.Send(WorldOpcode.MsgMoveTeleport, packet);
+                }
+            }
+        }
+        finally
+        {
+            if (ownsScratch)
+            {
+                snapshot.Clear();
+                _observerScratchInUse = false;
             }
         }
     }
 
     private const uint SlowTeleportAckThresholdMs = 10_000;
 
-    private sealed class Pending(TeleportDestination destination, TeleportStage stage, Map sourceMap, TeleportDestination origin)
+    private sealed class Pending(
+        TeleportService service,
+        Player player,
+        TeleportDestination destination,
+        TeleportStage stage,
+        Map sourceMap,
+        TeleportDestination origin)
     {
+        public Player Player { get; } = player;
+
         public TeleportDestination Destination { get; } = destination;
 
         public TeleportStage Stage { get; set; } = stage;
@@ -791,5 +907,12 @@ public sealed class TeleportService
 
         /// <summary>Whether the stall of this teleport was reported (one report per teleport).</summary>
         public bool StallReported { get; set; }
+
+        /// <summary>The world clock when <see cref="StallReported"/> was set (recovery grace counts from here).</summary>
+        public uint StallReportedAtMs { get; set; }
+
+        public void ExecuteFar() => service.ExecuteTeleportFar(Player, this);
+
+        public void CompleteFar() => service.CompleteTeleportFar(Player, this);
     }
 }

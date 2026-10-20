@@ -1,7 +1,7 @@
 // Top bar: map picker, coordinate go-to, bookmarks, camera mode, compare mode, capture, theme, HUD, palette.
 
 import { switchMode } from '../camera.js';
-import { parseGoto } from '../goto.js';
+import { LANDMARKS, parseGoto } from '../goto.js';
 import { mapLabel } from '../normalize.js';
 import { fill, formatPoint, h } from '../util.js';
 import { cameraPatch } from '../view.js';
@@ -21,19 +21,31 @@ const COMPARE_OPTIONS = [
     { value: 'diff', label: 'Diff', title: 'Differences between server and reference over a dimmed server view' },
 ];
 
+export const SHADING_OPTIONS = [
+    { value: 0, label: 'Standard', title: 'Standard directional shading (M cycles)' },
+    { value: 1, label: 'Relief', title: 'Elevation relief shading (M cycles)' },
+    { value: 2, label: 'Normals', title: 'Surface normal debug shading (M cycles)' },
+    { value: 3, label: 'Slope', title: 'Slope and walkability angle shading (M cycles)' },
+];
+
 export class TopBar {
     constructor(app, viewport, { onPalette, onShortcuts }) {
         this.app = app;
         this.viewport = viewport;
+        this.shadingMode = 0;
+        this.contours = false;
 
         this.mapSelect = h('select', { class: 'select', title: 'Map', aria: { label: 'Map' }, on: { change: () => this.#changeMap() } });
+        this.landmarkList = h('datalist', { id: 'atlas-landmarks' },
+            LANDMARKS.map((l) => h('option', { value: l.name, text: `Map ${l.map} (${l.x}, ${l.y}, ${l.z})` })));
         this.gotoInput = h('input', {
             class: 'input goto-input',
             type: 'text',
             placeholder: 'x, y, z   or   map x y z',
             spellcheck: false,
             autocomplete: 'off',
-            title: 'Go to a coordinate. Press / to focus. Enter goes; z is optional.',
+            attrs: { list: 'atlas-landmarks' },
+            title: 'Go to a coordinate or landmark. Press / to focus. Enter goes; z is optional.',
             aria: { label: 'Go to coordinate', describedby: 'goto-message' },
             on: {
                 keydown: (e) => {
@@ -60,6 +72,22 @@ export class TopBar {
             onSelect: (compare) => this.app.patchView({ compare }, { immediate: true }),
         });
 
+        this.shading = segmented({
+            label: 'Shading mode',
+            options: SHADING_OPTIONS,
+            onSelect: (mode) => this.setShading(Number(mode), this.contours),
+        });
+        this.shading.update(this.shadingMode);
+
+        this.contoursButton = h('button', {
+            class: 'button',
+            type: 'button',
+            text: 'Contours',
+            title: 'Toggle elevation contour lines (K)',
+            aria: { pressed: 'false' },
+            on: { click: () => this.toggleContours() },
+        });
+
         this.captureButton = h('button', { class: 'button', type: 'button', text: 'Capture', title: 'Save the current view as a PNG' });
         this.capturePanel = h('div', { class: 'capture-panel' });
         this.capturePopover = createPopover(this.captureButton, this.capturePanel, { onOpen: () => this.#renderCapture(), align: 'end' });
@@ -83,10 +111,11 @@ export class TopBar {
         this.element = h('header', { class: 'topbar', role: 'banner' },
             h('div', { class: 'brand', text: 'Atlas' }),
             h('div', { class: 'topbar-group' }, h('label', { class: 'sr-only', for: 'map-select', text: 'Map' }), this.mapSelect),
-            h('div', { class: 'topbar-group goto' }, this.gotoInput, this.gotoButton, this.gotoMessage),
+            h('div', { class: 'topbar-group goto' }, this.gotoInput, this.landmarkList, this.gotoButton, this.gotoMessage),
             h('div', { class: 'topbar-group popover-host' }, this.bookmarkButton, this.bookmarkPanel),
             h('div', { class: 'topbar-group' }, this.camera.element),
             h('div', { class: 'topbar-group' }, this.compare.element),
+            h('div', { class: 'topbar-group tb-group-shading' }, this.shading.element, this.contoursButton),
             h('div', { class: 'topbar-spacer' }),
             h('div', { class: 'topbar-group popover-host' }, this.captureButton, this.capturePanel),
             h('div', { class: 'topbar-group' }, this.themeButton, this.hudButton, this.paletteButton, this.helpButton));
@@ -100,12 +129,35 @@ export class TopBar {
         this.update();
     }
 
+    /** Sets terrain shading mode (0..3) and contour lines flag on the renderer and marks the viewport dirty. */
+    setShading(mode = this.shadingMode, contours = this.contours) {
+        this.shadingMode = ((Number(mode) || 0) % 4 + 4) % 4;
+        this.contours = Boolean(contours);
+        this.shading.update(this.shadingMode);
+        this.contoursButton.setAttribute('aria-pressed', this.contours ? 'true' : 'false');
+        this.contoursButton.classList.toggle('is-on', this.contours);
+        const vp = this.app.viewport ?? this.viewport;
+        vp?.renderer?.setShading?.({ mode: this.shadingMode, contours: this.contours });
+        vp?.markDirty?.();
+        vp?.requestRender?.();
+    }
+
+    cycleShading() {
+        this.setShading((this.shadingMode + 1) % 4, this.contours);
+    }
+
+    toggleContours() {
+        this.setShading(this.shadingMode, !this.contours);
+    }
+
     /** Reflects the view, map list and command list in the controls. */
     update() {
         const { app } = this;
         const view = app.view;
         this.camera.update(view.camera.mode);
         this.compare.update(view.compare);
+        this.shading.update(this.shadingMode);
+        this.contoursButton.setAttribute('aria-pressed', this.contours ? 'true' : 'false');
         const map = view.map;
         const wanted = new Set([...app.maps.map((m) => m.id), map]);
         const key = [...wanted].sort((a, b) => a - b).join(',');
@@ -203,6 +255,23 @@ export class TopBar {
                     on: { click: () => this.#removeBookmark(b) },
                 })));
         }
+        const landmarkList = h('ul', { class: 'bookmark-list landmark-list', role: 'list' });
+        for (const lm of LANDMARKS) {
+            const at = [lm.x, lm.y, lm.z];
+            landmarkList.append(h('li', { class: 'bookmark-row' },
+                h('button', {
+                    class: 'bookmark-go',
+                    type: 'button',
+                    title: `${lm.name}: map ${lm.map}, ${formatPoint(at, 1)}`,
+                    on: {
+                        click: () => {
+                            this.bookmarkPopover.close();
+                            const camera = app.view.camera;
+                            app.patchView({ map: lm.map, ...cameraPatch({ ...camera, target: at }) }, { immediate: true });
+                        },
+                    },
+                }, h('span', { class: 'bookmark-name', text: lm.name }), h('span', { class: 'bookmark-where num', text: `M${lm.map} · ${formatPoint(at, 0)}` }))));
+        }
         const name = h('input', { class: 'input', type: 'text', placeholder: 'Name this view', spellcheck: false, aria: { label: 'Bookmark name' } });
         const add = async () => {
             const value = name.value.trim();
@@ -227,7 +296,7 @@ export class TopBar {
         const form = app.hasCommand('bookmark.add')
             ? h('div', { class: 'bookmark-add' }, name, button('Add', add, { title: 'Save the current camera under this name' }))
             : null;
-        fill(this.bookmarkPanel, list, form);
+        fill(this.bookmarkPanel, list, form, h('h4', { class: 'section-title', text: 'Classic Landmarks' }), landmarkList);
     }
 
     async #goBookmark(b) {

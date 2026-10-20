@@ -48,6 +48,18 @@ internal static class PlayerbotMotion
     /// <summary>Destinations closer than this are the same place for loop detection and the blacklist.</summary>
     internal const float SamePlaceYards = 5f;
 
+    /// <summary>
+    /// Consecutive step or packet rejections towards the same destination before the motion blacklists the stuck target
+    /// and sets <c>LoopPending</c> so the caller drops its route and replans instead of spinning 50+ times.
+    /// </summary>
+    internal const int MaxRejectionsBeforeLoop = 3;
+
+    /// <summary>
+    /// Minimum height above the walkable floor at which an un-surfaced leg or direct-step start is draped onto the floor
+    /// (up to <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>).
+    /// </summary>
+    internal const float DirectStepDrapeMinYards = 2.5f;
+
     private static readonly ConditionalWeakTable<Player, MotionState> States = [];
 
     internal sealed class MotionState
@@ -78,6 +90,8 @@ internal static class PlayerbotMotion
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
         internal int LoopCount;
+        internal int ConsecutiveRejections;
+        internal Vector3 LastRejectedDestination;
         internal uint Packets;
         /// <summary>The outcome checks' rate limits and samples (<see cref="PlayerbotMotionAnomalies"/>).</summary>
         internal readonly PlayerbotMotionAnomalies.MotionWatch Watch = new();
@@ -108,6 +122,10 @@ internal static class PlayerbotMotion
 
     /// <summary>Loops detected so far (inspection).</summary>
     internal static int LoopCount(Player player) => States.TryGetValue(player, out MotionState? state) ? state.LoopCount : 0;
+
+    /// <summary>Consecutive rejected movement attempts towards the current destination (inspection).</summary>
+    internal static int ConsecutiveRejections(Player player)
+        => States.TryGetValue(player, out MotionState? state) ? state.ConsecutiveRejections : 0;
 
     /// <summary>True once after a loop was detected: the brain drops its current target and intent.</summary>
     internal static bool ConsumeLoop(Player player)
@@ -143,6 +161,8 @@ internal static class PlayerbotMotion
         state.Loops.Reset();
         state.Blacklist.Clear();
         state.LoopPending = false;
+        state.ConsecutiveRejections = 0;
+        state.LastRejectedDestination = default;
     }
 
     /// <summary>Whether <paramref name="destination"/> was given up after a loop and is still refused.</summary>
@@ -230,17 +250,37 @@ internal static class PlayerbotMotion
                 state.Speed * Age(now, state.AnchorMs) / 1000f, state.Heading, out int reached, out _, out _, out _);
             current = Validate(map, state.Route!, state.Route!.NextPoint, reached, state.Anchor, position) ?? state.Anchor;
         }
+        else if (!moving && !route.LegsNavigated(route.NextPoint, route.NextPoint))
+        {
+            TrySnapDirectStepStart(map, player, ref current);
+        }
 
         float skipDistance = moving ? 0.30f : 0.05f;
         while (route.NextPoint < route.Points.Count - 1 && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= skipDistance)
             route.NextPoint++;
         // The first stretch must be walkable before anything is announced.
-        Vector3 probe = Walk(route, current, route.NextPoint, MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f)),
+        float probeStep = MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f));
+        Vector3 probe = Walk(route, current, route.NextPoint, probeStep,
             HeadingTo(current, route.Points[route.NextPoint]), out int probed, out _, out _, out _);
         bool noStretch = Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f;
-        if (noStretch || Validate(map, route, route.NextPoint, probed, current, probe) is null)
+        string? rejectReason = null;
+        Vector3? validStart = noStretch ? null : Validate(map, route, route.NextPoint, probed, current, probe, out rejectReason);
+        if (!noStretch && validStart is null && TrySkipBlockedMicroCorner(map, player, route, ref current, probeStep, out probe, out probed, out validStart, out rejectReason))
         {
-            if (!noStretch) PlayerbotMotionAnomalies.ReportStartBlocked(session, player, route, current, now);
+            noStretch = false;
+        }
+
+        if (noStretch || validStart is null)
+        {
+            if (!noStretch)
+            {
+                string mode = MoveModeOf(route, route.NextPoint, probed);
+                TrySnapPlayerToFloor(map, player, ref current);
+                AdvancePastRejectedWaypoint(route, current);
+                int consecutive = NoteStepRejected(session, player, state, route, now);
+                PlayerbotMotionAnomalies.ReportStartBlocked(session, player, route, current, now, consecutive, rejectReason ?? "NoGroundSupport", mode);
+            }
+
             if (!keepMotion) Stop(session, player);
             return false;
         }
@@ -253,11 +293,20 @@ internal static class PlayerbotMotion
         {
             // A start the caller's action budget refused is its own back-off, not the server refusing the move.
             if (hadBudget || moving)
-                PlayerbotMotionAnomalies.ReportMoveRejected(session, player, opcode.ToString(), current, now);
+            {
+                string mode = MoveModeOf(route, route.NextPoint, probed);
+                TrySnapPlayerToFloor(map, player, ref current);
+                AdvancePastRejectedWaypoint(route, current);
+                int consecutive = NoteStepRejected(session, player, state, route, now);
+                PlayerbotMotionAnomalies.ReportMoveRejected(session, player, opcode.ToString(), current, now, consecutive, "NoGroundSupport", mode);
+            }
+
             if (!moving) state.Clear();
             return false;
         }
 
+        state.ConsecutiveRejections = 0;
+        state.LastRejectedDestination = default;
         state.Route = route;
         state.Map = map;
         state.Anchor = current;
@@ -333,27 +382,37 @@ internal static class PlayerbotMotion
         bool entering = PlayerbotAreaTriggers.WouldEnter(session, player, map, position, tracker);
         if (arrived)
         {
-            StopAt(session, player, state, position, heading, nextPoint, now);
-            if (ReferenceEquals(player.Map, map)) PlayerbotAreaTriggers.Update(session, player, map, position, tracker);
+            Vector3 arrivedAt = Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) ?? position;
+            StopAt(session, player, state, arrivedAt, heading, nextPoint, now);
+            if (ReferenceEquals(player.Map, map)) PlayerbotAreaTriggers.Update(session, player, map, arrivedAt, tracker);
             return;
         }
 
         if (!turned && !entering && age < HeartbeatIntervalMs) return;
-        if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is not { } valid)
+        if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position, out string? rejectReason) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
-            PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now);
-            StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
+            string mode = MoveModeOf(route, route.NextPoint, nextPoint);
+            int rejectedFrom = route.NextPoint;
+            AdvancePastRejectedWaypoint(route, state.Anchor);
+            int consecutive = NoteStepRejected(session, player, state, route, now);
+            PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now, consecutive, rejectReason ?? "NoGroundSupport", mode);
+            StopAt(session, player, state, state.Anchor, state.Heading, Math.Max(rejectedFrom, route.NextPoint), now);
             return;
         }
 
         if (!Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
         {
-            PlayerbotMotionAnomalies.ReportMoveRejected(session, player, "a heartbeat", valid, now);
+            string mode = MoveModeOf(route, route.NextPoint, nextPoint);
+            AdvancePastRejectedWaypoint(route, state.Anchor);
+            int consecutive = NoteStepRejected(session, player, state, route, now);
+            PlayerbotMotionAnomalies.ReportMoveRejected(session, player, "a heartbeat", valid, now, consecutive, "NoGroundSupport", mode);
             state.Clear();
             return;
         }
 
+        state.ConsecutiveRejections = 0;
+        state.LastRejectedDestination = default;
         int walkedFrom = route.NextPoint;
         route.NextPoint = nextPoint;
         float travelled = Vector2.Distance(Flat(state.Anchor), Flat(valid));
@@ -463,6 +522,8 @@ internal static class PlayerbotMotion
         if (!States.TryGetValue(player, out MotionState? state)) return;
         state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(place)) <= SamePlaceYards * 2);
         state.LoopPending = false;
+        state.ConsecutiveRejections = 0;
+        state.LastRejectedDestination = default;
     }
 
     /// <summary>
@@ -687,15 +748,27 @@ internal static class PlayerbotMotion
     /// <param name="fromPoint">The point the walk was heading for from <paramref name="from"/> (its leg ends there).</param>
     /// <param name="toPoint">The point the walk heads for at <paramref name="candidate"/>: every leg in between is checked by its own proof.</param>
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
+        => Validate(map, route, fromPoint, toPoint, from, candidate, out _);
+
+    private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
+        out string? rejectReason)
     {
-        if (!Finite(candidate)) return null;
+        rejectReason = null;
+        if (!Finite(candidate))
+        {
+            rejectReason = "NonFiniteCoordinate";
+            return null;
+        }
+
         bool navigated = route.LegsNavigated(fromPoint, toPoint);
+        bool hasMeshSurface = false;
         if (navigated && MeshSurface(map.Collision, route, fromPoint, toPoint, from, candidate) is { } surface)
         {
             // The leg is a straight line between string-pulled corners, so its own height is a chord: through the hill, over the hollow,
             // under the ramp. The mesh's surface under the walk is where the floor is (live: bots 8-30 yd under the terrain and 6-10 yd
             // above it in the open, under the Ironforge ramps, 2-5 yd under the Loch Modan tunnel floor).
             candidate = candidate with { Z = surface };
+            hasMeshSurface = true;
         }
 
         float maxCeilingZ = MathF.Max(from.Z, candidate.Z) + 1.25f;
@@ -711,16 +784,112 @@ internal static class PlayerbotMotion
                 if (MathF.Abs(best - candidate.Z) <= 1.25f) break;
             }
 
+            if (float.IsNaN(best) && !hasMeshSurface)
+            {
+                float directFloor = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
+                if (ValidHeight(directFloor)
+                    && candidate.Z - directFloor > DirectStepDrapeMinYards
+                    && candidate.Z - directFloor <= PlayerbotMoveCheck.DirectStepMaxDrapeYards)
+                {
+                    best = directFloor;
+                }
+            }
+
             if (float.IsNaN(best)) return candidate;
             return candidate with { Z = best + 0.05f };
         }
 
-        float ground = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
-        if (!ValidHeight(ground) || MathF.Abs(ground - candidate.Z) > 2f)
+        // Non-navigated (DirectStep / stepped / trail) leg: validate and drape onto the walkable floor via PlayerbotMoveCheck.
+        if (!PlayerbotMoveCheck.TryValidateStep(map, from, candidate, out Vector3 draped, out rejectReason))
             return null;
-        // Doodads (fences, trees, rocks) block a stepped leg too: the server does not collide a managed bot's movement.
-        if (!PlayerbotMoveCheck.LineClear(map.Collision, from, candidate with { Z = ground })) return null;
-        return candidate with { Z = ground + 0.05f };
+        return draped;
+    }
+
+    private static string MoveModeOf(PlayerbotRoute route, int fromPoint, int toPoint)
+        => route.LegsNavigated(fromPoint, toPoint) ? "NavMesh" : "DirectStep";
+
+    private static void TrySnapDirectStepStart(Map map, Player player, ref Vector3 current)
+    {
+        float floor = ResolveWalkFloor(map, current.X, current.Y, current.Z, 0f, current.Z + 2.25f);
+        if (!ValidHeight(floor))
+            floor = ResolveWalkFloor(map, current.X, current.Y, current.Z, 2f, current.Z + 2.25f);
+        if (!ValidHeight(floor)) return;
+        float delta = current.Z - floor;
+        if ((delta > DirectStepDrapeMinYards && delta <= PlayerbotMoveCheck.DirectStepMaxDrapeYards)
+            || (delta < -0.10f && delta >= -PlayerbotMoveCheck.DirectStepMaxStepUpYards))
+        {
+            current = current with { Z = floor + 0.05f };
+            player.SetPosition(current.X, current.Y, current.Z, player.Orientation);
+        }
+    }
+
+    private static void TrySnapPlayerToFloor(Map map, Player player, ref Vector3 current)
+    {
+        float floor = ResolveWalkFloor(map, current.X, current.Y, current.Z, 0f, current.Z + 2.25f);
+        if (!ValidHeight(floor) || MathF.Abs(floor - current.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards)
+        {
+            float raised = ResolveWalkFloor(map, current.X, current.Y, current.Z, 2f, current.Z + 2.25f);
+            if (ValidHeight(raised)) floor = raised;
+        }
+
+        if (!ValidHeight(floor)) return;
+        float delta = current.Z - floor;
+        if (delta < -PlayerbotMoveCheck.DirectStepMaxStepUpYards || delta > PlayerbotMoveCheck.DirectStepMaxDrapeYards) return;
+        current = current with { Z = floor + 0.05f };
+        player.SetPosition(current.X, current.Y, current.Z, player.Orientation);
+    }
+
+    private static bool TrySkipBlockedMicroCorner(Map map, Player player, PlayerbotRoute route, ref Vector3 current, float probeStep,
+        out Vector3 probe, out int probed, out Vector3? validStart, out string? rejectReason)
+    {
+        probe = default;
+        probed = route.NextPoint;
+        validStart = null;
+        rejectReason = null;
+        TrySnapPlayerToFloor(map, player, ref current);
+        if (route.NextPoint < route.Points.Count - 1
+            && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= 2.5f)
+        {
+            route.NextPoint++;
+        }
+
+        probe = Walk(route, current, route.NextPoint, probeStep,
+            HeadingTo(current, route.Points[route.NextPoint]), out probed, out _, out _, out _);
+        if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f) return false;
+        validStart = Validate(map, route, route.NextPoint, probed, current, probe, out rejectReason);
+        return validStart is not null;
+    }
+
+    private static void AdvancePastRejectedWaypoint(PlayerbotRoute route, Vector3 from)
+    {
+        if (route.NextPoint < route.Points.Count - 1
+            && Vector2.Distance(Flat(from), Flat(route.Points[route.NextPoint])) <= SamePlaceYards)
+        {
+            route.NextPoint++;
+        }
+    }
+
+    private static int NoteStepRejected(WorldSession session, Player player, MotionState state, PlayerbotRoute route, uint now)
+    {
+        Vector3 destination = route.Points[^1];
+        if (state.ConsecutiveRejections > 0 && Vector2.Distance(Flat(state.LastRejectedDestination), Flat(destination)) <= SamePlaceYards)
+        {
+            state.ConsecutiveRejections++;
+        }
+        else
+        {
+            state.ConsecutiveRejections = 1;
+            state.LastRejectedDestination = destination;
+        }
+
+        int consecutive = state.ConsecutiveRejections;
+        if (consecutive >= MaxRejectionsBeforeLoop)
+        {
+            Vector3 waypoint = route.Points[Math.Clamp(route.NextPoint, 0, route.Points.Count - 1)];
+            GiveUp(session, player, state, [destination, waypoint], now);
+        }
+
+        return consecutive;
     }
 
     /// <summary>
@@ -773,7 +942,7 @@ internal static class PlayerbotMotion
     /// Resolve the walkable floor near <paramref name="z"/> without snapping onto overhead M2/WMO props (tree branches, bushes, fences,
     /// roof eaves) that <see cref="MapCollision.GetHeight"/> prefers whenever <c>modelHeight &gt; mapHeight</c>.
     /// </summary>
-    private static float ResolveWalkFloor(Map map, float x, float y, float z, float raise, float maxCeilingZ)
+    internal static float ResolveWalkFloor(Map map, float x, float y, float z, float raise, float maxCeilingZ)
     {
         float terrain = map.Terrain.GetHeight(x, y, z);
         float floor = map.Collision.GetHeight(x, y, z + raise);
@@ -793,7 +962,7 @@ internal static class PlayerbotMotion
 
     private static readonly float[] MeshFloorProbes = [0f, 4f];
 
-    private static bool ValidHeight(float height)
+    internal static bool ValidHeight(float height)
         => float.IsFinite(height) && height != TerrainTile.InvalidHeight && height != TerrainTile.InvalidHeightValue;
 
     /// <summary>A stun, fear or confusion: the bot does not walk its own routes (<see cref="Pump"/> stops it, nothing starts it) until it ends.</summary>

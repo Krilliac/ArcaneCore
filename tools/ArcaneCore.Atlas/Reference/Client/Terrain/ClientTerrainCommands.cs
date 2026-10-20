@@ -6,8 +6,9 @@ using ArcaneCore.Atlas.Core.Commands;
 namespace ArcaneCore.Atlas.Reference.Client.Terrain;
 
 /// <summary>
-/// The commands the client terrain module adds: <c>ref.query.height</c> (what the client's ADT says at a point) and
-/// <c>ref.adt.info</c> (a summary of one tile's ADT). Handlers run on request threads and only read through
+/// The commands the client terrain module adds: <c>ref.query.height</c> (what the client's ADT says at a point),
+/// <c>ref.adt.info</c> (a summary of one tile's ADT), and <c>client.terrain.analyze</c> (elevation relief, slope, hole,
+/// liquid coverage, and area analysis for a tile). Handlers run on request threads and only read through
 /// <see cref="ClientTerrainService"/>, which is thread-safe.
 /// </summary>
 internal static class ClientTerrainCommands
@@ -18,16 +19,19 @@ internal static class ClientTerrainCommands
     /// <summary>Name of the tile summary.</summary>
     public const string InfoName = "ref.adt.info";
 
+    /// <summary>Name of the tile terrain analysis command.</summary>
+    public const string AnalyzeName = "client.terrain.analyze";
+
     private const int MaxListedAreas = 16;
     private const int MaxListedWmos = 32;
 
-    /// <summary>Adds both commands to <paramref name="registry"/>.</summary>
+    /// <summary>Adds the client terrain commands to <paramref name="registry"/>.</summary>
     public static void Register(CommandRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
         registry.Register(new CommandDefinition(
             HeightName,
-            "Client terrain height and liquid levels at a world position, read from the 1.12.1 ADT (the reference counterpart of query.height).",
+            "Client terrain height, surface normal, slope and liquid levels at a world position, read from the 1.12.1 ADT (the reference counterpart of query.height).",
             [
                 new CommandArg("map", ArgType.Integer, "Map id (Map.dbc).", Required: true),
                 new CommandArg("at", ArgType.Point3, "World position [x, y, z] (x north, y west, z up, yards). Z only sets deltaZ and depth; the query is by x and y.", Required: true),
@@ -42,6 +46,15 @@ internal static class ClientTerrainCommands
                 new CommandArg("y", ArgType.Integer, "Server tile Y (0..63; west, from world Y).", Required: true),
             ],
             Info));
+        registry.Register(new CommandDefinition(
+            AnalyzeName,
+            "Analyzes one tile's client ADT terrain: elevation min/max/mean, steep-triangle count/ratio, hole count, liquid coverage ratio, unique AreaIds, and steepest-chunk overlay.",
+            [
+                new CommandArg("map", ArgType.Integer, "Map id (Map.dbc).", Required: true),
+                new CommandArg("tileX", ArgType.Integer, "Server tile X (0..63; north, from world X).", Required: true),
+                new CommandArg("tileY", ArgType.Integer, "Server tile Y (0..63; west, from world Y).", Required: true),
+            ],
+            Analyze));
     }
 
     private static Task<JsonNode?> Height(CommandInvocation call, CancellationToken cancellationToken)
@@ -68,7 +81,7 @@ internal static class ClientTerrainCommands
         if (load.File is { } adt)
         {
             TerrainSample? sample = AdtGeometry.SampleAt(adt, tile, at.X, at.Y);
-            result["terrain"] = sample is { } s ? TerrainJson(s, adt, at, service, points) : null;
+            result["terrain"] = sample is { } s ? TerrainJson(s, adt, tile, at, service, points) : null;
             result["liquid"] = LiquidJson(adt, tile, at, sample, points);
         }
 
@@ -122,6 +135,87 @@ internal static class ClientTerrainCommands
         return Task.FromResult<JsonNode?>(result);
     }
 
+    private static Task<JsonNode?> Analyze(CommandInvocation call, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        uint mapId = call.GetMapId();
+        long tileX = call.GetInt("tileX");
+        long tileY = call.GetInt("tileY");
+        if (tileX is < 0 or >= WorldGrid.TilesPerSide || tileY is < 0 or >= WorldGrid.TilesPerSide)
+        {
+            throw new CommandException(CommandException.BadArguments, $"{AnalyzeName}: tile ({tileX}, {tileY}) must be inside 0..{WorldGrid.TilesPerSide - 1}.");
+        }
+
+        ClientTerrainService service = call.Service<ClientTerrainService>();
+        ClientMap map = RequireMap(service, mapId, AnalyzeName);
+        var tile = new TileKey(mapId, (int)tileX, (int)tileY);
+        AdtLoad load = service.LoadAdt(tile);
+        var result = new JsonObject
+        {
+            ["map"] = mapId,
+            ["mapName"] = map.Name,
+            ["tile"] = new JsonArray(mapId, tile.X, tile.Y),
+            ["adt"] = FileJson(load),
+        };
+
+        var boxes = new JsonArray();
+        if (load.File is { } adt)
+        {
+            TerrainTileAnalysis analysis = ClientTerrainGeometry.AnalyzeTile(tile, adt);
+            result["elevation"] = new JsonObject
+            {
+                ["min"] = FiniteOrNull(analysis.MinElevation),
+                ["max"] = FiniteOrNull(analysis.MaxElevation),
+                ["mean"] = FiniteOrNull(analysis.MeanElevation),
+            };
+            result["steepTriangles"] = analysis.SteepTriangles;
+            result["totalTriangles"] = analysis.TotalTriangles;
+            result["steepTriangleRatio"] = analysis.SteepTriangleRatio;
+            result["holeCount"] = analysis.HoleSquares;
+            result["liquidSquares"] = analysis.LiquidSquares;
+            result["liquidCoverageRatio"] = analysis.LiquidCoverageRatio;
+
+            var areaIds = new JsonArray();
+            foreach (uint areaId in analysis.AreaIds)
+            {
+                areaIds.Add(areaId);
+            }
+
+            result["areaIds"] = areaIds;
+
+            var steepest = new JsonArray();
+            WorldPoint origin = WorldGrid.Origin(tile);
+            double chunkSize = WorldGrid.TileSize / AdtFile.ChunksPerSide;
+            foreach (TerrainChunkSteepness c in analysis.SteepestChunks)
+            {
+                steepest.Add(new JsonObject
+                {
+                    ["chunkIndex"] = c.ChunkIndex,
+                    ["chunk"] = new JsonArray(c.ChunkRow, c.ChunkColumn),
+                    ["steepTriangles"] = c.SteepTriangles,
+                    ["totalTriangles"] = c.TotalTriangles,
+                    ["maxSlopeDegrees"] = c.MaxSlopeDegrees,
+                });
+
+                double maxX = origin.X - (c.ChunkRow * chunkSize);
+                double minX = maxX - chunkSize;
+                double maxY = origin.Y - (c.ChunkColumn * chunkSize);
+                double minY = maxY - chunkSize;
+                boxes.Add(new JsonObject
+                {
+                    ["min"] = new JsonArray(minX, minY, c.MinZ),
+                    ["max"] = new JsonArray(maxX, maxY, c.MaxZ),
+                    ["label"] = string.Create(CultureInfo.InvariantCulture, $"steep MCNK ({c.ChunkRow}, {c.ChunkColumn}) max={c.MaxSlopeDegrees:F1} deg ({c.SteepTriangles} tris)"),
+                });
+            }
+
+            result["steepestChunks"] = steepest;
+        }
+
+        result["overlay"] = new JsonObject { ["boxes"] = boxes };
+        return Task.FromResult<JsonNode?>(result);
+    }
+
     private static ClientMap RequireMap(ClientTerrainService service, uint mapId, string command)
     {
         if (service.Files is null)
@@ -152,6 +246,8 @@ internal static class ClientTerrainCommands
 
     private static JsonArray Point(WorldPoint p) => new(p.X, p.Y, p.Z);
 
+    private static JsonNode? FiniteOrNull(double value) => double.IsFinite(value) ? JsonValue.Create(value) : null;
+
     private static JsonObject FileJson(AdtLoad load) => new()
     {
         ["path"] = load.Path,
@@ -161,14 +257,26 @@ internal static class ClientTerrainCommands
         ["bytes"] = load.File?.ByteLength,
     };
 
-    private static JsonObject TerrainJson(TerrainSample s, AdtFile adt, WorldPoint at, ClientTerrainService service, JsonArray points)
+    private static JsonObject TerrainJson(TerrainSample s, AdtFile adt, TileKey tile, WorldPoint at, ClientTerrainService service, JsonArray points)
     {
         AdtChunk chunk = adt.Chunk(s.ChunkRow, s.ChunkColumn);
+        TerrainSurfaceSample? surface = ClientTerrainGeometry.SampleSurfaceAt(adt, tile, at.X, at.Y);
         var terrain = new JsonObject
         {
             ["hole"] = s.IsHole,
             ["z"] = s.IsHole ? null : s.Z,
             ["deltaZ"] = s.IsHole ? null : at.Z - s.Z,
+            ["normal"] = surface is { Terrain.IsHole: false } sf
+                ? new JsonObject
+                {
+                    ["x"] = sf.Normal.X,
+                    ["y"] = sf.Normal.Y,
+                    ["z"] = sf.Normal.Z,
+                }
+                : null,
+            ["slopeDegrees"] = surface is { Terrain.IsHole: false } sfSlope ? sfSlope.SlopeDegrees : null,
+            ["walkableSlope"] = surface is { Terrain.IsHole: false } sfWalk && sfWalk.WalkableSlope,
+            ["liquidDepth"] = surface?.LiquidDepth ?? 0.0,
             ["chunk"] = new JsonArray(s.ChunkRow, s.ChunkColumn),
             ["square"] = new JsonArray(s.SquareRow, s.SquareColumn),
             ["triangle"] = s.IsHole ? null : s.Triangle,

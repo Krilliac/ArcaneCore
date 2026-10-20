@@ -14,6 +14,12 @@ public static class ServerAnomalies
     /// <summary>Subsystem of the teleport checks.</summary>
     public const string Teleport = "teleport";
 
+    /// <summary>Anomaly code for a near or far teleport whose client acknowledgement timed out.</summary>
+    public const string AckTimeout = "ack-timeout";
+
+    /// <summary>Anomaly code for a scheduled or arriving far teleport that did not run within its budget.</summary>
+    public const string FarStuck = "far-stuck";
+
     /// <summary>Subsystem of the death and resurrection checks.</summary>
     public const string Death = "death";
 
@@ -34,10 +40,10 @@ public static class ServerAnomalies
     public static AnomalyRecording Report(Player player, string subsystem, string code, string detail, AnomalySeverity severity = AnomalySeverity.Warning)
     {
         ArgumentNullException.ThrowIfNull(player);
-        string where = float.IsFinite(player.X) && float.IsFinite(player.Y) && float.IsFinite(player.Z)
-            ? string.Create(CultureInfo.InvariantCulture, $" | map {player.MapId} at {player.X:F1},{player.Y:F1},{player.Z:F1}")
-            : string.Create(CultureInfo.InvariantCulture, $" | map {player.MapId} at a non-finite position");
-        return AnomalyLedger.Shared.Report(subsystem, code, SubjectOf(player), detail + where, severity);
+        string fullDetail = float.IsFinite(player.X) && float.IsFinite(player.Y) && float.IsFinite(player.Z)
+            ? string.Create(CultureInfo.InvariantCulture, $"{detail} | map {player.MapId} at {player.X:F1},{player.Y:F1},{player.Z:F1}")
+            : string.Create(CultureInfo.InvariantCulture, $"{detail} | map {player.MapId} at a non-finite position");
+        return AnomalyLedger.Shared.Report(subsystem, code, SubjectOf(player), fullDetail, severity);
     }
 
     /// <summary>A capture of one player's reports from the shared ledger (tests).</summary>

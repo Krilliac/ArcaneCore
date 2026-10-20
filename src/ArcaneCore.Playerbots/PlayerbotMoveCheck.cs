@@ -22,8 +22,8 @@ namespace ArcaneCore.World.Playerbots;
 /// <para>
 /// Cost: one raycast (a bounded polygon walk, no allocation, <see cref="PathOptions"/> shared) and one vmap segment query per leg, a
 /// handful more (<see cref="CutSearchSteps"/>) only when the segment is blocked. Callers run it per leg when a route is planned, not
-/// per tick; the per-step checks of a stepped route (<see cref="PlayerbotMotion"/>) use <see cref="LineClear"/> alone. No allocation
-/// apart from the route a caller asks for. World thread.
+/// per tick; the per-step checks of a stepped route (<see cref="PlayerbotMotion"/>) use <see cref="TryValidateStep"/> and <see cref="LineClear"/>.
+/// No allocation apart from the route a caller asks for. World thread.
 /// </para>
 /// </summary>
 internal static class PlayerbotMoveCheck
@@ -40,6 +40,16 @@ internal static class PlayerbotMoveCheck
     /// <summary>Bisection steps that find where a blocked segment first blocks (1/64 of its length).</summary>
     internal const int CutSearchSteps = 6;
 
+    /// <summary>Maximum upward step onto a walkable floor for a non-navigated (<c>DirectStep</c>) step.</summary>
+    internal const float DirectStepMaxStepUpYards = 2f;
+
+    /// <summary>
+    /// Maximum downward distance from an un-draped <c>DirectStep</c> candidate height to the walkable floor beneath it that may be
+    /// draped onto the floor instead of floating in mid-air or failing support (covers 6..10 yd elevation drift while still rejecting
+    /// 30 yd voids/cliffs).
+    /// </summary>
+    internal const float DirectStepMaxDrapeYards = 11f;
+
     /// <summary>How far past a mesh edge the "is there mesh beyond" probe is taken.</summary>
     private const float BeyondYards = 1f;
 
@@ -50,6 +60,52 @@ internal static class PlayerbotMoveCheck
     internal static bool LineClear(MapCollision collision, Vector3 from, Vector3 to)
         => collision.LineOfSight.IsInLineOfSight(collision.Map.MapId,
             new Vector3(from.X, from.Y, from.Z + ChestYards), new Vector3(to.X, to.Y, to.Z + ChestYards), ignoreM2: false);
+
+    /// <summary>
+    /// Validate and floor-drape a non-navigated (<c>DirectStep</c>) step from <paramref name="from"/> to <paramref name="to"/>.
+    /// Resolves the walkable floor at <paramref name="to"/>, drapes elevated candidate heights within <see cref="DirectStepMaxDrapeYards"/>
+    /// onto <c>ground + 0.05f</c>, and verifies chest-height line of sight. Returns false with <paramref name="rejectReason"/> when no
+    /// valid ground support exists or the line of sight is blocked.
+    /// </summary>
+    internal static bool TryValidateStep(Map map, Vector3 from, Vector3 to, out Vector3 drapedTo, out string? rejectReason)
+    {
+        drapedTo = to;
+        if (!IsFinite(from) || !IsFinite(to))
+        {
+            rejectReason = "NonFiniteCoordinate";
+            return false;
+        }
+
+        float maxCeilingZ = MathF.Max(from.Z, to.Z) + 1.25f;
+        float ground = PlayerbotMotion.ResolveWalkFloor(map, to.X, to.Y, to.Z, 0f, maxCeilingZ);
+        if (!PlayerbotMotion.ValidHeight(ground) || ground - to.Z > DirectStepMaxStepUpYards || to.Z - ground > DirectStepMaxDrapeYards)
+        {
+            float raised = PlayerbotMotion.ResolveWalkFloor(map, to.X, to.Y, to.Z, DirectStepMaxStepUpYards, maxCeilingZ);
+            if (PlayerbotMotion.ValidHeight(raised)
+                && raised - to.Z <= DirectStepMaxStepUpYards
+                && to.Z - raised <= DirectStepMaxDrapeYards)
+            {
+                ground = raised;
+            }
+        }
+
+        if (!PlayerbotMotion.ValidHeight(ground) || ground - to.Z > DirectStepMaxStepUpYards || to.Z - ground > DirectStepMaxDrapeYards)
+        {
+            rejectReason = "NoGroundSupport";
+            return false;
+        }
+
+        Vector3 grounded = to with { Z = ground };
+        if (!LineClear(map.Collision, from, grounded))
+        {
+            rejectReason = "LineBlocked";
+            return false;
+        }
+
+        drapedTo = to with { Z = ground + 0.05f };
+        rejectReason = null;
+        return true;
+    }
 
     /// <summary>Whether the whole leg from <paramref name="from"/> to <paramref name="to"/> may be walked as it is (not cut, not refused).</summary>
     internal static bool CanStep(Map map, Vector3 from, Vector3 to)
@@ -114,7 +170,7 @@ internal static class PlayerbotMoveCheck
         if (!float.IsFinite(length) || length < 1e-3f) return false;
         Vector2 direction = flat / length;
 
-        // Mesh beyond the edge? An edge between two loaded polygons that the filter refuses, a hole or a wall has mesh within a yard; the
+        // Mesh beyond the edge? An edge between two polygons that the filter refuses, a hole or a wall has mesh within a yard; the
         // border of the loaded tiles has none, and that is no evidence of an obstacle (the stepper exists to cross such ground).
         Vector3 probe = new(ray.Point.X + (direction.X * BeyondYards), ray.Point.Y + (direction.Y * BeyondYards), ray.Point.Z);
         if (!mesh.Raycast(mapId, probe, probe, MeshOptions).Available) return false;

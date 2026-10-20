@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 
@@ -45,6 +46,90 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
 
     /// <summary>Largest image area, pixels (3840 x 2160), which bounds the render's memory at about 12 bytes per pixel.</summary>
     public const long MaxPixels = 3840L * 2160;
+
+    /// <summary>Primary directional sun light (unit vector in world space, from upper north-east).</summary>
+    internal static Vector3 LightDir { get; } = Vector3.Normalize(new Vector3((float)Shading.Light.X, (float)Shading.Light.Y, (float)Shading.Light.Z));
+
+    /// <summary>Secondary sky/fill light direction (unit vector in world space, from opposite upper south-west).</summary>
+    internal static Vector3 FillLightDir { get; } = Vector3.Normalize(new Vector3(-0.45f, 0.35f, 0.82f));
+
+    /// <summary>
+    /// Shades a triangle using directional sun lighting (<c>LightDir</c>), secondary sky/fill lighting, subtle world-Z
+    /// hypsometric elevation relief, and steep-slope darkening (<c>|n.Z| &lt; 0.5</c>).
+    /// </summary>
+    internal static Rgb ShadeTriangle(Rgb baseColor, Vector3 v0, Vector3 v1, Vector3 v2, string? layerId = null, bool both = false)
+        => ShadeTriangle(
+            baseColor,
+            new WorldPoint(v0.X, v0.Y, v0.Z),
+            new WorldPoint(v1.X, v1.Y, v1.Z),
+            new WorldPoint(v2.X, v2.Y, v2.Z),
+            layerId,
+            both);
+
+    /// <summary>
+    /// Shades a world-space triangle using directional sun lighting (<c>LightDir</c>), secondary sky/fill lighting,
+    /// subtle world-Z hypsometric elevation relief, and steep-slope darkening (<c>|n.Z| &lt; 0.5</c>).
+    /// </summary>
+    internal static Rgb ShadeTriangle(Rgb baseColor, WorldPoint v0, WorldPoint v1, WorldPoint v2, string? layerId = null, bool both = false)
+    {
+        _ = layerId;
+        double ux = v1.X - v0.X;
+        double uy = v1.Y - v0.Y;
+        double uz = v1.Z - v0.Z;
+        double vx = v2.X - v0.X;
+        double vy = v2.Y - v0.Y;
+        double vz = v2.Z - v0.Z;
+        double nx = (uy * vz) - (uz * vy);
+        double ny = (uz * vx) - (ux * vz);
+        double nz = (ux * vy) - (uy * vx);
+        double length = Math.Sqrt((nx * nx) + (ny * ny) + (nz * nz));
+        if (!(length > 0))
+        {
+            nx = 0;
+            ny = 0;
+            nz = 1;
+        }
+        else
+        {
+            nx /= length;
+            ny /= length;
+            nz /= length;
+        }
+
+        // Orient the face normal to the upper hemisphere so terrain/model hillshading is winding-independent.
+        if (nz < 0 || (nz == 0 && ((nx * Shading.Light.X) + (ny * Shading.Light.Y)) < 0))
+        {
+            nx = -nx;
+            ny = -ny;
+            nz = -nz;
+        }
+
+        double sunDot = Math.Max(0.0, (nx * Shading.Light.X) + (ny * Shading.Light.Y) + (nz * Shading.Light.Z));
+        double fillDot = Math.Max(0.0, (nx * FillLightDir.X) + (ny * FillLightDir.Y) + (nz * FillLightDir.Z));
+        double slopeAmount = Math.Clamp(1.0 - nz, 0.0, 1.0);
+        double fillTerm = 0.12 * slopeAmount * fillDot;
+        double intensity = Shading.Ambient + (Shading.Diffuse * sunDot) + fillTerm;
+
+        // Emphasize steep slopes (|n.Z| < 0.5) so cliffs and walls stand out in top-down and 3D views.
+        double absNz = Math.Abs(nz);
+        if (absNz < 0.5)
+        {
+            double steepness = (0.5 - absNz) / 0.5;
+            intensity *= 1.0 - (0.22 * steepness);
+        }
+
+        // Subtle world-Z hypsometric elevation relief outside a small sea-level deadband.
+        double meanZ = (v0.Z + v1.Z + v2.Z) / 3.0;
+        if (double.IsFinite(meanZ))
+        {
+            double effectiveZ = meanZ > 6.0 ? meanZ - 6.0 : meanZ < -6.0 ? meanZ + 6.0 : 0.0;
+            double elevationMod = Math.Tanh(effectiveZ / 220.0) * 0.05;
+            intensity += elevationMod;
+        }
+
+        intensity = Math.Clamp(intensity, Shading.Ambient, 1.0);
+        return baseColor.Scaled(intensity * (both ? Shading.BothFillScale : 1.0));
+    }
 
     /// <inheritdoc />
     public RenderedImage Render(ViewState view, int width, int height, CancellationToken cancellationToken)
@@ -322,27 +407,10 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
         {
             GeometryChunk chunk = sceneChunk.Chunk;
             Rgb baseColour = sceneChunk.ColourOf(chunk.TriangleAttributes[triangle], layer.Colour);
-            float[] p = chunk.Positions;
-            int i0 = (int)chunk.Triangles[3 * triangle] * 3;
-            int i1 = (int)chunk.Triangles[(3 * triangle) + 1] * 3;
-            int i2 = (int)chunk.Triangles[(3 * triangle) + 2] * 3;
-            double ux = (double)p[i1] - p[i0];
-            double uy = (double)p[i1 + 1] - p[i0 + 1];
-            double uz = (double)p[i1 + 2] - p[i0 + 2];
-            double vx = (double)p[i2] - p[i0];
-            double vy = (double)p[i2 + 1] - p[i0 + 1];
-            double vz = (double)p[i2 + 2] - p[i0 + 2];
-            double nx = (uy * vz) - (uz * vy);
-            double ny = (uz * vx) - (ux * vz);
-            double nz = (ux * vy) - (uy * vx);
-            double length = Math.Sqrt((nx * nx) + (ny * ny) + (nz * nz));
-            if (!(length > 0))
-            {
-                // A zero-area triangle covers no pixels; any normal will do.
-                return Shading.Fill(baseColour, 0, 0, 1, layer.Mode == RenderMode.Both);
-            }
-
-            return Shading.Fill(baseColour, nx / length, ny / length, nz / length, layer.Mode == RenderMode.Both);
+            WorldPoint v0 = chunk.Vertex(chunk.Triangles[3 * triangle]);
+            WorldPoint v1 = chunk.Vertex(chunk.Triangles[(3 * triangle) + 1]);
+            WorldPoint v2 = chunk.Vertex(chunk.Triangles[(3 * triangle) + 2]);
+            return ShadeTriangle(baseColour, v0, v1, v2, layer.Info.Id, layer.Mode == RenderMode.Both);
         }
 
         private ViewVertex[] Project(GeometryChunk chunk)

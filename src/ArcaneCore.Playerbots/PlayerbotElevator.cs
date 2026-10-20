@@ -751,6 +751,12 @@ internal static class PlayerbotElevator
         {
             case ElevatorStage.ToStop:
             {
+                if (TryCompleteAtDestinationFloor(session, player, map, trip))
+                {
+                    trip.PendingStep = ElevatorStep.Arrived;
+                    return;
+                }
+
                 Vector3 bot = new(player.X, player.Y, player.Z);
                 if (trip.Car is null || trip.CarObject is not { IsInWorld: true } || !ReferenceEquals(trip.CarObject.Map, map))
                 {
@@ -765,6 +771,8 @@ internal static class PlayerbotElevator
                     (trip.Best, trip.BestMs, trip.Route) = (best, bestMs, route);
                 }
 
+                GuardPlatformShaft(session, player, map, trip);
+                bot = new(player.X, player.Y, player.Z);
                 if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(trip.Landing)) <= AtLandingYards
                     && MathF.Abs(bot.Z - trip.Landing.Z) <= LandingFloorYards + 1f)
                 {
@@ -776,12 +784,20 @@ internal static class PlayerbotElevator
             }
             case ElevatorStage.Waiting:
             {
+                if (TryCompleteAtDestinationFloor(session, player, map, trip))
+                {
+                    FlushStopAtFrom(session, player, trip);
+                    trip.PendingStep = ElevatorStep.Arrived;
+                    return;
+                }
+
                 if (trip.Car is not { } car || trip.CarObject is not { IsInWorld: true } live || !ReferenceEquals(live.Map, map)
                     || map.FindUpdater<GameObjectMapSystem>() is not { } system)
                 {
                     return;
                 }
 
+                GuardPlatformShaft(session, player, map, trip);
                 uint cycle = system.ElevatorCycle(live);
                 if (cycle == 0) return;
                 TryBoardFromWaiting(session, player, map, system, trip, car, live, cycle, now, fromDrive: false);
@@ -1127,8 +1143,13 @@ internal static class PlayerbotElevator
     private static ElevatorStep ToStop(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint elapsedMs,
         uint now)
     {
+        if (TryCompleteAtDestinationFloor(session, player, map, trip))
+        {
+            return ElevatorStep.Arrived;
+        }
+
         Vector3 bot = new(player.X, player.Y, player.Z);
-        if (InPit(trip.Lift, bot, bot.Z))
+        if (InPit(trip.Lift, bot, bot.Z) || InFromShaftPit(trip, bot))
         {
             ReportPitFall(session, player, trip, bot.Z);
             return Drop(session, player, map, trip, now, $"elevator: in the shaft pit of {trip.Lift.Name}");
@@ -1150,7 +1171,7 @@ internal static class PlayerbotElevator
                     }
                 }
 
-                approachTarget ??= LandingBeside(map, stop, bot) ?? stop;
+                approachTarget ??= LandingBeside(map, stop, bot) ?? SafeWaitOutsideShaft(map, stop, bot);
                 if (Walk(session, player, trip, approachTarget.Value, options, elapsedMs, now)) return ElevatorStep.Traveling;
                 return Fail(trip, string.Create(CultureInfo.InvariantCulture,
                     $"elevator: no way to {trip.Lift.Name} ({Word(trip.From)} level) from {bot.X:F1},{bot.Y:F1},{bot.Z:F1}{(trip.RefusedPlans >= MaxRefusedPlans ? $" (the path was refused {MaxRefusedPlans} times in a row)" : string.Empty)}"));
@@ -1162,6 +1183,12 @@ internal static class PlayerbotElevator
             (trip.Best, trip.BestMs) = (best, bestMs); // the progress bound runs on across the choice
         }
 
+        if (GuardPlatformShaft(session, player, map, trip))
+        {
+            return ElevatorStep.Traveling;
+        }
+
+        bot = new(player.X, player.Y, player.Z);
         if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(trip.Landing)) <= AtLandingYards
             && MathF.Abs(bot.Z - trip.Landing.Z) <= LandingFloorYards + 1f)
         {
@@ -1235,8 +1262,14 @@ internal static class PlayerbotElevator
 
     private static ElevatorStep Wait(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now)
     {
+        if (TryCompleteAtDestinationFloor(session, player, map, trip))
+        {
+            FlushStopAtFrom(session, player, trip);
+            return ElevatorStep.Arrived;
+        }
+
         Vector3 bot = new(player.X, player.Y, player.Z);
-        if (InPit(trip.Lift, bot, bot.Z))
+        if (InPit(trip.Lift, bot, bot.Z) || InFromShaftPit(trip, bot))
         {
             ReportPitFall(session, player, trip, bot.Z);
             return Drop(session, player, map, trip, now, $"elevator: in the shaft pit of {trip.Lift.Name}");
@@ -1250,6 +1283,8 @@ internal static class PlayerbotElevator
             trip.Car = null;
             return ElevatorStep.Traveling;
         }
+
+        GuardPlatformShaft(session, player, map, trip);
 
         uint cycle = system.ElevatorCycle(live);
         if (cycle == 0) return Fail(trip, $"elevator: the car of {trip.Lift.Name} has no animation");
@@ -1267,8 +1302,22 @@ internal static class PlayerbotElevator
     private static void TryBoardFromWaiting(WorldSession session, Player player, Map map, GameObjectMapSystem system, ElevatorTrip trip,
         ElevatorCar car, GameObject live, uint cycle, uint now, bool fromDrive)
     {
+        _ = fromDrive;
         CheckWaitingLanding(session, player, map, trip, car);
-        float level = car.At(trip.From).Z;
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        Vector3 stopAtFrom = car.At(trip.From);
+        float preFlatDist = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(stopAtFrom));
+        float preZDiff = MathF.Abs(bot.Z - stopAtFrom.Z);
+        if (preFlatDist > LandingRadii[^1] + AtLandingYards || preZDiff > LandingFloorYards + 1f)
+        {
+            trip.StopSkipReason = preFlatDist > LandingRadii[^1] + AtLandingYards ? "drifted-from-landing" : "z-mismatch";
+            FlushStopAtFrom(session, player, trip);
+            Enter(trip, ElevatorStage.ToStop, now);
+            trip.Car = null;
+            return;
+        }
+
+        float level = stopAtFrom.Z;
         if (StandingAt(system, live, level, 0) is not { } at)
         {
             FlushStopAtFrom(session, player, trip);
@@ -1311,20 +1360,14 @@ internal static class PlayerbotElevator
             trip.StopMaxStandsForMs = standsFor;
         }
 
-        Vector3 bot = new(player.X, player.Y, player.Z);
         float flatDist = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(at));
         float zDiff = MathF.Abs(bot.Z - at.Z);
         if (flatDist > LandingRadii[^1] + AtLandingYards || zDiff > LandingFloorYards + 1f)
         {
             trip.StopSkipReason = flatDist > LandingRadii[^1] + AtLandingYards ? "drifted-from-landing" : "z-mismatch";
-            if (fromDrive)
-            {
-                // Not beside it (pushed away while waiting): walk back to a landing.
-                FlushStopAtFrom(session, player, trip);
-                Enter(trip, ElevatorStage.ToStop, now);
-                trip.Car = null;
-            }
-
+            FlushStopAtFrom(session, player, trip);
+            Enter(trip, ElevatorStage.ToStop, now);
+            trip.Car = null;
             return;
         }
 
@@ -1556,6 +1599,159 @@ internal static class PlayerbotElevator
 
     /// <summary>A floor in a car's footprint this far (or more) under its lower stop is a pit (<see cref="InPit"/>).</summary>
     internal const float PitYards = 1f;
+
+    /// <summary>
+    /// When a bot in <c>ToStop</c> or <c>Waiting</c> has already reached (or dropped intact onto) the destination floor <c>trip.To</c>,
+    /// steps it out to the destination landing and completes the trip instead of waiting at the wrong floor for 90 seconds or failing.
+    /// </summary>
+    private static bool TryCompleteAtDestinationFloor(WorldSession session, Player player, Map map, ElevatorTrip trip)
+    {
+        if (trip.From == trip.To) return false;
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        ElevatorCar car = ClosestCar(trip.Lift, trip.To, bot);
+        Vector3 toStop = car.At(trip.To);
+
+        bool startedAtFromFloor = MathF.Abs(trip.StartPosition.Z - trip.Lift.LevelZ(trip.From)) <= ElevatorNetwork.LevelYards;
+        bool startedNearShaft = Vector2.Distance(ElevatorNetwork.Flat(trip.StartPosition), ElevatorNetwork.Flat(toStop)) <= LandingRadii[^1] + AtLandingYards;
+        if (trip.Stage != ElevatorStage.Waiting && !startedAtFromFloor && !startedNearShaft)
+        {
+            return false;
+        }
+
+        float flatToDest = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(toStop));
+        float zToDest = MathF.Abs(bot.Z - toStop.Z);
+        if (flatToDest > LandingRadii[^1] + AtLandingYards || zToDest > LandingFloorYards + 1.5f)
+        {
+            return false;
+        }
+
+        Vector3 ground = LandingBeside(map, toStop, trip.Goal)
+            ?? LandingBeside(map, toStop, bot)
+            ?? SafeWaitOutsideShaft(map, toStop, trip.Goal);
+        if (PlayerbotMotion.IsActive(player) && !PlayerbotMovementControl.Stop(session, player))
+        {
+            return false;
+        }
+
+        if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation))
+        {
+            return false;
+        }
+
+        trip.StepOffLevel = trip.To;
+        trip.Failure = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Detects when a bot approaching or waiting for an upper-level stop has fallen down the shaft to a depth well below <c>trip.From</c>,
+    /// even if the shaft floor is within <c>PitYards</c> of <c>car.Low.Z</c>.
+    /// </summary>
+    private static bool InFromShaftPit(ElevatorTrip trip, Vector3 bot)
+    {
+        float fromZ = trip.Lift.LevelZ(trip.From);
+        if (bot.Z >= fromZ - (LandingFloorYards + 2f))
+        {
+            return false;
+        }
+
+        bool startedAtFromFloor = MathF.Abs(trip.StartPosition.Z - fromZ) <= ElevatorNetwork.LevelYards;
+        if (trip.Stage != ElevatorStage.Waiting && !startedAtFromFloor)
+        {
+            return false;
+        }
+
+        bool vault = ElevatorRegions.IsVaultLift(trip.Lift.MapId, new Vector3(trip.Lift.Centre, trip.Lift.LowZ));
+        float footprint = vault ? VaultDoorOuterYards : CarHalfYards + 1.5f;
+        foreach (ElevatorCar car in trip.Lift.Cars)
+        {
+            if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(bot)) <= footprint
+                || Vector2.Distance(ElevatorNetwork.Flat(car.High), ElevatorNetwork.Flat(bot)) <= footprint)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Prevents the bot from walking into or standing inside the elevator shaft (or inside closed Undercity vault doors) during
+    /// <c>ToStop</c> and <c>Waiting</c> while the car is not standing at <c>trip.From</c>.
+    /// </summary>
+    internal static bool GuardPlatformShaft(WorldSession session, Player player, Map map, ElevatorTrip trip)
+    {
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        ElevatorCar car = trip.Car ?? ClosestCar(trip.Lift, trip.From, bot);
+        Vector3 stop = car.At(trip.From);
+        GameObjectMapSystem? system = map.FindUpdater<GameObjectMapSystem>();
+
+        bool landingCarStanding = false;
+        if (system is not null)
+        {
+            GameObject? live = trip.CarObject is { IsInWorld: true } co && ReferenceEquals(co.Map, map) ? co : FindCar(system, car);
+            landingCarStanding = live is not null && StandingAt(system, live, stop.Z, 0) is not null;
+        }
+
+        bool vault = ElevatorRegions.IsVaultLift(map.MapId, stop);
+        float guardRadius = vault ? VaultDoorOuterYards : CarHalfYards;
+
+        if (!landingCarStanding && trip.Landing != default)
+        {
+            float landingFlat = Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(stop));
+            if (landingFlat < guardRadius)
+            {
+                trip.Landing = (trip.Options is { } opt ? LandingBesideReachable(player, map, stop, bot, opt) : null)
+                    ?? LandingBeside(map, stop, bot)
+                    ?? LandingBeside(map, stop, trip.Goal)
+                    ?? SafeWaitOutsideShaft(map, stop, bot);
+            }
+        }
+
+        ElevatorCar nearestShaftCar = ClosestCar(trip.Lift, trip.From, bot);
+        Vector3 nearestStop = nearestShaftCar.At(trip.From);
+        if (system is not null && FindCar(system, nearestShaftCar) is { } nearestLive && StandingAt(system, nearestLive, nearestStop.Z, 0) is not null)
+        {
+            return false;
+        }
+
+        bool nearestVault = ElevatorRegions.IsVaultLift(map.MapId, nearestStop);
+        float nearestGuardRadius = nearestVault ? VaultDoorOuterYards : CarHalfYards;
+        float botFlat = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(nearestStop));
+        float botZDiff = MathF.Abs(bot.Z - nearestStop.Z);
+        if (botFlat < nearestGuardRadius && botZDiff <= LandingFloorYards + 2f)
+        {
+            Vector3 safeTarget = trip.Landing != default && Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(nearestStop)) >= nearestGuardRadius
+                ? trip.Landing
+                : LandingBeside(map, nearestStop, bot) ?? SafeWaitOutsideShaft(map, nearestStop, bot);
+            trip.Landing = safeTarget;
+            if (PlayerbotMotion.IsActive(player))
+            {
+                PlayerbotMovementControl.Stop(session, player);
+            }
+
+            PlayerbotMotion.SendStepOff(session, player, safeTarget, player.Orientation);
+            return true;
+        }
+
+        return false;
+    }
+
+    internal static Vector3 SafeWaitOutsideShaft(Map map, Vector3 stop, Vector3 toward, uint? mapIdOverride = null)
+    {
+        bool vault = ElevatorRegions.IsVaultLift(mapIdOverride ?? map.MapId, stop);
+        float safeRadius = vault ? VaultLandingRadii[0] : LandingRadii[0];
+        Vector2 dir = ElevatorNetwork.Flat(toward) - ElevatorNetwork.Flat(stop);
+        float len = dir.Length();
+        dir = len > 1e-3f ? dir / len : new Vector2(1f, 0f);
+        float x = stop.X + (dir.X * safeRadius);
+        float y = stop.Y + (dir.Y * safeRadius);
+        float floor = TryLandingFloor(map, stop, x, y, out float f) ? f : stop.Z;
+        return new Vector3(x, y, floor);
+    }
+
+    private static ElevatorCar ClosestCar(ElevatorLift lift, ElevatorLevel level, Vector3 near)
+        => lift.Cars.OrderBy(c => Vector2.DistanceSquared(ElevatorNetwork.Flat(c.At(level)), ElevatorNetwork.Flat(near))).First();
 
     /// <summary>
     /// Whether a fall of <paramref name="yards"/> costs the bot less than <see cref="MaxFallHealthPercent"/> percent of its current health:
@@ -1901,9 +2097,9 @@ internal static class PlayerbotElevator
     internal static Vector3? LandingBeside(Map map, Vector3 stop, Vector3 toward)
     {
         map.Collision.LoadTilesOnDemand(stop.X, stop.Y);
-        if (ElevatorRegions.IsVaultLift(map.MapId, stop) && FindOnRings(map, stop, toward, VaultLandingRadii) is { } vaultLanding)
+        if (ElevatorRegions.IsVaultLift(map.MapId, stop))
         {
-            return vaultLanding;
+            return FindOnRings(map, stop, toward, VaultLandingRadii);
         }
 
         return FindOnRings(map, stop, toward, LandingRadii);
@@ -1956,10 +2152,9 @@ internal static class PlayerbotElevator
         if (PlayerbotNavigation.TryPlanToward(player, primary, options, out _))
             return primary;
 
-        if (ElevatorRegions.IsVaultLift(map.MapId, stop)
-            && FindReachableOnRings(player, map, stop, toward, options, VaultLandingRadii) is { } vaultReachable)
+        if (ElevatorRegions.IsVaultLift(map.MapId, stop))
         {
-            return vaultReachable;
+            return FindReachableOnRings(player, map, stop, toward, options, VaultLandingRadii);
         }
 
         return FindReachableOnRings(player, map, stop, toward, options, LandingRadii);

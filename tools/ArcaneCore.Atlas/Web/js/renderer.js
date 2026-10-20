@@ -95,6 +95,7 @@ export class Renderer {
         }
         this.gl = gl;
         this.stats = { drawCalls: 0, triangles: 0, lines: 0, chunks: 0, gpuBytes: 0 };
+        this.shading = { mode: 0, contours: false, fog: true, sunAzimuth: 38, sunAltitude: 55 };
         this.pickSupported = true;
         this._slots = new Map();
         this._nextSlot = 1;
@@ -111,6 +112,45 @@ export class Renderer {
             this.callbacks.onContextRestored?.();
         });
         this._init();
+    }
+
+    setShading(patchOrMode = {}, contoursArg = undefined) {
+        const patch = typeof patchOrMode === 'number'
+            ? { mode: patchOrMode, ...(typeof contoursArg === 'boolean' ? { contours: contoursArg } : {}) }
+            : patchOrMode;
+        if (!patch || typeof patch !== 'object') {
+            return this.getShading();
+        }
+        if (patch.mode !== undefined) {
+            const m = Number(patch.mode);
+            if (Number.isInteger(m) && m >= 0 && m <= 3) {
+                this.shading.mode = m;
+            }
+        }
+        if (typeof patch.contours === 'boolean') {
+            this.shading.contours = patch.contours;
+        }
+        if (typeof patch.fog === 'boolean') {
+            this.shading.fog = patch.fog;
+        }
+        if (Number.isFinite(patch.sunAzimuth)) {
+            this.shading.sunAzimuth = Number(patch.sunAzimuth);
+        }
+        if (Number.isFinite(patch.sunAltitude)) {
+            this.shading.sunAltitude = Math.max(5, Math.min(89, Number(patch.sunAltitude)));
+        }
+        return this.getShading();
+    }
+
+    getShading() {
+        return { ...this.shading, sunDir: this._sunDir() };
+    }
+
+    _sunDir() {
+        const az = (this.shading.sunAzimuth * Math.PI) / 180;
+        const alt = (this.shading.sunAltitude * Math.PI) / 180;
+        const cosAlt = Math.cos(alt);
+        return normalize3([-Math.cos(az) * cosAlt, -Math.sin(az) * cosAlt, Math.sin(alt)]);
     }
 
     get lost() {
@@ -490,6 +530,7 @@ export class Renderer {
             proj,
             ortho: camera.mode === 'top',
             light: new Float32Array(rotateByView(view, LIGHT_WORLD)),
+            sunDir: new Float32Array(this._sunDir()),
             viewport: new Float32Array([frame.width, frame.height]),
             scale: frame.pixelScale,
         };
@@ -563,6 +604,11 @@ export class Renderer {
         this._bindFrame(p, ctx);
         gl.uniform3fv(p.u.uLight, ctx.light);
         gl.uniform1i(p.u.uLut, 0);
+        gl.uniform1i(p.u.uShadeMode, this.shading.mode | 0);
+        gl.uniform1i(p.u.uContours, this.shading.contours ? 1 : 0);
+        gl.uniform1i(p.u.uFog, this.shading.fog ? 1 : 0);
+        gl.uniform1i(p.u.uMode, ctx.ortho ? 0 : 1);
+        gl.uniform3fv(p.u.uSunDir, ctx.sunDir);
         gl.enable(gl.DEPTH_TEST);
         gl.depthFunc(gl.LEQUAL);
         gl.activeTexture(gl.TEXTURE0);
@@ -571,9 +617,12 @@ export class Renderer {
             gl.uniform3f(p.u.uColor, rgb[0], rgb[1], rgb[2]);
             gl.uniform1i(p.u.uByAttribute, layer.byAttribute ? 1 : 0);
             gl.uniform1f(p.u.uAlpha, blended ? layer.opacity : 1);
+            const isLiquid = layer.sub === 'liquid' || Boolean(layer.id?.includes('liquid')) || Boolean(layer.layerId?.includes('liquid'));
+            gl.uniform1i(p.u.uIsLiquid, isLiquid ? 1 : 0);
             for (const chunk of layer.chunks) {
                 if (chunk.triangleCount > 0) {
                     gl.bindTexture(gl.TEXTURE_2D, chunk.lut);
+                    gl.uniform3fv(p.u.uOrigin, chunk.origin);
                     gl.uniform3fv(p.u.uRel, this._rel(ctx, chunk.origin));
                     gl.bindVertexArray(chunk.triVao);
                     gl.drawArrays(gl.TRIANGLES, 0, chunk.triangleCount * 3);

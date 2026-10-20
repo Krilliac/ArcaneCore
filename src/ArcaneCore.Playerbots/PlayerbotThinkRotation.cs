@@ -45,6 +45,9 @@ internal sealed class PlayerbotThinkRotation
     /// <summary>The first bot the next tick visits (tests).</summary>
     internal int Cursor => _cursor;
 
+    /// <summary>Capacity of the internal per-tick stamp array (tests).</summary>
+    internal int StampCapacity => _stamp.Length;
+
     /// <summary>
     /// One tick over <paramref name="count"/> bots: <paramref name="visit"/> is called with each index from the cursor on, wrapping,
     /// until it returns false (the budget or the time cap ran out before that bot: it is not counted as visited) or every bot was
@@ -61,8 +64,14 @@ internal sealed class PlayerbotThinkRotation
         }
 
         if (cursor >= count) cursor %= count;
+        int index = cursor;
         int visited = 0;
-        while (visited < count && visit((cursor + visited) % count)) visited++;
+        while (visited < count && visit(index))
+        {
+            visited++;
+            if (++index == count) index = 0;
+        }
+
         // A tick that could visit nobody still moves on by one, so no bot can hold the head of the rotation for good.
         cursor = (cursor + Math.Max(1, visited)) % count;
         return visited;
@@ -82,20 +91,61 @@ internal sealed class PlayerbotThinkRotation
     internal int TickWithin(int count, double budgetMs, Func<int, bool> visit)
     {
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        return TickWithin(count, budgetMs, visit, () => System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        LastTickTimeLimited = false;
+        if (count <= 0)
+        {
+            _cursor = 0;
+            return 0;
+        }
+
+        if (_cursor >= count) _cursor %= count;
+        int index = _cursor;
+        int visited = 0;
+        while (visited < count)
+        {
+            if (visited > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= budgetMs)
+            {
+                LastTickTimeLimited = true;
+                break;
+            }
+
+            if (!visit(index)) break;
+            visited++;
+            if (++index == count) index = 0;
+        }
+
+        _cursor = (_cursor + Math.Max(1, visited)) % count;
+        return visited;
     }
 
     /// <summary><see cref="TickWithin(int, double, Func{int, bool})"/> on a given clock: <paramref name="elapsedMs"/> is the time since the tick began (tests).</summary>
     internal int TickWithin(int count, double budgetMs, Func<int, bool> visit, Func<double> elapsedMs)
     {
-        bool first = true;
         LastTickTimeLimited = false;
-        return Tick(count, index =>
+        if (count <= 0)
         {
-            if (!first && elapsedMs() >= budgetMs) { LastTickTimeLimited = true; return false; }
-            first = false;
-            return visit(index);
-        });
+            _cursor = 0;
+            return 0;
+        }
+
+        if (_cursor >= count) _cursor %= count;
+        int index = _cursor;
+        int visited = 0;
+        while (visited < count)
+        {
+            if (visited > 0 && elapsedMs() >= budgetMs)
+            {
+                LastTickTimeLimited = true;
+                break;
+            }
+
+            if (!visit(index)) break;
+            visited++;
+            if (++index == count) index = 0;
+        }
+
+        _cursor = (_cursor + Math.Max(1, visited)) % count;
+        return visited;
     }
 
     /// <summary>How <see cref="TickLanes"/> sees one bot this tick.</summary>
@@ -106,6 +156,24 @@ internal sealed class PlayerbotThinkRotation
 
         /// <summary>A bot of the first lane that is due: thought for before the ordinary ones, for at most the lane's share of the time.</summary>
         Priority,
+    }
+
+    /// <summary>Zero-allocation callback contract for <see cref="TickLanes{TDriver}"/>.</summary>
+    internal interface IThinkLaneDriver
+    {
+        ThinkLane Classify(int index);
+        bool Visit(int index, ThinkLane lane);
+        double ElapsedMs();
+    }
+
+    private readonly struct DelegateThinkLaneDriver(
+        Func<int, ThinkLane> classify,
+        Func<int, ThinkLane, bool> visit,
+        Func<double> elapsedMs) : IThinkLaneDriver
+    {
+        public ThinkLane Classify(int index) => classify(index);
+        public bool Visit(int index, ThinkLane lane) => visit(index, lane);
+        public double ElapsedMs() => elapsedMs();
     }
 
     /// <summary>The first lane's visits in the last <see cref="TickLanes"/> (tests, metrics).</summary>
@@ -147,6 +215,14 @@ internal sealed class PlayerbotThinkRotation
     internal int TickLanes(int count, double budgetMs, double priorityShare, Func<int, ThinkLane> classify, Func<int, ThinkLane, bool> visit, Func<double> elapsedMs,
         double priorityScale = 1)
     {
+        var driver = new DelegateThinkLaneDriver(classify, visit, elapsedMs);
+        return TickLanes(count, budgetMs, priorityShare, ref driver, priorityScale);
+    }
+
+    /// <summary>Zero-allocation struct-driver overload of <see cref="TickLanes"/>.</summary>
+    internal int TickLanes<TDriver>(int count, double budgetMs, double priorityShare, ref TDriver driver, double priorityScale = 1)
+        where TDriver : struct, IThinkLaneDriver
+    {
         LastTickTimeLimited = false;
         LastPriorityVisits = 0;
         if (count <= 0)
@@ -156,7 +232,7 @@ internal sealed class PlayerbotThinkRotation
             return 0;
         }
 
-        if (_stamp.Length != count) _stamp = new int[count];
+        if (_stamp.Length < count) _stamp = new int[count];
         if (++_tickNumber == int.MaxValue)
         {
             Array.Clear(_stamp);
@@ -167,33 +243,57 @@ internal sealed class PlayerbotThinkRotation
         LastPriorityScale = double.IsFinite(priorityScale) ? Math.Clamp(priorityScale, 0, 1) : 1;
         double priorityMs = budgetMs * Math.Clamp(priorityShare, 0, 1) * LastPriorityScale;
         int thinks = 0;
-        Walk(ref _priorityCursor, count, index =>
+
+        if (_priorityCursor >= count) _priorityCursor %= count;
+        int priorityIndex = _priorityCursor;
+        int priorityVisited = 0;
+        while (priorityVisited < count)
         {
-            if (classify(index) != ThinkLane.Priority) return true; // not this lane's business: passed over at no cost
-            if (elapsedMs() >= priorityMs)
+            if (driver.Classify(priorityIndex) == ThinkLane.Priority)
             {
-                // Only a lane that still had a due bot to think for was cut short by the time.
-                LastTickTimeLimited = true;
-                return false;
+                if (driver.ElapsedMs() >= priorityMs)
+                {
+                    // Only a lane that still had a due bot to think for was cut short by the time.
+                    LastTickTimeLimited = true;
+                    break;
+                }
+
+                if (!driver.Visit(priorityIndex, ThinkLane.Priority)) break;
+                _stamp[priorityIndex] = tick;
+                thinks++;
+                LastPriorityVisits++;
             }
 
-            if (!visit(index, ThinkLane.Priority)) return false;
-            _stamp[index] = tick;
-            thinks++;
-            LastPriorityVisits++;
-            return true;
-        });
+            priorityVisited++;
+            if (++priorityIndex == count) priorityIndex = 0;
+        }
 
+        _priorityCursor = (_priorityCursor + Math.Max(1, priorityVisited)) % count;
+
+        if (_cursor >= count) _cursor %= count;
+        int mainIndex = _cursor;
+        int mainVisited = 0;
         bool firstOfLane = true;
-        Walk(ref _cursor, count, index =>
+        while (mainVisited < count)
         {
-            if (_stamp[index] == tick) return true; // thought for in the first lane this tick
-            if (!firstOfLane && elapsedMs() >= budgetMs) { LastTickTimeLimited = true; return false; }
-            firstOfLane = false;
-            if (!visit(index, ThinkLane.Normal)) return false;
-            thinks++;
-            return true;
-        });
+            if (_stamp[mainIndex] != tick)
+            {
+                if (!firstOfLane && driver.ElapsedMs() >= budgetMs)
+                {
+                    LastTickTimeLimited = true;
+                    break;
+                }
+
+                firstOfLane = false;
+                if (!driver.Visit(mainIndex, ThinkLane.Normal)) break;
+                thinks++;
+            }
+
+            mainVisited++;
+            if (++mainIndex == count) mainIndex = 0;
+        }
+
+        _cursor = (_cursor + Math.Max(1, mainVisited)) % count;
         return thinks;
     }
 }

@@ -145,21 +145,38 @@ public sealed class ReactiveService
     /// <summary>vmangos Unit::UpdateReactives for every unit with an open window.</summary>
     public void Update(uint diffMs)
     {
-        foreach (Unit unit in _active.ToArray())
+        int activeCount = _active.Count;
+        if (activeCount == 0)
         {
-            try
-            {
-                if (unit is null)
-                {
-                    continue;
-                }
+            return;
+        }
 
-                UpdateUnit(unit, diffMs);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+        Unit[] units = System.Buffers.ArrayPool<Unit>.Shared.Rent(activeCount);
+        _active.CopyTo(units, 0);
+        try
+        {
+            for (int i = 0; i < activeCount; i++)
             {
-                FaultLedger.Shared.Record("map-reactive", ex);
+                Unit unit = units[i];
+                try
+                {
+                    if (unit is null)
+                    {
+                        continue;
+                    }
+
+                    UpdateUnit(unit, diffMs);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("map-reactive", ex);
+                }
             }
+        }
+        finally
+        {
+            Array.Clear(units, 0, activeCount);
+            System.Buffers.ArrayPool<Unit>.Shared.Return(units);
         }
     }
 
@@ -335,64 +352,131 @@ public sealed class ReactiveUpdater(ReactiveService reactives) : IMapUpdater
     public void Update(Map map, uint diffMs)
     {
         ArgumentNullException.ThrowIfNull(map);
-        foreach (Unit unit in reactives.ActiveUnits.Where(u => u is not null && (u.Map is null || !u.IsInWorld)).ToArray())
+        IReadOnlyList<Unit> activeUnits = reactives.ActiveUnits;
+        int activeCount = activeUnits.Count;
+        if (activeCount > 0)
         {
-            try
+            Unit[] activeSnapshot = System.Buffers.ArrayPool<Unit>.Shared.Rent(activeCount);
+            for (int i = 0; i < activeCount; i++)
             {
-                reactives.Forget(unit);
+                activeSnapshot[i] = activeUnits[i];
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map-reactive", ex);
-            }
-        }
 
-        // Only the windows of this map's units run down here, so each runs once per world tick.
-        foreach (Unit unit in reactives.ActiveUnits.Where(u => u is not null && u.IsInWorld && ReferenceEquals(u.Map, map)).ToArray())
-        {
             try
             {
-                reactives.UpdateUnit(unit, diffMs);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map-reactive", ex);
-            }
-        }
-
-        foreach (Player player in map.Players.ToArray())
-        {
-            try
-            {
-                if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                for (int i = 0; i < activeCount; i++)
                 {
-                    continue;
+                    Unit unit = activeSnapshot[i];
+                    if (unit is null || (unit.Map is not null && unit.IsInWorld))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        reactives.Forget(unit);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record("map-reactive", ex);
+                    }
                 }
 
-                reactives.AuraStates.UpdateHealthState(player);
+                // Only the windows of this map's units run down here, so each runs once per world tick.
+                for (int i = 0; i < activeCount; i++)
+                {
+                    Unit unit = activeSnapshot[i];
+                    if (unit is null || !unit.IsInWorld || !ReferenceEquals(unit.Map, map))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        reactives.UpdateUnit(unit, diffMs);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record("map-reactive", ex);
+                    }
+                }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            finally
             {
-                FaultLedger.Shared.Record("map-reactive", ex);
+                Array.Clear(activeSnapshot, 0, activeCount);
+                System.Buffers.ArrayPool<Unit>.Shared.Return(activeSnapshot);
+            }
+        }
+
+        if (map.PlayerCount > 0)
+        {
+            Player[] players = map.RentPlayerSnapshot(out int playerCount);
+            try
+            {
+                for (int i = 0; i < playerCount; i++)
+                {
+                    Player player = players[i];
+                    try
+                    {
+                        if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                        {
+                            continue;
+                        }
+
+                        reactives.AuraStates.UpdateHealthState(player);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record("map-reactive", ex);
+                    }
+                }
+            }
+            finally
+            {
+                Map.ReturnPlayerSnapshot(players);
             }
         }
 
         if (map.FindUpdater<MapCombat>() is { } combat)
         {
-            foreach (Unit unit in combat.TrackedUnits.ToArray())
+            IReadOnlyCollection<Unit> trackedUnits = combat.TrackedUnits;
+            int trackedCount = trackedUnits.Count;
+            if (trackedCount > 0)
             {
+                Unit[] trackedSnapshot = System.Buffers.ArrayPool<Unit>.Shared.Rent(trackedCount);
+                int copied = 0;
+                foreach (Unit unit in trackedUnits)
+                {
+                    if (copied < trackedSnapshot.Length)
+                    {
+                        trackedSnapshot[copied++] = unit;
+                    }
+                }
+
                 try
                 {
-                    if (unit is null || !unit.IsInWorld || unit.Map is null || !ReferenceEquals(unit.Map, map))
+                    for (int i = 0; i < copied; i++)
                     {
-                        continue;
-                    }
+                        Unit unit = trackedSnapshot[i];
+                        try
+                        {
+                            if (unit is null || !unit.IsInWorld || unit.Map is null || !ReferenceEquals(unit.Map, map))
+                            {
+                                continue;
+                            }
 
-                    reactives.AuraStates.UpdateHealthState(unit);
+                            reactives.AuraStates.UpdateHealthState(unit);
+                        }
+                        catch (Exception ex) when (ex is not OutOfMemoryException)
+                        {
+                            FaultLedger.Shared.Record("map-reactive", ex);
+                        }
+                    }
                 }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
+                finally
                 {
-                    FaultLedger.Shared.Record("map-reactive", ex);
+                    Array.Clear(trackedSnapshot, 0, copied);
+                    System.Buffers.ArrayPool<Unit>.Shared.Return(trackedSnapshot);
                 }
             }
         }

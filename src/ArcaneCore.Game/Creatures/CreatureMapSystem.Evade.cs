@@ -135,6 +135,7 @@ public sealed partial class CreatureMapSystem
                 // it does not walk home; the home events run where it stands and it is out of evade mode at once.
                 creature.IsEvading = false;
                 creature.Motion.Remove(MovementGeneratorType.Chase);
+                creature.Motion.Remove(MovementGeneratorType.Fleeing);
                 TriggerHomeEvents(creature);
             }
             else
@@ -232,15 +233,36 @@ public sealed partial class CreatureMapSystem
         creature.CalledAssistance = false;
         creature.CombatStart = null;
         creature.LeashClock = null;
-        _pendingAssists.RemoveAll(p => ReferenceEquals(p.Helper, creature) || ReferenceEquals(p.Caller, creature));
+        for (int i = _pendingAssists.Count - 1; i >= 0; i--)
+        {
+            PendingAssist pending = _pendingAssists[i];
+            if (ReferenceEquals(pending.Helper, creature) || ReferenceEquals(pending.Caller, creature))
+            {
+                _pendingAssists.RemoveAt(i);
+            }
+        }
     }
 
     private void ForgetAi(Creature creature)
     {
         ResetAiState(creature);
-        _summons.RemoveAll(s => ReferenceEquals(s.Creature, creature));
+        for (int i = _summons.Count - 1; i >= 0; i--)
+        {
+            if (ReferenceEquals(_summons[i].Creature, creature))
+            {
+                _summons.RemoveAt(i);
+            }
+        }
+
         _arrivalRelays.Remove(creature);
-        _scriptDespawns.RemoveAll(s => ReferenceEquals(s.Creature, creature));
+        for (int i = _scriptDespawns.Count - 1; i >= 0; i--)
+        {
+            if (ReferenceEquals(_scriptDespawns[i].Creature, creature))
+            {
+                _scriptDespawns.RemoveAt(i);
+            }
+        }
+
         _ai.Spells?.OnCreatureRemoved(creature);
         creature.AI = null;
     }

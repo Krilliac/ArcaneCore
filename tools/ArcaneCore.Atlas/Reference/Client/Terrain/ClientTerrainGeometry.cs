@@ -19,6 +19,12 @@ internal static class ClientTerrainGeometry
     // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:39-40 (16 chunks per tile edge, 8 squares per chunk edge)
     private const int SquaresPerChunk = 8;
 
+    /// <summary>Slope threshold in degrees at or above which a terrain triangle is considered steep/unwalkable.</summary>
+    public const double SteepSlopeDegrees = 60.0;
+
+    private const int TotalSquaresPerTile = WorldGrid.MapResolution * WorldGrid.MapResolution;
+    private const int MaxHighlightedSteepChunks = 8;
+
     /// <summary>The attribute id of the terrain triangles of the chunk at <paramref name="chunkIndex"/> (0..255).</summary>
     public static uint TerrainAttribute(int chunkIndex) => (uint)chunkIndex;
 
@@ -41,6 +47,254 @@ internal static class ClientTerrainGeometry
     /// <summary>The colour key of a liquid square: the dark-water bit selects the shared deep-water colour.</summary>
     public static string LiquidColorKey(AdtLiquidKind kind, bool darkWater)
         => darkWater ? ColorKeys.DeepWater : AdtLiquidLayer.ColorKeyOf(kind);
+
+    /// <summary>
+    /// Computes the terrain surface sample (height, unit normal, slope in degrees, steepness, and clamped liquid depth)
+    /// at world (<paramref name="x"/>, <paramref name="y"/>) inside <paramref name="tile"/>.
+    /// </summary>
+    public static TerrainSurfaceSample? SampleSurfaceAt(AdtFile adt, TileKey tile, double x, double y)
+    {
+        ArgumentNullException.ThrowIfNull(adt);
+        if (AdtGeometry.SampleAt(adt, tile, x, y) is not { } sample)
+        {
+            return null;
+        }
+
+        IReadOnlyList<LiquidSample>? liquids = AdtGeometry.LiquidAt(adt, tile, x, y);
+        double? liquidZ = null;
+        if (liquids is { Count: > 0 })
+        {
+            double maxLevel = double.NegativeInfinity;
+            for (int i = 0; i < liquids.Count; i++)
+            {
+                if (liquids[i].Level > maxLevel)
+                {
+                    maxLevel = liquids[i].Level;
+                }
+            }
+
+            liquidZ = maxLevel;
+        }
+
+        if (sample.IsHole)
+        {
+            return new TerrainSurfaceSample(
+                tile,
+                sample,
+                new WorldPoint(0, 0, 0),
+                double.NaN,
+                IsSteep: false,
+                WalkableSlope: false,
+                liquidZ,
+                LiquidDepth: 0.0);
+        }
+
+        AdtChunk chunk = adt.Chunk(sample.ChunkRow, sample.ChunkColumn);
+        int localRow = sample.SquareRow % SquaresPerChunk;
+        int localColumn = sample.SquareColumn % SquaresPerChunk;
+        (WorldPoint normal, double slopeDegrees) = TriangleNormalAndSlope(chunk, localRow, localColumn, sample.Triangle);
+        bool isSteep = slopeDegrees >= SteepSlopeDegrees;
+        double liquidDepth = liquidZ is { } lz ? Math.Max(0.0, lz - sample.Z) : 0.0;
+
+        return new TerrainSurfaceSample(
+            tile,
+            sample,
+            normal,
+            slopeDegrees,
+            isSteep,
+            WalkableSlope: !isSteep,
+            liquidZ,
+            liquidDepth);
+    }
+
+    /// <summary>
+    /// Computes the unit upward surface normal and slope angle in degrees for one of the four fan triangles (1..4) of
+    /// square (<paramref name="localRow"/>, <paramref name="localColumn"/>) in <paramref name="chunk"/>.
+    /// </summary>
+    public static (WorldPoint Normal, double SlopeDegrees) TriangleNormalAndSlope(AdtChunk chunk, int localRow, int localColumn, int triangle)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+        double h1 = chunk.OuterHeight(localRow, localColumn);
+        double h2 = chunk.OuterHeight(localRow + 1, localColumn);
+        double h3 = chunk.OuterHeight(localRow, localColumn + 1);
+        double h4 = chunk.OuterHeight(localRow + 1, localColumn + 1);
+        double h5 = 2.0 * chunk.InnerHeight(localRow, localColumn);
+
+        double a;
+        double b;
+        switch (triangle)
+        {
+            case 1:
+                a = h2 - h1;
+                b = h5 - h1 - h2;
+                break;
+            case 2:
+                a = h5 - h1 - h3;
+                b = h3 - h1;
+                break;
+            case 3:
+                a = h2 + h4 - h5;
+                b = h4 - h2;
+                break;
+            case 4:
+                a = h4 - h3;
+                b = h3 + h4 - h5;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(triangle), triangle, "Triangle index must be 1..4.");
+        }
+
+        // In square coordinates, fx advances along -X by SquareSize and fy advances along -Y by SquareSize:
+        // dZ/dX = -a / SquareSize, dZ/dY = -b / SquareSize, so the upward normal (-dZ/dX, -dZ/dY, 1) is (a / s, b / s, 1).
+        double nxRaw = a / WorldGrid.SquareSize;
+        double nyRaw = b / WorldGrid.SquareSize;
+        double len = Math.Sqrt((nxRaw * nxRaw) + (nyRaw * nyRaw) + 1.0);
+        double nx = nxRaw / len;
+        double ny = nyRaw / len;
+        double nz = 1.0 / len;
+        double slopeDegrees = Math.Acos(Math.Clamp(nz, -1.0, 1.0)) * (180.0 / Math.PI);
+        return (new WorldPoint(nx, ny, nz), slopeDegrees);
+    }
+
+    /// <summary>
+    /// Summarizes elevation min/max/mean, steep-triangle counts, hole square counts, visible liquid square coverage,
+    /// distinct <c>AreaId</c> values, and the steepest chunks across <paramref name="adt"/>.
+    /// </summary>
+    public static TerrainTileAnalysis AnalyzeTile(TileKey tile, AdtFile adt)
+    {
+        ArgumentNullException.ThrowIfNull(adt);
+        double minElevation = double.PositiveInfinity;
+        double maxElevation = double.NegativeInfinity;
+        double sumTriangleElevation = 0.0;
+        int totalTriangles = 0;
+        int steepTriangles = 0;
+        int holeSquares = 0;
+        int liquidSquares = 0;
+        var areaIds = new SortedSet<uint>();
+        var chunkSteepness = new List<TerrainChunkSteepness>(adt.Chunks.Count);
+
+        foreach (AdtChunk chunk in adt.Chunks)
+        {
+            areaIds.Add(chunk.AreaId);
+            int chunkSteep = 0;
+            int chunkTriangles = 0;
+            double chunkMaxSlope = 0.0;
+            double chunkMinZ = double.PositiveInfinity;
+            double chunkMaxZ = double.NegativeInfinity;
+
+            for (int y = 0; y < SquaresPerChunk; y++)
+            {
+                for (int x = 0; x < SquaresPerChunk; x++)
+                {
+                    bool hasVisibleLiquid = false;
+                    for (int l = 0; l < chunk.LiquidLayers.Count; l++)
+                    {
+                        if (chunk.LiquidLayers[l].IsVisible(y, x))
+                        {
+                            hasVisibleLiquid = true;
+                            break;
+                        }
+                    }
+
+                    if (hasVisibleLiquid)
+                    {
+                        liquidSquares++;
+                    }
+
+                    if (chunk.IsHoleSquare(y, x))
+                    {
+                        holeSquares++;
+                        continue;
+                    }
+
+                    double h1 = chunk.OuterHeight(y, x);
+                    double h2 = chunk.OuterHeight(y + 1, x);
+                    double h3 = chunk.OuterHeight(y, x + 1);
+                    double h4 = chunk.OuterHeight(y + 1, x + 1);
+                    double hc = chunk.InnerHeight(y, x);
+
+                    double sqMin = Math.Min(hc, Math.Min(Math.Min(h1, h2), Math.Min(h3, h4)));
+                    double sqMax = Math.Max(hc, Math.Max(Math.Max(h1, h2), Math.Max(h3, h4)));
+                    minElevation = Math.Min(minElevation, sqMin);
+                    maxElevation = Math.Max(maxElevation, sqMax);
+                    chunkMinZ = Math.Min(chunkMinZ, sqMin);
+                    chunkMaxZ = Math.Max(chunkMaxZ, sqMax);
+
+                    sumTriangleElevation += ((h1 + h2 + hc) / 3.0)
+                        + ((h1 + h3 + hc) / 3.0)
+                        + ((h2 + h4 + hc) / 3.0)
+                        + ((h3 + h4 + hc) / 3.0);
+
+                    for (int tri = 1; tri <= 4; tri++)
+                    {
+                        (_, double slope) = TriangleNormalAndSlope(chunk, y, x, tri);
+                        totalTriangles++;
+                        chunkTriangles++;
+                        if (slope > chunkMaxSlope)
+                        {
+                            chunkMaxSlope = slope;
+                        }
+
+                        if (slope >= SteepSlopeDegrees)
+                        {
+                            steepTriangles++;
+                            chunkSteep++;
+                        }
+                    }
+                }
+            }
+
+            if (chunkSteep > 0)
+            {
+                chunkSteepness.Add(new TerrainChunkSteepness(
+                    chunk.Index,
+                    chunk.Row,
+                    chunk.Column,
+                    chunkSteep,
+                    chunkTriangles,
+                    chunkMaxSlope,
+                    chunkMinZ,
+                    chunkMaxZ));
+            }
+        }
+
+        chunkSteepness.Sort(static (a, b) =>
+        {
+            int cmp = b.SteepTriangles.CompareTo(a.SteepTriangles);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            cmp = b.MaxSlopeDegrees.CompareTo(a.MaxSlopeDegrees);
+            return cmp != 0 ? cmp : a.ChunkIndex.CompareTo(b.ChunkIndex);
+        });
+
+        if (chunkSteepness.Count > MaxHighlightedSteepChunks)
+        {
+            chunkSteepness.RemoveRange(MaxHighlightedSteepChunks, chunkSteepness.Count - MaxHighlightedSteepChunks);
+        }
+
+        double finalMin = totalTriangles > 0 ? minElevation : double.NaN;
+        double finalMax = totalTriangles > 0 ? maxElevation : double.NaN;
+        double finalMean = totalTriangles > 0 ? sumTriangleElevation / totalTriangles : double.NaN;
+        double steepRatio = totalTriangles > 0 ? (double)steepTriangles / totalTriangles : 0.0;
+        double liquidRatio = (double)liquidSquares / TotalSquaresPerTile;
+
+        return new TerrainTileAnalysis(
+            tile,
+            finalMin,
+            finalMax,
+            finalMean,
+            totalTriangles,
+            steepTriangles,
+            steepRatio,
+            holeSquares,
+            liquidSquares,
+            liquidRatio,
+            [.. areaIds],
+            chunkSteepness);
+    }
 
     /// <summary>
     /// The terrain of <paramref name="adt"/> as the server would interpolate it: for every square the hole bitmap does

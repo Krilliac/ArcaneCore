@@ -49,7 +49,11 @@ internal static class Hud
         int scale = ScaleFor(frame.Height);
         DrawInfoBlock(frame, view, scale);
         DrawCompass(frame, raster, view.Camera, scale);
-        DrawScaleBar(frame, view.Camera, transform, scale);
+        if (frame.Width >= 240 && frame.Height >= 120)
+        {
+            DrawScaleBar(frame, view.Camera, transform, scale);
+        }
+
         DrawFooter(frame, view, scene, scale);
         if (view.Compare == CompareMode.Split)
         {
@@ -152,8 +156,34 @@ internal static class Hud
         raster.StrokeScreen(cx, cy, 0, cx + (nr * needle), cy - (nu * needle), 0, north);
     }
 
-    private static void DrawScaleBar(Framebuffer frame, CameraState camera, in ViewTransform transform, int scale)
+    /// <summary>
+    /// Renders a yard scale bar in the bottom-left corner when <paramref name="fb"/> is at least 240x120 pixels.
+    /// </summary>
+    public static void DrawScaleBar(Framebuffer fb, CameraState camera)
     {
+        ArgumentNullException.ThrowIfNull(fb);
+        ArgumentNullException.ThrowIfNull(camera);
+        if (fb.Width < 240 || fb.Height < 120)
+        {
+            return;
+        }
+
+        var transform = new ViewTransform(camera, fb.Width, fb.Height);
+        DrawScaleBar(fb, camera, in transform, ScaleFor(fb.Height));
+    }
+
+    /// <summary>
+    /// Renders a yard scale bar in the bottom-left corner using a precomputed <c>ViewTransform</c> and HUD font scale.
+    /// </summary>
+    public static void DrawScaleBar(Framebuffer frame, CameraState camera, in ViewTransform transform, int scale)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(camera);
+        if (frame.Width < 240 || frame.Height < 120)
+        {
+            return;
+        }
+
         bool perspective = camera.Mode != CameraMode.Top;
         double reference = camera.Mode == CameraMode.Orbit ? camera.Distance : 50.0;
         double pixelsPerYard = perspective ? transform.FocalPixels / reference : transform.FocalPixels;

@@ -74,7 +74,10 @@ internal sealed partial class PlayerbotWorldChatter
         while (budget-- > 0 && _heard.TryDequeue(out BotHeardLine? line))
             if (options.WorldReactions) React(pass, chat, options, line);
         if (_answered.Count > 512)
-            foreach (KeyValuePair<ulong, long> stale in _answered.Where(p => p.Value <= pass.NowMs).ToArray()) _answered.Remove(stale.Key);
+        {
+            foreach ((ulong key, long until) in _answered)
+                if (until <= pass.NowMs) _answered.Remove(key);
+        }
     }
 
     internal void Stop()
@@ -116,21 +119,77 @@ internal sealed partial class PlayerbotWorldChatter
     /// <summary>The first of <paramref name="goods"/> a WTB line names (whole words, any case); null when none.</summary>
     internal static BotChatItem? Wanted(string text, IReadOnlyList<BotChatItem> goods)
     {
-        if (goods.Count == 0) return null;
-        string lower = " " + Normalize(text) + " ";
-        foreach (BotChatItem item in goods)
+        if (goods.Count == 0 || string.IsNullOrWhiteSpace(text)) return null;
+        return WantedNormalized(Normalize(text), goods);
+    }
+
+    private static BotChatItem? WantedNormalized(string normalizedText, IReadOnlyList<BotChatItem> goods)
+    {
+        if (goods.Count == 0 || normalizedText.Length < 3) return null;
+        for (int i = 0; i < goods.Count; i++)
         {
+            BotChatItem item = goods[i];
             string name = Normalize(item.Name);
-            if (name.Length >= 3 && lower.Contains(" " + name + " ", StringComparison.Ordinal)) return item;
+            if (name.Length >= 3 && ContainsWholePhrase(normalizedText, name)) return item;
         }
 
         return null;
     }
 
+    private static bool ContainsWholePhrase(string haystack, string needle)
+    {
+        int start = 0;
+        while (start <= haystack.Length - needle.Length)
+        {
+            int idx = haystack.IndexOf(needle, start, StringComparison.Ordinal);
+            if (idx < 0) return false;
+            bool leftOk = idx == 0 || haystack[idx - 1] == ' ';
+            int end = idx + needle.Length;
+            bool rightOk = end == haystack.Length || haystack[end] == ' ';
+            if (leftOk && rightOk) return true;
+            start = idx + 1;
+        }
+
+        return false;
+    }
+
     /// <summary>The asking price of one item: twice its vendor value (a 2005 player's "fair price"), at least a silver.</summary>
     internal static string Price(BotChatItem item) => PlayerbotChatEvents.Coins(Math.Max(100u, item.SellPrice * 2));
 
-    private static string Normalize(string text) => Spaces().Replace(NotWord().Replace(text.ToLowerInvariant(), " "), " ").Trim();
+    internal static string Normalize(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        char[]? rented = null;
+        Span<char> buffer = text.Length <= 256
+            ? stackalloc char[256]
+            : (rented = System.Buffers.ArrayPool<char>.Shared.Rent(text.Length));
+        try
+        {
+            int len = 0;
+            bool inSpace = true;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = char.ToLowerInvariant(text[i]);
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '\'')
+                {
+                    buffer[len++] = c;
+                    inSpace = false;
+                }
+                else if (!inSpace)
+                {
+                    buffer[len++] = ' ';
+                    inSpace = true;
+                }
+            }
+
+            if (len > 0 && buffer[len - 1] == ' ') len--;
+            return len == 0 ? string.Empty : new string(buffer[..len]);
+        }
+        finally
+        {
+            if (rented is not null) System.Buffers.ArrayPool<char>.Shared.Return(rented);
+        }
+    }
 
     // --- reacting --------------------------------------------------------------------------------------------------------
 
@@ -143,7 +202,9 @@ internal sealed partial class PlayerbotWorldChatter
         if (pass.World.FindOnlinePlayer(line.SenderGuid) is not { } sender || sender.Session is not WorldSession { IsManaged: false }) return;
         if (pass.Social.Channels.Find(sender.Team, line.ChannelName!) is not { } channel) return;
         WorldLineKind kind = Read(line.Text);
+        if (kind == WorldLineKind.None) return;
         BotChatRole? role = kind == WorldLineKind.LookingForMore ? AskedRole(line.Text) : null;
+        string? normalizedWtb = kind == WorldLineKind.WantToBuy ? Normalize(line.Text) : null;
 
         // A bounded look at the bots in that channel, from a random start.
         IReadOnlyList<PlayerbotSocialBot> bots = pass.Bots;
@@ -158,7 +219,7 @@ internal sealed partial class PlayerbotWorldChatter
             BotSpeech? speech = kind switch
             {
                 WorldLineKind.LookingForMore => LfmAnswer(pass, bot, line, role),
-                WorldLineKind.WantToBuy => WtbAnswer(pass, bot, line),
+                WorldLineKind.WantToBuy => WtbAnswer(pass, bot, line, normalizedWtb!),
                 _ => null,
             };
             if (speech is null || chat.TrySpeak(bot.Id, player.Guid, speech) != BotSpeechAdmission.Queued) continue;
@@ -185,10 +246,10 @@ internal sealed partial class PlayerbotWorldChatter
         return Answer(pass, bot, line, "react.lfm", new Dictionary<string, string>(StringComparer.Ordinal) { ["dungeon"] = dungeon.Short });
     }
 
-    private static BotSpeech? WtbAnswer(PlayerbotSocialPass pass, PlayerbotSocialBot bot, BotHeardLine line)
+    private static BotSpeech? WtbAnswer(PlayerbotSocialPass pass, PlayerbotSocialBot bot, BotHeardLine line, string normalizedText)
     {
         PlayerbotPersonaFacts.Bags bags = PlayerbotPersonaFacts.ReadBags(bot.Player, spells: null);
-        if (Wanted(line.Text, bags.Surplus) is not { } item) return null;
+        if (WantedNormalized(normalizedText, bags.Surplus) is not { } item) return null;
         CultureInfo c = CultureInfo.InvariantCulture;
         return Answer(pass, bot, line, "react.wtb", new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -222,8 +283,4 @@ internal sealed partial class PlayerbotWorldChatter
 
     [GeneratedRegex(@"\b(dps|dd|damage)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Damage();
-
-    [GeneratedRegex(@"[^a-z0-9']+")] private static partial Regex NotWord();
-
-    [GeneratedRegex(@"\s+")] private static partial Regex Spaces();
 }

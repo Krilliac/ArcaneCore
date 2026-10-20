@@ -833,30 +833,46 @@ public sealed partial class CreatureMapSystem
 
     private void CheckCombatStuck(Creature creature, uint diffMs)
     {
-        bool inCombat = creature.Combat.IsInCombat || (creature.UnitFlags & UnitFlags.InCombat) != 0;
-        if (!inCombat || !creature.CharmerOrOwnerGuid.IsEmpty)
+        if ((creature.UnitFlags & UnitFlags.InCombat) == 0 || creature.IsEvading || !creature.CharmerOrOwnerGuid.IsEmpty)
         {
             creature.ResetStuckInCombatEpisode();
             return;
         }
 
-        Unit? victim = creature.Combat.Victim;
+        UnitCombat combat = creature.Combat;
+        Unit? victim = combat.Victim;
         bool hasValidVictim = victim is { IsAlive: true } && ReferenceEquals(victim.Map, Map);
         bool hasValidThreat = false;
-        if (creature.Combat.HasThreatList)
+        if (combat.HasThreatList)
         {
-            foreach (ThreatEntry entry in creature.Combat.Threat.Entries)
+            IReadOnlyList<ThreatEntry> entries = combat.Threat.Entries;
+            for (int i = 0; i < entries.Count; i++)
             {
-                if (entry.Target.IsAlive && ReferenceEquals(entry.Target.Map, Map))
+                Unit target = entries[i].Target;
+                if (target.IsAlive && ReferenceEquals(target.Map, Map))
                 {
                     hasValidThreat = true;
                     break;
                 }
             }
+
+            if (!hasValidThreat)
+            {
+                IReadOnlyList<ThreatEntry> offline = combat.Threat.OfflineEntries;
+                for (int i = 0; i < offline.Count; i++)
+                {
+                    Unit target = offline[i].Target;
+                    if (target.IsAlive && ReferenceEquals(target.Map, Map))
+                    {
+                        hasValidThreat = true;
+                        break;
+                    }
+                }
+            }
         }
 
         bool hasValidAttacker = false;
-        foreach (Unit attacker in creature.Combat.Attackers)
+        foreach (Unit attacker in combat.AttackersInternal)
         {
             if (attacker.IsAlive && ReferenceEquals(attacker.Map, Map))
             {
@@ -867,8 +883,14 @@ public sealed partial class CreatureMapSystem
 
         if (!hasValidVictim && !hasValidThreat && !hasValidAttacker)
         {
+            // A critter (CritterAI, e.g. entry 4075 Rat) or NO_MELEE_FLEE creature flees in combat for EscapeTimerMs (30 s)
+            // with no victim by design before calling EnterEvadeMode.
+            uint emptyThresholdMs = (creature.AI is CritterAI || creature.InNoMeleePanic)
+                && creature.Motion.CurrentType == MovementGeneratorType.Fleeing
+                ? CritterAI.EscapeTimerMs + CreatureAnomalies.StuckInCombatEmptyMs
+                : CreatureAnomalies.StuckInCombatEmptyMs;
             uint elapsed = creature.AdvanceStuckInCombat(diffMs);
-            if (elapsed >= CreatureAnomalies.StuckInCombatEmptyMs && !creature.StuckInCombatEpisodeReported)
+            if (elapsed >= emptyThresholdMs && !creature.StuckInCombatEpisodeReported)
             {
                 CreatureAnomalies.ReportStuckInCombat(
                     creature,
@@ -931,7 +953,7 @@ public sealed partial class CreatureMapSystem
             creature.ClearBossStateInconsistent("evading-without-home-generator");
         }
 
-        if (!creature.Combat.IsInCombat && !creature.IsEvading)
+        if ((creature.UnitFlags & UnitFlags.InCombat) == 0 && !creature.IsEvading)
         {
             if (creature.AiImmobilizedCombatOnly && creature.AiImmobilized)
             {

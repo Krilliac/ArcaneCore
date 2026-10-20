@@ -97,7 +97,7 @@ public sealed partial class GameObjectMapSystem
     /// <summary>GameObject::Update, GO_NOT_READY of a restocking chest (GameObject.cpp:381-394): ready once the restock time ran out.</summary>
     private void UpdateRestock(GameObject go)
     {
-        if (go.LootState == GameObjectLootState.NotReady && go.RestockAfterSecond is { } after && after <= ClockSeconds)
+        if (go.Type == GameObjectType.Chest && go.LootState == GameObjectLootState.NotReady && go.RestockAfterSecond is { } after && after <= ClockSeconds)
         {
             go.RestockAfterSecond = null;
             go.LootState = GameObjectLootState.Ready;

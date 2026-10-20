@@ -82,7 +82,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private int _approachFailCount;
     private const int ApproachConfirmFailures = 3;
     private const float ApproachSpotYards = 3f;
-    private (uint QuestId, uint Entry, uint Progress) _lastNoProgressEpisode;
+    private readonly Dictionary<(uint QuestId, uint Entry), (uint Progress, string Reason)> _reportedNoProgressEpisodes = [];
 
     /// <summary>The bot's home area, or null. New quests are taken only inside it; distant completed returns may be abandoned.</summary>
     internal PlayerbotHomeArea? Home { get; set; }
@@ -731,23 +731,39 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// <see cref="PlayerbotContention.NoCreditMs"/> is set aside for the bot (<see cref="PlayerbotContention.ObserveObjective"/>) and the
     /// next one is taken; none left is reported through <see cref="OnContentionExhausted"/>.
     /// </summary>
-    private void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
+    internal void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
     {
         uint now = _session.World.NowMs;
         Objective chosen = Pick(player, services, state, now);
         if (Contention is { } contention)
         {
-            if (chosen.Entry == 0) contention.ClearObjective();
-            else if (contention.ObserveObjective(chosen.Entry, chosen.Progress, now))
+            if (chosen.Entry == 0 || chosen.Visited)
             {
-                (uint stalled, uint stalledQuest, uint stalledProgress) = (chosen.Entry, chosen.Quest, chosen.Progress);
-                ReportObjectiveNoProgress(player, stalledQuest, stalled, stalledProgress, "no-credit-timeout");
-                chosen = Pick(player, services, state, now); // the stalled entry is set aside now
-                if (chosen.Entry == 0) OnContentionExhausted?.Invoke(stalled, stalledQuest);
+                contention.ClearObjective();
+            }
+            else
+            {
+                ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
+                uint trackedProgress = Math.Max(chosen.Progress,
+                    PlayerbotQuestObjectives.GetTotalProgressForCreature(player, services, state, loot, chosen.Entry));
+                if (contention.ObserveObjective(chosen.Entry, trackedProgress, now))
+                {
+                    (uint stalled, uint stalledQuest, uint stalledProgress) = (chosen.Entry, chosen.Quest, chosen.Progress);
+                    ReportObjectiveNoProgress(player, stalledQuest, stalled, stalledProgress, "no-credit-timeout");
+                    chosen = Pick(player, services, state, now); // the stalled entry is set aside now
+                    if (chosen.Entry == 0) OnContentionExhausted?.Invoke(stalled, stalledQuest);
+                }
             }
         }
         if (chosen.Entry != 0 && chosen.Visited)
+        {
             ReportObjectiveNoProgress(player, chosen.Quest, chosen.Entry, chosen.Progress, "all-spawns-visited");
+            PreferredCreatureEntry = 0;
+            PreferredQuestId = 0;
+            PreferredItemUseId = 0;
+            PreferredItemUseQuestId = 0;
+            return;
+        }
 
         PreferredCreatureEntry = chosen.Entry;
         PreferredQuestId = chosen.Quest;
@@ -796,6 +812,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (item == 0 || needed == 0 || content is null) continue;
                 uint have = player.Inventory.GetItemCount(item);
                 if (have >= needed) continue;
+                if (!PlayerbotQuestObjectives.CanStoreObjectiveItem(player, item)) continue;
                 if (!lootLoaded)
                 {
                     loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
@@ -1382,9 +1399,19 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private void ReportObjectiveNoProgress(Player player, uint questId, uint entry, uint progress, string reason)
     {
         if (_session.IsInChaosProbe || questId == 0 || entry == 0) return;
-        var episode = (questId, entry, progress);
-        if (_lastNoProgressEpisode == episode) return;
-        _lastNoProgressEpisode = episode;
+        var key = (questId, entry);
+        if (_reportedNoProgressEpisodes.TryGetValue(key, out (uint Progress, string Reason) last))
+        {
+            // Once all spawns of an objective entry have been visited for a quest, killing stray respawns (incrementing progress)
+            // or revisiting the camp must not re-fire all-spawns-visited; other reasons deduplicate by (progress, reason) per (quest, entry).
+            if (reason == "all-spawns-visited" && last.Reason == "all-spawns-visited")
+                return;
+            if (last.Progress == progress && last.Reason == reason)
+                return;
+        }
+        if (_reportedNoProgressEpisodes.Count >= 64)
+            _reportedNoProgressEpisodes.Clear();
+        _reportedNoProgressEpisodes[key] = (progress, reason);
         PlayerbotAnomalies.Report(player, "quest", "objective-no-progress",
             $"quest={questId} entry={entry} progress={progress} reason={reason}");
     }
@@ -1397,12 +1424,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             || state.Quests.Get(questId) is not { } status
             || services.Quests.Get(questId) is not { } quest)
             return 0;
-        for (int i = 0; i < quest.ReqCreatureOrGOId.Count; i++)
+        for (int i = 0; i < quest.ReqCreatureOrGOId.Count && i < status.CreatureOrGOCount.Length; i++)
         {
             if (quest.ReqCreatureOrGOId[i] == (int)entry)
                 return status.CreatureOrGOCount[i];
         }
-        return 0;
+        return PlayerbotQuestObjectives.GetQuestTotalProgress(player, quest, status);
     }
 
     internal static string TurnInRefusalCode(string? reason, string fallback)

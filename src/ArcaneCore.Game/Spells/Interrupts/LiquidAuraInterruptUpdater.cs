@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
@@ -17,44 +18,54 @@ public sealed class LiquidAuraInterruptUpdater(Func<SpellSystem?> spells, ILiqui
 {
     private readonly Dictionary<Player, State> _states = [];
 
-    private readonly record struct State(float X, float Y, float Z, bool High);
+    private record struct State(float X, float Y, float Z, bool High);
 
     /// <summary>Raised on every flag change (player, entered). Other systems (breath/fatigue timers) may reuse it.</summary>
     public event Action<Player, bool>? HighLiquidChanged;
 
     public void Update(Map map, uint diffMs)
     {
-        if (map is null)
+        if (map is null || map.PlayerCount == 0)
         {
             return;
         }
 
-        foreach (Player player in map.Players.ToArray())
+        Player[] players = map.RentPlayerSnapshot(out int playerCount);
+        try
         {
-            try
+            for (int i = 0; i < playerCount; i++)
             {
-                if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                Player player = players[i];
+                try
                 {
-                    continue;
-                }
+                    if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                    {
+                        continue;
+                    }
 
-                bool hadState = _states.TryGetValue(player, out State last);
-                if (hadState && last.X == player.X && last.Y == player.Y && last.Z == player.Z)
-                {
-                    continue;
-                }
+                    ref State state = ref CollectionsMarshal.GetValueRefOrAddDefault(_states, player, out bool hadState);
+                    if (hadState && state.X == player.X && state.Y == player.Y && state.Z == player.Z)
+                    {
+                        continue;
+                    }
 
-                bool high = probe.IsHighLiquid(map, player);
-                _states[player] = new State(player.X, player.Y, player.Z, high);
-                if (last.High != high)
+                    bool previousHigh = state.High;
+                    bool high = probe.IsHighLiquid(map, player);
+                    state = new State(player.X, player.Y, player.Z, high);
+                    if (previousHigh != high)
+                    {
+                        OnChanged(player, high);
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    OnChanged(player, high);
+                    FaultLedger.Shared.Record("map-liquid-interrupt", ex);
                 }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map-liquid-interrupt", ex);
-            }
+        }
+        finally
+        {
+            Map.ReturnPlayerSnapshot(players);
         }
     }
 

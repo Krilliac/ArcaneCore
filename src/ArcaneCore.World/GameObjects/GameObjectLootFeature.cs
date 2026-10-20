@@ -222,6 +222,19 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <summary>Cancel in-flight chest operations and finalize them without world publication.</summary>
     public Task StopAsync() => _settlements?.StopAsync() ?? Task.CompletedTask;
 
+    private CreatureWorldFeature? _creatureFeature;
+    private ArcaneCore.World.Spells.SpellFeature? _spellFeature;
+    private DeferredItemTemplates? _deferredItemTemplates;
+    private SocialGroups? _socialGroups;
+    private LootConditions? _lootConditions;
+    private SmartGameObjectAi? _fallbackAi;
+    private Action<Player>? _dismount;
+    private Action<Player>? _breakLootingAuras;
+
+    private CreatureWorldFeature? CreatureFeature => _creatureFeature ??= services.GetService<CreatureWorldFeature>();
+
+    private ArcaneCore.World.Spells.SpellFeature? SpellFeature => _spellFeature ??= services.GetService<ArcaneCore.World.Spells.SpellFeature>();
+
     private void OnMapCreated(Map map)
     {
         if (_systems.ContainsKey(map))
@@ -231,12 +244,12 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         var loot = new LootService(LootContent, Options, new Random(), logger)
         {
-            Items = new DeferredItemTemplates(services),
+            Items = _deferredItemTemplates ??= new DeferredItemTemplates(services),
             Quests = Quests,
-            Groups = new SocialGroups(services),
+            Groups = _socialGroups ??= new SocialGroups(services),
             // LootMgr.cpp:370-377 evaluates each row's condition against the viewer (resolved at use time, fails closed without the feature).
-            Conditions = new LootConditions(services).IsSatisfied,
-            CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
+            Conditions = (_lootConditions ??= new LootConditions(services)).IsSatisfied,
+            CreatureOptions = CreatureFeature?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
         var system = new GameObjectMapSystem(map, Content, loot, Quests, logger)
@@ -245,12 +258,17 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             ElevatorAnimations = ElevatorAnimations,
             Random = new Random(),
             // An object with source-type-1 smart_scripts rows runs them unless a C# AI is registered for its entry; the catalog is read at use time (the creature feature loads it).
-            FallbackAi = new SmartGameObjectAi(() => services.GetService<CreatureWorldFeature>()?.Content.Ai.SmartScripts ?? SmartScriptCatalog.Empty),
+            FallbackAi = _fallbackAi ??= new SmartGameObjectAi(() => CreatureFeature?.Content.Ai.SmartScripts ?? SmartScriptCatalog.Empty),
             // GameObject::Use (GameObject.cpp:1414-1415): RemoveSpellsCausingAura(SPELL_AURA_MOUNTED), the spell system resolved at use time.
-            Dismount = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
+            Dismount = _dismount ??= player => SpellFeature?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
             // HandleGameObjectUseOpcode (SpellHandler.cpp:257): RemoveAurasWithInterruptFlags(AURA_INTERRUPT_LOOTING_CANCELS) before Use.
-            BreakLootingAuras = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveAurasWithInterruptFlags(player, Game.Spells.AuraInterruptMask.Looting),
+            BreakLootingAuras = _breakLootingAuras ??= player => SpellFeature?.System.RemoveAurasWithInterruptFlags(player, Game.Spells.AuraInterruptMask.Looting),
         };
+        if (map.FindUpdater<CreatureMapSystem>() is { } creatures)
+        {
+            system.SubscribeCreatureLifecycle(creatures);
+        }
+
         map.AddUpdater(system);
         map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
         _systems.Add(map, system);
@@ -329,7 +347,9 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <summary>Item templates from the items feature, read at use time (it loads them lazily at first login).</summary>
     private sealed class DeferredItemTemplates(IServiceProvider services) : IItemTemplateStore
     {
-        private IItemTemplateStore Inner => services.GetService<ItemsFeature>()?.Templates ?? ItemTemplateStore.Empty;
+        private ItemsFeature? _items;
+
+        private IItemTemplateStore Inner => (_items ??= services.GetService<ItemsFeature>())?.Templates ?? ItemTemplateStore.Empty;
 
         public int Count => Inner.Count;
 
@@ -349,15 +369,21 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// </summary>
     private sealed class LootConditions(IServiceProvider services)
     {
+        private ConditionFeature? _conditions;
+
         public bool IsSatisfied(Player player, uint conditionId)
-            => services.GetService<ConditionFeature>()?.IsSatisfied(conditionId, player, null) ?? false;
+            => (_conditions ??= services.GetService<ConditionFeature>())?.IsSatisfied(conditionId, player, null) ?? false;
     }
 
     private sealed class SocialGroups(IServiceProvider services) : ILootGroups
     {
+        private SocialFeature? _social;
+
+        private SocialFeature? Social => _social ??= services.GetService<SocialFeature>();
+
         public Group? GroupOf(Player player)
         {
-            if (services.GetService<SocialFeature>() is not { } social)
+            if (Social is not { } social)
             {
                 return null;
             }
@@ -374,7 +400,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         public void LooterChanged(Group group)
         {
-            if (services.GetService<SocialFeature>() is { } social)
+            if (Social is { } social)
             {
                 try
                 {
@@ -389,7 +415,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         public bool IsMemberOnline(ObjectGuid guid)
         {
-            if (services.GetService<SocialFeature>() is not { } social)
+            if (Social is not { } social)
             {
                 return true;
             }

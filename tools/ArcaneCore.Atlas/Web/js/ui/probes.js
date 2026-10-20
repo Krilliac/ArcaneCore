@@ -10,6 +10,29 @@ import { clear, fill, formatDuration, h } from '../util.js';
 import { buildForm } from './formview.js';
 import { button, emptyState } from './widgets.js';
 
+const PROFILE_COMMAND_FALLBACK = {
+    name: 'query.profile',
+    summary: 'Elevation & floor profile sampled between from and to.',
+    surfaces: ['palette', 'probes'],
+    schema: {
+        type: 'object',
+        required: ['map', 'from', 'to'],
+        properties: {
+            map: { type: 'integer', description: 'Map ID' },
+            from: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Start point (x, y, z)' },
+            to: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'End point (x, y, z)' },
+            steps: { type: 'integer', default: 32, description: 'Number of profile sample steps between from and to' },
+        },
+    },
+};
+
+function labelForProbe(kind) {
+    if (kind === 'profile') {
+        return 'Elevation & floor profile';
+    }
+    return probeTitle(kind);
+}
+
 /** Fields of a probe kind: the server schema's, then those only the reference schema has. */
 export function unionFields(server, reference) {
     const commands = [server, reference].filter(Boolean);
@@ -54,6 +77,11 @@ export class ProbesPanel {
         const { app } = this;
         this.cards.clear();
         const kinds = probeKinds(app.commands);
+        if (kinds.length > 0 && !kinds.some((k) => k.kind === 'profile')) {
+            const serverProfile = app.commandNamed('query.profile') ?? PROFILE_COMMAND_FALLBACK;
+            const refProfile = app.commandNamed('ref.query.profile') ?? null;
+            kinds.push({ kind: 'profile', server: serverProfile, reference: refProfile });
+        }
         if (kinds.length === 0) {
             fill(this.cardBox, emptyState(
                 app.commands.length === 0 ? 'Waiting for the host' : 'No probes on this host',
@@ -78,7 +106,6 @@ export class ProbesPanel {
     }
 
     #buildCard({ kind, server, reference }, open) {
-        const { app } = this;
         const fields = unionFields(server, reference);
         const card = { kind, server, reference, fields, results: {}, open, form: null };
         const body = h('div', { class: 'probe-body' });
@@ -107,7 +134,7 @@ export class ProbesPanel {
                     toggle.firstElementChild.textContent = card.open ? '▾' : '▸';
                 },
             },
-        }, h('span', { class: 'disclosure-glyph', text: open ? '▾' : '▸', aria: { hidden: 'true' } }), h('span', { class: 'card-title', text: probeTitle(kind) }),
+        }, h('span', { class: 'disclosure-glyph', text: open ? '▾' : '▸', aria: { hidden: 'true' } }), h('span', { class: 'card-title', text: labelForProbe(kind) }),
         h('span', { class: 'card-tags' }, server ? h('span', { class: 'tag tag-server', text: 'server' }) : null, reference ? h('span', { class: 'tag tag-reference', text: 'reference' }) : null));
         body.id = toggleId;
         body.hidden = !open;

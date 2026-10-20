@@ -245,30 +245,43 @@ internal static class PlayerbotMotionAnomalies
     }
 
     /// <summary>The server did not take a movement packet the motion sent (<paramref name="what"/> names it).</summary>
-    internal static void ReportMoveRejected(WorldSession session, Player player, string what, Vector3 intended, uint now)
+    internal static void ReportMoveRejected(WorldSession session, Player player, string what, Vector3 intended, uint now,
+        int consecutiveRejections = 1, string? reason = null, string? moveMode = null)
     {
         if (session.IsInChaosProbe || !PlayerbotMotion.Of(player).Watch.Due(Code.MoveRejected, now)) return;
+        string context = FormatRejectionContext(consecutiveRejections, reason, moveMode);
         Emit(player, Code.MoveRejected,
-            $"{what} to {Describe(intended)} was not taken (the bot stands at {Describe(new Vector3(player.X, player.Y, player.Z))})",
+            $"{what} to {Describe(intended)} was not taken (the bot stands at {Describe(new Vector3(player.X, player.Y, player.Z))}){context}",
             AnomalySeverity.Warning);
     }
 
     /// <summary>A route could not be started: its first stretch from <paramref name="from"/> is not walkable.</summary>
-    internal static void ReportStartBlocked(WorldSession session, Player player, PlayerbotRoute route, Vector3 from, uint now)
+    internal static void ReportStartBlocked(WorldSession session, Player player, PlayerbotRoute route, Vector3 from, uint now,
+        int consecutiveRejections = 1, string? reason = null, string? moveMode = null)
     {
         if (session.IsInChaosProbe || !PlayerbotMotion.Of(player).Watch.Due(Code.StartBlocked, now)) return;
+        string context = FormatRejectionContext(consecutiveRejections, reason, moveMode);
         Emit(player, Code.StartBlocked,
-            $"the first stretch of a {route.Points.Count}-point route from {Describe(from)} towards {Describe(route.Points[Math.Clamp(route.NextPoint, 0, route.Points.Count - 1)])} is not walkable",
+            $"the first stretch of a {route.Points.Count}-point route from {Describe(from)} towards {Describe(route.Points[Math.Clamp(route.NextPoint, 0, route.Points.Count - 1)])} is not walkable{context}",
             AnomalySeverity.Warning);
     }
 
     /// <summary>The route being walked is not walkable ahead of <paramref name="at"/>: the bot stopped there.</summary>
-    internal static void ReportRouteBlocked(WorldSession session, Player player, PlayerbotRoute route, Vector3 at, uint now)
+    internal static void ReportRouteBlocked(WorldSession session, Player player, PlayerbotRoute route, Vector3 at, uint now,
+        int consecutiveRejections = 1, string? reason = null, string? moveMode = null)
     {
         if (session.IsInChaosProbe || !PlayerbotMotion.Of(player).Watch.Due(Code.RouteBlocked, now)) return;
+        string context = FormatRejectionContext(consecutiveRejections, reason, moveMode);
         Emit(player, Code.RouteBlocked,
-            $"the route ({route.Points.Count} points, next {route.NextPoint}) is not walkable ahead of {Describe(at)}; the bot stopped",
+            $"the route ({route.Points.Count} points, next {route.NextPoint}) is not walkable ahead of {Describe(at)}; the bot stopped{context}",
             AnomalySeverity.Warning);
+    }
+
+    private static string FormatRejectionContext(int consecutiveRejections, string? reason, string? moveMode)
+    {
+        if (reason is null && moveMode is null && consecutiveRejections <= 1) return string.Empty;
+        return string.Create(CultureInfo.InvariantCulture,
+            $" [reason={reason ?? "NoGroundSupport"} moveMode={moveMode ?? "DirectStep"} consec={Math.Max(1, consecutiveRejections)}]");
     }
 
     /// <summary>

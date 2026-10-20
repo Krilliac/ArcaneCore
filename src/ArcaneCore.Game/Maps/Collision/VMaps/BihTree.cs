@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace ArcaneCore.Game.Maps.Collision.VMaps;
 
@@ -178,7 +179,8 @@ public sealed class BihTree
     internal void IntersectRay<TCallback>(Vector3 origin, Vector3 direction, ref float maxDistance, ref TCallback callback, bool stopAtFirstHit)
         where TCallback : struct, IRayPrimitiveCallback
     {
-        if (_objects.Length == 0 || !(maxDistance > 0))
+        uint[] objects = _objects;
+        if (objects.Length == 0 || !(maxDistance > 0))
         {
             return;
         }
@@ -188,6 +190,7 @@ public sealed class BihTree
             return;
         }
 
+        uint[] tree = _tree;
         Span<(int Node, float Min, float Max)> stack = stackalloc (int, float, float)[MaxStack];
         int depth = 0;
         stack[depth++] = (0, tMin, tMax);
@@ -202,12 +205,12 @@ public sealed class BihTree
             max = MathF.Min(max, maxDistance);
             while (true)
             {
-                if (node < 0 || node + 2 >= _tree.Length)
+                if (node < 0 || node + 2 >= tree.Length)
                 {
                     break;
                 }
 
-                uint word = _tree[node];
+                uint word = tree[node];
                 int axis = (int)(word >> 30);
                 int offset = (int)(word & OffsetMask);
                 if (axis == LeafAxis)
@@ -217,20 +220,24 @@ public sealed class BihTree
                         break;
                     }
 
-                    uint count = _tree[node + 1];
-                    for (uint i = 0; i < count && offset + i < _objects.Length; i++)
+                    uint count = tree[node + 1];
+                    if ((uint)offset < (uint)objects.Length)
                     {
-                        if (callback.Invoke((int)_objects[offset + i], ref maxDistance) && stopAtFirstHit)
+                        int end = (int)Math.Min((long)objects.Length, (long)offset + count);
+                        for (int i = offset; i < end; i++)
                         {
-                            return;
+                            if (callback.Invoke((int)objects[i], ref maxDistance) && stopAtFirstHit)
+                            {
+                                return;
+                            }
                         }
                     }
 
                     break;
                 }
 
-                float clipLow = BitConverter.UInt32BitsToSingle(_tree[node + 1]);
-                float clipHigh = BitConverter.UInt32BitsToSingle(_tree[node + 2]);
+                float clipLow = BitConverter.UInt32BitsToSingle(tree[node + 1]);
+                float clipHigh = BitConverter.UInt32BitsToSingle(tree[node + 2]);
                 float o = Axis(origin, axis);
                 float d = Axis(direction, axis);
 
@@ -297,6 +304,7 @@ public sealed class BihTree
 
     private readonly struct DelegateRayCallback(RayPrimitiveCallback callback) : IRayPrimitiveCallback
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Invoke(int primitive, ref float maxDistance) => callback(primitive, ref maxDistance);
     }
 
@@ -304,11 +312,20 @@ public sealed class BihTree
     public void IntersectPoint(Vector3 point, Action<int> callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
-        if (_objects.Length == 0 || !Contains(Low, High, point))
+        var wrapper = new DelegatePointCallback(callback);
+        IntersectPoint(point, ref wrapper);
+    }
+
+    internal void IntersectPoint<TCallback>(Vector3 point, ref TCallback callback)
+        where TCallback : struct, IPointPrimitiveCallback
+    {
+        uint[] objects = _objects;
+        if (objects.Length == 0 || !Contains(Low, High, point))
         {
             return;
         }
 
+        uint[] tree = _tree;
         Span<int> stack = stackalloc int[MaxStack];
         int depth = 0;
         stack[depth++] = 0;
@@ -317,30 +334,31 @@ public sealed class BihTree
             int node = stack[--depth];
             while (true)
             {
-                if (node < 0 || node + 2 >= _tree.Length)
+                if (node < 0 || node + 2 >= tree.Length)
                 {
                     break;
                 }
 
-                uint word = _tree[node];
+                uint word = tree[node];
                 int axis = (int)(word >> 30);
                 int offset = (int)(word & OffsetMask);
                 if (axis == LeafAxis)
                 {
-                    if ((word & Bvh2Bit) == 0)
+                    if ((word & Bvh2Bit) == 0 && (uint)offset < (uint)objects.Length)
                     {
-                        uint count = _tree[node + 1];
-                        for (uint i = 0; i < count && offset + i < _objects.Length; i++)
+                        uint count = tree[node + 1];
+                        int end = (int)Math.Min((long)objects.Length, (long)offset + count);
+                        for (int i = offset; i < end; i++)
                         {
-                            callback((int)_objects[offset + i]);
+                            callback.Invoke((int)objects[i]);
                         }
                     }
 
                     break;
                 }
 
-                float clipLow = BitConverter.UInt32BitsToSingle(_tree[node + 1]);
-                float clipHigh = BitConverter.UInt32BitsToSingle(_tree[node + 2]);
+                float clipLow = BitConverter.UInt32BitsToSingle(tree[node + 1]);
+                float clipHigh = BitConverter.UInt32BitsToSingle(tree[node + 2]);
                 float p = Axis(point, axis);
                 if ((word & Bvh2Bit) != 0)
                 {
@@ -378,25 +396,28 @@ public sealed class BihTree
         }
     }
 
+    private readonly struct DelegatePointCallback(Action<int> callback) : IPointPrimitiveCallback
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Invoke(int primitive) => callback(primitive);
+    }
+
     /// <summary>Clip the ray interval [<paramref name="tMin"/>, <paramref name="tMax"/>] to a box (slab test).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool ClipToBox(Vector3 origin, Vector3 direction, Vector3 low, Vector3 high, float tMin, float tMax, out float outMin, out float outMax)
     {
         outMin = tMin;
         outMax = tMax;
-        for (int axis = 0; axis < 3; axis++)
-        {
-            if (!ClipSlab(Axis(origin, axis), Axis(direction, axis), Axis(low, axis), Axis(high, axis), ref outMin, ref outMax))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return ClipSlab(origin.X, direction.X, low.X, high.X, ref outMin, ref outMax)
+            && ClipSlab(origin.Y, direction.Y, low.Y, high.Y, ref outMin, ref outMax)
+            && ClipSlab(origin.Z, direction.Z, low.Z, high.Z, ref outMin, ref outMax);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool Contains(Vector3 low, Vector3 high, Vector3 p)
         => p.X >= low.X && p.X <= high.X && p.Y >= low.Y && p.Y <= high.Y && p.Z >= low.Z && p.Z <= high.Z;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static float Axis(Vector3 v, int axis) => axis switch
     {
         0 => v.X,
@@ -404,6 +425,7 @@ public sealed class BihTree
         _ => v.Z,
     };
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ClipSlab(float o, float d, float low, float high, ref float min, ref float max)
     {
         if (MathF.Abs(d) < 1e-12f)
@@ -423,6 +445,7 @@ public sealed class BihTree
         return min <= max;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector3 Centroid((Vector3 Low, Vector3 High) box) => (box.Low + box.High) * 0.5f;
 
     private static uint[] ReadWords(ref CollisionDataReader reader)
@@ -448,8 +471,14 @@ public sealed class BihTree
 /// <summary>Tests one primitive against the ray; may shorten <paramref name="maxDistance"/>; returns whether it was hit.</summary>
 public delegate bool RayPrimitiveCallback(int primitive, ref float maxDistance);
 
-/// <summary>Struct callback contract for allocation-free <see cref="BihTree.IntersectRay{TCallback}"/> walks.</summary>
+/// <summary>Struct callback contract for allocation-free <c>BihTree.IntersectRay</c> walks.</summary>
 internal interface IRayPrimitiveCallback
 {
     bool Invoke(int primitive, ref float maxDistance);
+}
+
+/// <summary>Struct callback contract for allocation-free <c>BihTree.IntersectPoint</c> walks.</summary>
+internal interface IPointPrimitiveCallback
+{
+    void Invoke(int primitive);
 }

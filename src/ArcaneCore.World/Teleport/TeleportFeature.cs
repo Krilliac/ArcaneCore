@@ -27,6 +27,8 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
 {
     private TeleportService? _service;
     private WorldMaps? _maps;
+    private SpellFeature? _spells;
+    private bool _spellsResolved;
 
     /// <summary>The teleport service, or null before the feature attached (<c>.debug scheduler</c>).</summary>
     public TeleportService? TeleportsIfAttached => _service;
@@ -80,7 +82,13 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
             return;
         }
 
-        services.GetService<SpellFeature>()?.System.CastSpell(player, SpellHonorlessTarget, SpellCastTargets.ForSelf(), triggered: true);
+        if (!_spellsResolved)
+        {
+            _spells = services.GetService<SpellFeature>();
+            _spellsResolved = true;
+        }
+
+        _spells?.System.CastSpell(player, SpellHonorlessTarget, SpellCastTargets.ForSelf(), triggered: true);
     }
 
     private static void SendBeforeAddToMap(Player player)

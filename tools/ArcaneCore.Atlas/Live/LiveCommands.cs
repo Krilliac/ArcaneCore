@@ -21,6 +21,14 @@ internal static class LiveCommands
     public const int MaxEntityLimit = 5000;
     public const double DefaultRadius = 100;
 
+    public const int DefaultFindLimit = 50;
+    public const int MaxFindLimit = 500;
+    public const float DefaultCellSize = 120f;
+    public const float MinCellSize = 16f;
+    public const float MaxCellSize = 2000f;
+    public const int DefaultHotspotsLimit = 10;
+    public const int MaxHotspotsLimit = 100;
+
     /// <summary>The map is 64 x 533.33 yd across, so no radius beyond its full extent can mean anything.</summary>
     // ref: src/ArcaneCore.Game/Maps/Grid/GridDefines.cs:22,25,55 (MaxNumberOfGrids = 64, SizeOfGrids = 533.33333, MapSize = their product, about 34 133 yd)
     public const double MaxRadius = 40_000;
@@ -94,6 +102,28 @@ internal static class LiveCommands
                 new CommandArg("instance", ArgType.Integer, "Instance id. Default: the subscription's when it is for this map, else 0."),
             ],
             (call, ct) => QueryAsync(feed, call, ct)));
+
+        registry.Register(new CommandDefinition(
+            "live.find",
+            "Search active entities in the live store by substring name, exact guid/entry, kind, map, and combat state.",
+            [
+                new CommandArg("map", ArgType.Integer, "Only this map."),
+                new CommandArg("query", ArgType.String, "Text to match against entity name (substring, case-insensitive) or exact guid/entry."),
+                new CommandArg("kind", ArgType.String, "Only this entity kind.", Choices: LiveKinds.Names),
+                new CommandArg("inCombat", ArgType.Boolean, "Only entities in (true) or out of (false) combat."),
+                new CommandArg("limit", ArgType.Integer, $"Most entities to return (1..{MaxFindLimit}, default {DefaultFindLimit}).", Default: JsonValue.Create(DefaultFindLimit)),
+            ],
+            (call, _) => Task.FromResult<JsonNode?>(Find(feed, call))));
+
+        registry.Register(new CommandDefinition(
+            "live.hotspots",
+            "Bucket active entities into spatial cells and return the busiest combat and player clusters.",
+            [
+                new CommandArg("map", ArgType.Integer, "Only this map."),
+                new CommandArg("cellSize", ArgType.Number, $"Spatial cell edge in yards (default {DefaultCellSize:0}, clamped to {MinCellSize:0}..{MaxCellSize:0}).", Default: JsonValue.Create((double)DefaultCellSize)),
+                new CommandArg("limit", ArgType.Integer, $"Most hotspot cells to return (1..{MaxHotspotsLimit}, default {DefaultHotspotsLimit}).", Default: JsonValue.Create(DefaultHotspotsLimit)),
+            ],
+            (call, _) => Task.FromResult<JsonNode?>(Hotspots(feed, call))));
     }
 
     private static async Task<JsonNode?> ConnectAsync(LiveFeed feed, CommandInvocation call, CancellationToken cancellationToken)
@@ -192,6 +222,79 @@ internal static class LiveCommands
 
     private static JsonObject Follow(LiveFeed feed, CommandInvocation call)
         => feed.Follow(OptionalGuid(call, "guid"));
+
+    private static JsonObject Find(LiveFeed feed, CommandInvocation call)
+    {
+        uint? map = OptionalUInt(call, "map");
+        string? query = OptionalQueryText(call, "query");
+        LiveKind? kind = null;
+        if (call.OptionalString("kind") is { } kindText)
+        {
+            kind = LiveKinds.TryParse(kindText, out LiveKind parsed)
+                ? parsed
+                : throw Bad(call, $"argument 'kind' must be one of {string.Join(", ", LiveKinds.Names)}.");
+        }
+
+        bool? inCombat = call.OptionalBool("inCombat");
+        long limit = call.OptionalInt("limit") ?? DefaultFindLimit;
+        if (limit is < 1 or > MaxFindLimit)
+        {
+            throw Bad(call, $"argument 'limit' must be between 1 and {MaxFindLimit}.");
+        }
+
+        LiveFindResult result = feed.Store.FindEntities(new LiveFindFilter(map, query, kind, inCombat, (int)limit));
+        return result.ToJson(feed.IsConnected);
+    }
+
+    private static JsonObject Hotspots(LiveFeed feed, CommandInvocation call)
+    {
+        uint? map = OptionalUInt(call, "map");
+        double rawCellSize = call.OptionalNumber("cellSize") ?? DefaultCellSize;
+        if (!double.IsFinite(rawCellSize) || rawCellSize <= 0)
+        {
+            throw Bad(call, $"argument 'cellSize' must be a positive finite number (clamped to {MinCellSize:0}..{MaxCellSize:0}).");
+        }
+
+        float cellSize = Math.Clamp((float)rawCellSize, MinCellSize, MaxCellSize);
+        long limit = call.OptionalInt("limit") ?? DefaultHotspotsLimit;
+        if (limit is < 1 or > MaxHotspotsLimit)
+        {
+            throw Bad(call, $"argument 'limit' must be between 1 and {MaxHotspotsLimit}.");
+        }
+
+        IReadOnlyList<LiveHotspot> hotspots = feed.Store.Hotspots(map, cellSize, (int)limit);
+        return new JsonObject
+        {
+            ["connected"] = feed.IsConnected,
+            ["map"] = map is { } m ? JsonValue.Create(m) : null,
+            ["cellSize"] = Math.Round((double)cellSize, 3),
+            ["count"] = hotspots.Count,
+            ["hotspots"] = new JsonArray([.. hotspots.Select(h => (JsonNode)h.ToJson())]),
+        };
+    }
+
+    private static string? OptionalQueryText(CommandInvocation call, string name)
+    {
+        if (!call.Args.TryGetPropertyValue(name, out JsonNode? node) || node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue v)
+        {
+            if (v.TryGetValue(out string? s))
+            {
+                return s;
+            }
+
+            if (JsonScalars.TryGetInt64(node, out long n) && n >= 0)
+            {
+                return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        throw Bad(call, $"argument '{name}' must be a string.");
+    }
 
     private static async Task<JsonNode?> QueryAsync(LiveFeed feed, CommandInvocation call, CancellationToken cancellationToken)
     {

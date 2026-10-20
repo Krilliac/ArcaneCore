@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Nodes;
@@ -32,6 +33,93 @@ public sealed record MapSummary(
     JsonObject? Counters,
     double AgeMs,
     long MissedFrames);
+
+/// <summary>Filter criteria for <c>live.find</c>.</summary>
+/// <param name="Map">Optional map id filter.</param>
+/// <param name="Query">Optional text, guid, or entry query.</param>
+/// <param name="Kind">Optional entity kind filter.</param>
+/// <param name="InCombat">Optional combat state filter.</param>
+/// <param name="Limit">Maximum entities to return (<c>1..500</c>).</param>
+public sealed record LiveFindFilter(
+    uint? Map = null,
+    string? Query = null,
+    LiveKind? Kind = null,
+    bool? InCombat = null,
+    int Limit = 50);
+
+/// <summary>Result of <c>live.find</c>.</summary>
+/// <param name="Entities">Matched entities up to the requested limit.</param>
+/// <param name="TotalMatched">Total active entities matching the filter before truncation.</param>
+public sealed record LiveFindResult(IReadOnlyList<LiveEntity> Entities, int TotalMatched)
+{
+    /// <summary>Number of entities returned in <see cref="Entities"/>.</summary>
+    public int Count => Entities.Count;
+
+    /// <summary>The find result as JSON.</summary>
+    public JsonObject ToJson(bool connected = false)
+    {
+        var array = new JsonArray();
+        foreach (LiveEntity entity in Entities)
+        {
+            JsonObject item = entity.ToJson();
+            item["inCombat"] = LiveStore.IsInCombat(entity);
+            array.Add(item);
+        }
+
+        return new JsonObject
+        {
+            ["connected"] = connected,
+            ["count"] = Entities.Count,
+            ["matched"] = TotalMatched,
+            ["returned"] = Entities.Count,
+            ["truncated"] = TotalMatched > Entities.Count,
+            ["entities"] = array,
+        };
+    }
+}
+
+/// <summary>One spatial activity cell returned by <c>live.hotspots</c>.</summary>
+/// <param name="Map">Map id of the cell.</param>
+/// <param name="CellX">Cell X index (<c>floor(x / cellSize)</c>).</param>
+/// <param name="CellY">Cell Y index (<c>floor(y / cellSize)</c>).</param>
+/// <param name="CellSize">Edge length of the cell in yards.</param>
+/// <param name="TotalCount">Total entities in the cell.</param>
+/// <param name="PlayerCount">Players (and bots) in the cell.</param>
+/// <param name="CreatureCount">Creatures in the cell.</param>
+/// <param name="InCombatCount">Entities currently in combat in the cell.</param>
+/// <param name="Centroid">Average world position <c>{x, y, z}</c> of the entities in the cell.</param>
+public sealed record LiveHotspot(
+    uint Map,
+    int CellX,
+    int CellY,
+    float CellSize,
+    int TotalCount,
+    int PlayerCount,
+    int CreatureCount,
+    int InCombatCount,
+    WorldPoint Centroid)
+{
+    /// <summary>The hotspot as JSON.</summary>
+    public JsonObject ToJson() => new()
+    {
+        ["map"] = Map,
+        ["cell"] = new JsonArray(CellX, CellY),
+        ["cellX"] = CellX,
+        ["cellY"] = CellY,
+        ["cellSize"] = Math.Round((double)CellSize, 3),
+        ["totalCount"] = TotalCount,
+        ["playerCount"] = PlayerCount,
+        ["creatureCount"] = CreatureCount,
+        ["inCombatCount"] = InCombatCount,
+        ["centroid"] = new JsonObject
+        {
+            ["x"] = Math.Round(Centroid.X, 3),
+            ["y"] = Math.Round(Centroid.Y, 3),
+            ["z"] = Math.Round(Centroid.Z, 3),
+        },
+        ["at"] = LiveJson.Point(new WorldPoint(Math.Round(Centroid.X, 3), Math.Round(Centroid.Y, 3), Math.Round(Centroid.Z, 3))),
+    };
+}
 
 /// <summary>
 /// What the feed last said: the newest frame of every map/instance, every entity by guid, and a ring of the last
@@ -264,6 +352,200 @@ public sealed class LiveStore
             return list;
         }
     }
+    /// <summary>Whether <paramref name="entity"/> is considered to be in combat (has a non-zero target or a combat motion such as chase or flee).</summary>
+    public static bool IsInCombat(LiveEntity entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        if (entity.Target is > 0)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrEmpty(entity.Motion))
+        {
+            return false;
+        }
+
+        return entity.Motion.Contains("chase", StringComparison.OrdinalIgnoreCase)
+            || entity.Motion.Contains("flee", StringComparison.OrdinalIgnoreCase)
+            || entity.Motion.Contains("combat", StringComparison.OrdinalIgnoreCase)
+            || entity.Motion.Contains("attack", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Searches active entities in the store matching <paramref name="filter"/>: substring match on <c>Name</c>, exact match on <c>Guid</c>
+    /// or <c>Entry</c> when <c>Query</c> parses as a uint/ulong, and filters by <c>Kind</c>, <c>Map</c>, and <c>InCombat</c>.
+    /// </summary>
+    public LiveFindResult FindEntities(LiveFindFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        int limit = Math.Clamp(filter.Limit, 1, 500);
+        string? q = string.IsNullOrWhiteSpace(filter.Query) ? null : filter.Query.Trim();
+        bool hasEntryQuery = false;
+        uint entryQuery = 0;
+        bool hasGuidDecQuery = false;
+        ulong guidDecQuery = 0;
+        bool hasGuidHexQuery = false;
+        ulong guidHexQuery = 0;
+
+        if (q is not null)
+        {
+            hasEntryQuery = uint.TryParse(q, NumberStyles.Integer, CultureInfo.InvariantCulture, out entryQuery);
+            hasGuidDecQuery = ulong.TryParse(q, NumberStyles.Integer, CultureInfo.InvariantCulture, out guidDecQuery) && guidDecQuery != 0;
+            hasGuidHexQuery = LiveGuid.TryParse(q, out guidHexQuery) && guidHexQuery != 0;
+        }
+
+        IReadOnlyList<StoredEntity> matched = Snapshot(e =>
+        {
+            if (filter.Map is { } m && e.Map != m)
+            {
+                return false;
+            }
+
+            if (filter.Kind is { } k && e.Kind != k)
+            {
+                return false;
+            }
+
+            if (filter.InCombat is { } ic && IsInCombat(e) != ic)
+            {
+                return false;
+            }
+
+            if (q is not null)
+            {
+                bool nameHit = e.Name is not null && e.Name.Contains(q, StringComparison.OrdinalIgnoreCase);
+                bool guidHit = (hasGuidHexQuery && e.Id == guidHexQuery) || (hasGuidDecQuery && e.Id == guidDecQuery);
+                bool entryHit = hasEntryQuery && e.Entry != 0 && e.Entry == entryQuery;
+                if (!nameHit && !guidHit && !entryHit)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        var results = new List<LiveEntity>(Math.Min(limit, matched.Count));
+        for (int i = 0; i < matched.Count && i < limit; i++)
+        {
+            results.Add(matched[i].Entity);
+        }
+
+        return new LiveFindResult(results, matched.Count);
+    }
+
+    /// <summary>
+    /// Buckets live entities by <c>(map, floor(x / cellSize), floor(y / cellSize))</c> and returns the top <paramref name="limit"/>
+    /// cells ranked by activity (<c>inCombatCount</c>, <c>playerCount</c>, <c>totalCount</c>, <c>creatureCount</c>).
+    /// </summary>
+    public IReadOnlyList<LiveHotspot> Hotspots(uint? map = null, float cellSize = 120f, int limit = 10)
+    {
+        float clampedSize = float.IsFinite(cellSize) ? Math.Clamp(cellSize, 16f, 2000f) : 120f;
+        int clampedLimit = Math.Clamp(limit, 1, 100);
+
+        IReadOnlyList<StoredEntity> snapshot = Snapshot(map is { } m ? e => e.Map == m : null);
+        if (snapshot.Count == 0)
+        {
+            return [];
+        }
+
+        var buckets = new Dictionary<(uint Map, int CellX, int CellY), HotspotAccumulator>();
+        foreach (StoredEntity stored in snapshot)
+        {
+            LiveEntity e = stored.Entity;
+            int cx = (int)Math.Floor(e.Position.X / clampedSize);
+            int cy = (int)Math.Floor(e.Position.Y / clampedSize);
+            (uint, int, int) key = (e.Map, cx, cy);
+            if (!buckets.TryGetValue(key, out HotspotAccumulator acc))
+            {
+                acc = default;
+            }
+
+            acc.TotalCount++;
+            if (e.Kind is LiveKind.Player or LiveKind.Bot)
+            {
+                acc.PlayerCount++;
+            }
+            else if (e.Kind == LiveKind.Creature)
+            {
+                acc.CreatureCount++;
+            }
+
+            if (IsInCombat(e))
+            {
+                acc.InCombatCount++;
+            }
+
+            acc.SumX += e.Position.X;
+            acc.SumY += e.Position.Y;
+            acc.SumZ += e.Position.Z;
+            buckets[key] = acc;
+        }
+
+        var hotspots = new List<LiveHotspot>(buckets.Count);
+        foreach (((uint cellMap, int cx, int cy), HotspotAccumulator acc) in buckets)
+        {
+            var centroid = new WorldPoint(
+                acc.SumX / acc.TotalCount,
+                acc.SumY / acc.TotalCount,
+                acc.SumZ / acc.TotalCount);
+            hotspots.Add(new LiveHotspot(
+                cellMap,
+                cx,
+                cy,
+                clampedSize,
+                acc.TotalCount,
+                acc.PlayerCount,
+                acc.CreatureCount,
+                acc.InCombatCount,
+                centroid));
+        }
+
+        hotspots.Sort(static (a, b) =>
+        {
+            int c = b.InCombatCount.CompareTo(a.InCombatCount);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = b.PlayerCount.CompareTo(a.PlayerCount);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = b.TotalCount.CompareTo(a.TotalCount);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = b.CreatureCount.CompareTo(a.CreatureCount);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = a.Map.CompareTo(b.Map);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = a.CellX.CompareTo(b.CellX);
+            return c != 0 ? c : a.CellY.CompareTo(b.CellY);
+        });
+
+        if (hotspots.Count > clampedLimit)
+        {
+            hotspots.RemoveRange(clampedLimit, hotspots.Count - clampedLimit);
+        }
+
+        return hotspots;
+    }
+
 
     private Record? Find(ulong id)
     {
@@ -364,4 +646,14 @@ public sealed class LiveStore
     }
 
     private readonly record struct TrailPoint(float X, float Y, float Z);
+    private struct HotspotAccumulator
+    {
+        public int TotalCount;
+        public int PlayerCount;
+        public int CreatureCount;
+        public int InCombatCount;
+        public double SumX;
+        public double SumY;
+        public double SumZ;
+    }
 }

@@ -71,14 +71,23 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private LootContent? _questLootContent; // the loot tables _questLootItems was computed from (a loot reload replaces them)
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly Dictionary<ObjectGuid, long> _despawnAt = [];
+    private readonly List<ObjectGuid> _despawnScratch = [];
+    private long _nextDespawnAtMs = long.MaxValue;
     private readonly Dictionary<uint, uint> _spawnEntries = [];
     private readonly Dictionary<GameObjectType, Func<Player, GameObject, GameObjectUseResult>> _useHandlers = [];
     private readonly Dictionary<(ObjectGuid Player, ObjectGuid Go), (long WindowStartMs, int Count, bool Reported)> _refusedUseAttempts = [];
     private readonly HashSet<ObjectGuid> _reportedDoorCollisionMissing = [];
     private readonly HashSet<ObjectGuid> _reportedDoorStateDesync = [];
+    private CreatureMapSystem? _subscribedCreatures;
     private long _clockMs;
     private long _nextQuestRefreshMs;
     private uint _nextTemporaryCounter;
+
+    /// <summary>How many objects needed per-object work in the last <see cref="Update"/> (diagnostics, tests; world thread).</summary>
+    internal int LastUpdatedObjectCount { get; private set; }
+
+    /// <summary>How many quest objects currently hold per-viewer dynamic flag baselines in <c>_questFlagsSent</c> (diagnostics, tests).</summary>
+    internal int QuestFlagsTrackedObjectCount => _questFlagsSent.Count;
 
     public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null, Random? random = null)
     {
@@ -121,6 +130,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             loot.Objects = this;
         }
 
+        EnsureCreatureLifecycleSubscribed();
         Map.Grids.GridLoaded += grid => LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         Map.Grids.GridUnloading += grid => UnloadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         foreach (MapGrid grid in Map.Grids.LoadedGrids.ToArray())
@@ -129,6 +139,44 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             {
                 LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
             }
+        }
+    }
+
+    /// <summary>
+    /// Drop any loot bag held for a creature whose corpse decayed, respawned or left the map, closing any open loot window
+    /// so decayed corpses do not accumulate in <see cref="LootService"/> until the next kill's stale-bag prune. World thread.
+    /// </summary>
+    public void ForgetCreatureLoot(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        Loot?.ForgetLoot(creature);
+    }
+
+    /// <summary>Subscribe to <paramref name="creatures"/>'s corpse-removal and respawn callbacks once so corpse loot is forgotten at decay/respawn.</summary>
+    public void SubscribeCreatureLifecycle(CreatureMapSystem creatures)
+    {
+        ArgumentNullException.ThrowIfNull(creatures);
+        if (ReferenceEquals(_subscribedCreatures, creatures))
+        {
+            return;
+        }
+
+        if (_subscribedCreatures is not null)
+        {
+            _subscribedCreatures.CorpseRemoving -= ForgetCreatureLoot;
+            _subscribedCreatures.Respawning -= ForgetCreatureLoot;
+        }
+
+        _subscribedCreatures = creatures;
+        creatures.CorpseRemoving += ForgetCreatureLoot;
+        creatures.Respawning += ForgetCreatureLoot;
+    }
+
+    private void EnsureCreatureLifecycleSubscribed()
+    {
+        if (_subscribedCreatures is null && Map.FindUpdater<CreatureMapSystem>() is { } creatures)
+        {
+            SubscribeCreatureLifecycle(creatures);
         }
     }
 
@@ -226,6 +274,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         List<GameObject> walk;
         using (Serial())
         {
+            EnsureCreatureLifecycleSubscribed();
             UpdateAis(diffMs);
             UpdateElevators();
             // The walk's snapshot (respawns and despawns change the map while it runs): the object list, rebuilt only when the object set
@@ -233,6 +282,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             walk = reentrant ? new List<GameObject>(_objects.Values) : WalkList();
             if (walk.Count == 0)
             {
+                LastUpdatedObjectCount = 0;
                 UpdateRest();
                 return;
             }
@@ -245,6 +295,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             int count = ScanObjects(walk, needing);
             using (Serial())
             {
+                LastUpdatedObjectCount = count;
                 UpdateObjects(walk, needing, count);
                 UpdateRest();
             }
@@ -261,15 +312,35 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private void UpdateRest()
     {
         UpdateSpawnGroups();
-        if (_despawnAt.Count > 0)
+        if (_despawnAt.Count > 0 && _clockMs >= _nextDespawnAtMs)
         {
-            foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
+            long next = long.MaxValue;
+            _despawnScratch.Clear();
+            foreach ((ObjectGuid guid, long at) in _despawnAt)
             {
+                if (at <= _clockMs)
+                {
+                    _despawnScratch.Add(guid);
+                }
+                else if (at < next)
+                {
+                    next = at;
+                }
+            }
+
+            _nextDespawnAtMs = next;
+            for (int i = 0; i < _despawnScratch.Count; i++)
+            {
+                ObjectGuid guid = _despawnScratch[i];
                 try
                 {
-                    if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
+                    if (_objects.TryGetValue(guid, out GameObject? expired))
                     {
                         Remove(expired);
+                    }
+                    else
+                    {
+                        _despawnAt.Remove(guid);
                     }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -277,6 +348,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                     FaultLedger.Shared.Record("map-gameobject", ex);
                 }
             }
+
+            _despawnScratch.Clear();
         }
 
         if (_clockMs >= _nextQuestRefreshMs)
@@ -356,8 +429,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 GameObjectType type = go.Type;
                 needs = loot == GameObjectLootState.JustDeactivated
                     || (go.ResetAfterSecond is { } resetAfter && resetAfter < clockSeconds)
-                    || (loot == GameObjectLootState.NotReady && go.RestockAfterSecond is { } after && after <= clockSeconds)
-                    || type == GameObjectType.Door
+                    || (type == GameObjectType.Chest && loot == GameObjectLootState.NotReady && go.RestockAfterSecond is { } after && after <= clockSeconds)
+                    || (type == GameObjectType.Door && NeedsDoorAudit(go))
                     || (type == GameObjectType.SpellCaster && loot == GameObjectLootState.Ready
                         && go.Template.Charges() is var scCharges and not 0 && go.UseCount >= scCharges)
                     || (type == GameObjectType.Trap && NeedsTrapUpdate(go, loot, playerCount));
@@ -370,6 +443,34 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// Whether a spawned door has an unreported <c>door/collision-missing</c> or <c>door/state-desync</c> anomaly, or has recovered from one
+    /// that was previously reported and must clear its reported set in <see cref="AuditDoorObject"/>.
+    /// </summary>
+    private bool NeedsDoorAudit(GameObject go)
+    {
+        bool closed = go.State == GameObjectState.Ready;
+        bool missingCollision = closed && (
+            go.Template.DisplayId == 0
+            || !float.IsFinite(go.Template.Size)
+            || go.Template.Size <= 0f);
+        if (missingCollision
+            ? !_reportedDoorCollisionMissing.Contains(go.Guid)
+            : _reportedDoorCollisionMissing.Count > 0 && _reportedDoorCollisionMissing.Contains(go.Guid))
+        {
+            return true;
+        }
+
+        byte spawnState = go.Spawn?.State ?? (byte)GameObjectState.Ready;
+        bool desync = go.LootState == GameObjectLootState.Activated
+            && closed
+            && (go.Flags & GameObjectFlags.InUse) == 0
+            && spawnState == (byte)GameObjectState.Ready;
+        return desync
+            ? !_reportedDoorStateDesync.Contains(go.Guid)
+            : _reportedDoorStateDesync.Count > 0 && _reportedDoorStateDesync.Contains(go.Guid);
     }
 
     private bool NeedsTrapUpdate(GameObject go, GameObjectLootState loot, int playerCount)
@@ -474,7 +575,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                     $"Closed door (State={go.State}, DisplayId={go.Template.DisplayId}, Size={go.Template.Size}) has no active collision model.", AnomalySeverity.Warning);
             }
         }
-        else
+        else if (_reportedDoorCollisionMissing.Count > 0)
         {
             _reportedDoorCollisionMissing.Remove(go.Guid);
         }
@@ -500,7 +601,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                     desyncDetail, AnomalySeverity.Warning);
             }
         }
-        else
+        else if (_reportedDoorStateDesync.Count > 0)
         {
             _reportedDoorStateDesync.Remove(go.Guid);
         }
@@ -510,9 +611,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         OnRitualParticipantLeft(player);
         Loot?.OnPlayerLeft(player);
-        foreach (Dictionary<Player, uint> sent in _questFlagsSent.Values)
+        if (_questFlagsSent.Count > 0 && player.Session.WantsUpdateObjects)
         {
-            sent.Remove(player);
+            foreach (Dictionary<Player, uint> sent in _questFlagsSent.Values)
+            {
+                sent.Remove(player);
+            }
         }
     }
 
@@ -1329,7 +1433,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         AddToWorld(go);
         if (despawnAfterSeconds > 0)
         {
-            _despawnAt[go.Guid] = _clockMs + (despawnAfterSeconds * 1000L);
+            long at = _clockMs + (despawnAfterSeconds * 1000L);
+            _despawnAt[go.Guid] = at;
+            if (at < _nextDespawnAtMs)
+            {
+                _nextDespawnAtMs = at;
+            }
         }
 
         return go;
@@ -1345,19 +1454,54 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _objects.Remove(go.Guid);
-        ObjectsChanged();
+        OnObjectMembershipChanged(go);
         IndexRitual(go, tracked: false);
         Loot?.ForgetLoot(go);
-        _questFlagsSent.Remove(go.Guid);
-        _despawnAt.Remove(go.Guid);
+        if (_questFlagsSent.Count > 0)
+        {
+            _questFlagsSent.Remove(go.Guid);
+        }
+
+        if (_despawnAt.Count > 0)
+        {
+            _despawnAt.Remove(go.Guid);
+        }
+
+        if (_reportedDoorCollisionMissing.Count > 0)
+        {
+            _reportedDoorCollisionMissing.Remove(go.Guid);
+        }
+
+        if (_reportedDoorStateDesync.Count > 0)
+        {
+            _reportedDoorStateDesync.Remove(go.Guid);
+        }
+
         if (go.IsSpawned)
         {
             Map.RemoveObject(go);
         }
 
-        foreach (List<GameObject> grid in _grids.Values)
+        GridCoord currentGrid = CreatureMapSystem.ComputeGrid(go.X, go.Y);
+        bool removedFromGrid = _grids.TryGetValue(currentGrid, out List<GameObject>? currentList) && currentList.Remove(go);
+        if (!removedFromGrid && go.Spawn is { } spawn)
         {
-            grid.Remove(go);
+            GridCoord spawnGrid = CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y);
+            if (spawnGrid != currentGrid && _grids.TryGetValue(spawnGrid, out List<GameObject>? spawnList))
+            {
+                removedFromGrid = spawnList.Remove(go);
+            }
+        }
+
+        if (!removedFromGrid)
+        {
+            foreach (List<GameObject> grid in _grids.Values)
+            {
+                if (grid.Remove(go))
+                {
+                    break;
+                }
+            }
         }
 
         go.System = null;
@@ -1569,7 +1713,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
         go.System = this;
         _objects[go.Guid] = go;
-        ObjectsChanged();
+        OnObjectMembershipChanged(go);
         IndexRitual(go, tracked: true);
         list.Add(go);
         ConfigureQuestFlags(go);
@@ -1648,10 +1792,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
 
             _objects.Remove(go.Guid);
-            ObjectsChanged();
+            OnObjectMembershipChanged(go);
             IndexRitual(go, tracked: false);
-            _questFlagsSent.Remove(go.Guid);
-            _despawnAt.Remove(go.Guid);
+            if (_questFlagsSent.Count > 0)
+            {
+                _questFlagsSent.Remove(go.Guid);
+            }
+
+            if (_despawnAt.Count > 0)
+            {
+                _despawnAt.Remove(go.Guid);
+            }
+
+            if (_reportedDoorCollisionMissing.Count > 0)
+            {
+                _reportedDoorCollisionMissing.Remove(go.Guid);
+            }
+
+            if (_reportedDoorStateDesync.Count > 0)
+            {
+                _reportedDoorStateDesync.Remove(go.Guid);
+            }
+
             Loot?.ForgetLoot(go);
             if (go.IsSpawned)
             {
@@ -1660,6 +1822,30 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             go.System = null;
             OnGroupMemberUntracked(go);
+        }
+    }
+
+    /// <summary>
+    /// Marks cached object lists stale when <paramref name="go"/> joins or leaves <see cref="_objects"/>.
+    /// Avoids invalidating <see cref="_transports"/> or <see cref="_aiObjects"/> when a non-transport, unscripted object changes.
+    /// </summary>
+    private void OnObjectMembershipChanged(GameObject go)
+    {
+        _walkListStale = true;
+        if (go.Type == GameObjectType.Transport)
+        {
+            _transportsStale = true;
+        }
+
+        if (_aiObjectsStale)
+        {
+            return;
+        }
+
+        object? key = _fallbackAi?.HandlesKey;
+        if (!ReferenceEquals(key, _aiObjectsKey) || (key is null && _fallbackAi is not null) || AiOf(go) is not null)
+        {
+            _aiObjectsStale = true;
         }
     }
 
@@ -1685,7 +1871,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         go.System = this;
         _objects[go.Guid] = go;
-        ObjectsChanged();
+        OnObjectMembershipChanged(go);
         IndexRitual(go, tracked: true);
         GridListOf(go.X, go.Y).Add(go);
         ConfigureQuestFlags(go);
@@ -1739,6 +1925,25 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return items;
     }
 
+    private bool NeedsAnyQuestLootItem(Player viewer, uint lootId)
+    {
+        if (Quests is null)
+        {
+            return false;
+        }
+
+        uint[] items = QuestLootItems(lootId);
+        for (int i = 0; i < items.Length; i++)
+        {
+            if (Quests.NeedsQuestItem(viewer, items[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// vmangos GameObject::ActivateToQuest + BuildValuesUpdate: a chest whose quest is incomplete
     /// or whose loot holds an item the viewer's quests need, and a goober whose quest is
@@ -1756,7 +1961,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         bool active = go.Type switch
         {
             GameObjectType.Chest => (go.Template.GetData(8) is var q and not 0 && Quests.IsQuestIncomplete(viewer, q))
-                || QuestLootItems(go.Template.GetData(1)).Any(item => Quests.NeedsQuestItem(viewer, item)),
+                || NeedsAnyQuestLootItem(viewer, go.Template.GetData(1)),
             // GameObject::ActivateToQuest (GameObject.cpp:1245-1250): questId -1 activates the goober for everyone.
             GameObjectType.Goober => GooberQuestId(go) is var gq && (gq == -1 || (gq > 0 && Quests.IsQuestIncomplete(viewer, (uint)gq))),
             _ => false,
@@ -1773,62 +1978,84 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // This answer is what the viewer's create block or values update carries, so it is the baseline RefreshQuestFlags compares against.
         uint quest = (uint)QuestFlagsFor(go, viewer);
-        if (!_questFlagsSent.TryGetValue(go.Guid, out Dictionary<Player, uint>? sent))
+        if (viewer.Session.WantsUpdateObjects)
         {
-            _questFlagsSent[go.Guid] = sent = new(ReferenceEqualityComparer.Instance);
+            if (!_questFlagsSent.TryGetValue(go.Guid, out Dictionary<Player, uint>? sent))
+            {
+                _questFlagsSent[go.Guid] = sent = new(ReferenceEqualityComparer.Instance);
+            }
+
+            sent[viewer] = quest;
         }
 
-        sent[viewer] = quest;
         return value | quest;
+    }
+
+    private bool HasUpdateObjectPlayers()
+    {
+        foreach (Player player in Map.PlayerValues)
+        {
+            if (player.Session.WantsUpdateObjects)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
     /// Re-send GAMEOBJECT_DYN_FLAGS for quest objects whose answer differs, for one of their viewers, from what that viewer was last sent
     /// (recorded by <see cref="IViewerFieldFilter.Filter"/>; a viewer never sent the field counts as having seen 0).
+    /// Walks only the visible sets of players whose session wants update packets, skipping bot-only maps entirely.
     /// </summary>
     private void RefreshQuestFlags()
     {
-        foreach (GameObject go in _objects.Values)
+        if (Quests is null || !HasUpdateObjectPlayers())
         {
-            try
+            return;
+        }
+
+        foreach (Player viewer in Map.PlayerValues)
+        {
+            if (!viewer.Session.WantsUpdateObjects)
             {
-                if (!go.IsSpawned || !ReferenceEquals(go.ViewerFieldFilter, this))
+                continue;
+            }
+
+            foreach (ObjectGuid guid in viewer.VisibleObjects)
+            {
+                if (guid.IsPlayer
+                    || !_objects.TryGetValue(guid, out GameObject? go)
+                    || !go.IsSpawned
+                    || !ReferenceEquals(go.ViewerFieldFilter, this))
                 {
                     continue;
                 }
 
-                if (!_questFlagsSent.TryGetValue(go.Guid, out Dictionary<Player, uint>? sent))
+                try
                 {
-                    _questFlagsSent[go.Guid] = sent = new(ReferenceEqualityComparer.Instance);
-                }
-
-                bool changed = false;
-                foreach (Player viewer in Map.ObserversOf(go))
-                {
-                    // A Lean bot builds no values block, so nothing it is "sent" can go stale; counting it would force an update to every real viewer.
-                    if (!viewer.Session.WantsUpdateObjects)
+                    if (!_questFlagsSent.TryGetValue(guid, out Dictionary<Player, uint>? sent))
                     {
-                        continue;
+                        _questFlagsSent[guid] = sent = new(ReferenceEqualityComparer.Instance);
                     }
 
                     // A viewer never sent this field (not built yet) has seen none of it: any quest flag is news to it.
                     uint now = (uint)QuestFlagsFor(go, viewer);
                     if (sent.GetValueOrDefault(viewer) != now)
                     {
-                        changed = true;
+                        sent[viewer] = now;
+                        go.ForceFieldUpdate(UpdateFields.GameobjectDynFlags);
                     }
-
-                    sent[viewer] = now;
+                    else
+                    {
+                        sent[viewer] = now;
+                    }
                 }
-
-                if (changed)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    go.ForceFieldUpdate(UpdateFields.GameobjectDynFlags);
+                    FaultLedger.Shared.Record("map-gameobject", ex);
                 }
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map-gameobject", ex);
             }
         }
     }

@@ -94,6 +94,10 @@ internal sealed class PlayerbotSocialPass(
     private List<PlayerbotSocialBot>? _bots;
     private Dictionary<uint, PlayerbotSocialBot>? _byCharacter;
     private HashSet<Guid>? _ids;
+    private QuestNpcServices? _quests;
+    private bool _questsResolved;
+    private ChatWordFilter? _wordFilter;
+    private bool _wordFilterResolved;
 
     internal PlayerbotOptions Bot => bot;
 
@@ -154,9 +158,31 @@ internal sealed class PlayerbotSocialPass(
         return set;
     }
 
-    internal QuestNpcServices? Quests => services.GetService<QuestNpcFeature>()?.Services;
+    internal QuestNpcServices? Quests
+    {
+        get
+        {
+            if (!_questsResolved)
+            {
+                _quests = services.GetService<QuestNpcFeature>()?.Services;
+                _questsResolved = true;
+            }
+            return _quests;
+        }
+    }
 
-    internal ChatWordFilter? WordFilter => services.GetService<ChatWordFilterFeature>()?.Filter;
+    internal ChatWordFilter? WordFilter
+    {
+        get
+        {
+            if (!_wordFilterResolved)
+            {
+                _wordFilter = services.GetService<ChatWordFilterFeature>()?.Filter;
+                _wordFilterResolved = true;
+            }
+            return _wordFilter;
+        }
+    }
 
     /// <summary>The screening of a guild name from the live services (a filter the server has not installed adds no check).</summary>
     internal PlayerbotGuildNameRules NameRules()
@@ -197,14 +223,25 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
     private readonly ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice _voice = new(services, logger);
+    private static readonly HashSet<uint> EmptyRegistry = [];
+    private static readonly List<PlayerbotSocialBot> EmptyBots = [];
+    private static readonly Func<List<PlayerbotSocialBot>> EmptyGather = static () => EmptyBots;
     private readonly HashSet<Map> _maps = [];
     private WorldRuntime? _world;
+    private SocialFeature? _socialFeature;
+    private ManagedPlayerbotFeature? _managedBots;
+    private PlayerbotGroupCoordinator? _groupCoordinator;
+    private Func<List<PlayerbotSocialBot>>? _gatherBots;
     private long _clockMs;
     private long _sinceLastPassMs;
     private bool _subscribed;
     private GuildManager? _subscribedGuilds;
     private HashSet<uint>? _registry;
     private long _registryAtMs = long.MinValue / 2;
+    private long _registryCheckedAtMs = long.MinValue / 2;
+    private HashSet<uint>? _verifiedRegistry;
+    private int _verifiedBotsCount = -1;
+    private uint _verifiedBotsChecksum;
     private int _refreshing;
     private int _faults;
 
@@ -308,6 +345,12 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _subscribedGuilds = null;
         _subscribed = false;
         _subscriptions = null;
+        _socialFeature = null;
+        _managedBots = null;
+        _groupCoordinator = null;
+        _verifiedRegistry = null;
+        _verifiedBotsCount = -1;
+        _verifiedBotsChecksum = 0;
         _world = null;
     }
 
@@ -347,7 +390,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     {
         try
         {
-            return services.GetService<SocialFeature>()?.Context;
+            return (_socialFeature ??= services.GetService<SocialFeature>())?.Context;
         }
         catch (InvalidOperationException)
         {
@@ -355,19 +398,24 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         }
     }
 
+    private ManagedPlayerbotFeature? ResolveManagedBots() => _managedBots ??= services.GetService<ManagedPlayerbotFeature>();
+
+    private List<PlayerbotSocialBot> GatherCurrentBots() => ResolveManagedBots() is { } bots ? Gather(bots) : EmptyBots;
+
     private PlayerbotSocialPass? NewPass(long elapsed, bool gatherBots)
     {
         if (_world is not { } world || TryContext() is not { } social) return null;
-        ManagedPlayerbotFeature? bots = services.GetService<ManagedPlayerbotFeature>();
+        ManagedPlayerbotFeature? bots = ResolveManagedBots();
         HashSet<uint>? registry = Volatile.Read(ref _registry);
-        return new PlayerbotSocialPass(_options, social, world, services, bots?.Chat, registry ?? [], registry is not null, Timings, Random, _clockMs,
-            elapsed, () => gatherBots && bots is not null ? Gather(bots) : [],
+        Func<List<PlayerbotSocialBot>> gather = gatherBots && bots is not null ? (_gatherBots ??= GatherCurrentBots) : EmptyGather;
+        return new PlayerbotSocialPass(_options, social, world, services, bots?.Chat, registry ?? EmptyRegistry, registry is not null, Timings, Random, _clockMs,
+            elapsed, gather,
             gatherBots ? _byCharacterScratch : null, gatherBots ? _botIdsScratch : null);
     }
 
     private void RunPass(long elapsed)
     {
-        if (services.GetService<ManagedPlayerbotFeature>() is null || NewPass(elapsed, gatherBots: true) is not { } pass) return;
+        if (ResolveManagedBots() is null || NewPass(elapsed, gatherBots: true) is not { } pass) return;
         EnsureSubscribed(pass.Social);
         MaintainRegistry(pass);
         Intake(pass);
@@ -406,7 +454,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private List<PlayerbotSocialBot> Gather(ManagedPlayerbotFeature bots)
     {
-        PlayerbotGroupCoordinator? groups = services.GetService<PlayerbotGroupCoordinator>();
+        PlayerbotGroupCoordinator? groups = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>();
         bots.GatherSocialBots(groups, _socialBotsScratch);
         return _socialBotsScratch;
     }
@@ -442,11 +490,34 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     {
         HashSet<uint>? registry = Volatile.Read(ref _registry);
         bool due = registry is null || pass.NowMs - _registryAtMs >= Timings.RegistryRefreshMs;
-        if (!due && pass.NowMs - _registryAtMs >= Timings.RegistryMissGapMs)
-            foreach (PlayerbotSocialBot bot in pass.Bots)
-                if (!registry!.Contains(bot.Player.Guid.Low)) { due = true; break; }
+        if (!due && pass.NowMs - _registryAtMs >= Timings.RegistryMissGapMs && pass.NowMs - _registryCheckedAtMs >= Timings.RegistryMissGapMs)
+        {
+            _registryCheckedAtMs = pass.NowMs;
+            IReadOnlyList<PlayerbotSocialBot> bots = pass.Bots;
+            uint checksum = 0;
+            for (int i = 0; i < bots.Count; i++)
+                checksum = (checksum * 16777619u) ^ bots[i].Player.Guid.Low;
+            if (!ReferenceEquals(registry, _verifiedRegistry) || bots.Count != _verifiedBotsCount || checksum != _verifiedBotsChecksum)
+            {
+                for (int i = 0; i < bots.Count; i++)
+                {
+                    if (!registry!.Contains(bots[i].Player.Guid.Low))
+                    {
+                        due = true;
+                        break;
+                    }
+                }
+                if (!due)
+                {
+                    _verifiedRegistry = registry;
+                    _verifiedBotsCount = bots.Count;
+                    _verifiedBotsChecksum = checksum;
+                }
+            }
+        }
         if (!due || _quiesced || Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
         _registryAtMs = pass.NowMs;
+        _registryCheckedAtMs = pass.NowMs;
         Volatile.Write(ref _refresh, Task.Run(RefreshRegistryAsync));
     }
 
@@ -509,8 +580,10 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void OnUnitKilled(Game.Entities.Unit? killer, Game.Entities.Unit victim)
     {
-        if (_options.Enabled && victim.Map is { } killedOn) _conversations.OnUnitKilled(killedOn, killer, victim);
-        if (!ChatTopicsWanted || victim.Map is not { } map || NewPass(0, gatherBots: false) is not { } pass) return;
-        _chat.OnUnitKilled(pass, map, killer, victim);
+        if (!_options.Enabled || victim.Map is not { } map) return;
+        _conversations.OnUnitKilled(map, killer, victim);
+        if (!ChatTopicsWanted) return;
+        if (victim is not Game.Creatures.Creature { Template.Rank: >= 1 }) return;
+        if (NewPass(0, gatherBots: false) is { } pass) _chat.OnUnitKilled(pass, map, killer, victim);
     }
 }

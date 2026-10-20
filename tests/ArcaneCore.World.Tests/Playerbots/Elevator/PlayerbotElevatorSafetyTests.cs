@@ -428,4 +428,137 @@ public sealed class PlayerbotElevatorSafetyTests(ITestOutputHelper output)
         Assert.True(offCarElsewhere is null, $"the bot stood off the car at {offCarElsewhere}: not on the plateau");
         Assert.True(lowest > ElevatorTestWorld.BottomFloor + 30f, $"went down to z {lowest:F1} after the invite");
     }
+
+    [Fact]
+    public async Task ToStopAndWaiting_WhileCarAway_GuardShaftAndClampLandingOutsideFootprint()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar topCar = lift.Cars.Single(c => c.SpawnGuid == 16874);
+
+        await world.PlaceAsync(new Vector3(ElevatorTestWorld.Cliff + 8f, topCar.High.Y, ElevatorTestWorld.TopFloor));
+
+        // Advance until topCar is down in the shaft (at least 15 yd below High.Z).
+        for (int i = 0; i < 700; i++)
+        {
+            bool away = await world.OnWorldAsync(() =>
+            {
+                GameObjectMapSystem? objects = world.Objects();
+                GameObject? car = objects?.GameObjects.FirstOrDefault(g => g.Spawn?.Guid == 16874);
+                return car is not null && objects!.ElevatorPosition(car) is { } pos && MathF.Abs(pos.Z - topCar.High.Z) > 15f;
+            });
+            if (away) break;
+            await world.AdvanceAsync(50);
+        }
+
+        PlayerbotOptions options = Options();
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _); // spend login settle
+            PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.High, ElevatorTestWorld.CanyonStart);
+            PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _);
+        });
+
+        await world.PlaceAsync(topCar.High + new Vector3(2f, 0f, 0f));
+        await world.OnWorldAsync(() =>
+        {
+            ElevatorTrip trip = PlayerbotElevator.TripOf(world.Player)!;
+            trip.Car = topCar;
+            trip.CarObject = world.Objects()!.GameObjects.FirstOrDefault(g => g.Spawn?.Guid == 16874);
+            trip.Landing = topCar.High;
+            bool guarded = PlayerbotElevator.GuardPlatformShaft(world.Session, world.Player, world.Player.Map!, trip);
+            Assert.True(guarded, "expected GuardPlatformShaft to step the bot out of the open shaft");
+
+            float landingDist = Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(topCar.High));
+            Assert.True(landingDist >= PlayerbotElevator.CarHalfYards, $"expected clamped landing outside shaft, got {landingDist:F2} yd");
+
+            // Also verify that SafeWaitOutsideShaft on an Undercity vault lift (map 0) stays outside VaultDoorOuterYards (10.6 yd).
+            var ucStop = new Vector3(1595f, 189f, 1.18f);
+            Vector3 ucSafe = PlayerbotElevator.SafeWaitOutsideShaft(world.Player.Map!, ucStop, ucStop + new Vector3(20f, 0f, 0f), mapIdOverride: 0);
+            float ucDist = Vector2.Distance(ElevatorNetwork.Flat(ucSafe), ElevatorNetwork.Flat(ucStop));
+            Assert.True(ucDist >= PlayerbotElevator.VaultDoorOuterYards, $"expected vault wait radius >= {PlayerbotElevator.VaultDoorOuterYards:F1}, got {ucDist:F2}");
+        });
+    }
+
+    [Fact]
+    public async Task WaitingBot_DroppedToDestinationFloor_CompletesTripInsteadOf90sWaitTimeout()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar topCar = lift.Cars.Single(c => c.SpawnGuid == 16874);
+
+        await world.PlaceAsync(new Vector3(ElevatorTestWorld.Cliff + 8f, topCar.High.Y, ElevatorTestWorld.TopFloor));
+        PlayerbotOptions options = Options();
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _); // spend login settle
+            PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.High, ElevatorTestWorld.CanyonStart);
+        });
+
+        // Drive until the bot reaches Waiting at the top landing.
+        for (int i = 0; i < 40 && await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)?.Stage) == ElevatorStage.ToStop; i++)
+        {
+            await world.TickAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _));
+        }
+
+        Assert.Equal(ElevatorStage.Waiting, await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)?.Stage));
+
+        // Place the bot at the bottom floor near the shaft (within 0.24 yd of BottomFloor so InPit is false),
+        // reproducing the flight-recorder scenario where the bot reached the bottom floor while still in Waiting.
+        await world.PlaceAsync(new Vector3(topCar.Low.X - 6.5f, topCar.Low.Y, ElevatorTestWorld.BottomFloor - 0.2f));
+
+        (ElevatorStep step, string? why) = await world.TickAsync(() =>
+            (PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out string? f), f));
+
+        Assert.Null(why);
+        Assert.Equal(ElevatorStep.Arrived, step);
+        Assert.Equal(ElevatorStage.Done, await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)?.Stage));
+    }
+
+    [Fact]
+    public async Task WaitingBot_DisplacedOnPumpTicksOnly_TransitionsBackToToStopWhileCarAway()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar bottomCar = lift.Cars.Single(c => c.SpawnGuid == 16876);
+
+        // Advance until the bottom car is up in the shaft so it is not standing at Low.
+        for (int i = 0; i < 700; i++)
+        {
+            uint? progress = await world.OnWorldAsync(() =>
+            {
+                GameObjectMapSystem? objects = world.Objects();
+                GameObject? car = objects?.GameObjects.FirstOrDefault(g => g.Spawn?.Guid == 16876);
+                return car is null ? null : objects!.ElevatorProgressAhead(car, 0);
+            });
+            if (progress is >= 14_000 and <= 16_000) break;
+            await world.AdvanceAsync(50);
+        }
+
+        await world.PlaceAsync(new Vector3(bottomCar.Low.X - 6.5f, bottomCar.Low.Y, ElevatorTestWorld.BottomFloor));
+        PlayerbotOptions options = Options();
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _); // spend login settle
+            PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet);
+        });
+
+        for (int i = 0; i < 40 && await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)?.Stage) == ElevatorStage.ToStop; i++)
+        {
+            await world.TickAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _));
+        }
+
+        Assert.Equal(ElevatorStage.Waiting, await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)?.Stage));
+
+        // Displace the bot far from the landing while the car is still away in the shaft, and run Pump only (no Drive).
+        await world.PlaceAsync(new Vector3(bottomCar.Low.X - 25f, bottomCar.Low.Y, ElevatorTestWorld.BottomFloor));
+        await world.AdvanceAsync(300);
+        ElevatorStage? stageAfterPump = await world.OnWorldAsync(() =>
+        {
+            PlayerbotElevator.Pump(world.Session, world.Player, world.Host.World.NowMs);
+            return PlayerbotElevator.TripOf(world.Player)?.Stage;
+        });
+
+        Assert.Equal(ElevatorStage.ToStop, stageAfterPump);
+    }
 }

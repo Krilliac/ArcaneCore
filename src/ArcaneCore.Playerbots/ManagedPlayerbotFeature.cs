@@ -49,12 +49,40 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private CharacterSaveQueue saves => services.GetRequiredService<CharacterSaveQueue>();
 
     /// <summary>Bot-led groups for group content (<see cref="PlayerbotGroupCoordinator"/>; absent in a minimal host).</summary>
-    private PlayerbotGroupCoordinator? coordinator => _coordinator ??= services.GetService<PlayerbotGroupCoordinator>();
+    private PlayerbotGroupCoordinator? coordinator
+    {
+        get
+        {
+            if (!_coordinatorResolved)
+            {
+                _coordinator = services.GetService<PlayerbotGroupCoordinator>();
+                _coordinatorResolved = true;
+            }
+
+            return _coordinator;
+        }
+    }
     private PlayerbotGroupCoordinator? _coordinator;
+    private bool _coordinatorResolved;
 
     /// <summary>Bots in battlegrounds (<see cref="PlayerbotBattlegroundCoordinator"/>; absent in a minimal host).</summary>
-    private PlayerbotBattlegroundCoordinator? battlegrounds => _battlegrounds ??= services.GetService<PlayerbotBattlegroundCoordinator>();
+    private PlayerbotBattlegroundCoordinator? battlegrounds
+    {
+        get
+        {
+            if (!_battlegroundsResolved)
+            {
+                _battlegrounds = services.GetService<PlayerbotBattlegroundCoordinator>();
+                _battlegroundsResolved = true;
+            }
+
+            return _battlegrounds;
+        }
+    }
     private PlayerbotBattlegroundCoordinator? _battlegrounds;
+    private bool _battlegroundsResolved;
+    private static readonly Comparison<ActiveBot> CompareByBotId = static (a, b) => a.Record.BotId.CompareTo(b.Record.BotId);
+    private static readonly ManagedActionBudget EmptyActionBudget = new(0);
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly ConcurrentDictionary<Guid, ActiveBot> _active = new();
     private PlayerbotStatus[] _snapshot = [];
@@ -65,6 +93,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private int _activeVersion;
     private int _orderedVersion = -1;
     private ActiveBot[] _ordered = [];
+    private readonly List<ActiveBot> _orderedScratch = [];
     private int _snapshotEpoch;
     private int _builtEpoch = -1;
     private int _builtCount = -1;
@@ -1839,6 +1868,70 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
     }
 
+    private static ActiveBot? FindOrderedBot(ActiveBot[] bots, Guid botId)
+    {
+        int lo = 0;
+        int hi = bots.Length - 1;
+        while (lo <= hi)
+        {
+            int mid = lo + ((hi - lo) >> 1);
+            ActiveBot candidate = bots[mid];
+            int cmp = candidate.Record.BotId.CompareTo(botId);
+            if (cmp == 0) return candidate;
+            if (cmp < 0) lo = mid + 1;
+            else hi = mid - 1;
+        }
+
+        return null;
+    }
+
+    private struct TickLaneDriver(
+        ManagedPlayerbotFeature feature,
+        ActiveBot[] bots,
+        uint now,
+        uint combatIntervalMs,
+        int reserve,
+        ManagedActionBudget combatBudget,
+        long thinkStarted) : PlayerbotThinkRotation.IThinkLaneDriver
+    {
+        public ManagedActionBudget? MainBudget;
+        public int MainActions = -1;
+        public int Thinks;
+        public bool ActionLimited;
+        public double CombatMs;
+
+        public PlayerbotThinkRotation.ThinkLane Classify(int index)
+        {
+            ActiveBot bot = bots[index];
+            return IsCombatLane(bot) && unchecked(now - bot.LastUpdateMs) >= combatIntervalMs
+                ? PlayerbotThinkRotation.ThinkLane.Priority
+                : PlayerbotThinkRotation.ThinkLane.Normal;
+        }
+
+        public bool Visit(int index, PlayerbotThinkRotation.ThinkLane lane)
+        {
+            ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
+                ? combatBudget
+                : MainBudget ??= new ManagedActionBudget(MainActions = reserve + combatBudget.Remaining);
+            if (budget.Remaining <= 0)
+            {
+                if (lane == PlayerbotThinkRotation.ThinkLane.Normal) ActionLimited = true;
+                return false;
+            }
+
+            // The main lane's cost per visit feeds the budget's coverage floor (PlayerbotThinkBudget.CoverageMs).
+            long visitStarted = Stopwatch.GetTimestamp();
+            feature.Think(bots[index], budget, index);
+            double visitMs = Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds;
+            if (lane == PlayerbotThinkRotation.ThinkLane.Normal) feature._thinkBudget.ObserveVisit(visitMs);
+            else CombatMs += visitMs;
+            Thinks++;
+            return true;
+        }
+
+        public double ElapsedMs() => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds;
+    }
+
     private void Update(uint elapsedMs)
     {
         if (_stopping || _detaching || !_options.Enabled || _world is not { } world) return;
@@ -1851,11 +1944,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         int version = Volatile.Read(ref _activeVersion);
         if (version != _orderedVersion)
         {
-            _ordered = _active.Values.OrderBy(b => b.Record.BotId).ToArray();
+            _orderedScratch.Clear();
+            foreach (KeyValuePair<Guid, ActiveBot> pair in _active)
+                _orderedScratch.Add(pair.Value);
+            _orderedScratch.Sort(CompareByBotId);
+            _ordered = _orderedScratch.ToArray();
             _orderedVersion = version;
         }
 
         ActiveBot[] bots = _ordered;
+        uint now = world.NowMs;
         // Movement first, every tick, for every bot: the motion is a client's own reporting and must not wait for a
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
         foreach (ActiveBot active in bots)
@@ -1868,7 +1966,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 ReportSessionLostOnce(active, "tick");
                 continue;
             }
-            try { PlayerbotMotion.Pump(active.Session, mover, world.NowMs); }
+            try { PlayerbotMotion.Pump(active.Session, mover, now); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
             // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
             // chat, loot rolls and resurrection offers are answered as they come, not when the bot's turn in the budget comes.
@@ -1877,8 +1975,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "party", ex); }
         }
         DeliverChatReplies();
+        PlayerbotGroupCoordinator? groups = coordinator;
+        PlayerbotBattlegroundCoordinator? fields = battlegrounds;
         // Bot-led groups (PlayerbotGroupCoordinator): their states, the needs and the matching, once per tick before any think.
-        if (coordinator is { } groups)
+        if (groups is not null)
         {
             if (bots.Length > 64 && !groups.NeedsBotSnapshot(elapsedMs))
             {
@@ -1891,7 +1991,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                            active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true,
+                            active.Controller is null && !active.PartyDriven && fields?.Holds(active.Record.BotId) != true,
                             Scripted: active.Controller is not null));
                 try { groups.Update(_groupBotsScratch, elapsedMs); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1904,7 +2004,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // think while a group drives them, so this is the only stall line such a group gets (bot QA parses it).
             foreach ((Guid botId, string name, string report) in groups.TakeStalls())
             {
-                ActiveBot? leader = bots.FirstOrDefault(bot => bot.Record.BotId == botId);
+                ActiveBot? leader = FindOrderedBot(bots, botId);
                 string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
                 string? diag = leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null;
                 LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context, diag: diag);
@@ -1912,7 +2012,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         // Battlegrounds (PlayerbotBattlegroundCoordinator): the queue machines, the demand and the free bots' choices, after the groups
         // so a bot a group took this tick is not free here.
-        if (battlegrounds is { } fields)
+        if (fields is not null)
         {
             if (bots.Length > 64 && !fields.NeedsBotSnapshot(elapsedMs))
             {
@@ -1925,7 +2025,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _bgBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                            active.Controller is null && !active.PartyDriven && coordinator?.Involves(active.Record.BotId) != true));
+                            active.Controller is null && !active.PartyDriven && groups?.Involves(active.Record.BotId) != true));
                 try { fields.Update(_bgBotsScratch, elapsedMs); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -1939,53 +2039,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
         int reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
         int combatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
-        var combatBudget = new ManagedActionBudget(combatActions);
-        ManagedActionBudget? mainBudget = null;
-        int mainActions = -1;
+        ManagedActionBudget combatBudget = combatActions > 0 ? new ManagedActionBudget(combatActions) : EmptyActionBudget;
         // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
         // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
         long thinkStarted = Stopwatch.GetTimestamp();
         double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
         LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
+        uint starvedBoundMs = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
         double budgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs, spentMs,
-            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, _options.ThinkStarvedGapMs);
+            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, starvedBoundMs);
         _lastBudgetMs = budgetMs;
-        uint now = world.NowMs;
         uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
-        int thinks = 0;
-        bool actionLimited = false;
-        double combatMs = 0;
-        _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare,
-            index => IsCombatLane(bots[index]) && unchecked(now - bots[index].LastUpdateMs) >= combatIntervalMs
-                ? PlayerbotThinkRotation.ThinkLane.Priority
-                : PlayerbotThinkRotation.ThinkLane.Normal,
-            (index, lane) =>
-            {
-                ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
-                    ? combatBudget
-                    : mainBudget ??= new ManagedActionBudget(mainActions = reserve + combatBudget.Remaining);
-                if (budget.Remaining <= 0)
-                {
-                    if (lane == PlayerbotThinkRotation.ThinkLane.Normal) actionLimited = true;
-                    return false;
-                }
-
-                // The main lane's cost per visit feeds the budget's coverage floor (PlayerbotThinkBudget.CoverageMs).
-                long visitStarted = Stopwatch.GetTimestamp();
-                Think(bots[index], budget, index);
-                double visitMs = Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds;
-                if (lane == PlayerbotThinkRotation.ThinkLane.Normal) _thinkBudget.ObserveVisit(visitMs);
-                else combatMs += visitMs;
-                thinks++;
-                return true;
-            },
-            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds,
-            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, (uint)_options.ThinkStarvedGapMs));
-        _thinkBudget.ObservePriorityTick(combatMs);
-        LastLaneActions = (combatActions, mainActions >= 0 ? mainActions : reserve + combatBudget.Remaining);
+        var laneDriver = new TickLaneDriver(this, bots, now, combatIntervalMs, reserve, combatBudget, thinkStarted);
+        _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare, ref laneDriver,
+            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, starvedBoundMs));
+        _thinkBudget.ObservePriorityTick(laneDriver.CombatMs);
+        LastLaneActions = (combatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
-        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited, budgetMs);
-        ReportStarvedBots(bots, now);
+        _cadence.EndTick(laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, budgetMs);
+        ReportStarvedBots(bots, now, starvedBoundMs);
         if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
             logger.LogInformation(
@@ -2015,9 +2087,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// Reports each bot that has gone longer than <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> without a think, once per episode
     /// (<see cref="PlayerbotThinkStarvation"/>; the episode ends at its next think). One compare per bot per tick.
     /// </summary>
-    private void ReportStarvedBots(ActiveBot[] bots, uint now)
+    private void ReportStarvedBots(ActiveBot[] bots, uint now, uint bound)
     {
-        uint bound = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
         _oldestSilentMs = 0;
         if (bound == 0) return;
         uint oldest = 0;

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace ArcaneCore.Game.Maps.Collision.VMaps;
 
@@ -33,7 +34,23 @@ public sealed class VMapTree
     public BihTree Tree { get; }
 
     /// <summary>Number of spawn slots holding a model.</summary>
-    public int LoadedInstanceCount => _instances.Count(i => i is not null);
+    public int LoadedInstanceCount
+    {
+        get
+        {
+            int count = 0;
+            ModelInstance?[] instances = _instances;
+            for (int i = 0; i < instances.Length; i++)
+            {
+                if (instances[i] is not null)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
 
     public IReadOnlyCollection<(int X, int Y)> LoadedTiles => _loadedTiles.Keys;
 
@@ -75,6 +92,7 @@ public sealed class VMapTree
         return spawns;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsTileLoaded(int tileX, int tileY) => _loadedTiles.ContainsKey((tileX, tileY));
 
     /// <summary>Fill slots for a tile (or the global spawns); returns the slots referenced.</summary>
@@ -113,6 +131,7 @@ public sealed class VMapTree
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool IsValidSlot(uint slot) => slot < _instances.Length;
 
     /// <summary>
@@ -136,6 +155,7 @@ public sealed class VMapTree
     {
         public bool Hit;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Invoke(int primitive, ref float max)
         {
             if ((uint)primitive >= (uint)instances.Length || instances[primitive] is not { } instance
@@ -219,19 +239,27 @@ public sealed class VMapTree
     /// </summary>
     public bool TryGetAreaInfo(Vector3 point, out ModelAreaInfo info)
     {
-        ModelAreaInfo best = default;
-        bool found = false;
-        Tree.IntersectPoint(point, primitive =>
+        var callback = new AreaInfoPointCallback(_instances, point);
+        Tree.IntersectPoint(point, ref callback);
+        info = callback.Best;
+        return callback.Found;
+    }
+
+    private struct AreaInfoPointCallback(ModelInstance?[] instances, Vector3 point) : IPointPrimitiveCallback
+    {
+        public ModelAreaInfo Best;
+        public bool Found;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Invoke(int primitive)
         {
-            if ((uint)primitive < (uint)_instances.Length && _instances[primitive] is { } instance
+            if ((uint)primitive < (uint)instances.Length && instances[primitive] is { } instance
                 && instance.TryGetGroupFloor(point, out GroupModel? group, out float floor)
-                && (!found || floor > best.GroundZ))
+                && (!Found || floor > Best.GroundZ))
             {
-                best = new ModelAreaInfo(group!.MogpFlags, instance.Spawn.AdtId, (int)instance.Model.RootWmoId, (int)group.GroupWmoId, floor);
-                found = true;
+                Best = new ModelAreaInfo(group!.MogpFlags, instance.Spawn.AdtId, (int)instance.Model.RootWmoId, (int)group.GroupWmoId, floor);
+                Found = true;
             }
-        });
-        info = best;
-        return found;
+        }
     }
 }

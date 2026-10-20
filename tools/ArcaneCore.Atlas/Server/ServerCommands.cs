@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.Atlas.Server;
 
 /// <summary>
-/// The server-view commands: <c>query.height</c>, <c>query.los</c>, <c>query.path</c>, <c>query.floorstack</c> and <c>server.status</c>. They
+/// The server-view commands: <c>query.height</c>, <c>query.los</c>, <c>query.path</c>, <c>query.floorstack</c>, <c>query.profile</c> and <c>server.status</c>. They
 /// validate every argument (finite, inside the map) before the engine is touched, run the query on the engine's owner thread, and return the
 /// report as JSON plus an <c>overlay</c> the UI draws. A refusal (bad arguments, missing data) becomes a <see cref="CommandException"/> with a
 /// precise message and is logged at Information; an unexpected failure becomes <see cref="CommandException.Failed"/>.
@@ -31,8 +31,20 @@ public static class ServerCommands
     /// <summary>The column query.</summary>
     public const string FloorStackName = "query.floorstack";
 
+    /// <summary>The elevation/floor cross-section query.</summary>
+    public const string ProfileName = "query.profile";
+
     /// <summary>The engine status.</summary>
     public const string StatusName = "server.status";
+
+    /// <summary>Default step count for a profile query.</summary>
+    public const int DefaultProfileSteps = 32;
+
+    /// <summary>Minimum step count for a profile query.</summary>
+    public const int MinProfileSteps = 2;
+
+    /// <summary>Maximum step count for a profile query.</summary>
+    public const int MaxProfileSteps = 256;
 
     /// <summary>Default lowest height of a column query.</summary>
     public const float DefaultZMin = -500f;
@@ -56,6 +68,7 @@ public static class ServerCommands
 
     private static readonly string[] MoverKeys = ["canWalk", "canSwim", "canFly", "isPlayer", "inhabit", "pet"];
     private static readonly string[] OptionKeys = ["loadTiles", "allowPartial", "maxPoints", "maxSearchNodes", "endTolerance", "wideEndSearch", "includeFlags", "excludeFlags"];
+    private static readonly string[] EndpointKeys = ["x", "y", "z"];
 
     /// <summary>The command definitions over <paramref name="engine"/>.</summary>
     public static IReadOnlyList<CommandDefinition> Create(ServerEngine engine, ILogger log)
@@ -107,6 +120,16 @@ public static class ServerCommands
                     new CommandArg("zMax", ArgType.Number, "Highest height searched.", Default: JsonValue.Create((double)DefaultZMax)),
                 ],
                 (inv, ct) => Guard(FloorStackName, log, () => FloorStackAsync(engine, inv, ct))),
+            new CommandDefinition(
+                ProfileName,
+                "Elevation and floor cross-section sampled evenly between two points, with grade statistics and a 3D polyline overlay.",
+                [
+                    new CommandArg("map", ArgType.Integer, "Map id.", Required: true),
+                    new CommandArg("from", ArgType.Object, "Start point {x, y, z?} (or [x, y, z]).", Required: true),
+                    new CommandArg("to", ArgType.Object, "End point {x, y, z?} (or [x, y, z]).", Required: true),
+                    new CommandArg("steps", ArgType.Integer, $"Intervals to sample along the segment ({MinProfileSteps}..{MaxProfileSteps}).", Default: JsonValue.Create(DefaultProfileSteps)),
+                ],
+                (inv, ct) => Guard(ProfileName, log, () => ProfileAsync(engine, inv, ct))),
             new CommandDefinition(
                 StatusName,
                 "The server engine's state: data directories, resident tiles, query counters and parsed-file caches.",
@@ -373,6 +396,193 @@ public static class ServerCommands
         }
 
         return overlay;
+    }
+
+    // ----- query.profile -----
+
+    private static async Task<JsonNode?> ProfileAsync(ServerEngine engine, CommandInvocation inv, CancellationToken ct)
+    {
+        uint map = inv.GetMapId();
+        Vector3 from = ProfileEndpoint(inv, "from");
+        Vector3 to = ProfileEndpoint(inv, "to");
+        long steps = inv.OptionalInt("steps") ?? DefaultProfileSteps;
+        if (steps is < MinProfileSteps or > MaxProfileSteps)
+        {
+            throw Bad($"{ProfileName}: steps ({steps}) must be between {MinProfileSteps} and {MaxProfileSteps}.");
+        }
+
+        int stepCount = (int)steps;
+        float totalDist = Vector2.Distance(new Vector2(from.X, from.Y), new Vector2(to.X, to.Y));
+        var samples = new List<ProfileSample>(stepCount + 1);
+        float? minTerrainZ = null;
+        float? maxTerrainZ = null;
+        float? minFloorZ = null;
+        float? maxFloorZ = null;
+        float? maxGrade = null;
+        float? prevFloorZ = null;
+        float prevDist = 0f;
+
+        for (int i = 0; i <= stepCount; i++)
+        {
+            float t = (float)i / stepCount;
+            Vector3 pos = Vector3.Lerp(from, to, t);
+            float dist = totalDist * t;
+            HeightReport h = await engine.QueryHeightAsync(map, pos, MapCollision.DefaultHeightSearch, ct).ConfigureAwait(false);
+            float? terrainZ = h.Terrain.Z;
+            float? floorZ = h.CollisionZ ?? terrainZ;
+            float? liquidZ = h.Liquid.Level;
+            bool hasLiquid = liquidZ is not null;
+
+            float? deltaFloorZ = null;
+            float? gradeDegrees = null;
+            if (i == 0)
+            {
+                if (floorZ is not null)
+                {
+                    deltaFloorZ = 0f;
+                    gradeDegrees = 0f;
+                    maxGrade = 0f;
+                }
+            }
+            else if (floorZ is { } fz && prevFloorZ is { } pfz)
+            {
+                float dz = fz - pfz;
+                deltaFloorZ = dz;
+                float stepDist = dist - prevDist;
+                float grade = stepDist > 1e-5f
+                    ? MathF.Atan2(MathF.Abs(dz), stepDist) * (180f / MathF.PI)
+                    : (MathF.Abs(dz) > 1e-5f ? 90f : 0f);
+                gradeDegrees = grade;
+                maxGrade = maxGrade is { } mg ? MathF.Max(mg, grade) : grade;
+            }
+
+            if (terrainZ is { } tz)
+            {
+                minTerrainZ = minTerrainZ is { } mntz ? MathF.Min(mntz, tz) : tz;
+                maxTerrainZ = maxTerrainZ is { } mxtz ? MathF.Max(mxtz, tz) : tz;
+            }
+
+            if (floorZ is { } curFz)
+            {
+                minFloorZ = minFloorZ is { } mnfz ? MathF.Min(mnfz, curFz) : curFz;
+                maxFloorZ = maxFloorZ is { } mxfz ? MathF.Max(mxfz, curFz) : curFz;
+            }
+
+            prevFloorZ = floorZ;
+            prevDist = dist;
+
+            samples.Add(new ProfileSample(
+                t,
+                dist,
+                pos.X,
+                pos.Y,
+                terrainZ,
+                floorZ,
+                liquidZ,
+                hasLiquid,
+                deltaFloorZ,
+                gradeDegrees));
+        }
+
+        var report = new ProfileReport(
+            map,
+            from,
+            to,
+            stepCount,
+            totalDist,
+            minTerrainZ,
+            maxTerrainZ,
+            minFloorZ,
+            maxFloorZ,
+            maxGrade,
+            samples);
+        JsonObject json = report.ToJson();
+        json["overlay"] = ProfileOverlay(report).ToJson();
+        return json;
+    }
+
+    private static ServerOverlay ProfileOverlay(ProfileReport report)
+    {
+        var overlay = new ServerOverlay();
+        var floorPts = new List<Vector3>(report.Samples.Count);
+        var terrainPts = new List<Vector3>(report.Samples.Count);
+        foreach (ProfileSample s in report.Samples)
+        {
+            float z = s.FloorZ ?? s.TerrainZ ?? Vector3.Lerp(report.From, report.To, s.T).Z;
+            floorPts.Add(new Vector3(s.X, s.Y, z));
+            if (s.TerrainZ is { } tz)
+            {
+                terrainPts.Add(new Vector3(s.X, s.Y, tz));
+            }
+        }
+
+        if (floorPts.Count >= 2)
+        {
+            overlay.Polyline(floorPts, "profile", Color(LayerIds.Terrain));
+            overlay.Point(floorPts[0], "from", Clear);
+            overlay.Point(floorPts[^1], "to", Clear);
+        }
+
+        if (terrainPts.Count >= 2 && terrainPts.Where((t, idx) => t != floorPts[idx]).Any())
+        {
+            overlay.Polyline(terrainPts, "terrain", Neutral, dashed: true);
+        }
+
+        return overlay;
+    }
+
+    private static Vector3 ProfileEndpoint(CommandInvocation inv, string name)
+    {
+        if (!inv.Args.TryGetPropertyValue(name, out JsonNode? node) || node is null)
+        {
+            throw Bad($"{inv.Definition.Name}: argument '{name}' is required.");
+        }
+
+        if (node is JsonObject obj)
+        {
+            RejectUnknown(inv.Definition.Name, name, obj, EndpointKeys);
+            if (!obj.TryGetPropertyValue("x", out JsonNode? xNode) || xNode is null || !JsonScalars.TryGetDouble(xNode, out double x))
+            {
+                throw Bad($"{inv.Definition.Name}: {name}.x must be a finite number.");
+            }
+
+            if (!obj.TryGetPropertyValue("y", out JsonNode? yNode) || yNode is null || !JsonScalars.TryGetDouble(yNode, out double y))
+            {
+                throw Bad($"{inv.Definition.Name}: {name}.y must be a finite number.");
+            }
+
+            double z = DefaultZMax;
+            if (obj.TryGetPropertyValue("z", out JsonNode? zNode) && zNode is not null)
+            {
+                if (!JsonScalars.TryGetDouble(zNode, out z))
+                {
+                    throw Bad($"{inv.Definition.Name}: {name}.z must be a finite number.");
+                }
+            }
+
+            return Checked(inv.Definition.Name, name, x, y, z);
+        }
+
+        if (node is JsonArray arr && arr.Count is 2 or 3)
+        {
+            if (!JsonScalars.TryGetDouble(arr[0], out double x) || !JsonScalars.TryGetDouble(arr[1], out double y))
+            {
+                throw Bad($"{inv.Definition.Name}: argument '{name}' must have finite x and y coordinates.");
+            }
+
+            double z = DefaultZMax;
+            if (arr.Count == 3 && arr[2] is not null)
+            {
+                if (!JsonScalars.TryGetDouble(arr[2], out z))
+                {
+                    throw Bad($"{inv.Definition.Name}: argument '{name}' must have a finite z coordinate.");
+                }
+            }
+
+            return Checked(inv.Definition.Name, name, x, y, z);
+        }
+
+        return Point(inv, name);
     }
 
     // ----- argument validation -----

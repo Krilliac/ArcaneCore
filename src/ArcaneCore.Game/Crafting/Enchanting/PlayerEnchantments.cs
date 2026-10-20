@@ -63,7 +63,11 @@ public sealed class PlayerEnchantments
     public int TrackedCount => _durations.Count;
 
     /// <summary>The remaining ms of a running timer, or null.</summary>
-    public uint? LeftMs(Item item, int slot) => _durations.FirstOrDefault(t => ReferenceEquals(t.Item, item) && t.Slot == slot)?.Left;
+    public uint? LeftMs(Item item, int slot)
+    {
+        int index = FindTrackedIndex(item, slot);
+        return index >= 0 ? _durations[index].Left : null;
+    }
 
     /// <summary>Whether the enchantment of (item, slot) is currently applied to the stats.</summary>
     public bool IsApplied(Item item, int slot) => _applied.ContainsKey((item, slot));
@@ -258,9 +262,19 @@ public sealed class PlayerEnchantments
             return;
         }
 
-        foreach ((Item item, uint spellId) in _pendingSpells.ToArray())
+        for (int i = 0; i < _pendingSpells.Count; i++)
         {
-            SpellAuraHolder? existing = _spells.GetAuras(_player).FirstOrDefault(h => !h.IsRemoved && h.Spell.Id == spellId && h.CasterGuid == _player.Guid);
+            (Item item, uint spellId) = _pendingSpells[i];
+            SpellAuraHolder? existing = null;
+            foreach (SpellAuraHolder holder in _spells.GetAuras(_player))
+            {
+                if (!holder.IsRemoved && hMatches(holder, spellId))
+                {
+                    existing = holder;
+                    break;
+                }
+            }
+
             if (existing is not null)
             {
                 existing.CastItemGuid = item.Guid;
@@ -272,6 +286,8 @@ public sealed class PlayerEnchantments
         }
 
         _pendingSpells.Clear();
+
+        bool hMatches(SpellAuraHolder h, uint sId) => h.Spell.Id == sId && h.CasterGuid == _player.Guid;
     }
 
     private const int PlayerResistanceCount = 7;
@@ -333,7 +349,7 @@ public sealed class PlayerEnchantments
             return;
         }
 
-        int existing = _durations.FindIndex(t => ReferenceEquals(t.Item, item) && t.Slot == slot);
+        int existing = FindTrackedIndex(item, slot);
         if (existing >= 0)
         {
             Stop(_durations[existing]);
@@ -461,5 +477,19 @@ public sealed class PlayerEnchantments
         }
     }
 
-    private bool IsTracked(Item item, int slot) => _durations.Exists(t => ReferenceEquals(t.Item, item) && t.Slot == slot);
+    private bool IsTracked(Item item, int slot) => FindTrackedIndex(item, slot) >= 0;
+
+    private int FindTrackedIndex(Item item, int slot)
+    {
+        for (int i = 0; i < _durations.Count; i++)
+        {
+            Tracked tracked = _durations[i];
+            if (ReferenceEquals(tracked.Item, item) && tracked.Slot == slot)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
 }

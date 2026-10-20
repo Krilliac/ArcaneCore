@@ -63,11 +63,15 @@ public sealed partial class PlayerbotGroupCoordinator
         if (_declinedPlayers.ContainsKey(player.Guid)) return new(PlayerbotVolunteerOutcome.Declined);
         uint now = Now;
         if (_volunteers.Count >= MaxVolunteers)
-            foreach ((ObjectGuid key, (Guid, (PlayerbotGroupGoalKind, uint), uint Until) entry) in _volunteers.ToArray())
+        {
+            foreach ((ObjectGuid key, (Guid, (PlayerbotGroupGoalKind, uint), uint Until) entry) in _volunteers)
                 if (unchecked((int)(entry.Until - now)) <= 0) _volunteers.Remove(key);
+        }
         if (_volunteers.Count >= MaxVolunteers) _volunteers.Clear();
         _volunteers[player.Guid] = (botId, waiting.Goal.Key, unchecked(now + VolunteerLifeMs));
-        int waitingForGoal = _waiting.Count(w => w.Value.Goal.Key == waiting.Goal.Key);
+        int waitingForGoal = 0;
+        foreach (Waiting w in _waiting.Values)
+            if (w.Goal.Key == waiting.Goal.Key) waitingForGoal++;
         return new(PlayerbotVolunteerOutcome.Noted, Math.Max(0, waiting.Goal.Size - waitingForGoal - 1));
     }
 
@@ -83,10 +87,12 @@ public sealed partial class PlayerbotGroupCoordinator
     private PlayerbotGroupPlan? MatchWithVolunteer(List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, GroupManager groupManager)
     {
         if (_volunteers.Count == 0 || _world is not { } world) return null;
-        PlayerbotGroupCandidate oldest = candidates.OrderBy(c => c.NeedSinceMs).First();
+        PlayerbotGroupCandidate oldest = candidates[0];
+        for (int i = 1; i < candidates.Count; i++)
+            if (candidates[i].NeedSinceMs < oldest.NeedSinceMs) oldest = candidates[i];
         if (_bots[oldest.BotId].Session.Player is not { } anchor) return null;
         uint now = Now;
-        foreach ((ObjectGuid guid, (Guid _, (PlayerbotGroupGoalKind, uint) key, uint until)) in _volunteers.ToArray())
+        foreach ((ObjectGuid guid, (Guid _, (PlayerbotGroupGoalKind, uint) key, uint until)) in _volunteers)
         {
             if (unchecked((int)(until - now)) <= 0)
             {
@@ -98,11 +104,10 @@ public sealed partial class PlayerbotGroupCoordinator
             if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
             if (_declinedPlayers.ContainsKey(real.Guid) || real.Level < goal.MinLevel || real.MapId != goal.MeetingMap) continue;
             if (Vector3.Distance(new Vector3(real.X, real.Y, real.Z), goal.Meeting) > MaxMeetingYards) continue;
-            var withPlayer = new List<PlayerbotGroupCandidate>(candidates)
-            {
-                new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
-                    new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue),
-            };
+            var withPlayer = new List<PlayerbotGroupCandidate>(candidates.Count + 1);
+            withPlayer.AddRange(candidates);
+            withPlayer.Add(new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
+                new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, static _ => false), Gear(real), uint.MaxValue));
             if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups) is { } plan && plan.Leader.BotId != Guid.Empty
                 && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
             {
