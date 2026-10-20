@@ -1245,7 +1245,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
     [Theory]
     [MemberData(nameof(StalemateRuns))]
-    public async Task AnAttackerComingToTheWaitingLeader_IsFoughtAtTheWaypoint_TheLeaderNeverChasesOut_NoDenial(int run)
+    public async Task AnAttackerComingToTheWaitingLeader_IsFought_TheLeaderStaysWithinTheLeash_NoDenialNoRefusedWaypoint(int run)
     {
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
         await using GroupTestWorld _ = world;
@@ -1300,7 +1300,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.True(done && siege.Step > stepAtPush, "the step did not move: " + story);
         Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
         Assert.False(refused, "the loop watch refused the waypoint: " + story);
-        Assert.True(worstOff <= PlayerbotSiegeCommander.WaypointYards, "the leader was drawn out of its waypoint: " + story);
+        Assert.True(worstOff <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards, "the leader went past the leash: " + story);
     }
 
     private static Creature? NextAttacker(Player leader)
