@@ -144,7 +144,7 @@ public sealed class PlayerbotGroupAnomalyTests
         GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
         var tank = await world.AddBotAsync(prefix + "tank", Human, Warrior, 10, [Taunt]);
         var healer = await world.AddBotAsync(prefix + "prie", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         var leader = group.LeaderBotId == tank.Id ? tank : healer;
         return (world, group, leader, leader.Id == tank.Id ? healer : tank);

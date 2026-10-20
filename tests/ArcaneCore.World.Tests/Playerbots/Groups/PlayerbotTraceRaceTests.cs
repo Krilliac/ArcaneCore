@@ -24,7 +24,7 @@ public sealed class PlayerbotTraceRaceTests
         var tank = await world.AddBotAsync("Racetank", Human, Warrior, 10, [Taunt]);
         var healer = await world.AddBotAsync("Raceheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
         var mage = await world.AddBotAsync("Racemage", Human, Mage, 10, [Fireball]);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), await world.TraceAsync());
 
         // The fight goes on (the coordinator notes events) and, on every tick, the tank's attacker set changes through the real combat API,
         // while the test thread builds traces.
@@ -44,7 +44,7 @@ public sealed class PlayerbotTraceRaceTests
         int built = 0;
         while (built < Iterations && !running.IsCompleted)
         {
-            string trace = world.Trace();
+            string trace = await world.TraceAsync();
             Assert.False(string.IsNullOrEmpty(trace));
             built++;
         }
