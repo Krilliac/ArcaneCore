@@ -381,16 +381,18 @@ internal sealed class PlayerbotGroupAI
     /// <summary>
     /// The raid rallies where it stands only because its leader found no path to the retreat point: the leader tries the walk again every
     /// <see cref="RetreatRetryMs"/> (a lift ride that failed, a place the loop watch refused). When it plans, the flag clears and the raid
-    /// retreats again; the time at the rally point starts afresh. Members fight back meanwhile (<see cref="SelectTarget"/>).
+    /// retreats again; the time at the rally point restarts, once per latch (<see cref="PlayerbotSiegeRaid.EndNoPathRally"/>). Members fight back meanwhile (<see cref="SelectTarget"/>).
     /// </summary>
     private void RetryRetreatWalk(Player player, PlayerbotSiegeRaid raid, uint interval)
     {
         uint now = _session.World.NowMs;
         if (unchecked(now - _retreatRetryMs) < RetreatRetryMs) return;
+        // A leader that stands at the real retreat point has nothing to retry.
+        float dx = player.X - raid.MoveTo.X, dy = player.Y - raid.MoveTo.Y;
+        if (MathF.Sqrt((dx * dx) + (dy * dy)) <= PlayerbotSiegeCommander.RallyYards) return;
         _retreatRetryMs = Math.Max(1u, now);
         if (!WalkTo(player, raid.MoveTo, interval, toward: true)) return;
-        raid.RetreatNoPath = false;
-        raid.RallySinceMs = 0;
+        raid.EndNoPathRally();
     }
 
     /// <summary>
