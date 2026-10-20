@@ -27,6 +27,9 @@ public sealed class CorruptedFurbolgAI(Creature creature) : ScriptedAI(creature)
     /// <summary>Lured or purified: the script holds its combat actions (SetCombatScriptStatus) and does not react (REACT_PASSIVE).</summary>
     public bool IsPassive => _passive;
 
+    /// <summary>npc_corrupted_furbolgAI EVENT_START_PURIFICATION SetCombatScriptStatus(true) (darkshore.cpp:717), dropped by Reset (:752).</summary>
+    public override bool CombatScriptRunning => _passive;
+
     public bool IsPurified => _resetMs != 0;
 
     private bool IsWarrior => Me.Template.Entry == NpcBlackwoodWarrior;

@@ -53,9 +53,9 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             // The instance hears OnCreatureEnterCombat once, after the AI's aggro hook (below; cmangos Unit::SetInCombatWith). sd2-mid,
             // sd2-high, sd2-end and raid-mc-ony each added a call; wave-7 integration keeps raid-mc-ony's, which also passes the enemy.
             creature.AI?.OnAggro(target);
-            if (!creature.IsAlive || creature.IsEvading)
+            if (!creature.IsAlive || creature.IsEvading || !creature.HasAggroed)
             {
-                return true; // the aggro script killed or reset it
+                return true; // the aggro script killed it, reset it or left combat in place (StopCombatInPlace clears HasAggroed)
             }
 
             TryStartNoMeleeFlee(creature, target); // after the aggro hook: a cast on aggro wins (cmangos Unit.cpp:7993)
@@ -66,7 +66,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
             // cmangos Unit::SetInCombatWith (Unit.cpp:8004-8008): InstanceData::OnCreatureEnterCombat, then the aggro linking event.
             Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEnterCombat(creature, target);
-            if (!creature.IsAlive || creature.IsEvading)
+            if (!creature.IsAlive || creature.IsEvading || !creature.HasAggroed)
             {
                 return true;
             }
@@ -201,6 +201,13 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
                 Map.Combat.CombatStop(creature);
             }
 
+            return false;
+        }
+
+        // cmangos Unit::SelectHostileTarget (Entities/Unit.cpp:8717-8721): "do not evade during combat script running". cmangos returns
+        // before picking a target while the script runs; here the pick above is unchanged and only the fallback evade is held.
+        if (creature.AI is { CombatScriptRunning: true })
+        {
             return false;
         }
 

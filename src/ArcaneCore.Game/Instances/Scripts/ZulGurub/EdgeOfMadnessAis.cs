@@ -72,6 +72,9 @@ public sealed class RenatakiAI : RaidBossAI
     /// <summary>Whether the vanish's combat script is running (SetCombatScriptStatus(true) until the delay ends).</summary>
     public bool Vanished => _vanishMs != 0;
 
+    /// <summary>boss_renatakiAI::ReceiveAIEvent SetCombatScriptStatus(true) (boss_renataki.cpp:86), dropped by the delay (:56) and Reset (:68).</summary>
+    public override bool CombatScriptRunning => Vanished;
+
     /// <summary>
     /// boss_renatakiAI::ReceiveAIEvent(AI_EVENT_CUSTOM_A), sent by RenatakiVanish with the enemy hit as the invoker: remember that enemy
     /// and stop fighting. <paramref name="spells"/> is the spell system that cast 24699; the enemy casts 24700 through it when the delay

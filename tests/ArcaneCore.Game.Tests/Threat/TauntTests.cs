@@ -172,6 +172,7 @@ public sealed class TauntTests
         // The aura expires through the normal removal path (HandleModTaunt drops the caster): nothing holds the wolf, so it evades.
         arena.Kit.Advance(3500);
         Assert.False(arena.Wolf.Combat.Threat.HasTauntCasters);
+        Assert.True(arena.Wolf.Combat.IsInCombat);
         Assert.False(arena.System.SelectHostileTarget(arena.Wolf));
         Assert.False(arena.Wolf.Combat.IsInCombat);
     }

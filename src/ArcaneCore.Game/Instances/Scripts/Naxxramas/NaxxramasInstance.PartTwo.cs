@@ -39,6 +39,7 @@ public sealed partial class NaxxramasInstance
     private uint _sapphironSpawnMs;
     private uint _guardianCheckMs;
     private bool _respawnHorsemen;
+    private bool _despawnConstructAdds;
 
     public override void Initialize()
     {
@@ -47,6 +48,22 @@ public sealed partial class NaxxramasInstance
         _constructAddsDead.Clear();
         _addReviveMs = _overloadMs = _sapphironSpawnMs = _guardianCheckMs = 0;
         _respawnHorsemen = false;
+        _despawnConstructAdds = false;
+    }
+
+    /// <summary>
+    /// mangos-classic naxxramas.cpp SetData(TYPE_THADDIUS, FAIL) :594-617 and boss_thaddius.cpp JustDied :131-145: Stalagg, Feugen and
+    /// their Tesla Coils (16218) are forced to despawn, with a one-shot respawn delay of <paramref name="respawnSeconds"/> after a failed
+    /// attempt. After a kill there is no delay (null): the database respawn time applies.
+    /// </summary>
+    internal void DespawnConstructAdds(uint? respawnSeconds)
+    {
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } system) return;
+        foreach (Creature creature in system.Creatures.Where(c => c.Entry is 15929 or 15930 or 16218).ToArray())
+        {
+            if (respawnSeconds is { } seconds) system.SetNextRespawnDelay(creature, seconds);
+            system.ForcedDespawn(creature, 0);
+        }
     }
 
     /// <summary>ScriptDev2 instance_naxxramas::SetData(TYPE_FOUR_HORSEMEN): one shared encounter, credited only on all four distinct deaths.</summary>
@@ -60,7 +77,8 @@ public sealed partial class NaxxramasInstance
     /// <summary>SD2 boss_thaddiusAddsAI: both adds must fall within ten seconds; fourteen seconds later their Teslas overload.</summary>
     public void RecordConstructAddDeath(uint entry)
     {
-        if (entry is not (15929 or 15930) || GetData(Thaddius) == EncounterState.Done) return;
+        // A death between the FAIL and its deferred despawn belongs to the failed attempt: it must not re-arm the timers.
+        if (entry is not (15929 or 15930) || GetData(Thaddius) == EncounterState.Done || _despawnConstructAdds) return;
         _constructAddsDead.Add(entry);
         if (_constructAddsDead.Count == 2) { _addReviveMs = 0; _overloadMs = 14000; }
         else _addReviveMs = 10000;
@@ -76,6 +94,14 @@ public sealed partial class NaxxramasInstance
         {
             _respawnHorsemen = false;
             RespawnDeadHorsemen();
+        }
+        if (_despawnConstructAdds)
+        {
+            // Deferred from the FAIL SetData: its caller may be one of the adds, inside its own OnReachedHome.
+            _despawnConstructAdds = false;
+            _constructAddsDead.Clear();
+            _addReviveMs = _overloadMs = 0;
+            DespawnConstructAdds(30);
         }
         if (_guardianCheckMs > 0)
         {
@@ -124,8 +150,14 @@ public sealed partial class NaxxramasInstance
                 if (GetSingleCreatureFromStorage(15930) is { IsAlive: true } feugen)
                     feugen.System?.CastSpell(feugen, 28359, feugen, triggered: true);
                 SetData(Thaddius, EncounterState.Special);
-                if (GetSingleCreatureFromStorage(15928) is { } thaddius)
-                    thaddius.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
+                if (GetSingleCreatureFromStorage(15928) is { IsAlive: true } thaddius)
+                {
+                    // His flags come off in his own Aggro (boss_thaddius.cpp:117-123), when he actually engages.
+                    // ArcaneCore only: cmangos soft-locks here when nobody is alive (Creature.cpp:2382-2400 yields no target and he never
+                    // fights). With no living player the encounter fails instead (the Fail handler keeps him flagged); precedent
+                    // FrostwyrmBossAIs.StartPhaseTwo (Kel'Thuzad), which fails when SetInCombatWithZone finds nobody.
+                    if (thaddius.System?.SetInCombatWithZone(thaddius) == 0) SetData(Thaddius, EncounterState.Fail);
+                }
             }
         }
     }
@@ -290,12 +322,11 @@ public sealed partial class NaxxramasInstance
                 {
                     _constructAddsDead.Clear();
                     _addReviveMs = _overloadMs = 0;
-                    foreach (uint entry in new uint[] { 15929, 15930 })
-                        if (GetSingleCreatureFromStorage(entry) is { } add)
-                        {
-                            if (add.IsAlive && add.AI is ThaddiusAddAI ai) ai.Revive();
-                            else Instance.FindUpdater<CreatureMapSystem>()?.ForceRespawn(add);
-                        }
+                    _despawnConstructAdds = true; // UpdatePartTwo despawns both adds with a 30 s respawn (naxxramas.cpp:594-617)
+                    // Thaddius that is not fighting is unattackable again (boss_thaddius.cpp:109-115): his own evade reaches this too, but
+                    // a failed overload (nobody to pull) never put him in combat, so the handler re-applies the flags itself.
+                    if (GetSingleCreatureFromStorage(15928) is { IsAlive: true } thaddiusAtHome && !thaddiusAtHome.Combat.IsInCombat)
+                        thaddiusAtHome.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
                 }
                 if (state != EncounterState.Special) SetDoor(181121, state is not EncounterState.InProgress);
                 break;

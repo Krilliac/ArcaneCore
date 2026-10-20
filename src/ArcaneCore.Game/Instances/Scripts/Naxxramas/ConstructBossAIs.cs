@@ -186,9 +186,14 @@ public sealed class ThaddiusAI : RaidBossAI
     {
         if (Instance is NaxxramasInstance { ConstructAddsDefeated: false })
         {
-            EnterEvadeMode();
+            // Pulled before the adds fell: leave combat in place. A full evade would reach OnReachedHome, fail the encounter and
+            // despawn the adds a raid may be fighting at that moment.
+            System?.StopCombatInPlace(Me);
             return;
         }
+
+        // boss_thaddiusAI::Aggro (boss_thaddius.cpp:117-123): attackable only once he really engages.
+        Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
         base.OnAggro(target);
     }
 
@@ -197,6 +202,24 @@ public sealed class ThaddiusAI : RaidBossAI
         base.OnRespawn();
         if (Instance is NaxxramasInstance { ConstructAddsDefeated: false })
             Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
+    }
+
+    /// <summary>
+    /// boss_thaddiusAI::JustReachedHome (boss_thaddius.cpp:125-129) after the encounter fails: Thaddius is unattackable again until the
+    /// adds fall (Reset :109-115). Limit: the Thaddius spawn stun aura (28160) is not modelled.
+    /// </summary>
+    public override void OnReachedHome()
+    {
+        base.OnReachedHome();
+        if (Instance is NaxxramasInstance { ConstructAddsDefeated: false })
+            Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
+    }
+
+    /// <summary>boss_thaddiusAI::JustDied (boss_thaddius.cpp:131-145): both adds are forced to despawn.</summary>
+    public override void OnDeath(Unit? killer)
+    {
+        if (Instance is NaxxramasInstance naxx) naxx.DespawnConstructAdds(respawnSeconds: null);
+        base.OnDeath(killer);
     }
 
     protected override void ResetActions() { base.ResetActions(); _ballLightning = 1000; }
@@ -236,12 +259,6 @@ public sealed class ThaddiusAddAI : RaidBossAI
         if (other is not null && !other.Combat.IsInCombat) other.AI?.AttackStart(target);
     }
 
-    public override void OnRespawn()
-    {
-        base.OnRespawn();
-        Revive();
-    }
-
     public override void OnAttackedBy(Unit attacker)
     {
         if (_fakingDeath) return; // SD2 SetCombatScriptStatus(true): a feigning add reacts to nothing
@@ -271,25 +288,45 @@ public sealed class ThaddiusAddAI : RaidBossAI
         (Instance as NaxxramasInstance)?.RecordConstructAddDeath(Me.Entry);
     }
 
+    /// <summary>
+    /// boss_thaddiusAddsAI::Reset (boss_thaddius.cpp:197-210): an evade ends the fake death (full health, selectable, standing, death
+    /// prevention back, combat script off, combat movement on).
+    /// </summary>
+    protected override void ResetActions()
+    {
+        base.ResetActions();
+        _fakingDeath = false;
+        Me.Health = Me.MaxHealth;
+        Me.InvincibilityHpThreshold = 1;
+        Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
+        SetMeleeEnabled(true);
+        SetCombatMovement(true);
+    }
+
     public override void OnUpdate(uint diffMs)
     {
-        if (!_fakingDeath) base.OnUpdate(diffMs);
+        // A feigning add runs no combat actions (UnitAI::CanExecuteCombatAction is false while the combat script runs, UnitAI.cpp:778-781).
+        if (_fakingDeath) return;
+        base.OnUpdate(diffMs);
     }
 
     /// <summary>Whether the add lies at one health point waiting for its partner (SD2 m_isFakingDeath).</summary>
     internal bool IsFakingDeath => _fakingDeath;
 
+    /// <summary>boss_thaddiusAddsAI::JustPreventedDeath SetCombatScriptStatus(true) (boss_thaddius.cpp:275), dropped by Revive (:235) and Reset (:208).</summary>
+    public override bool CombatScriptRunning => _fakingDeath;
+
     internal void Revive()
     {
         // mangos-classic boss_thaddiusAddsAI::Revive -> DoResetThreat, Reset: full health, selectable, chasing and swinging again.
         // Limit: SD2's 1.5 s PauseCombatMovement hold before the chase resumes is not modelled.
-        bool wasFaking = _fakingDeath;
+        // Only a feigning add is revived (the revive timer runs for it alone): a partner that is still fighting is not healed.
+        if (!_fakingDeath) return;
         _fakingDeath = false;
         Me.Health = Me.MaxHealth;
         Me.InvincibilityHpThreshold = 1;
         Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
-        if (wasFaking)
-            foreach (var entry in Me.Combat.Threat.Entries.ToArray()) Me.Combat.Threat.ModifyThreatPercent(entry.Target, -100);
+        ResetThreat();
         SetMeleeEnabled(true);
         SetCombatMovement(true);
     }
