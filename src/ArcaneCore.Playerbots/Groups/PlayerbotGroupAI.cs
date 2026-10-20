@@ -289,7 +289,11 @@ internal sealed class PlayerbotGroupAI
         }
         else _retreatStarted = false;
 
-        if (_lootActions.TryPeek(out var next))
+        Player? leader = group.LeaderPlayer(_session.World);
+        bool isLeader = leader is not null && leader.Guid == player.Guid;
+        // A pushing leader away from its waypoint walks: it does not rest, eat, loot or buff on the way (the push has its own no-progress bound, and a rest that is not ended stands the leader still until the push is withdrawn).
+        bool pushWalks = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: false };
+        if (!pushWalks && _lootActions.TryPeek(out var next))
         {
             Step = "loot";
             if (!PlayerbotMovementControl.Stop(_session, player)) return;
@@ -297,10 +301,6 @@ internal sealed class PlayerbotGroupAI
             return;
         }
 
-        Player? leader = group.LeaderPlayer(_session.World);
-        bool isLeader = leader is not null && leader.Guid == player.Guid;
-        // A pushing leader away from its waypoint walks: it does not rest, eat, loot or buff on the way (the push has its own no-progress bound, and a rest that is not ended stands the leader still until the push is withdrawn).
-        bool pushWalks = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: false };
         if (_restUntilMs != 0 && ContinueRest(player, pushWalks)) { Step = "rest"; return; }
 
         if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
@@ -309,7 +309,7 @@ internal sealed class PlayerbotGroupAI
         if (target is not null)
         {
             if (isLeader && group.Run is { } run && target is Creature boss) NoteBossFight(group, run, boss);
-            Fight(player, target, interval);
+            Fight(player, target, interval, holdPosition: isLeader && group.Siege is { PushingThrough: true, AtWaypoint: true });
             return;
         }
 
@@ -425,9 +425,10 @@ internal sealed class PlayerbotGroupAI
 
         if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
         {
-            // A pushing leader that was drawn off its waypoint and walked back has made the loop watch refuse the waypoint (an A, B, A pattern), and the walk would report no path until the
-            // blacklist ends. The push has its own no-progress bound (PushStallMs), so the watch starts afresh, as at a retreat.
-            if (raid.PushingThrough && PlayerbotMotion.IsBlacklisted(player, raid.MoveTo)) PlayerbotMotion.ForgetLoops(player);
+            // A pushing leader that was drawn off its waypoint and walked back has made the loop watch refuse the waypoint (an A, B, A pattern), and the walk would report no path until the blacklist ends. The push has its
+            // own no-progress bound (PushStallMs), so the waypoint's own entry is lifted. Only that one: the other refused places, the loop pattern and the rejection count stay, so the guard against a walk that is
+            // refused again and again still trips (ForgetLoops on every think would reset it each time).
+            if (raid.PushingThrough && PlayerbotMotion.IsBlacklisted(player, raid.MoveTo)) PlayerbotMotion.Unblacklist(player, raid.MoveTo);
             bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
             raid.RetreatNoPath = !walked && raid.Order == PlayerbotSiegeOrder.Retreat;
             Step = string.Create(CultureInfo.InvariantCulture,
@@ -695,10 +696,10 @@ internal sealed class PlayerbotGroupAI
         if (group.Siege is { PushingThrough: true } pushing)
         {
             if (isLeader && !pushing.AtWaypoint) return null;
-            // The leader waiting at its waypoint fights back only what is at the waypoint (3D, so a unit on the other level of a lift top is not): an attacker farther out comes to it, and chasing it would draw the leader
-            // out of the waypoint, off its walk, and back.
+            // The leader waiting at its waypoint picks no fights: it takes what is at the waypoint (3D, so a unit on the other level of a lift top is not) and whatever attacks it, wherever that stands (a caster, a flagged
+            // player, a long-reach melee unit). It fights from where it stands (Fight holdPosition): chasing would draw it out of the waypoint, off its walk, and back, and the members that could cover it are the ones it waits for.
             if (isLeader)
-                return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= PlayerbotSiegeCommander.WaypointYards)
+                return loose.Where(l => l.OnSelf || Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= PlayerbotSiegeCommander.WaypointYards)
                     .OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
             return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
@@ -860,7 +861,8 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
-    private void Fight(Player player, Unit target, uint interval)
+    /// <param name="holdPosition">A fight that does not chase (the waiting siege leader): a target out of reach is answered from where the player stands (a cast, or a swing once it is in reach), never walked to.</param>
+    private void Fight(Player player, Unit target, uint interval, bool holdPosition = false)
     {
         if (!ReferenceEquals(_target, target))
         {
@@ -896,6 +898,10 @@ internal sealed class PlayerbotGroupAI
         {
             case PlayerbotFightPosition.Hold:
                 _rangedIdleMs = engaged ? 0 : _rangedIdleMs + interval;
+                _route = null;
+                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+                return;
+            case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee when holdPosition:
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
