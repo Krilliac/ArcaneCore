@@ -100,7 +100,7 @@ public sealed class WorldStateSaveFlushTests
         var store = new InvasionStore(gate);
         ServiceProvider provider = new ServiceCollection().AddSingleton<IElementalInvasionStore>(store).BuildServiceProvider();
         var events = new GameEventFeature(provider, NullLogger<GameEventFeature>.Instance);
-        var feature = new HolidayObjectsFeature(provider, provider.GetRequiredService<IServiceScopeFactory>(), events);
+        var feature = new HolidayObjectsFeature(provider.GetRequiredService<IServiceScopeFactory>(), events);
         using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
             new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
             NullLogger<WorldRuntime>.Instance);

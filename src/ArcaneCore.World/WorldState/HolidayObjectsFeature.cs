@@ -1,9 +1,10 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Holidays;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
-using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -14,11 +15,11 @@ namespace ArcaneCore.World.WorldState;
 /// (go_darkmoon_faire_music) and the elemental invasion rifts (elemental_invasions.cpp), with the invasion stages saved in characters table
 /// world_elemental_invasion. The objects themselves are ClassicDB spawns; nothing is spawned here except the rifts' invaders.
 /// </summary>
-public sealed class HolidayObjectsFeature(IServiceProvider services, IServiceScopeFactory scopes, GameEventFeature events,
+public sealed class HolidayObjectsFeature(IServiceScopeFactory scopes, GameEventFeature events,
     ILogger<HolidayObjectsFeature>? logger = null) : IWorldFeature
 {
     private readonly HashSet<GameObjectMapSystem> _installed = [];
-    private bool _deathHooked;
+    private readonly HashSet<MapCombat> _combats = [];
 
     public ElementalInvasionController Invasion { get; private set; } = null!;
 
@@ -44,18 +45,17 @@ public sealed class HolidayObjectsFeature(IServiceProvider services, IServiceSco
         world.MapUnloading += map =>
         {
             if (map.FindUpdater<GameObjectMapSystem>() is { } objects) _installed.Remove(objects);
+            if (map.FindUpdater<MapCombat>() is { } combat && _combats.Remove(combat)) combat.UnitKilled -= OnUnitKilled;
         };
     }
 
     private void Install(WorldRuntime world)
     {
-        if (!_deathHooked && services.GetService<SpellFeature>()?.System is { } spells)
+        // npc_invaderAI::JustDied (elemental_invasions.cpp:198-204) is an AI death hook: only a creature that really died counts, so the
+        // credit hangs on MapCombat.UnitKilled (raised after OnJustDied) and not on SpellSystem.UnitDied, which a ForcedDespawn also raises.
+        foreach (Map map in world.Maps)
         {
-            spells.UnitDied += unit =>
-            {
-                if (unit is ArcaneCore.Game.Creatures.Creature creature) Invasion.OnCreatureDied(creature.Entry);
-            };
-            _deathHooked = true;
+            if (map.FindUpdater<MapCombat>() is { } combat && _combats.Add(combat)) combat.UnitKilled += OnUnitKilled;
         }
 
         foreach (Map map in world.Maps.Where(m => m.MapId is 0 or 1))
@@ -66,6 +66,11 @@ public sealed class HolidayObjectsFeature(IServiceProvider services, IServiceSco
             objects.RegisterAi(DarkmoonFaireMusicAi.GoDarkmoonFaireMusic, Music);
             foreach (InvasionElement e in ElementalInvasionController.Elements) objects.RegisterAi(e.Rift, Rifts);
         }
+    }
+
+    private void OnUnitKilled(Unit? killer, Unit victim)
+    {
+        if (victim is ArcaneCore.Game.Creatures.Creature creature) Invasion.OnCreatureDied(creature.Entry);
     }
 
     private void Load()

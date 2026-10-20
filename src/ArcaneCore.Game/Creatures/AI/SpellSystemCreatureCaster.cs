@@ -175,6 +175,13 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
     }
 
     /// <inheritdoc/>
+    public void RemoveAurasOnDeath(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        Spells.OnUnitDied(creature);
+    }
+
+    /// <inheritdoc/>
     public void RemoveAllAuras(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);

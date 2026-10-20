@@ -78,6 +78,11 @@ Immunity: unit immunity auras (EffectImmunity ATTACK_ME, StateImmunity MOD_TAUNT
 read: `ICreatureImmunityProvider` carries mechanic and school masks only, so a creature template with that flag still
 gets taunted until the creature data lane exposes it.
 
+The taunt list lives only as long as the aura: `ForcedDespawn` of a living creature strips its auras through their remove handlers
+(`ICreatureAuraReset.RemoveAurasOnDeath`, vmangos Creature::ForcedDespawn runs SetDeathState(JUST_DIED) -> RemoveAllAurasOnDeath,
+Creature.cpp:2428, Unit.cpp:7341), so a creature that respawns after a forced despawn starts with no taunter. Corpse removal alone
+only forgets the holders without running handlers.
+
 Limits: SMSG_CAST_RESULT with DONT_REPORT for "already attacking you" is not sent; the taunted creature is not turned to face
 the taunter; after the taunt fades the victim is re-selected at the creature's next update (vmangos selects at once).
 
@@ -123,6 +128,7 @@ their auras and spell modifiers.
   default true). The per-spell "not removed on evade" custom flag of vmangos' spell_template is data this repository does not have.
 - A charmed creature keeps its auras and does not run home.
 - `CreatureMapSystem.Evaded` is raised once per evade (not for a dead creature, not for an evade already running).
+- `ForcedDespawn` of a living creature strips its auras through `RemoveAurasOnDeath` (vmangos `SetDeathState(JUST_DIED)`, Creature.cpp:2427-2428), so it now raises `SpellSystem.UnitDied` (diminishing-returns reset, charm end). It is not a kill: kill-only consumers hang on `MapCombat.UnitKilled` instead, e.g. the elemental invasion count (`HolidayObjectsFeature`, vmangos `npc_invaderAI::JustDied`, elemental_invasions.cpp:198-204).
 
 Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service yet; the new
 event is the hook), a creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is
