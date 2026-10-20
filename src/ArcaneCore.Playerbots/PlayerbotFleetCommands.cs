@@ -36,7 +36,7 @@ namespace ArcaneCore.World.Playerbots;
 /// unless <c>to $player</c> names an online player. Only bots in <see cref="IPlayerbotService.Snapshot"/> can ever be touched.
 /// </para>
 /// </summary>
-public sealed class PlayerbotFleetCommands : ICommandExtension
+public sealed partial class PlayerbotFleetCommands : ICommandExtension
 {
     /// <summary>The most per-bot lines a bulk reply lists before "... and N more."</summary>
     internal const int MaxDetailLines = 15;
@@ -77,6 +77,7 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
         new ChatCommand("defend", AccountSecurity.Administrator,
             "Syntax: .playerbot defend $name|$prefix*|all here #radius [force]\n.playerbot defend $name|$prefix*|all clear\nThe running bots hold a post at your position: they turn their PvP flag on, fight the PvP-flagged enemy players and help friendly creatures in combat within #radius yards (10 to 200), heal each other and walk back to the post. 'clear' ends it. More bots than the bulk cap need 'force'. Memory only: a restart ends it.",
             Defend),
+        SiegeCommand(),
         new ChatCommand("fleet", AccountSecurity.Administrator,
             "Syntax: .playerbot fleet reset [confirm $code]\nDestructive fleet operations.",
             Children:

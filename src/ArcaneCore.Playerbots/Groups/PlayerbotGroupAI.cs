@@ -343,6 +343,7 @@ internal sealed class PlayerbotGroupAI
                 WalkTo(player, group.Goal.Meeting, interval, toward: true);
                 return;
             case PlayerbotGroupState.Engaging:
+                if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
                 if (group.Goal.InInstance && player.MapId == group.Goal.MeetingMap)
                 {
                     WalkTo(player, group.Goal.Meeting, interval, toward: true);
@@ -365,6 +366,23 @@ internal sealed class PlayerbotGroupAI
                 else Hold(player);
                 return;
         }
+    }
+
+    /// <summary>
+    /// A siege raid's leader does what the commander ordered (<see cref="PlayerbotSiegeCommander"/>): walks to <see cref="PlayerbotSiegeRaid.MoveTo"/>
+    /// to advance or retreat, otherwise stands (the pull and the fight are <see cref="SelectTarget"/>'s).
+    /// </summary>
+    private void LeadSiege(Player player, PlayerbotSiegeRaid raid, uint interval)
+    {
+        if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
+        {
+            bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
+            Step = string.Create(CultureInfo.InvariantCulture, $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(walked ? string.Empty : ":no-path")}");
+            return;
+        }
+
+        Step = "lead:siege-" + raid.Order.ToString().ToLowerInvariant();
+        HoldRun(player);
     }
 
     /// <summary>
@@ -587,6 +605,8 @@ internal sealed class PlayerbotGroupAI
         Player? leader, bool isLeader)
     {
         if (player.Map is not { } map) return null;
+        // A lost fight is left: nobody in a retreating siege raid fights.
+        if (group.Siege is { Order: PlayerbotSiegeOrder.Retreat }) return null;
         GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
         Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
@@ -628,6 +648,15 @@ internal sealed class PlayerbotGroupAI
                 && IsValidTarget(player, victim) && Distance(player, victim) <= AssistYards)
                 return victim;
             if (loose.Count > 0) return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).First().Unit;
+        }
+
+        // A siege leader opens on the skull's unit the commander named; nothing else is pulled.
+        if (isLeader && group.Siege is { } siegeRaid)
+        {
+            if (siegeRaid.Order is PlayerbotSiegeOrder.Pull or PlayerbotSiegeOrder.AssignTank or PlayerbotSiegeOrder.Assault
+                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled))
+                return pulled;
+            return null;
         }
 
         // The leader pulls: the objective, or what stands in the way.

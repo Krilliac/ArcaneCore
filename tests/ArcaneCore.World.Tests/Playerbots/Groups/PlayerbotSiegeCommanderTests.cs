@@ -1,0 +1,126 @@
+using ArcaneCore.World.Playerbots.Groups;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Playerbots.Groups;
+
+/// <summary>
+/// The siege commander's rules (<see cref="PlayerbotSiegeCommander.Decide"/>) over plain facts, in the order they are stated:
+/// Retreat, Regroup or Hold, Pull with hysteresis, AssignTank, Advance, Assault. And the leader's raid-warning gap.
+/// </summary>
+public sealed class PlayerbotSiegeCommanderTests
+{
+    private static readonly PlayerbotSiegeFacts Calm = new(
+        InCombat: false, MsSinceCombat: 60_000, Total: 6, Alive: 6, HasTank: true, TankAlive: true, AverageHealthPct: 100f, MaxLagYards: 5f,
+        AnyResting: false, AnyHurt: false, AtWaypoint: false, PeersAtWaypoint: true, Hostiles: 0, NearestHostileYards: float.PositiveInfinity,
+        CrossValid: false, RetreatLatched: false, PullLatched: false);
+
+    private static readonly PlayerbotSiegeFacts Fight = Calm with { InCombat = true, MsSinceCombat = 0, Hostiles = 1, NearestHostileYards = 8f };
+
+    private static PlayerbotSiegeOrder Order(PlayerbotSiegeFacts facts) => PlayerbotSiegeCommander.Decide(facts).Order;
+
+    [Fact]
+    public void AnIdleRaid_Advances_AndARaidInCombat_Assaults()
+    {
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(Calm));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight));
+    }
+
+    [Fact]
+    public void ACombatLostByTheTank_ByTheAverageHealth_OrByAThirdOfTheRaid_IsARetreat()
+    {
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { TankAlive = false, Alive = 5 }));
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { AverageHealthPct = 34f }));
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { Alive = 4 }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { AverageHealthPct = 36f }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Alive = 5 }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { HasTank = false, TankAlive = false }));
+    }
+
+    [Fact]
+    public void ARetreat_NeedsACombat_ToBegin_AndIsALatch_UntilTheRaidIsQuietForFiveSeconds()
+    {
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(Calm with { TankAlive = false, AverageHealthPct = 10f, Alive = 3 }));
+
+        PlayerbotSiegeDecision begun = PlayerbotSiegeCommander.Decide(Fight with { TankAlive = false });
+        Assert.Equal((PlayerbotSiegeOrder.Retreat, true), (begun.Order, begun.RetreatLatched));
+
+        PlayerbotSiegeDecision stillRunning = PlayerbotSiegeCommander.Decide(Fight with { RetreatLatched = true });
+        Assert.Equal((PlayerbotSiegeOrder.Retreat, true), (stillRunning.Order, stillRunning.RetreatLatched));
+
+        PlayerbotSiegeDecision quiet = PlayerbotSiegeCommander.Decide(Calm with { RetreatLatched = true, MsSinceCombat = 4_999 });
+        Assert.Equal((PlayerbotSiegeOrder.Retreat, true), (quiet.Order, quiet.RetreatLatched));
+
+        PlayerbotSiegeDecision over = PlayerbotSiegeCommander.Decide(Calm with { RetreatLatched = true, MsSinceCombat = 5_000 });
+        Assert.Equal((PlayerbotSiegeOrder.Advance, false), (over.Order, over.RetreatLatched));
+    }
+
+    [Fact]
+    public void ALaggingResting_OrHurtMember_RegroupsTheRaid_WhenItIsNotFighting()
+    {
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(Calm with { MaxLagYards = 30.5f }));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(Calm with { MaxLagYards = 30f }));
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(Calm with { AnyResting = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(Calm with { AnyHurt = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { MaxLagYards = 80f, AnyResting = true, AnyHurt = true }));
+    }
+
+    [Fact]
+    public void AtItsWaypointWhileThePeersAreNot_TheRaidHolds_UnlessThereIsSomethingToPull()
+    {
+        PlayerbotSiegeFacts waiting = Calm with { AtWaypoint = true, PeersAtWaypoint = false };
+        Assert.Equal(PlayerbotSiegeOrder.Hold, Order(waiting));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(waiting with { PeersAtWaypoint = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Pull, Order(waiting with { Hostiles = 1, NearestHostileYards = 30f }));
+        Assert.Equal(PlayerbotSiegeOrder.Hold, Order(waiting with { Hostiles = 1, NearestHostileYards = 45f }));
+    }
+
+    [Fact]
+    public void RegroupBeatsHoldAndPull_AndRetreatBeatsEverything()
+    {
+        PlayerbotSiegeFacts lagging = Calm with { MaxLagYards = 50f, AtWaypoint = true, PeersAtWaypoint = false, Hostiles = 2, NearestHostileYards = 20f };
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(lagging));
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(lagging with { InCombat = true, MsSinceCombat = 0, TankAlive = false }));
+    }
+
+    [Theory]
+    [InlineData(45f, false, (int)PlayerbotSiegeOrder.Advance, false)]
+    [InlineData(40f, false, (int)PlayerbotSiegeOrder.Pull, true)]
+    [InlineData(25f, false, (int)PlayerbotSiegeOrder.Pull, true)]
+    [InlineData(50f, true, (int)PlayerbotSiegeOrder.Pull, true)]
+    [InlineData(55f, true, (int)PlayerbotSiegeOrder.Pull, true)]
+    [InlineData(56f, true, (int)PlayerbotSiegeOrder.Advance, false)]
+    [InlineData(float.PositiveInfinity, true, (int)PlayerbotSiegeOrder.Advance, false)]
+    public void APullStartsWithin40Yards_AndEndsBeyond55(float nearest, bool latched, int order, bool latchAfter)
+    {
+        PlayerbotSiegeDecision decision = PlayerbotSiegeCommander.Decide(Calm with
+        {
+            Hostiles = float.IsFinite(nearest) ? 1 : 0, NearestHostileYards = nearest, PullLatched = latched,
+        });
+        Assert.Equal(((PlayerbotSiegeOrder)order, latchAfter), (decision.Order, decision.PullLatched));
+    }
+
+    [Fact]
+    public void TwoHostilesWithoutACross_AreAnAssignTank_AndAPullComesFirst()
+    {
+        Assert.Equal(PlayerbotSiegeOrder.AssignTank, Order(Fight with { Hostiles = 2 }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Hostiles = 2, CrossValid = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Hostiles = 1 }));
+        Assert.Equal(PlayerbotSiegeOrder.AssignTank, Order(Calm with { Hostiles = 2, NearestHostileYards = 50f }));
+        Assert.Equal(PlayerbotSiegeOrder.Pull, Order(Calm with { Hostiles = 2, NearestHostileYards = 30f }));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(Calm with { Hostiles = 2, NearestHostileYards = 50f, CrossValid = true }));
+    }
+
+    [Fact]
+    public void TheRaidWarningsAreOnePerThreeSeconds_AndOnlyOnAChange()
+    {
+        var announcer = new PlayerbotSiegeAnnouncer();
+        Assert.True(announcer.Offer("Advancing to waypoint 1", 10_000));
+        Assert.False(announcer.Offer("Advancing to waypoint 1", 20_000));
+        Assert.False(announcer.Offer("Pulling", 11_000));
+        Assert.False(announcer.Offer("Pulling", 12_999));
+        Assert.True(announcer.Offer("Pulling", 13_000));
+        Assert.False(announcer.Offer("Pulling", 30_000));
+        Assert.True(announcer.Offer("Advancing to waypoint 1", 33_000));
+        Assert.Equal(["Advancing to waypoint 1", "Pulling", "Advancing to waypoint 1"], announcer.Sent);
+    }
+}

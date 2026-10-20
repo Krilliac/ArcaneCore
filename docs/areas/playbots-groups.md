@@ -372,6 +372,39 @@ CMSG_GROUP_SET_LEADER) hands the clear to the bots (`PlayerbotGroupCoordinator.H
 * **Status.** `.playerbot groups` shows `handoff-from=<player>` (and `clear-list=<left>/<total>`) on the group's line, `:handoff` on a
   bot's group tag, and a summary line `leader handoffs: 1 leading, 3 adopted, 1 cleared, 1 ended early.`.
 
+## Siege (`.playerbot siege`)
+
+A siege is a GM-ordered march of one or two **bot-led raids** along stored waypoints to a creature entry, and its death. A bot leads each
+raid and commands it alone; nobody has to be in a group (the GM may watch invisibly, `.gm on` and `.gm visible off`), and a real player can
+still be fought, or lead a group of his own. All state is in memory (`PlayerbotGroupCoordinator.Siege.cs`); there is no configuration key.
+
+* **Commands (Administrator).** `.playerbot siege waypoint add` stores the invoker's position as the next waypoint (all on one map, at most 64);
+  `waypoint list` prints them, `waypoint clear` forgets them (both refused as `siege-running` while a siege runs); `siege start $name|$prefix*|all
+  #entry [raids 1|2] [force]` enlists the running bots; `siege stop` ends it (outcome `stopped: gm`).
+* **Forming.** Free, living, ungrouped bots of one team on the waypoints' map are split over the raids: tanks, then healers, then damage dealers,
+  dealt round the raids (the highest level first); the best tank leads a raid. Each is an ordinary bot-led group (same invitations, raid conversion,
+  subgroups of five) with goal kind `Siege`, always a raid, and goes straight to `Engaging`. A siege raid takes no slot of `MaxGroups`, has no goal
+  timeout, no stall watch and no wipe rule of the quest groups, and works with the groups kill switch off: the GM stops it. Refusals: `siege-running`,
+  `no-waypoints`, `bad-raids`, `bad-objective`, `groups-unavailable`, `too-few-bots` (two for every raid); skipped bots carry `not-running`,
+  `busy`, `grouped`, `dead`, `other-map`, `in-group`, `other-team`, `raid-full`.
+* **Lockstep.** The raids share one `Step`, the index of the waypoint they head for. It moves on only when every raid's leader stands within
+  6 yards of that waypoint and none fights; a raid that is there first holds for the others. Past the last waypoint the leaders walk to the
+  living objective. Lifts are ridden by the ordinary walk (`PlayerbotElevator`, the three Undercity lifts).
+* **The commander** (`PlayerbotSiegeCommander.Decide`, a pure function; the coordinator re-reads the raids every 400 ms) picks an order for each
+  raid in this order: **Retreat** (in combat: the tank dead, the average health under 35 % or a third of the raid dead; kept until the raid has been
+  out of combat for 5 s; the leader walks back to the waypoint behind or the rally point, nobody fights); out of combat **Regroup** (a member more
+  than 30 yards behind, resting, or hurt below 60 % for at most 90 s) or **Hold** (at the waypoint while the other raid is not); **Pull** (a
+  hostile within 40 yards, kept until it is farther than 55: hysteresis); **AssignTank** (two or more hostiles and no cross); **Advance**; **Assault**
+  (in combat). A raid has no retreat cap: it may retreat and advance again.
+* **Marks and warnings.** The leader sets the skull (the unit to kill) and, for AssignTank, the cross (the second hostile, followed first by
+  the tanks) through its own client packet MSG_RAID_TARGET_UPDATE, and says one **raid warning** (CMSG_MESSAGECHAT, type raid warning; Orcish for
+  the Horde, else Common) whenever the order changes, never twice the same line in a row and at most one per 3 s (`PlayerbotSiegeAnnouncer`).
+* **Leader.** When the leader dies the raid's best living member (a tank first) takes over through the old leader's own CMSG_GROUP_SET_LEADER
+  (`PromoteLeader`); a leader that leaves is replaced by the member the server group now names. A raid with nobody alive ends.
+* **Winning.** The objective entry is seen alive and later none is alive on the map: each leader says `Siege complete`, the raids disband and
+  the outcome is `won`. A siege whose raids have all ended is `stopped: raids-ended`.
+* **Status.** `.playerbot groups` adds ` siege=1:raid1:advance:step0/2` to a raid's line.
+
 ## Configuration (`World:Playerbots:Groups`, live)
 
 | Key | Default | Range | Meaning |
