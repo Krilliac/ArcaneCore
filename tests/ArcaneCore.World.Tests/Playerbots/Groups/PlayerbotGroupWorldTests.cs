@@ -379,4 +379,37 @@ public sealed class PlayerbotGroupWorldTests
         await world.RunAsync(10_000);
         Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == lone.Id);
     }
+
+    [Fact]
+    public async Task ABotWithADefendPost_IsNeverMatchedIntoAQuestGroup()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);
+        var tank = await world.AddBotAsync("Deftank", Human, Warrior, 10, [Taunt]);
+        var healer = await world.AddBotAsync("Defheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
+        var mage = await world.AddBotAsync("Defmage", Human, Mage, 10, [Fireball]);
+        Guid[] ids = [tank.Id, healer.Id, mage.Id];
+
+        // The healer takes a post the moment it has the quest, before the coordinator can match the three: it is not free for a group.
+        bool posted = false;
+        Assert.True(await world.RunUntilAsync(60_000, () =>
+        {
+            if (!posted && world.HasQuest(healer.Id, EliteQuest))
+            {
+                Player p = world.Player(healer.Id);
+                world.Bots.FindBrain(healer.Id)!.Defend = new PlayerbotDefendPost(p.MapId, new System.Numerics.Vector3(p.X, p.Y, p.Z), 30f, 1);
+                posted = true;
+            }
+
+            return ids.All(id => world.HasQuest(id, EliteQuest));
+        }), world.Trace());
+
+        // Long enough for the three to be matched and the group to leave Forming, as in the test above.
+        await world.RunAsync(40_000);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.False(world.Coordinator.Drives(healer.Id), world.Trace());
+            Assert.DoesNotContain(world.Coordinator.Groups, g => g.Members.Any(m => m.BotId == healer.Id));
+            return true;
+        });
+    }
 }

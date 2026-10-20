@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Spells;
@@ -81,6 +82,23 @@ public sealed class PlayerbotDefendTests
         rig.Think();
         Assert.Same(rig.EnemyPlayer, rig.Brain.InspectionPvpTarget);
         Assert.Same(rig.EnemyPlayer, rig.BotPlayer.Combat.Victim);
+    }));
+
+    [Fact]
+    public Task DroppingTheIntent_WhileSwingingAtAPlayer_SendsAttackStop() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.BotPlayer.Combat.Victim);
+
+        var sent = new List<WorldOpcode>();
+        rig.Bot.ManagedDispatchObserver = sent.Add;
+        rig.Bot.ManagedBudget = new ManagedActionBudget(4);
+        rig.Brain.DropIntent();
+
+        Assert.Contains(WorldOpcode.CmsgAttackstop, sent);
+        Assert.Null(rig.Brain.InspectionPvpTarget);
     }));
 
     [Fact]

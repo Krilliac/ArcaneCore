@@ -2023,9 +2023,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         TargetEntry = 0;
     }
 
-    private void DropIntent()
+    internal void DropIntent()
     {
-        if (_pvpFight is { } pvp) (pvp.Target, pvp.Attacking) = (null, false);
+        // A PvP swing in progress is stopped on the wire too (CMSG_ATTACKSTOP), not only forgotten.
+        if (_pvpFight is { } pvp)
+        {
+            if (pvp.Target is not null && _session.Player is { } self) pvp.Stop(self);
+            else (pvp.Target, pvp.Attacking) = (null, false);
+        }
+
         _destinations.CancelPlanning();
         _target = null;
         AbandonRoute();

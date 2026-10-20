@@ -2031,7 +2031,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                            active.Controller is null && !active.PartyDriven && fields?.Holds(active.Record.BotId) != true,
+                            // A bot with a defend post holds it: it is neither matched into a quest group nor enlisted in a siege.
+                            active.Controller is null && !active.PartyDriven && fields?.Holds(active.Record.BotId) != true && active.Brain.Defend is null,
                             Scripted: active.Controller is not null));
                 try { groups.Update(_groupBotsScratch, elapsedMs); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
