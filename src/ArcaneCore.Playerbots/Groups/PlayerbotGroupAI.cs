@@ -391,6 +391,7 @@ internal sealed class PlayerbotGroupAI
         if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
         {
             bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
+            raid.RetreatNoPath = !walked && raid.Order == PlayerbotSiegeOrder.Retreat;
             Step = string.Create(CultureInfo.InvariantCulture, $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(walked ? string.Empty : ":no-path")}");
             return;
         }
@@ -621,6 +622,10 @@ internal sealed class PlayerbotGroupAI
         Player? leader, bool isLeader)
     {
         if (player.Map is not { } map) return null;
+        // A retreating siege raid disengages: it fights nothing and casts nothing (every cast-time spell stops the mover first), so the leader walks
+        // to the retreat point and the members follow it.
+        PlayerbotSiegeOrder? siegeOrder = group.Siege?.Order;
+        if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
         GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
         Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
@@ -639,12 +644,8 @@ internal sealed class PlayerbotGroupAI
             }
         }
 
-        // A lost fight is left: a retreating siege raid fights nothing and casts nothing (every cast-time spell stops the mover first), so the
-        // leader walks to the retreat point and the members follow it. Once the leader is there (Rally) the raid picks no new targets and follows
-        // no marks either: it only fights back what attacks the member (or, for a healer, the raid member it heals), the member itself first,
-        // then the nearest.
-        PlayerbotSiegeOrder? siegeOrder = group.Siege?.Order;
-        if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
+        // At the retreat point (Rally) the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for
+        // a healer, the raid member it heals), the member itself first, then the nearest.
         if (siegeOrder == PlayerbotSiegeOrder.Rally)
         {
             bool heals = me.Role == PlayerbotGroupRole.Healer;

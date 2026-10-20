@@ -428,9 +428,9 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         if (_siegeViews.Count == 0) return;
-        // The witness stands on the siege's map (a raid whose leader is elsewhere cannot see the objective's grid).
-        SiegeView witness = _siegeViews.FirstOrDefault(v => v.Leader.MapId == siege.MapId) ?? _siegeViews[0];
-        if (WatchObjective(siege, witness.Leader, now)) return;
+        // The witness stands on the siege's map: a leader elsewhere sees another map's creatures and grids, which says nothing of the objective.
+        // With none on the map the objective is not judged this tick.
+        if (WatchObjective(siege, _siegeViews.FirstOrDefault(v => v.Leader.MapId == siege.MapId)?.Leader, now)) return;
 
         // Lockstep: the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it.
         if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
@@ -531,7 +531,8 @@ public sealed partial class PlayerbotGroupCoordinator
         // The leader at the retreat point (the waypoint behind the step, else where the siege began) turns a retreat into a rally.
         Vector3 retreatPoint = RetreatPointOf(siege);
         float rx = leader.X - retreatPoint.X, ry = leader.Y - retreatPoint.Y;
-        bool atRally = MathF.Sqrt((rx * rx) + (ry * ry)) <= PlayerbotSiegeCommander.RallyYards;
+        // A leader that cannot plan a way to the point (it stands boxed in) rallies where it is: the raid fights back and the bound applies.
+        bool atRally = MathF.Sqrt((rx * rx) + (ry * ry)) <= PlayerbotSiegeCommander.RallyYards || raid.RetreatNoPath;
         uint msAtRally = raid.RallySinceMs == 0 ? 0u : unchecked(now - raid.RallySinceMs);
         // The skull the commander last set on the objective counts as fighting it too.
         if (!objectiveEngaged && !raid.PullTarget.IsEmpty)
@@ -638,9 +639,9 @@ public sealed partial class PlayerbotGroupCoordinator
     /// The objective's death ends the siege: the entry is seen alive at some tick, and later none is. Once won, each leader's closing raid
     /// warning goes out (they keep the 3 s gap) and the siege ends. True when it is over or ending (nothing is commanded this tick).
     /// </summary>
-    private bool WatchObjective(PlayerbotSiege siege, Player witness, uint now)
+    private bool WatchObjective(PlayerbotSiege siege, Player? witness, uint now)
     {
-        if (!siege.Won)
+        if (!siege.Won && witness is not null && witness.MapId == siege.MapId)
         {
             if (FindLivingOnMap(witness, siege.ObjectiveEntry) is { } living)
             {
@@ -699,7 +700,11 @@ public sealed partial class PlayerbotGroupCoordinator
         raid.Order = decision.Order;
         raid.RetreatLatched = decision.RetreatLatched;
         raid.PullLatched = decision.PullLatched;
-        if (!decision.RetreatLatched) raid.RallySinceMs = 0;
+        if (!decision.RetreatLatched)
+        {
+            raid.RallySinceMs = 0;
+            raid.RetreatNoPath = false;
+        }
         else if (facts.AtRally && raid.RallySinceMs == 0) raid.RallySinceMs = Math.Max(1u, now);
 
         Unit? skull = null;

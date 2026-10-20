@@ -11,6 +11,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
 
@@ -703,5 +704,75 @@ public sealed class PlayerbotSiegeWorldTests
             Assert.True(skulled, "the objective critter was never skulled");
             Assert.Equal("won", world.Coordinator.SiegeOutcome);
         }
+    }
+
+    [Fact]
+    public async Task ARetreatingLeaderWithNoPath_RalliesWhereItStands_AndTheMembersFightBack()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+
+        // Walking is refused on this map from the retreat on (the planner answers no path), so the leader cannot leave the fight.
+        world.Options.AllowedMaps = [1];
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order is PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally), world.Trace());
+        Assert.True(raid.RetreatNoPath);
+        Assert.True(YardsFrom(Leader(world, raid), RetreatPoint(siege)) > PlayerbotSiegeCommander.RallyYards, "the leader did not move: it rallies in place");
+        Assert.Equal(1, raid.Retreats);
+
+        // The members answer their attackers, and the bound ends the latch (the guards cannot be killed meanwhile).
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group!.Members.Any(m =>
+            m.AI?.TargetUnit is { } target && world.World.Host.World.FindOnlinePlayer(m.Guid) is { } player && player.Combat.Attackers.Any(a => ReferenceEquals(a, target)))),
+            world.Trace());
+        Assert.True(await world.RunUntilAsync(PlayerbotSiegeCommander.RallyHoldMs + 30_000, () => { TopUpGuards(world, raid); return !raid.RetreatLatched; }), world.Trace());
+        Assert.False(raid.RetreatNoPath);
+    }
+
+    [Fact]
+    public async Task ASiegeWhoseOnlyLeaderIsOffTheSiegeMap_IsNotWon_ByAGridLoadedAtTheObjectivesPositionThere()
+    {
+        // The Deadmines world logs the bots in elsewhere than the open one: the objective stands 30 yards east of their start.
+        Vector3 start = new(-8939.45f, -132.49f, 83.58f);
+        (CreatureTemplate template, CreatureSpawn spawn) = Guard(Objective, 0f, 0f, health: 120);
+        spawn = spawn with { X = start.X + 30f, Y = start.Y };
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], null, dungeon: true, extraCreatures: [(template, spawn)]);
+        (Guid, string)[] bots =
+        [
+            await world.AddBotAsync("Sgatank", 1, 1, 10, [GroupTestWorld.Taunt]),
+            await world.AddBotAsync("Sgbtank", 1, 1, 10, [GroupTestWorld.Taunt]),
+        ];
+        await world.RunAsync(2_000);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.Null(world.Coordinator.AddSiegeWaypoint(0, start with { X = start.X + 10f }));
+            return true;
+        });
+        PlayerbotSiege siege = await Start(world, [.. bots.Select(b => (b.Item1, b.Item2))], raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        Assert.True(await world.RunUntilAsync(60_000, () => siege.ObjectiveSeen), world.Trace());
+
+        // The leader stands on another map (the Deadmines), on the objective's own X/Y: the grid there is loaded and no such creature lives there.
+        // (The raid dissolves when its leader leaves the map, so the commander's tick never gets that far; the judgement of the objective itself must
+        // refuse such a witness too, and is called here as the tick would call it.)
+        Player witness = await world.OnWorldAsync(() => Leader(world, raid));
+        Assert.True(await world.OnWorldAsync(() =>
+        {
+            Vector3 at = siege.ObjectivePosition;
+            return world.World.Services.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports.TeleportTo(witness, 36, at.X, at.Y, at.Z, 0f);
+        }), "teleport refused");
+        Assert.True(await world.RunUntilAsync(20_000, () => witness.MapId == 36), world.Trace());
+        bool won = await world.OnWorldAsync(() =>
+        {
+            Assert.True(witness.Map!.FindUpdater<CreatureMapSystem>()!.IsGridLoaded(siege.ObjectivePosition.X, siege.ObjectivePosition.Y),
+                "the grid at the objective's X/Y on the other map must be loaded for this test to mean anything");
+            Assert.True(siege.ObjectiveSeen);
+            typeof(PlayerbotGroupCoordinator).GetMethod("WatchObjective", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(world.Coordinator, [siege, witness, world.World.Host.World.NowMs]);
+            return siege.Won;
+        });
+
+        Assert.False(won, "a witness on another map judged the objective dead");
+        Assert.False(siege.ObjectiveUnseen);
     }
 }

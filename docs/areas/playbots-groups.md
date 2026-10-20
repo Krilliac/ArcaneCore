@@ -407,6 +407,7 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   the leader is within 8 yards) stands there: the leader holds, no mark is set and nothing new is pulled, and each member fights back only a hostile
   that attacks it (a healer also one that attacks a raid member). The latch ends when the raid has been out of combat for 5 s, or has stood at the
   point for `RallyHoldMs` (30 s) and still fights (the bound: a pursuit that does not end is fought, not run from again), or the objective is engaged.
+  A leader that can find no path to the retreat point (`lead:siege-retreat:no-path`) rallies where it stands, so the raid fights back and the 30 s bound applies.
   A retreat is counted (`retreats=` in the status) where its latch begins, not on an order change: a raid that loses its leader holds meanwhile
   and resumes the same retreat after the promotion, uncounted. A flicker of the combat flag is not a new engagement. The leader's loop watch starts
   afresh at the start of a retreat (the walk back to the waypoint it came from reads as an A, B, A loop). Creatures leash after about 50 yards, and

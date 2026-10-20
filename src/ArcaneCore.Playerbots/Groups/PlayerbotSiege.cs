@@ -298,6 +298,9 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     /// <summary>The raid has begun a retreat in the current engagement (cleared when the raid enters combat from quiet).</summary>
     public bool RetreatedThisEngagement { get; set; }
 
+    /// <summary>The retreating leader reported that it has no path to the retreat point (set by <see cref="PlayerbotGroupAI"/>; the raid then rallies in place).</summary>
+    public bool RetreatNoPath { get; set; }
+
     /// <summary>When the leader first stood at the retreat point during the current retreat (0: not there during this latch).</summary>
     public uint RallySinceMs { get; set; }
 
