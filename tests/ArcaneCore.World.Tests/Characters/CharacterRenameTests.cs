@@ -1,5 +1,7 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using ArcaneCore.Data.Characters.Rename;
+using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Game.Characters;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
@@ -10,6 +12,7 @@ using ArcaneCore.World.Characters.Creation;
 using ArcaneCore.World.Characters.Rename;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Names;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Tests.Progression;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +32,8 @@ public sealed class CharacterRenameTests
     private const byte TooLong = 0x47;
     private const byte MixedLanguages = 0x49;
     private const byte CreateError = 0x2F;
+    private const byte Profane = 0x4A;
+    private const byte Reserved = 0x4B;
 
     private static byte[] Request(ulong guid, string name) => Request(guid, Encoding.UTF8.GetBytes(name));
 
@@ -240,26 +245,85 @@ public sealed class CharacterRenameTests
             var options = new CharacterCreationOptions();
             await store.SetFlagAsync(1, CharacterAtLoginFlags.Rename);
 
-            CharacterRenameDecision taken = await CharacterRename.DecideAsync(store, options, account, new CharacterRenameRequest(1, "taken"u8.ToArray()));
+            CharacterRenameDecision taken = await CharacterRename.DecideAsync(store, options, NameCatalog.Empty, AccountSecurity.Player, account, new CharacterRenameRequest(1, "taken"u8.ToArray()));
             Assert.Equal(CharacterRenameOutcome.NameTaken, taken.Outcome);
             Assert.Equal(CharResult.CharCreateError, taken.Failure);
             Assert.False(taken.Rejected);
 
-            CharacterRenameDecision rejected = await CharacterRename.DecideAsync(store, options, account, new CharacterRenameRequest(1, "x"u8.ToArray()));
+            CharacterRenameDecision rejected = await CharacterRename.DecideAsync(store, options, NameCatalog.Empty, AccountSecurity.Player, account, new CharacterRenameRequest(1, "x"u8.ToArray()));
             Assert.Null(rejected.Outcome);
             Assert.Equal(CharResult.CharNameTooShort, rejected.Failure);
             Assert.True(rejected.Rejected);
 
-            CharacterRenameDecision renamed = await CharacterRename.DecideAsync(store, options, account, new CharacterRenameRequest(1, "elune"u8.ToArray()));
+            CharacterRenameDecision renamed = await CharacterRename.DecideAsync(store, options, NameCatalog.Empty, AccountSecurity.Player, account, new CharacterRenameRequest(1, "elune"u8.ToArray()));
             Assert.Equal(CharacterRenameOutcome.Renamed, renamed.Outcome);
             Assert.Null(renamed.Failure);
             Assert.Equal(("Elune", "Decide"), (renamed.NewName, renamed.OldName));
 
             // MinPlayerName from the creation options applies to renames too.
             await store.SetFlagAsync(1, CharacterAtLoginFlags.Rename);
-            CharacterRenameDecision strict = await CharacterRename.DecideAsync(store, new CharacterCreationOptions { MinPlayerName = 5 }, account, new CharacterRenameRequest(1, "abcd"u8.ToArray()));
+            CharacterRenameDecision strict = await CharacterRename.DecideAsync(store, new CharacterCreationOptions { MinPlayerName = 5 }, NameCatalog.Empty, AccountSecurity.Player, account, new CharacterRenameRequest(1, "abcd"u8.ToArray()));
             Assert.Equal(CharResult.CharNameTooShort, strict.Failure);
         }
+    }
+
+    /// <summary>
+    /// The realm's name catalog as character creation applies it: a NamesProfanity pattern, a NamesReserved pattern and one SQL
+    /// <c>reserved_name</c> row.
+    /// </summary>
+    private static void UseNameCatalog(WorldTestHost host)
+        => host.WorldServices.GetRequiredService<NameCatalogFeature>().RestoreCatalog(new NameCatalog(
+            [new Regex("^bad", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)],
+            [new Regex("^admin", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)],
+            [],
+            new HashSet<string>(StringComparer.Ordinal) { "staffname" }));
+
+    [Fact]
+    public async Task AProfaneOrReservedName_IsRefused_AsAtCreation_AndNothingChanges()
+    {
+        // vmangos HandleCharRenameOpcode runs ObjectMgr::CheckPlayerName(newname, true) (CharacterHandler.cpp:774), which ends in
+        // ValidateName over NamesProfanity/NamesReserved (ObjectMgr.cpp:9597, DBCStores.cpp:617-628), then refuses a player the
+        // reserved_name list (CharacterHandler.cpp:784), exactly as HandleCharCreateOpcode does (:257, :264).
+        await using WorldTestHost host = WorldTestHost.Start();
+        UseNameCatalog(host);
+        (WorldTestClient client, _) = await AccountWithAsync(host, "RENAMEC1", "Keepname");
+        await using (client)
+        {
+            await Flags(host).SetFlagAsync(1, CharacterAtLoginFlags.Rename);
+
+            Assert.Equal(Code(Profane), await RenameAsync(client, 1, "Badword"));
+            Assert.Equal(Code(Reserved), await RenameAsync(client, 1, "Adminx"));
+            Assert.Equal(Code(Reserved), await RenameAsync(client, 1, "staffname"));
+            Assert.Equal("Keepname", (await host.Characters.GetByIdAsync(1))!.Name);
+            Assert.Equal(CharacterAtLoginFlags.Rename, Flags(host).FlagsOf(1)); // the flag stays
+            Assert.Equal("Keepname", host.Directory.Find(1)!.Name);
+
+            // The same names are refused at creation with the same codes.
+            Assert.Equal(Profane, await client.TryCreateCharacterAsync("Badword"));
+            Assert.Equal(Reserved, await client.TryCreateCharacterAsync("Staffname"));
+
+            // An allowed name still renames.
+            Assert.Equal(0, (await RenameAsync(client, 1, "Goodname"))[0]);
+            Assert.Equal("Goodname", (await host.Characters.GetByIdAsync(1))!.Name);
+        }
+    }
+
+    [Fact]
+    public async Task Staff_MayTakeASqlReservedName_ButNotADbcProfaneOrReservedOne()
+    {
+        // vmangos refuses reserved_name to SEC_PLAYER only (CharacterHandler.cpp:784); ValidateName's DBC rules apply to everyone.
+        await using WorldTestHost host = WorldTestHost.Start();
+        UseNameCatalog(host);
+        byte[] key = await host.AddAccountAsync("RENAMEC2", AccountSecurity.GameMaster);
+        await using WorldTestClient client = await host.ConnectAsync();
+        await client.AuthenticateAsync("RENAMEC2", key);
+        await client.CreateCharacterAsync("Staffer");
+        await Flags(host).SetFlagAsync(1, CharacterAtLoginFlags.Rename);
+
+        Assert.Equal(Code(Profane), await RenameAsync(client, 1, "Badword"));
+        Assert.Equal(Code(Reserved), await RenameAsync(client, 1, "Adminx"));
+        Assert.Equal(0, (await RenameAsync(client, 1, "staffname"))[0]);
+        Assert.Equal("Staffname", (await host.Characters.GetByIdAsync(1))!.Name);
     }
 
     // --- .character rename ---------------------------------------------------------------

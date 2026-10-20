@@ -258,19 +258,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // Without CharacterCreation:CharSectionsDbcPath the realm has no appearance data and checks nothing (the feature logs that once).
         public bool IsAppearanceValid(byte race, byte gender, CharacterAppearance looks) => appearance.IsEmpty || appearance.IsValid(race, gender, looks);
 
-        public CharResult? CheckNameCatalog(string name)
-        {
-            NameCatalogResult result = catalog.Check(name);
-            // vmangos staff may use SQL reserved names, while DBC profanity/reserved rules remain global.
-            if (result == NameCatalogResult.Reserved && security > AccountSecurity.Player && catalog.IsSqlReservedOnly(name))
-                return null;
-            return result switch
-            {
-                NameCatalogResult.Profane => CharResult.CharNameProfane,
-                NameCatalogResult.Reserved => CharResult.CharNameReserved,
-                _ => null,
-            };
-        }
+        public CharResult? CheckNameCatalog(string name) => CharacterNameCatalog.Check(catalog, name, security);
 
         public Task<bool> IsNameTakenAsync(string name) => characters.IsNameTakenAsync(name);
 

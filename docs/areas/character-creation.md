@@ -38,7 +38,10 @@ The checks of `HandleCharCreateOpcode`, in its order (CharacterHandler.cpp:185-3
 disabled team mask for player security (0x32, :193-216) -> unknown race or class (0x30, :218-228) -> race
 flagged NOT_PLAYABLE (0x32, :230-237) -> gender (0x30, :239-244) -> name (NO_NAME, TOO_SHORT/LONG,
 MIXED_LANGUAGES per `MinPlayerName`, `StrictPlayerNames` and `RealmZone`, ObjectMgr.cpp:9507-9598,
-RealmZone.h:23-61) -> name in use (0x31) -> per-realm count with `CharactersPerRealm` clamped to 1..10
+RealmZone.h:23-61) -> name catalog (`CharacterNameCatalog.Check`, shared with rename: PROFANE 0x4A for a
+NamesProfanity.dbc or `chat_word_filter` name pattern, RESERVED 0x4B for a NamesReserved.dbc pattern or a `reserved_name`
+row, which staff above Player may take; ObjectMgr.cpp:9597, DBCStores.cpp:617-628, CharacterHandler.cpp:264)
+-> name in use (0x31) -> per-realm count with `CharactersPerRealm` clamped to 1..10
 (0x34, World.cpp:633) -> PvP realm one faction per account (0x33, :282-307) -> no start row (0x2F, Player.cpp:408-413).
 
 The PvP rule keeps the vmangos quirks on purpose: only the account's first character (the lowest id, a
@@ -113,8 +116,6 @@ once at start. Legacy mode does not check appearance. 1.12.1 has no barber shop.
 
 Each of these needs data or a primitive this lane does not have; none is stubbed.
 
-* Reserved and profane names: the `reserved_name` table, NamesProfanity.dbc and NamesReserved.dbc
-  (codes 0x4A/0x4B exist; nothing sends them). (cc06.)
 * ChrRaces.dbc/ChrClasses.dbc: race/class existence and NOT_PLAYABLE come from the vanilla masks
   (SharedDefines.h:60-110, `RaceClassRules`), `race_taxi_start` still has no writer so new characters get no
   starting flight paths. (cc04.)

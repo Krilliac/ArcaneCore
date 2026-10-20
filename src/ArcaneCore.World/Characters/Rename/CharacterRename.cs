@@ -1,8 +1,11 @@
 using ArcaneCore.Data.Characters.Rename;
+using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Game.Characters;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters.Creation;
+using ArcaneCore.World.Names;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -14,27 +17,29 @@ namespace ArcaneCore.World.Characters.Rename;
 /// <param name="Failure">The result code SMSG_CHAR_RENAME carries for a refusal (null for a rename).</param>
 /// <param name="NewName">The normalized name that was stored (a rename only).</param>
 /// <param name="OldName">The name the character had (when the store found it).</param>
-/// <param name="Rejected">The name failed the name rules before the store was asked.</param>
+/// <param name="Rejected">The name failed the name rules or the name catalog before the store was asked.</param>
 public readonly record struct CharacterRenameDecision(CharacterRenameOutcome? Outcome, CharResult? Failure, string? NewName, string? OldName, bool Rejected);
 
 /// <summary>
 /// The rename of a flagged character from the character screen (mangos WorldSession::HandleCharRenameOpcode and its database
 /// callback, CharacterHandlerCustomize.cpp:86-190), on the session task: normalize and check the name, then one transaction renames
 /// the character and clears its flag, provided it belongs to the account, carries the flag and nobody has the name.
-/// The reserved-name list (mangos <c>reserved_name</c>) is not enforced, as at character creation (docs/areas/character-rename.md).
 /// </summary>
 public static class CharacterRename
 {
     /// <summary>
-    /// Decide and apply a rename. Order as the reference: the name must normalize (valid UTF-8, at most 15 code points) and pass
-    /// the realm's name rules; then the store applies the rename atomically. A refusal because the character is not flagged, is
-    /// not the account's or the name is taken answers CHAR_CREATE_ERROR, as the reference's single validation query does.
+    /// Decide and apply a rename. Order as the reference: the name must normalize (valid UTF-8, at most 15 code points), pass
+    /// the realm's name rules and the name catalog (<see cref="CharacterNameCatalog.Check"/>, as at creation); then the store applies
+    /// the rename atomically. A refusal because the character is not flagged, is not the account's or the name is taken answers
+    /// CHAR_CREATE_ERROR, as the reference's single validation query does.
     /// </summary>
     public static async Task<CharacterRenameDecision> DecideAsync(
-        ICharacterRenameStore store, CharacterCreationOptions options, int accountId, CharacterRenameRequest request)
+        ICharacterRenameStore store, CharacterCreationOptions options, NameCatalog catalog, AccountSecurity security, int accountId,
+        CharacterRenameRequest request)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(catalog);
         string? name = CharacterNames.NormalizeUtf8(request.RawName);
         if (name is null)
         {
@@ -45,6 +50,12 @@ public static class CharacterRename
         if (CharacterNameRules.Check(name, NameRuleSettings.From(options, create: true)) is { } invalid)
         {
             return new CharacterRenameDecision(null, invalid, name, null, Rejected: true);
+        }
+
+        // NamesProfanity/NamesReserved for everyone, reserved_name for players (vmangos CharacterHandler.cpp:774 and :784).
+        if (CharacterNameCatalog.Check(catalog, name, security) is { } refused)
+        {
+            return new CharacterRenameDecision(null, refused, name, null, Rejected: true);
         }
 
         if (request.Guid > int.MaxValue)
@@ -76,7 +87,8 @@ public static class CharacterRename
         {
             ICharacterRenameStore store = session.Services.GetRequiredService<ICharacterRenameStore>();
             CharacterCreationOptions options = session.Services.GetService<CharacterCreationFeature>()?.Options ?? new CharacterCreationOptions();
-            decision = await DecideAsync(store, options, session.AccountId, request.Value).ConfigureAwait(false);
+            NameCatalog catalog = session.Services.GetService<NameCatalogFeature>()?.Catalog ?? NameCatalog.Empty;
+            decision = await DecideAsync(store, options, catalog, session.Security, session.AccountId, request.Value).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
