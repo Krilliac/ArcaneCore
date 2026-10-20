@@ -201,7 +201,10 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         return Rules.MagicHitChance.Finish(chance, binary, resistChance);
     }
 
-    /// <summary>Melee spell table: miss, then dodge, then parry from the front, each after the white-swing skill term (percent rolls out of 10000).</summary>
+    /// <summary>
+    /// Melee spell table: miss, then dodge, then parry, each after the white-swing skill term (percent rolls out of 10000). Dodge and
+    /// parry follow the white swing's eligibility, and a <see cref="SpellAttributesCombat.NoActiveDefense"/> spell rolls neither.
+    /// </summary>
     protected virtual SpellMissInfo MeleeSpellHitResult(SpellSystem system, Unit caster, Unit target, SpellInfo spell)
     {
         ArgumentNullException.ThrowIfNull(system);
@@ -234,8 +237,13 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             {
                 // The same skill and low-level terms as the white swing (RollMeleeOutcomeAgainst, SpellCaster.cpp:585-615).
                 // A raw 5% is wrong once defense and weapon skill differ: a level-63 mob dodges at 6.5% and parries at 14%.
-                dodgePoints = DodgePoints(input);
-                parryPoints = input.FromBehind ? 0 : ParryPoints(input);
+                // Which defenses may roll (SpellCaster.cpp:553-582): a player cannot dodge from behind, nothing parries from behind,
+                // a NO_PARRY creature never parries, and SPELL_ATTR_NO_ACTIVE_DEFENSE (Overpower, Ambush, Cheap Shot) allows neither.
+                bool noActiveDefense = spell.HasAttribute(SpellAttributesCombat.NoActiveDefense);
+                bool canDodge = !noActiveDefense && !(input.FromBehind && input.VictimIsPlayer);
+                bool canParry = !noActiveDefense && !input.FromBehind && (input.VictimIsPlayer || input.VictimCreatureCanParry);
+                dodgePoints = canDodge ? DodgePoints(input) : 0;
+                parryPoints = canParry ? ParryPoints(input) : 0;
             }
         }
         else
