@@ -51,19 +51,24 @@ internal static class PlayerbotMoveCheck
     internal const float DirectStepMaxDrapeYards = 11f;
 
     /// <summary>
-    /// Maximum drop from the lower of a <c>DirectStep</c>'s two ends to the floor under its destination. The drape
-    /// (<see cref="DirectStepMaxDrapeYards"/>) brings a step whose waypoint height drifted above the floor down onto it; it never lets a bot
-    /// that stands on the floor step off an edge into a pit or down a cliff deeper than this. Never below
-    /// <see cref="PlayerbotMotion.DirectStepDrapeMinYards"/>: a standing bot lower than that is not snapped to the floor before it steps,
-    /// so its first step must not be refused for a drop it does not have.
+    /// Maximum drop of the floor within one stretch of a <c>DirectStep</c> (see <see cref="DropAllowed"/>), and of the floor under the
+    /// destination below the lower of the step's two ends. The drape (<see cref="DirectStepMaxDrapeYards"/>) brings a step whose waypoint
+    /// height drifted above the floor down onto it; it never lets a bot that stands on the floor step off an edge into a pit or down a
+    /// cliff deeper than this. Never below <see cref="PlayerbotMotion.DirectStepDrapeMinYards"/>: a standing bot lower than that is not
+    /// snapped to the floor before it steps, so its first step must not be refused for a drop it does not have.
     /// </summary>
     internal const float DirectStepMaxDropYards = PlayerbotMotion.DirectStepDrapeMinYards;
 
     /// <summary>
-    /// Steepest ground (rise over run, about 50 degrees, the walkable limit) a <c>DirectStep</c> may descend: the floor under the step's
-    /// start may lie this much lower per flat yard than the floor under its end without the step counting as a drop.
+    /// Steepest ground (rise over run, about 50 degrees) a stretch of a <c>DirectStep</c> may descend beyond
+    /// <see cref="DirectStepMaxDropYards"/>. vmangos builds its navigation mesh with walkableSlopeAngle 50 (contrib/mmap/src/MapBuilder.cpp)
+    /// and its tile worker sets playerClimbLimit = cos(52 degrees), "client side controlled" (contrib/mmap/src/TileWorker.cpp); both are
+    /// climb limits, used here for descent as well (a slope walkable up is walkable down).
     /// </summary>
     internal const float DirectStepMaxSlope = 1.19f;
+
+    /// <summary>Spacing of the floor samples along a <c>DirectStep</c> (<see cref="DropAllowed"/>).</summary>
+    private const float DropSampleYards = 1f;
 
     /// <summary>How far past a mesh edge the "is there mesh beyond" probe is taken.</summary>
     private const float BeyondYards = 1f;
@@ -126,19 +131,40 @@ internal static class PlayerbotMoveCheck
     }
 
     /// <summary>
-    /// Whether the floor under a step's end (<paramref name="ground"/>) is no pit: at most <see cref="DirectStepMaxDropYards"/> under the
-    /// lower end, or, for a bot standing on its floor, no more than a walkable slope falls over the step's length (the floor under
-    /// <paramref name="from"/> against the floor under <paramref name="to"/>, so waypoint heights that drifted above a slope do not
-    /// turn a descent into a drop).
+    /// Whether a step is no drop: the floor is sampled every <see cref="DropSampleYards"/> along it (starting under
+    /// <paramref name="from"/>, ending at <paramref name="ground"/> under <paramref name="to"/>) and each stretch may fall at most
+    /// <c>max(<see cref="DirectStepMaxDropYards"/>, run * <see cref="DirectStepMaxSlope"/>)</c>, so a walkable slope is walked down (also
+    /// under waypoint heights that drifted above it) while a ledge or a dip anywhere in the step, however long the step, is refused: a
+    /// pit's wall is one stretch and no slope. Besides, the floor under the destination is at most <see cref="DirectStepMaxDropYards"/>
+    /// under the lower end, or, when it is lower, the bot stands on its floor (within that distance of it). A sample with no floor is
+    /// skipped (the destination's floor is checked by the caller). Cost: at most one floor lookup per yard of the step.
     /// </summary>
     private static bool DropAllowed(Map map, Vector3 from, Vector3 to, float ground, float maxCeilingZ)
     {
         float lower = MathF.Min(from.Z, to.Z);
-        if (lower - ground <= DirectStepMaxDropYards) return true;
-        float fromFloor = PlayerbotMotion.ResolveWalkFloor(map, from.X, from.Y, from.Z, 0f, maxCeilingZ);
-        if (!PlayerbotMotion.ValidHeight(fromFloor) || lower - fromFloor > DirectStepMaxDropYards) return false;
+        float previous = PlayerbotMotion.ResolveWalkFloor(map, from.X, from.Y, from.Z, 0f, maxCeilingZ);
+        bool startFloor = PlayerbotMotion.ValidHeight(previous);
+        if (lower - ground > DirectStepMaxDropYards && (!startFloor || lower - previous > DirectStepMaxDropYards)) return false;
+
         float run = MathF.Sqrt(((to.X - from.X) * (to.X - from.X)) + ((to.Y - from.Y) * (to.Y - from.Y)));
-        return fromFloor - ground <= run * DirectStepMaxSlope;
+        int samples = Math.Max(1, (int)MathF.Ceiling(run / DropSampleYards));
+        float last = 0f;
+        for (int i = 1; i <= samples; i++)
+        {
+            float t = i / (float)samples;
+            float floor = i == samples
+                ? ground
+                : PlayerbotMotion.ResolveWalkFloor(map, from.X + ((to.X - from.X) * t), from.Y + ((to.Y - from.Y) * t),
+                    from.Z + ((to.Z - from.Z) * t), 0f, maxCeilingZ);
+            if (!PlayerbotMotion.ValidHeight(floor)) continue;
+            float stretch = (t - last) * run;
+            last = t;
+            if (startFloor && previous - floor > MathF.Max(DirectStepMaxDropYards, stretch * DirectStepMaxSlope)) return false;
+            previous = floor;
+            startFloor = true;
+        }
+
+        return true;
     }
 
     /// <summary>Whether the whole leg from <paramref name="from"/> to <paramref name="to"/> may be walked as it is (not cut, not refused).</summary>

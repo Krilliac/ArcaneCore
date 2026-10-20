@@ -53,10 +53,31 @@ public sealed class PlayerbotDirectStepDropTests
     }
 
     [Fact]
-    public async Task ACliffEdge_IsRefused_EvenWithTheSlopeAllowance()
+    public async Task AFourYardLedge_InTheMiddleOfAFiveYardStep_IsRefused()
+    {
+        // The floors under the two ends differ by 4 yd over 5 yd of run, which a walkable slope would allow; the drop is all in one yard.
+        (bool ok, _, string? reason) = await Step(
+            new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ), x => x < StepX + 2.5f ? FloorZ : FloorZ - 4f);
+        Assert.False(ok);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    [Fact]
+    public async Task ALongStep_OverATenYardPit_IsRefused_HoweverLongTheRun()
+    {
+        // A tick stall makes the step as long as 8.5 yd (run speed times the age of the anchor): 10 yd of drop is no slope for that.
+        (bool ok, _, string? reason) = await Step(
+            new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 8.5f, StepY, FloorZ), x => x < StepX + 4f ? FloorZ : FloorZ - 10f);
+        Assert.False(ok);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    [Fact]
+    public async Task ADipInTheMiddleOfAStep_WhoseEndsAreOnTheFloor_IsRefused()
     {
         (bool ok, _, string? reason) = await Step(
-            new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ), x => x < StepX + 2f ? FloorZ : FloorZ - 10f);
+            new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ),
+            x => x >= StepX + 1.5f && x < StepX + 3.5f ? FloorZ - 4f : FloorZ);
         Assert.False(ok);
         Assert.Equal("NoGroundSupport", reason);
     }
