@@ -999,8 +999,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         uint now = Now;
         // A bot that stopped, became scripted or joined a real player's group leaves this one: the feature calls Forget for each of those
         // (a controller attaching, a leash, a stop). Here only a bot no longer running (out of the snapshot, or without a player) is gone.
-        // Neither Free nor IsInWorld is asked: a member of an adopted party (Handoff) is party-driven, so never Free, and a member between
-        // maps (the instance portal, the walk out) is briefly out of the world; both are still members.
+        // Neither Free nor IsInWorld is asked: the snapshot of a member of an adopted party (Handoff) is taken with Free=false
+        // while the bot is still PartyDriven on the tick it is adopted (TakeLeaderChanges adopts and Advance runs in the same Update; the
+        // bot's next think then clears PartyDriven), and a member between maps (the instance portal, the walk out) is briefly out of the
+        // world; both are still members.
         _membersScratch.Clear();
         for (int i = 0; i < group.Members.Count; i++)
         {
