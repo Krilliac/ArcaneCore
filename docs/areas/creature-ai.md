@@ -21,8 +21,9 @@ docs/integration/creature-ai.md.
     the effect value of SPELL_EFFECT_DISTRACT), then faces its spawn orientation again. Any newly pushed generator expires it
     (MotionMaster::Mutate, MotionMaster.cpp:699-702). `CreatureMapSystem.SetFacingTo` sends the facing spline (Unit::SetFacingTo).
 - **Splines.** Multi-point linear splines use SMSG_MONSTER_MOVE: the point count, the
-  destination, then N−1 packed offsets from the path midpoint (11/11/10 bits at quarter-yard
-  resolution, from gtker wow_messages / vmangos `MoveSplineInitArgs` packing). Facing can be
+  destination, then N−1 packed offsets from the destination (`destination − point`, 11/11/10 bits at
+  quarter-yard resolution, rounded like vmangos `appendPackXYZ`; `Creatures:Movement:MonsterMoveOffsetBase` can restore the old
+  midpoint layout). Facing can be
   none, an angle, a spot or a target. A late observer catches up on the remaining points.
 - **AI host** (`CreatureMapSystem.Ai.cs`):
   - **Aggro radius** (vmangos `Creature::GetAttackDistance`, Objects/Creature.cpp:2193-2240): the template's detection range (`creature_template.Detection`, 18 yd by default; the earlier hard-coded 20 yd was wrong), minus the level difference (at most 25 levels counted below), never below `min(detection, 5)`, times `AggroRate`; a detection range under 1 means no proximity aggro. The detect-range auras are not applied.

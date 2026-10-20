@@ -13,6 +13,9 @@ Companion docs: `docs/areas/creatures.md` (the base creature system), `docs/area
 * Intermediate spline points are now written as `destination - point` (11/11/10-bit quarter-yard pack), not
   `middle - point`: vmangos `Movement/spline/packet_builder.cpp:77-111` (`offset = destination - real_path[i]`),
   mangos-classic `Movement/packet_builder.cpp:98-125` (`destination - pathPoint[i]`).
+  Each axis is rounded to the nearest quarter yard, halves away from zero (`CreatureMovePackets.PackXYZ`, vmangos
+  `ByteBuffer::appendPackXYZ` `lroundf(v * 4)`, ByteBuffer.h:482-489); it was truncated toward zero, an error of up to 0.25 yd that always
+  pulled the point toward the destination's height (now at most 0.125 yd and unbiased).
 * An offset under 0.25 yd on every axis is nudged on z (+0.51 when z is below zero, else +0.26): "the client freezes when it
   gets a zero offset" (`packet_builder.cpp:99-106`). mangos-classic drops such points instead (`:104-107`); vmangos is followed
   because the packet's point count then stays equal to the spline's.
@@ -343,7 +346,8 @@ install (only the seam exists), so they keep the straight line.
   Multi-corner `PathOutcome.Mesh` paths returned by `CreatureMapSystem.PlanPath`, except a non-home path of an out-of-combat creature whose current motion is `Random` (a wander leg), are post-processed by `CreatureSplineSmoothing.VaryAndSmooth`:
   1. **Per-creature lateral corridor variation**: on non-home paths `>= 12` yd of an out-of-combat creature with `>= 2` corners, interior corners receive a deterministic lateral offset (`±0.85` yd seeded from `creature.Guid.Counter`, tapered to `0` at start and destination) when `IMeshPointQuery.Raycast` and floor height (`<= 0.85` yd delta) confirm the shifted vertex is walkable.
   2. **Quadratic Bezier corner-cutting**: interior turns `>= 15°` with arms `>= 2` yd are replaced with 3 quadratic Bezier points (`u = 0.20, 0.50, 0.80`, arm `min(3.5, 0.38 x the shorter leg)` yd; a corner whose arm would be under `1.5` yd is not cut) validated by `IMeshPointQuery.Raycast` and height lookup, capped at `32` spline points and spaced `>= 1.1` yd apart.
-  3. **Live segment orientation & corner blending**: `Creature.AdvanceSpline` and `StopSpline` update `creature.Orientation` at every tick via `CreatureSpline.PositionAndOrientationAt` (which blends heading across interior corners within a 1.25-yd window and finishes on `EndOrientation` when `FinalOrientation` is null).
+  3. **Ground snap** (`GroundHeight.DrapePath`, `CreatureMapSystem.FinishPlannedPath`, docs/areas/collision-pathing.md "Ground snap"): after the above, every finished path of every outcome (mesh, partial, straight shortcut; a no-path `FindPath` straight line too) has its points put on the floor (terrain or model, +0.05 yd) and is sampled every `1` yd, keeping a sample only where the chord of the points kept before it would miss the ground by more than `0.11` yd. Walkers and swimmers only: a flier keeps the mesh's heights, a water-only creature stays in its water. This replaced the raise-only `DrapeCornersOverMeshFloor` of the wander and the chase/home generators.
+  4. **Live segment orientation & corner blending**: `Creature.AdvanceSpline` and `StopSpline` update `creature.Orientation` at every tick via `CreatureSpline.PositionAndOrientationAt` (which blends heading across interior corners within a 1.25-yd window and finishes on `EndOrientation` when `FinalOrientation` is null).
 Tests: `Creatures/NoStraightPathTests.cs`, `Creatures/CreatureSplineSmoothingTests.cs`, plus the updated `UnreachableTargetTests`, `CreaturePathBudgetTests`, `ChargeEffectTests`.
 
 ## Not done in this lane (recorded, not stubbed)

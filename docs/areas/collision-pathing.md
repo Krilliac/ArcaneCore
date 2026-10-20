@@ -88,6 +88,29 @@ are still not implemented: a swimmer takes the mesh path, and with `EndTolerance
 `FindWalkPoly` reach (more than 10 yd above the lake-bottom mesh, or more than 3 yd under a polygon) gets `NoPath`, so home
 teleports (vmangos would swim straight via `IsSwimmable`, `PathFinder.cpp:199-201`).
 
+### Ground snap (GroundHeight)
+
+`Maps/Collision/GroundHeight.cs`: puts a position on the floor a creature would stand on. Navmesh detail heights sit
+0.20 to 0.31 yd (p95 about 0.55) above the real floor (Recast rounds a span top up and adds a cell height to detail
+vertices), and a straight chord between string-pulled corners misses rolling ground by up to about 1.6 yd (p95), so
+a creature walking a mesh path floated. `GroundQuery` selects the window (`Up`/`Down` around the current z, default 2/4),
+`Liquid` (`Bottom` for walkers, `Surface` for swimmers) and the prop guard.
+
+* `TrySnap` reads `MapCollision.GetHeight` (terrain plus models, probe from z + Up) and accepts a floor inside the window. The
+  prop guard is the bots' `ResolveWalkFloor` rule: a model floor more than 0.4 yd over the terrain and farther from z than
+  the terrain by 0.25 yd gives the terrain (a creature beside an M2 does not climb it). With no data or no floor in the window
+  it falls back to the mesh surface - 0.20 + 0.05 (window up to 4 yd), else keeps z. The result is the floor + 0.05 yd.
+* `SnapOrKeep` is `TrySnap` or the input z. `DrapePath` snaps the corners, then samples each segment every `step` yd and keeps
+  a sample only where dropping it would put the polyline more than `tolerance` yd off the sampled ground (sliding window),
+  within `maxPoints` (32): the step doubles up to 6 times to fit, and a path that still cannot fit keeps its snapped corners.
+* Creatures: `CreatureMapSystem.FinishPlannedPath` (every outcome, after smoothing) uses step 1 yd, tolerance 0.11 yd; fliers and
+  water-only creatures are left alone. Thread: the snap reads terrain and the model tree, which belong to the world thread;
+  an ungated wander leg takes `Serial()` around it (path jobs themselves only run navmesh searches).
+* Measured on the real data (test `GroundSnapRealTerrainTests`, skipped visibly when the data root is absent): wanderers'
+  terrain offset p95 <= 0.15 yd with a median within 0.06; authored legs terrain p95 <= 0.15 and p05 >= -0.15 with at most 8 points per leg.
+  Cost per leg (step 1 yd, tolerance 0.11, 200 legs per region, Release, loaded machine, so an upper bound): median 30 to 154 us,
+  p95 55 to 279 us, 6 to 13 points per leg (Undercity the dearest); a few first-touch outliers up to a tile load.
+
 ### Region graph (NavRegionGraph)
 
 Not a vmangos feature: a coarse level over a whole map's mesh for long walks (the playerbots' far goals, issues
