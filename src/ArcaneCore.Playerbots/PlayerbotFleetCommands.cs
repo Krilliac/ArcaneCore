@@ -57,7 +57,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
             "Syntax: .playerbot summon $name|$prefix*|all [#count] [force] [to $player]\nTeleport running bots to you (or to the named online player), in rings around the spot. With a count: the nearest bots on that player's map first. 'all' or a count above the cap needs 'force'.",
             Summon),
         new ChatCommand("send", AccountSecurity.Administrator,
-            "Syntax: .playerbot send $name|$prefix*|all $tele|here [force] [to $player]\n.playerbot send $name|$prefix*|all at $map $x $y $z [force]\nTeleport running bots to a game_tele place, to your position (here, or the named player's), or to the given map and coordinates (at: no player needed, so the server console and RA can use it; the height is taken as given), in rings.",
+            "Syntax: .playerbot send $name|$prefix*|all $tele|here [force] [to $player]\n.playerbot send $name|$prefix*|all at $map $x $y $z [force]\nTeleport running bots to a game_tele place, to your position (here, or the named player's), or to the given map and coordinates (at: no player needed, so the server console and RA can use it; each bot's height is the collision ground found from the given z on the loaded continent map, as for here, else the given z), in rings.",
             Send),
         new ChatCommand("follow", AccountSecurity.Administrator,
             "Syntax: .playerbot follow $name|$prefix*|all [to $player]\nThe bots follow you (or the named player) without a party and fight back. .playerbot dismiss, or the master's whisper 'leave', sets them free.",
@@ -226,16 +226,25 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
         if (Services(context) is not { } env) return true;
         if (request.At is { } words)
         {
-            if (ResolveSpot(context, env.Tele, "send", words) is not { } spot) return true;
-            if (spot.IsBattleground)
+            // A game_tele place whose whole name is "at $a $b $c $d" shadows the position form.
+            if (env.Tele.Maps.FindGameTele(string.Join(' ', words.Prepend("at"))) is not null)
+                request = request with { At = null, Head = string.Join(' ', words.Prepend("at")) };
+            else
             {
-                context.Reply(TeleportCommands.CannotTeleToBattlegroundText);
-                return true;
-            }
+                if (ResolveSpot(context, env.Tele, "send", words) is not { } spot) return true;
+                if (spot.IsBattleground)
+                {
+                    context.Reply(TeleportCommands.CannotTeleToBattlegroundText);
+                    return true;
+                }
 
-            // Not tied to a loaded map or a player: the ground comes from the terrain files, as for a game_tele place.
-            TerrainInfo ground = env.Tele.Maps.Terrain.For(spot.MapId);
-            return Relocate(env, "send", request, new Destination(spot.MapId, spot.Position, 0f, null, (x, y, z) => ground.GetHeight(x, y, z), _ => true));
+                // Slot heights as the here form finds them: the collision ground (terrain and models) searched from the given z, on the
+                // continent map when it is loaded; on an unloaded map, or where it knows no ground, the given z is kept.
+                Func<float, float, float, float> ground = context.World.FindMap(spot.MapId) is { } loaded
+                    ? (x, y, z) => loaded.Collision.GetHeight(x, y, z)
+                    : (_, _, z) => z;
+                return Relocate(env, "send", request, new Destination(spot.MapId, spot.Position, 0f, null, ground, _ => true));
+            }
         }
 
         if (request.Head.Equals("here", StringComparison.OrdinalIgnoreCase))
@@ -497,6 +506,11 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
             {
                 spot = ResolveSpot(context, env.Tele, "defend", words);
                 if (spot is null) return true;
+                if (spot.Value.IsBattleground)
+                {
+                    context.Reply(TeleportCommands.CannotTeleToBattlegroundText);
+                    return true;
+                }
             }
             else
             {

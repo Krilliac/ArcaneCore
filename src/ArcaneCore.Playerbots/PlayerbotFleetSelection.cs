@@ -143,10 +143,10 @@ internal static class PlayerbotFleetSelection
                 break;
             case FleetVerb.Send:
                 if (tail.Count == 0) return false;
-                if (IsAtWord(tail[0]))
+                if (IsAtWord(tail[0]) && to is null && tail.Count == 5)
                 {
-                    // "at $map $x $y $z": the numbers are checked by the command, which says what is wrong with them.
-                    if (to is not null || tail.Count != 5) return false;
+                    // "at $map $x $y $z": the numbers are checked by the command, which says what is wrong with them. Any other
+                    // shape starting with "at" is a place name ("At the Docks") and goes to the game_tele lookup.
                     head = "at";
                     at = [.. tail.Skip(1)];
                     break;

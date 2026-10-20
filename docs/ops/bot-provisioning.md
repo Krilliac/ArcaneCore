@@ -89,6 +89,6 @@ Do it in this order:
 
 You can stage a siege entirely from RA (or the server console), with no game client: `send ... at`, `defend ... at` and `siege waypoint add at` take
 `at $map $x $y $z` instead of your position, so no player has to stand anywhere. The map must exist, the three numbers must be finite and inside the
-map, and a refusal says which; the height is used as given, so read it from a spot you know (a `.gps` of the place) rather than guessing. For example:
+map, and a refusal says which; a waypoint or a defend post keeps the height you give, and `send` places the bots on the collision ground found from the height you give, so give the real z of the floor (a `.gps` of the place), above all inside a building or Undercity. For example:
 `.playerbot send Siegebot* at 0 1925 225 49.41`, `.playerbot siege waypoint add at 0 1925 225 49.41`, `.playerbot siege start Siegebot* 10181 raids 2`.
 `siege watch` still needs a player (it names who to message).

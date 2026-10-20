@@ -1,6 +1,12 @@
 using System.Globalization;
+using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Tests.GridTerrain;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Party;
@@ -103,9 +109,6 @@ public sealed class PlayerbotPositionFreeTests
     }
 
     [Theory]
-    [InlineData("send Pfsynaa at 0 1 2")]
-    [InlineData("send Pfsynaa at 0 1 2 3 4")]
-    [InlineData("send Pfsynaa at 0 1 2 3 to Nobody")]
     [InlineData("defend Pfsynaa at 0 1 2 3")]
     [InlineData("defend Pfsynaa at 0 1 2 3 abc")]
     [InlineData("defend Pfsynaa at 0 1 2 3 40 to Nobody")]
@@ -130,5 +133,146 @@ public sealed class PlayerbotPositionFreeTests
 
         Assert.Equal([ArcaneCore.World.Gm.Core.GmStrings.ConsoleNeedsPlayer], send);
         Assert.Equal([ArcaneCore.World.Gm.Core.GmStrings.ConsoleNeedsPlayer], defend);
+    }
+
+    [Theory]
+    [InlineData("at 0 1 2")]
+    [InlineData("at 0 1 2 3 4")]
+    [InlineData("at 0 1 2 3 to Nobody")]
+    public async Task SendWithAnAtThatIsNotTheFourNumberForm_IsTakenAsAPlaceName(string tail)
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync();
+        await world.AddBotAsync("Pfnameaa", 30);
+
+        string[] reply = await world.Console.RunAsync(".playerbot send Pfnameaa " + tail);
+
+        Assert.Equal([GmStrings.TeleNotFound], reply);
+    }
+
+    [Fact]
+    public void TheParser_TakesAtAsThePositionFormOnlyWithExactlyFourWords()
+    {
+        Assert.True(PlayerbotFleetSelection.TryParse("Bot at the docks", FleetVerb.Send, out FleetRequest place));
+        Assert.Null(place.At);
+        Assert.Equal("at the docks", place.Head);
+        Assert.True(PlayerbotFleetSelection.TryParse("Bot at 0 1 2 3", FleetVerb.Send, out FleetRequest spot));
+        Assert.Equal(["0", "1", "2", "3"], spot.At!);
+        Assert.Equal("at", spot.Head);
+        Assert.True(PlayerbotFleetSelection.TryParse("Bot at 0 1 2 3 force", FleetVerb.Send, out FleetRequest forced));
+        Assert.True(forced.Force);
+        Assert.Equal(["0", "1", "2", "3"], forced.At!);
+    }
+
+    [Fact]
+    public async Task SendAt_TakesTheSlotHeightsFromTheCollisionFloorNearTheGivenZ_AsHereDoes()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync();
+        await world.Host.World.InvokeAsync(() =>
+        {
+            // Two floors above each other at every point (an upper deck and a lower one): the one the search from the given z finds counts.
+            WorldCollision.Of(world.Host.World).Install(lineOfSight: new TwoFloors(100f, 60f));
+            return true;
+        });
+        await world.AddBotAsync("Pfflraa", 100);
+        await world.AddBotAsync("Pfflrab", 110);
+
+        string[] low = await world.Console.RunAsync(".playerbot send Pfflraa at 0 -8000 1000 62");
+        string[] high = await world.Console.RunAsync(".playerbot send Pfflrab at 0 -8000 1100 98");
+
+        Assert.Equal(["Playerbot send: matched=1 moved=1 skipped=0"], low);
+        Assert.Equal(["Playerbot send: matched=1 moved=1 skipped=0"], high);
+        await world.WaitNearAsync("Pfflraa", 0, -8000f, 1000f, 60f, 19f);
+        await world.WaitNearAsync("Pfflrab", 0, -8000f, 1100f, 100f, 19f);
+    }
+
+    [Fact]
+    public async Task SendAt_ToABattlegroundMap_IsRefused_AsForAGameTele()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync(configureServices: s => s.AddSingleton<IMapDataStore, MapsWithABattleground>());
+        await world.AddBotAsync("Pfbgaaa", 30);
+        (float X, float Y, float Z) before = await world.PositionAsync("Pfbgaaa");
+
+        string[] reply = await world.Console.RunAsync(".playerbot send Pfbgaaa at 489 1 2 3");
+
+        Assert.Equal([TeleportCommandsText.Battleground], reply);
+        Assert.Equal(before, await world.PositionAsync("Pfbgaaa"));
+    }
+
+    [Fact]
+    public async Task DefendAt_ToABattlegroundMap_IsRefused_AndSetsNoPost()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync(configureServices: s => s.AddSingleton<IMapDataStore, MapsWithABattleground>());
+        Guid id = await world.AddBotAsync("Pfbgbaa", 30);
+
+        string[] reply = await world.Console.RunAsync(".playerbot defend Pfbgbaa at 489 1 2 3 40");
+
+        Assert.Equal([TeleportCommandsText.Battleground], reply);
+        Assert.Null(await world.Host.OnWorldAsync(() => world.Bots.FindBrain(id)!.Defend));
+    }
+
+    [Fact]
+    public async Task SendAt_ToAnInstanceMap_SkipsTheBotsWithoutAnInstance()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync();
+        await world.AddBotAsync("Pfinsaa", 30);
+        (float X, float Y, float Z) before = await world.PositionAsync("Pfinsaa");
+
+        string[] reply = await world.Console.RunAsync(".playerbot send Pfinsaa at 36 -16 -383 61");
+
+        Assert.Equal("Playerbot send: matched=1 moved=0 skipped=1 (instance=1)", reply[0]);
+        Assert.Equal(before, await world.PositionAsync("Pfinsaa"));
+    }
+
+    [Fact]
+    public async Task SendAt_AboveTheBulkCap_NeedsForce()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync(options => options.MaxBulkCommand = 1);
+        await world.AddBotAsync("Pffoaaa", 30);
+        await world.AddBotAsync("Pffoaab", 33);
+
+        string[] refused = await world.Console.RunAsync(".playerbot send Pffoaa* at 0 -8000 1200 100");
+        string[] forced = await world.Console.RunAsync(".playerbot send Pffoaa* at 0 -8000 1200 100 force");
+
+        Assert.Equal(["Playerbot send: 2 bots match; give a count <= 1 or add 'force'."], refused);
+        Assert.Equal(["Playerbot send: matched=2 moved=2 skipped=0"], forced);
+        await world.WaitNearAsync("Pffoaaa", 0, -8000f, 1200f, 100f, 19f);
+        await world.WaitNearAsync("Pffoaab", 0, -8000f, 1200f, 100f, 19f);
+    }
+
+    private static class TeleportCommandsText
+    {
+        public const string Battleground = "You cannot teleport to a battleground map.";
+    }
+
+    private sealed class MapsWithABattleground : IMapDataStore
+    {
+        public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(InMemoryMapDataStore.Content with
+            {
+                Maps = [.. InMemoryMapDataStore.Content.Maps, new MapTemplate(489, 0, MapType.Battleground, 3277, 20, 0, -1, 0, 0, "Warsong Gulch", "")],
+            });
+    }
+
+    /// <summary>Two model floors above each other: the highest one at or below the probe height (within the search) answers.</summary>
+    private sealed class TwoFloors(float upper, float lower) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+            => z >= upper && z - upper <= maxSearchDistance ? upper : z >= lower && z - lower <= maxSearchDistance ? lower : null;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
     }
 }
