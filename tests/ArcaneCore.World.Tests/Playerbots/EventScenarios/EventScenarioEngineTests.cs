@@ -688,6 +688,99 @@ public sealed class EventScenarioEngineTests
         rig.Ticks(3);
         Assert.Single(rig.Host.SiegeStarts);
     }
+
+    [Fact]
+    public void AReloadedFeature_WithProvisioning_CreatesNoBotDuringOrAfterTheAdoptedSiege_AndReclaimsTheOriginals()
+    {
+        var first = new Rig(Raiders(count: 4, provision: true));
+        for (int i = 0; i < 4; i++) FarBot(first.Host, "Siegebot" + (char)('a' + i), team: 0);
+        first.Engine.EventChanged(Event, active: true);
+        first.Ticks(6);
+        Assert.Single(first.Host.SiegeStarts);
+        Assert.Empty(first.Host.Created);
+        foreach (FakeBot bot in first.Host.Bots) bot.HeldBy = "in a group";
+
+        first.Engine.Dispose();
+        var engine = new EventScenarioEngine(first.Host, NullLogger.Instance);
+        engine.SetCatalog(EventScenarioCatalogFixtures.Catalog(Raiders(count: 4, provision: true)));
+        engine.EventChanged(Event, active: true);
+        for (int i = 0; i < 6; i++)
+        {
+            first.Host.Now += 2_000;
+            engine.Tick();
+        }
+
+        Assert.Empty(first.Host.Created);
+        Assert.Equal(4, first.Host.Bots.Count);
+        Assert.All(first.Host.Bots, b => Assert.Equal((Event, 1u), engine.ClaimOf(b.Id)));
+        Assert.Contains("claimed 4/4", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+
+        first.Host.RunningSiegeId = null;
+        first.Host.SiegeOutcome = "won";
+        foreach (FakeBot bot in first.Host.Bots) bot.HeldBy = null;
+        for (int i = 0; i < 10; i++)
+        {
+            first.Host.Now += 2_000;
+            engine.Tick();
+        }
+
+        Assert.Empty(first.Host.Created);
+        Assert.Equal(4, first.Host.Bots.Count);
+        Assert.Single(first.Host.SiegeStarts);
+    }
+
+    [Fact]
+    public void EventStop_StopsAnAdoptedSiege()
+    {
+        var first = new Rig(Raiders(count: 4));
+        for (int i = 0; i < 4; i++) FarBot(first.Host, "Siegebot" + (char)('a' + i), team: 0);
+        first.Engine.EventChanged(Event, active: true);
+        first.Ticks(6);
+        foreach (FakeBot bot in first.Host.Bots) bot.HeldBy = "in a group";
+        first.Engine.Dispose();
+        var engine = new EventScenarioEngine(first.Host, NullLogger.Instance);
+        engine.SetCatalog(EventScenarioCatalogFixtures.Catalog(Raiders(count: 4)));
+        engine.EventChanged(Event, active: true);
+        first.Host.Now += 2_000;
+        engine.Tick();
+
+        engine.EventChanged(Event, active: false);
+
+        Assert.Equal(["event stopped"], first.Host.SiegeStops);
+        Assert.Null(first.Host.RunningSiegeId);
+    }
+
+    [Fact]
+    public void AGmSiege_WithAFewBotsOfThePrefix_IsNotAdopted_AndNotStoppedWithTheEvent()
+    {
+        var rig = new Rig(Raiders(count: 4));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        rig.Host.RunningSiegeId = 77;
+        for (int i = 0; i < 36; i++) rig.Host.SiegeBots.Add(Guid.NewGuid());
+        foreach (FakeBot bot in rig.Host.Bots) rig.Host.SiegeBots.Add(bot.Id);
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(3);
+
+        rig.Engine.EventChanged(Event, active: false);
+
+        Assert.Empty(rig.Host.SiegeStops);
+        Assert.Equal(77, rig.Host.RunningSiegeId);
+    }
+
+    [Fact]
+    public void ARefusedDefendPost_IsRetriedAtTheUsualCadence_NotEveryPass()
+    {
+        var rig = new Rig(Defenders(count: 1));
+        rig.Host.Add("Ucltopaa").OnlineAt(0, Start, 60);
+        rig.Host.DefendRefusal = "bot-busy";
+        rig.Engine.EventChanged(Event, active: true);
+
+        rig.Ticks(14); // 28 seconds
+        Assert.Equal(1, rig.Host.DefendAttempts);
+        rig.Ticks(2);
+        Assert.Equal(2, rig.Host.DefendAttempts);
+        Assert.Contains("defend: bot-busy", rig.Status());
+    }
 }
 
 /// <summary>Catalogs built from groups directly.</summary>

@@ -69,9 +69,10 @@ for it) it ticks `EventScenarioEngine`, which holds the desired state (the runni
 4. A siege group starts one siege when `min_ready_pct` percent of its bots are online, at level and placed (and at least two per
    raid). A siege that has ended (won or stopped) is not started again while the event runs. To start it, the stored siege waypoints
    (which a GM may have staged with `.playerbot siege waypoint`) are replaced by the group's; that happens only when the siege is
-   about to start, never while another siege runs. A siege that is already under way whose raids hold bots of the group's prefix, as
-   after a hot reload of the playerbot pack, is taken over (status `siege N running`): it is stopped with the event, and not started a
-   second time when it ends. A siege of other bots is waited for, and the group starts its own once it is over.
+   about to start, never while another siege runs. A siege that is already under way whose raids consist of bots of the group's prefix (at least 90 percent of the raid members), as
+   after a hot reload of the playerbot pack, is taken over (status `siege N running`): those bots become the group's claims although the
+   raids hold them, no bot is created while the group owns a running siege, it is stopped with the event, and not started a second time
+   when it ends. A siege of other bots, even with a few prefix bots among them, is waited for, and the group starts its own once it is over.
 5. When the event stops, the engine clears the defend posts it set (only posts with its own ids, only on bots that still hold them),
    stops the siege only if it started or took over that siege (the outcome reads `stopped: event stopped`), and forgets its claims. The
    bots themselves stay where they are and stay managed bots.
@@ -88,8 +89,8 @@ command, so the two never collide and an id is the same after a reload.
   The read is done on the world thread, once per attach, and stalls the world for as long as the database takes to return four small
   tables (normally milliseconds; a slow or unreachable database stalls it for the connection timeout). It is not moved off the
   thread, because the feature must know at attach whether it has rows (it subscribes to nothing without them).
-- A hot reload during a running siege: the bots held by the raids are "unavailable" to the new feature (shown in the status), the
-  running siege is taken over (see the reconciler), and the group does nothing more until it ends.
+- A hot reload during a running siege: the running siege and its bots are taken over (see the reconciler), nothing is created for the
+  group while it runs, and the group does nothing more until it ends.
 - Bots of a group are matched by name prefix. Two groups, or a group and the bots of another system, with prefixes that start the same
   way share candidates: the first group to claim a bot keeps it.
 - Event ids 900 to 999 are reserved for shipped scenarios; the SQL deletes and recreates the `game_event` row of its own id.
@@ -103,7 +104,7 @@ and start and stop it).
 
 - CMangos: a serverside event (schedule 0) is never touched by the schedule; `occurence` only has to be at least `length`.
 - VMangos: the row is read as vmangos reads it. A NULL `start_time`/`end_time` is 0 (`Field::GetUInt64` of a NULL), so the event is
-  valid and never scheduled, and it is the manual start and stop that move it. A manual start sets its end to now plus `length`
+  valid and never scheduled, and it is the manual start and stop that move it. A manual start sets the end to now plus `length`, because the row's end (NULL, read as 0) is not after the new start;
   **seconds** (`World:GameEvents:ManualStartLengthUnit` `Seconds`, the default and retail's behaviour; about 60 days for this row), and
   the event then ends by itself: use `ManualStartLengthUnit` `Minutes` for the full ten years. A manual stop back-dates the start by
   `length` minutes, which keeps a stopped event stopped only while `occurence` is greater than `length`; that is why the row has twice

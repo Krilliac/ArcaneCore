@@ -33,6 +33,9 @@ internal sealed class ScenarioClaim(Guid botId, string name, int slot)
 
     public long NextStartMs { get; set; }
 
+    /// <summary>World time before which a refused defend post is not tried again.</summary>
+    public long NextDefendMs { get; set; }
+
     public long TeleportAtMs { get; set; } = -1;
 
     public int TeleportAttempts { get; set; }
@@ -276,9 +279,11 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     }
 
     /// <summary>
-    /// A feature that was detached and attached again has a new engine while the siege it started still runs: the group adopts a siege whose
-    /// raids hold bots of its own prefix, so it is neither started a second time when it ends nor left running when the event stops.
-    /// A siege of other bots (a GM's) is not adopted: this group waits for it and starts its own once it is over.
+    /// A feature that was detached and attached again has a new engine while the siege it started still runs. The group adopts a siege whose
+    /// raids consist (at least 90 percent) of bots of its own prefix: those bots become its claims even though the raids hold them (the
+    /// ordinary claim refuses a held bot), so no bot is created for them, and the siege is neither started a second time when it ends nor
+    /// left running when the event stops. A siege of other bots (a GM's, with a few prefix bots among them) is not adopted: this group
+    /// waits for it and starts its own once it is over.
     /// </summary>
     private void AdoptSiegeUnderWay(ScenarioGroupRun g)
     {
@@ -287,13 +292,22 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         IReadOnlyCollection<Guid> members = host.SiegeMembers();
         if (members.Count == 0) return;
         var inRaids = new HashSet<Guid>(members);
-        int mine = 0;
+        var mine = new List<PlayerbotStatus>();
         foreach (PlayerbotStatus status in Roster())
-            if (status.Name.StartsWith(g.Group.NamePrefix, StringComparison.OrdinalIgnoreCase) && inRaids.Contains(status.BotId)) mine++;
-        if (mine == 0) return;
+            if (status.Name.StartsWith(g.Group.NamePrefix, StringComparison.OrdinalIgnoreCase) && inRaids.Contains(status.BotId) && !_claimed.ContainsKey(status.BotId))
+                mine.Add(status);
+        if (mine.Count == 0 || mine.Count * 10 < members.Count * 9) return;
+        mine.Sort(static (a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        foreach (PlayerbotStatus status in mine)
+        {
+            if (g.Claims.Count >= g.Group.Count) break;
+            g.Claims.Add(new ScenarioClaim(status.BotId, status.Name, g.NextSlot++));
+            _claimed[status.BotId] = (g.Group.EventId, g.Group.GroupId);
+        }
+
         g.SiegeId = running;
-        g.SiegeEnlisted = mine;
-        logger.LogInformation("Bot event scenario {Event} group {Group}: siege {Siege} is already under way with {Bots} of its bots and is taken over", g.Group.EventId, g.Group.GroupId, running, mine);
+        g.SiegeEnlisted = g.Claims.Count;
+        logger.LogInformation("Bot event scenario {Event} group {Group}: siege {Siege} is already under way with {Bots} of its bots and is taken over", g.Group.EventId, g.Group.GroupId, running, g.Claims.Count);
     }
 
     /// <summary>A claim whose bot was deleted from the registry is forgotten (a stopped or offline bot stays claimed).</summary>
@@ -382,7 +396,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         EventScenarioGroup def = g.Group;
         int missing = def.Count - g.Claims.Count - g.Pending;
         g.NoRoom = false;
-        if (missing <= 0 || !def.Provision) return;
+        if (missing <= 0 || !def.Provision || g.SiegeId != 0) return; // a group that owns a running siege never makes more bots
         if (now < g.CreateRetryMs) return;
         int room = host.CreateRoom() - _creatingNow;
         if (room <= 0)
@@ -459,7 +473,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
         if (claim.AtLevel && !claim.Placed) Place(g, claim, probe, now);
         if (claim.Placed && claim.Alive && claim.AtLevel) g.ReadyCount++;
-        if (def.Role == EventScenarioRole.Defend && claim.Placed) Defend(g, claim, probe);
+        if (def.Role == EventScenarioRole.Defend && claim.Placed) Defend(g, claim, probe, now);
     }
 
     /// <summary>An offline claim: a stopped bot nobody will bring up is started; one that should come up by itself (restore) is waited for.</summary>
@@ -518,7 +532,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     /// Keep the bot's post as the table says, judged each pass from the post its brain holds now: a bot that restarted has none and gets it
     /// again, a bot holding a GM's post is left alone and reported.
     /// </summary>
-    private void Defend(ScenarioGroupRun g, ScenarioClaim claim, ScenarioBotProbe probe)
+    private void Defend(ScenarioGroupRun g, ScenarioClaim claim, ScenarioBotProbe probe, long now)
     {
         EventScenarioGroup def = g.Group;
         EventScenarioPost post = def.Posts[claim.Slot % def.Posts.Count];
@@ -537,9 +551,11 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             return;
         }
 
+        if (now < claim.NextDefendMs) return; // a refused post is tried again at the usual retry cadence, not every pass
         var defend = new PlayerbotDefendPost(post.Map, post.Centre, post.Radius, wanted);
         string? refusal = host.SetDefend(claim.BotId, defend);
         claim.DefendSet = refusal is null;
+        if (refusal is not null) claim.NextDefendMs = now + RetryMs;
         claim.Refusal = refusal is null ? null : "defend: " + refusal;
     }
 

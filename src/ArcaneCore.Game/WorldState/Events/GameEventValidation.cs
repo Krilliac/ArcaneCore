@@ -133,7 +133,8 @@ public static class GameEventValidation
         // A NULL start_time or end_time is not an error: vmangos selects UNIX_TIMESTAMP(NULL) and Field::GetUInt64 turns a NULL into 0
         // (Field.h:68-75), so the row loads with start 0 and end 0. Such an event is valid (only a length of 0 is not), the schedule never
         // makes it active (GameEventMgr.cpp:42 needs start <= now < end), and .event start / stop run it by hand. The defaults above
-        // (start 1, end 0) have the same effect. Serverside content that must work in both dialects relies on this.
+        // (start 1, end 0) have the same effect, except that a NULL start with an end that is set starts at 1 here against 0 in vmangos, which
+        // moves the occurence window by one second. Serverside content that must work in both dialects relies on this.
         if (source.LengthMinutes == 0)
         {
             issues.Add($"game_event {source.Id} has length 0 and can't be used");

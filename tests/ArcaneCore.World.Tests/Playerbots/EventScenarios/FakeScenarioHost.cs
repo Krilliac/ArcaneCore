@@ -86,6 +86,8 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
 
     public int DefendCalls { get; private set; }
 
+    public int DefendAttempts { get; private set; }
+
     public int? RunningSiegeId { get; set; }
 
     public List<Guid> SiegeBots { get; } = [];
@@ -186,6 +188,7 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
 
     public string? SetDefend(Guid botId, PlayerbotDefendPost? post)
     {
+        if (post is not null) DefendAttempts++;
         if (post is not null && DefendRefusal is { } refusal) return refusal;
         if (post is not null) DefendCalls++;
         Posts[botId] = post;
