@@ -112,7 +112,11 @@ whatever the think interval. Brain, goals and scripted controllers only choose r
 and gentle sinusoidal weave (`±0.85` yards) along outdoor corridors at least 18 yards long (tapered at start and
 destination, skipped on combat chases) so multiple bots walking the same road spread naturally instead of marching single-file,
 and replaces sharp interior polygon turns with 4-point quadratic Bezier arcs verified against floor height, doodad-aware
-line of sight (`PlayerbotMoveCheck.LineClear`), and navmesh raycasts. `PlayerbotMotion` also gives up navigation loops. Details and
+line of sight (`PlayerbotMoveCheck.LineClear`), and navmesh raycasts. `PlayerbotMotion` also gives up navigation loops. A mesh
+route's proof covers its own legs only: a bot taken off its route (a chase, an escape, a fear, a same-map teleport) and handed it
+again walks a straight line from where it stands to the next point, and when it starts more than `OffLegYards` (5) off the leg
+that line is checked as a stepped one (floor and line of sight), so it no longer runs through hills and rocks at its own height
+(bot-motion/under-map in the Valley of Trials). Details and
 the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
 real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
 
