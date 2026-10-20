@@ -64,6 +64,21 @@ public sealed class PacketToolsOptionsTests
     }
 
     [Fact]
+    public void TheLiveDeployScript_SetsTheLiveServerMarker_ForEveryDaemonItStarts()
+    {
+        string script = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "deploy", "deploy-live.py"));
+        int start = script.IndexOf("def start(dll: Path, name: str):", StringComparison.Ordinal);
+        Assert.True(start >= 0, "deploy-live.py has no start()");
+        int marker = script.IndexOf($"env[\"{WorldPacketToolsOptions.LiveServerVariable}\"] = \"1\"", start, StringComparison.Ordinal);
+        int branch = script.IndexOf("if args.visible_consoles:", start, StringComparison.Ordinal);
+        Assert.True(marker > start && marker < branch, "start() must set the marker before either launch branch");
+        int end = script.IndexOf("def log_text(", start, StringComparison.Ordinal);
+        string body = script[start..end];
+        Assert.Equal(2, body.Split("Popen(").Length - 1);
+        Assert.Equal(2, body.Split("env=env").Length - 1);
+    }
+
+    [Fact]
     public void TheConfigCheck_WarnsAboutAllowOutsideDevelopment_AndAboutEnabledOnTheLiveServer()
     {
         ConfigIssue outside = Assert.Single(Check(("World:Control:PacketTools:AllowOutsideDevelopment", "true")));

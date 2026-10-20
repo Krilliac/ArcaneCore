@@ -114,7 +114,8 @@ Tests: `PacketToolsTests`, `PacketToolsOptionsTests` and `PacketToolsSessionTest
   names the environment. Every start of the tools logs a Warning that says what they allow. `check-config` warns when
   `AllowOutsideDevelopment` is on.
 * **Never on the live server.** The local live server runs as `Development` (`tools/ops/live/launch-daemon.ps1` sets
-  `DOTNET_ENVIRONMENT=Development`), so the environment alone does not guard it. The same script sets `ARCANECORE_LIVE_SERVER=1`, and
+  `DOTNET_ENVIRONMENT=Development`), so the environment alone does not guard it. Both live launchers, that script and
+  `tools/ops/deploy/deploy-live.py`, set `ARCANECORE_LIVE_SERVER=1` for every daemon they start, and
   the World refuses the tools whenever that variable is `1`, whatever the configuration says (`Enabled` and `AllowOutsideDevelopment`
   included): the feed logs one Warning (`packet tools refused: this is the live server (ARCANECORE_LIVE_SERVER)`), the session gate is
   not created, and `check-config` warns when `Enabled` is set while the variable is. The decision reads the process environment once at
@@ -196,8 +197,9 @@ session handler at a time), and:
   a burst of injections can be dropped and, past the flood limit, disconnects the session;
 * a session handler that throws a fault the dispatcher does not contain ends the session, as it ends the reader's loop for a client's
   packet; the injection answers `disconnected` (the fault is logged at Error under the `session` fault site). A broken invariant
-  (`InvariantViolationException`) also kicks the session and then propagates, as it does from the reader. A cancellation that is not the
-  feed connection's own is a handler fault like any other.
+  (`InvariantViolationException`) also kicks the session and then propagates, as it does from the reader. A cancellation from the session's own
+  kick answers `offline` (the session is closing); any other cancellation that is not the feed connection's own is a handler fault
+  like any other.
 * a packet over the connection's packet budget (`Net:Protection:World*`) is dropped as a client's is, and the injection answers
   `dropped`; the session stays up. A world-thread opcode queued on a session that closes meanwhile is discarded.
 
