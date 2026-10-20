@@ -1141,7 +1141,6 @@ public sealed class PlayerbotSiegeWorldTests
         await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + 40_000, () =>
         {
             KeepInCombat(world, raid);
-            Hold();
             granted |= raid.Push == PlayerbotSiegePush.Quiet;
             if (siege.Step != 0) stepped.Add($"step {siege.Step} at {Now(world)} with the member {MaxLag(world, raid):F0} yd from the leader");
             return false;
@@ -1230,18 +1229,20 @@ public sealed class PlayerbotSiegeWorldTests
         Assert.True(maxX > 60f && siege.Step > stepAtPush || raid.Retreats > 0, story);
     }
 
-    [Fact]
-    public async Task AnAttackerComingToTheWaitingLeader_IsFoughtAtTheWaypoint_TheLeaderNeverChasesOut_NoDenial()
+    [Theory]
+    [MemberData(nameof(StalemateRuns))]
+    public async Task AnAttackerComingToTheWaitingLeader_IsFoughtAtTheWaypoint_TheLeaderNeverChasesOut_NoDenial(int run)
     {
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
         await using GroupTestWorld _ = world;
         world.Options.Party.TeleportToLeader = false;
         Guid leaderBot = raid.Group!.LeaderBotId;
         var held = raid.Group.Members.First(m => !m.Real && m.BotId != leaderBot);
+        // One member is kept where the guards are, 110 yards behind the waypoint: it stays in the fight (the raid stays in combat) and the lag hold of the waiting leader runs.
         void Hold()
         {
             Player far = world.World.Host.World.FindOnlinePlayer(held.Guid)!;
-            far.Relocate(Origin.X, Origin.Y + 120f, far.Z, 0, Now(world));
+            far.Relocate(Origin.X + 38f, Origin.Y, far.Z, 0, Now(world));
         }
 
         int stepAtPush = -1;
@@ -1253,14 +1254,13 @@ public sealed class PlayerbotSiegeWorldTests
         {
             TopUpGuards(world, raid);
             TopUpMembers(world, raid); // nobody dies: the only trigger is the guard sent at the leader
-            KeepInCombat(world, raid); // the raid stays in combat, as it does with a guard on its members
             Player leader = Leader(world, raid);
             if (raid.Push == PlayerbotSiegePush.Stalemate && stepAtPush < 0) { stepAtPush = siege.Step; }
             if (stepAtPush < 0) return false;
             Hold();
             if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
                 trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={sent} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} x={leader.X - Origin.X:F1} lagSince={raid.LagSinceMs} off={worstOff:F1}");
-            // The member held far away keeps the leader waiting at its waypoint; once it has waited 5 s a guard that is more than 20 yards from it (the one farthest along x: the raid's members are
+            // The members stay behind, fighting at the start (the lag hold of a pushing leader at its waypoint runs, about 110 yards); once the leader has waited 5 s a guard that is more than 20 yards from it (the one farthest along x: the raid's members are
             // far behind) turns on the leader, as the guard of a member that died does. It runs at the leader from afar, and the leader must fight it at the waypoint.
             if (!sent && raid.AtWaypoint && raid.PushInForce != PlayerbotSiegePush.None && raid.LagSinceMs != 0 && unchecked(Now(world) - raid.LagSinceMs) > 5_000
                 && leader.Map?.FindUpdater<CreatureMapSystem>() is { } system
@@ -1280,7 +1280,7 @@ public sealed class PlayerbotSiegeWorldTests
             return siege.Step > stepAtPush || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0;
         });
 
-        string story = $"done={done} sent={sent} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} refused={refused} worstOff={worstOff:F1} retreats={raid.Retreats}"
+        string story = $"run {run}: done={done} sent={sent} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} refused={refused} worstOff={worstOff:F1} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail);
         Assert.True(sent, "the probe never fired: " + story);
         Assert.True(done && siege.Step > stepAtPush, "the step did not move: " + story);
