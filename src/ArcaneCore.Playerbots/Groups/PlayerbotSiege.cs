@@ -250,4 +250,10 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     /// <summary>The hostiles, the order and the step as the last decision saw them (status).</summary>
     public string Detail { get; set; } = string.Empty;
+
+    /// <summary>What the raid does, in one line, for a watching GM (<c>.playerbot siege watch</c>).</summary>
+    public string WatchLine { get; set; } = string.Empty;
+
+    /// <summary>The <see cref="WatchLine"/> the watchers were last told; a line is sent again only when it changes.</summary>
+    public string WatchedLine { get; set; } = string.Empty;
 }

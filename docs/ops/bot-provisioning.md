@@ -54,3 +54,20 @@ Use this to give an account a ready-made character (the boost needs an online ch
 
 The boost state that is saved with the character (spells, items, buttons, money) comes through the dump; a changed bar layout is shown after a relog
 (see the in-session redraw limit in the area page).
+
+## Run a bot siege (bots lead, you watch)
+
+Two bot-led raids march a stored way and kill a creature, with no real player in either (details: [Siege](../areas/playbots-groups.md#siege-playerbot-siege)).
+Do it in this order:
+
+1. **Capacity.** Check there is room for the fleet (`.playerbot status`, the capacity lines of the provisioning runs above).
+2. **Provision** the bots at the level of the content (the first section), enough for two to forty per raid.
+3. **Send** them to the starting ground: `.playerbot send Siegebot* here` (or `send $tele`), so they stand on one map near each other.
+4. **Defend Horde** (when the objective is a Horde or Alliance leader and its guards are PvP-flagged): `.playerbot defend Siegebot* here 60` flags the bots
+   so they may fight flagged enemy players; skip this for a plain creature.
+5. **Stand at the points.** Walk to the first point and `.playerbot siege waypoint add`; walk on and add the next, in the order the raids take them; the
+   last one is where the fight for the objective begins. `.playerbot siege waypoint list` checks them; `waypoint clear` starts over.
+6. **Start.** `.playerbot siege start Siegebot* #entry raids 2` (the entry is the creature's `creature_template` id; `raids 1` keeps one raid).
+7. **Watch.** With `.gm on` and `.gm visible off` you are invisible; `.playerbot siege watch on` sends you a line per raid as its order changes,
+   `.playerbot siege status` shows the step, who lives and the orders, `.playerbot siege status $leader` one raid and its last raid warnings.
+   `.playerbot siege stop` ends it (the raids disband). Nothing is saved: a restart ends the siege and forgets the waypoints.

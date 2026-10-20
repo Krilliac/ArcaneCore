@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Playerbots;
 public sealed partial class PlayerbotFleetCommands
 {
     private static ChatCommand SiegeCommand() => new("siege", AccountSecurity.Administrator,
-        "Syntax: .playerbot siege waypoint add|list|clear\n.playerbot siege start $name|$prefix*|all #entry [raids 1|2] [force]\n.playerbot siege stop\nBot-led raids march the stored waypoints in step and kill the creature with the entry. Memory only: a restart ends it.",
+        "Syntax: .playerbot siege waypoint add|list|clear\n.playerbot siege start $name|$prefix*|all #entry [raids 1|2] [force]\n.playerbot siege stop\n.playerbot siege status [$leader]\n.playerbot siege watch [on|off]\nBot-led raids march the stored waypoints in step and kill the creature with the entry. Memory only: a restart ends it.",
         Children:
         [
             new ChatCommand("waypoint", AccountSecurity.Administrator,
@@ -31,6 +31,12 @@ public sealed partial class PlayerbotFleetCommands
                 "Syntax: .playerbot siege start $name|$prefix*|all #entry [raids 1|2] [force]\nForm the running bots into one or two bot-led raids (tanks, healers and damage dealt round them; the best tank leads) that march the waypoints in step and kill the creature with the entry. Needs two bots per raid and at least one waypoint.",
                 SiegeStart),
             new ChatCommand("stop", AccountSecurity.Administrator, "Syntax: .playerbot siege stop\nEnd the siege: the raids disband and the bots go back to their own play.", SiegeStop),
+            new ChatCommand("status", AccountSecurity.Administrator,
+                "Syntax: .playerbot siege status [$leader]\nThe siege under way: step, and for each raid its leader, who lives and what it is doing; with a leader's name, that raid only and the raid warnings it said last.",
+                SiegeStatus),
+            new ChatCommand("watch", AccountSecurity.Administrator,
+                "Syntax: .playerbot siege watch [on|off]\nYou are sent a line for each raid whenever its order changes (at most one every 2 seconds), and when the siege ends. Without an argument: whether you are watching. Memory only.",
+                SiegeWatch),
         ]);
 
     private static PlayerbotGroupCoordinator? SiegeCoordinator(CommandContext context)
@@ -128,6 +134,39 @@ public sealed partial class PlayerbotFleetCommands
         if (SiegeCoordinator(context) is not { } coordinator) return true;
         int? id = coordinator.Siege?.Id;
         context.Reply(coordinator.StopSiege("gm") ? $"Playerbot siege: siege {id} stopped." : "Playerbot siege: none is running.");
+        return true;
+    }
+
+    private static bool SiegeStatus(CommandContext context, string text)
+    {
+        string[] words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length > 1) return false;
+        if (SiegeCoordinator(context) is not { } coordinator) return true;
+        foreach (string line in coordinator.SiegeStatus(words.Length == 1 ? words[0] : null)) context.Reply(line);
+        return true;
+    }
+
+    private static bool SiegeWatch(CommandContext context, string text)
+    {
+        string[] words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        bool? on = words.Length == 0 ? null
+            : words.Length == 1 && words[0].Equals("on", StringComparison.OrdinalIgnoreCase) ? true
+            : words.Length == 1 && words[0].Equals("off", StringComparison.OrdinalIgnoreCase) ? false
+            : null;
+        if (words.Length > 1 || words.Length == 1 && on is null) return false;
+        if (SiegeCoordinator(context) is not { } coordinator || Anchor(context, null) is not { } me) return true;
+        if (coordinator.Siege is not { } siege)
+        {
+            context.Reply("Playerbot siege: none is running.");
+            return true;
+        }
+
+        if (on is { } set)
+        {
+            coordinator.SetSiegeWatch(me.Guid, set);
+            context.Reply($"Playerbot siege: watching {(set ? "on" : "off")}.");
+        }
+        else context.Reply(siege.Watchers.Contains(me.Guid) ? "Playerbot siege: you are watching." : "Playerbot siege: you are not watching.");
         return true;
     }
 }

@@ -8,6 +8,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Party;
 using Microsoft.Extensions.Logging;
@@ -216,6 +217,8 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (PlayerbotSiegeRaid raid in siege.Raids)
             if (raid.Group is { } group && _groups.Contains(group) && group.State != PlayerbotGroupState.Disbanding)
                 Finish(group, success: true, "siege-" + reason, setAside: false);
+        TellWatchers(siege, $"Siege {siege.Id} ended: {SiegeOutcome}");
+        siege.Watchers.Clear();
         Note($"siege {siege.Id} ended: {SiegeOutcome}");
         logger.LogInformation("Playerbot siege {Siege} ended: {Outcome}", siege.Id, SiegeOutcome);
     }
@@ -266,6 +269,81 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         return false;
+    }
+
+    // --- status and watch ---------------------------------------------------------------------------------------------------
+
+    /// <summary>How often a watching GM may be sent a changed raid line.</summary>
+    internal const uint WatchGapMs = 2_000;
+
+    private string LeaderNameOf(BotGroup group) => group.Find(group.LeaderBotId)?.Name ?? "?";
+
+    /// <summary>
+    /// The <c>.playerbot siege status</c> lines: the siege and one line per raid, or just the raid led by <paramref name="leaderName"/>
+    /// (case-insensitive) with the last raid warnings it said. A single line says that no siege runs (and how the last one ended).
+    /// </summary>
+    internal IReadOnlyList<string> SiegeStatus(string? leaderName)
+    {
+        if (_siege is not { } siege)
+            return SiegeOutcome is null ? ["Playerbot siege: none is running."] : ["Playerbot siege: none is running.", "Last siege: " + SiegeOutcome + "."];
+        var lines = new List<string>();
+        bool all = string.IsNullOrEmpty(leaderName);
+        if (all)
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"Siege {siege.Id}: {siege.Raids.Count} raids, objective {siege.ObjectiveEntry}, step {siege.Step}/{siege.Waypoints.Count}, running {unchecked(Now - siege.StartedMs) / 1000}s{(siege.Won ? ", won" : string.Empty)}."));
+        foreach (PlayerbotSiegeRaid raid in siege.Raids)
+        {
+            if (raid.Group is not { } group) continue;
+            string name = LeaderNameOf(group);
+            if (!all && !name.Equals(leaderName, StringComparison.OrdinalIgnoreCase)) continue;
+            int total = 0, alive = 0;
+            foreach (Member member in group.Members)
+            {
+                if (member.Real || !member.Joined) continue;
+                total++;
+                if (_world?.FindOnlinePlayer(member.Guid) is { IsAlive: true }) alive++;
+            }
+
+            string what = raid.Detail.Length > 0 ? raid.Detail : group.State.ToString().ToLowerInvariant();
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"raid {raid.Index} ({name}, {alive}/{total} alive): {what} retreats={raid.Retreats}"));
+            if (!all) foreach (string said in raid.Announcer.Sent.TakeLast(3)) lines.Add("said: " + said);
+        }
+
+        if (!all && lines.Count == 0) lines.Add($"Playerbot siege: no raid led by '{leaderName}'.");
+        return lines;
+    }
+
+    /// <summary>Watch (or stop watching) the siege as the GM <paramref name="gm"/>. False when no siege runs.</summary>
+    internal bool SetSiegeWatch(ObjectGuid gm, bool on)
+    {
+        if (_siege is not { } siege) return false;
+        if (on) siege.Watchers.Add(gm);
+        else siege.Watchers.Remove(gm);
+        return true;
+    }
+
+    private void TellWatchers(PlayerbotSiege siege, string line)
+    {
+        if (siege.Watchers.Count == 0 || _world is not { } world) return;
+        foreach (ObjectGuid guid in siege.Watchers.ToArray())
+        {
+            if (world.FindOnlinePlayer(guid) is { IsInWorld: true } gm) gm.SendSystemMessage(line);
+            else siege.Watchers.Remove(guid);
+        }
+    }
+
+    /// <summary>Each raid whose order, step or strength changed since the watchers were last told gets one line (at most every <see cref="WatchGapMs"/>).</summary>
+    private void NotifyWatchers(PlayerbotSiege siege, uint now)
+    {
+        if (siege.Watchers.Count == 0 || siege.WatchedMs != 0 && unchecked(now - siege.WatchedMs) < WatchGapMs) return;
+        siege.WatchedMs = Math.Max(1u, now);
+        foreach (SiegeView view in _siegeViews)
+        {
+            if (view.Raid.WatchLine == view.Raid.WatchedLine) continue;
+            view.Raid.WatchedLine = view.Raid.WatchLine;
+            string line = string.Create(CultureInfo.InvariantCulture, $"Siege {siege.Id} raid {view.Raid.Index} ({LeaderNameOf(view.Group)}): {view.Raid.WatchLine}");
+            TellWatchers(siege, line);
+        }
     }
 
     // --- the commander's tick ----------------------------------------------------------------------------------------------
@@ -350,6 +428,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         foreach (SiegeView view in _siegeViews) Command(siege, view, now);
+        NotifyWatchers(siege, now);
     }
 
     /// <summary>Read one raid into <see cref="PlayerbotSiegeFacts"/> and its hostiles.</summary>
@@ -540,6 +619,8 @@ public sealed partial class PlayerbotGroupCoordinator
         };
         raid.Detail = string.Create(CultureInfo.InvariantCulture,
             $"{decision.Order.ToString().ToLowerInvariant()} step={siege.Step}/{siege.Waypoints.Count} hostiles={facts.Hostiles} alive={facts.Alive}/{facts.Total} hp={facts.AverageHealthPct:F0}%");
+        raid.WatchLine = string.Create(CultureInfo.InvariantCulture,
+            $"{decision.Order.ToString().ToLowerInvariant()} step {siege.Step}/{siege.Waypoints.Count}, alive {facts.Alive}/{facts.Total}");
         if (raid.Announcer.Offer(line, now)) RaidWarning(view.Group, view.Leader, line);
     }
 

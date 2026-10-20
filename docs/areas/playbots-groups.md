@@ -403,6 +403,10 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   (`PromoteLeader`); a leader that leaves is replaced by the member the server group now names. A raid with nobody alive ends.
 * **Winning.** The objective entry is seen alive and later none is alive on the map: each leader says `Siege complete`, the raids disband and
   the outcome is `won`. A siege whose raids have all ended is `stopped: raids-ended`.
+* **Status and watch.** `.playerbot siege status` prints the siege (step, running time) and a line per raid (leader, who lives, the last order and
+  its numbers, retreats); `status $leader` only that raid and its last three raid warnings. `.playerbot siege watch on|off` makes the coordinator
+  send the GM one system line per raid whenever its order, step or strength changes (at most one batch every 2 s), and one when the siege ends;
+  without an argument it says whether you watch. Both are in memory with the siege.
 * **Status.** `.playerbot groups` adds ` siege=1:raid1:advance:step0/2` to a raid's line.
 
 ## Configuration (`World:Playerbots:Groups`, live)
