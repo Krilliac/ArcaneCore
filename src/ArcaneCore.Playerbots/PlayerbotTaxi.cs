@@ -326,14 +326,17 @@ internal static class PlayerbotTransitBackoff
         ArgumentNullException.ThrowIfNull(player);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(waitMs, (uint)int.MaxValue);
         Dictionary<(TransitKind, uint), Entry> table = Tables.GetOrCreateValue(player);
+        uint until = unchecked(nowMs + waitMs);
         if (!table.TryGetValue((kind, point), out Entry? entry))
         {
             if (table.Count >= MaxPoints) table.Clear();
-            table[(kind, point)] = entry = new Entry();
+            table[(kind, point)] = new Entry { UntilMs = until };
+            return;
         }
 
-        uint until = unchecked(nowMs + waitMs);
-        if (unchecked((int)(until - entry.UntilMs)) > 0 || unchecked((int)(entry.UntilMs - nowMs)) <= 0) entry.UntilMs = until;
+        // An existing wait still running and longer than this one stays; an expired one (wrapping clock) is replaced.
+        bool running = unchecked((int)(entry.UntilMs - nowMs)) > 0;
+        if (!running || unchecked((int)(until - entry.UntilMs)) > 0) entry.UntilMs = until;
     }
 
     /// <summary>Whether <paramref name="point"/> is waiting out a failure at <paramref name="nowMs"/>.</summary>
@@ -1116,19 +1119,17 @@ internal static class PlayerbotTaxi
     /// <summary>
     /// Milliseconds until the creature of flight master spawn <paramref name="spawnGuid"/> is back, when it was killed: dead or a corpse in the
     /// map's creature system, or gone from the map with its respawn time kept (<see cref="CreatureMapSystem.PendingRespawnAt"/>). Null when the
-    /// spawn's creature is alive or the map knows nothing of the spawn (a master that is truly absent). A creature that never respawns
-    /// reports a very long wait. World thread.
+    /// spawn's creature is alive, the map knows nothing of the spawn (a master that is truly absent), or the respawn is already due (a
+    /// master that should be back and is not: a link or pool holds it, or the timer is overdue; that stays a "master-missing" report). A
+    /// creature that never respawns reports a very long wait. World thread.
     /// </summary>
     internal static long? MasterRespawnWaitMs(Map map, uint spawnGuid)
     {
         if (map.FindUpdater<CreatureMapSystem>() is not { } system) return null;
-        foreach (Creature creature in system.Creatures)
-        {
-            if (creature.Spawn is not { } spawn || spawn.Guid != spawnGuid) continue;
-            return creature.DeathState == CreatureDeathState.Alive ? null : system.RespawnRemainingMs(creature) ?? 0L;
-        }
-
-        return system.PendingRespawnAt(spawnGuid) is { } at ? Math.Max(0L, at - system.ClockMs) : null;
+        long? wait = system.FindBySpawnGuid(spawnGuid) is { } creature
+            ? creature.DeathState == CreatureDeathState.Alive ? null : system.RespawnRemainingMs(creature)
+            : system.PendingRespawnAt(spawnGuid) is { } at ? at - system.ClockMs : null;
+        return wait > 0 ? wait : null;
     }
 
     private static TaxiStep MasterDead(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, uint now, long respawnWaitMs,

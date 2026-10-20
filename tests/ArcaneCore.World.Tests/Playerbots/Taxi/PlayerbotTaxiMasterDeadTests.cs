@@ -57,7 +57,7 @@ public sealed partial class PlayerbotTaxiTests
     }
 
     [Fact]
-    public async Task AMasterGoneFromTheMapAndWaitingForItsRespawn_IsNotAnAnomaly_EitherEnd()
+    public async Task ACorpseThatIsGoneWhileTheRespawnTimerRuns_IsNotAnAnomaly()
     {
         await using Rig rig = await Rig.StartAsync();
         await rig.OnPlayer((player, state) =>
@@ -143,7 +143,7 @@ public sealed partial class PlayerbotTaxiTests
             Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
             (CreatureMapSystem system, Creature master) = MasterOf(player);
             system.KillCreature(master);
-            master.RespawnAtMs = system.ClockMs; // due now: the hold is the shortest one
+            master.RespawnAtMs = system.ClockMs + 1_000; // soon: the hold is the shortest one
             AssertMasterDeadOutcome(rig, player, options, cap);
             system.ForceRespawn(master);
             Assert.Equal(CreatureDeathState.Alive, master.DeathState);
@@ -165,6 +165,139 @@ public sealed partial class PlayerbotTaxiTests
             rig.FlyUntilLanded(player);
             DriveOnce(rig, player, options, TaxiStep.Arrived);
             AssertNoTaxiAnomaly(cap);
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task ARespawnThatIsDueButNotHappening_IsStillMasterMissing()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            (CreatureMapSystem system, Creature master) = MasterOf(player);
+            system.KillCreature(master);
+            master.RespawnAtMs = system.ClockMs; // overdue: a link or pool holds the respawn, or the timer is stuck
+            Assert.Null(PlayerbotTaxi.MasterRespawnWaitMs(player.Map!, master.Spawn!.Guid));
+            DriveOnce(rig, player, options, TaxiStep.Failed);
+            Assert.True(cap.Any(TaxiKey("master-missing")), cap.Describe());
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task ASpawnWithNoCreatureAndNoPendingRespawn_IsMasterMissing()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            (CreatureMapSystem system, Creature master) = MasterOf(player);
+            uint spawn = master.Spawn!.Guid;
+            system.Despawn(master);
+            Assert.Null(system.FindBySpawnGuid(spawn));
+            Assert.Null(system.PendingRespawnAt(spawn));
+            Assert.Null(PlayerbotTaxi.MasterRespawnWaitMs(player.Map!, spawn));
+            DriveOnce(rig, player, options, TaxiStep.Failed);
+            Assert.True(cap.Any(TaxiKey("master-missing")), cap.Describe());
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task ASpawnWhoseCreatureLeftTheMapWithARespawnPending_IsMasterDead()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            (CreatureMapSystem system, Creature master) = MasterOf(player);
+            uint spawn = master.Spawn!.Guid;
+            system.Despawn(master);
+
+            // The dormant respawn time an unloaded grid keeps (PendingRespawnAt).
+            system.SetDormantRespawn(spawn, system.ClockMs + 30_000);
+            Assert.Null(system.FindBySpawnGuid(spawn));
+            Assert.InRange(PlayerbotTaxi.MasterRespawnWaitMs(player.Map!, spawn) ?? -1, 1, 30_000);
+            AssertMasterDeadOutcome(rig, player, options, cap);
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task TheHoldOnAKilledMastersNode_NeverExceedsBackoffMinutes()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options(t => t.BackoffMinutes = 1);
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            (CreatureMapSystem system, Creature master) = MasterOf(player);
+            system.KillCreature(master);
+            master.RespawnAtMs = system.ClockMs + 3_600_000; // an hour away
+            uint before = rig.Session.World.NowMs;
+            DriveOnce(rig, player, options, TaxiStep.MasterDead);
+            uint after = rig.Session.World.NowMs;
+            Assert.True(PlayerbotTaxi.IsBackedOff(player, 1, after));
+            Assert.False(PlayerbotTaxi.IsBackedOff(player, 1, unchecked(after + 60_001u)));
+            Assert.True(PlayerbotTaxi.IsBackedOff(player, 1, unchecked(before + 59_000u)));
+            return 0;
+        });
+    }
+
+    [Theory]
+    [InlineData(0x8000_0005u)]
+    [InlineData(0xFFFF_FF00u)]
+    [InlineData(0xFFFF_FFFFu)]
+    [InlineData(1_000u)]
+    public async Task ADeferredHold_IsWritten_AndExpires_AtAnyClock_IncludingAcrossTheWrap(uint now)
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, _) =>
+        {
+            const uint Wait = 5_000;
+            PlayerbotTransitBackoff.Defer(player, TransitKind.Taxi, 9, now, Wait);
+            Assert.True(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 9, now));
+            Assert.True(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 9, unchecked(now + Wait - 1)));
+            Assert.False(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 9, unchecked(now + Wait)));
+            Assert.Equal(0, PlayerbotTransitBackoff.Failures(player, TransitKind.Taxi, 9));
+            Assert.False(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 10, now)); // another node never waits
+
+            // A later, longer hold extends it; an expired one is replaced by a new one.
+            PlayerbotTransitBackoff.Defer(player, TransitKind.Taxi, 9, unchecked(now + Wait + 10), Wait);
+            Assert.True(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 9, unchecked(now + Wait + 10)));
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task ADeferredHold_NeverShortensALongerFailureBackoff_NorCountsAsAFailure()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, _) =>
+        {
+            PlayerbotOptions options = Options(t => t.BackoffMinutes = 1440);
+            uint t0 = 7_000;
+            uint wait = PlayerbotTransitBackoff.Fail(player, TransitKind.Taxi, 1, t0, options);
+            PlayerbotTransitBackoff.Defer(player, TransitKind.Taxi, 1, t0 + 100, 5_000);
+            Assert.True(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 1, t0 + wait - 1));
+            Assert.False(PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, 1, t0 + wait));
+            Assert.Equal(1, PlayerbotTransitBackoff.Failures(player, TransitKind.Taxi, 1));
             return 0;
         });
     }

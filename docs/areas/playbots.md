@@ -874,8 +874,9 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
   timer still running, the trip ends as `TaxiStep.MasterDead`: nothing is reported (no `bot-taxi/master-missing`, so bot QA files no issue),
   no failure is counted (no `repeated-failure`, the node's failure count and its doubling wait stay as they were), and the departure node is
   held off until about the respawn (at least 5 s, at most `BackoffMinutes`; a master that never respawns holds for the cap). The goal
-  walks meanwhile, and the node flies again once the hold ends. A master that is alive but not where the node says, or has no creature
-  and no respawn pending at the spawn, still ends the trip as a failure and reports `bot-taxi/master-missing` (Warning).
+  walks meanwhile, and the node flies again once the hold ends. A master that is alive but not where the node says, has no creature
+  and no respawn pending at the spawn, or whose respawn is already due yet has not happened (a link or pool holds it, or the timer is
+  stuck), still ends the trip as a failure and reports `bot-taxi/master-missing` (Warning).
 - **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
   `BackoffMinutes` (10, 1..1440; the per-node cap of the Travel schedule).
 
