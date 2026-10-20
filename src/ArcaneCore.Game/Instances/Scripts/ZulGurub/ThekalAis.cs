@@ -22,6 +22,8 @@ public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBoss
     private uint _resurrectMs;
     protected Unit? LastTarget;
     public bool FakeDeath => _fakeDeath;
+    /// <summary>boss_thekalBaseAI::JustPreventedDeath SetCombatScriptStatus(true) (boss_thekal.cpp:118): held until it rises.</summary>
+    public override bool CombatScriptRunning => _fakeDeath;
     protected ZulGurubInstance? Raid => Instance as ZulGurubInstance;
     /// <summary>The creature's own instance slot (TYPE_THEKAL 3, TYPE_LORKHAN 6, TYPE_ZATH 7).</summary>
     protected uint Slot => slot;

@@ -21,7 +21,6 @@ public sealed class CreatureStuckInCombatFixTests
     private const uint RatCritterEntry = 974075;
     private const uint CritterPostFleeEntry = 974076;
     private const uint NullAiEntry = 974077;
-    private const uint DeadTaunterEntry = 974078;
     private const uint NoThreatListEntry = 974079;
 
     private static AnomalyCapture CaptureStuckInCombat(uint entry)
@@ -102,28 +101,6 @@ public sealed class CreatureStuckInCombatFixTests
 
             Assert.False(npc.Combat.IsInCombat);
             Assert.Empty(capture.Notices);
-        }
-    }
-
-    [Fact]
-    public void SelectHostileTarget_WithStaleTauntCasterAndNoValidTargets_EvadesInsteadOfStickingInCombat()
-    {
-        using AnomalyCapture capture = CaptureStuckInCombat(DeadTaunterEntry);
-        CreatureContent content = Content([Template(DeadTaunterEntry)], [Spawn(1, DeadTaunterEntry, 10, 0)]);
-        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
-        using (world)
-        {
-            AddPlayer(world, 1, 100, 100);
-            Creature wolf = Assert.Single(system.Creatures);
-
-            // Add a stale taunt caster GUID that is not a valid living unit on the map while the creature is in combat.
-            map.Combat.SetInCombatState(wolf, 0);
-            wolf.Combat.Threat.AddTauntCaster(ObjectGuid.Player(99999));
-
-            bool selected = system.SelectHostileTarget(wolf);
-
-            Assert.False(selected);
-            Assert.False(wolf.Combat.IsInCombat);
         }
     }
 

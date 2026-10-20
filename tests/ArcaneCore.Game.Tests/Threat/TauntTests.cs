@@ -154,6 +154,29 @@ public sealed class TauntTests
     }
 
     [Fact]
+    public void SelectHostileTarget_WithTauntAuraAndNoValidTargets_HoldsWhileItIsUp_AndEvadesOnceItFades()
+    {
+        using var arena = new Arena();
+        arena.Pull();
+        arena.Cast(arena.Tank, TauntSpell);
+        Assert.True(arena.Wolf.Combat.Threat.HasTauntCasters);
+
+        // Every possible victim is gone, but the taunt aura is still on the wolf (vmangos Unit::SelectHostileTarget Unit.cpp:7589: no evade).
+        arena.Wolf.Combat.Threat.Clear();
+        arena.Tank.Health = 0;
+        arena.Dps.Health = 0;
+        Assert.False(arena.System.SelectHostileTarget(arena.Wolf));
+        Assert.True(arena.Wolf.Combat.IsInCombat);
+        Assert.False(arena.Wolf.IsInEvadeMode);
+
+        // The aura expires through the normal removal path (HandleModTaunt drops the caster): nothing holds the wolf, so it evades.
+        arena.Kit.Advance(3500);
+        Assert.False(arena.Wolf.Combat.Threat.HasTauntCasters);
+        Assert.False(arena.System.SelectHostileTarget(arena.Wolf));
+        Assert.False(arena.Wolf.Combat.IsInCombat);
+    }
+
+    [Fact]
     public void ATauntOnACreatureAlreadyAttackingTheCaster_ChangesNothing()
     {
         using var arena = new Arena();

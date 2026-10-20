@@ -41,6 +41,13 @@ public abstract class CreatureAI
     /// <summary>Whether this AI attacks hostile units that come into aggro range (vmangos AggressorAI).</summary>
     public virtual bool AggroesOnSight => false;
 
+    /// <summary>
+    /// Whether the script holds the creature in combat on its own (cmangos UnitAI::GetCombatScriptStatus, set by SetCombatScriptStatus(true)
+    /// in a fake death). The host's stranded-combat check does not evade such a creature: cmangos Unit::SelectHostileTarget "do not evade
+    /// during combat script running" (Entities/Unit.cpp:8717-8721).
+    /// </summary>
+    public virtual bool CombatScriptRunning => false;
+
     /// <summary>Whether the creature runs after its victim (cmangos EventAI combat movement).</summary>
     public bool CombatMovement { get; set; } = true;
 
