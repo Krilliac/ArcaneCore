@@ -252,8 +252,8 @@ public sealed class PetGmCommands : ICommandGroup
 
     /// <summary>
     /// Find the stored pet off the world thread, refuse it while its owner is online (the live pet and the login cache would write the old
-    /// row back), drain the owner's queued pet saves, run <paramref name="change"/>, then drop the owner's cached pet so the next login reads
-    /// the database.
+    /// row back), fence the owner's pet against a login already under way, drain the owner's queued pet saves, run <paramref name="change"/>,
+    /// then drop the owner's cached pet and release the fence so the next (or the waiting) login reads the database.
     /// </summary>
     private static void RunOnStoredPet(CommandContext context, uint petNumber, Func<IPetAdminStore, StoredPetLocation, Task<string>> change)
     {
@@ -274,20 +274,25 @@ public sealed class PetGmCommands : ICommandGroup
                 {
                     reply = PetNotFound(petNumber);
                 }
-                else if (await context.World.InvokeAsync(() => context.World.OnlinePlayers.FirstOrDefault(p => p.Guid.Low == (uint)found.CharacterId)?.Name)
-                             .ConfigureAwait(false) is { } online)
+                else if (await context.World.InvokeAsync(() => OnlineOwnerOrFence(context, summons, found.CharacterId)).ConfigureAwait(false) is { } online)
                 {
                     reply = OwnerOnline(petNumber, online);
                 }
                 else
                 {
-                    if (summons is not null)
+                    try
                     {
-                        await summons.FlushCharacterAsync(found.CharacterId).ConfigureAwait(false);
-                    }
+                        if (summons is not null)
+                        {
+                            await summons.FlushCharacterAsync(found.CharacterId).ConfigureAwait(false);
+                        }
 
-                    reply = await change(store, found).ConfigureAwait(false);
-                    summons?.ForgetCharacter(found.CharacterId);
+                        reply = await change(store, found).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        summons?.EndStoredPetChange(found.CharacterId);
+                    }
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -298,5 +303,20 @@ public sealed class PetGmCommands : ICommandGroup
 
             context.World.Post(() => context.Reply(reply));
         });
+    }
+
+    /// <summary>
+    /// World thread: the owner's name when they are online; otherwise fence their stored pet, in this same step, so a login already past its
+    /// pet read (not yet online) rereads it after the change instead of restoring, and later saving back, what it read before.
+    /// </summary>
+    private static string? OnlineOwnerOrFence(CommandContext context, SummonService? summons, int characterId)
+    {
+        if (context.World.OnlinePlayers.FirstOrDefault(p => p.Guid.Low == (uint)characterId) is { } online)
+        {
+            return online.Name;
+        }
+
+        summons?.BeginStoredPetChange(characterId);
+        return null;
     }
 }
