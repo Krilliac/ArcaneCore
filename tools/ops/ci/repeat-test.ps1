@@ -31,6 +31,14 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $projectPath = if ([IO.Path]::IsPathRooted($Project)) { $Project } else { Join-Path $repoRoot $Project }
 if (-not (Test-Path -LiteralPath $projectPath)) { [Console]::Error.WriteLine("Project not found: $projectPath"); exit 2 }
 $projectPath = (Resolve-Path -LiteralPath $projectPath).Path
+# Build and run in the checkout that owns the project, not the one this script came from,
+# and say which one, so a run against the wrong worktree is visible.
+$projectDir = if (Test-Path -LiteralPath $projectPath -PathType Container) { $projectPath } else { Split-Path -Parent $projectPath }
+$ownerRoot = (& git -C $projectDir rev-parse --show-toplevel 2>$null)
+if ($LASTEXITCODE -eq 0 -and $ownerRoot) { $repoRoot = (Resolve-Path -LiteralPath $ownerRoot).Path }
+$ownerHead = (& git -C $repoRoot rev-parse --short HEAD 2>$null)
+$ownerDirty = @(& git -C $repoRoot status --porcelain 2>$null).Count
+Write-Host "repeat-test: project $projectPath; checkout $repoRoot HEAD $ownerHead dirtyFiles=$ownerDirty"
 if (-not $OutDir) { $OutDir = Join-Path ([IO.Path]::GetTempPath()) ('repeat-test-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path -LiteralPath $OutDir).Path
