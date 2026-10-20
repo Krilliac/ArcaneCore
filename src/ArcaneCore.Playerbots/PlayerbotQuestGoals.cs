@@ -727,9 +727,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// The creature the bot hunts for its quests (<see cref="PreferredCreatureEntry"/>), 0 for none. Among the unfinished objectives the
     /// bot takes the one a stable hash of its own guid ranks first, so bots with the same quests spread over the objectives instead of all
     /// hunting the first. A kill objective is hunted by its creature; an item objective by a creature that drops the item
-    /// (<see cref="PlayerbotDropIndex"/>, from the loot tables, cached once). An objective that gained no credit for
-    /// <see cref="PlayerbotContention.NoCreditMs"/> is set aside for the bot (<see cref="PlayerbotContention.ObserveObjective"/>) and the
-    /// next one is taken; none left is reported through <see cref="OnContentionExhausted"/>.
+    /// at a chance worth hunting it for (<see cref="PlayerbotDropIndex.HuntedDroppersOf"/>, from the loot tables, cached once). An
+    /// objective that gained no credit for <see cref="PlayerbotContention.NoCreditMs"/> is set aside for the bot
+    /// (<see cref="PlayerbotContention.ObserveObjective"/>) and the next one is taken; none left is reported through <see cref="OnContentionExhausted"/>.
     /// </summary>
     internal void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
     {
@@ -820,8 +820,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 }
 
                 if (loot is null) continue;
-                IReadOnlyList<uint> droppers = PlayerbotDropIndex.DroppersOf(loot, item);
-                if (droppers.Count == 0 || droppers.Count > MaxItemDroppers) continue;
+                int dropperCount = PlayerbotDropIndex.DroppersOf(loot, item).Count;
+                if (dropperCount == 0 || dropperCount > MaxItemDroppers) continue;
+                // Only a creature that drops the item at a chance worth hunting it for: a trace dropper gains no credit (GitHub #809).
+                IReadOnlyList<uint> droppers = PlayerbotDropIndex.HuntedDroppersOf(loot, item);
                 for (int d = 0; d < droppers.Count; d++)
                 {
                     uint dropper = droppers[d];

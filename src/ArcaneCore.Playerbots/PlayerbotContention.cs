@@ -463,10 +463,107 @@ internal sealed class PlayerbotContention
 internal static class PlayerbotDropIndex
 {
     private static readonly ConditionalWeakTable<LootContent, Dictionary<uint, uint[]>> Cache = new();
+    private static readonly ConditionalWeakTable<LootContent, Dictionary<uint, uint[]>> HuntCache = new();
+
+    /// <summary>
+    /// A dropper whose chance for an item, times this, is still below the best dropper's chance for it drops the item only as a trace
+    /// (<see cref="HuntIndex"/>): Small Crag Boar has Crag Boar Rib at 0.02% where Crag Boar has it at 52%.
+    /// </summary>
+    internal const float TraceDropRatio = 20f;
 
     /// <summary>The creature entries that drop <paramref name="item"/>, ascending (empty when none does).</summary>
     internal static IReadOnlyList<uint> DroppersOf(LootContent loot, uint item)
         => Cache.GetValue(loot, PlayerbotGroupContent.DropIndex).GetValueOrDefault(item) ?? [];
+
+    /// <summary>
+    /// The creature entries worth hunting <paramref name="item"/> at, ascending: <see cref="DroppersOf"/> less the trace droppers
+    /// (<see cref="HuntIndex"/>). Empty when none drops it.
+    /// </summary>
+    internal static IReadOnlyList<uint> HuntedDroppersOf(LootContent loot, uint item)
+        => HuntCache.GetValue(loot, HuntIndex).GetValueOrDefault(item) ?? [];
+
+    /// <summary>
+    /// Which creatures drop each item at a chance worth hunting it for (item entry to creature entries, ascending). A creature's chance for
+    /// an item is the best of its rows that yield it (<see cref="DropChances"/>); a dropper whose chance times <see cref="TraceDropRatio"/>
+    /// is below the best dropper's chance is left out. The world data carries such traces from sampled drop rates (Small Crag Boar:
+    /// Crag Boar Rib 0.02%, Chunk of Boar Meat 0.0094%; Crag Boar 52%, Dire Mottled Boar 98%): hunting one gains no credit, and a bot
+    /// too low for every other dropper hunted it until the contention clock set it aside (GitHub #809, <c>reason=no-credit-timeout</c>).
+    /// </summary>
+    internal static Dictionary<uint, uint[]> HuntIndex(LootContent loot)
+    {
+        ArgumentNullException.ThrowIfNull(loot);
+        var chances = new Dictionary<uint, List<(uint Creature, float Chance)>>();
+        var references = new Dictionary<uint, Dictionary<uint, float>>();
+        foreach (CreatureLootInfo creature in loot.CreatureInfos)
+        {
+            if (creature.LootId == 0) continue;
+            foreach ((uint item, float chance) in DropChances(loot, LootTableKind.Creature, creature.LootId, 0, references))
+            {
+                if (!chances.TryGetValue(item, out List<(uint, float)>? droppers)) chances[item] = droppers = [];
+                droppers.Add((creature.Entry, chance));
+            }
+        }
+
+        var index = new Dictionary<uint, uint[]>(chances.Count);
+        foreach ((uint item, List<(uint Creature, float Chance)> droppers) in chances)
+        {
+            float best = 0;
+            foreach ((_, float chance) in droppers) best = Math.Max(best, chance);
+            index[item] = [.. droppers.Where(d => d.Chance * TraceDropRatio >= best).Select(d => d.Creature).Order()];
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// The percent chance one loot of table <paramref name="entry"/> yields each item, the best row's where several do. The chance is
+    /// the row's absolute ChanceOrQuestChance (vmangos <c>LootStoreItem</c> keeps <c>fabs</c> of it, LootMgr.h:119-121; a negative one
+    /// only marks a quest drop), capped at 100 (LootMgr.cpp:258). An equal-chanced row of a group (chance 0) gets an equal share of what
+    /// the group's explicit chances leave (vmangos <c>LootGroup::Roll</c>, LootMgr.cpp:1056-1093: the explicit chances first, then one
+    /// equal-chanced row); an ungrouped one never rolls. A reference row scales the chances of the table it names by its own (LootMgr.cpp:261-262, 1220-1235), nested up to
+    /// <see cref="PlayerbotGroupContent.MaxReferenceDepth"/>; a reference cycle ends at the table already being read.
+    /// </summary>
+    private static Dictionary<uint, float> DropChances(LootContent loot, LootTableKind kind, uint entry, int depth,
+        Dictionary<uint, Dictionary<uint, float>> references)
+    {
+        if (kind == LootTableKind.Reference && references.TryGetValue(entry, out Dictionary<uint, float>? known)) return known;
+        var chances = new Dictionary<uint, float>();
+        if (kind == LootTableKind.Reference) references[entry] = chances;
+        IReadOnlyList<LootStoreRow> rows = loot.GetRows(kind, entry);
+        var explicitByGroup = new Dictionary<byte, float>();
+        var equalByGroup = new Dictionary<byte, int>();
+        foreach (LootStoreRow row in rows)
+        {
+            if (row.GroupId == 0) continue;
+            if (row.ChanceOrQuestChance == 0)
+                equalByGroup[row.GroupId] = equalByGroup.GetValueOrDefault(row.GroupId) + 1;
+            else
+                explicitByGroup[row.GroupId] = explicitByGroup.GetValueOrDefault(row.GroupId) + Math.Abs(row.ChanceOrQuestChance);
+        }
+
+        foreach (LootStoreRow row in rows)
+        {
+            float chance = Math.Min(Math.Abs(row.ChanceOrQuestChance), 100f);
+            if (chance == 0 && row.GroupId != 0)
+                chance = Math.Max(0f, 100f - explicitByGroup.GetValueOrDefault(row.GroupId)) / equalByGroup[row.GroupId];
+            if (chance <= 0) continue;
+            if (row.MinCountOrRef < 0)
+            {
+                if (depth >= PlayerbotGroupContent.MaxReferenceDepth) continue;
+                foreach ((uint item, float inner) in DropChances(loot, LootTableKind.Reference, (uint)-row.MinCountOrRef, depth + 1, references))
+                    Keep(chances, item, chance * inner / 100f);
+            }
+            else if (row.Item != 0)
+            {
+                Keep(chances, row.Item, chance);
+            }
+        }
+
+        return chances;
+
+        static void Keep(Dictionary<uint, float> chances, uint item, float chance)
+            => chances[item] = Math.Max(chances.GetValueOrDefault(item), chance);
+    }
 }
 
 /// <summary>One candidate target and its weight (lower is better; <see cref="PlayerbotBrain.CollectTargets"/>).</summary>
