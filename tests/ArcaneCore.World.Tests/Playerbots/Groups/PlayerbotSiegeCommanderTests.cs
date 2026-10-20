@@ -360,12 +360,77 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 3, HostilesAtStepStart = 3 }));
         Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 5, HostilesAtStepStart = 3 }));
         // A push that has begun goes on when the count falls (the leader walked out of the scan range, or the raid killed what attacked it).
-        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = true }));
-        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = true, AverageHealthPct = 70f }));
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = PlayerbotSiegePush.Stalemate }));
+        // ... and a dip under 80% (it needs only the retreat rules to stay away: the fight is not lost at 70%).
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = PlayerbotSiegePush.Stalemate, AverageHealthPct = 70f }));
+        // ... until the fight is lost by the retreat rules.
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = PlayerbotSiegePush.Stalemate, AverageHealthPct = 34f }));
         // The quiet rule is no slow win: no hostile is no hostile.
         Assert.Equal(PlayerbotSiegePush.Quiet, PlayerbotSiegeCommander.PushOf(Straggler with { HostilesAtStepStart = 4 }));
     }
 
+
+    [Fact]
+    public void ACarriedPush_SurvivesTheStepBump_AndAWaypointHold_ButNotTheExclusions()
+    {
+        // The step clock and the quiet clock are zero after a step bump and a hold shows hostiles: a push in force goes on all the same.
+        PlayerbotSiegeFacts bumped = Fight with { Hostiles = 0, MsInCombatAtStep = 0, MsQuietInCombat = 0, Pushing = PlayerbotSiegePush.Stalemate };
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(bumped));
+        Assert.Equal(PlayerbotSiegePush.Quiet, PlayerbotSiegeCommander.PushOf(bumped with { Hostiles = 3, Pushing = PlayerbotSiegePush.Quiet }));
+        // The exclusions end it.
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(bumped with { PushBlocked = true }));
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(bumped with { ObjectiveLeg = true }));
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(bumped with { ObjectiveEngaged = true }));
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(bumped with { RetreatLatched = true }));
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(bumped with { InCombat = false }));
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(bumped with { TankAlive = false }));
+        // The decision carries it as an Advance in combat.
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.Decide(bumped with { Hostiles = 3 }).Push);
+    }
+
+    [Fact]
+    public void TheNoProgressBound_WithdrawsAPushAfterThirtySeconds_NotAtTheWaypoint_AndDeniesTheStep()
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new System.Numerics.Vector3(100f, 0f, 0f), new System.Numerics.Vector3(200f, 0f, 0f)], default, 0);
+        var raid = new PlayerbotSiegeRaid(siege, 1) { Push = PlayerbotSiegePush.Stalemate, PushInForce = PlayerbotSiegePush.Stalemate };
+
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 50f, false, 1_000));
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 47f, false, 5_000)); // 3 yd nearer: progress
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 46f, false, 20_000)); // 1 yd: not progress (needs more than 2)
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 46f, false, 34_999)); // 29.999 s after the last progress
+        Assert.Equal(-1, raid.PushDeniedStep);
+        Assert.True(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 46f, false, 35_000));
+        Assert.Equal(0, raid.PushDeniedStep);
+        Assert.Equal(PlayerbotSiegePush.None, raid.PushInForce);
+
+        // Standing at the waypoint is progress, however long the lockstep keeps the leader there.
+        raid.PushInForce = PlayerbotSiegePush.Stalemate;
+        raid.PushDeniedStep = -1;
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 60f, false, 100_000));
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 0f, true, 120_000));
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 0, 0f, true, 149_000));
+        Assert.Equal(-1, raid.PushDeniedStep);
+
+        // A step change starts the best distance over: 150 yd at the next waypoint is no stall against the 0 of the last.
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 1, 150f, false, 150_000));
+        Assert.Equal(150f, raid.PushBestYards);
+        Assert.Equal(1, raid.PushProgressStep);
+
+        // A raid that does not push tracks nothing.
+        raid.Push = PlayerbotSiegePush.None;
+        Assert.False(PlayerbotGroupCoordinator.NotePushProgress(raid, 1, 150f, false, 500_000));
+        Assert.Equal(-1f, raid.PushBestYards);
+        Assert.Equal(-1, raid.PushProgressStep);
+        Assert.Equal(-1, raid.PushDeniedStep);
+    }
+
+    [Fact]
+    public void TheNoProgressAndLagHoldBounds_AreThirtySeconds_TwoYards_AndNinetySeconds()
+    {
+        Assert.Equal(30_000u, PlayerbotSiegeCommander.PushStallMs);
+        Assert.Equal(2f, PlayerbotSiegeCommander.PushProgressYards);
+        Assert.Equal(90_000u, PlayerbotGroupCoordinator.LagHoldMs);
+    }
     [Fact]
     public void TheStepClock_TakesTheHostileCountOfItsFirstRead_AsTheBaseline_AndAStepChangeRestartsTheQuietClock()
     {

@@ -650,8 +650,7 @@ internal sealed class PlayerbotGroupAI
     /// <see cref="PlayerbotGroupCoordinator.Member.FocusIcon"/>, then the skull; vmangos PartyBotAI.cpp:366-377), then it assists the leader's
     /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
     /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
-    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The leader of a raid that pushes through
-    /// its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) picks no new targets and follows no marks, like a rally: leader and members drop what they fight and fight back only what attacks them, then follow the leader.
+    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The raid that pushes through its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) follows no marks and picks no new targets: its leader fights nothing away from its waypoint (it walks, its attackers in tow) and fights back at it; every member answers any attacker of any raid member within <see cref="AssistYards"/>, its own attacker first, then the nearest, and with none follows the leader.
     /// </summary>
     private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
@@ -679,12 +678,19 @@ internal sealed class PlayerbotGroupAI
             }
         }
 
-        // At the retreat point (Rally), and while the raid pushes through its fight, the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for
-        // a healer, the raid member it heals), the member itself first, then the nearest.
-        if (siegeOrder == PlayerbotSiegeOrder.Rally || group.Siege is { PushingThrough: true })
+        // At the retreat point (Rally) the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for a healer, the raid member it heals), the member itself first, then the nearest.
+        if (siegeOrder == PlayerbotSiegeOrder.Rally)
         {
             bool heals = me.Role == PlayerbotGroupRole.Healer;
             return loose.Where(l => l.OnSelf || heals).OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
+        }
+
+        // While the raid pushes through its fight there are no marks and no new targets. The leader walks: away from its waypoint it fights nothing (Update never reaches Lead while it has a target), with its attackers in
+        // tow; at the waypoint, waiting, it fights back. Every member answers any attacker of any raid member within AssistYards (loose), its own attacker first, then the nearest, and with none follows.
+        if (group.Siege is { PushingThrough: true } pushing)
+        {
+            if (isLeader && !pushing.AtWaypoint) return null;
+            return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
 
         Unit? marked = null;
