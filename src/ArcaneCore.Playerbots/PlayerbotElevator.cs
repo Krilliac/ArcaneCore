@@ -2018,27 +2018,16 @@ internal static class PlayerbotElevator
     internal const float StepOffZToleranceYards = 5f;
 
     /// <summary>
-    /// Fallback for a trip with no <see cref="ElevatorTrip.StepOffPoint"/>: the bot is relocated when it is farther (flat) than this from the
-    /// nearest car's stop at the arrival level. 25 yd is the outermost landing ring (<see cref="LandingRadii"/>, 13.5 yd) plus
-    /// <see cref="AtLandingYards"/> and a margin for the ground search.
-    /// </summary>
-    internal const float ArrivedNearYards = 25f;
-
-    /// <summary>
     /// Whether the bot of a trip that is to be reported arrived was relocated since it stepped off: measured from the stored step-off point
     /// (the car it stepped off beside is not always <see cref="ElevatorTrip.Car"/>: <c>TryCompleteAtDestinationFloor</c> uses the closest car).
+    /// Every path that completes a trip stores the point; a trip without one has nothing to judge an arrival by, so it counts as relocated
+    /// (<see cref="Drive"/> drops it, <see cref="CheckArrivedAnomalies"/> skips its checks).
     /// </summary>
     private static bool Relocated(ElevatorTrip trip, Player player)
     {
-        if (trip.StepOffPoint is { } point)
-        {
-            return Vector2.Distance(new Vector2(player.X, player.Y), new Vector2(point.X, point.Y)) > StepOffToleranceYards
-                || MathF.Abs(player.Z - point.Z) > StepOffZToleranceYards;
-        }
-
-        ElevatorLevel level = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
-        Vector3 bot = new(player.X, player.Y, player.Z);
-        return Vector2.Distance(new Vector2(player.X, player.Y), ElevatorNetwork.Flat(ClosestCar(trip.Lift, level, bot).At(level))) > ArrivedNearYards;
+        if (trip.StepOffPoint is not { } point) return true;
+        return Vector2.Distance(new Vector2(player.X, player.Y), new Vector2(point.X, point.Y)) > StepOffToleranceYards
+            || MathF.Abs(player.Z - point.Z) > StepOffZToleranceYards;
     }
 
     /// <summary>
