@@ -169,6 +169,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
+    private PlayerbotPvpFight? _pvpFight;
+    private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
     private PlayerbotOpportunities? _opportunities;
     private readonly PlayerbotRecovery _recovery = new(session, options);
@@ -346,6 +348,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal PlayerbotGoalKind Goal => _goal;
     internal void CancelNavigationPlanning() => _destinations.CancelPlanning();
     internal Creature? InspectionTarget => _target;
+
+    /// <summary>The player the bot fights back or defends against (<see cref="PlayerbotPvpFight"/>; inspection and tests).</summary>
+    internal Unit? InspectionPvpTarget => _pvpFight?.Target;
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
 
@@ -956,6 +961,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             else _lootResponseReceived = LootManagedPackets(player, pendingLoot.Guid.Value);
             return;
         }
+
+        PlayerbotThinkProbe.Phase("pvp");
+        if (TryFightPlayer(player, interval)) return;
 
         PlayerbotThinkProbe.Phase("quest return");
         if (_quests.AbandonDistantCompletedQuest(player))
@@ -1919,6 +1927,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     private void RetireDeathIntent()
     {
+        if (_pvpFight is { } pvp) (pvp.Target, pvp.Attacking) = (null, false);
         // Death starts a new gameplay lifetime. Drop only controller-owned, transient
         // intent; the recovery helper still owns the ordinary release/reclaim flow.
         _contention.ReleaseClaim();
@@ -2009,6 +2018,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     private void DropIntent()
     {
+        if (_pvpFight is { } pvp) (pvp.Target, pvp.Attacking) = (null, false);
         _destinations.CancelPlanning();
         _target = null;
         AbandonRoute();
