@@ -13,7 +13,7 @@ client builds, and is it a cheat, a bot bug or a server bug.
 
 | Traffic | Hook | What it sees |
 |---|---|---|
-| Client (socket, gateway, packet-tool injection) | `WorldSession.DispatchAsync` (`HeuristicsClientPacket`, `WorldSession.cs`, before the dispatcher decides anything) | shape, cadence, replay on every authenticated packet |
+| Client (socket, gateway) and packet-tool injection | `WorldSession.DispatchAsync` (`HeuristicsClientPacket`, `WorldSession.cs`, before the dispatcher decides anything) | shape, cadence, replay on every authenticated packet |
 | Client dispatcher outcomes | the drop sites in `DispatchAsync` and `ProcessWorldPackets` | `wrong-state`, `unknown-opcode`, `malformed` (reported before the disconnect or kick) |
 | Client world packet about to run | `ProcessWorldPackets` on the world thread | `incapacitated-action` |
 | Playerbot (managed session) | `ManagedWorldSession.TryManagedAction` | shape, cadence, replay and `incapacitated-action` when the action reaches its handler; `wrong-state`, `unknown-opcode` and `malformed` when the action is refused or its handler throws (an exception filter that always returns false, so the exception continues exactly as before) |
@@ -27,7 +27,10 @@ managed hook is what makes bot traffic visible at all. A chaos-engine probe a bo
 Off: a packet costs one volatile read and no per-session state exists (a test pushes a burst of bad packets and asserts zero findings and
 no state). **Exemptions**: managed bots (`ExemptBots`, default true) and staff (`ExemptStaff`, default true: Moderator and above, or a
 player in GM mode, refreshed from every world packet the session dispatches, so a player who turns GM mode on or off is reclassified at the next packet) are not checked at all. With an exemption lifted their traffic is checked and counted under its own column (player,
-bot, staff) of the status table. The bot sessions are almost all the traffic on this server, so the usual way to use it here is
+bot, staff) of the status table. **A packet a packet tool injected** (`InjectAsync`, which goes through the same dispatcher) is never attributed to the
+target's account: it is checked whenever the feature is on, whatever the target is (neither exemption applies), counted in the `tool` column and reported
+under the subject `tool N` (N is the target's account), so tool use stays visible and does not look like the player's own traffic. The tool
+shares the target session's cadence and replay state with the real client. The injection gate and the tools themselves are untouched. The bot sessions are almost all the traffic on this server, so the usual way to use it here is
 `.packetcheck on` and `.packetcheck bots on`.
 
 `.packetcheck status | on | off | bots on|off | staff on|off | reset` (Administrator; works from chat, the console and RA). A change lasts
@@ -36,7 +39,7 @@ per-check counts. `reset` zeroes the counters and lets every session report agai
 
 ## Findings and the throttle
 
-Subject `account N` (player, staff) or `botname NAME` (managed bot). The subsystem is `packet`, never `bot-...`, which would auto-file bot QA
+Subject `account N` (player, staff), `botname NAME` (managed bot) or `tool N` (a packet-tool injection into account N). The subsystem is `packet`, never `bot-...`, which would auto-file bot QA
 issues: triage here is manual. The bot subject is not `bot NAME` either: `PlayerbotPolicyTelemetry` counts every anomaly subject that starts
 with `bot ` (capped, never evicted), so findings would crowd out its own. Detail = opcode name plus specifics (`Cast class 11 within a second
 > 10/s`: the count is always the ceiling plus one, the packet that broke it; `trailing 3 bytes (length 11, the message is exactly 8)`;
@@ -49,14 +52,14 @@ formatted inside the report, so a flood costs no allocation (asserted by `AThrot
 
 | Code | Severity | Detects | False-positive risks |
 |---|---|---|---|
-| `wrong-state` | Warning (Info for a second `CMSG_PLAYER_LOGIN`) | an opcode dropped because the session state does not allow it: a world opcode at the character screen, a session opcode in a disallowed state, a world packet dequeued after the session left the world or while the player has no map | packets in flight: none are reported for `WrongStateGraceMs` (5 s) after the session left the world, nor for the same time after the server sent `SMSG_TRANSFER_PENDING` or `SMSG_NEW_WORLD` (a far transfer: instance portal, hearthstone across continents, release), nor once the session is closing or kicked; a map-less player outside any transfer is still reported. A double-clicked Enter World sends a second `CMSG_PLAYER_LOGIN` while the first is logging in: Info. A bot's refused action is the same check, with the same transfer grace |
+| `wrong-state` | Warning (Info for a second `CMSG_PLAYER_LOGIN`) | an opcode dropped because the session state does not allow it: a world opcode at the character screen, a session opcode in a disallowed state, a world packet dequeued after the session left the world or while the player has no map | packets in flight: none are reported for `WrongStateGraceMs` (5 s) after the session left the world, nor while the player is in a far teleport (`TeleportService.StageOf` is `FarScheduled`, `Far` or `Arriving`: instance portal, hearthstone across continents, release; the whole loading screen, from `SMSG_TRANSFER_PENDING` until the tick after `MSG_MOVE_WORLDPORT_ACK`, however long it takes, not a timer), nor once the session is closing or kicked; a map-less player outside any transfer is still reported. A double-clicked Enter World sends a second `CMSG_PLAYER_LOGIN` while the first is logging in: Info. A bot's refused action is the same check, with the same transfer grace |
 | `unknown-opcode` | Info (named but unhandled), Warning (outside the opcode table, or a server opcode sent by a client) | an opcode with no handler | a client feature the server does not implement yet: Info is expected noise |
 | `malformed` | Error | a payload a handler rejected as truncated or invalid, a bad frame header, a `CMSG_PING` without its sequence number, a bot payload over the frame limit | none expected; a real client never sends these |
 | `shape` | Warning | a payload whose length differs from the fixed length of its message (trailing or missing bytes) | a modified client or a different build with another layout; see the section below |
 | `cadence` | Warning | an opcode class above its ceiling in any sliding second (`CadenceLimits`), and a `CMSG_PING` closer than `PingMinIntervalMs` to the previous one (`overspeed-ping`) | `QueryPerSecond`: a client entering a crowded city bursts queries (raise it if that is all you see); casts and uses are limited by the global cooldown, so 10/s is far above what a client produces |
 | `replay` | Warning | the same opcode with the same payload at least `ReplayCount` (5) times within `ReplayWindowMs` (1000) | an opcode that legitimately repeats an identical payload and is not in the exclusion list below |
 | `orphan-ack` | Warning | a speed, knockback, root, flag or teleport acknowledgement that matches nothing the server sent, or names another mover | a late acknowledgement after a second change superseded the first; a server that dropped its own pending record (a server bug, which is the point) |
-| `incapacitated-action` | Info for a bot, Warning for a player | an action received while the player is dead or a ghost, on a taxi flight or being teleported; reported even when the handler refuses | a packet sent before the client learned of the state change (latency): expect a few right after a death or a landing |
+| `incapacitated-action` | Info for a bot, Warning for a player | an action received while the player is dead or a ghost, on a taxi flight or in a far transfer; reported even when the handler refuses | a packet sent before the client learned of the state change (latency): expect a few right after a death or a landing. A near teleport (Blink, `SPELL_EFFECT_LEAP`) is not a transfer: the client keeps playing, so an action within one round trip of it is not reported |
 
 ### Shape: a length table, not the oracle
 

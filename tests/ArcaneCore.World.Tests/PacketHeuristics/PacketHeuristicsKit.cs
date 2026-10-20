@@ -98,5 +98,5 @@ internal static class PacketHeuristicsKit
     internal static byte[] U32(uint value) => BitConverter.GetBytes(value);
 
     internal static long Total(PacketHeuristicsFeature feature, PacketCheck check)
-        => feature.Count(check, PacketTraffic.Player) + feature.Count(check, PacketTraffic.Bot) + feature.Count(check, PacketTraffic.Staff);
+        => feature.Count(check, PacketTraffic.Player) + feature.Count(check, PacketTraffic.Bot) + feature.Count(check, PacketTraffic.Staff) + feature.Count(check, PacketTraffic.Tool);
 }

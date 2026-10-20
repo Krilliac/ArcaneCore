@@ -11251,8 +11251,9 @@ World.PacketHeuristics.ExemptStaff = true
 
 #
 #    World.PacketHeuristics.IncapacitatedAction
-#        Description: Report an action opcode received while the player is dead, stunned, on a taxi
-#                     or being teleported (incapacitated-action). Default true.
+#        Description: Report an action opcode received while the player is dead or a ghost, on a
+#                     taxi flight or in a far transfer (incapacitated-action; a near teleport such
+#                     as Blink is not one). Default true.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -11403,7 +11404,9 @@ World.PacketHeuristics.WrongState = true
 #    World.PacketHeuristics.WrongStateGraceMs
 #        Description: After the player left the world (logout, back at the character screen) world
 #                     opcodes are expected for this many milliseconds (packets in flight) and are
-#                     not reported as wrong-state. 0-60000, default 5000.
+#                     not reported as wrong-state. Only this post-logout window is timed: a map-less
+#                     player in a far teleport is excused by the teleport stage, however long the
+#                     loading screen takes. 0-60000, default 5000.
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number, -2147483648 to 2147483647

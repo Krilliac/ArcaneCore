@@ -7,8 +7,12 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.MapFeed;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.PacketHeuristics;
@@ -39,6 +43,36 @@ public sealed class PacketHeuristicsFollowUpTests
             await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]);
             await PacketHeuristicsKit.SettleAsync(host, client, session);
+            Assert.Equal(0, feature.Count(PacketCheck.WrongState, PacketTraffic.Player));
+            Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
+
+            await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+            await host.WaitForWorldAsync(() => player.Map is not null, "back on a map");
+        }
+    }
+
+    [Fact]
+    public async Task AFarTeleport_WhoseLoadingScreenOutlastsTheGraceWindow_StillReportsNothing()
+    {
+        await using var host = WorldTestHost.Start();
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHSLOW", "Phslowone");
+        await using (client)
+        {
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host); // the default 5 s WrongStateGraceMs
+            using AnomalyCapture capture = ledger.Capture();
+            Player player = await host.PlayerAsync("Phslowone");
+            await host.OnWorldAsync(() =>
+            {
+                TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+                Assert.True(teleports.TeleportTo(player, player.MapId, player.X, player.Y, player.Z, player.Orientation, TeleportOptions.ForceFar));
+            });
+            await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+
+            // A loading screen that takes longer than the post-logout window: the map is still null, the teleport stage still Far.
+            await Task.Delay(TimeSpan.FromMilliseconds(5600));
+            await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]);
+            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            Assert.Null(player.Map);
             Assert.Equal(0, feature.Count(PacketCheck.WrongState, PacketTraffic.Player));
             Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
 
@@ -194,27 +228,115 @@ public sealed class PacketHeuristicsFollowUpTests
     }
 
     [Fact]
-    public async Task IncapacitatedAction_WhileBeingTeleported_IsReported()
+    public async Task ACastRightAfterANearTeleport_IsNotReported()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHTELE", "Phteleone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHBLINK", "Phblinkone");
         await using (client)
         {
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
-            Player player = await host.PlayerAsync("Phteleone");
+            Player player = await host.PlayerAsync("Phblinkone");
             await host.OnWorldAsync(() =>
             {
                 TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-                Assert.True(teleports.TeleportTo(player, player.MapId, player.X + 5, player.Y, player.Z, player.Orientation)); // near: pending until the ack
+                Assert.True(teleports.TeleportTo(player, player.MapId, player.X + 5, player.Y, player.Z, player.Orientation)); // near, like Blink: pending until the ack
+                Assert.True(teleports.IsBeingTeleportedNear(player));
             });
 
             await client.SendAsync(WorldOpcode.CmsgCastSpell, [1, 0, 0, 0, 0, 0]);
             await PacketHeuristicsKit.SettleAsync(host, client, session);
 
-            AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
-            Assert.Contains("being teleported", notice.Detail, StringComparison.Ordinal);
-            Assert.Equal(1, feature.Count(PacketCheck.IncapacitatedAction, PacketTraffic.Player));
+            Assert.Equal(0, feature.Count(PacketCheck.IncapacitatedAction, PacketTraffic.Player));
+            Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
         }
+    }
+
+    [Fact]
+    public async Task AnActionDuringAFarTransfer_IsStillReported()
+    {
+        await using var host = WorldTestHost.Start();
+        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHFARACT", "Phfaractone");
+        try
+        {
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false);
+            using AnomalyCapture capture = ledger.Capture();
+            Player player = bot.Player!;
+            await host.World.InvokeAsync(() =>
+            {
+                TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+                Assert.True(teleports.TeleportTo(player, player.MapId, player.X, player.Y, player.Z, player.Orientation, TeleportOptions.ForceFar));
+                Assert.True(teleports.IsBeingTeleportedFar(player));
+                bot.TryManagedAction(WorldOpcode.CmsgCastSpell, [1, 0, 0, 0, 0, 0]);
+                return true;
+            });
+
+            AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
+            Assert.Contains("far transfer", notice.Detail, StringComparison.Ordinal);
+            Assert.Equal(1, feature.Count(PacketCheck.IncapacitatedAction, PacketTraffic.Bot));
+        }
+        finally
+        {
+            bot.Kick("test over");
+            await bot.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task APacketAToolInjected_IsReportedUnderTheTool_NeverTheTargetsAccount()
+    {
+        var permit = new PacketToolsPermit(
+            Options.Create(new WorldPacketToolsOptions { Enabled = true }),
+            Options.Create(new WorldMapFeedOptions { Enabled = true }),
+            new DevelopmentEnvironment(),
+            liveServer: false);
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(permit));
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHTOOL", "Phtoolone");
+        await using (client)
+        {
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
+            using AnomalyCapture capture = ledger.Capture();
+            Player player = await host.PlayerAsync("Phtoolone");
+            string toolSubject = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"tool {session.AccountId}");
+
+            // Network phase: a bad shape (one byte too many, which the handler ignores) found while the injection holds the dispatch gate.
+            Assert.Equal(InjectVerdict.Queued, await session.InjectAsync(WorldOpcode.CmsgSetSelection, new byte[9], TimeSpan.FromSeconds(5), CancellationToken.None));
+            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            AnomalyNotice injected = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.Shape));
+            Assert.Equal(toolSubject, injected.Subject);
+            Assert.Equal(1, feature.Count(PacketCheck.Shape, PacketTraffic.Tool));
+            Assert.Equal(0, feature.Count(PacketCheck.Shape, PacketTraffic.Player));
+
+            // World phase: an injected, well-formed packet that meets a player without a map is attributed to the tool too.
+            await host.OnWorldAsync(() =>
+            {
+                Map source = player.Map!;
+                source.RemovePlayer(player);
+                source.BeginTransit(player);
+            });
+            Assert.Equal(InjectVerdict.Queued, await session.InjectAsync(WorldOpcode.CmsgCancelAura, new byte[4], TimeSpan.FromSeconds(5), CancellationToken.None));
+            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            AnomalyNotice dropped = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
+            Assert.Equal(toolSubject, dropped.Subject);
+            Assert.Equal(1, feature.Count(PacketCheck.WrongState, PacketTraffic.Tool));
+
+            // A bad packet from the real client afterwards is the player's, not mistaken for the tool's.
+            await client.SendAsync(WorldOpcode.CmsgSetActionbarToggles, [1, 2, 3]);
+            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            AnomalyNotice own = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.Shape) && n.Subject != toolSubject);
+            Assert.Equal(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"account {session.AccountId}"), own.Subject);
+            Assert.Equal(1, feature.Count(PacketCheck.Shape, PacketTraffic.Player));
+        }
+    }
+
+    private sealed class DevelopmentEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = "Development";
+
+        public string ApplicationName { get; set; } = "PacketHeuristicsFollowUpTests";
+
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 }

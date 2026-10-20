@@ -13783,7 +13783,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Report an action opcode received while the player is dead, stunned, on a taxi or being teleported (`incapacitated-action`). Default true.",
+      "meaning": "Report an action opcode received while the player is dead or a ghost, on a taxi flight or in a far transfer (`incapacitated-action`; a near teleport such as Blink is not one). Default true.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldpacketheuristics",
       "isCollection": false
@@ -13975,7 +13975,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as `wrong-state`. 0-60000, default 5000.",
+      "meaning": "After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as `wrong-state`. Only this post-logout window is timed: a map-less player in a far teleport is excused by the teleport stage, however long the loading screen takes. 0-60000, default 5000.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldpacketheuristics",
       "isCollection": false

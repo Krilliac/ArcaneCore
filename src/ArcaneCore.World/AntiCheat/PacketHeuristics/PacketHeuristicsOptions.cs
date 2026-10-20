@@ -29,7 +29,7 @@ public sealed class PacketHeuristicsOptions
     /// <summary>Report an opcode dropped because the session state does not allow it (<c>wrong-state</c>). Default true.</summary>
     public bool WrongState { get; set; } = true;
 
-    /// <summary>After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as <c>wrong-state</c>. 0-60000, default 5000.</summary>
+    /// <summary>After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as <c>wrong-state</c>. Only this post-logout window is timed: a map-less player in a far teleport is excused by the teleport stage, however long the loading screen takes. 0-60000, default 5000.</summary>
     public int WrongStateGraceMs { get; set; } = 5000;
 
     /// <summary>Report an opcode with no handler or outside the opcode table (<c>unknown-opcode</c>). Default true.</summary>
@@ -74,7 +74,7 @@ public sealed class PacketHeuristicsOptions
     /// <summary>Report an unsolicited or mismatching movement acknowledgement (<c>orphan-ack</c>). Default true.</summary>
     public bool OrphanAck { get; set; } = true;
 
-    /// <summary>Report an action opcode received while the player is dead, stunned, on a taxi or being teleported (<c>incapacitated-action</c>). Default true.</summary>
+    /// <summary>Report an action opcode received while the player is dead or a ghost, on a taxi flight or in a far transfer (<c>incapacitated-action</c>; a near teleport such as Blink is not one). Default true.</summary>
     public bool IncapacitatedAction { get; set; } = true;
 
     /// <summary>A copy (the live options are replaced whole, never edited in place).</summary>

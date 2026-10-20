@@ -41,6 +41,9 @@ public enum PacketTraffic
 
     /// <summary>A staff account (Moderator and above) or a player in GM mode.</summary>
     Staff = 2,
+
+    /// <summary>A packet an operator's packet tool injected into the session (the subject is <c>tool N</c>, not the target's account).</summary>
+    Tool = 3,
 }
 
 /// <summary>Names, ledger codes and default severities of the checks.</summary>
@@ -53,7 +56,7 @@ public static class PacketChecks
     public const int Count = 8;
 
     /// <summary>Number of traffic kinds.</summary>
-    public const int TrafficKinds = 3;
+    public const int TrafficKinds = 4;
 
     /// <summary>The ledger code of <paramref name="check"/>: the check name, lower case with dashes.</summary>
     public static string Code(PacketCheck check) => check switch

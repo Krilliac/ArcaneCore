@@ -316,10 +316,6 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
-        if (opcode == WorldOpcode.SmsgTransferPending || opcode == WorldOpcode.SmsgNewWorld)
-        {
-            HeuristicsTransferStarted(); // report only: opens the grace for packets in flight across a far transfer
-        }
 
         if (_remoteOutput is not null)
         {
@@ -372,12 +368,25 @@ public sealed partial class WorldSession : IPlayerSession
     /// <summary>Handle queued in-world packets (world thread, from the player's map update).</summary>
     public void ProcessWorldPackets(Player player)
     {
+        try
+        {
+            ProcessWorldPacketsCore(player);
+        }
+        finally
+        {
+            _injectWorld = false; // report only: the heuristics' "this packet came from a packet tool" flag never outlives the batch
+        }
+    }
+
+    private void ProcessWorldPacketsCore(Player player)
+    {
         // Player and map state are owned by the world thread; this is the only consumer of _worldQueue.
         Invariant.Assert(World.IsWorldThread, "in-world packets are handled on the world thread");
         CheckLogoutOverdue(player);
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
             Release(packet);
+            _injectWorld = packet.Injected;
             if (_kick.IsCancellationRequested || !IsCurrentSession)
             {
                 return;
@@ -790,7 +799,7 @@ public sealed partial class WorldSession : IPlayerSession
 
                     Interlocked.Increment(ref _queuedPackets);
                     Interlocked.Add(ref _queuedBytes, payload.Length);
-                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds()));
+                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds(), _injectDispatch));
                 }
                 else
                 {
@@ -1169,5 +1178,5 @@ public sealed partial class WorldSession : IPlayerSession
         return bytes;
     }
 
-    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload, uint ReceivedMs);
+    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload, uint ReceivedMs, bool Injected = false);
 }

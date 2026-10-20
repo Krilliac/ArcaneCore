@@ -127,13 +127,13 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         {
             string.Create(CultureInfo.InvariantCulture,
                 $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} (report only). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
-            "check                   enabled     player        bot      staff",
+            "check                   enabled     player        bot      staff       tool",
         };
         for (int i = 0; i < PacketChecks.Count; i++)
         {
             var check = (PacketCheck)i;
             lines.Add(string.Create(CultureInfo.InvariantCulture,
-                $"{PacketChecks.Code(check),-22}  {(settings.CheckOn(check) ? "yes" : "no"),-7} {Count(check, PacketTraffic.Player),10} {Count(check, PacketTraffic.Bot),10} {Count(check, PacketTraffic.Staff),10}"));
+                $"{PacketChecks.Code(check),-22}  {(settings.CheckOn(check) ? "yes" : "no"),-7} {Count(check, PacketTraffic.Player),10} {Count(check, PacketTraffic.Bot),10} {Count(check, PacketTraffic.Staff),10} {Count(check, PacketTraffic.Tool),10}"));
         }
 
         lines.Add("Findings are in the anomaly ledger under packet/<check> (.server anomalies).");
@@ -157,7 +157,12 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         }
 
         PacketHeuristicsSession? existing = session.HeuristicsState;
-        if (session.IsPlayerbot)
+        if (session.HeuristicsToolPacket)
+        {
+            // An operator's injected packet is always visible: neither the bot nor the staff exemption applies to the tool.
+            traffic = PacketTraffic.Tool;
+        }
+        else if (session.IsPlayerbot)
         {
             traffic = PacketTraffic.Bot;
             if (settings.ExemptBots)
@@ -362,9 +367,9 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
             why = "on a taxi flight";
         }
         else if ((applicable & PacketOpcodeClasses.Incapacity.Teleporting) != 0
-            && (_teleport ??= _services.GetService<TeleportFeature>())?.TeleportsIfAttached?.IsBeingTeleported(player) == true)
+            && InFarTransfer(player))
         {
-            why = "being teleported";
+            why = "in a far transfer";
         }
 
         if (why is not null)
@@ -373,6 +378,14 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
                 traffic == PacketTraffic.Bot ? AnomalySeverity.Info : AnomalySeverity.Warning, why, static why => "player is " + why);
         }
     }
+
+    /// <summary>
+    /// Whether <paramref name="player"/> is crossing a far teleport right now: scheduled, loading (SMSG_TRANSFER_PENDING to the world-port
+    /// acknowledgement) or arriving. The map is null for all of it, so a packet in flight is not a finding. A near teleport (a Blink) is not
+    /// a transfer: the client keeps playing and may legitimately act within one round trip.
+    /// </summary>
+    internal bool InFarTransfer(Player player)
+        => (_teleport ??= _services.GetService<TeleportFeature>())?.TeleportsIfAttached?.IsBeingTeleportedFar(player) == true;
 
     // --- reporting -----------------------------------------------------------------------------------------------------------
 
@@ -405,9 +418,14 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         Interlocked.Increment(ref _counts[Slot(check, traffic)]);
     }
 
-    /// <summary>The ledger subject: <c>account N</c> for a player or staff session, <c>botname NAME</c> for a managed bot. Never the <c>bot-</c> subsystem prefix that files bot QA issues, and not a leading <c>bot </c> either: PlayerbotPolicyTelemetry counts every anomaly subject that starts with that.</summary>
+    /// <summary>The ledger subject: <c>account N</c> for a player or staff session, <c>botname NAME</c> for a managed bot, <c>tool N</c> (the target's account) for a packet a packet tool injected. Never the <c>bot-</c> subsystem prefix that files bot QA issues, and not a leading <c>bot </c> either: PlayerbotPolicyTelemetry counts every anomaly subject that starts with that.</summary>
     private static string SubjectOf(WorldSession session, PacketTraffic traffic)
     {
+        if (traffic == PacketTraffic.Tool)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"tool {session.AccountId}");
+        }
+
         if (traffic == PacketTraffic.Bot)
         {
             return "botname " + (session.Player?.Name is { Length: > 0 } name ? name : session.AccountName);

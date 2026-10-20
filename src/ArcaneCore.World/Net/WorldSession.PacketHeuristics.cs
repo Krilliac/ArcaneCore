@@ -18,10 +18,11 @@ public sealed partial class WorldSession
     private PacketHeuristicsFeature? _heuristics;
     private PacketHeuristicsSession? _heuristicsState;
     private long _leftWorldTick = long.MinValue;
-    private long _transferTick = long.MinValue;
     private volatile bool _heuristicsGm;
+    private volatile bool _injectDispatch;
+    private volatile bool _injectWorld;
 
-    /// <summary>Where a dropped packet may be a packet in flight: after the player left the world, or across a far transfer.</summary>
+    /// <summary>Where a dropped packet may be a packet in flight: after the player left the world (a timed window), or across a far transfer (the teleport stage, however long the loading screen takes).</summary>
     private enum WrongStateGrace : byte
     {
         None = 0,
@@ -32,18 +33,16 @@ public sealed partial class WorldSession
     /// <summary>The player was in GM mode when the world thread last dispatched one of this session's world packets (read by the network path to classify the session as staff).</summary>
     internal bool HeuristicsGmMode => _heuristicsGm;
 
-    /// <summary>The server just sent SMSG_TRANSFER_PENDING or SMSG_NEW_WORLD: packets the client sent before it processed them are in flight and will meet a player without a map.</summary>
-    private void HeuristicsTransferStarted()
-    {
-        if (_heuristics is { Active: true })
-        {
-            Volatile.Write(ref _transferTick, Environment.TickCount64);
-        }
-    }
+    /// <summary>
+    /// Whether the packet being handled right now was injected by a packet tool (<see cref="InjectAsync"/>). On the world thread that is the world
+    /// packet being processed; elsewhere it is the injection holding the dispatch gate. Report only: it picks the traffic kind and subject of a finding.
+    /// </summary>
+    internal bool HeuristicsToolPacket => World.IsWorldThread ? _injectWorld : _injectDispatch;
 
     private static bool Within(long startTick, long windowMs) => startTick != long.MinValue && Environment.TickCount64 - startTick < windowMs;
 
-    private bool InTransferGrace(PacketHeuristicsFeature heuristics) => Within(Volatile.Read(ref _transferTick), heuristics.Settings.WrongStateGraceMs);
+    /// <summary>The player is crossing a far teleport (map null from SMSG_TRANSFER_PENDING until the tick after the world-port acknowledgement).</summary>
+    private bool InFarTransfer(PacketHeuristicsFeature heuristics) => Player is { } player && heuristics.InFarTransfer(player);
 
     private void InitPacketHeuristics(IServiceProvider services) => _heuristics = services.GetService<PacketHeuristicsFeature>();
 
@@ -77,7 +76,7 @@ public sealed partial class WorldSession
 
     /// <summary>
     /// A packet the dispatcher dropped because of the session state. Not reported once the session is closing or kicked, nor inside the requested
-    /// <paramref name="grace"/> (the window after the player left the world, or after a far transfer began). <paramref name="reason"/> must be a
+    /// <paramref name="grace"/> (the window after the player left the world, or the player being in a far transfer). <paramref name="reason"/> must be a
     /// constant: nothing is formatted here, the feature appends the state only when it reports. A second CMSG_PLAYER_LOGIN while the first is
     /// logging in (a double click on Enter World) is Info, not a Warning.
     /// </summary>
@@ -88,9 +87,8 @@ public sealed partial class WorldSession
             return;
         }
 
-        long window = heuristics.Settings.WrongStateGraceMs;
-        if ((grace == WrongStateGrace.LeftWorld && Within(Volatile.Read(ref _leftWorldTick), window))
-            || (grace == WrongStateGrace.Transfer && Within(Volatile.Read(ref _transferTick), window)))
+        if ((grace == WrongStateGrace.LeftWorld && Within(Volatile.Read(ref _leftWorldTick), heuristics.Settings.WrongStateGraceMs))
+            || (grace == WrongStateGrace.Transfer && InFarTransfer(heuristics)))
         {
             return;
         }
@@ -182,7 +180,7 @@ public sealed partial class WorldSession
         {
             heuristics.WrongState(this, opcode, "session opcode sent as a world action");
         }
-        else if (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck && !InTransferGrace(heuristics))
+        else if (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck && !heuristics.InFarTransfer(player))
         {
             heuristics.WrongState(this, opcode, "bot action while player.Map is null");
         }

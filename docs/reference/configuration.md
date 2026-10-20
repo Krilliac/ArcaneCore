@@ -1337,7 +1337,7 @@ How to read the tables:
 | `World:PacketHeuristics:Enabled` | `bool` | `false` | - | Run the checks at all. Default false: with it off a packet costs one volatile read and no per-session state exists. |
 | `World:PacketHeuristics:ExemptBots` | `bool` | `true` | - | The server's own managed playerbot sessions are not checked. Default true; with false their traffic is checked and counted as bot traffic. |
 | `World:PacketHeuristics:ExemptStaff` | `bool` | `true` | - | Staff (Moderator and above, or a player in GM mode) are not checked. Default true; with false their traffic is checked and counted as staff traffic. |
-| `World:PacketHeuristics:IncapacitatedAction` | `bool` | `true` | - | Report an action opcode received while the player is dead, stunned, on a taxi or being teleported (`incapacitated-action`). Default true. |
+| `World:PacketHeuristics:IncapacitatedAction` | `bool` | `true` | - | Report an action opcode received while the player is dead or a ghost, on a taxi flight or in a far transfer (`incapacitated-action`; a near teleport such as Blink is not one). Default true. |
 | `World:PacketHeuristics:Malformed` | `bool` | `true` | - | Report a payload a handler rejected as malformed, or a bad frame header (`malformed`). Default true. |
 | `World:PacketHeuristics:OrphanAck` | `bool` | `true` | - | Report an unsolicited or mismatching movement acknowledgement (`orphan-ack`). Default true. |
 | `World:PacketHeuristics:Replay` | `bool` | `true` | - | Report the same opcode with the same payload repeated (`replay`). Default true. |
@@ -1349,7 +1349,7 @@ How to read the tables:
 | `World:PacketHeuristics:Shape` | `bool` | `true` | - | Report a payload whose length differs from the fixed length of its message (`shape`). Default true. |
 | `World:PacketHeuristics:UnknownOpcode` | `bool` | `true` | - | Report an opcode with no handler or outside the opcode table (`unknown-opcode`). Default true. |
 | `World:PacketHeuristics:WrongState` | `bool` | `true` | - | Report an opcode dropped because the session state does not allow it (`wrong-state`). Default true. |
-| `World:PacketHeuristics:WrongStateGraceMs` | `int` | `5000` | - | After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as `wrong-state`. 0-60000, default 5000. |
+| `World:PacketHeuristics:WrongStateGraceMs` | `int` | `5000` | - | After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as `wrong-state`. Only this post-logout window is timed: a map-less player in a far teleport is excused by the teleport stage, however long the loading screen takes. 0-60000, default 5000. |
 
 ## `World:Playerbots`
 
