@@ -615,6 +615,54 @@ public sealed class NaxxramasPartTwoTests
     }
 
     [Fact]
+    public void ThaddiusAdd_CombatScriptRunsFromTheFakeDeathUntilReviveOrReset()
+    {
+        // boss_thaddius.cpp: JustPreventedDeath SetCombatScriptStatus(true) (:275); Revive (:235) and Reset (:208) set it false.
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        Creature stalagg = raid.Creatures.SpawnTemporary(Template(15929), 1, 0, 270, 0);
+        raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+        var ai = (ThaddiusAddAI)stalagg.AI!;
+        ai.AttackStart(raid.Tank);
+        Assert.False(ai.CombatScriptRunning);
+
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        Assert.True(ai.IsFakingDeath);
+        Assert.True(ai.CombatScriptRunning);
+        ai.Revive();
+        Assert.False(ai.CombatScriptRunning);
+
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        Assert.True(ai.CombatScriptRunning);
+        ai.EnterEvadeMode(); // Reset: evade drops the fake death with the rest of the script state
+        Assert.False(ai.IsFakingDeath);
+        Assert.False(ai.CombatScriptRunning);
+    }
+
+    [Fact]
+    public void ThaddiusAdds_BothFakingDeathWhenTheRaidWipesBeforeThaddiusIsEngaged_DoNotStayInCombatForever()
+    {
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        Creature stalagg = raid.Creatures.SpawnTemporary(Template(15929), 1, 0, 270, 0);
+        Creature feugen = raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+        stalagg.AI!.AttackStart(raid.Tank);
+        feugen.AI!.AttackStart(raid.Tank);
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        raid.Map.Combat.DealDamage(raid.Tank, feugen, feugen.Health, direct: false);
+        Assert.True(raid.Instance.ConstructAddsDefeated);
+
+        raid.Tank.Health = 0; // the wipe: nobody is left to fight
+        for (int i = 0; i < 300; i++) raid.World.RunTick(100); // 30 s: past the 14 s overload and every leash check
+
+        foreach (Creature add in new[] { stalagg, feugen })
+        {
+            var addAi = (ThaddiusAddAI)add.AI!;
+            Assert.False(addAi.IsFakingDeath);
+            Assert.False(addAi.CombatScriptRunning);
+            Assert.False(add.Combat.IsInCombat);
+        }
+    }
+
+    [Fact]
     public void ThaddiusAdd_HitFromOutsideItsAggroRadius_StartsTheEncounterAndPullsThePartner()
     {
         // vmangos CreatureAI::AttackedBy -> AttackStart -> Aggro: the encounter starts, the door shuts, the other add joins.

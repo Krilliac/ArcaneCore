@@ -307,6 +307,25 @@ public sealed class ZoneScriptBatch13Tests
     }
 
     [Fact]
+    public void PurifyFood_TheCombatScriptRunsFromTheLureUntilReset()
+    {
+        // darkshore.cpp: EVENT_START_PURIFICATION SetCombatScriptStatus(true) (:717); Reset sets it false (:752).
+        (Rig rig, GameObject bonfire) = PurifyRig();
+        using (rig)
+        {
+            List<Creature> drawn = [.. Furbolgs(rig).Where(c => c.Spawn?.Guid != 3)];
+            Assert.All(drawn, c => Assert.False(AiOf(c).CombatScriptRunning));
+            ScriptedEvents.Start(rig.Map, ScriptedEvents.PurifyFood, rig.Player, bonfire);
+            rig.RunUntil(() => drawn.All(c => AiOf(c).IsPassive), 6_000);
+            Assert.All(drawn, c => Assert.True(AiOf(c).CombatScriptRunning));
+
+            AiOf(drawn[0]).EnterEvadeMode();
+            Assert.False(AiOf(drawn[0]).IsPassive);
+            Assert.False(AiOf(drawn[0]).CombatScriptRunning);
+        }
+    }
+
+    [Fact]
     public void PurifyFood_OnlyTheLastFurbolgDrawnEmotes()
     {
         (Rig rig, GameObject bonfire) = PurifyRig();

@@ -482,6 +482,54 @@ public sealed class RemainingRaidBossTests
     }
 
     [Fact]
+    public void Renataki_CombatScriptRunsFromTheVanishHitUntilTheDelayEnds_AndEvadeDropsIt()
+    {
+        // boss_renataki.cpp: ReceiveAIEvent SetCombatScriptStatus(true) (:86); the delay (:56) and Reset (:68) set it false.
+        using var raid = new Raid(309, 15084);
+        raid.Start();
+        var ai = Assert.IsType<RenatakiAI>(raid.Boss.AI);
+        Assert.False(ai.CombatScriptRunning);
+
+        ai.OnVanishHit(raid.Tank, spells: null);
+        Assert.True(ai.CombatScriptRunning);
+        ai.OnUpdate(RenatakiAI.VanishDelayMs - 1);
+        Assert.True(ai.CombatScriptRunning);
+        ai.OnUpdate(1);
+        Assert.False(ai.CombatScriptRunning);
+
+        ai.OnVanishHit(raid.Tank, spells: null);
+        Assert.True(ai.CombatScriptRunning);
+        ai.EnterEvadeMode();
+        Assert.False(ai.CombatScriptRunning);
+    }
+
+    [Fact]
+    public void Renataki_VanishedWithNoLivingCombatant_StaysInCombatOnTheLeashCheck_AndEvadesOnceTheVanishEnds()
+    {
+        // The stranded-combat evade (CheckHardLeash, every 3 s) and SelectHostileTarget's fallback evade both honour the combat script.
+        using var raid = new Raid(309, 15084);
+        raid.Start();
+        var ai = Assert.IsType<RenatakiAI>(raid.Boss.AI);
+        int evaded = 0;
+        raid.Creatures.Evaded += c => { if (ReferenceEquals(c, raid.Boss)) evaded++; };
+        ai.OnVanishHit(raid.Tank, spells: null);
+
+        raid.Boss.Combat.Threat.Clear();
+        raid.Tank.Health = 0;
+        for (int i = 0; i < 40; i++) raid.World.RunTick(100); // 4 s: past a 3 s leash check, inside the 20 s vanish
+
+        Assert.True(ai.Vanished);
+        Assert.True(raid.Boss.Combat.IsInCombat);
+        Assert.False(raid.Boss.IsInEvadeMode);
+        Assert.Equal(0, evaded);
+
+        for (int i = 0; i < 200; i++) raid.World.RunTick(100); // the vanish ends; nothing holds the boss any more
+        Assert.False(ai.Vanished);
+        Assert.False(raid.Boss.Combat.IsInCombat);
+        Assert.Equal(1, evaded);
+    }
+
+    [Fact]
     public void RenatakiVanish_WithRealSpells_TheHitEnemyCastsTheTeleport_AndItsAuraEndsInThrashAndNoVanish()
     {
         // The shapes of the real spells (mangos-classic spell_template): 24699 a dummy on the enemies plus a self aura (20 s), 24700 an
