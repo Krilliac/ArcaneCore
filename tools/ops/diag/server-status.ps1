@@ -145,13 +145,19 @@ function Restart-SupervisedService([string] $svcName, [string] $reason) {
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
         $envPrevEnabled = $env:Logging__ArcaneCore__File__Enabled
         $envPrevPath = $env:Logging__ArcaneCore__File__Path
+        $envPrevLive = $env:ARCANECORE_LIVE_SERVER
         try {
             $env:Logging__ArcaneCore__File__Enabled = 'true'
             $env:Logging__ArcaneCore__File__Path = $logFile
+            # A supervised restart is a live-server launcher (deploy-live.py opens this console with -Supervise): the World refuses the
+            # map feed's packet tools whenever this is 1, whatever the profile says (docs/areas/map-feed.md, "Never on the live server").
+            # Set on every supervised restart, live or not: the only effect is that the packet tools stay off.
+            $env:ARCANECORE_LIVE_SERVER = '1'
             $proc = [System.Diagnostics.Process]::Start($psi)
         } finally {
             $env:Logging__ArcaneCore__File__Enabled = $envPrevEnabled
             $env:Logging__ArcaneCore__File__Path = $envPrevPath
+            $env:ARCANECORE_LIVE_SERVER = $envPrevLive
         }
         if ($null -ne $proc) {
             try { $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::AboveNormal } catch { }

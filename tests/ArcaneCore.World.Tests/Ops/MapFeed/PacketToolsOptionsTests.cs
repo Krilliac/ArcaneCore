@@ -79,6 +79,19 @@ public sealed class PacketToolsOptionsTests
     }
 
     [Fact]
+    public void TheSupervisedRestart_SetsTheLiveServerMarker_BeforeItStartsTheDaemon()
+    {
+        string script = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "server-status.ps1"));
+        int restart = script.IndexOf("function Restart-SupervisedService", StringComparison.Ordinal);
+        Assert.True(restart >= 0, "server-status.ps1 has no Restart-SupervisedService");
+        int start = script.IndexOf("[System.Diagnostics.Process]::Start($psi)", restart, StringComparison.Ordinal);
+        int marker = script.IndexOf($"$env:{WorldPacketToolsOptions.LiveServerVariable} = '1'", restart, StringComparison.Ordinal);
+        Assert.True(start > restart, "Restart-SupervisedService does not start the daemon with Process.Start($psi)");
+        Assert.True(marker > restart && marker < start, "the supervised restart must set the marker before it starts the daemon");
+        Assert.Equal(1, script.Split("[System.Diagnostics.Process]::Start(").Length - 1);
+    }
+
+    [Fact]
     public void TheConfigCheck_WarnsAboutAllowOutsideDevelopment_AndAboutEnabledOnTheLiveServer()
     {
         ConfigIssue outside = Assert.Single(Check(("World:Control:PacketTools:AllowOutsideDevelopment", "true")));
