@@ -976,6 +976,7 @@ public sealed class PlayerbotSiegeWorldTests
         bool pushed = false, hostileNear = false, engagedBefore = false, guardsDown = false;
         float lagAtStep = -1f;
         var engagedWhilePushing = new List<string>();
+        var marksWhilePushing = new List<string>();
         var wrongSince = new Dictionary<ObjectGuid, uint>();
         var trail = new List<string>();
         uint startedAt = Now(world), pushSince = 0;
@@ -995,6 +996,9 @@ public sealed class PlayerbotSiegeWorldTests
                 pushed = true;
                 hostileNear |= raid.LastFacts.Hostiles > 0;
                 if (pushSince == 0) pushSince = Now(world);
+                // A second into the push the skull is off its unit and nobody is the raid's pull target (the marks are taken off when the push begins).
+                if (unchecked(Now(world) - pushSince) >= 1_000 && (!Skull(world, raid).IsEmpty || !raid.PullTarget.IsEmpty))
+                    marksWhilePushing.Add($"skull {Skull(world, raid)}, pull target {raid.PullTarget}, {unchecked(Now(world) - pushSince)} ms into the push");
                 // Three seconds into the push (the marks are off, the targets dropped) a member fights only what attacks it.
                 if (unchecked(Now(world) - pushSince) >= 3_000)
                     foreach (var member in raid.Group!.Members.Where(m => !m.Real && m.Joined))
@@ -1033,6 +1037,7 @@ public sealed class PlayerbotSiegeWorldTests
         Assert.True(done, $"the step never moved (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + story + Environment.NewLine + world.Trace());
         Assert.True(engagedBefore && pushed && hostileNear, $"engaged before {engagedBefore}, pushed {pushed}, hostile near the leader {hostileNear}" + Environment.NewLine + story);
         Assert.Empty(engagedWhilePushing);
+        Assert.Empty(marksWhilePushing);
         Assert.Equal(0, raid.Retreats);
         // The step moved with every member within LagYards of the leader (a tick of walking as tolerance), and nobody is left behind afterwards.
         Assert.InRange(lagAtStep, 0f, PlayerbotSiegeCommander.LagYards + 6f);
