@@ -316,6 +316,10 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
+        if (opcode == WorldOpcode.SmsgTransferPending || opcode == WorldOpcode.SmsgNewWorld)
+        {
+            HeuristicsTransferStarted(); // report only: opens the grace for packets in flight across a far transfer
+        }
 
         if (_remoteOutput is not null)
         {
@@ -380,7 +384,7 @@ public sealed partial class WorldSession : IPlayerSession
             }
             if (_state != SessionState.InWorld || !ReferenceEquals(Player, player))
             {
-                HeuristicsWrongState(packet.Handler.Opcode, "world packet dequeued after the session left the world", honourGrace: true);
+                HeuristicsWrongState(packet.Handler.Opcode, "world packet dequeued after the session left the world", WrongStateGrace.LeftWorld);
                 continue;
             }
 
@@ -411,7 +415,7 @@ public sealed partial class WorldSession : IPlayerSession
                         RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode), player.Name, player.Guid.Low, player.MapId, suppressed);
                 }
 
-                HeuristicsWrongState(packet.Handler.Opcode, "world packet while player.Map is null (awaiting MSG_MOVE_WORLDPORT_ACK)", honourGrace: false);
+                HeuristicsWrongState(packet.Handler.Opcode, "world packet while player.Map is null (awaiting MSG_MOVE_WORLDPORT_ACK)", WrongStateGrace.Transfer);
                 continue;
             }
 
@@ -645,7 +649,7 @@ public sealed partial class WorldSession : IPlayerSession
                 {
                     _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
                         RemoteEndpoint, size, rawOpcode);
-                    HeuristicsMalformed(rawOpcode <= ushort.MaxValue ? (WorldOpcode)rawOpcode : default, size, $"bad packet header (size {size}, opcode 0x{rawOpcode:X})");
+                    HeuristicsBadHeader(size, rawOpcode);
                     return;
                 }
 
@@ -790,7 +794,7 @@ public sealed partial class WorldSession : IPlayerSession
                 }
                 else
                 {
-                    HeuristicsWrongState(opcode, "world opcode before the player is logging in or in the world", honourGrace: true);
+                    HeuristicsWrongState(opcode, "world opcode before the player is logging in or in the world", WrongStateGrace.LeftWorld);
                 }
 
                 return true;
@@ -800,7 +804,7 @@ public sealed partial class WorldSession : IPlayerSession
             {
                 _logger.LogDebug("[{Endpoint}] {Opcode} ignored in state {State}",
                     RemoteEndpoint, WorldOpcodeNames.GetName(opcode), _state);
-                HeuristicsWrongState(opcode, "session opcode not allowed in this state", honourGrace: false);
+                HeuristicsWrongState(opcode, "session opcode not allowed in this state", WrongStateGrace.None);
                 return true;
             }
 

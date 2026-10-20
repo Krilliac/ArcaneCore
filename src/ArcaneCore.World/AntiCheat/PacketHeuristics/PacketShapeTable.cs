@@ -3,14 +3,16 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 
 /// <summary>
-/// The exact payload length of every client message the vendored wire oracle (tests/ThirdParty/WowWorldMessages, vanilla 1.12.1) declares
-/// with a fixed layout: its body is a constant number of bytes, so any other length is a packet no 1.12.1 client builds. Messages with a
-/// variable layout (strings, arrays, packed GUIDs, movement blocks, optional parts) are not listed, so they are never shape-checked.
+/// The exact payload length of the client messages the vendored wire oracle (tests/ThirdParty/WowWorldMessages, vanilla 1.12.1) declares
+/// with a fixed layout AND the server handler agrees with: a row is kept only when the handler reads or enforces exactly that many bytes (or
+/// documents the unused remainder), so a client the server accepts is never flagged. Where the server deliberately differs from the oracle
+/// (the reputation messages: u32 list index, docs/integration/reputation.md) the row is the server length. Messages with a variable layout
+/// (strings, arrays, packed GUIDs, movement blocks, optional parts) are not listed, so they are never shape-checked.
 /// <para>
 /// Why a table and not the oracle itself: the oracle project lives under tests/ThirdParty (a test dependency of this repository, 899 generated
 /// source files, an async stream decoder that allocates a message object per packet), and the world assembly must not reference it. The table
 /// is the fixed-size subset, generated from the oracle and pinned to it by PacketShapeTableTests (every row equals the oracle's header size minus
-/// the 4 header bytes, and no fixed oracle message is missing), so it cannot drift. Lookup is one array read.
+/// the 4 header bytes except the commented overrides and removals, and the server's own exact parsers accept the row length), so it cannot drift. Lookup is one array read.
 /// </para>
 /// <para>Thread affinity: immutable after type initialisation, any thread. No allocation.</para>
 /// </summary>
@@ -55,7 +57,6 @@ public static class PacketShapeTable
 
     private static readonly (WorldOpcode Opcode, short Length)[] Source =
     [
-        (WorldOpcode.CmsgBootme, 0),
         (WorldOpcode.CmsgWorldTeleport, 24),
         (WorldOpcode.CmsgCharEnum, 0),
         (WorldOpcode.CmsgCharDelete, 8),
@@ -113,19 +114,16 @@ public static class PacketShapeTable
         (WorldOpcode.CmsgBeginTrade, 0),
         (WorldOpcode.CmsgBusyTrade, 0),
         (WorldOpcode.CmsgIgnoreTrade, 0),
-        (WorldOpcode.CmsgAcceptTrade, 4),
         (WorldOpcode.CmsgUnacceptTrade, 0),
         (WorldOpcode.CmsgCancelTrade, 0),
         (WorldOpcode.CmsgSetTradeItem, 3),
         (WorldOpcode.CmsgClearTradeItem, 1),
         (WorldOpcode.CmsgSetTradeGold, 4),
-        (WorldOpcode.CmsgSetFactionAtwar, 3),
+        (WorldOpcode.CmsgSetFactionAtwar, 5),
         (WorldOpcode.CmsgSetActionButton, 5),
         (WorldOpcode.CmsgCancelCast, 4),
         (WorldOpcode.CmsgCancelAura, 4),
-        (WorldOpcode.CmsgCancelChannelling, 4),
         (WorldOpcode.CmsgSetSelection, 8),
-        (WorldOpcode.CmsgSetTargetObsolete, 8),
         (WorldOpcode.CmsgAttackswing, 8),
         (WorldOpcode.CmsgAttackstop, 0),
         (WorldOpcode.CmsgRepopRequest, 0),
@@ -183,7 +181,6 @@ public static class PacketShapeTable
         (WorldOpcode.MsgTabardvendorActivate, 8),
         (WorldOpcode.CmsgZoneupdate, 4),
         (WorldOpcode.MsgRandomRoll, 8),
-        (WorldOpcode.MsgLookingForGroup, 0),
         (WorldOpcode.CmsgUnlearnSkill, 4),
         (WorldOpcode.CmsgRequestAccountData, 4),
         (WorldOpcode.CmsgGmticketGetticket, 0),
@@ -196,13 +193,11 @@ public static class PacketShapeTable
         (WorldOpcode.CmsgGetMailList, 8),
         (WorldOpcode.CmsgBattlefieldList, 4),
         (WorldOpcode.CmsgBattlefieldJoin, 4),
-        (WorldOpcode.CmsgItemTextQuery, 12),
         (WorldOpcode.CmsgMailTakeMoney, 12),
         (WorldOpcode.CmsgMailTakeItem, 12),
         (WorldOpcode.CmsgMailMarkAsRead, 12),
         (WorldOpcode.CmsgMailReturnToSender, 12),
         (WorldOpcode.CmsgMailDelete, 12),
-        (WorldOpcode.CmsgMailCreateTextItem, 16),
         (WorldOpcode.CmsgLearnTalent, 8),
         (WorldOpcode.MsgAuctionHello, 8),
         (WorldOpcode.CmsgAuctionSellItem, 28),
@@ -257,8 +252,8 @@ public static class PacketShapeTable
         (WorldOpcode.CmsgBattlemasterJoin, 17),
         (WorldOpcode.CmsgPetUnlearn, 8),
         (WorldOpcode.CmsgPetSpellAutocast, 13),
-        (WorldOpcode.CmsgSetFactionInactive, 3),
-        (WorldOpcode.CmsgSetWatchedFaction, 2),
+        (WorldOpcode.CmsgSetFactionInactive, 5),
+        (WorldOpcode.CmsgSetWatchedFaction, 4),
         (WorldOpcode.CmsgResetInstances, 0),
     ];
 

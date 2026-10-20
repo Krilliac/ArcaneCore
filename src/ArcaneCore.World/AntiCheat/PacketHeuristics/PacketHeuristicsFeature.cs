@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +36,8 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     private PacketHeuristicsSettings _settings;
     private volatile bool _active;
     private int _epoch;
+    private readonly object _applyGate = new();
+    private TeleportFeature? _teleport;
 
     /// <summary>Creates the feature with the options of the <c>World:PacketHeuristics</c> section (defaults when there is none or it is invalid; the startup check refuses an invalid one).</summary>
     public PacketHeuristicsFeature(IServiceProvider services)
@@ -84,8 +87,12 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         }
 
         var settings = new PacketHeuristicsSettings(options);
-        Volatile.Write(ref _settings, settings);
-        _active = settings.Enabled;
+        lock (_applyGate)
+        {
+            Volatile.Write(ref _settings, settings);
+            _active = settings.Enabled;
+        }
+
         return true;
     }
 
@@ -158,7 +165,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
                 return false;
             }
         }
-        else if (session.IsManaged || session.Security >= AccountSecurity.Moderator || existing?.GmMode == true)
+        else if (session.IsManaged || session.Security >= AccountSecurity.Moderator || session.HeuristicsGmMode)
         {
             traffic = PacketTraffic.Staff;
             if (settings.ExemptStaff)
@@ -197,22 +204,25 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         }
     }
 
-    /// <summary>A client's world packet about to run its handler on the world thread: refreshes the GM flag, then the incapacitated-action check.</summary>
+    /// <summary>A client's world packet about to run its handler on the world thread: the incapacitated-action check (the session refreshed its GM flag before calling).</summary>
     internal void OnWorldPacket(WorldSession session, Player player, WorldOpcode opcode)
     {
         if (Admit(session, out PacketHeuristicsSettings settings, out PacketHeuristicsSession state, out PacketTraffic traffic))
         {
-            state.GmMode = player.IsGameMaster;
             CheckIncapacitated(session, settings, state, traffic, player, opcode);
         }
     }
 
-    /// <summary>A packet dropped because of the session state (<paramref name="reason"/> says where).</summary>
-    internal void WrongState(WorldSession session, WorldOpcode opcode, string reason)
+    /// <summary>
+    /// A packet dropped because of the session state (<paramref name="reason"/> is a constant that says where; <paramref name="state"/> is appended to
+    /// the detail only when a report goes out, so nothing is built for a throttled finding).
+    /// </summary>
+    internal void WrongState(WorldSession session, WorldOpcode opcode, string reason, SessionState? state = null, AnomalySeverity severity = AnomalySeverity.Warning)
     {
-        if (Admit(session, out PacketHeuristicsSettings settings, out PacketHeuristicsSession state, out PacketTraffic traffic) && settings.CheckOn(PacketCheck.WrongState))
+        if (Admit(session, out PacketHeuristicsSettings settings, out PacketHeuristicsSession sessionState, out PacketTraffic traffic) && settings.CheckOn(PacketCheck.WrongState))
         {
-            Report(session, settings, state, traffic, PacketCheck.WrongState, opcode, AnomalySeverity.Warning, reason, static reason => reason);
+            Report(session, settings, sessionState, traffic, PacketCheck.WrongState, opcode, severity, (reason, state),
+                static s => s.state is { } st ? s.reason + " (state " + st + ")" : s.reason);
         }
     }
 
@@ -224,14 +234,13 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
             return;
         }
 
-        string name = WorldOpcodeNames.GetName(opcode);
-        bool named = !name.StartsWith("0x", StringComparison.Ordinal);
-        if (!named)
+        OpcodeNameKind kind = PacketOpcodeClasses.NameKindOf(opcode);
+        if (kind == OpcodeNameKind.Unnamed)
         {
             Report(session, settings, state, traffic, PacketCheck.UnknownOpcode, opcode, AnomalySeverity.Warning, length,
                 static length => string.Create(CultureInfo.InvariantCulture, $"outside the opcode table, {length} bytes"));
         }
-        else if (name.StartsWith("SMSG_", StringComparison.Ordinal))
+        else if (kind == OpcodeNameKind.Server)
         {
             Report(session, settings, state, traffic, PacketCheck.UnknownOpcode, opcode, AnomalySeverity.Warning, length,
                 static length => string.Create(CultureInfo.InvariantCulture, $"server-to-client opcode sent by the client, {length} bytes"));
@@ -250,6 +259,16 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         {
             Report(session, settings, state, traffic, PacketCheck.Malformed, opcode, AnomalySeverity.Error, (length, reason),
                 static s => string.Create(CultureInfo.InvariantCulture, $"{s.length} bytes: {s.reason}"));
+        }
+    }
+
+    /// <summary>A frame header the reader refused (size or opcode out of range); <paramref name="opcode"/> is what the header named when it fits the table.</summary>
+    internal void BadHeader(WorldSession session, WorldOpcode opcode, int size, uint rawOpcode)
+    {
+        if (Admit(session, out PacketHeuristicsSettings settings, out PacketHeuristicsSession state, out PacketTraffic traffic) && settings.CheckOn(PacketCheck.Malformed))
+        {
+            Report(session, settings, state, traffic, PacketCheck.Malformed, opcode, AnomalySeverity.Error, (size, rawOpcode),
+                static s => string.Create(CultureInfo.InvariantCulture, $"bad packet header (size {s.size}, opcode 0x{s.rawOpcode:X})"));
         }
     }
 
@@ -338,16 +357,12 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         {
             why = "dead or ghost";
         }
-        else if ((applicable & PacketOpcodeClasses.Incapacity.Stunned) != 0 && (player.UnitFlags & ArcaneCore.Game.UnitFlags.Stunned) != 0)
-        {
-            why = "stunned";
-        }
         else if ((applicable & PacketOpcodeClasses.Incapacity.Taxi) != 0 && (player.UnitFlags & ArcaneCore.Game.UnitFlags.TaxiFlight) != 0)
         {
             why = "on a taxi flight";
         }
         else if ((applicable & PacketOpcodeClasses.Incapacity.Teleporting) != 0
-            && _services.GetService<TeleportFeature>()?.TeleportsIfAttached?.IsBeingTeleported(player) == true)
+            && (_teleport ??= _services.GetService<TeleportFeature>())?.TeleportsIfAttached?.IsBeingTeleported(player) == true)
         {
             why = "being teleported";
         }
@@ -390,12 +405,12 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         Interlocked.Increment(ref _counts[Slot(check, traffic)]);
     }
 
-    /// <summary>The ledger subject: <c>account N</c> for a player or staff session, <c>bot NAME</c> for a managed bot (never the <c>bot-</c> subsystem prefix that files bot QA issues).</summary>
+    /// <summary>The ledger subject: <c>account N</c> for a player or staff session, <c>botname NAME</c> for a managed bot. Never the <c>bot-</c> subsystem prefix that files bot QA issues, and not a leading <c>bot </c> either: PlayerbotPolicyTelemetry counts every anomaly subject that starts with that.</summary>
     private static string SubjectOf(WorldSession session, PacketTraffic traffic)
     {
         if (traffic == PacketTraffic.Bot)
         {
-            return "bot " + (session.Player?.Name is { Length: > 0 } name ? name : session.AccountName);
+            return "botname " + (session.Player?.Name is { Length: > 0 } name ? name : session.AccountName);
         }
 
         return string.Create(CultureInfo.InvariantCulture, $"account {session.AccountId}");
@@ -403,12 +418,16 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
 
     private void Mutate(Action<PacketHeuristicsOptions> change)
     {
-        PacketHeuristicsOptions options = Settings.Options.Clone();
-        change(options);
-        if (!TryApply(options, out IReadOnlyList<string> problems))
+        // Read-modify-write under the gate so two concurrent toggles (chat and RA) cannot lose one another's change.
+        lock (_applyGate)
         {
-            // The values come from validated options and a boolean toggle; this cannot happen, but a refused change must not be silent.
-            _logger?.LogError("Packet heuristics change refused: {Problems}", string.Join(" ", problems));
+            PacketHeuristicsOptions options = Settings.Options.Clone();
+            change(options);
+            if (!TryApply(options, out IReadOnlyList<string> problems))
+            {
+                // The values come from validated options and a boolean toggle; this cannot happen, but a refused change must not be silent.
+                _logger?.LogError("Packet heuristics change refused: {Problems}", string.Join(" ", problems));
+            }
         }
     }
 }

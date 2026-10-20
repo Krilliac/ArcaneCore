@@ -93,6 +93,19 @@ internal static class OpcodePatterns
     }
 }
 
+/// <summary>Whether an opcode has a reference name, and if so which direction it names.</summary>
+internal enum OpcodeNameKind : byte
+{
+    /// <summary>No name: outside the opcode table.</summary>
+    Unnamed = 0,
+
+    /// <summary>A named client-to-server opcode (CMSG_ or MSG_).</summary>
+    Client = 1,
+
+    /// <summary>A named server-to-client opcode (SMSG_).</summary>
+    Server = 2,
+}
+
 /// <summary>The cadence classes of the <c>cadence</c> check: which opcodes share one one-second window.</summary>
 internal enum CadenceClass : byte
 {
@@ -121,9 +134,6 @@ internal static class PacketOpcodeClasses
         /// <summary>Dead or a ghost (not alive).</summary>
         Dead = 1,
 
-        /// <summary>UNIT_FLAG_STUNNED.</summary>
-        Stunned = 2,
-
         /// <summary>UNIT_FLAG_TAXI_FLIGHT.</summary>
         Taxi = 4,
 
@@ -145,6 +155,7 @@ internal static class PacketOpcodeClasses
     ];
 
     private static readonly byte[] Classes = BuildClasses();
+    private static readonly byte[] NameKinds = BuildNameKinds();
     private static readonly byte[] Actions = BuildActions();
 
     internal static CadenceClass ClassOf(WorldOpcode opcode)
@@ -153,11 +164,32 @@ internal static class PacketOpcodeClasses
         return code < PacketHeuristicsOptions.OpcodeSpace ? (CadenceClass)Classes[code] : CadenceClass.None;
     }
 
+    /// <summary>Whether <paramref name="opcode"/> has a reference name and in which direction; one array read, no allocation.</summary>
+    internal static OpcodeNameKind NameKindOf(WorldOpcode opcode)
+    {
+        uint code = (uint)opcode;
+        return code < PacketHeuristicsOptions.OpcodeSpace ? (OpcodeNameKind)NameKinds[code] : OpcodeNameKind.Unnamed;
+    }
+
     /// <summary>The incapacities that make <paramref name="opcode"/> an action the player cannot send (None for opcodes that are not in any list).</summary>
     internal static Incapacity ActionMask(WorldOpcode opcode)
     {
         uint code = (uint)opcode;
         return code < PacketHeuristicsOptions.OpcodeSpace ? (Incapacity)Actions[code] : Incapacity.None;
+    }
+
+    private static byte[] BuildNameKinds()
+    {
+        var kinds = new byte[PacketHeuristicsOptions.OpcodeSpace];
+        for (uint i = 0; i < kinds.Length; i++)
+        {
+            string name = WorldOpcodeNames.GetName(i);
+            kinds[i] = (byte)(name.StartsWith("0x", StringComparison.Ordinal)
+                ? OpcodeNameKind.Unnamed
+                : name.StartsWith("SMSG_", StringComparison.Ordinal) ? OpcodeNameKind.Server : OpcodeNameKind.Client);
+        }
+
+        return kinds;
     }
 
     private static byte[] BuildClasses()
@@ -205,9 +237,10 @@ internal static class PacketOpcodeClasses
             WorldOpcode.CmsgInitiateTrade, WorldOpcode.CmsgAutoequipItem, WorldOpcode.CmsgAutoequipItemSlot,
             WorldOpcode.CmsgAttackswing, WorldOpcode.CmsgBuyItem, WorldOpcode.CmsgSellItem);
 
-        // Stunned: the 1.12.1 client refuses to start a cast or use an item while stunned (it shows "Can't do that while stunned" and sends
-        // nothing). Attack toggles, loot and bag changes remain possible in the client, so they are not listed.
-        Add(actions, Incapacity.Stunned, WorldOpcode.CmsgCastSpell, WorldOpcode.CmsgUseItem);
+        // Stunned is not listed: the server itself refuses a cast or item use for a stun only when the caster is not immune to the stun mechanic
+        // and the spell is instant or has the stun interrupt flag (CasterAuraGate.Check, vmangos Spell::CheckCasterAuras), and UNIT_FLAG_STUNNED is
+        // also set during the logout countdown (CcState.RefreshStun). A packet-level check cannot know the spell's cast time or immunity cheaply, so
+        // reporting would flag legitimate casts; the cast and item-use cases were the only stun entries, so the stun case is dropped.
 
         // On a taxi the client disables every action bar button and every NPC and object interaction.
         Add(actions, Incapacity.Taxi,

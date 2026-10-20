@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Handlers;
@@ -17,6 +18,32 @@ public sealed partial class WorldSession
     private PacketHeuristicsFeature? _heuristics;
     private PacketHeuristicsSession? _heuristicsState;
     private long _leftWorldTick = long.MinValue;
+    private long _transferTick = long.MinValue;
+    private volatile bool _heuristicsGm;
+
+    /// <summary>Where a dropped packet may be a packet in flight: after the player left the world, or across a far transfer.</summary>
+    private enum WrongStateGrace : byte
+    {
+        None = 0,
+        LeftWorld = 1,
+        Transfer = 2,
+    }
+
+    /// <summary>The player was in GM mode when the world thread last dispatched one of this session's world packets (read by the network path to classify the session as staff).</summary>
+    internal bool HeuristicsGmMode => _heuristicsGm;
+
+    /// <summary>The server just sent SMSG_TRANSFER_PENDING or SMSG_NEW_WORLD: packets the client sent before it processed them are in flight and will meet a player without a map.</summary>
+    private void HeuristicsTransferStarted()
+    {
+        if (_heuristics is { Active: true })
+        {
+            Volatile.Write(ref _transferTick, Environment.TickCount64);
+        }
+    }
+
+    private static bool Within(long startTick, long windowMs) => startTick != long.MinValue && Environment.TickCount64 - startTick < windowMs;
+
+    private bool InTransferGrace(PacketHeuristicsFeature heuristics) => Within(Volatile.Read(ref _transferTick), heuristics.Settings.WrongStateGraceMs);
 
     private void InitPacketHeuristics(IServiceProvider services) => _heuristics = services.GetService<PacketHeuristicsFeature>();
 
@@ -48,21 +75,39 @@ public sealed partial class WorldSession
         }
     }
 
-    /// <summary>A packet the dispatcher dropped because of the session state. Not reported once the session is closing or kicked, nor (when <paramref name="honourGrace"/>) in the grace after the player left the world.</summary>
-    private void HeuristicsWrongState(WorldOpcode opcode, string reason, bool honourGrace)
+    /// <summary>
+    /// A packet the dispatcher dropped because of the session state. Not reported once the session is closing or kicked, nor inside the requested
+    /// <paramref name="grace"/> (the window after the player left the world, or after a far transfer began). <paramref name="reason"/> must be a
+    /// constant: nothing is formatted here, the feature appends the state only when it reports. A second CMSG_PLAYER_LOGIN while the first is
+    /// logging in (a double click on Enter World) is Info, not a Warning.
+    /// </summary>
+    private void HeuristicsWrongState(WorldOpcode opcode, string reason, WrongStateGrace grace)
     {
         if (_heuristics is not { Active: true } heuristics || _state == SessionState.Closed || _kick.IsCancellationRequested)
         {
             return;
         }
 
-        long leftAt = Volatile.Read(ref _leftWorldTick);
-        if (honourGrace && leftAt != long.MinValue && Environment.TickCount64 - leftAt < heuristics.Settings.WrongStateGraceMs)
+        long window = heuristics.Settings.WrongStateGraceMs;
+        if ((grace == WrongStateGrace.LeftWorld && Within(Volatile.Read(ref _leftWorldTick), window))
+            || (grace == WrongStateGrace.Transfer && Within(Volatile.Read(ref _transferTick), window)))
         {
             return;
         }
 
-        heuristics.WrongState(this, opcode, reason + " (state " + _state + ")");
+        AnomalySeverity severity = opcode == WorldOpcode.CmsgPlayerLogin && _state is SessionState.LoggingIn or SessionState.InWorld
+            ? AnomalySeverity.Info
+            : AnomalySeverity.Warning;
+        heuristics.WrongState(this, opcode, reason, _state, severity);
+    }
+
+    /// <summary>A frame header the reader refused; nothing is formatted unless a report goes out.</summary>
+    private void HeuristicsBadHeader(int size, uint rawOpcode)
+    {
+        if (_heuristics is { Active: true } heuristics && _state != SessionState.Connected)
+        {
+            heuristics.BadHeader(this, rawOpcode <= ushort.MaxValue ? (WorldOpcode)rawOpcode : default, size, rawOpcode);
+        }
     }
 
     private void HeuristicsUnhandled(WorldOpcode opcode, int length)
@@ -86,6 +131,7 @@ public sealed partial class WorldSession
     {
         if (_heuristics is { Active: true } heuristics)
         {
+            _heuristicsGm = player.IsGameMaster;
             heuristics.OnWorldPacket(this, player, opcode);
         }
     }
@@ -114,7 +160,7 @@ public sealed partial class WorldSession
 
         if (_state != SessionState.InWorld)
         {
-            heuristics.WrongState(this, opcode, "bot action while the session is " + _state);
+            heuristics.WrongState(this, opcode, "bot action while the session is not in the world", _state);
         }
         else if (Player is not { } player)
         {
@@ -126,7 +172,7 @@ public sealed partial class WorldSession
         }
         else if (length > MaxClientPacketSize - 4)
         {
-            heuristics.Malformed(this, opcode, length, $"payload over the {MaxClientPacketSize - 4} byte frame limit");
+            heuristics.Malformed(this, opcode, length, "payload over the frame limit");
         }
         else if (!_opcodes.TryGet(opcode, out OpcodeHandler? handler))
         {
@@ -136,7 +182,7 @@ public sealed partial class WorldSession
         {
             heuristics.WrongState(this, opcode, "session opcode sent as a world action");
         }
-        else if (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)
+        else if (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck && !InTransferGrace(heuristics))
         {
             heuristics.WrongState(this, opcode, "bot action while player.Map is null");
         }

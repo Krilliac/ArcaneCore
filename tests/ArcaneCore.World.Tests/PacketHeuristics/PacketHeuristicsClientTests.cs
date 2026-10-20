@@ -88,11 +88,12 @@ public sealed class PacketHeuristicsClientTests
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
 
-            await client.SendAsync(WorldOpcode.CmsgPlayerLogin, new byte[8]); // allowed at the character screen only
+            await client.SendAsync(WorldOpcode.CmsgCharEnum, []); // allowed at the character screen only
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.WrongState, PacketTraffic.Player) >= 1, "the wrong-state finding");
 
             AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
-            Assert.Contains("CMSG_PLAYER_LOGIN", notice.Detail, StringComparison.Ordinal);
+            Assert.Contains("CMSG_CHAR_ENUM", notice.Detail, StringComparison.Ordinal);
+            Assert.Equal(AnomalySeverity.Warning, notice.Severity);
             Assert.Contains("InWorld", notice.Detail, StringComparison.Ordinal);
             Assert.Equal(SessionState.InWorld, session.State);
         }
@@ -298,7 +299,7 @@ public sealed class PacketHeuristicsClientTests
     }
 
     [Fact]
-    public async Task IncapacitatedAction_ACastWhileStunned_IsReported_AndAnActionWhileAbleIsNot()
+    public async Task IncapacitatedAction_ACastWhileStunned_IsNotReported_BecauseTheServerOnlyRefusesSomeStunnedCasts()
     {
         await using var host = WorldTestHost.Start();
         (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHINC", "Phincone");
@@ -312,14 +313,16 @@ public sealed class PacketHeuristicsClientTests
             await client.SendAsync(WorldOpcode.CmsgCastSpell, cast);
             await PacketHeuristicsKit.SettleAsync(host, client, session);
             Assert.Equal(0, feature.Count(PacketCheck.IncapacitatedAction, PacketTraffic.Player)); // able to act
+
+            // Stunned (and in the logout countdown, which sets the same flag): CasterAuraGate refuses only an instant spell or one with the stun
+            // interrupt flag, and not at all for a caster immune to the stun mechanic, so the packet alone proves nothing and is never reported.
             await host.OnWorldAsync(() => { player.UnitFlags |= UnitFlags.Stunned; });
             await client.SendAsync(WorldOpcode.CmsgCastSpell, cast);
             await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await host.OnWorldAsync(() => { player.UnitFlags &= ~UnitFlags.Stunned; });
 
-            AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
-            Assert.Contains("CMSG_CAST_SPELL", notice.Detail, StringComparison.Ordinal);
-            Assert.Contains("stunned", notice.Detail, StringComparison.Ordinal);
-            Assert.Equal(AnomalySeverity.Warning, notice.Severity);
+            Assert.Equal(0, feature.Count(PacketCheck.IncapacitatedAction, PacketTraffic.Player));
+            Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
         }
     }
 

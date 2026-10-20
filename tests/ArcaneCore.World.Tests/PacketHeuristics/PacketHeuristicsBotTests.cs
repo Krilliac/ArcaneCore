@@ -124,10 +124,10 @@ public sealed class PacketHeuristicsBotTests
                 // orphan-ack: a teleport ack with no teleport pending (the handler ignores it).
                 Assert.True(bot.TryManagedAction(WorldOpcode.MsgMoveTeleportAck, teleportAck));
 
-                // incapacitated-action: a cast while stunned (Info for a bot).
-                player.UnitFlags |= UnitFlags.Stunned;
+                // incapacitated-action: a cast on a taxi flight (Info for a bot).
+                player.UnitFlags |= UnitFlags.TaxiFlight;
                 Assert.True(bot.TryManagedAction(WorldOpcode.CmsgCastSpell, [1, 0, 0, 0, 0, 0]));
-                player.UnitFlags &= ~UnitFlags.Stunned;
+                player.UnitFlags &= ~UnitFlags.TaxiFlight;
 
                 // replay: the same emote five times in a second.
                 for (int i = 0; i < 5; i++)
@@ -150,7 +150,7 @@ public sealed class PacketHeuristicsBotTests
             AnomalyNotice unknown = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.UnknownOpcode));
             Assert.Equal(AnomalySeverity.Info, unknown.Severity);
             Assert.Contains("CMSG_BOOTME", unknown.Detail, StringComparison.Ordinal);
-            Assert.Equal("bot Phbotaone", unknown.Subject);
+            Assert.Equal("botname Phbotaone", unknown.Subject);
 
             AnomalyNotice wrongState = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
             Assert.Contains("session opcode sent as a world action", wrongState.Detail, StringComparison.Ordinal);
@@ -160,7 +160,7 @@ public sealed class PacketHeuristicsBotTests
             Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.OrphanAck));
             AnomalyNotice incapacitated = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
             Assert.Equal(AnomalySeverity.Info, incapacitated.Severity);
-            Assert.Contains("stunned", incapacitated.Detail, StringComparison.Ordinal);
+            Assert.Contains("taxi", incapacitated.Detail, StringComparison.Ordinal);
             Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.Replay));
             Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.Cadence));
 

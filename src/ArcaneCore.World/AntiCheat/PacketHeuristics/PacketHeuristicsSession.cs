@@ -7,8 +7,7 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 /// first packet the heuristics actually inspect (never while the feature is off or the session exempt) and owned by the session.
 /// <para>
 /// Thread affinity: the network path (client sessions: the reader task, serialised by the dispatch gate) and the world thread both reach it;
-/// every member takes <see cref="Gate"/>, which is uncontended except for a finding racing the next packet. <see cref="GmMode"/> is a
-/// volatile flag the world thread refreshes so the network path can classify a session without touching the player.
+/// every member takes <see cref="Gate"/>, which is uncontended except for a finding racing the next packet.
 /// </para>
 /// </summary>
 internal sealed class PacketHeuristicsSession
@@ -24,9 +23,6 @@ internal sealed class PacketHeuristicsSession
     private int _epoch;
 
     internal object Gate { get; } = new();
-
-    /// <summary>The player was in GM mode when the world thread last looked (volatile: read by the network path).</summary>
-    internal volatile bool GmMode;
 
     /// <summary>Feeds one packet of <paramref name="kind"/> into its class window; true (with the packets in the second) when it exceeds <paramref name="ceiling"/> per sliding second. Caller holds <see cref="Gate"/>.</summary>
     internal bool NoteCadence(CadenceClass kind, long nowMs, int ceiling, out int inWindow)

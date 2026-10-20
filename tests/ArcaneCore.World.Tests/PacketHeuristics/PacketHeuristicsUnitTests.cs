@@ -122,7 +122,7 @@ public sealed class PacketHeuristicsUnitTests
         Assert.Equal(PacketOpcodeClasses.Incapacity.None, Of(WorldOpcode.CmsgSwapInvItem)); // the dead may rearrange their bags
         Assert.Equal(PacketOpcodeClasses.Incapacity.None, Of(WorldOpcode.CmsgCastSpell) & PacketOpcodeClasses.Incapacity.Dead); // Reincarnation
         Assert.Equal(PacketOpcodeClasses.Incapacity.None, Of(WorldOpcode.CmsgGossipHello) & PacketOpcodeClasses.Incapacity.Dead); // how a ghost opens a spirit healer
-        Assert.NotEqual(PacketOpcodeClasses.Incapacity.None, Of(WorldOpcode.CmsgCastSpell) & PacketOpcodeClasses.Incapacity.Stunned);
+        Assert.Equal(PacketOpcodeClasses.Incapacity.Taxi | PacketOpcodeClasses.Incapacity.Teleporting, Of(WorldOpcode.CmsgCastSpell)); // no stun case, see PacketOpcodeClasses
         Assert.NotEqual(PacketOpcodeClasses.Incapacity.None, Of(WorldOpcode.CmsgGossipHello) & PacketOpcodeClasses.Incapacity.Taxi);
         Assert.Equal(PacketOpcodeClasses.Incapacity.None, Of(WorldOpcode.MsgMoveHeartbeat));
     }
