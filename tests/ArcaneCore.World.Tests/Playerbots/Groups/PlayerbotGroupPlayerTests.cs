@@ -76,8 +76,8 @@ public sealed class PlayerbotGroupPlayerTests
         await gm.CollectAsync();
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".playerbot groups");
-        Assert.StartsWith("Bot groups: enabled, 1 running", (await gm.ReadChatAsync()).Text);
-        string line = (await gm.ReadChatAsync()).Text;
+        Assert.StartsWith("Bot groups: enabled, 1 running", (await gm.ReadSystemChatAsync()).Text);
+        string line = (await gm.ReadSystemChatAsync()).Text;
         Assert.StartsWith("group 1 quest:" + OgreEntry, line);
         Assert.Contains("Cmdtank(tank,leader)", line);
         Assert.Contains("Cmdprie(healer)", line);

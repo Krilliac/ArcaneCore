@@ -221,7 +221,7 @@ public sealed class FleetResetTests
         await player.CollectAsync();
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".playerbot fleet reset");
-        await player.ReadChatAsync();
+        await player.ReadSystemChatAsync();
 
         Assert.False(world.Bots.ResetConfirmation.HasPending);
         Assert.Single(await world.Owners.LoadAllAsync());
