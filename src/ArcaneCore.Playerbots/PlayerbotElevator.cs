@@ -746,6 +746,7 @@ internal static class PlayerbotElevator
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
+        if (trip.PendingStep is not null) return; // completed: the step-off is sent, the next Drive reports it (no second step-off)
 
         switch (trip.Stage)
         {
