@@ -13,6 +13,7 @@ From the character screen the player sends `CMSG_CHAR_RENAME` (u64 guid, CString
 |---|---|
 | The name is empty, not valid UTF-8, or longer than 15 code points | `CHAR_NAME_NO_NAME` (0x45) |
 | The name breaks the realm's name rules (length 2 to 12, one script, the creation options `MinPlayerName`, `StrictPlayerNames`, `RealmZone`) | the `CHAR_NAME_*` code of the rule (too short 0x46, too long 0x47, mixed languages 0x49, ...) |
+| The name catalog refuses it, exactly as at creation (`CharacterNameCatalog.Check`, the `NameCatalogFeature` catalog): a NamesProfanity.dbc or `chat_word_filter` name pattern, a NamesReserved.dbc pattern, or a `reserved_name` row; staff above Player may take a name whose only reserved reason is `reserved_name` (vmangos `CharacterHandler.cpp:774` via `ObjectMgr::CheckPlayerName` → `ValidateName`, `ObjectMgr.cpp:9597`; `:784` for `reserved_name`) | `CHAR_NAME_PROFANE` (0x4A) or `CHAR_NAME_RESERVED` (0x4B), nothing changes, the flag stays |
 | The character is not the account's, is not flagged, does not exist, or another character already has the name (any case) | `CHAR_CREATE_ERROR` (0x2F), nothing changes, the flag stays (the reference's single validation query makes no difference between these) |
 | The database fails | `CHAR_CREATE_ERROR`, logged; the session continues |
 | Otherwise | one commit changes the name and clears the flag; `SMSG_CHAR_RENAME` = `0, guid, name`; the character directory takes the new name; `SMSG_INVALIDATE_PLAYER` (the guid) goes to every online client so they drop the cached name (`World::InvalidatePlayerDataToAllClient`) |
@@ -50,7 +51,6 @@ written off the world thread; a database failure is reported to the caller. Unkn
 
 * **Invalid names at login.** vmangos flags a character at login whose stored name no longer passes the name rules
   (`Player::LoadFromDB`, PlayerLoad.cpp:233-239) and refuses the login; ArcaneCore does neither.
-* **Reserved names.** The `reserved_name` list is not enforced, here or at creation (see [character-creation](character-creation.md)).
 * **Other name caches** (guild rosters, mail sender names, friend lists, group members) were not audited; the character directory and the
   client caches (`SMSG_INVALIDATE_PLAYER`) are handled. A renamed character is offline at the character screen, so no live object carries
   its old name.
@@ -70,7 +70,8 @@ written off the world thread; a database failure is reported to the caller. Unkn
 ## Tests
 
 `tests/ArcaneCore.Game.Tests/Characters/CharacterRenamePacketsTests.cs`; `tests/ArcaneCore.World.Tests/Characters/CharacterRenameTests.cs`
-(handler end to end, name rules, duplicates, ownership, flag clearing, the command online and offline, security);
+(handler end to end, name rules, the name catalog for players and staff, duplicates, ownership, flag clearing, the command online and
+offline, security);
 `tests/ArcaneCore.World.Tests/Characters/CharEnumRenameFlagTests.cs` (the flags word of the list: builder, mapping, the flagged
 character only, its own account only, `.character rename` of an offline character prompts its owner, a flag-read outage);
 `tests/ArcaneCore.MockClient.Tests/CharacterRenameEnumFlagTests.cs` (real SQLite store, the mock client's parser reads 0x4000 and the

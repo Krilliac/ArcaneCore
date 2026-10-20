@@ -492,8 +492,11 @@ public sealed class WorldEconomySocialGmPersistenceFuzzAndExceptionTests
         life.Dispose();
 
         var renameReq = new CharacterRenameRequest(1, [65, 98]);
-        await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.DecideAsync(null!, new CharacterCreationOptions(), 1, renameReq));
-        await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.DecideAsync(Dummy<ICharacterRenameStore>(), null!, 1, renameReq));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.DecideAsync(null!, new CharacterCreationOptions(), NameCatalog.Empty, AccountSecurity.Player, 1, renameReq));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.DecideAsync(Dummy<ICharacterRenameStore>(), null!, NameCatalog.Empty, AccountSecurity.Player, 1, renameReq));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.DecideAsync(Dummy<ICharacterRenameStore>(), new CharacterCreationOptions(), null!, AccountSecurity.Player, 1, renameReq));
+        Assert.Throws<ArgumentNullException>(() => CharacterNameCatalog.Check(null!, "Name", AccountSecurity.Player));
+        Assert.Throws<ArgumentNullException>(() => CharacterNameCatalog.Check(NameCatalog.Empty, null!, AccountSecurity.Player));
         await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.FlagsOfAccountAsync(null!));
         await Assert.ThrowsAsync<ArgumentNullException>(() => CharacterRename.CharEnumFlagsOfAccountAsync(null!));
     }
