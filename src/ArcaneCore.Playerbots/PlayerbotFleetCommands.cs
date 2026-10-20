@@ -226,7 +226,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
         if (Services(context) is not { } env) return true;
         if (request.At is { } words)
         {
-            // A game_tele place whose whole name is "at $a $b $c $d" shadows the position form.
+            // A game_tele place that FindGameTele matches for "at $a $b $c $d" (exact, else a name containing it) shadows the position form.
             if (env.Tele.Maps.FindGameTele(string.Join(' ', words.Prepend("at"))) is not null)
                 request = request with { At = null, Head = string.Join(' ', words.Prepend("at")) };
             else
