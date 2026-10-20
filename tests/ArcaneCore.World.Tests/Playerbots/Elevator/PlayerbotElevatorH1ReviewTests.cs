@@ -472,6 +472,9 @@ public sealed class PlayerbotElevatorH1ReviewTests
         Assert.Equal(ElevatorStep.Idle, step);
         Assert.False(Reported(capture, "arrived-wrong-level"), capture.Describe());
         Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+        Assert.True(await world.OnWorldAsync(() => !PlayerbotMotion.TryGetState(world.Player, out PlayerbotMotion.MotionState? state) || state.ElevatorTrip is null));
+        Assert.Equal(0, await world.OnWorldAsync(() => PlayerbotTransitBackoff.Failures(world.Player, TransitKind.Lift, trip.Lift.Key)));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotTransitBackoff.IsBackedOff(world.Player, TransitKind.Lift, trip.Lift.Key, world.Host.World.NowMs)));
     }
 
     [Fact]
@@ -492,6 +495,98 @@ public sealed class PlayerbotElevatorH1ReviewTests
 
         Assert.Equal(ElevatorStep.Arrived, step);
         Assert.True(Reported(capture, "arrived-wrong-level"), capture.Describe());
+    }
+
+    // ---------------------------------------------------------------- real step-off flow (Pump parks Arrived, Drive reports it)
+
+    private sealed record StepOffRig(ElevatorTrip Trip, ElevatorCar CarA, ElevatorCar CarB);
+
+    /// <summary>A trip begun on the canyon floor with <c>Car</c> the Great Lift's car 16874; its twin 16876 stands 22.6 yd away.</summary>
+    private static async Task<StepOffRig> BeginFromTheCanyonAsync(ElevatorTestWorld world)
+    {
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar a = lift.Cars.Single(c => c.SpawnGuid == 16874);
+        ElevatorCar b = lift.Cars.Single(c => c.SpawnGuid == 16876);
+        ElevatorTrip trip = await world.OnWorldAsync(() =>
+        {
+            ElevatorTrip begun = PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet);
+            begun.Car = a;
+            return begun;
+        });
+        return new StepOffRig(trip, a, b);
+    }
+
+    /// <summary>The pump's turn: it completes the trip on the destination floor and parks <c>Arrived</c> for the next Drive.</summary>
+    private static Task PumpOnceAsync(ElevatorTestWorld world, ElevatorTrip trip)
+        => world.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            trip.LastDriveMs = unchecked(now - 1_000);
+            trip.LastPumpMs = unchecked(now - 1_000);
+            PlayerbotElevator.Pump(world.Session, world.Player, now);
+            return 0;
+        });
+
+    [Fact]
+    public async Task SteppingOffBesideTheOtherCar_FarFromTripCar_IsStillAnArrival_AndClearsTheBackoff()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        StepOffRig rig = await BeginFromTheCanyonAsync(world);
+        Vector3 aHigh = rig.CarA.At(ElevatorLevel.High);
+        Vector3 bHigh = rig.CarB.At(ElevatorLevel.High);
+        Vector2 away = Vector2.Normalize(new Vector2(bHigh.X - aHigh.X, bHigh.Y - aHigh.Y));
+        rig.Trip.Goal = bHigh + new Vector3(away * 50f, 0f); // the landing is looked for on the side away from the trip's car
+        await world.PlaceAsync(new Vector3(bHigh.X + (away.X * 12f), bHigh.Y + (away.Y * 12f), ElevatorTestWorld.TopFloor));
+        uint key = rig.Trip.Lift.Key;
+        await world.OnWorldAsync(() => PlayerbotTransitBackoff.Fail(world.Player, TransitKind.Lift, key, world.Host.World.NowMs, Options()));
+        Assert.Equal(1, await world.OnWorldAsync(() => PlayerbotTransitBackoff.Failures(world.Player, TransitKind.Lift, key)));
+
+        ElevatorStep step = await world.OnWorldAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, Options(), 100, out _));
+
+        float fromTripCar = await world.OnWorldAsync(() => Vector2.Distance(new Vector2(world.Player.X, world.Player.Y), new Vector2(aHigh.X, aHigh.Y)));
+        Assert.True(fromTripCar > 25f, $"the bot stands {fromTripCar:F1} yd from the trip car's stop");
+        Assert.Equal(ElevatorStep.Arrived, step);
+        Assert.Equal(ElevatorStage.Done, rig.Trip.Stage);
+        Assert.Equal(0, await world.OnWorldAsync(() => PlayerbotTransitBackoff.Failures(world.Player, TransitKind.Lift, key)));
+    }
+
+    [Fact]
+    public async Task RelocatedOntoTheOtherLevelNearTheStop_AfterTheStepOff_IsNotAWrongLevelArrival()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        StepOffRig rig = await BeginFromTheCanyonAsync(world);
+        Vector3 stop = rig.CarA.At(ElevatorLevel.High);
+        await world.PlaceAsync(stop + new Vector3(PlayerbotElevator.LandingRadii[0] + 1f, 0f, 0f));
+        await PumpOnceAsync(world, rig.Trip);
+        Assert.Equal(ElevatorStep.Arrived, rig.Trip.PendingStep);
+
+        await world.PlaceAsync(new Vector3(stop.X - 14f, stop.Y, ElevatorTestWorld.BottomFloor)); // 14 yd from the stop, on the canyon floor
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(world.Player);
+        ElevatorStep step = await world.OnWorldAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, Options(), 100, out _));
+
+        Assert.Equal(ElevatorStep.Idle, step);
+        Assert.False(Reported(capture, "arrived-wrong-level"), capture.Describe());
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+    }
+
+    [Fact]
+    public async Task ASlowArrivalNearTheStepOffPoint_StillReportsTripSlow()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        StepOffRig rig = await BeginFromTheCanyonAsync(world);
+        Vector3 stop = rig.CarA.At(ElevatorLevel.High);
+        await world.PlaceAsync(stop + new Vector3(PlayerbotElevator.LandingRadii[0] + 1f, 0f, 0f));
+        await world.AdvanceAsync(300_000);
+        await PumpOnceAsync(world, rig.Trip);
+        Assert.Equal(ElevatorStep.Arrived, rig.Trip.PendingStep);
+
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(world.Player);
+        ElevatorStep step = await world.OnWorldAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, Options(), 100, out _));
+
+        Assert.Equal(ElevatorStep.Arrived, step);
+        Assert.True(Reported(capture, "trip-slow"), capture.Describe());
+        Assert.False(Reported(capture, "arrived-wrong-level"), capture.Describe());
     }
 
     [Fact]

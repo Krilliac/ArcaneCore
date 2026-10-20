@@ -415,6 +415,9 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public uint NextDestStopAtMs { get; set; }
     public int PassedDestinations { get; set; }
     public ElevatorLevel? StepOffLevel { get; set; }
+
+    /// <summary>Where the bot was sent when it stepped off (the landing ground); <see cref="PlayerbotElevator.Relocated"/> measures from it.</summary>
+    public Vector3? StepOffPoint { get; set; }
     public bool PitFallReported { get; set; }
     public bool RescueRefusedReported { get; set; }
     public bool TripFailedReported { get; set; }
@@ -846,6 +849,7 @@ internal static class PlayerbotElevator
                     trip.DestStopActive = false;
                     trip.DestSkipReason = null;
                     trip.StepOffLevel = level;
+                    trip.StepOffPoint = ground;
                     trip.PendingStep = trip.Failure is null ? ElevatorStep.Arrived : ElevatorStep.Failed;
                     return;
                 }
@@ -1468,6 +1472,7 @@ internal static class PlayerbotElevator
             trip.DestStopActive = false;
             trip.DestSkipReason = null;
             trip.StepOffLevel = level;
+            trip.StepOffPoint = ground;
             return trip.Failure is null ? ElevatorStep.Arrived : ElevatorStep.Failed;
         }
 
@@ -1642,6 +1647,7 @@ internal static class PlayerbotElevator
         }
 
         trip.StepOffLevel = trip.To;
+        trip.StepOffPoint = ground;
         trip.Failure = null;
         return true;
     }
@@ -2002,24 +2008,38 @@ internal static class PlayerbotElevator
     }
 
     /// <summary>
-    /// A bot that completes a trip (steps off at a stop) stands within this of that stop (flat). Farther, it was relocated after it stepped
-    /// off (a GM <c>.playerbot send</c>, a teleport, a resurrection at a spirit healer, a catch-up teleport) between the pump's step-off and
-    /// the next <see cref="Drive"/> that reports it: the trip is abandoned (<see cref="Drive"/>) and the arrival checks are skipped
-    /// (<see cref="CheckArrivedAnomalies"/>). 25 yd is the outermost landing ring (<see cref="LandingRadii"/>, 13.5 yd) plus
-    /// <see cref="AtLandingYards"/> and a margin for the step-off ground search; a real wrong-level step-off lands within it.
+    /// A completed trip's bot stands within this (flat) of the point it was sent to when it stepped off (<see cref="ElevatorTrip.StepOffPoint"/>);
+    /// the server may nudge the position a little. Farther, the bot was relocated between the pump's step-off and the <see cref="Drive"/> that
+    /// reports it (a GM <c>.playerbot send</c>, a teleport, a resurrection at a spirit healer, a catch-up teleport).
+    /// </summary>
+    internal const float StepOffToleranceYards = 8f;
+
+    /// <summary>The vertical counterpart of <see cref="StepOffToleranceYards"/>: a bot this far above or below its step-off point was moved to another level.</summary>
+    internal const float StepOffZToleranceYards = 5f;
+
+    /// <summary>
+    /// Fallback for a trip with no <see cref="ElevatorTrip.StepOffPoint"/>: the bot is relocated when it is farther (flat) than this from the
+    /// nearest car's stop at the arrival level. 25 yd is the outermost landing ring (<see cref="LandingRadii"/>, 13.5 yd) plus
+    /// <see cref="AtLandingYards"/> and a margin for the ground search.
     /// </summary>
     internal const float ArrivedNearYards = 25f;
 
-    /// <summary>The stop the trip's arrival is judged against: the car's stop at the level the bot stepped off at, else the lift's centre.</summary>
-    private static Vector2 ArrivalStopFlat(ElevatorTrip trip)
-    {
-        if (trip.Car is not { } car) return trip.Lift.Centre;
-        ElevatorLevel level = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
-        return ElevatorNetwork.Flat(car.At(level));
-    }
-
+    /// <summary>
+    /// Whether the bot of a trip that is to be reported arrived was relocated since it stepped off: measured from the stored step-off point
+    /// (the car it stepped off beside is not always <see cref="ElevatorTrip.Car"/>: <c>TryCompleteAtDestinationFloor</c> uses the closest car).
+    /// </summary>
     private static bool Relocated(ElevatorTrip trip, Player player)
-        => Vector2.Distance(new Vector2(player.X, player.Y), ArrivalStopFlat(trip)) > ArrivedNearYards;
+    {
+        if (trip.StepOffPoint is { } point)
+        {
+            return Vector2.Distance(new Vector2(player.X, player.Y), new Vector2(point.X, point.Y)) > StepOffToleranceYards
+                || MathF.Abs(player.Z - point.Z) > StepOffZToleranceYards;
+        }
+
+        ElevatorLevel level = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        return Vector2.Distance(new Vector2(player.X, player.Y), ElevatorNetwork.Flat(ClosestCar(trip.Lift, level, bot).At(level))) > ArrivedNearYards;
+    }
 
     /// <summary>
     /// A trip reported as arrived whose bot is no longer near its stop was relocated, so it neither arrived nor failed: the trip is dropped
@@ -2037,10 +2057,10 @@ internal static class PlayerbotElevator
     internal static void CheckArrivedAnomalies(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint now)
     {
         if (Relocated(trip, player)) return; // not at its stop: nothing about the arrival (or its duration) can be judged
-        if (trip.Car is { } car)
+        if (trip.Car is not null)
         {
             ElevatorLevel targetLevel = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
-            Vector3 stop = car.At(targetLevel);
+            Vector3 stop = ClosestCar(trip.Lift, targetLevel, new Vector3(player.X, player.Y, player.Z)).At(targetLevel); // the car it stepped off beside
             if (MathF.Abs(player.Z - stop.Z) > LandingFloorYards + 1f)
             {
                 ReportAnomaly(session, player, "arrived-wrong-level",
