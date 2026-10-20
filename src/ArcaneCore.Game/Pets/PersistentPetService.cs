@@ -24,6 +24,11 @@ public sealed partial class SummonService
     private readonly Dictionary<int, Task> _saveTails = [];
     private readonly Dictionary<int, long> _cacheGeneration = [];
 
+    // A snapshot whose write failed and that no later write or delete of the character superseded. It is the authoritative
+    // pet state until it is written: FlushCharacterAsync (the login, delete and handoff barrier) and StopAsync retry it, and a
+    // newer save of the character replaces it (one row per character, so the newer full snapshot carries everything).
+    private readonly Dictionary<int, PersistentPetSnapshot> _retained = [];
+
     /// <summary>Capture only the current player controlled pet; guardians, critters and wild summons are excluded.</summary>
     public PersistentPetSnapshot? CaptureCurrentPet(Player owner)
     {
@@ -116,6 +121,7 @@ public sealed partial class SummonService
         lock (_cacheGate)
         {
             _cached.Remove(characterId);
+            _retained.Remove(characterId); // the abandoned pet's unwritten snapshot must never be written back
             _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
             prior = _saveTails.GetValueOrDefault(characterId) ?? Task.CompletedTask;
             _saveTails[characterId] = done.Task;
@@ -160,14 +166,35 @@ public sealed partial class SummonService
         { _logger.LogError(ex, "persistent pet save failed for character {CharacterId}", snapshot.CharacterId); }
     }
 
-    private async Task PersistSerializedAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
+    private Task PersistSerializedAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
+        => PersistSerializedAsync(snapshot, retainedRetry: false, cancellationToken);
+
+    private async Task PersistSerializedAsync(PersistentPetSnapshot snapshot, bool retainedRetry, CancellationToken cancellationToken)
     {
-        Task prior;
+        Task prior = Task.CompletedTask;
         TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool superseded;
         lock (_cacheGate)
         {
-            prior = _saveTails.GetValueOrDefault(snapshot.CharacterId) ?? Task.CompletedTask;
-            _saveTails[snapshot.CharacterId] = done.Task;
+            bool isRetained = ReferenceEquals(_retained.GetValueOrDefault(snapshot.CharacterId), snapshot);
+            superseded = retainedRetry && !isRetained;
+            if (!superseded)
+            {
+                if (!isRetained)
+                {
+                    // This newer full snapshot supersedes a retained one; if it fails in turn it is the one retained.
+                    _retained.Remove(snapshot.CharacterId);
+                }
+                prior = _saveTails.GetValueOrDefault(snapshot.CharacterId) ?? Task.CompletedTask;
+                _saveTails[snapshot.CharacterId] = done.Task;
+            }
+        }
+        if (superseded)
+        {
+            // A newer save or a delete replaced the retained snapshot after the barrier read it: never write the older state
+            // over that; the barrier waits for the newer write instead.
+            await FlushCharacterAsync(snapshot.CharacterId).ConfigureAwait(false);
+            return;
         }
         try
         {
@@ -177,8 +204,8 @@ public sealed partial class SummonService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // A failed predecessor is retained/logged by its caller; it must not poison
-                // the next authoritative snapshot for this character.
+                // A failed predecessor is retained (or superseded by this snapshot) and logged by its caller; it must not
+                // poison the next authoritative snapshot for this character.
                 _logger.LogWarning(ex, "previous persistent pet save failed for character {CharacterId}; continuing with newer state", snapshot.CharacterId);
             }
             if (!snapshot.IsCurrent && SaveDetachedPersistence is { } detachedSave)
@@ -194,28 +221,102 @@ public sealed partial class SummonService
                 if (snapshot.IsCurrent) await store.SaveCurrentAsync(snapshot, cancellationToken).ConfigureAwait(false);
                 else await store.SaveDetachedAsync(snapshot, cancellationToken).ConfigureAwait(false);
             }
+            lock (_cacheGate)
+            {
+                if (ReferenceEquals(_retained.GetValueOrDefault(snapshot.CharacterId), snapshot))
+                {
+                    _retained.Remove(snapshot.CharacterId);
+                }
+            }
             done.SetResult();
         }
         catch (Exception ex)
         {
+            lock (_cacheGate)
+            {
+                // Retain the failed snapshot unless a later save or delete of the character is already queued behind it.
+                if (ReferenceEquals(_saveTails.GetValueOrDefault(snapshot.CharacterId), done.Task))
+                {
+                    _retained[snapshot.CharacterId] = snapshot;
+                }
+            }
             done.SetException(ex);
             throw;
         }
     }
 
-    /// <summary>Drain all per-character writes during world shutdown.</summary>
+    /// <summary>
+    /// Drain every character's writes during world shutdown through <see cref="FlushCharacterAsync"/>, so each retained failed
+    /// snapshot is tried once more; throws naming the characters whose pet state is still not durable.
+    /// </summary>
     public async Task StopAsync()
     {
-        Task[] tails;
-        lock (_cacheGate) tails = _saveTails.Values.ToArray();
-        await Task.WhenAll(tails).ConfigureAwait(false);
+        int[] characters;
+        lock (_cacheGate) characters = [.. _saveTails.Keys];
+        List<int> failed = [];
+        List<Exception> failures = [];
+        foreach (int characterId in characters)
+        {
+            try
+            {
+                await FlushCharacterAsync(characterId).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                failed.Add(characterId);
+                failures.Add(ex);
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new InvalidOperationException($"persistent pet writes did not drain for character(s) {string.Join(", ", failed)}",
+                failures.Count == 1 ? failures[0] : new AggregateException(failures));
+        }
     }
 
+    /// <summary>
+    /// The per-character barrier (login, character delete, cluster handoff, GM pet commands): waits for every queued write, then
+    /// tries a retained failed snapshot once more. Throws while the character's pet state is still not durable (the retained
+    /// snapshot stays for the next barrier) or when the last write was a delete that failed.
+    /// </summary>
     public async Task FlushCharacterAsync(int characterId)
     {
         Task tail;
         lock (_cacheGate) tail = _saveTails.GetValueOrDefault(characterId) ?? Task.CompletedTask;
-        await tail.ConfigureAwait(false);
+        try
+        {
+            await tail.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            bool retainedOrNewer;
+            lock (_cacheGate)
+            {
+                retainedOrNewer = _retained.ContainsKey(characterId) || !ReferenceEquals(_saveTails.GetValueOrDefault(characterId), tail);
+            }
+            if (!retainedOrNewer)
+            {
+                throw; // the last write was a delete that failed: nothing is retained to write
+            }
+        }
+
+        PersistentPetSnapshot? pending;
+        bool newer;
+        lock (_cacheGate)
+        {
+            pending = _retained.GetValueOrDefault(characterId);
+            newer = !ReferenceEquals(_saveTails.GetValueOrDefault(characterId) ?? Task.CompletedTask, tail);
+        }
+        if (pending is not null)
+        {
+            _logger.LogInformation("retrying retained persistent pet save for character {CharacterId}", characterId);
+            await PersistSerializedAsync(pending, retainedRetry: true, CancellationToken.None).ConfigureAwait(false);
+        }
+        else if (newer)
+        {
+            await FlushCharacterAsync(characterId).ConfigureAwait(false); // a write queued meanwhile decides durability
+        }
     }
 
     public void ForgetCharacter(int characterId)
@@ -223,6 +324,7 @@ public sealed partial class SummonService
         lock (_cacheGate)
         {
             _cached.Remove(characterId);
+            _retained.Remove(characterId);
             // A late read must not see the same generation after deletion.
             _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
             _saveTails.Remove(characterId);

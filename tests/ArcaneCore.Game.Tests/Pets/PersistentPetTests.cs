@@ -161,6 +161,117 @@ public sealed class PersistentPetTests
     }
 
     [Fact]
+    public async Task FailedQueuedSave_IsRetainedAndTheLoginBarrierWritesIt()
+    {
+        using PetTestKit kit = new();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(player, PetTestKit.PetSpell);
+        var writes = new ConcurrentQueue<PersistentPetSnapshot>();
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int attempt = 0;
+        kit.Service.SavePersistence = (snapshot, _) =>
+        {
+            if (Interlocked.Increment(ref attempt) == 1)
+            {
+                failed.SetResult();
+                throw new InvalidOperationException("synthetic failure");
+            }
+            writes.Enqueue(snapshot);
+            return Task.CompletedTask;
+        };
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        pet.Health = 31;
+        kit.Service.QueueCurrentPetSave(player);
+        await failed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // The login barrier (PersistentPetFeature.OnPlayerLoadingAsync, CharacterPersistenceBarrier) writes the retained
+        // snapshot before the row is read back, so the level, loyalty and health the failed save carried are not lost.
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(31u, Assert.Single(writes).Health);
+        await kit.Service.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Single(writes);
+    }
+
+    [Fact]
+    public async Task FailedLogoutSave_FailsTheBarrierUntilStorageRecoversThenWritesTheRetainedSnapshot()
+    {
+        using PetTestKit kit = new();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(player, PetTestKit.PetSpell);
+        var writes = new ConcurrentQueue<PersistentPetSnapshot>();
+        int attempts = 0;
+        bool storageDown = true;
+        kit.Service.SavePersistence = (snapshot, _) =>
+        {
+            Interlocked.Increment(ref attempts);
+            if (Volatile.Read(ref storageDown)) throw new InvalidOperationException("synthetic failure");
+            writes.Enqueue(snapshot);
+            return Task.CompletedTask;
+        };
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        pet.Health = 31;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Service.SaveCurrentPetAsync(player)).WaitAsync(TimeSpan.FromSeconds(30));
+        pet.Health = 5; // not captured again: the barrier writes the snapshot the logout save took
+
+        // While storage is down the barrier fails closed, and each barrier tries the retained snapshot again.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Service.FlushCharacterAsync(1)).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(2, Volatile.Read(ref attempts));
+        Volatile.Write(ref storageDown, false);
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(3, Volatile.Read(ref attempts));
+        Assert.Equal(31u, Assert.Single(writes).Health);
+    }
+
+    [Fact]
+    public async Task FailedSave_IsRetriedByStop()
+    {
+        using PetTestKit kit = new();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(player, PetTestKit.PetSpell);
+        var writes = new ConcurrentQueue<PersistentPetSnapshot>();
+        int attempt = 0;
+        kit.Service.SavePersistence = (snapshot, _) =>
+        {
+            if (Interlocked.Increment(ref attempt) == 1) throw new InvalidOperationException("synthetic failure");
+            writes.Enqueue(snapshot);
+            return Task.CompletedTask;
+        };
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        pet.Health = 31;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Service.SaveCurrentPetAsync(player)).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await kit.Service.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(31u, Assert.Single(writes).Health);
+    }
+
+    [Fact]
+    public async Task AbandonDelete_SupersedesARetainedFailedSave()
+    {
+        using PetTestKit kit = new();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(player, PetTestKit.PetSpell);
+        int saves = 0;
+        int deletes = 0;
+        kit.Service.SavePersistence = (_, _) =>
+        {
+            Interlocked.Increment(ref saves);
+            throw new InvalidOperationException("synthetic failure");
+        };
+        kit.Service.DeletePersistence = (_, _) => { Interlocked.Increment(ref deletes); return Task.CompletedTask; };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Service.SaveCurrentPetAsync(player)).WaitAsync(TimeSpan.FromSeconds(30));
+
+        kit.Service.QueueDeletePet(player);
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        await kit.Service.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, Volatile.Read(ref saves)); // the abandoned pet's failed snapshot is never written back
+        Assert.Equal(1, Volatile.Read(ref deletes));
+    }
+
+    [Fact]
     public void CachedRestore_RehydratesLiveCooldownsAndSkipsUnknownRows()
     {
         using PetTestKit kit = new();
