@@ -80,6 +80,18 @@ while the connection stays open: `#done` is queued on the world thread right aft
 does not run a command within 30 s the World answers that it stays queued and then sends `#done`; whatever that command replies when it does run
 comes later. One client at a time; the next one is served after it disconnects.
 
+## Map feed console (packet tools)
+
+A development daemon can also take console lines over the map feed's pipe, as JSON, from Atlas (`server.console`) or any tool that
+speaks the feed's protocol: `{"op":"console","id":n,"line":".reload status"}`, answered by a `result` holding the reply lines. It is
+part of the map feed's [packet tools](map-feed.md#packet-tools): off by default (`World:Control:PacketTools:Enabled`), refused
+outside the Development environment unless `World:Control:PacketTools:AllowOutsideDevelopment` is also set, and only on the map feed's
+pipe, whose security is this control pipe's (same access list, `PIPE_REJECT_REMOTE_CLIENTS`, first-instance rule). A line runs through
+the same executor as a control-pipe line (Administrator authority, account 0, GM audit entries under `Console`, secrets redacted) and is
+logged under `ArcaneCore.MapFeed` as `Map feed console command: <line> (client pid <pid> <process>)`. Each feed connection has its own
+console session; a command that holds itself open is waited for up to 2 minutes, and its later lines arrive as `consoleLine`. The
+control pipe stays the redeploy scripts' channel; the feed's console is for agents and tools that already drive the daemon through Atlas.
+
 ## Limits
 
 - A blocked read cannot be interrupted, so stopping the daemon does not wait for the reader; it is a background thread and cannot keep the process alive.

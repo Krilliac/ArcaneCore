@@ -394,15 +394,18 @@ def main() -> int:
         LIVE_PRIORITY = subprocess.ABOVE_NORMAL_PRIORITY_CLASS
 
         def start(dll: Path, name: str):
+            env = dict(os.environ)
+            # The World refuses the packet tools whenever this is 1, whatever the profile's configuration says
+            # (docs/areas/map-feed.md, "Never on the live server"); launch-daemon.ps1 and server-status.ps1 -Supervise set it too.
+            env["ARCANECORE_LIVE_SERVER"] = "1"
             if args.visible_consoles:
-                env = dict(os.environ)
                 env["Logging__ArcaneCore__File__Enabled"] = "true"
                 env["Logging__ArcaneCore__File__Path"] = str(log_path(name))
                 log_path(name).parent.mkdir(exist_ok=True)
                 return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env, close_fds=True,
                                         creationflags=subprocess.CREATE_NEW_CONSOLE | LIVE_PRIORITY)
             log = (out / f"{name}.log").open("x", encoding="utf-8")
-            return subprocess.Popen(["dotnet", str(dll)], cwd=profile, stdout=log, stderr=subprocess.STDOUT,
+            return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL,
                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | LIVE_PRIORITY)
 
@@ -468,9 +471,12 @@ def main() -> int:
             meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         deploy_lock.unlink(missing_ok=True)
         if args.status_console:
+            # The supervisor restarts the live daemons; it sets ARCANECORE_LIVE_SERVER itself, and inherits it here as well.
+            status_env = dict(os.environ)
+            status_env["ARCANECORE_LIVE_SERVER"] = "1"
             subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
                               "-WorldPort", str(args.world_port), "-AuthPort", str(args.auth_port), "-Supervise"],
-                             close_fds=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                             close_fds=True, env=status_env, creationflags=subprocess.CREATE_NEW_CONSOLE)
             report["status_console"] = args.status_console
             save()
     finally:

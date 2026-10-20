@@ -38,6 +38,9 @@ try { [Win32.ConsoleModeHelper]::SetConsoleCtrlHandler([IntPtr]::Zero, $false) |
 if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = Join-Path $env:USERPROFILE '.dotnet' }
 $env:PATH = "$env:DOTNET_ROOT;$env:PATH"
 $env:DOTNET_ENVIRONMENT = 'Development'
+# The live server runs as Development, so the environment alone does not keep the map feed's packet tools (console, inject, send, tap)
+# off it. This marker does: the World refuses the tools whenever it is "1", whatever the configuration says (WorldPacketToolsOptions).
+$env:ARCANECORE_LIVE_SERVER = '1'
 # Each daemon its own log (<LiveHome>\logs\<role>.debug.log/.jsonl): both read the profile's appsettings.json, and a log file has one
 # writer, so with one shared path the daemon started second (the World, in redeploy.ps1) would write a fallback name instead.
 Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome

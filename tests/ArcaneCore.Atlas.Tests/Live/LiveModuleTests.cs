@@ -23,6 +23,17 @@ public sealed class LiveModuleTests
         "live.subscribe",
     ];
 
+    // The packet tools (PacketToolCommands): they need the world daemon's packet tools and a connection that outlives one command.
+    private static readonly string[] PacketToolNames =
+    [
+        "live.inject",
+        "live.send",
+        "live.tap.read",
+        "live.tap.start",
+        "live.tap.stop",
+        "server.console",
+    ];
+
     private static LiveOptions Options(string pipeName) => new()
     {
         PipeNameFor = _ => pipeName,
@@ -49,11 +60,14 @@ public sealed class LiveModuleTests
     }
 
     [Fact]
-    public void RegisteringAddsExactlyTheSevenCommands_TheFeedService_AndNoProblems()
+    public void RegisteringAddsExactlyTheLiveCommands_ThePacketTools_TheFeedService_AndNoProblems()
     {
         using AtlasContext context = Compose(new LiveModule(Options("unused")));
+        string[] names = [.. context.Commands.All.Select(c => c.Name)];
 
-        Assert.Equal(CommandNames, context.Commands.All.Select(c => c.Name).Where(n => n.StartsWith("live.", StringComparison.Ordinal)));
+        Assert.Equal(CommandNames, names.Where(n => n.StartsWith("live.", StringComparison.Ordinal) && !PacketToolNames.Contains(n)).Order(StringComparer.Ordinal));
+        Assert.Equal(PacketToolNames, names.Where(PacketToolNames.Contains).Order(StringComparer.Ordinal));
+        Assert.Contains("opcodes.find", names);
         LiveFeed feed = context.Services.Require<LiveFeed>();
         Assert.False(feed.IsConnected);
         Assert.DoesNotContain(context.Problems, p => p.Contains("live", StringComparison.OrdinalIgnoreCase));
@@ -69,13 +83,14 @@ public sealed class LiveModuleTests
     }
 
     [Fact]
-    public void EveryLiveCommandRunsHeadless_BecauseRunScriptAndHeadlessMcpMayUseThem()
+    public void EveryLiveCommandRunsHeadless_BecauseRunScriptAndHeadlessMcpMayUseThem_ButThePacketToolsNeedAnInstance()
     {
         using AtlasContext context = Compose(new LiveModule(Options("unused")));
 
-        foreach (CommandDefinition command in context.Commands.All.Where(c => c.Name.StartsWith("live.", StringComparison.Ordinal)))
+        foreach (CommandDefinition command in context.Commands.All.Where(c => c.Name.StartsWith("live.", StringComparison.Ordinal) || PacketToolNames.Contains(c.Name)))
         {
-            Assert.True(command.Surfaces.HasFlag(CommandSurfaces.Headless), command.Name);
+            // A tap or an injected packet's reply outlives one command, so the packet tools run only where the connection does: in serve.
+            Assert.True(PacketToolNames.Contains(command.Name) != command.Surfaces.HasFlag(CommandSurfaces.Headless), command.Name);
             Assert.False(string.IsNullOrWhiteSpace(command.Summary), command.Name);
             Assert.All(command.Args, a => Assert.False(string.IsNullOrWhiteSpace(a.Description), command.Name + "." + a.Name));
         }

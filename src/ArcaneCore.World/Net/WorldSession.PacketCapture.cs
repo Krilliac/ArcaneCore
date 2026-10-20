@@ -73,6 +73,13 @@ public sealed partial class WorldSession
 
     private void CapturePacket(bool fromClient, WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
+        // Packet-tools taps (WorldSession.PacketTools.cs): none by default, one array read on the per-packet path.
+        ISessionPacketTap[] taps = Volatile.Read(ref _taps);
+        if (taps.Length != 0)
+        {
+            OfferToTaps(taps, fromClient, opcode, payload);
+        }
+
         // Off (the default): no lock on the per-packet path. A start racing this read only misses one packet.
         if (Volatile.Read(ref _packetCapture) is null) return;
 

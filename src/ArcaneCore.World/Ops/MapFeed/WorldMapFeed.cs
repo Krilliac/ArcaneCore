@@ -47,6 +47,7 @@ public sealed class WorldMapFeed : IHostedService
     private static readonly Lazy<string> Sha = new(ReadBuildSha);
 
     private readonly WorldMapFeedOptions _options;
+    private readonly WorldPacketToolsOptions _toolsOptions;
     private readonly WorldRuntime _world;
     private readonly IServiceProvider _services;
     private readonly ILogger _logger;
@@ -77,6 +78,7 @@ public sealed class WorldMapFeed : IHostedService
     public WorldMapFeed(IOptions<WorldMapFeedOptions> options, WorldRuntime world, IServiceProvider services, ILoggerFactory loggerFactory)
     {
         _options = options.Value;
+        _toolsOptions = services.GetService<IOptions<WorldPacketToolsOptions>>()?.Value ?? new WorldPacketToolsOptions();
         _world = world;
         _services = services;
         _logger = loggerFactory.CreateLogger(LogCategory);
@@ -113,6 +115,18 @@ public sealed class WorldMapFeed : IHostedService
 
     /// <summary>How long a query waits for the world thread.</summary>
     internal TimeSpan QueryTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The packet tools (docs/areas/map-feed.md, "Packet tools"), or null while they are off: they need the feed listening,
+    /// <see cref="WorldPacketToolsOptions.Enabled"/>, and the Development environment or <see cref="WorldPacketToolsOptions.AllowOutsideDevelopment"/>.
+    /// </summary>
+    internal PacketTools? Tools { get; private set; }
+
+    /// <summary>The host environment name the tools are judged by (tests set it; else the host's, "Production" when there is none).</summary>
+    internal string? EnvironmentName { get; init; }
+
+    /// <summary>Whether this is the live server (null: read <see cref="WorldPacketToolsOptions.LiveServerVariable"/>); tests set it instead of the process environment.</summary>
+    internal bool? LiveServer { get; init; }
 
     /// <summary>The server streams of the pipe instances (tests read their security descriptors); empty when the pipe is off.</summary>
     internal IReadOnlyList<NamedPipeServerStream> Servers => _servers;
@@ -162,6 +176,11 @@ public sealed class WorldMapFeed : IHostedService
         if (!_options.Enabled)
         {
             _logger.LogDebug("map feed off: World:Control:MapFeed:Enabled is false");
+            if (_toolsOptions.Enabled)
+            {
+                _logger.LogWarning("packet tools off: they are served by the map feed, and World:Control:MapFeed:Enabled is false");
+            }
+
             return Task.CompletedTask;
         }
 
@@ -186,7 +205,58 @@ public sealed class WorldMapFeed : IHostedService
         }
 
         Listen(name);
+        if (PipeName is not null)
+        {
+            EnableTools();
+        }
+
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Turn the packet tools on when the options and the environment permit (docs/areas/map-feed.md, "Packet tools"). Off by default;
+    /// refused outside Development unless <see cref="WorldPacketToolsOptions.AllowOutsideDevelopment"/> is also set, and always refused on the live server. Either way the
+    /// decision is logged at Warning: the tools let a local tool act as any online character.
+    /// </summary>
+    private void EnableTools()
+    {
+        if (!_toolsOptions.Enabled)
+        {
+            return;
+        }
+
+        if (LiveServer ?? WorldPacketToolsOptions.IsLiveServer())
+        {
+            _logger.LogWarning("packet tools refused: this is the live server ({Variable}); no setting turns them on here", WorldPacketToolsOptions.LiveServerVariable);
+            return;
+        }
+
+        string environment = EnvironmentName ?? _services.GetService<IHostEnvironment>()?.EnvironmentName ?? Environments.Production;
+        if (!_toolsOptions.PermitsEnvironment(environment, liveServer: false))
+        {
+            _logger.LogWarning(
+                "packet tools off: the environment is '{Environment}', not Development; set {Key}=true as well to allow them here",
+                environment, WorldPacketToolsOptions.SectionName + ":" + nameof(WorldPacketToolsOptions.AllowOutsideDevelopment));
+            return;
+        }
+
+        Tools = new PacketTools(_services, _world, _logger);
+        if (_services.GetService<PacketToolsPermit>() is { } permit)
+        {
+            permit.Granted = true;
+        }
+
+        if (string.Equals(environment, WorldPacketToolsOptions.DevelopmentEnvironment, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "packet tools on: map-feed clients on this machine may run console commands, inject and send packets as any online character, and tap their traffic (World:Control:PacketTools)");
+        }
+        else
+        {
+            _logger.LogWarning(
+                "packet tools on OUTSIDE Development (environment '{Environment}', World:Control:PacketTools:AllowOutsideDevelopment): map-feed clients on this machine may run console commands, inject and send packets as any online character, and tap their traffic",
+                environment);
+        }
     }
 
     [SupportedOSPlatform("windows")]
@@ -616,6 +686,16 @@ public sealed class WorldMapFeed : IHostedService
         foreach (NamedPipeServerStream server in _servers)
         {
             server.Dispose();
+        }
+
+        if (_services.GetService<PacketToolsPermit>() is { } stoppedPermit)
+        {
+            stoppedPermit.Granted = false;
+        }
+
+        if (Tools is { } tools)
+        {
+            await tools.DisposeAsync().ConfigureAwait(false);
         }
 
         _stopping.Dispose();

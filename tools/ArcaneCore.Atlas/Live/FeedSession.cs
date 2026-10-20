@@ -76,6 +76,9 @@ internal sealed class FeedSession : IDisposable
     /// <summary>What this connection has received and refused.</summary>
     public LiveStats Stats { get; } = new();
 
+    /// <summary>The packet tools' streamed lines (tap packets, tap ends, late console lines) waiting to be read.</summary>
+    public PacketToolTraffic Tools { get; } = new();
+
     /// <summary>True until the session is disposed or the pipe ends.</summary>
     public bool IsOpen => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _ended) == 0;
 
@@ -171,10 +174,11 @@ internal sealed class FeedSession : IDisposable
 
     /// <summary>
     /// Sends <paramref name="message"/> with a fresh <c>id</c> and waits for the matching result line. Times out after
-    /// <see cref="LiveOptions.QueryTimeout"/>; a result that arrives later is counted and dropped.
+    /// <paramref name="timeout"/>, else <see cref="LiveOptions.QueryTimeout"/>; a result that arrives later is counted and dropped.
     /// </summary>
-    public async Task<JsonObject> QueryAsync(JsonObject message, CancellationToken cancellationToken)
+    public async Task<JsonObject> QueryAsync(JsonObject message, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
+        TimeSpan wait = timeout ?? _options.QueryTimeout;
         ArgumentNullException.ThrowIfNull(message);
         if (Interlocked.Increment(ref _queriesWaiting) > MaxPendingQueries)
         {
@@ -189,13 +193,13 @@ internal sealed class FeedSession : IDisposable
         {
             message["id"] = id;
             await SendAsync(message, cancellationToken).ConfigureAwait(false);
-            return await waiter.Task.WaitAsync(_options.QueryTimeout, cancellationToken).ConfigureAwait(false);
+            return await waiter.Task.WaitAsync(wait, cancellationToken).ConfigureAwait(false);
         }
         catch (TimeoutException e)
         {
             throw new CommandException(
                 CommandException.Failed,
-                string.Create(CultureInfo.InvariantCulture, $"query {id} timed out after {_options.QueryTimeout.TotalSeconds:0.#} s: the server did not answer (its world thread may be busy, or it does not support this query)."),
+                string.Create(CultureInfo.InvariantCulture, $"query {id} timed out after {wait.TotalSeconds:0.#} s: the server did not answer (its world thread may be busy, or it does not support this query)."),
                 e);
         }
         finally
@@ -431,6 +435,15 @@ internal sealed class FeedSession : IDisposable
                 break;
             case LiveProtocol.OpError:
                 HandleError(root);
+                break;
+            case LiveProtocol.OpPacket or LiveProtocol.OpTapEnd or LiveProtocol.OpConsoleLine:
+                if (!_helloDone)
+                {
+                    Bad($"a {op} arrived before the hello exchange finished");
+                    break;
+                }
+
+                Tools.Accept(op, root);
                 break;
             default:
                 Stats.UnknownOp(op);

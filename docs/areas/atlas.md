@@ -65,7 +65,7 @@ Atlas defines four viewport compare modes (`CompareMode`: `Server`, `Reference`,
 | `live.trails` | `Live` | `Live` | **Trails**: recent entity positions, fading with age (untiled). |
 | `live.grids` | `Live` | `Live` | **Loaded grids**: grids the world daemon has loaded on this map (untiled). |
 
-### 3. Command catalog (47 commands)
+### 3. Command catalog (58 commands)
 
 Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":...,"data":{...}}` or `{"command":"...","ok":false,"elapsedMs":...,"error":{"code":"...","message":"..."}}`.
 
@@ -83,9 +83,11 @@ Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":..
 - `query.los` (`map`, `a`, `b`): both spell LoS (`ignoreM2: true`, vmangos `ModelIgnoreFlags::M2`) and movement/camera LoS (`ignoreM2: false`), returning the first hit point and model metadata.
 - `query.path` (`map`, `a`, `b`, `mover?`, `options?`): server `NavMeshPathfinder` / `NavMeshQuery` polygon corridor, smooth path, and BV-tree rejection diagnostics.
 - `query.floorstack` (`map`, `x`, `y`, `zMin?`, `zMax?`): all server terrain, liquid, WMO/M2, and navmesh surfaces along a vertical column `(x, y)`, sorted by `z` descending.
+- `query.profile` (`map`, `from`, `to`, `steps?`): elevation and floor cross-section sampled evenly between two points, with grade statistics and a 3D polyline overlay.
 
 #### Reference client readers and DotRecast oracle (`Reference/`)
 - `client.status`, `client.maps`, `client.files` (`glob?`, `limit?`), `client.read` (`path`, `maxBytes?`): pure-C# MPQ v1 archive reader (`MpqArchive`, `MpqFileSystem`, PKWARE DCL explode, zlib, bzip2, wave, Huffman, hash/block tables, patch chain in retail 1.12.1 priority order), extracted directory reader (`DirectoryClientFiles`), and build-5875 DBC readers (`DbcTable`, `ClientDatabase` for `Map.dbc`, `AreaTable.dbc`, `LiquidType.dbc`).
+- `client.terrain.analyze` (`map`, `tileX`, `tileY`): one tile's client ADT terrain: elevation min/max/mean, steep-triangle count and ratio, holes, liquid coverage, unique area ids, and the steepest chunk as an overlay.
 - `ref.adt.info` (`map`, `x`, `y`), `ref.query.height` (`map`, `x`, `y`): client `.wdt` (`MPHD`, `MAIN`, `MODF`) and `.adt` (`MHDR`, `MCNK`, `MCVT`, `MCLQ`, `MDDF`, `MODF`) parsers and exact client triangle height/hole/liquid interpolation (`ClientTerrainService`).
 - `ref.model.info` (`path`), `ref.query.los` (`map`, `a`, `b`, `includeSkipped?`), `ref.query.floorstack` (`map`, `x`, `y`, `zMin?`, `zMax?`, `includeSkipped?`): client WMO v17 root/group (`WmoRootReader`, `WmoGroupReader`) and M2 v256 (`M2Reader`) readers, `MODF`/`MDDF`/`MODD` placement transforms (`ClientTransforms`), raycast LoS, and vertical column floor stack (`ReferenceModelQueries`).
 - `ref.nav.tile` (`map`, `x`, `y`), `ref.query.path` (`map`, `a`, `b`, `includeFlags?`, `excludeFlags?`, `extents?`), `ref.query.nearest` (`map`, `at`, `includeFlags?`, `excludeFlags?`, `extents?`): independent `DotRecast.Detour` reader (`MmapFileReader`, `ReferenceNavMeshService`) over `.mmap`/`.mmtile` files.
@@ -102,14 +104,54 @@ Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":..
 
 #### Live world-daemon connection (`Live/`)
 - `live.status`, `live.connect` (`pid?`), `live.disconnect`, `live.subscribe` (`map`, `instance?`, `hz?`, `kinds?`, `paths?`), `live.entities` (`kind?`, `near?`, `radius?`, `name?`, `limit?`, `map?`, `instance?`, `guid?`, `trails?`), `live.follow` (`guid?`), `live.query` (`kind`, `a`, `b?`, `map?`, `instance?`): connects `LiveFeed` to `\\.\pipe\arcanecore-mapfeed-{pid}` (when `World:Control:MapFeed:Enabled` is `true` on the world daemon; see [map-feed](map-feed.md)), stores live frames and trails in `LiveStore`, and forwards live collision queries (`los`, `height`, `path`, `undermap`) to the world thread.
+- `live.find` (`map?`, `query?`, `kind?`, `inCombat?`, `limit?`) searches the live store by name substring, exact guid or entry, kind, map and combat state; `live.hotspots` (`map?`, `cellSize?`, `limit?`) buckets live entities into cells and returns the busiest combat and player clusters.
+- Packet tools, attached only (`serve` with `ctl`, `script --attach` or `mcp --attach`; `run`, headless `script` and `mcp --headless` answer `Unavailable`), and only when the world daemon has its [packet tools](map-feed.md#packet-tools) on (`World:Control:PacketTools:Enabled`): `server.console` (`line`) runs one console line and returns its reply lines; `live.inject` (`target` or `guid`, `opcode`, `payload?` or `fields?`) hands a client opcode to an online session through its own dispatcher; `live.send` (same arguments) queues a server opcode to its client; `live.tap.start` (`target` or `guid`, `dir?`, `opcodes?`, `maxPackets?`, `seconds?`, `bytes?`), `live.tap.read` (`max?`, `wait?`) and `live.tap.stop` watch a session's packets (`PacketToolCommands`, `PacketToolTraffic`).
+- `opcodes.find` (`query?`, `side?`, `limit?`): searches the build-5875 world opcode table (`WorldOpcodeNames`); works offline and headless.
+- `fields` builds a payload from typed values written little-endian one after another, each `type:value` with type `u8`, `u16`, `u32`, `u64`, `f32`, `guid` (a `u64`) or `cstring` (UTF-8 then a 0 byte); numbers take decimal, negative decimal (two's complement) or `0x` hex (`PacketFields`). These are the server's own writers (`src/ArcaneCore.Protocol/PacketWriter.cs:27-55` for integers and floats, `:105-117` for `WriteCString`) and the reference core's: vmangos@0e3ff01 `src/framework/Utilities/ByteConverter.h:51-56` converts nothing on a little-endian host and `src/shared/ByteBuffer.h:180-185` appends a string with a trailing 0. On the `ctl` command line a list is split at commas, so a `cstring` holding a comma goes through `--json`.
 
-### 4. Binary geometry wire format (`ATG1`)
+### 4. Driving the world daemon headlessly
+
+Agents and tools can drive and watch a local development world daemon with no game client and no browser, through `serve` and
+`ctl` (or `mcp --attach`, where every command below is an MCP tool). The daemon needs the map feed and its packet tools on, in the
+Development environment (`World:Control:MapFeed:Enabled=true`, `World:Control:PacketTools:Enabled=true`):
+
+```
+arcane-atlas serve                                   # prints {pid, port, ...}; keep it running
+arcane-atlas ctl live.connect                        # finds the daemon's feed pipe; hello says tools:true
+arcane-atlas ctl server.console line=".server info"
+arcane-atlas ctl opcodes.find query=standstate side=client
+arcane-atlas ctl live.tap.start target=Botname maxPackets=200 seconds=30
+arcane-atlas ctl live.inject target=Botname opcode=CMSG_STANDSTATECHANGE fields=u32:1
+arcane-atlas ctl live.send target=Botname --json "{\"opcode\":\"SMSG_NOTIFICATION\",\"fields\":[\"cstring:hello, world\"]}"
+arcane-atlas ctl live.tap.read wait=2
+arcane-atlas ctl live.tap.stop
+```
+
+`live.inject` answers how the packet was handled: `handler` `session` (it ran under the session's dispatcher before the answer) or
+`world` (it was queued for the world thread, like the client's own world opcodes); `live.tap.read` shows the reply packets. A refusal
+comes back as `Failed` with the daemon's code (`offline`, `lifecycle-opcode`, `no-handler`, `wrong-state`, `not-injectable`,
+`oversize`, `busy`, `tap-busy`, `no-tap`; see [map-feed](map-feed.md#packet-tools)), `BadArguments` for an opcode or payload Atlas
+can reject itself, and `Unavailable` when the daemon's packet tools are off or no daemon is connected.
+
+Security model: the commands add no new way in. They speak only to the map feed's local named pipe, which keeps its access list
+(the daemon's own account and SYSTEM, NETWORK denied), `PIPE_REJECT_REMOTE_CLIENTS` and first-instance rule; the daemon serves them
+only when `World:Control:PacketTools:Enabled` is set and the environment is Development (or
+`World:Control:PacketTools:AllowOutsideDevelopment` is also set, with a startup warning); both default to `false`. The local live
+server runs as Development, so it is kept out by a marker instead: every live launcher (`tools/ops/live/launch-daemon.ps1`,
+`tools/ops/deploy/deploy-live.py` and the supervised restart of `tools/ops/diag/server-status.ps1 -Supervise`) sets
+`ARCANECORE_LIVE_SERVER=1`,
+and the daemon refuses the tools then, whatever the configuration says. The daemon logs
+every console line (redacted), injection and send (opcode, length, target, client process; never the payload) and counts injections
+and sends in `arcanecore_tools_packets_total`. Atlas itself only relays what its loopback, token-authenticated `serve` instance is
+asked.
+
+### 5. Binary geometry wire format (`ATG1`)
 
 Browser and headless consumers read tile geometry chunks in the compact `ATG1` little-endian binary format (`GeometryWire`):
 - 48-byte header (`GeometryWire.HeaderBytes`): `u32 magic` `0x31475441` (`"ATG1"`), `u16 version` `1`, `u16 flags` (`bit0` triangles, `bit1` lines, `bit2` points), `f64 originX`, `f64 originY`, `f64 originZ` (subtracted before `float32` vertex encoding to preserve sub-millimeter precision across the 34,133 yd map), `u32 vertexCount`, `u32 triangleCount`, `u32 lineCount`, `u32 pointCount`.
 - 4-byte-aligned payload arrays: `f32[3 * vertexCount] positions`, `u32[3 * triangleCount] triangles`, `u32[triangleCount] triangleAttributes`, `u32[2 * lineCount] lines`, `u32[lineCount] lineAttributes`, `u32[pointCount] points`, `u32[pointCount] pointAttributes`, followed by `u32 jsonBytes` and `jsonBytes` of UTF-8 JSON metadata (`{"layer","tile":[map,x,y],"part","attributes":{"id":{...}},"stats":{...}}`).
 
-### 5. Security and loopback posture
+### 6. Security and loopback posture
 
 - `serve` binds strictly to `127.0.0.1` (`AtlasServer`) and validates the `Host` and `Origin` headers against `127.0.0.1:<port>` / `localhost:<port>`.
 - Every `/api/*` HTTP request requires an `Authorization: Bearer <token>` header matching the per-instance token in the user-only discovery file (`0600` on POSIX, current-user ACL directory on Windows).

@@ -377,6 +377,76 @@ public sealed class LiveFeed : IDisposable
     }
 
     /// <summary>
+    /// Sends one packet-tools request (docs/areas/map-feed.md, "Packet tools") and returns its result fields. Unavailable when not connected
+    /// or when the daemon's hello did not offer the tools; a refusal by the daemon fails with its code in the message (BadArguments for a
+    /// malformed request, Unavailable when the tools are off, Failed otherwise).
+    /// </summary>
+    public async Task<JsonObject> ToolAsync(JsonObject message, TimeSpan? timeout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        FeedSession session = RequireSession();
+        if (session.Hello is not { Tools: true })
+        {
+            throw new CommandException(
+                CommandException.Unavailable,
+                "the connected world daemon does not offer the packet tools: they need World:Control:PacketTools:Enabled=true and the Development environment (or World:Control:PacketTools:AllowOutsideDevelopment=true), then a restart.");
+        }
+
+        string op = message["op"] is JsonValue opValue && opValue.TryGetValue(out string? opText) ? opText : "tool";
+        if (op == LiveProtocol.OpTap)
+        {
+            session.Tools.Reset();
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        JsonObject reply = await session.QueryAsync(message, linked.Token, timeout).ConfigureAwait(false);
+        if (!(reply["ok"] is JsonValue okValue && okValue.TryGetValue(out bool ok) && ok))
+        {
+            string code = reply["code"] is JsonValue c && c.TryGetValue(out string? codeText) ? codeText : "refused";
+            string why = reply["message"] is JsonValue m && m.TryGetValue(out string? text) ? text : "it gave no reason";
+            string kind = code switch
+            {
+                "bad-args" or "unknown-opcode" => CommandException.BadArguments,
+                "tools-off" => CommandException.Unavailable,
+                _ => CommandException.Failed,
+            };
+            throw new CommandException(kind, $"the world daemon refused the {op}: {code}: {why}");
+        }
+
+        var data = new JsonObject();
+        foreach ((string key, JsonNode? value) in reply)
+        {
+            if (key is not ("op" or "id" or "ok"))
+            {
+                data[key] = value?.DeepClone();
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>The tap packets received so far (up to <paramref name="max"/>, removed), the tap's end once reached, and late console lines.</summary>
+    public JsonObject ReadToolTraffic(int max)
+    {
+        FeedSession session = RequireSession();
+        JsonObject read = session.Tools.Drain(max);
+        read["connected"] = session.IsOpen;
+        return read;
+    }
+
+    /// <summary>Whether tap packets or the tap's end are waiting (false when not connected).</summary>
+    internal bool HasToolTraffic
+    {
+        get
+        {
+            lock (_state)
+            {
+                return _session is { } session && session.Tools.HasNews;
+            }
+        }
+    }
+
+    /// <summary>
     /// The map and instance a query without them targets: the subscribed map and instance, else the view's map and instance 0. A map named
     /// without an instance gets the subscription's instance when the subscription is for that map, else instance 0.
     /// </summary>

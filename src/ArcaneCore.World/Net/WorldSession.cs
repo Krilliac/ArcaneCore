@@ -171,6 +171,7 @@ public sealed partial class WorldSession : IPlayerSession
         _guard = guard;
         _protection = guard?.Options ?? DefaultProtection;
         _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
+        _dispatchGate = CreateDispatchGate(services);
         InitObservability(services);
     }
 
@@ -667,7 +668,7 @@ public sealed partial class WorldSession : IPlayerSession
             ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketIn(header.Length + payload.Length);
             ArcaneCore.World.Ops.Metrics.WorldPacketMetrics.Table.RecordIn(rawOpcode, header.Length + payload.Length);
             CapturePacket(true, opcode, payload);
-            if (!await DispatchAsync(opcode, payload).ConfigureAwait(false))
+            if (!await DispatchFromClientAsync(opcode, payload, token).ConfigureAwait(false))
             {
                 return;
             }
@@ -734,6 +735,7 @@ public sealed partial class WorldSession : IPlayerSession
 
                         return false;
                     case OpcodeRateVerdict.Dropped:
+                        _budgetDropped = true;
                         if (_guard is not null)
                         {
                             _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
@@ -757,8 +759,9 @@ public sealed partial class WorldSession : IPlayerSession
             {
                 if (_state is SessionState.LoggingIn or SessionState.InWorld)
                 {
-                    // The read loop is the only producer, so this check-then-add cannot race another
-                    // enqueue; the world thread only ever lowers the counters.
+                    // The read loop is the only producer (a packet-tools injection takes the same
+                    // dispatcher gate, WorldSession.PacketTools.cs), so this check-then-add cannot race
+                    // another enqueue; the world thread only ever lowers the counters.
                     int maxPackets = _options.MaxQueuedWorldPackets;
                     long maxBytes = _options.MaxQueuedWorldBytes;
                     if ((maxPackets > 0 && _queuedPackets >= maxPackets)
@@ -1082,6 +1085,7 @@ public sealed partial class WorldSession : IPlayerSession
 
         _registry.Unregister(this);
         DiscardQueuedPackets(); // a closed session retains nothing
+        EndTaps();
 
         // Remove the player on the world thread; queued after any pending login command, which
         // sees the Closed state and backs out.

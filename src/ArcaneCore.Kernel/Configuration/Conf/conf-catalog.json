@@ -12108,6 +12108,38 @@
       "isCollection": false
     },
     {
+      "path": "World:Control:PacketTools:AllowOutsideDevelopment",
+      "section": "World:Control:PacketTools",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "A second, deliberate opt-in: let Enabled take effect when the host environment is not Development (Staging, Production or unset). The tools then start with a warning naming the environment. Never set this on a server players use. Default off.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldcontrolpackettools",
+      "isCollection": false
+    },
+    {
+      "path": "World:Control:PacketTools:Enabled",
+      "section": "World:Control:PacketTools",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Offer the packet tools on the map feed's pipe (World:Control:MapFeed:Enabled must be on too). A connected tool may then run console commands with the console's Administrator authority, inject client opcodes as an online player or bot, send server opcodes to its client and watch its packets. Every console line, injection and send is logged and counted. Refused, with a warning at start, outside the Development environment unless AllowOutsideDevelopment is also true. Changing it needs a restart. Default off.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldcontrolpackettools",
+      "isCollection": false
+    },
+    {
       "path": "World:Control:Pipe:Enabled",
       "section": "World:Control:Pipe",
       "type": "bool",
