@@ -730,6 +730,29 @@ internal static class PlayerbotMotion
     internal const float MeshFloorToleranceYards = 4f;
 
     /// <summary>
+    /// How far (flat) the start of a walk may lie from the route's leg before the walk is no longer that leg (<see cref="OnLeg"/>). A
+    /// walk's positions lie on its legs; a route planned from the bot starts where the mesh query placed it, within a few yards.
+    /// </summary>
+    internal const float OffLegYards = 5f;
+
+    /// <summary>
+    /// Whether <paramref name="from"/> lies within <see cref="OffLegYards"/> (flat) of the route's leg ending at point
+    /// <paramref name="toPoint"/> (point 1 for 0, as <see cref="Walk"/> walks it), so that a walk from it toward that point walks the
+    /// leg itself and its proof (<see cref="PlayerbotRoute.LegsNavigated"/>) holds.
+    /// </summary>
+    private static bool OnLeg(PlayerbotRoute route, int toPoint, Vector3 from)
+    {
+        if (route.Points.Count < 2) return true;
+        int end = Math.Clamp(toPoint, 1, route.Points.Count - 1);
+        Vector2 start = Flat(route.Points[end - 1]);
+        Vector2 leg = Flat(route.Points[end]) - start;
+        Vector2 here = Flat(from);
+        float lengthSquared = leg.LengthSquared();
+        float along = lengthSquared <= 1e-6f ? 0f : Math.Clamp(Vector2.Dot(here - start, leg) / lengthSquared, 0f, 1f);
+        return Vector2.Distance(here, start + (leg * along)) <= OffLegYards;
+    }
+
+    /// <summary>
     /// Where the bot stands at <paramref name="candidate"/>, or null when it cannot stand there.
     /// <list type="bullet">
     /// <item><description>A route without a navigation-mesh proof (<see cref="PlayerbotRoute.Navigated"/>, the terrain stepper): a floor
@@ -743,6 +766,9 @@ internal static class PlayerbotMotion
     /// when the mesh has one there. The bot then stands on the floor nearest to the
     /// leg's height among the probes from 2 and 6 yards above within <see cref="MeshFloorToleranceYards"/>, else at the leg's
     /// own height.</description></item>
+    /// <item><description>The mesh's proof covers its own legs only: a walk from a <paramref name="from"/> more than
+    /// <see cref="OffLegYards"/> off the leg ending at <paramref name="fromPoint"/> (<see cref="OnLeg"/>) is judged as a route without
+    /// one.</description></item>
     /// </list>
     /// </summary>
     /// <param name="fromPoint">The point the walk was heading for from <paramref name="from"/> (its leg ends there).</param>
@@ -760,7 +786,11 @@ internal static class PlayerbotMotion
             return null;
         }
 
-        bool navigated = route.LegsNavigated(fromPoint, toPoint);
+        // A bot taken off its route (a chase, an escape, a fear, a same-map teleport) and handed the route again walks a straight line
+        // from where it stands to the next point: no leg of the mesh, and with the mesh's proof it went through hills, rocks and city
+        // walls at its own height (live: bot-motion/under-map 10-36 yd under the Valley of Trials mesa, 92-94% of the under-map
+        // samples on routed bots more than 10 yd off their leg).
+        bool navigated = route.LegsNavigated(fromPoint, toPoint) && OnLeg(route, fromPoint, from);
         bool hasMeshSurface = false;
         if (navigated && MeshSurface(map.Collision, route, fromPoint, toPoint, from, candidate) is { } surface)
         {

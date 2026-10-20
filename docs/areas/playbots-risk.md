@@ -191,7 +191,8 @@ quest travel, exploring, approaches) is checked, sampled every 2 yards, against 
 passes through a hazard is replaced by a way round it: a corner before it and one past it, its radius plus 5, 15 or 28 yards off to
 either side, each leg on the navigation mesh (or stepped over the terrain where the mesh has none); with none, the route is refused.
 Each leg of such a route keeps its own proof (`PlayerbotRoute.LegsNavigated`): the motion skips the floor and line-of-sight checks only
-on the mesh's legs, never on a stepped one that follows a mesh leg (it used to take the first leg's proof for the whole route). The goal then does what it does with any route it
+on the mesh's legs, never on a stepped one that follows a mesh leg (it used to take the first leg's proof for the whole route), nor on
+a walk that starts more than `PlayerbotMotion.OffLegYards` (5) off the leg it heads along. The goal then does what it does with any route it
 cannot get: a trainer destination tries the next trainer (`PlayerbotTrainerDestinations` blocks that spawn), a vendor, quest giver
 or travel goal another one or nothing, and a goal that keeps failing is given up by the stall watch. A route being walked is
 checked again at each step and given up when a hazard turned up on the rest of it. An errand route that starts and ends inside a

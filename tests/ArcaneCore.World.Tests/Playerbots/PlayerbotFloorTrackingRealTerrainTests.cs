@@ -141,6 +141,81 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         Assert.Empty(ground);
     }
 
+    // The Valley of Trials (Durotar), the live server's hottest bot-motion/under-map spot: a mesa rises from the valley floor (terrain
+    // 50-62) to 77 between about -540 and -490 west, -4220 and -4130 south, and bots were reported 10-36 yd under its top inside it
+    // (-516.6,-4130.1,59.7; -546.2,-4161.8,58.2; -555.5,-4176.0,51.8). A route along the valley floor east of the mesa, and a place
+    // north of it from where the straight line to the route's far end runs through the mesa.
+    private static readonly Vector3 TrialsEastNorth = new(-470f, -4120f, 50f);
+    private static readonly Vector3 TrialsEastSouth = new(-470f, -4200f, 51f);
+    private static readonly Vector3 TrialsNorthOfMesa = new(-520f, -4110f, 61f);
+
+    /// <summary>
+    /// A bot taken off its route (a same-map teleport here; on the live server also a chase, an escape or a fear) and then handed the
+    /// same route again walked a straight line from where it stood to the route's next point. That line is no leg of the mesh, yet the
+    /// motion judged it by the route's mesh proof: no line-of-sight check, and the line's own height wherever no floor lay near it, so
+    /// the bot walked through hills, rocks and city walls (live: 92-94% of the bot-motion/under-map samples on routed bots were more
+    /// than 10 yd off their leg, Atlas evidence 2026-10-19). Here the line runs through the mesa: the bot must not go under the
+    /// terrain on the way.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task ABotResumingItsRouteFromOffTheRoute_DoesNotWalkThroughTheMesaBetween()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(TrialsEastNorth with { Z = TrialsEastNorth.Z + 2f }, 1u);
+        Vector3 start = await terrain.Host.OnWorldAsync(() => OnMesh(terrain.Player.Map!, TrialsEastNorth));
+        Vector3 goal = await terrain.Host.OnWorldAsync(() => OnMesh(terrain.Player.Map!, TrialsEastSouth));
+        Vector3 aside = await terrain.Host.OnWorldAsync(() => OnMesh(terrain.Player.Map!, TrialsNorthOfMesa));
+        await terrain.PlaceAsync(start, 1u);
+        var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 400 };
+        PlayerbotRoute? route = null;
+        for (int attempt = 0; attempt < 50 && route is null; attempt++)
+        {
+            route = await terrain.Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(terrain.Player, goal, options, out PlayerbotRoute? r) ? r : null);
+            if (route is null)
+            {
+                await Task.Delay(20);
+                await terrain.Host.World.AdvanceClockAsync(100);
+            }
+        }
+
+        Assert.NotNull(route);
+        output.WriteLine($"route {route!.Points.Count} points, navigated {route.Navigated}: {string.Join(" ", route.Points)}");
+        // One think along the route, then the bot is taken away from it (teleported north of the mesa) and the route handed back.
+        Assert.True(await terrain.Host.OnWorldAsync(() => PlayerbotNavigation.TryAdvance(terrain.Session, route, options, 500, terrain.Host.World.NowMs)));
+        await terrain.Host.World.AdvanceClockAsync(500);
+        await terrain.Host.OnWorldAsync(() => PlayerbotMotion.Pump(terrain.Session, terrain.Player, terrain.Host.World.NowMs));
+        await terrain.PlaceAsync(aside, 1u);
+        using AnomalyCapture capture = await terrain.Host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(terrain.Player));
+        float worst = 0f;
+        Vector3 worstAt = default;
+        for (int think = 0; think < 60; think++)
+        {
+            bool going = await terrain.Host.OnWorldAsync(() =>
+                PlayerbotNavigation.TryAdvance(terrain.Session, route, options, 500, terrain.Host.World.NowMs));
+            for (int tick = 0; tick < 10; tick++)
+            {
+                await terrain.Host.World.AdvanceClockAsync(50);
+                (float depth, Vector3 at) = await terrain.Host.OnWorldAsync(() =>
+                {
+                    PlayerbotMotion.Pump(terrain.Session, terrain.Player, terrain.Host.World.NowMs);
+                    var here = new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z);
+                    UnderMapVerdict verdict = terrain.Player.Map!.Collision.ClassifyUnderMap(here.X, here.Y, here.Z, PlayerbotMotionAnomalies.UnderMapYards);
+                    return (verdict.Kind == UnderMapKind.UnderMap ? verdict.DepthYards : 0f, here);
+                });
+                if (depth > worst) (worst, worstAt) = (depth, at);
+            }
+
+            if (!going) break;
+        }
+
+        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        AnomalyNotice[] under = [.. capture.Notices.Where(n => n.Key == "bot-motion/under-map")];
+        foreach (AnomalyNotice notice in under) output.WriteLine($"{notice.Key}: {notice.Detail}");
+        output.WriteLine($"resumed from {aside}; ended at {end}; worst {worst:F2} yd under the terrain at {worstAt}");
+        Assert.True(worst == 0f, $"the bot went {worst:F2} yd under the terrain (at {worstAt})");
+        Assert.Empty(under);
+    }
+
     /// <summary>The ground at (<paramref name="x"/>, <paramref name="y"/>): the mesh surface over the terrain there.</summary>
     private static Vector3 OnGround(Map map, float x, float y)
         => OnMesh(map, new Vector3(x, y, map.Terrain.GetHeight(x, y, 1000f)));
