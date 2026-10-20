@@ -86,7 +86,7 @@ public sealed partial class QuestNpcServices
                 // GetDialogStatus (QuestHandler.cpp:517-526): a finished-and-unrewarded quest or a takeable autocomplete quest
                 // is Reward2, or RewardRep when it is an autocomplete repeatable one; otherwise an incomplete quest.
                 DialogStatus candidate = (state.Quests.GetStatus(id) == QuestStatus.Complete && !state.Quests.RewardStatus(quest))
-                    || (quest.IsAutoComplete && CanTakeQuest(state, quest, []))
+                    || (quest.IsAutoComplete && CanTakeQuest(state, quest, null))
                     ? quest.IsAutoComplete && quest.IsRepeatable ? DialogStatus.RewardRep : DialogStatus.Reward2
                     : state.Quests.GetStatus(id) == QuestStatus.Incomplete ? DialogStatus.Incomplete : DialogStatus.None;
                 if ((byte)candidate > (byte)status)
@@ -97,7 +97,7 @@ public sealed partial class QuestNpcServices
 
             foreach (uint id in StartersOf(npc))
             {
-                if (Quests.Get(id) is not { } quest || !CanTakeQuest(state, quest, [], visibilityOnly: true)
+                if (Quests.Get(id) is not { } quest || !CanTakeQuest(state, quest, null, visibilityOnly: true)
                     || (Options.HighLevelHideDiff >= 0 && (long)player.Level + Options.HighLevelHideDiff < quest.MinLevel))
                 {
                     continue;
@@ -227,7 +227,7 @@ public sealed partial class QuestNpcServices
     /// </summary>
     private bool AddQuestFrom(Player player, PlayerNpcState state, Quest quest, long? sharedTimerEnd)
     {
-        if (RefuseTakeQuest(state, quest, []) is { } refusal)
+        if (RefuseTakeQuest(state, quest, null) is { } refusal)
         {
             if (refusal.Message is { } reason)
             {

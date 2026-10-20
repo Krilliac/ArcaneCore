@@ -25,7 +25,7 @@ public sealed partial class QuestNpcServices
     {
         if (quest.IsAutoComplete)
         {
-            if (RefuseTakeQuest(state, quest, [], skipStatusCheck: true) is not null && !state.Quests.Player.IsGameMaster)
+            if (RefuseTakeQuest(state, quest, null, skipStatusCheck: true) is not null && !state.Quests.Player.IsGameMaster)
             {
                 return false;
             }
@@ -81,7 +81,7 @@ public sealed partial class QuestNpcServices
     /// </summary>
     private bool CanCompleteRepeatableQuest(PlayerNpcState state, Quest quest)
     {
-        if (!CanTakeQuest(state, quest, []))
+        if (!CanTakeQuest(state, quest, null))
         {
             return false;
         }
@@ -188,7 +188,7 @@ public sealed partial class QuestNpcServices
         if (state.Quests.RewardStatus(quest)) return "quest already rewarded";
         if (quest.IsAutoComplete)
         {
-            if (RefuseTakeQuest(state, quest, [], skipStatusCheck: true) is { } takeRefusal && !player.IsGameMaster)
+            if (RefuseTakeQuest(state, quest, null, skipStatusCheck: true) is { } takeRefusal && !player.IsGameMaster)
                 return $"autocomplete requirement not met ({takeRefusal})";
         }
         else if (state.Quests.Get(questId) is not { Status: QuestStatus.Complete } data)

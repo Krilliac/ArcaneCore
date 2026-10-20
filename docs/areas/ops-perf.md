@@ -5,6 +5,10 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
 
 ## Load benchmark (2026-10-08)
 
+Bot-think allocations (2026-10-19): the quest-candidate scan's spawn gate, `CanTakeQuest` and `IsRewardable` no longer allocate
+(closures, delegates and LINQ enumerators replaced by loops). The 200-bot benchmark's bot feature dropped from about 1,260 to 947 KiB
+per tick. `tools/perf` adds `QuestCandidateBenchmarks` and `CreatureTickBenchmarks`. See the [lane report](../integration/perf-tick-20261019.md).
+
 `ActiveCellReactivationTests` adds a manual-clock reactivation workload (2026-10-11): players leave loaded patrol cells for ten
 minutes and return together. It separates creature-update and path-search time from grid loading. Dormant splines now exclude
 inactive time, preventing simultaneous false waypoint arrivals and next-leg path searches. This reproduces a reactivation burst,

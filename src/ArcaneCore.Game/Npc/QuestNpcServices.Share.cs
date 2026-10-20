@@ -94,7 +94,7 @@ public sealed partial class QuestNpcServices
             {
                 refusal = QuestShareMessage.HaveQuest;
             }
-            else if (!CanTakeQuest(state, quest, []))
+            else if (!CanTakeQuest(state, quest, null))
             {
                 refusal = QuestShareMessage.CantTakeQuest;
             }
@@ -153,7 +153,7 @@ public sealed partial class QuestNpcServices
         }
 
         // CanTakeQuest(msg) runs before the offer is consulted ("prevent cheating", QuestHandler.cpp:134-139).
-        if (RefuseTakeQuest(state, quest, []) is { } refusal)
+        if (RefuseTakeQuest(state, quest, null) is { } refusal)
         {
             if (refusal.Message is { } reason)
             {
@@ -201,7 +201,7 @@ public sealed partial class QuestNpcServices
                 continue;
             }
 
-            if (RefuseTakeQuest(state, quest, []) is { } refusal)
+            if (RefuseTakeQuest(state, quest, null) is { } refusal)
             {
                 // CanTakeQuest(qInfo, true) (QuestHandler.cpp:179) tells the member why it was not offered the quest.
                 if (refusal.Message is { } reason)
@@ -248,7 +248,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        if (RefuseTakeQuest(state, quest, []) is { } refusal)
+        if (RefuseTakeQuest(state, quest, null) is { } refusal)
         {
             if (refusal.Message is { } reason)
             {

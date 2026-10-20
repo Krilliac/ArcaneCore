@@ -33,14 +33,14 @@ public sealed partial class QuestNpcServices
 
         foreach (uint id in StartersOf(npc))
         {
-            if (Quests.Get(id) is { } quest && CanTakeQuest(state, quest, []))
+            if (Quests.Get(id) is { } quest && CanTakeQuest(state, quest, null))
             {
                 state.Menu.AddQuestItem(id, quest.IsAutoComplete ? DialogStatus.RewardRep : DialogStatus.Available);
             }
         }
     }
 
-    private bool CanTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false)
+    private bool CanTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint>? visited, bool visibilityOnly = false)
         => RefuseTakeQuest(state, quest, visited, visibilityOnly) is null;
 
     /// <summary>A refused CanTakeQuest: the message vmangos sends (SendCanTakeQuestResponse), or none.</summary>
@@ -56,13 +56,15 @@ public sealed partial class QuestNpcServices
     /// IsActive refuse silently. <paramref name="visibilityOnly"/> skips the level and timed checks (the
     /// quest-giver status icon applies its own level handling). <paramref name="skipStatusCheck"/> is vmangos's
     /// skipStatusCheck: the autocomplete turn-in ignores the quest's current status (Player.cpp:12684-12698).
+    /// <paramref name="visited"/> holds the quests already on the breadcrumb path (null at the top: the set is made only when a
+    /// breadcrumb recurses). No check allocates: bots run this per candidate quest every think.
     /// </summary>
-    private TakeRefusal? RefuseTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false,
+    private TakeRefusal? RefuseTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint>? visited, bool visibilityOnly = false,
         bool skipStatusCheck = false)
     {
         Player player = state.Quests.Player;
         QuestTemplate t = quest.Template;
-        if (!visited.Add(quest.Id))
+        if (visited is not null && !visited.Add(quest.Id))
         {
             return Silent;
         }
@@ -79,8 +81,7 @@ public sealed partial class QuestNpcServices
         }
 
         // SatisfyQuestExclusiveGroup (13560-13592)
-        if (t.ExclusiveGroup > 0 && Quests.ExclusiveGroup(t.ExclusiveGroup).Any(id => id != quest.Id
-            && state.Quests.GetStatus(id) is QuestStatus.Incomplete or QuestStatus.Complete))
+        if (t.ExclusiveGroup > 0 && ExclusiveSiblingStarted(state, quest))
         {
             return Refused(QuestInvalidReason.DontHaveReq);
         }
@@ -123,7 +124,7 @@ public sealed partial class QuestNpcServices
         }
 
         // SatisfyQuestPreviousQuest (13345-13435)
-        if (quest.PrevQuests.Count > 0 && !quest.PrevQuests.Any(signedId => PreviousQuestSatisfied(state, signedId)))
+        if (quest.PrevQuests.Count > 0 && !AnyPreviousQuestSatisfied(state, quest.PrevQuests))
         {
             return Refused(QuestInvalidReason.DontHaveReq);
         }
@@ -140,20 +141,19 @@ public sealed partial class QuestNpcServices
             return Refused(QuestInvalidReason.DontHaveReq);
         }
 
-        if (quest.PrevChainQuests.Any(state.Quests.IsCurrent))
+        if (AnyCurrent(state, quest.PrevChainQuests))
         {
             return Refused(QuestInvalidReason.DontHaveReq);
         }
 
         // SatisfyQuestBreadcrumbQuest (13437-13453), SatisfyQuestDependentBreadcrumbQuests (13455-13471)
         if (quest.BreadcrumbForQuestId != 0 && !(Quests.Get(quest.BreadcrumbForQuestId) is { } target
-            && CanTakeQuest(state, target, visited)))
+            && CanTakeQuest(state, target, visited ?? [quest.Id])))
         {
             return Refused(QuestInvalidReason.DontHaveReq);
         }
 
-        if (quest.DependentBreadcrumbQuests.Any(id => state.Quests.Get(id) is { Rewarded: false,
-            Status: QuestStatus.Incomplete or QuestStatus.Complete or QuestStatus.Failed }))
+        if (DependentBreadcrumbInProgress(state, quest.DependentBreadcrumbQuests))
         {
             return Refused(QuestInvalidReason.DontHaveReq);
         }
@@ -161,17 +161,87 @@ public sealed partial class QuestNpcServices
         return quest.IsActive ? null : Silent;
     }
 
+    /// <summary>SatisfyQuestExclusiveGroup: another member of the quest's (positive) exclusive group is in progress or done.</summary>
+    private bool ExclusiveSiblingStarted(PlayerNpcState state, Quest quest)
+    {
+        IReadOnlyList<uint> group = Quests.ExclusiveGroup(quest.Template.ExclusiveGroup);
+        for (int i = 0; i < group.Count; i++)
+        {
+            if (group[i] != quest.Id && state.Quests.GetStatus(group[i]) is QuestStatus.Incomplete or QuestStatus.Complete)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool AnyPreviousQuestSatisfied(PlayerNpcState state, IReadOnlyList<int> signedIds)
+    {
+        for (int i = 0; i < signedIds.Count; i++)
+        {
+            if (PreviousQuestSatisfied(state, signedIds[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private bool PreviousQuestSatisfied(PlayerNpcState state, int signedId)
     {
         uint id = (uint)Math.Abs((long)signedId);
-        if (Quests.Get(id) is not { } previous)
+        if (Quests.Get(id) is not { } previous || !Satisfied(state, signedId, id))
         {
             return false;
         }
 
-        bool Satisfied(uint questId) => signedId > 0 ? state.Quests.Get(questId)?.Rewarded == true : state.Quests.IsCurrent(questId);
-        return Satisfied(id) && (previous.Template.ExclusiveGroup >= 0
-            || Quests.ExclusiveGroup(previous.Template.ExclusiveGroup).All(Satisfied));
+        if (previous.Template.ExclusiveGroup >= 0)
+        {
+            return true;
+        }
+
+        IReadOnlyList<uint> group = Quests.ExclusiveGroup(previous.Template.ExclusiveGroup);
+        for (int i = 0; i < group.Count; i++)
+        {
+            if (!Satisfied(state, signedId, group[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+
+        static bool Satisfied(PlayerNpcState state, int signedId, uint questId)
+            => signedId > 0 ? state.Quests.Get(questId)?.Rewarded == true : state.Quests.IsCurrent(questId);
+    }
+
+    private static bool AnyCurrent(PlayerNpcState state, IReadOnlyList<uint> questIds)
+    {
+        for (int i = 0; i < questIds.Count; i++)
+        {
+            if (state.Quests.IsCurrent(questIds[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>SatisfyQuestDependentBreadcrumbQuests: a breadcrumb leading to the quest is in progress (not yet rewarded).</summary>
+    private static bool DependentBreadcrumbInProgress(PlayerNpcState state, IReadOnlyList<uint> breadcrumbs)
+    {
+        for (int i = 0; i < breadcrumbs.Count; i++)
+        {
+            if (state.Quests.Get(breadcrumbs[i]) is { Rewarded: false, Status: QuestStatus.Incomplete or QuestStatus.Complete or QuestStatus.Failed })
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void SendPreparedQuest(PlayerNpcState state, NpcInfo npc)
@@ -226,7 +296,7 @@ public sealed partial class QuestNpcServices
     {
         if (state.Quests.RewardStatus(quest)
             || !(state.Quests.GetStatus(quest.Id) == QuestStatus.Complete
-                || ((quest.IsAutoComplete || quest.IsRepeatable) && CanTakeQuest(state, quest, [])))
+                || ((quest.IsAutoComplete || quest.IsRepeatable) && CanTakeQuest(state, quest, null)))
             || (quest.Template.RewOrReqMoney < 0 && state.Quests.Player.Money < -(long)quest.Template.RewOrReqMoney))
         {
             return false;
