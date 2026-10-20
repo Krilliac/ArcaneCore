@@ -19,6 +19,12 @@ public sealed partial class CreatureMapSystem
     internal const float GroundToleranceYards = 0.11f;
 
     /// <summary>
+    /// The same tolerance where the floor is a model or the mesh (<see cref="GroundHeight.DrapePath"/> <c>modelTolerance</c>): WMO ramps and
+    /// stairs need 12 points a leg at 0.11 (Undercity, median of the raw mesh legs) and 7 at 0.40, with model offsets still p95 +0.30 and p05 -0.25 (gate: p95 0.5).
+    /// </summary>
+    internal const float GroundModelToleranceYards = 0.4f;
+
+    /// <summary>
     /// A creature leg draped over the ground (<see cref="GroundHeight.DrapePath"/>): every point on the floor plus the stand offset, and
     /// split every 4 yd where the chord between points would pass over or under it. Walkers and swimmers; a flier keeps the mesh's heights
     /// and a creature that only swims (<c>InhabitType</c> 2) stays in its water. A creature that also swims is put on the liquid surface
@@ -39,10 +45,10 @@ public sealed partial class CreatureMapSystem
         {
             using (Serial())
             {
-                return GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query);
+                return GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query, modelTolerance: GroundModelToleranceYards);
             }
         }
 
-        return GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query);
+        return GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query, modelTolerance: GroundModelToleranceYards);
     }
 }

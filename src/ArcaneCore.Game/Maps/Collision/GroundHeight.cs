@@ -44,7 +44,7 @@ public enum LiquidMode
 /// branch over the walkable ground is not the floor (<see cref="MapCollision.GetHeight"/> prefers any model above the terrain, vmangos parity).
 /// </param>
 /// <param name="AllowMeshFallback">No terrain or model answer: the navigation mesh's surface less <see cref="GroundHeight.MeshBias"/>.</param>
-/// <param name="LoadTiles">Load the collision tiles under the point first (<see cref="MapCollision.LoadTilesOnDemand"/>): GM and console paths with no player near.</param>
+/// <param name="LoadTiles">Load the collision and terrain tiles under the point first (<see cref="MapCollision.LoadTilesOnDemand"/>, a synchronous read): GM and console paths with no player near. Off, nothing is read from disk: a point over a terrain tile that is not in memory keeps its height (or takes the mesh fallback).</param>
 public readonly record struct GroundQuery(
     float Up,
     float Down,
@@ -121,8 +121,21 @@ public static class GroundHeight
 
         // MapCollision.GetHeight probes from its z + 2 (vmangos GetHeightStatic): hand it z + Up - 2 so the probe starts at z + Up.
         float probeZ = z + query.Up - 2f;
-        float terrain = collision.Map.Terrain.GetHeight(x, y, probeZ);
-        float floor = collision.GetHeight(x, y, probeZ, useModels: true, maxSearchDistance: query.Up + query.Down);
+        float terrain;
+        float floor;
+        if (!query.LoadTiles && !collision.Map.Terrain.TryGetLoadedHeight(x, y, out terrain))
+        {
+            // The terrain tile is not in memory and reading it is a disk read: a drape runs on the world thread, so it keeps the height it
+            // had (below, the mesh fallback, which also never loads) and the normal loaders bring the tile in.
+            terrain = TerrainTile.InvalidHeightValue;
+            floor = TerrainTile.InvalidHeightValue;
+        }
+        else
+        {
+            terrain = collision.Map.Terrain.GetHeight(x, y, probeZ);
+            floor = collision.GetHeight(x, y, probeZ, useModels: true, maxSearchDistance: query.Up + query.Down);
+        }
+
         if (query.PreferTerrainOverProps && Known(terrain) && Known(floor)
             && floor > terrain + PropHeightYards && MathF.Abs(terrain - z) + PropCloserYards < MathF.Abs(floor - z))
         {
@@ -177,6 +190,9 @@ public static class GroundHeight
     /// client draws a leg as straight chords between points, so the sent points are the only ground it follows.
     /// </summary>
     /// <param name="query">The floor query; the walker default (<see cref="Walker"/>) when null.</param>
+    /// <param name="modelTolerance">The tolerance at a sample whose floor is a model (a WMO ramp or stair) or the mesh; <paramref name="tolerance"/> when null.
+    /// Terrain is what the eye follows over open ground and gets the tight one; a model floor is stepped and its client chords are looser
+    /// anyway, so a looser tolerance there saves points (Undercity's median leg: 12 points at 0.11, 7 at 0.40).</param>
     public static List<Vector3> DrapePath(
         MapCollision collision,
         Vector3 start,
@@ -184,7 +200,8 @@ public static class GroundHeight
         float step = 4f,
         float tolerance = 0.15f,
         int maxPoints = 32,
-        GroundQuery? query = null)
+        GroundQuery? query = null,
+        float? modelTolerance = null)
     {
         ArgumentNullException.ThrowIfNull(collision);
         ArgumentNullException.ThrowIfNull(points);
@@ -203,7 +220,7 @@ public static class GroundHeight
         float stride = MathF.Max(step, 0.5f);
         for (int attempt = 0; attempt <= MaxStepDoublings; attempt++, stride *= 2f)
         {
-            if (TryInsertGroundPoints(collision, start, corners, stride, tolerance, maxPoints, q) is { } draped)
+            if (TryInsertGroundPoints(collision, start, corners, stride, tolerance, modelTolerance ?? tolerance, maxPoints, q) is { } draped)
             {
                 return draped;
             }
@@ -217,10 +234,10 @@ public static class GroundHeight
 
     /// <summary>The snapped <paramref name="corners"/> with ground points inserted every <paramref name="step"/> yd where the chord misses; null when they would pass <paramref name="maxPoints"/>.</summary>
     private static List<Vector3>? TryInsertGroundPoints(
-        MapCollision collision, Vector3 start, List<Vector3> corners, float step, float tolerance, int maxPoints, in GroundQuery q)
+        MapCollision collision, Vector3 start, List<Vector3> corners, float step, float tolerance, float modelTolerance, int maxPoints, in GroundQuery q)
     {
         var result = new List<Vector3>(corners.Count + 8);
-        var nodes = new List<(float At, Vector3 Point)>(16);
+        var nodes = new List<(float At, Vector3 Point, float Tol)>(16);
         Vector3 prev = start;
         for (int i = 0; i < corners.Count; i++)
         {
@@ -234,29 +251,29 @@ public static class GroundHeight
                 // misses by more than the window is still followed); a sample with no floor is left out.
                 int pieces = (int)MathF.Ceiling(length / step);
                 nodes.Clear();
-                nodes.Add((0f, prev));
+                nodes.Add((0f, prev, tolerance));
                 for (int j = 1; j < pieces; j++)
                 {
                     float at = length * j / pieces;
                     float t = at / length;
                     float x = prev.X + (dx * t);
                     float y = prev.Y + (dy * t);
-                    (float lastAt, Vector3 last) = nodes[^1];
+                    (float lastAt, Vector3 last, _) = nodes[^1];
                     float expected = last.Z + ((corner.Z - last.Z) * ((at - lastAt) / (length - lastAt)));
-                    if (TrySnap(collision, x, y, expected, q, out float ground, out _))
+                    if (TrySnap(collision, x, y, expected, q, out float ground, out GroundSource source))
                     {
-                        nodes.Add((at, new Vector3(x, y, ground)));
+                        nodes.Add((at, new Vector3(x, y, ground), source is GroundSource.Model or GroundSource.Mesh ? modelTolerance : tolerance));
                     }
                 }
 
-                nodes.Add((length, corner));
+                nodes.Add((length, corner, tolerance));
 
                 // Keep a sample only where dropping it would put the polyline more than the tolerance off the ground at a sample: a sliding
                 // window from the last kept point, widened while every sample it skips stays within the tolerance of its chord.
                 int kept = 0;
                 for (int end = 2; end < nodes.Count; end++)
                 {
-                    if (WindowFits(nodes, kept, end, tolerance))
+                    if (WindowFits(nodes, kept, end))
                     {
                         continue;
                     }
@@ -278,15 +295,15 @@ public static class GroundHeight
         return result;
     }
 
-    /// <summary>Whether the chord from <c>nodes[from]</c> to <c>nodes[to]</c> passes within <paramref name="tolerance"/> yd (in z) of every node between them.</summary>
-    private static bool WindowFits(List<(float At, Vector3 Point)> nodes, int from, int to, float tolerance)
+    /// <summary>Whether the chord from <c>nodes[from]</c> to <c>nodes[to]</c> passes within each node's own tolerance (in z) of every node between them.</summary>
+    private static bool WindowFits(List<(float At, Vector3 Point, float Tol)> nodes, int from, int to)
     {
-        (float fromAt, Vector3 a) = nodes[from];
-        (float toAt, Vector3 b) = nodes[to];
+        (float fromAt, Vector3 a, _) = nodes[from];
+        (float toAt, Vector3 b, _) = nodes[to];
         float span = toAt - fromAt;
         for (int k = from + 1; k < to; k++)
         {
-            (float at, Vector3 p) = nodes[k];
+            (float at, Vector3 p, float tolerance) = nodes[k];
             float chordZ = a.Z + ((b.Z - a.Z) * ((at - fromAt) / span));
             if (MathF.Abs(p.Z - chordZ) > tolerance)
             {

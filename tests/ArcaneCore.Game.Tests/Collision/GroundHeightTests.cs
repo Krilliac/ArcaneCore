@@ -56,9 +56,25 @@ public sealed class GroundHeightTests
         }
     }
 
+    /// <summary>The flat tile with its terrain in memory, as the grid of a player nearby would have it: a drape reads no terrain tile from disk.</summary>
+    private static HazardKit Kit(LiquidTypeFlags? liquid)
+    {
+        var kit = new HazardKit(liquid);
+        kit.Map.Terrain.GetTile(31, 32);
+        return kit;
+    }
+
     private static MapCollision ModelOnly(WorldRuntime world, Func<float, float, float?> floorAt)
     {
         WorldCollision.Of(world).Install(lineOfSight: new ModelFloors(floorAt));
+        for (int tx = 31; tx <= 33; tx++)
+        {
+            for (int ty = 31; ty <= 33; ty++)
+            {
+                world.GetMap(0).Terrain.GetTile(tx, ty); // the tiles around the origin, in memory
+            }
+        }
+
         return world.GetMap(0).Collision;
     }
 
@@ -82,7 +98,7 @@ public sealed class GroundHeightTests
     [InlineData(22.5f)]   // above the probe start (z + Up is above the ground): snapped down
     public void ATerrainPoint_SnapsToTheGroundPlusTheStandOffset_BothWays(float z)
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         MapCollision collision = kit.Map.Collision;
 
         Assert.True(GroundHeight.TrySnap(collision, X, Y, z, new GroundQuery(), out float snapped, out GroundSource source));
@@ -94,7 +110,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void AFloorInAnotherStorey_IsNotTaken_AndTheHeightIsKept()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         MapCollision collision = kit.Map.Collision;
 
         // 10 yd over the ground: the ground is 10 yd below, outside Down = 4. 3 yd under it: the probe (z + 2) is still under the terrain.
@@ -109,7 +125,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void NonFinitePoints_AreKept()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         var q = new GroundQuery();
 
         Assert.False(GroundHeight.TrySnap(kit.Map.Collision, float.NaN, Y, 0f, q, out _, out GroundSource source));
@@ -121,7 +137,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void AModelTopOverTheWalkableGround_IsAProp_UntilTheUnitStandsOnIt()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         WorldCollision.Of(kit.Kit.World).Install(lineOfSight: new ModelFloors((_, _) => Ground + 1.0f)); // a doodad 1 yd over the ground
         MapCollision collision = kit.Map.Collision;
         Assert.Equal(Ground + 1.0f, collision.GetHeight(X, Y, Ground + 0.1f), 0.001f); // the raw floor query takes the prop
@@ -189,7 +205,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void ATerrainFloorInAnotherStorey_GivesWayToTheMeshSurfaceInTheWindow()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         WorldCollision.Of(kit.Kit.World).Install(pathfinder: new MeshFloors((_, _) => Ground + 8f)); // a deck 8 yd over the terrain
         MapCollision collision = kit.Map.Collision;
 
@@ -202,7 +218,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void TheMeshFallbackIsNotUsed_WhereTheTerrainAnswers()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         WorldCollision.Of(kit.Kit.World).Install(pathfinder: new MeshFloors((_, _) => Ground + 0.4f));
 
         Assert.True(GroundHeight.TrySnap(kit.Map.Collision, X, Y, Ground + 0.4f, new GroundQuery(), out float snapped, out GroundSource source));
@@ -214,7 +230,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void ALiquidPoint_SnapsToTheBottomForAWalker_AndToTheSurfaceForASwimmer()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water); // ground 20, water surface 100
+        using var kit = Kit(LiquidTypeFlags.Water); // ground 20, water surface 100
         MapCollision collision = kit.Map.Collision;
         float z = HazardKit.Level - 5f;
 
@@ -232,7 +248,7 @@ public sealed class GroundHeightTests
     [Fact]
     public void AFlatLeg_GainsNoPoints_ButItsCornersAreSnapped()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = Kit(liquid: null);
         var start = new Vector3(X, Y, Ground + 0.1f);
         Vector3[] corners = [new(X + 20f, Y, Ground + 0.3f), new(X + 20f, Y + 25f, Ground + 0.22f)];
 

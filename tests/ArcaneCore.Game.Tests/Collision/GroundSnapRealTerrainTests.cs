@@ -60,6 +60,7 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             {
                 vmaps.LoadTile(mapId, tx + dx, ty + dy);
                 nav.LoadTile(mapId, tx + dx, ty + dy);
+                world.GetMap(mapId).Terrain.GetTile(tx + dx, ty + dy); // the grids a player's neighbourhood loads: a drape never reads a terrain tile itself
             }
         }
 
@@ -117,6 +118,9 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             return v[Math.Clamp((int)Math.Round(q * (v.Length - 1)), 0, v.Length - 1)];
         }
 
+        /// <summary>Every key's numbers on one line, for an assertion message: a failing gate says what was measured.</summary>
+        public string Summary(string region) => string.Join(" || ", Lines(region).Select(l => string.Join(' ', l.Split(' ', StringSplitOptions.RemoveEmptyEntries))));
+
         public IEnumerable<string> Lines(string prefix)
         {
             foreach (string key in _by.Keys.Order(StringComparer.Ordinal))
@@ -155,6 +159,9 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             World = Load(r.Map, r.X, r.Y);
             Map = World.GetMap(r.Map, 0);
             System = new CreatureMapSystem(Map, content, null, random: new Random(1), aiServices: new CreatureAiServices());
+            // FindPath in a loop is one update's worth of searches: the default 64 searches / 12 ms budget would defer the rest (an empty result),
+            // so how many legs a run measured, and which, depended on the machine's load (the Undercity median and Ashenvale's leg count flaked).
+            System.PathBudget = CreaturePathBudget.Unlimited;
             Map.AddUpdater(System);
             Player player = TestWorld.CreatePlayer(1, Center.X, Center.Y, new FakeSession(1));
             player.MapId = r.Map;
@@ -384,16 +391,16 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         Assert.True(legs >= 20, $"only {legs} legs were measured");
         if (d.Count("leg-terrain") >= 200)
         {
-            Assert.True(d.Quantile("leg-terrain", 0.95) <= 0.15f, $"terrain p95 {d.Quantile("leg-terrain", 0.95):F3}");
-            Assert.True(d.Quantile("leg-terrain", 0.05) >= -0.15f, $"terrain p05 {d.Quantile("leg-terrain", 0.05):F3}");
+            Assert.True(d.Quantile("leg-terrain", 0.95) <= 0.15f, $"{regionName} terrain p95 {d.Quantile("leg-terrain", 0.95):F3} over 0.15: {d.Summary(regionName)}");
+            Assert.True(d.Quantile("leg-terrain", 0.05) >= -0.15f, $"{regionName} terrain p05 {d.Quantile("leg-terrain", 0.05):F3} under -0.15: {d.Summary(regionName)}");
         }
 
         AssertModelOffsets(d, regionName, 50, "leg-model");
 
-        // Undercity's WMO ramps and stairs need more points than open ground: median 9 at 1 yd sampling (4 before).
-        float medianCap = regionName == "Undercity" ? 10f : 8f;
-        Assert.True(d.Quantile("points-per-leg", 0.5) <= medianCap, $"median {d.Quantile("points-per-leg", 0.5)} points per leg");
-        Assert.True(d.Quantile("points-per-leg", 1.0) <= CreatureSplineSmoothing.MaxSplinePoints, $"{d.Quantile("points-per-leg", 1.0)} points in a leg");
+        // Undercity's WMO ramps and stairs hold the median at 8 only because model floors are drawn with the looser model tolerance (12 points at 0.11, 7 at 0.40).
+        const float medianCap = 8f;
+        Assert.True(d.Quantile("points-per-leg", 0.5) <= medianCap, $"{regionName} median {d.Quantile("points-per-leg", 0.5)} points per leg, cap {medianCap}: {d.Summary(regionName)}");
+        Assert.True(d.Quantile("points-per-leg", 1.0) <= CreatureSplineSmoothing.MaxSplinePoints, $"{regionName} {d.Quantile("points-per-leg", 1.0)} points in a leg: {d.Summary(regionName)}");
     }
 
     private static void AssertOffsets(Dist d, string region, params string[] keys)
@@ -401,8 +408,8 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         foreach (string key in keys)
         {
             if (d.Count(key) < 100) continue;
-            Assert.True(d.Quantile(key, 0.95, absolute: true) <= 0.15f, $"{region} {key}: |offset| p95 {d.Quantile(key, 0.95, absolute: true):F3}");
-            Assert.InRange(d.Quantile(key, 0.5), -0.06f, 0.06f);
+            Assert.True(d.Quantile(key, 0.95, absolute: true) <= 0.15f, $"{region} {key}: |offset| p95 {d.Quantile(key, 0.95, absolute: true):F3}: {d.Summary(region)}");
+            Assert.True(d.Quantile(key, 0.5) is >= -0.06f and <= 0.06f, $"{region} {key}: median {d.Quantile(key, 0.5):F3} outside +-0.06: {d.Summary(region)}");
         }
     }
 
@@ -421,9 +428,99 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
                 continue;
             }
 
-            Assert.True(d.Quantile(key, 0.95) <= 0.5f, $"{region} {key}: p95 {d.Quantile(key, 0.95):F3}");
+            Assert.True(d.Quantile(key, 0.95) <= 0.5f, $"{region} {key}: p95 {d.Quantile(key, 0.95):F3}: {d.Summary(region)}");
         }
     }
+
+    /// <summary>
+    /// Offsets (leg point minus floor, terrain only) along a leg as the client draws it, sampled every half yard, into <paramref name="d"/>.
+    /// </summary>
+    private static void MeasureLeg(Map map, Vector3 start, IReadOnlyList<Vector3> pts, Dist d)
+    {
+        Vector3 prev = start;
+        foreach (Vector3 q in pts)
+        {
+            int n = Math.Max(1, (int)MathF.Ceiling(Vector2.Distance(new(prev.X, prev.Y), new(q.X, q.Y)) / 0.5f));
+            for (int j = 1; j <= n; j++)
+            {
+                Vector3 m = Vector3.Lerp(prev, q, j / (float)n);
+                float g = Floor(map, m.X, m.Y, m.Z, 2.5f);
+                if (float.IsNaN(g) || MathF.Abs(m.Z - g) > 6f || Source(map, m.X, m.Y, m.Z, g) != "terrain") continue;
+                d.Add("leg-terrain", m.Z - g);
+            }
+
+            prev = q;
+        }
+    }
+
+    private void AssertDrapedLegs(Func<Harness, Creature, Vector3, IReadOnlyList<Vector3>> plan, string regionName)
+    {
+        Region r = RegionNamed(regionName);
+        using var h = new Harness(r, 949302, 30, 60f, seed: 9, wander: false);
+        var d = new Dist();
+        int legs = 0;
+        foreach (Creature cr in h.System.Creatures.ToList())
+        {
+            var s = new Vector3(cr.X, cr.Y, cr.Z);
+            if (!h.Map.Collision.MeshPoints!.TryGetRandomPointAround(r.Map, s, 60f, h.Random, new PathOptions(), out Vector3 dest)
+                || Vector2.Distance(new(s.X, s.Y), new(dest.X, dest.Y)) < 15f) continue;
+            IReadOnlyList<Vector3> pts = plan(h, cr, dest);
+            if (pts.Count == 0) continue;
+            legs++;
+            MeasureLeg(h.Map, s, pts, d);
+        }
+
+        string summary = d.Summary(regionName);
+        output.WriteLine($"{legs} legs; {summary}");
+        Assert.True(legs >= 15, $"only {legs} legs: {summary}");
+        Assert.True(d.Count("leg-terrain") >= 300, $"only {d.Count("leg-terrain")} terrain samples: {summary}");
+        Assert.True(d.Quantile("leg-terrain", 0.95, absolute: true) <= 0.15f, $"|offset| p95 {d.Quantile("leg-terrain", 0.95, absolute: true):F3} over 0.15: {summary}");
+        Assert.True(d.Quantile("leg-terrain", 0.5) is >= -0.06f and <= 0.06f, $"median {d.Quantile("leg-terrain", 0.5):F3} outside +-0.06 (the mesh sits about +0.2 over the floor): {summary}");
+    }
+
+    /// <summary>A chase leg (<see cref="ICreaturePathQuery.FindPath"/>, what the melee chase generator asks) is sent on the ground, not on the mesh.</summary>
+    [RealTerrainFact]
+    public void ChaseLegs_AreDrapedOnTheGround()
+        => AssertDrapedLegs((h, cr, dest) => ((ICreaturePathQuery)h.System).FindPath(cr, dest, out _), "Orgrimmar");
+
+    /// <summary>A walk-home leg (<c>PlanPath(toSpawn: true)</c>, what the home generator asks) is sent on the ground, not on the mesh.</summary>
+    [RealTerrainFact]
+    public void HomeLegs_AreDrapedOnTheGround()
+        => AssertDrapedLegs((h, cr, dest) => h.System.PlanPath(cr, dest, toSpawn: true).Corners, "Orgrimmar");
+
+    /// <summary>
+    /// A drape over a terrain tile that is not in memory reads nothing from disk (a synchronous tile read on the world thread was the 35 ms
+    /// outlier of the cost run): the tile stays unloaded afterwards and the points keep their heights. With the tile loaded the same
+    /// path is snapped.
+    /// </summary>
+    [RealTerrainFact]
+    public void ADrapeOverAnUnloadedTerrainTile_ReadsNothing_AndKeepsTheHeights()
+    {
+        Region r = RegionNamed("ElwynnForest");
+        using WorldRuntime world = Load(r.Map, r.X, r.Y);
+        Map map = world.GetMap(r.Map);
+        float fx = r.X + 2200f;
+        float fy = r.Y;
+        Assert.False(map.Terrain.TryGetLoadedHeight(fx, fy, out _), "the fixture changed: the far tile is already loaded");
+        Assert.False(map.Terrain.TryGetLoadedHeight(fx + 40f, fy, out _), "the fixture changed: the far tile is already loaded");
+        Vector3 start = new(fx, fy, 123f);
+        Vector3[] corners = [new(fx + 20f, fy, 123f), new(fx + 40f, fy, 123f)];
+
+        long t = Stopwatch.GetTimestamp();
+        List<Vector3> draped = GroundHeight.DrapePath(map.Collision, start, corners, CreatureMapSystem.GroundSampleYards, CreatureMapSystem.GroundToleranceYards, modelTolerance: CreatureMapSystem.GroundModelToleranceYards);
+        double ms = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+        output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"drape over an unloaded tile: {ms:F3} ms, {draped.Count} points"));
+
+        Assert.False(map.Terrain.TryGetLoadedHeight(fx, fy, out _), "the drape read the terrain tile from disk");
+        Assert.False(map.Terrain.TryGetLoadedHeight(fx + 40f, fy, out _), "the drape read the terrain tile from disk");
+        Assert.Equal(corners.Length, draped.Count);
+        Assert.All(draped, p => Assert.Equal(123f, p.Z));
+
+        Assert.False(GroundHeight.TrySnap(map.Collision, fx, fy, 123f, new GroundQuery(), out float kept, out GroundSource source));
+        Assert.Equal(GroundSource.None, source);
+        Assert.Equal(123f, kept);
+    }
+
 
     /// <summary>Cost of the drape per leg on the real data (printed, not asserted: the number depends on the build configuration and the machine).</summary>
     [RealTerrainFact]
@@ -448,20 +545,20 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             }
 
             Assert.True(legs.Count >= 50, $"{r.Name}: {legs.Count} legs");
-            foreach ((Vector3 s, List<Vector3> corners) in legs.Take(50)) GroundHeight.DrapePath(map.Collision, s, corners, CreatureMapSystem.GroundSampleYards, CreatureMapSystem.GroundToleranceYards); // warm
+            foreach ((Vector3 s, List<Vector3> corners) in legs.Take(50)) GroundHeight.DrapePath(map.Collision, s, corners, CreatureMapSystem.GroundSampleYards, CreatureMapSystem.GroundToleranceYards, modelTolerance: CreatureMapSystem.GroundModelToleranceYards); // warm
             var micros = new List<double>(legs.Count);
             int points = 0;
             foreach ((Vector3 s, List<Vector3> corners) in legs)
             {
                 long t = Stopwatch.GetTimestamp();
-                List<Vector3> draped = GroundHeight.DrapePath(map.Collision, s, corners, CreatureMapSystem.GroundSampleYards, CreatureMapSystem.GroundToleranceYards);
+                List<Vector3> draped = GroundHeight.DrapePath(map.Collision, s, corners, CreatureMapSystem.GroundSampleYards, CreatureMapSystem.GroundToleranceYards, modelTolerance: CreatureMapSystem.GroundModelToleranceYards);
                 micros.Add(Stopwatch.GetElapsedTime(t).TotalMicroseconds);
                 points += draped.Count;
             }
 
             micros.Sort();
             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"{r.Name,-16} legs={legs.Count} mean={micros.Average():F1} us median={micros[micros.Count / 2]:F1} us p95={micros[(int)(0.95 * (micros.Count - 1))]:F1} us max={micros[^1]:F1} us, {points / (double)legs.Count:F1} points/leg ({RuntimeConfiguration})"));
+                $"{r.Name,-16} legs={legs.Count} mean={micros.Average():F1} us median={micros[micros.Count / 2]:F1} us p95={micros[(int)(0.95 * (micros.Count - 1))]:F1} us p99={micros[(int)(0.99 * (micros.Count - 1))]:F1} us max={micros[^1]:F1} us, {points / (double)legs.Count:F1} points/leg ({RuntimeConfiguration})"));
         }
     }
 
