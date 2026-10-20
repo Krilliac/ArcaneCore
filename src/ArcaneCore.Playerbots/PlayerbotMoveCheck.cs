@@ -53,9 +53,12 @@ internal static class PlayerbotMoveCheck
     /// <summary>
     /// Maximum drop from the lower of a <c>DirectStep</c>'s two ends to the floor under its destination. The drape
     /// (<see cref="DirectStepMaxDrapeYards"/>) brings a step whose waypoint height drifted above the floor down onto it; it never lets a bot
-    /// that stands on the floor step off an edge into a pit or down a cliff deeper than this.
+    /// that stands on the floor step off an edge into a pit or down a cliff deeper than this. Never below
+    /// <see cref="PlayerbotMotion.DirectStepDrapeMinYards"/>: a standing bot lower than that is not snapped to the floor before it steps,
+    /// so its first step must not be refused for a drop it does not have. A walkable slope steeper than this over one step is refused too
+    /// (descending slopes is a separate design task).
     /// </summary>
-    internal const float DirectStepMaxDropYards = 2f;
+    internal const float DirectStepMaxDropYards = PlayerbotMotion.DirectStepDrapeMinYards;
 
     /// <summary>How far past a mesh edge the "is there mesh beyond" probe is taken.</summary>
     private const float BeyondYards = 1f;

@@ -1278,11 +1278,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             return new(false, "bot-not-running", botId);
         if (bot.Controller is not null) return new(false, "bot-scripted", botId, player.Name);
         if (ReferenceEquals(player, master)) return new(false, "leash-refused", botId, player.Name);
-        if (bot.GroupDriven)
+        // The coordinator may already hold the bot without a group-driven think yet (matched in this very tick): it lets go either way.
+        if (bot.GroupDriven || coordinator?.Drives(botId) == true)
         {
             coordinator?.Forget(botId);
-            bot.GroupDriven = false;
-            bot.Brain.ResumeAfterGroup();
+            if (bot.GroupDriven)
+            {
+                bot.GroupDriven = false;
+                bot.Brain.ResumeAfterGroup();
+            }
         }
 
         bot.Session.ManagedBudget = null;
