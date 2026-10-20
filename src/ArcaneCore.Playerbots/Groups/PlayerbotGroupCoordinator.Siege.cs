@@ -528,6 +528,14 @@ public sealed partial class PlayerbotGroupCoordinator
 
         raid.AtWaypoint = atWaypoint;
 
+        // A new leader has its own path and its own place: the no-path rally and the time at the point are not inherited.
+        if (raid.LeaderSeen != group.LeaderBotId)
+        {
+            raid.LeaderSeen = group.LeaderBotId;
+            raid.RetreatNoPath = false;
+            raid.RallySinceMs = 0;
+        }
+
         // The leader at the retreat point (the waypoint behind the step, else where the siege began) turns a retreat into a rally.
         Vector3 retreatPoint = RetreatPointOf(siege);
         float rx = leader.X - retreatPoint.X, ry = leader.Y - retreatPoint.Y;

@@ -95,6 +95,12 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>The leader has started the loop watch afresh for the retreat it is walking (once per retreat, see <see cref="LeadSiege"/>).</summary>
     private bool _retreatFresh;
+
+    /// <summary>When the leader last retried the walk of a retreat that found no path.</summary>
+    private uint _retreatRetryMs;
+
+    /// <summary>How often a leader whose retreat found no path tries the walk again.</summary>
+    private const uint RetreatRetryMs = 3_000;
     private uint _rangedIdleMs;
 
     internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options, PlayerbotEquipment? equipment = null)
@@ -286,6 +292,7 @@ internal sealed class PlayerbotGroupAI
 
         Player? leader = group.LeaderPlayer(_session.World);
         bool isLeader = leader is not null && leader.Guid == player.Guid;
+        if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
         Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
@@ -369,6 +376,21 @@ internal sealed class PlayerbotGroupAI
                 else Hold(player);
                 return;
         }
+    }
+
+    /// <summary>
+    /// The raid rallies where it stands only because its leader found no path to the retreat point: the leader tries the walk again every
+    /// <see cref="RetreatRetryMs"/> (a lift ride that failed, a place the loop watch refused). When it plans, the flag clears and the raid
+    /// retreats again; the time at the rally point starts afresh. Members fight back meanwhile (<see cref="SelectTarget"/>).
+    /// </summary>
+    private void RetryRetreatWalk(Player player, PlayerbotSiegeRaid raid, uint interval)
+    {
+        uint now = _session.World.NowMs;
+        if (unchecked(now - _retreatRetryMs) < RetreatRetryMs) return;
+        _retreatRetryMs = Math.Max(1u, now);
+        if (!WalkTo(player, raid.MoveTo, interval, toward: true)) return;
+        raid.RetreatNoPath = false;
+        raid.RallySinceMs = 0;
     }
 
     /// <summary>

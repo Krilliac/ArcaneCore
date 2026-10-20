@@ -775,4 +775,52 @@ public sealed class PlayerbotSiegeWorldTests
         Assert.False(won, "a witness on another map judged the objective dead");
         Assert.False(siege.ObjectiveUnseen);
     }
+
+    [Fact]
+    public async Task ANoPathRally_RetriesTheWalk_AndRetreatsAgainOnceThePathIsBack()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        uint[] allowed = world.Options.AllowedMaps;
+
+        world.Options.AllowedMaps = [1];
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath), world.Trace());
+        Vector3 point = RetreatPoint(siege);
+        Assert.True(YardsFrom(Leader(world, raid), point) > PlayerbotSiegeCommander.RallyYards);
+
+        // The path comes back: within a few retries the flag clears and the raid retreats again, the leader walking to its point.
+        world.Options.AllowedMaps = allowed;
+        Assert.True(await world.RunUntilAsync(15_000, () => !raid.RetreatNoPath), world.Trace());
+        Assert.True(await world.RunUntilAsync(15_000, () => raid.Order == PlayerbotSiegeOrder.Retreat || raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => YardsFrom(Leader(world, raid), point) <= PlayerbotSiegeCommander.RallyYards + 1.5f), world.Trace());
+        Assert.Equal(1, raid.Retreats);
+    }
+
+    [Fact]
+    public async Task ALeaderChange_DuringANoPathRally_ClearsTheFlagAndTheTimeAtThePoint()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        uint[] allowed = world.Options.AllowedMaps;
+        world.Options.AllowedMaps = [1];
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath && raid.RallySinceMs != 0), world.Trace());
+        Guid oldLeader = raid.Group!.LeaderBotId;
+
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            leader.Health = 0;
+            leader.Map!.Combat.KillPlayer(leader);
+            return true;
+        });
+
+        // The path is back for the new leader: it retreats at once (the flag and the time at the point were not inherited).
+        world.Options.AllowedMaps = allowed;
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), world.Trace());
+        Assert.True(await world.RunUntilAsync(2_500, () => raid.Order == PlayerbotSiegeOrder.Retreat), "the new leader inherited the no-path rally" + Environment.NewLine + world.Trace());
+        Assert.False(raid.RetreatNoPath);
+        Assert.NotNull(siege);
+    }
 }
