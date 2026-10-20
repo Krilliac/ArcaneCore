@@ -389,10 +389,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>A bot stopped, became scripted or left the world: it leaves its group (or its wait).</summary>
     internal void Forget(Guid botId)
     {
+        _waiting.Remove(botId);
+        // The member is released first (Release): it reads the bot's session from the snapshot to send the leave and check it took.
+        if (_memberOf.TryGetValue(botId, out BotGroup? group)) DropMember(group, botId, "stopped");
         if (_bots.Remove(botId, out PlayerbotGroupBot removed) && removed.Session.Player is { } player)
             _botByPlayer.Remove(player.Guid);
-        _waiting.Remove(botId);
-        if (_memberOf.TryGetValue(botId, out BotGroup? group)) DropMember(group, botId, "stopped");
     }
 
     /// <summary>The group part of a bot's status line: <c>group=3:tank:engaging</c>, <c>group=waiting:quest:990700</c>, or null.</summary>
@@ -996,7 +997,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         if (_world is not { } world) return;
         uint now = Now;
-        // A bot that stopped, became scripted or joined a real player's group leaves this one.
+        // A bot that stopped, became scripted or joined a real player's group leaves this one: the feature calls Forget for each of those
+        // (a controller attaching, a leash, a stop). Here only a bot no longer running (out of the snapshot, or without a player) is gone.
+        // Neither Free nor IsInWorld is asked: a member of an adopted party (Handoff) is party-driven, so never Free, and a member between
+        // maps (the instance portal, the walk out) is briefly out of the world; both are still members.
         _membersScratch.Clear();
         for (int i = 0; i < group.Members.Count; i++)
         {
@@ -1006,7 +1010,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         for (int i = 0; i < _membersScratch.Count; i++)
         {
             Member member = _membersScratch[i];
-            if (!_bots.TryGetValue(member.BotId, out PlayerbotGroupBot bot) || !bot.Free || bot.Session.Player is not { IsInWorld: true })
+            if (!_bots.TryGetValue(member.BotId, out PlayerbotGroupBot bot) || bot.Session.Player is null)
                 DropMember(group, member.BotId, "gone");
         }
         if (!_groups.Contains(group)) return;
