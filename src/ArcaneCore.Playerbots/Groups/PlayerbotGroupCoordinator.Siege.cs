@@ -464,6 +464,11 @@ public sealed partial class PlayerbotGroupCoordinator
         NotifyWatchers(siege, now);
     }
 
+    /// <summary>Whether the leader is answering an attacker of its own from this waypoint (<see cref="PlayerbotSiegeRaid.AnsweringMs"/> fresh) and is still within the leash of it.</summary>
+    internal static bool IsAnswering(PlayerbotSiegeRaid raid, Vector3 leader, Vector3 waypoint, uint now)
+        => raid.AnsweringMs != 0 && unchecked(now - raid.AnsweringMs) <= PlayerbotSiegeCommander.AnswerFreshMs
+            && Vector3.Distance(leader, waypoint) <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards;
+
     /// <summary>
     /// Whether a leader at <paramref name="leader"/> stands at <paramref name="waypoint"/>: within <see cref="PlayerbotSiegeCommander.WaypointYards"/> in the plane, and on its level (no more than
     /// <see cref="PlayerbotSiegeCommander.WaypointLevelYards"/> apart in height). A lift-top waypoint has the same XY as the floor under it (up to about 100 yards below in the Undercity, whose levels are about 20 yards apart), and a leader
@@ -587,7 +592,9 @@ public sealed partial class PlayerbotGroupCoordinator
         bool atWaypoint = false;
         if (siege.Step < siege.Waypoints.Count)
         {
-            atWaypoint = IsAtWaypoint(new Vector3(leader.X, leader.Y, leader.Z), siege.Waypoints[siege.Step]);
+            var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
+            // A leader that left the waypoint's disk to answer an attacker of its own (within the leash) is still at the waypoint for the raid: the lag hold, the lockstep and the no-progress clock do not flip because of the answer.
+            atWaypoint = IsAtWaypoint(leaderAt, siege.Waypoints[siege.Step]) || IsAnswering(raid, leaderAt, siege.Waypoints[siege.Step], now);
         }
 
         raid.AtWaypoint = atWaypoint;

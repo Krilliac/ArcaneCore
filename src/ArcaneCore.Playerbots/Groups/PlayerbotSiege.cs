@@ -187,6 +187,15 @@ internal static class PlayerbotSiegeCommander
     /// <summary>A leader is at its waypoint only on its level: no more than this many yards apart in height. The Undercity levels are about 20 yards apart (the lift runs about 100, its top shares its XY with the floor below), and within the 6-yard plane bound walkable ground does not climb more than about 7 yards.</summary>
     internal const float WaypointLevelYards = 10f;
 
+    /// <summary>
+    /// How far from its waypoint (3D) a waiting pushing leader answers an attacker that is on it: it closes on an attacker it cannot hit from where it stands, but only while that attacker is within this many yards of the
+    /// waypoint. An attacker beyond it (kiting) is not followed: the leader walks back to the waypoint. While the leader answers, the raid reads it as at the waypoint (<see cref="AnswerFreshMs"/>).
+    /// </summary>
+    internal const float SiegeAnswerLeashYards = 30f;
+
+    /// <summary>How long the leader's answer (<see cref="PlayerbotSiegeRaid.AnsweringMs"/>) keeps the raid reading it as at its waypoint after the leader's last think that fought.</summary>
+    internal const uint AnswerFreshMs = 3_000;
+
     /// <summary>A retreating leader is at its retreat point (the retreat becomes a rally) within this many yards (2D).</summary>
     internal const float RallyYards = 8f;
 
@@ -439,6 +448,9 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     public bool CommitAnnounced { get; set; }
 
     public bool AtWaypoint { get; set; }
+
+    /// <summary>When the waiting pushing leader last fought an attacker of its own from its waypoint (<see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>); 0: it is not answering. Written by the leader's group AI, read by the coordinator.</summary>
+    public uint AnsweringMs { get; set; }
 
     /// <summary>What the raid's current order executes in combat: the push in force (<see cref="PlayerbotSiegeCommander.PushOf"/>) while the raid advances, <see cref="PlayerbotSiegePush.None"/> otherwise and while the raid holds at a waypoint for the peer. <see cref="PlayerbotGroupAI"/> reads it: a pushing leader fights nothing away from its waypoint, its members answer any attacker of the raid, and a lift ride is not cancelled by combat.</summary>
     public PlayerbotSiegePush Push { get; set; }

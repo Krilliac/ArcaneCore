@@ -1303,8 +1303,13 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.True(worstOff <= PlayerbotSiegeCommander.WaypointYards, "the leader was drawn out of its waypoint: " + story);
     }
 
+    private static Creature? NextAttacker(Player leader)
+        => leader.Map?.FindUpdater<CreatureMapSystem>()?.Creatures.FirstOrDefault(g => g.Entry is GuardA or GuardB && g.IsAlive);
+
+    private static float FlatYards(Unit unit, Vector3 point) => MathF.Sqrt(((unit.X - point.X) * (unit.X - point.X)) + ((unit.Y - point.Y) * (unit.Y - point.Y)));
+
     [Fact]
-    public async Task AnAttackerOutsideTheDiskOnTheWaitingLeader_IsFoughtFromWhereTheLeaderStands_NoDenial()
+    public async Task AMeleeWaitingLeaderShotByAnAttackerOutOfReach_ClosesAndFightsIt_ThenReturnsToTheWaypoint_NoDenial()
     {
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
         await using GroupTestWorld _ = world;
@@ -1319,55 +1324,140 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         }
 
         int stepAtPush = -1;
-        bool sent = false, targeted = false, leaderDied = false, refused = false;
-        uint sentAt = 0, pinnedAt = 0;
-        float guardOff = 0f, leaderOff = 0f;
+        Creature? attacker = null;
+        uint sentAt = 0, lagBefore = 0;
+        bool engaged = false, killed = false, back = false, refused = false, flipped = false, lagKept = true;
+        float leaderOff = 0f;
         var trail = new List<string>();
         uint began = Now(world);
-        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 250_000, () =>
+        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 300_000, () =>
         {
-            TopUpGuards(world, raid);
-            foreach (Player member in Living(world, raid)) if (!sent || member.Guid != raid.Group.LeaderGuid) member.Health = member.MaxHealth; // the leader is NOT topped up once the attacker is sent
+            foreach (Creature g in leaderGuards(world, raid)) if (!ReferenceEquals(g, attacker) || !engaged) g.Health = g.MaxHealth;
+            TopUpMembers(world, raid);
             Player leader = Leader(world, raid);
             if (raid.Push == PlayerbotSiegePush.Stalemate && stepAtPush < 0) stepAtPush = siege.Step;
             if (stepAtPush < 0) return false;
             Hold();
-            if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
-                trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={sent} targeted={targeted} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} hp={leader.Health}/{leader.MaxHealth} lagSince={raid.LagSinceMs}");
             Vector3 waypoint = siege.Waypoints[stepAtPush];
-            if (!sent && raid.AtWaypoint && raid.PushInForce != PlayerbotSiegePush.None && raid.LagSinceMs != 0 && unchecked(Now(world) - raid.LagSinceMs) > 5_000
-                && leader.Map?.FindUpdater<CreatureMapSystem>() is { } system
-                && system.Creatures.FirstOrDefault(g => g.Entry is GuardA or GuardB && g.IsAlive) is { } guard)
+            if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
+                trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={attacker is not null} engaged={engaged} killed={killed} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} off={FlatYards(leader, waypoint):F1} lagSince={raid.LagSinceMs}");
+            if (attacker is null && siege.Step == stepAtPush && raid.AtWaypoint && raid.PushInForce != PlayerbotSiegePush.None && raid.LagSinceMs != 0 && unchecked(Now(world) - raid.LagSinceMs) > 5_000
+                && NextAttacker(leader) is { } guard)
+            {
+                // A ranged attacker on the melee leader, 25 yards from the waypoint (out of the 6-yard disk and out of melee reach), held there until the leader reaches it.
+                guard.Combat.Threat.AddThreat(leader, 100_000f);
+                attacker = guard;
+                sentAt = Now(world);
+                lagBefore = raid.LagSinceMs;
+            }
+
+            if (attacker is not null)
+            {
+                if (!engaged && attacker.IsAlive)
+                {
+                    attacker.Relocate(waypoint.X + 25f, waypoint.Y, attacker.Z, 0, Now(world));
+                    if (FlatYards(leader, new Vector3(attacker.X, attacker.Y, attacker.Z)) <= 6f)
+                    {
+                        engaged = true;
+                        attacker.Health = 1; // a single blow of the leader ends it
+                    }
+                }
+
+                killed |= !attacker.IsAlive;
+                leaderOff = Math.Max(leaderOff, FlatYards(leader, waypoint));
+                refused |= siege.Step == stepAtPush && PlayerbotMotion.IsBlacklisted(leader, waypoint);
+                // The raid still reads the leader at the waypoint while it answers out of the disk, and the lag hold keeps running.
+                if (siege.Step == stepAtPush && !killed && FlatYards(leader, waypoint) > PlayerbotSiegeCommander.WaypointYards + 2f)
+                {
+                    flipped |= !raid.AtWaypoint;
+                    lagKept &= raid.LagSinceMs == lagBefore;
+                }
+
+                back |= killed && (FlatYards(leader, waypoint) <= PlayerbotSiegeCommander.WaypointYards || siege.Step > stepAtPush);
+            }
+
+            return back || attacker is not null && (raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 120_000);
+        });
+
+        string Story() => $"done={done} sent={attacker is not null} engaged={engaged} killed={killed} back={back} refused={refused} flipped={flipped} lagKept={lagKept} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
+        if (attacker is null) Assert.Fail("the probe never fired: " + Story());
+        if (!engaged) Assert.Fail("the melee leader never closed on the attacker that was shooting it: " + Story());
+        if (leaderOff <= PlayerbotSiegeCommander.WaypointYards + 2f) Assert.Fail("the leader never left the disk, the probe proves nothing: " + Story());
+        if (leaderOff > PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards) Assert.Fail("the leader went past the leash: " + Story());
+        if (!killed) Assert.Fail("the attacker did not die: " + Story());
+        if (!back) Assert.Fail("the leader did not return to the waypoint: " + Story());
+        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
+        if (refused) Assert.Fail("the waypoint was blacklisted: " + Story());
+        if (flipped) Assert.Fail("the raid read the answering leader as away from its waypoint: " + Story());
+        if (!lagKept) Assert.Fail("the lag hold was reset by the answer: " + Story());
+
+        static IEnumerable<Creature> leaderGuards(GroupTestWorld w, PlayerbotSiegeRaid r)
+            => Leader(w, r).Map?.FindUpdater<CreatureMapSystem>()?.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive).ToList() ?? [];
+    }
+
+    [Fact]
+    public async Task AnAttackerThatKitesBeyondTheLeash_IsNotFollowedFurther_TheLeaderReturnsToTheWaypoint_NoDenial()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
+        await using GroupTestWorld _ = world;
+        world.Options.Party.TeleportToLeader = false;
+        Guid leaderBot = raid.Group!.LeaderBotId;
+        var held = raid.Group.Members.First(m => !m.Real && m.BotId != leaderBot);
+        void Hold()
+        {
+            Player far = world.World.Host.World.FindOnlinePlayer(held.Guid)!;
+            far.Relocate(Origin.X + 38f, Origin.Y, far.Z, 0, Now(world));
+        }
+
+        int stepAtPush = -1;
+        Creature? attacker = null;
+        uint sentAt = 0, kitedAt = 0;
+        bool chased = false, kited = false, back = false, refused = false;
+        float leaderOff = 0f;
+        var trail = new List<string>();
+        uint began = Now(world);
+        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 300_000, () =>
+        {
+            TopUpGuards(world, raid);
+            TopUpMembers(world, raid);
+            Player leader = Leader(world, raid);
+            if (raid.Push == PlayerbotSiegePush.Stalemate && stepAtPush < 0) stepAtPush = siege.Step;
+            if (stepAtPush < 0) return false;
+            Hold();
+            Vector3 waypoint = siege.Waypoints[stepAtPush];
+            if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
+                trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={attacker is not null} chased={chased} kited={kited} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} off={FlatYards(leader, waypoint):F1}");
+            if (attacker is null && siege.Step == stepAtPush && raid.AtWaypoint && raid.PushInForce != PlayerbotSiegePush.None && raid.LagSinceMs != 0 && unchecked(Now(world) - raid.LagSinceMs) > 5_000
+                && NextAttacker(leader) is { } guard)
             {
                 guard.Combat.Threat.AddThreat(leader, 100_000f);
-                sent = true;
+                attacker = guard;
                 sentAt = Now(world);
             }
 
-            if (sent && leader.Map?.FindUpdater<CreatureMapSystem>() is { } sys && sys.Creatures.FirstOrDefault(g => g.Entry is GuardA or GuardB && g.IsAlive && ReferenceEquals(g.Combat.Victim, leader)) is { } attacker)
+            if (attacker is not null)
             {
-                // The attacker stays 10 yards from the waypoint (outside the 6-yard disk) with the leader 5.5 yards from it, inside the waypoint's radius, in reach of the attacker.
-                leader.Relocate(waypoint.X + 5.5f, waypoint.Y, leader.Z, 0, Now(world));
-                attacker.Relocate(waypoint.X + 10f, waypoint.Y, attacker.Z, 0, Now(world));
-                guardOff = Math.Max(guardOff, MathF.Sqrt(((attacker.X - waypoint.X) * (attacker.X - waypoint.X)) + ((attacker.Y - waypoint.Y) * (attacker.Y - waypoint.Y))));
-                // Counted only once the attacker has stood outside the disk for 3 s: a target chosen while it was still on its way in does not show the leader answers it out there.
-                if (pinnedAt == 0) pinnedAt = Now(world);
-                if (unchecked(Now(world) - pinnedAt) > 3_000 && raid.Group.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit is { } t && ReferenceEquals(t, attacker)) targeted = true;
+                float off = FlatYards(leader, waypoint);
+                leaderOff = Math.Max(leaderOff, off);
+                // The attacker stays 25 yards out until the leader has left the disk to answer it, then it kites to 45 yards (beyond the 30-yard leash) and stays there.
+                if (!kited && off > 8f) { chased = true; kited = true; kitedAt = Now(world); }
+                attacker.Relocate(waypoint.X + (kited ? 45f : 25f), waypoint.Y, attacker.Z, 0, Now(world));
+                refused |= siege.Step == stepAtPush && PlayerbotMotion.IsBlacklisted(leader, waypoint);
+                back |= kited && unchecked(Now(world) - kitedAt) > 2_000 && (off <= PlayerbotSiegeCommander.WaypointYards || siege.Step > stepAtPush);
             }
 
-            leaderDied |= !leader.IsAlive;
-            refused |= siege.Step == stepAtPush && PlayerbotMotion.IsBlacklisted(leader, waypoint);
-            leaderOff = Math.Max(leaderOff, YardsFrom(leader, waypoint));
-            return targeted || leaderDied || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || sent && unchecked(Now(world) - sentAt) > 60_000;
+            return back || attacker is not null && (raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 100_000);
         });
 
-        string Story() => $"done={done} sent={sent} targeted={targeted} died={leaderDied} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} guardOff={guardOff:F1} leaderOff={leaderOff:F1} {raid.LastFacts}"
+        string Story() => $"done={done} sent={attacker is not null} chased={chased} kited={kited} back={back} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        if (!sent) Assert.Fail("the probe never fired: " + Story());
-        if (!targeted) Assert.Fail("the waiting leader never fought the attacker that stands on it outside the disk: " + Story());
-        if (leaderDied) Assert.Fail("the leader died: " + Story());
+        if (attacker is null) Assert.Fail("the probe never fired: " + Story());
+        if (!chased) Assert.Fail("the leader never left the disk to answer the attacker: " + Story());
+        if (leaderOff > PlayerbotSiegeCommander.SiegeAnswerLeashYards + 3f) Assert.Fail("the leader followed the kiting attacker past the leash: " + Story());
+        if (!back) Assert.Fail("the leader did not return to the waypoint: " + Story());
         if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
-        if (guardOff <= PlayerbotSiegeCommander.WaypointYards) Assert.Fail("the attacker was not outside the disk, the probe proves nothing: " + Story());
+        if (refused) Assert.Fail("the waypoint was blacklisted: " + Story());
     }
 
     [Fact]
@@ -1376,7 +1466,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
         await using GroupTestWorld _ = world;
         int stepAtPush = -1;
-        bool injected = false, lifted = false, decoyKept = true, walked = false;
+        bool injected = false, lifted = false, decoyKept = true, walked = false, counterKept = false;
         uint injectedAt = 0;
         float xAtInject = 0f;
         var decoy = new Vector3(Origin.X + 300f, Origin.Y + 300f, Origin.Z);
@@ -1395,6 +1485,15 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (!injected && raid.PushInForce != PlayerbotSiegePush.None && !raid.AtWaypoint && siege.Step == stepAtPush && YardsFrom(leader, waypoint) > 20f
                 && PlayerbotMotion.TryGetState(leader, out PlayerbotMotion.MotionState? state))
             {
+                // Lifting one place leaves the rejection count alone (a successful route start resets it, so this is checked on the call itself, not later).
+                var probe = new Vector3(Origin.X + 400f, Origin.Y + 400f, Origin.Z);
+                state.Blacklist.Add((probe, Now(world) + 600_000));
+                state.ConsecutiveRejections = 2;
+                state.LastRejectedDestination = probe;
+                PlayerbotMotion.Unblacklist(leader, probe);
+                counterKept = state.ConsecutiveRejections == 2 && !PlayerbotMotion.IsBlacklisted(leader, probe);
+                state.ConsecutiveRejections = 0;
+                state.LastRejectedDestination = default;
                 // The push's own walk is refused (as an A, B, A pattern would), another place is refused too, and a rejection count is running.
                 state.Blacklist.Add((waypoint, Now(world) + 600_000));
                 state.Blacklist.Add((decoy, Now(world) + 600_000));
@@ -1416,14 +1515,55 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return injected && (siege.Step > stepAtPush || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0);
         });
 
-        string Story() => $"done={done} injected={injected} lifted={lifted} decoyKept={decoyKept} walked={walked} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
+        string Story() => $"done={done} injected={injected} lifted={lifted} decoyKept={decoyKept} counterKept={counterKept} walked={walked} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
         if (!injected) Assert.Fail("the probe never fired: " + Story());
         if (!lifted) Assert.Fail("the push's own waypoint stayed refused: " + Story());
         if (!walked) Assert.Fail("the leader did not walk on: " + Story());
         if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
+        if (!counterKept) Assert.Fail("lifting one refused place reset the rejection count: " + Story());
         if (!decoyKept) Assert.Fail("the other refused place was forgotten as well (ForgetLoops on every think): " + Story());
         if (!(done && siege.Step > stepAtPush)) Assert.Fail("the step did not move: " + Story());
+    }
+
+    [Fact]
+    public async Task QueuedLootWaits_WhileAPushingLeaderWalksOffItsWaypoint()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
+        await using GroupTestWorld _ = world;
+        Guid leaderBot = raid.Group!.LeaderBotId;
+        int stepAtPush = -1;
+        bool queued = false, drained = false;
+        int walkTicks = 0;
+        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 250_000, () =>
+        {
+            TopUpGuards(world, raid);
+            TopUpMembers(world, raid);
+            Player leader = Leader(world, raid);
+            if (raid.Push == PlayerbotSiegePush.Stalemate && stepAtPush < 0) stepAtPush = siege.Step;
+            if (stepAtPush < 0) return false;
+            PlayerbotGroupAI ai = raid.Group.Members.First(m => m.BotId == leaderBot).AI!;
+            bool walking = siege.Step == stepAtPush && raid.PushingThrough && !raid.AtWaypoint && YardsFrom(leader, siege.Waypoints[stepAtPush]) > 20f;
+            if (!queued && walking)
+            {
+                // A corpse looted before the push began left its packets queued.
+                ai.QueueLootAction(WorldOpcode.CmsgLootMoney, []);
+                queued = true;
+            }
+
+            if (queued && walking)
+            {
+                walkTicks++;
+                drained |= ai.QueuedLootActions == 0;
+            }
+
+            return queued && (!walking && walkTicks > 0 || siege.Step > stepAtPush);
+        });
+
+        string Story() => $"done={done} queued={queued} drained={drained} walkTicks={walkTicks} step={siege.Step}/{stepAtPush} {raid.LastFacts}" + Environment.NewLine + world.Trace();
+        if (!queued) Assert.Fail("the probe never fired: " + Story());
+        if (walkTicks < 3) Assert.Fail("the leader was not seen walking long enough: " + Story());
+        if (drained) Assert.Fail("the queued loot was sent while the pushing leader was walking: " + Story());
     }
 
     private const uint WeakFoodItem = 992101;

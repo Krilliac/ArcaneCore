@@ -152,6 +152,12 @@ internal sealed class PlayerbotGroupAI
     /// <summary>Resting (eating or drinking) now.</summary>
     internal bool Resting => _restUntilMs != 0;
 
+    /// <summary>Loot packets queued and not yet sent (a pushing siege leader off its waypoint sends none).</summary>
+    internal int QueuedLootActions => _lootActions.Count;
+
+    /// <summary>Queues a loot packet as a looted corpse would (the world update thread).</summary>
+    internal void QueueLootAction(WorldOpcode opcode, byte[] payload) => _lootActions.Enqueue((opcode, payload));
+
     /// <summary>Walking to a corpse, or opening and emptying its loot (a run waits for it after the last boss).</summary>
     internal bool Looting => _lootActions.Count > 0 || !_lootOpened.IsEmpty || Goal == PlayerbotGoalKind.Loot;
 
@@ -309,9 +315,13 @@ internal sealed class PlayerbotGroupAI
         if (target is not null)
         {
             if (isLeader && group.Run is { } run && target is Creature boss) NoteBossFight(group, run, boss);
-            Fight(player, target, interval, holdPosition: isLeader && group.Siege is { PushingThrough: true, AtWaypoint: true });
+            PlayerbotSiegeRaid? waiting = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: true } w ? w : null;
+            if (waiting is not null) waiting.AnsweringMs = Math.Max(1u, _session.World.NowMs);
+            Fight(player, target, interval, waiting?.MoveTo);
             return;
         }
+
+        if (isLeader && group.Siege is { AnsweringMs: not 0 } answered) answered.AnsweringMs = 0;
 
         if (_target is not null)
         {
@@ -696,10 +706,11 @@ internal sealed class PlayerbotGroupAI
         if (group.Siege is { PushingThrough: true } pushing)
         {
             if (isLeader && !pushing.AtWaypoint) return null;
-            // The leader waiting at its waypoint picks no fights: it takes what is at the waypoint (3D, so a unit on the other level of a lift top is not) and whatever attacks it, wherever that stands (a caster, a flagged
-            // player, a long-reach melee unit). It fights from where it stands (Fight holdPosition): chasing would draw it out of the waypoint, off its walk, and back, and the members that could cover it are the ones it waits for.
+            // The leader waiting at its waypoint picks no fights: it takes what is at the waypoint (within WaypointYards, 3D, so a unit on the other level of a lift top is not) and an attacker that is on it, as long as that attacker
+            // is within SiegeAnswerLeashYards of the waypoint (a caster, a flagged player, a long-reach melee unit). Beyond the leash (a kiting attacker) it is not followed: the leader walks back to its waypoint. Fight closes on
+            // an attacker the leader cannot hit from where it stands, within that leash only.
             if (isLeader)
-                return loose.Where(l => l.OnSelf || Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= PlayerbotSiegeCommander.WaypointYards)
+                return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= (l.OnSelf ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : PlayerbotSiegeCommander.WaypointYards))
                     .OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
             return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
@@ -861,8 +872,8 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
-    /// <param name="holdPosition">A fight that does not chase (the waiting siege leader): a target out of reach is answered from where the player stands (a cast, or a swing once it is in reach), never walked to.</param>
-    private void Fight(Player player, Unit target, uint interval, bool holdPosition = false)
+    /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
+    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null)
     {
         if (!ReferenceEquals(_target, target))
         {
@@ -901,7 +912,8 @@ internal sealed class PlayerbotGroupAI
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
-            case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee when holdPosition:
+            case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee when leashCentre is { } centre
+                && Vector3.Distance(new Vector3(target.X, target.Y, target.Z), centre) > PlayerbotSiegeCommander.SiegeAnswerLeashYards:
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;

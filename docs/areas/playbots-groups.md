@@ -433,15 +433,20 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   waypoint it fights nothing (its target is none, so `PlayerbotGroupAI.Update` reaches the walk; its attackers follow it), and at its waypoint, waiting, it fights back.
   **Every member answers any attacker of any raid member** within `AssistYards` (50 yards), its own attacker first, then the nearest, and with none follows the leader;
   there are no marks and no new targets (`SelectTarget`). A rally is different: there a member fights back only its own attackers (a healer also a raid member's).
-  **At the waypoint the pushing leader picks no fights and does not chase**: it takes what is at the waypoint (within `WaypointYards`, 6 yards, of it, in 3D so that a unit on
-  the other level of a lift top is not) and anything that attacks it, wherever that stands (a caster, a flagged player, a long-reach melee unit; the members that could cover
-  it are the ones the wait is for). It fights from where it stands (`Fight` with `holdPosition`): a spell is cast, a melee swing happens once the target is in reach, and a
-  target out of reach is never walked to. Chasing drew the leader out of the 6-yard radius, so that its target was none and it walked back, then chased again; the loop
-  watch read that as an A, B, A pattern and refused the waypoint, the walk reported no path and the push was denied after 30 s. Known gap: a melee-only leader with an
-  unreachable ranged attacker on it holds and takes the damage until the lag hold ends (`LagHoldMs`) or it dies (a leader death is the raid's retreat). Members are unchanged
-  (any attacker of a raid member within 50 yards). Since the push has its own no-progress bound, `LeadSiege` lifts the waypoint's own loop-watch refusal
-  (`PlayerbotMotion.Unblacklist`: only the entries at that place; the other refusals, the loop pattern and the rejection count stay) when the waypoint of a pushing leader is
-  refused, so the guard against a walk refused again and again still trips. A pushing leader away from its waypoint does not loot either: queued loot actions wait. **A pushing leader away from its waypoint does not rest, eat, loot or buff** (no `FinishLoot`, `Resurrect`, `LootHeld`,
+  **At the waypoint the pushing leader picks no fights, but answers what attacks it**: it takes what is at the waypoint (within `WaypointYards`, 6 yards, of it, in 3D so that a
+  unit on the other level of a lift top is not) and an attacker that is on it, wherever it stands within `SiegeAnswerLeashYards` (30 yards, 3D) of the waypoint (a caster, a
+  flagged player, a long-reach melee unit). A leader that cannot hit that attacker from where it stands closes on it (a melee tank under fire from a ranged attacker; a ranged
+  leader casts from where it stands) but only while the attacker is inside the leash: an attacker that kites beyond it is not followed, the leader walks back to the waypoint
+  (and stands there taking what it takes until the lag hold ends, `LagHoldMs`), and so it does when the attacker dies or stops attacking. Units outside the disk that do not
+  attack the leader are ignored. While the leader answers, the raid reads it as at the waypoint (`PlayerbotSiegeRaid.AnsweringMs`, fresh for `AnswerFreshMs`, 3 s, and the leader
+  within the leash): the lag hold, the lockstep and the no-progress clock do not flip because it left the disk. Chasing without that leash drew the leader out of the 6-yard
+  radius, so that its target was none and it walked back, then chased again; the loop watch read that as an A, B, A pattern and refused the waypoint, the walk reported no path
+  and the push was denied after 30 s. **A leader death is not a retreat**: a retreat needs every tank dead (`WouldRetreat`); the death of the leader promotes the next tank
+  (`PromoteLeader`) and the push goes on. Members are unchanged (any attacker of a raid member within 50 yards). Since the push has its own no-progress bound
+  (`PushStallMs`, 30 s, which ends a push whose leader cannot get on whatever it does), `LeadSiege` lifts the waypoint's own loop-watch refusal on every think while the waypoint is
+  refused (`PlayerbotMotion.Unblacklist`: only the entries at that place; the other refusals, the loop pattern and the rejection count stay, so the guard against a walk refused
+  again and again still trips). `Unblacklist` is 2D like the refusal itself (`IsBlacklisted`), so it also lifts a refused spot with the same XY on another level: the walk would
+  refuse that spot as well. **A pushing leader away from its waypoint does not rest, eat, loot or buff** (queued loot packets wait, no `FinishLoot`, `Resurrect`, `LootHeld`,
   buffs or `Rest`, and a rest already running is ended): a sit at 30 % health with weak food stood the leader still until the push was withdrawn. **"At the waypoint" is
   level-aware**: within `WaypointYards` in the plane and no more than `WaypointLevelYards` (10 yards) in height, because a lift-top waypoint shares its XY with the floor
   up to about 100 yards below it and the Undercity levels are about 20 yards apart (lift bottom -40.8, floors -59 to -62; within 6 yards in the plane walkable ground does not climb more than about 7).
