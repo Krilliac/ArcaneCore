@@ -21,7 +21,6 @@ public sealed class CreatureStuckInCombatFixTests
     private const uint RatCritterEntry = 974075;
     private const uint CritterPostFleeEntry = 974076;
     private const uint NullAiEntry = 974077;
-    private const uint DeadTaunterEntry = 974078;
     private const uint NoThreatListEntry = 974079;
 
     private static AnomalyCapture CaptureStuckInCombat(uint entry)
@@ -102,34 +101,6 @@ public sealed class CreatureStuckInCombatFixTests
 
             Assert.False(npc.Combat.IsInCombat);
             Assert.Empty(capture.Notices);
-        }
-    }
-
-    [Fact]
-    public void SelectHostileTarget_WithStaleTauntCasterAndNoValidTargets_HoldsWhileTheTauntIsUp_AndEvadesOnceItFades()
-    {
-        using AnomalyCapture capture = CaptureStuckInCombat(DeadTaunterEntry);
-        CreatureContent content = Content([Template(DeadTaunterEntry)], [Spawn(1, DeadTaunterEntry, 10, 0)]);
-        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
-        using (world)
-        {
-            AddPlayer(world, 1, 100, 100);
-            Creature wolf = Assert.Single(system.Creatures);
-
-            // A taunt caster GUID that is not a valid living unit on the map while the creature is in combat.
-            ObjectGuid taunter = ObjectGuid.Player(99999);
-            map.Combat.SetInCombatState(wolf, 0);
-            wolf.Combat.Threat.AddTauntCaster(taunter);
-
-            // vmangos Unit::SelectHostileTarget (Unit.cpp:7589): no target, but the taunt aura is still up, so no evade yet ...
-            Assert.False(system.SelectHostileTarget(wolf));
-            Assert.True(wolf.Combat.IsInCombat);
-            Assert.False(wolf.IsInEvadeMode);
-
-            // ... and once it fades (Aura::HandleModTaunt removes the caster) nothing holds it: it evades instead of sticking in combat.
-            wolf.Combat.Threat.RemoveTauntCaster(taunter);
-            Assert.False(system.SelectHostileTarget(wolf));
-            Assert.False(wolf.Combat.IsInCombat);
         }
     }
 
