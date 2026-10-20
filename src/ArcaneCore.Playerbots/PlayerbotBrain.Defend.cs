@@ -17,7 +17,7 @@ namespace ArcaneCore.World.Playerbots;
 /// the transit legs, before any quest, grind or explore step. In this order: keep the PvP flag on (CMSG_TOGGLE_PVP; clearing the post sends
 /// it off again and vmangos' five-minute linger then runs out); fight a player attacking it, then the nearest hostile player inside the post;
 /// else help a friendly creature in combat inside the post by fighting what it fights; else heal a wounded defender of the same post; else
-/// walk back to the post when it is farther than 0.75 x the radius; else hold, rest and buff. Everything is memory only.
+/// walk back to the post when it is outside the radius (and on to within 0.75 x the radius); else hold, rest and buff. Everything is memory only.
 /// </summary>
 internal sealed partial class PlayerbotBrain
 {
@@ -34,7 +34,9 @@ internal sealed partial class PlayerbotBrain
     private uint _defendScanAtMs;
     private bool _defendScanned;
     private Unit? _defendScanTarget;
-    private bool _defendFlagOn;
+    private uint _defendHealAtMs;
+    private bool _defendHealScanned;
+    private Player? _defendHealTarget;
     private PlayerbotDefendPost? _defendAreaPost;
     private PlayerbotHomeArea? _defendArea;
 
@@ -50,6 +52,8 @@ internal sealed partial class PlayerbotBrain
             _defend = value;
             _defendScanned = false;
             _defendScanTarget = null;
+            _defendHealScanned = false;
+            _defendHealTarget = null;
             if (_session.Player is not { } player) return;
             if (value is null) PlayerbotDefend.Unregister(player);
             else PlayerbotDefend.Register(player, value);
@@ -79,7 +83,7 @@ internal sealed partial class PlayerbotBrain
 
         // 1. The PvP flag: a defender is a fair target of the players it fights (and flags itself by fighting them anyway), asked for again every
         // think until the server shows it.
-        if ((player.Flags & PlayerFlags.PvpDesired) == 0 && _session.TryManagedAction(WorldOpcode.CmsgTogglePvp, [1])) _defendFlagOn = true;
+        if ((player.Flags & PlayerFlags.PvpDesired) == 0 && _session.TryManagedAction(WorldOpcode.CmsgTogglePvp, [1])) PlayerbotDefend.OwnFlag(player);
 
         // 2-3. Fight: whoever attacks the bot, what it fights already, then the scan of the post.
         Unit? foe = DefendFoe(player, post);
@@ -124,10 +128,7 @@ internal sealed partial class PlayerbotBrain
     /// <summary>A defender that no longer has a post lets go of the PvP flag it turned on (the server's linger timer then runs).</summary>
     private void ReleaseDefendFlag()
     {
-        if (!_defendFlagOn) return;
-        if (_session.Player is { } player && (player.Flags & PlayerFlags.PvpDesired) != 0 && !_session.TryManagedAction(WorldOpcode.CmsgTogglePvp, [0]))
-            return;
-        _defendFlagOn = false;
+        if (_session.Player is { } player) PlayerbotDefend.ReleaseFlag(_session, player);
     }
 
     /// <summary>The home area of a post (cached per post): a circle at its centre.</summary>
@@ -148,8 +149,9 @@ internal sealed partial class PlayerbotBrain
     /// </summary>
     private Unit? DefendFoe(Player player, PlayerbotDefendPost post)
     {
-        if (player.Map is not { } map || player.MapId != post.MapId) return null;
+        if (player.Map is not { } map) return null;
         if (PlayerbotHostility.FirstProvokingPlayer(player) is { } provoker) return provoker;
+        if (player.MapId != post.MapId) return null;
         if (_pvpFight is { Target: { } current } && DefendTargetValid(player, map, post, current)) return current;
         if (FindDefensiveAttacker(player) is { } creature) return creature;
 
@@ -227,18 +229,27 @@ internal sealed partial class PlayerbotBrain
     private bool TryHealDefender(Player player, PlayerbotDefendPost post)
     {
         if (player.Class is not (Game.Class.Priest or Game.Class.Paladin or Game.Class.Druid or Game.Class.Shaman) || player.Map is not { } map) return false;
-        Player? wounded = null;
-        float lowest = 85f;
-        foreach (ObjectGuid guid in player.VisibleObjects)
+        // The walk over what the bot sees runs at most once per DefendScanMs; between the scans the last pick is kept while it still needs the heal.
+        uint now = _session.World.NowMs;
+        if (!_defendHealScanned || unchecked((int)(now - _defendHealAtMs)) >= DefendScanMs)
         {
-            if (map.FindObject(guid) is not Player mate || ReferenceEquals(mate, player) || mate.MaxHealth == 0
-                || PlayerbotDefend.PostOf(mate) is not { } matePost || matePost.PostId != post.PostId
-                || Distance(player, mate) > DefendHealYards || !IsSafeHealTarget(player, mate)) continue;
-            float percent = mate.Health * 100f / mate.MaxHealth;
-            if (percent < lowest) (wounded, lowest) = (mate, percent);
+            _defendHealScanned = true;
+            _defendHealAtMs = now;
+            _defendHealTarget = null;
+            float lowest = 85f;
+            foreach (ObjectGuid guid in player.VisibleObjects)
+            {
+                if (map.FindObject(guid) is not Player mate || ReferenceEquals(mate, player) || mate.MaxHealth == 0
+                    || PlayerbotDefend.PostOf(mate) is not { } matePost || matePost.PostId != post.PostId
+                    || Distance(player, mate) > DefendHealYards || !IsSafeHealTarget(player, mate)) continue;
+                float percent = mate.Health * 100f / mate.MaxHealth;
+                if (percent < lowest) (_defendHealTarget, lowest) = (mate, percent);
+            }
         }
 
-        if (wounded is null) return false;
+        if (_defendHealTarget is not { } wounded || !wounded.IsInWorld || !wounded.IsAlive || wounded.MaxHealth == 0
+            || wounded.Health * 100f / wounded.MaxHealth >= 85f || Distance(player, wounded) > DefendHealYards || !IsSafeHealTarget(player, wounded))
+            return false;
         PlayerbotAbilities abilities = _combatSpells.Abilities(player);
         return _combatSpells.FirstCastable(player, abilities.DirectHeals, wounded, abilities.HealsAnotherUnit) is { } heal
             && _combatSpells.CastAt(player, heal, wounded);

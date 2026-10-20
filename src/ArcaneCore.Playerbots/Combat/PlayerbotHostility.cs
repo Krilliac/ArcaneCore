@@ -11,7 +11,7 @@ internal enum PlayerbotEngageReason : byte
     /// <summary>Nothing beyond the bot's own provocation.</summary>
     None,
 
-    /// <summary>The player attacks the bot (or the bot attacks it): checked by the rule itself, named for call sites that only grant that.</summary>
+    /// <summary>The player attacks the bot: checked by the rule itself, named for call sites that only grant that.</summary>
     Provoked,
 
     /// <summary>The player attacks a member or the master of the bot's group, or the master's or the leader's victim is the player.</summary>
@@ -46,7 +46,7 @@ internal static class PlayerbotHostility
 
     /// <summary>
     /// Whether the bot may attack <paramref name="other"/> now: it is a hostile player (<see cref="IsHostilePlayer"/>) and either provoked it
-    /// (it attacks the bot, or the bot attacks it), or, with <paramref name="groups"/>,
+    /// (it attacks the bot), or, with <paramref name="groups"/>,
     /// it attacks a member of the bot's group or is the victim of the group's leader (<see cref="PlayerbotEngageReason.GroupProvoked"/>), or
     /// <paramref name="granted"/> is an initiating reason (<see cref="PlayerbotEngageReason.Ordered"/>, <see cref="PlayerbotEngageReason.Defend"/>,
     /// <see cref="PlayerbotEngageReason.Siege"/>). Real players and bots share this rule.
@@ -62,6 +62,7 @@ internal static class PlayerbotHostility
     /// <summary>The first player (alive, in the world, on the bot's map) among the bot's attackers; the caller still asks <see cref="MayEngage"/>.</summary>
     internal static Player? FirstProvokingPlayer(Player self)
     {
+        if (self.Combat.Attackers.Count == 0) return null;
         foreach (Unit unit in self.Combat.Attackers)
         {
             if (unit is Player attacker && IsHostilePlayer(self, attacker)) return attacker;

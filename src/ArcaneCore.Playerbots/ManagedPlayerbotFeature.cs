@@ -473,6 +473,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     active.Session.World.NowMs, unixNow);
             }
 
+            // A hot reload ends the posts (memory only): the PvP flag a post turned on goes off before the brain is dropped.
+            if (_world is { IsStopped: false } held)
+            {
+                if (held.IsWorldThread) ReleaseDefendFlag(active);
+                else _ = held.InvokeAsync(() => { ReleaseDefendFlag(active); return true; });
+            }
+
             active.Brain.Stop();
             if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controllers[active.Entry.BotId] = controller;
         }
@@ -1331,6 +1338,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             else
             {
                 bot.Brain.Defend = post;
+                if (post is null) PlayerbotDefend.ReleaseFlag(bot.Session, player);
                 results.Add(new(true, post is null ? "defend-cleared" : "defending", botId, player.Name));
             }
         }
@@ -1805,6 +1813,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 return;
             }
 
+            await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
             void Quiesce()
             {
                 if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
@@ -2810,6 +2819,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
+        await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
@@ -2907,6 +2917,26 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         string risk = RiskOf(active) ?? "none";
         string snap = active.Brain.FormatDiagnosticSnapshot(player);
         return $"bot={active.Record.BotId.ToString("N")[..8]} drv={driver} goal={goal}/{target}/q{quest} stall={stall} home={home} risk={risk} {snap}";
+    }
+
+    /// <summary>World thread: the PvP flag a defend post turned on goes off (<see cref="PlayerbotDefend.ReleaseFlag"/>), so the saved character keeps none.</summary>
+    private static void ReleaseDefendFlag(ActiveBot active)
+    {
+        if (active.Session.Player is { IsInWorld: true } player) PlayerbotDefend.ReleaseFlag(active.Session, player);
+    }
+
+    /// <summary>As <see cref="ReleaseDefendFlag"/> from any thread, done before the bot's session closes and the character is saved.</summary>
+    private async Task ReleaseDefendFlagAsync(ActiveBot active)
+    {
+        if (_world is not { IsStopped: false } world) return;
+        if (world.IsWorldThread)
+        {
+            ReleaseDefendFlag(active);
+            return;
+        }
+
+        try { await world.InvokeAsync(() => { ReleaseDefendFlag(active); return true; }).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { }
     }
 
     private void ReplaceBrain(ActiveBot active)

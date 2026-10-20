@@ -193,6 +193,12 @@ internal static class PlayerbotParty
     internal const byte SkullIcon = 7;
 
     /// <summary>
+    /// A raid mark is followed only within this distance of the bot. The group's marks are saved with the group and have no range of their own, so a
+    /// mark left on a unit far away (or one the bot cannot see) must not pull it across the map.
+    /// </summary>
+    internal const float MarkRangeYards = 100f;
+
+    /// <summary>
     /// vmangos PartyBotAI::ShouldAutoRevive (:237): a released ghost revives at once; while any other member fights, or a healer
     /// (priest, paladin, shaman, druid) is alive to resurrect it, the bot waits; otherwise it revives when a living member is within
     /// <see cref="ReviveCompanyRange"/> yards.

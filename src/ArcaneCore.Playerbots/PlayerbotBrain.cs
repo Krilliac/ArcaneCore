@@ -1930,7 +1930,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     private void RetireDeathIntent()
     {
-        if (_pvpFight is { } pvp) (pvp.Target, pvp.Attacking) = (null, false);
+        if (_pvpFight is { } pvp)
+        {
+            if (pvp.Target is not null && _session.Player is { } self) pvp.Stop(self);
+            (pvp.Target, pvp.Attacking) = (null, false);
+        }
         // Death starts a new gameplay lifetime. Drop only controller-owned, transient
         // intent; the recovery helper still owns the ordinary release/reclaim flow.
         _contention.ReleaseClaim();

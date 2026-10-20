@@ -1317,7 +1317,9 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 `.playerbot defend <sel> here #radius [force]` gives the running autonomous bots a post: the GM's map and position and a radius (10 to 200
 yards, clamped). Bots in a real player's group, scripted, or driven by the party AI, a bot-led group or a battleground are skipped
 (`in-player-group`, `bot-busy`, `bot-scripted`). Every bot of one command shares a post id. A post is **memory only** (`PlayerbotDefendPost`
-on the brain): it is not saved, a restart, a bot stop or `.playerbot defend <sel> clear` ends it, and the brain replacement after a fault keeps it.
+on the brain): it is not saved: a restart, a bot stop, a playerbots hot reload or `.playerbot defend <sel> clear` ends it. A brain replacement (a bot leaving a
+real player's party, a controller detaching) keeps it. The PvP flag the post turned on is tracked per player (`PlayerbotDefend.OwnFlag`), so
+whichever of those ends the post also turns `PvpDesired` off again, before the character is saved; a flag the post did not turn on is left alone.
 
 A bot with a post owns its think right after death and recovery and the transit legs (a lift ride), before any quest, grind or explore step
 (`PlayerbotBrain.Defend.cs`). In order:
@@ -1328,11 +1330,11 @@ A bot with a post owns its think right after death and recovery and the transit 
 2. **Fight.** A player attacking the bot first, then what it fights already while inside the post (10 yards of chase margin), a creature
    attacking it, then the scan of the post: the nearest PvP-flagged hostile player inside the radius (`PlayerbotHostility.MayEngage` with the
    `Defend` grant), else what a friendly creature (`Hooks.IsFriendly`, so a guard) that is in combat inside the radius fights: its victim and
-   its attackers. The scan runs at most once per second per defender; the fight is `PlayerbotPvpFight`, for players and creatures alike.
+   its attackers. The scan runs at most once per second per defender (as does the heal's look at the post mates); the fight is `PlayerbotPvpFight`, for players and creatures alike.
 3. **Heal.** A priest, paladin, druid or shaman heals the most wounded defender of the same post (below 85% health) within 40 yards when
    the heal is safe (`IsSafeHealTarget`, as for a tagger).
-4. **Return.** Farther than 0.75 times the radius from the centre, the bot walks back with the home walk (`TryReturnHome`: lift-aware, the
-   Auto return mode's teleport rules apply); no errand holds a defender off its post.
+4. **Return.** Outside the full radius, the bot walks back with the home walk (`TryReturnHome`: lift-aware, the Auto return mode's teleport
+   rules apply) and stops once it is within 0.75 times the radius of the centre (`PlayerbotHome`); no errand holds a defender off its post.
 5. Otherwise it holds, rests and buffs. The goal shows as `Home`; `.playerbot inspect` prints `defend=r=40 post=3 map=0 centre=x,y,z`.
 
 An unflagged enemy player is never attacked, and a hostile player outside the radius only if it attacks the bot.

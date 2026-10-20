@@ -1,6 +1,11 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Groups;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -21,6 +26,33 @@ internal static class PlayerbotDefend
 
     // Who holds which post. Keyed by the player object, so the roster of one world never meets another's and a bot that leaves takes its entry along.
     private static readonly ConditionalWeakTable<Player, PlayerbotDefendPost> s_posts = new();
+
+    // Who turned CMSG_TOGGLE_PVP on for a post. Keyed by the player object, not the brain: a replaced brain, a stop and a hot reload all keep the
+    // bot's flag, so whoever ends the post can take the flag off again (and no persisted PvpDesired outlives it).
+    private static readonly ConditionalWeakTable<Player, object> s_flagOwned = new();
+    private static readonly object s_marker = new();
+
+    /// <summary>Note that a post turned <paramref name="player"/>'s PvP flag on (it is taken off again by <see cref="ReleaseFlag"/>).</summary>
+    internal static void OwnFlag(Player player) => s_flagOwned.AddOrUpdate(player, s_marker);
+
+    /// <summary>Whether a post turned the player's PvP flag on and it has not been released yet.</summary>
+    internal static bool OwnsFlag(Player player) => s_flagOwned.TryGetValue(player, out _);
+
+    /// <summary>
+    /// Take the PvP flag a post turned on off again: CMSG_TOGGLE_PVP 0 (the server's five-minute linger then runs), and the toggle itself when
+    /// the packet is refused, so no desire is left to be saved with the character. A flag the post did not turn on is left alone. World thread.
+    /// </summary>
+    internal static void ReleaseFlag(WorldSession session, Player player)
+    {
+        if (!OwnsFlag(player)) return;
+        if ((player.Flags & PlayerFlags.PvpDesired) != 0)
+        {
+            PlayerbotGroupCoordinator.Act(session, WorldOpcode.CmsgTogglePvp, [0], budgeted: false);
+            if ((player.Flags & PlayerFlags.PvpDesired) != 0) player.Map?.Combat.TogglePvp(player, false);
+        }
+
+        if ((player.Flags & PlayerFlags.PvpDesired) == 0) s_flagOwned.Remove(player);
+    }
 
     /// <summary>The radius of a post for a requested one.</summary>
     internal static float ClampRadius(float radius) => Math.Clamp(radius, MinRadius, MaxRadius);

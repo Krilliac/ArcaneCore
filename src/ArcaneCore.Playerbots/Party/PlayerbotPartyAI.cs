@@ -1530,7 +1530,8 @@ internal sealed class PlayerbotPartyAI
         Unit? selected = ordered is not null && !stay ? ordered : null;
         if (selected is null && !stay && groups?.GetGroup(player.Guid) is { } group
             && (player.Combat.IsInCombat || (master is not null && master.Combat.Victim is not null)))
-            selected = PlayerbotParty.MarkedTarget(group.TargetIcons, FocusIcons, guid => map.FindObject(guid) as Unit, unit => IsValidTarget(player, unit));
+            selected = PlayerbotParty.MarkedTarget(group.TargetIcons, FocusIcons, guid => map.FindObject(guid) as Unit,
+                unit => Distance(player, unit) <= PlayerbotParty.MarkRangeYards && IsValidTarget(player, unit));
         selected ??= PlayerbotParty.SelectAttackTarget(null, masterVictim, own, members, unit => IsValidTarget(player, unit));
         // FightThrough: what blocks the way to the master is fought, not run past (World:Playerbots:Follow:CatchUpMode).
         if (selected is null && !stay && _follower.Blocker(player) is { } blocker && IsValidTarget(player, blocker)) selected = blocker;

@@ -242,6 +242,85 @@ public sealed class PlayerbotDefendTests
         Assert.Null(await host.OnWorldAsync(() => feature.FindBrain(id)!.Defend));
     }
 
+    [Fact]
+    public Task DefenderIgnoresAGameMasterInGmMode() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        rig.EnemyPlayer.Flags |= PlayerFlags.Gm;
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Null(rig.Brain.InspectionPvpTarget);
+        Assert.Null(rig.BotPlayer.Combat.Victim);
+    }));
+
+    [Fact]
+    public Task DefenderOffThePostMapStillFightsAPlayerWhoAttacksIt() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        PlayerbotPvpTestKit.Flag(bot);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
+        rig.Brain.Defend = new PlayerbotDefendPost(bot.MapId + 99, new Vector3(bot.X, bot.Y, bot.Z), 40f, 1);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Brain.InspectionPvpTarget);
+    }));
+
+    private static bool Desired(Player player) => (player.Flags & PlayerFlags.PvpDesired) != 0;
+
+    [Fact]
+    public async Task ClearAfterABrainReplacementTakesTheFlagOff()
+    {
+        await using WorldTestHost host = PartyTestHost.Start(o =>
+        {
+            o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
+            o.Party.MasterTimeoutSeconds = 1;
+        });
+        Guid id = await PartyTestHost.StartBotAsync(host, "Defreplaced");
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Defreplaced")!;
+            Assert.True(Assert.Single(feature.SetDefend([id], new PlayerbotDefendPost(player.MapId, new Vector3(player.X, player.Y, player.Z), 40f, 5))).Success);
+            return true;
+        });
+        await host.WaitForWorldAsync(() => Desired(host.World.FindOnlinePlayer("Defreplaced")!), "the defender flags itself");
+
+        // A party AI takes the bot and gives it back: the brain is replaced and keeps the post.
+        WorldTestClient master = await host.EnterWorldAsync("DEFREPMASTER", "Defrepmaster");
+        await master.SendAsync(ArcaneCore.Protocol.WorldOpcode.CmsgGroupInvite, PartyTestHost.CString("Defreplaced"));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the bot");
+        await master.DisposeAsync();
+        await host.WaitForWorldAsync(() => !feature.IsPartyDriven(id) && feature.FindBrain(id) is { Defend: not null }, "a fresh brain holds the post");
+
+        await host.OnWorldAsync(() => Assert.Single(feature.SetDefend([id], null)).Success);
+        Assert.False(await host.OnWorldAsync(() => Desired(host.World.FindOnlinePlayer("Defreplaced")!)));
+        await Task.Delay(700);
+        Assert.False(await host.OnWorldAsync(() => Desired(host.World.FindOnlinePlayer("Defreplaced")!)));
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
+    public async Task StoppingADefenderLeavesNoPvpDesireToSave()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        Guid id = await PartyTestHost.StartBotAsync(host, "Defstopped");
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        Player player = null!;
+        await host.OnWorldAsync(() =>
+        {
+            player = host.World.FindOnlinePlayer("Defstopped")!;
+            Assert.True(Assert.Single(feature.SetDefend([id], new PlayerbotDefendPost(player.MapId, new Vector3(player.X, player.Y, player.Z), 40f, 6))).Success);
+            return true;
+        });
+        await host.WaitForWorldAsync(() => Desired(player), "the defender flags itself");
+
+        Assert.True((await feature.StopAsync(id.ToString())).Success);
+
+        // The player object outlives its session: whatever the character was saved with, the desire was already off.
+        Assert.False(Desired(player));
+    }
+
     private static Creature Spawn(WorldTestHost host, Player near, uint entry, float dx, float dy, string name)
     {
         var creature = new Creature(entry, new CreatureTemplate
