@@ -57,7 +57,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
             "Syntax: .playerbot summon $name|$prefix*|all [#count] [force] [to $player]\nTeleport running bots to you (or to the named online player), in rings around the spot. With a count: the nearest bots on that player's map first. 'all' or a count above the cap needs 'force'.",
             Summon),
         new ChatCommand("send", AccountSecurity.Administrator,
-            "Syntax: .playerbot send $name|$prefix*|all $tele|here [force] [to $player]\nTeleport running bots to a game_tele place, or to your position (here, or the named player's), in rings.",
+            "Syntax: .playerbot send $name|$prefix*|all $tele|here [force] [to $player]\n.playerbot send $name|$prefix*|all at $map $x $y $z [force]\nTeleport running bots to a game_tele place, to your position (here, or the named player's), or to the given map and coordinates (at: no player needed, so the server console and RA can use it; the height is taken as given), in rings.",
             Send),
         new ChatCommand("follow", AccountSecurity.Administrator,
             "Syntax: .playerbot follow $name|$prefix*|all [to $player]\nThe bots follow you (or the named player) without a party and fight back. .playerbot dismiss, or the master's whisper 'leave', sets them free.",
@@ -75,7 +75,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
             "Syntax: .playerbot revive $name|$prefix*|all\nRevive the dead bots among the selection, as .revive does.",
             Revive),
         new ChatCommand("defend", AccountSecurity.Administrator,
-            "Syntax: .playerbot defend $name|$prefix*|all here #radius [force]\n.playerbot defend $name|$prefix*|all clear\nThe running bots hold a post at your position: they turn their PvP flag on, fight the PvP-flagged enemy players and help friendly creatures in combat within #radius yards (10 to 200), heal each other and walk back to the post. 'clear' ends it. More bots than the bulk cap need 'force'. Memory only: a restart ends it.",
+            "Syntax: .playerbot defend $name|$prefix*|all here #radius [force]\n.playerbot defend $name|$prefix*|all at $map $x $y $z #radius [force]\n.playerbot defend $name|$prefix*|all clear\nThe running bots hold a post at your position (here) or at the given map and coordinates (at: no player needed, so the server console and RA can use it; the height is taken as given): they turn their PvP flag on, fight the PvP-flagged enemy players and help friendly creatures in combat within #radius yards (10 to 200), heal each other and walk back to the post. 'clear' ends it. More bots than the bulk cap need 'force'. Memory only: a restart ends it.",
             Defend),
         SiegeCommand(),
         new ChatCommand("fleet", AccountSecurity.Administrator,
@@ -136,6 +136,45 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
         return null;
     }
 
+    /// <summary>An explicit, validated position of an <c>at $map $x $y $z</c> form: no player is involved.</summary>
+    private readonly record struct FleetSpot(uint MapId, bool IsBattleground, Vector3 Position);
+
+    /// <summary>
+    /// Check the four words of an <c>at</c> form: a map id the registry knows, then finite numbers, then a position inside the map
+    /// (<see cref="GridDefines.IsValidMapCoord(float, float, float, float)"/>, the check .go xyz and .tele apply). The height is taken as
+    /// given: nothing here snaps it to the terrain or the navmesh. Replies with the reason and returns null when a word is wrong.
+    /// </summary>
+    private static FleetSpot? ResolveSpot(CommandContext context, TeleportFeature tele, string verb, IReadOnlyList<string> words)
+    {
+        if (words.Count != 4 || !uint.TryParse(words[0], NumberStyles.None, CultureInfo.InvariantCulture, out uint mapId))
+        {
+            context.Reply($"Playerbot {verb}: the map must be a map id.");
+            return null;
+        }
+
+        if (tele.Maps.Registry.Find(mapId) is not { } template)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture, $"Playerbot {verb}: unknown map {mapId}."));
+            return null;
+        }
+
+        if (!float.TryParse(words[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float x) || !float.IsFinite(x)
+            || !float.TryParse(words[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float y) || !float.IsFinite(y)
+            || !float.TryParse(words[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float z) || !float.IsFinite(z))
+        {
+            context.Reply($"Playerbot {verb}: x, y and z must be finite numbers.");
+            return null;
+        }
+
+        if (!GridDefines.IsValidMapCoord(x, y, z, 0f))
+        {
+            context.Reply($"Playerbot {verb}: the position is outside the map.");
+            return null;
+        }
+
+        return new FleetSpot(mapId, template.IsBattleground, new Vector3(x, y, z));
+    }
+
     /// <summary>The running managed bot behind a status line, or the reason it is not one.</summary>
     private static string? Running(Env env, PlayerbotStatus status, out Player bot)
     {
@@ -185,6 +224,20 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
     {
         if (!PlayerbotFleetSelection.TryParse(text, FleetVerb.Send, out FleetRequest request)) return false;
         if (Services(context) is not { } env) return true;
+        if (request.At is { } words)
+        {
+            if (ResolveSpot(context, env.Tele, "send", words) is not { } spot) return true;
+            if (spot.IsBattleground)
+            {
+                context.Reply(TeleportCommands.CannotTeleToBattlegroundText);
+                return true;
+            }
+
+            // Not tied to a loaded map or a player: the ground comes from the terrain files, as for a game_tele place.
+            TerrainInfo ground = env.Tele.Maps.Terrain.For(spot.MapId);
+            return Relocate(env, "send", request, new Destination(spot.MapId, spot.Position, 0f, null, (x, y, z) => ground.GetHeight(x, y, z), _ => true));
+        }
+
         if (request.Head.Equals("here", StringComparison.OrdinalIgnoreCase))
         {
             return Anchor(context, request.ToPlayer) is not { } anchor || Relocate(env, "send", request, DestinationOf(anchor));
@@ -437,10 +490,19 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
         if (Services(context) is not { } env) return true;
         bool clear = request.Head == "clear";
         Player? anchor = null;
+        FleetSpot? spot = null;
         if (!clear)
         {
-            anchor = Anchor(context, null);
-            if (anchor is null) return true;
+            if (request.At is { } words)
+            {
+                spot = ResolveSpot(context, env.Tele, "defend", words);
+                if (spot is null) return true;
+            }
+            else
+            {
+                anchor = Anchor(context, null);
+                if (anchor is null) return true;
+            }
         }
 
         List<PlayerbotStatus> matches = PlayerbotFleetSelection.Match(request, env.Feature.Snapshot());
@@ -457,8 +519,12 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
             return true;
         }
 
-        PlayerbotDefendPost? post = anchor is null ? null : new PlayerbotDefendPost(anchor.MapId, new Vector3(anchor.X, anchor.Y, anchor.Z),
-            PlayerbotDefend.ClampRadius(request.Radius), Interlocked.Increment(ref s_nextPostId));
+        PlayerbotDefendPost? post = anchor is not null
+            ? new PlayerbotDefendPost(anchor.MapId, new Vector3(anchor.X, anchor.Y, anchor.Z),
+                PlayerbotDefend.ClampRadius(request.Radius), Interlocked.Increment(ref s_nextPostId))
+            : spot is { } there
+                ? new PlayerbotDefendPost(there.MapId, there.Position, PlayerbotDefend.ClampRadius(request.Radius), Interlocked.Increment(ref s_nextPostId))
+                : null;
         var skipped = new List<Outcome>();
         var chosen = new List<Guid>(matches.Count);
         var names = new Dictionary<Guid, string>(matches.Count);

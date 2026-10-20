@@ -25,7 +25,7 @@ internal enum FleetVerb
     /// <summary><c>[#count] [force] [to $player]</c></summary>
     Summon,
 
-    /// <summary><c>$tele|here [force] [to $player]</c></summary>
+    /// <summary><c>$tele|here|at $map $x $y $z [force] [to $player]</c> (<c>at</c> takes no <c>to</c>)</summary>
     Send,
 
     /// <summary><c>[force]</c> (start, stop, revive, dismiss)</summary>
@@ -34,15 +34,18 @@ internal enum FleetVerb
     /// <summary><c>[to $player]</c> (follow, stay)</summary>
     Leash,
 
-    /// <summary><c>here #radius [force]</c> or <c>clear</c> (defend)</summary>
+    /// <summary><c>here #radius [force]</c>, <c>at $map $x $y $z #radius [force]</c> or <c>clear</c> (defend)</summary>
     Defend,
 
     /// <summary><c>#entry [raids 1|2] [force]</c> (siege start)</summary>
     Siege,
 }
 
-/// <summary>A parsed bulk command line. <see cref="Head"/> is the tele name of <c>send</c> (the words between selector and tail).</summary>
-internal sealed record FleetRequest(FleetSelectorKind Kind, string Text, Guid BotId, int? Count, bool Force, string? ToPlayer, string Head, string RawTail, float Radius = 0f, uint Entry = 0, int Raids = 1)
+/// <summary>
+/// A parsed bulk command line. <see cref="Head"/> is the tele name of <c>send</c> (the words between selector and tail), or <c>here</c>,
+/// <c>at</c> or <c>clear</c>. <see cref="At"/> holds the four words (<c>$map $x $y $z</c>) of an <c>at</c> form, unvalidated (null otherwise).
+/// </summary>
+internal sealed record FleetRequest(FleetSelectorKind Kind, string Text, Guid BotId, int? Count, bool Force, string? ToPlayer, string Head, string RawTail, float Radius = 0f, uint Entry = 0, int Raids = 1, string[]? At = null)
 {
     /// <summary>The selector as typed, for messages.</summary>
     public string Selector => Kind == FleetSelectorKind.Prefix ? Text + "*" : Text;
@@ -118,6 +121,7 @@ internal static class PlayerbotFleetSelection
         float radius = 0f;
         uint entry = 0;
         int raids = 1;
+        string[]? at = null;
         switch (verb)
         {
             case FleetVerb.Siege:
@@ -139,11 +143,26 @@ internal static class PlayerbotFleetSelection
                 break;
             case FleetVerb.Send:
                 if (tail.Count == 0) return false;
+                if (IsAtWord(tail[0]))
+                {
+                    // "at $map $x $y $z": the numbers are checked by the command, which says what is wrong with them.
+                    if (to is not null || tail.Count != 5) return false;
+                    head = "at";
+                    at = [.. tail.Skip(1)];
+                    break;
+                }
+
                 head = string.Join(' ', tail);
                 break;
             case FleetVerb.Defend:
                 if (to is not null) return false;
                 if (tail.Count == 1 && tail[0].Equals("clear", StringComparison.OrdinalIgnoreCase)) head = "clear";
+                else if (tail.Count == 6 && IsAtWord(tail[0])
+                    && float.TryParse(tail[5], NumberStyles.Float, CultureInfo.InvariantCulture, out radius) && float.IsFinite(radius) && radius > 0f)
+                {
+                    head = "at";
+                    at = [.. tail.Skip(1).Take(4)];
+                }
                 else if (tail.Count == 2 && tail[0].Equals("here", StringComparison.OrdinalIgnoreCase)
                     && float.TryParse(tail[1], NumberStyles.Float, CultureInfo.InvariantCulture, out radius) && float.IsFinite(radius) && radius > 0f)
                     head = "here";
@@ -154,9 +173,12 @@ internal static class PlayerbotFleetSelection
                 break;
         }
 
-        request = new FleetRequest(kind, name, id, count, force, to, head, raw, radius, entry, raids);
+        request = new FleetRequest(kind, name, id, count, force, to, head, raw, radius, entry, raids, at);
         return true;
     }
+
+    /// <summary>Whether <paramref name="word"/> is the keyword that starts an explicit position, <c>at</c>.</summary>
+    internal static bool IsAtWord(string word) => word.Equals("at", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The registered bots the selector names, by name. Empty when none does (the command then fails closed).</summary>
     internal static List<PlayerbotStatus> Match(FleetRequest request, IReadOnlyList<PlayerbotStatus> snapshot)

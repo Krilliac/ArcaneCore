@@ -1275,14 +1275,14 @@ bots in the service snapshot only, never on a real player.
 | Command | Level | Effect |
 |---|---|---|
 | `.playerbot summon <sel> [#count] [force] [to $player]` | Administrator | Teleport running bots to you (or the named online player), in rings around the spot. With a count, the nearest bots on that player's map go first. |
-| `.playerbot send <sel> <$tele\|here> [force] [to $player]` | Administrator | Teleport running bots to a `game_tele` place, or to your position (`here`, or the named player's), in rings. |
+| `.playerbot send <sel> <$tele\|here> [force] [to $player]`, `.playerbot send <sel> at $map $x $y $z [force]` | Administrator | Teleport running bots to a `game_tele` place, to your position (`here`, or the named player's), or to the given map and coordinates (`at`: no player needed, so RA and the console can use it; the map must exist, the numbers must be finite and inside the map, the height is used as given; no `to`, and not a battleground map), in rings. |
 | `.playerbot follow <sel> [to $player]` | Administrator | The bots follow you (or the named player) without a party and fight back. |
 | `.playerbot stay <sel> [to $player]` | Administrator | The bots hold position (they fight only what attacks them) and obey the player's whispered orders. |
 | `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
 | `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
 | `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
-| `.playerbot defend <sel> here #radius [force]`, `.playerbot defend <sel> clear` | Administrator | The running bots hold a defend post at your position ([Defend posts](#defend-posts)); radius 10 to 200 yards (clamped). More bots than the bulk cap need `force`. `clear` ends it. |
-| `.playerbot siege waypoint add\|list\|clear`, `siege start <sel> #entry [raids 1\|2] [force]`, `siege stop`, `siege status [$leader]`, `siege watch [on\|off]` | Administrator | Bot-led raids march the stored waypoints in step and kill the creature with the entry ([Siege](playbots-groups.md#siege-playerbot-siege)). Memory only. |
+| `.playerbot defend <sel> here #radius [force]`, `.playerbot defend <sel> at $map $x $y $z #radius [force]`, `.playerbot defend <sel> clear` | Administrator | The running bots hold a defend post at your position (`here`) or at the given map and coordinates (`at`: no player needed, same checks as `send ... at`) ([Defend posts](#defend-posts)); radius 10 to 200 yards (clamped). More bots than the bulk cap need `force`. `clear` ends it. |
+| `.playerbot siege waypoint add [at $map $x $y $z]\|list\|clear`, `siege start <sel> #entry [raids 1\|2] [force]`, `siege stop`, `siege status [$leader]`, `siege watch [on\|off]` | Administrator | Bot-led raids march the stored waypoints in step and kill the creature with the entry ([Siege](playbots-groups.md#siege-playerbot-siege)). Memory only. |
 | `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the refusal (a controller, the party AI, a bot-led group or a battleground holds the bot; or the planner's: travel off, no route, a leg of another journey under way). |
 | `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
 
@@ -1334,7 +1334,8 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 #### Defend posts
 
 `.playerbot defend <sel> here #radius [force]` gives the running autonomous bots a post: the GM's map and position and a radius (10 to 200
-yards, clamped). Bots in a real player's group, scripted, or driven by the party AI, a bot-led group or a battleground are skipped
+yards, clamped). `.playerbot defend <sel> at $map $x $y $z #radius [force]` gives the same post at an explicit map and position and needs no
+player (RA, the console); the map must exist and the numbers be finite and inside the map, and the height is kept as given. Bots in a real player's group, scripted, or driven by the party AI, a bot-led group or a battleground are skipped
 (`in-player-group`, `bot-busy`, `bot-scripted`). Every bot of one command shares a post id. A post is **memory only** (`PlayerbotDefendPost`
 on the brain): it is not saved: a restart, a bot stop, a playerbots hot reload or `.playerbot defend <sel> clear` ends it. A brain replacement (a bot leaving a
 real player's party, a controller detaching) keeps it. The PvP flag the post turned on is tracked per player (`PlayerbotDefend.OwnFlag`), so
