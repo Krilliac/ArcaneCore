@@ -103,13 +103,19 @@ a creature walking a mesh path floated. `GroundQuery` selects the window (`Up`/`
 * `SnapOrKeep` is `TrySnap` or the input z. `DrapePath` snaps the corners, then samples each segment every `step` yd and keeps
   a sample only where dropping it would put the polyline more than `tolerance` yd off the sampled ground (sliding window),
   within `maxPoints` (32): the step doubles up to 6 times to fit, and a path that still cannot fit keeps its snapped corners.
-* Creatures: `CreatureMapSystem.FinishPlannedPath` (every outcome, after smoothing) uses step 1 yd, tolerance 0.11 yd; fliers and
+* Creatures: `CreatureMapSystem.FinishPlannedPath` (every outcome, after smoothing) uses step 1 yd, tolerance 0.11 yd where the floor is terrain and 0.40 yd where it is a model or the mesh (Undercity's
+  WMO ramps: median 12 points a leg at 0.11, 7 at 0.40, model offsets p95 +0.30 and p05 -0.25); fliers and
   water-only creatures are left alone. Thread: the snap reads terrain and the model tree, which belong to the world thread;
   an ungated wander leg takes `Serial()` around it (path jobs themselves only run navmesh searches).
 * Measured on the real data (test `GroundSnapRealTerrainTests`, skipped visibly when the data root is absent): wanderers'
   terrain offset p95 <= 0.15 yd with a median within 0.06; authored legs terrain p95 <= 0.15 and p05 >= -0.15 with at most 8 points per leg.
-  Cost per leg (step 1 yd, tolerance 0.11, 200 legs per region, Release, loaded machine, so an upper bound): median 30 to 154 us,
-  p95 55 to 279 us, 6 to 13 points per leg (Undercity the dearest); a few first-touch outliers up to a tile load.
+  Cost per leg (200 legs per region, `DrapeCostPerLeg_IsPrinted`, run with 16 CPU burners running, so an upper bound), Release: median
+  33 to 148 us, p95 56 to 271 us, p99 66 to 418 us, max 215 to 691 us, 6 to 9 points a leg (Undercity the dearest). An earlier run showed a
+  Debug (the live build), unloaded machine: median 68 to 375 us, p95 115 to 795 us, p99 169 to 2967 us, max 487 to 6165 us (Brill's 6 ms is a GC pause or
+  a cache miss, not a read). An earlier run showed a
+  35 ms maximum: that was the drape reading a terrain tile from disk (`TerrainInfo.GetTile` loads on first touch).
+  A drape now never reads a tile: a point over a terrain tile that is not in memory (`TerrainInfo.TryGetLoadedHeight`) keeps its height or takes
+  the mesh fallback (which does not load either), and the normal loaders bring the tile in; `GroundQuery.LoadTiles` is the explicit opt-in.
 
 ### Region graph (NavRegionGraph)
 
