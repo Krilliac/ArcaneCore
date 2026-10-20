@@ -79,7 +79,7 @@ public sealed class TauntTests
                 t.MaxLevelHealth = 100000;
             });
             System = new CreatureMapSystem(Map, CreatureTestSupport.Content([template], [CreatureTestSupport.Spawn(77, CreatureTestSupport.WolfEntry, 3, 0)]),
-                null, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile() });
+                null, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile(), Spells = new SpellSystemCreatureCaster(Kit.System) });
             Map.AddUpdater(System);
             Kit.World.RunTick(50);
             Wolf = Assert.Single(System.Creatures);
@@ -223,6 +223,24 @@ public sealed class TauntTests
 
         Assert.True(arena.System.SelectHostileTarget(arena.Wolf));
         Assert.Same(arena.Dps, arena.Wolf.Combat.Victim);
+    }
+
+    [Fact]
+    public void ATauntedCreatureForceDespawned_RespawnsWithoutTauntCasters()
+    {
+        using var arena = new Arena();
+        arena.Pull();
+        arena.Cast(arena.Tank, TauntSpell);
+        Assert.True(arena.Wolf.Combat.Threat.HasTauntCasters);
+
+        // vmangos Creature::ForcedDespawn runs SetDeathState(JUST_DIED), which strips the auras with their handlers (Creature.cpp:2408-2436,
+        // Unit.cpp:7341), so the ModTaunt remove handler empties m_tauntGuids; the respawned creature starts with no taunter.
+        arena.System.ForcedDespawn(arena.Wolf, 0);
+        arena.System.ForceRespawn(arena.Wolf);
+
+        Assert.Equal(CreatureDeathState.Alive, arena.Wolf.DeathState);
+        Assert.False(arena.Wolf.Combat.Threat.HasTauntCasters);
+        Assert.Null(arena.Wolf.Combat.Threat.GetTauntTarget(guid => guid == arena.Tank.Guid ? arena.Tank : null, _ => true));
     }
 
     [Fact]

@@ -78,6 +78,11 @@ Immunity: unit immunity auras (EffectImmunity ATTACK_ME, StateImmunity MOD_TAUNT
 read: `ICreatureImmunityProvider` carries mechanic and school masks only, so a creature template with that flag still
 gets taunted until the creature data lane exposes it.
 
+The taunt list lives only as long as the aura: `ForcedDespawn` of a living creature strips its auras through their remove handlers
+(`ICreatureAuraReset.RemoveAurasOnDeath`, vmangos Creature::ForcedDespawn runs SetDeathState(JUST_DIED) -> RemoveAllAurasOnDeath,
+Creature.cpp:2428, Unit.cpp:7341), so a creature that respawns after a forced despawn starts with no taunter. Corpse removal alone
+only forgets the holders without running handlers.
+
 Limits: SMSG_CAST_RESULT with DONT_REPORT for "already attacking you" is not sent; the taunted creature is not turned to face
 the taunter; after the taunt fades the victim is re-selected at the creature's next update (vmangos selects at once).
 

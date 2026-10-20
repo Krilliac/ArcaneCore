@@ -18,4 +18,14 @@ public interface ICreatureAuraReset
     /// evade that strips the creature bare, such as vmangos silithus.cpp npc_colossusAI::EnterEvadeMode.
     /// </summary>
     void RemoveAllAuras(Creature creature);
+
+    /// <summary>
+    /// The spell side of a forced despawn killing a living creature (vmangos Creature::ForcedDespawn runs SetDeathState(JUST_DIED), which
+    /// calls Unit::RemoveAllAurasOnDeath, Objects/Creature.cpp:2408-2436, Objects/Unit.cpp:7341): the creature is already dead (no health) and
+    /// its auras go through their remove handlers, so state they keep elsewhere (the threat list's taunt casters) is cleaned too.
+    /// A caster that does not implement it leaves the auras alone.
+    /// </summary>
+    void RemoveAurasOnDeath(Creature creature)
+    {
+    }
 }
