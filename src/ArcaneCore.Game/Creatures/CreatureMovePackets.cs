@@ -127,14 +127,21 @@ public static class CreatureMovePackets
         return w.ToArray();
     }
 
-    /// <summary>11/11/10-bit two's-complement quarter-yard packing of an offset (appendPackXYZ).</summary>
+    /// <summary>
+    /// 11/11/10-bit two's-complement quarter-yard packing of an offset (appendPackXYZ, ByteBuffer.h:482-489). Each axis is
+    /// <c>lroundf(v * 4)</c>: rounded to the nearest quarter, halves away from zero, so the client's decoded point is within 0.125 yd of
+    /// the true one and the error has no sign. Truncation toward zero erred by up to 0.25 yd, always toward the destination (the offset base).
+    /// </summary>
     public static uint PackXYZ(Vector3 offset)
     {
-        uint packed = (uint)((int)(offset.X / 0.25f) & 0x7FF);
-        packed |= (uint)((int)(offset.Y / 0.25f) & 0x7FF) << 11;
-        packed |= (uint)((int)(offset.Z / 0.25f) & 0x3FF) << 22;
+        uint packed = (uint)(Quarters(offset.X) & 0x7FF);
+        packed |= (uint)(Quarters(offset.Y) & 0x7FF) << 11;
+        packed |= (uint)(Quarters(offset.Z) & 0x3FF) << 22;
         return packed;
     }
+
+    /// <summary><c>lroundf(v * 4.0f)</c>: <see cref="MidpointRounding.AwayFromZero"/>, like C's <c>lroundf</c>.</summary>
+    private static int Quarters(float v) => (int)MathF.Round(v * 4.0f, MidpointRounding.AwayFromZero);
 
     /// <summary>The inverse of <see cref="PackXYZ"/> (sign-extended; tests and tools).</summary>
     public static Vector3 UnpackXYZ(uint packed)
