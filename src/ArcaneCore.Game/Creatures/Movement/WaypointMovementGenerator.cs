@@ -31,8 +31,8 @@ internal static class CreatureMovementGates
 /// reached" (<c>!m_lastReachedWaypoint</c>), which cmangos does not. The data ArcaneCore loads is cmangos-shaped, so a node is reached
 /// when it is reached.
 /// <para>
-/// Limits (docs/areas/creature-movement-spawns.md): wander at a node, sub-paths (<c>path_id</c>), non-repeating paths and
-/// interaction pauses are not driven. A spawn group formation's leader walks its formation's path through this generator: a
+/// A player talking to the creature pauses the path (<see cref="AddPauseTime"/>, <see cref="Creature.PauseOutOfCombatMovement"/>).
+/// Limits (docs/areas/creature-movement-spawns.md): wander at a node, sub-paths (<c>path_id</c>) and non-repeating paths are not driven. A spawn group formation's leader walks its formation's path through this generator: a
 /// LINEAR_WP path (cmangos LinearWPMovementGenerator, MotionGenerators/WaypointMovementGenerator.cpp:617-647) turns back at either end
 /// instead of looping, and a new leader resumes at the node after the last one the old leader reached (FormationData::SetMasterMovement,
 /// <c>SetNextWaypoint(m_lastWP + 1)</c>).
@@ -80,6 +80,19 @@ internal sealed class WaypointMovementGenerator(
         _lastReachedPoint = 0;
         _retryStart = false;
         StartMove(creature, mover);
+    }
+
+    /// <summary>
+    /// vmangos WaypointMovementGenerator::AddPauseTime (WaypointMovementGenerator.h:89-93): the next leg waits at least
+    /// <paramref name="pauseMs"/>, a longer node wait already running is kept. A creature stopped mid-leg has not arrived, so it sets
+    /// off for the same node afterwards (StartMove, WaypointMovementGenerator.cpp:184-207).
+    /// </summary>
+    internal void AddPauseTime(int pauseMs)
+    {
+        if (_waitMs < pauseMs)
+        {
+            _waitMs = pauseMs;
+        }
     }
 
     public void Resume(Creature creature, ICreatureMover mover)

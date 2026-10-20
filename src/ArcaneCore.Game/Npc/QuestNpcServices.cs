@@ -248,6 +248,22 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         return npc;
     }
 
+    /// <summary>
+    /// "Stop the npc if moving" of the vmangos interaction handlers (SendListInventory ItemHandler.cpp:716-718, HandleGossipHelloOpcode
+    /// NPCHandler.cpp:357-358, HandleGossipSelectOptionOpcode :395-396, HandleQuestgiverHelloOpcode QuestHandler.cpp:93-95,
+    /// HandleBattlemasterHelloOpcode BattleGroundHandler.cpp:50-52): a creature without CREATURE_FLAG_EXTRA_NO_MOVEMENT_PAUSE pauses its
+    /// out-of-combat wander or waypoint path (<see cref="Creatures.Creature.PauseOutOfCombatMovement"/>), so it stays within
+    /// INTERACTION_DISTANCE while its window is open. A game object never moves. World thread.
+    /// </summary>
+    public void PauseInteractionMovement(Player player, NpcInfo npc)
+    {
+        if (!npc.IsGameObject && player.Map?.FindObject(npc.Guid) is Creatures.Creature creature
+            && (creature.Template.Behaviour & Kernel.WorldData.Creatures.CreatureBehaviourFlags.NoMovementPause) == 0)
+        {
+            creature.PauseOutOfCombatMovement();
+        }
+    }
+
     /// <summary>Why <see cref="Interactable"/> refused (no allocation; the text is <see cref="InteractableNpc(Player, ObjectGuid, NpcFlags, out string?)"/>'s).</summary>
     private enum InteractRefusal : byte
     {

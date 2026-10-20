@@ -104,8 +104,10 @@ public sealed partial class QuestNpcServices
     public Func<IReadOnlyCollection<uint>>? ScriptCreditedQuests { get; set; }
 
     /// <summary>
-    /// CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368, no script hooks): a spirit guide first
-    /// sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (:360-361), then the gossip menu goes out.
+    /// CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368; HandleQuestgiverHelloOpcode,
+    /// QuestHandler.cpp:79-105): the creature pauses its movement (<see cref="PauseInteractionMovement"/>; NPCHandler.cpp:357-358,
+    /// QuestHandler.cpp:93-95), a spirit guide sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (NPCHandler.cpp:360-361), then the
+    /// gossip menu goes out.
     /// </summary>
     public void GossipHello(Player player, ObjectGuid guid)
     {
@@ -117,6 +119,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        PauseInteractionMovement(player, npc);
         if ((npc.NpcFlags & NpcFlags.SpiritGuide) != 0)
         {
             player.Session.Send(WorldOpcode.SmsgAreaSpiritHealerTime,
@@ -179,7 +182,7 @@ public sealed partial class QuestNpcServices
 
     /// <summary>
     /// CMSG_GOSSIP_SELECT_OPTION (vmangos HandleGossipSelectOptionOpcode → Player::OnGossipSelect):
-    /// a coded option needs a non-empty code; the creature must be interactable.
+    /// a coded option needs a non-empty code; the creature must be interactable and pauses its movement (NPCHandler.cpp:395-396).
     /// </summary>
     public void GossipSelectOption(Player player, ObjectGuid guid, uint listId, string? code)
     {
@@ -199,6 +202,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        PauseInteractionMovement(player, npc);
         OnGossipSelect(s, npc, listId);
         Flush(s);
     }

@@ -26,6 +26,43 @@ public sealed partial class Creature : Unit, ICombatCreature
 
     internal void SetHome(CreatureHome home) => Home = home;
 
+    /// <summary>vmangos NPC_MOVEMENT_PAUSE_TIME (CreatureDefines.h:222): how long a creature a player talks to stands still.</summary>
+    public const int NpcMovementPauseMs = 180_000;
+
+    /// <summary>
+    /// vmangos Creature::PauseOutOfCombatMovement (Movement/MotionMaster.cpp:947-969), called when a player talks to the creature: out of
+    /// combat, a creature whose current movement is a random wander or a waypoint path stops where it is and starts its next leg no
+    /// sooner than <paramref name="pauseMs"/> later. Other movement (chase, follow, a scripted point, a formation slot) is left alone.
+    /// The NO_MOVEMENT_PAUSE template flag is the caller's check (the vmangos handlers test it before calling). World thread.
+    /// </summary>
+    public void PauseOutOfCombatMovement(int pauseMs = NpcMovementPauseMs)
+    {
+        if (Combat.IsInCombat)
+        {
+            return;
+        }
+
+        switch (Motion.Top)
+        {
+            case RandomMovementGenerator random:
+                if (IsMoving)
+                {
+                    System?.StopMoving(this);
+                }
+
+                random.AddPauseTime(pauseMs);
+                break;
+            case WaypointMovementGenerator waypoints:
+                if (IsMoving)
+                {
+                    System?.StopMoving(this);
+                }
+
+                waypoints.AddPauseTime(pauseMs);
+                break;
+        }
+    }
+
     /// <summary>
     /// A creature's flight is server state (vmangos Unit::SetFly sets MOVEFLAG_FLYING on m_movementInfo, Unit.cpp:7304-7310): its moves and
     /// relocations keep it, as they keep the walk mode.
