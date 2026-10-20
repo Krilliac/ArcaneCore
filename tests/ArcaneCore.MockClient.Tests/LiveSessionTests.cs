@@ -162,6 +162,64 @@ public sealed class LiveSessionTests : IDisposable
     }
 
     /// <summary>
+    /// A same-map teleport (GM .go xyz, .tele on a continent, a same-map summon) reaches the client as MSG_MOVE_TELEPORT_ACK (packed
+    /// GUID, counter, movement block). The 1.12 client answers with MSG_MOVE_TELEPORT_ACK: u64 GUID, the same counter, u32 time. Before,
+    /// the live session answered only SMSG_NEW_WORLD, so the server never moved the player.
+    /// </summary>
+    [Fact]
+    public async Task ASameMapTeleportAck_IsAnsweredWithTheClientsTeleportAck_CarryingTheGuidAndCounter()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        Task<TcpClient> accepted = listener.AcceptTcpClientAsync(deadline.Token).AsTask();
+        await using WorldClient client = await WorldClient.ConnectAsync((IPEndPoint)listener.LocalEndpoint, deadline.Token);
+        using TcpClient server = await accepted;
+        NetworkStream stream = server.GetStream();
+
+        // Server frame: u16 BE size, u16 LE opcode, then packed GUID 0x2A (mask 0x01), counter 7, a 30-byte movement block.
+        byte[] payload = new byte[2 + 4 + 30];
+        payload[0] = 0x01;
+        payload[1] = 0x2A;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2), 7);
+        byte[] frame = new byte[4 + payload.Length];
+        BinaryPrimitives.WriteUInt16BigEndian(frame, (ushort)(2 + payload.Length));
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2), (ushort)WorldOpcode.MsgMoveTeleportAck);
+        payload.CopyTo(frame, 4);
+        await stream.WriteAsync(frame, deadline.Token);
+
+        var output = new StringWriter();
+        await LiveSession.DrainAsync(client, output, "test", DateTime.UtcNow + TimeSpan.FromSeconds(1.5), deadline.Token);
+
+        // Client frame: u16 BE size, u32 LE opcode, payload.
+        byte[] header = new byte[6];
+        using var read = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        read.CancelAfter(TimeSpan.FromSeconds(5));
+        await stream.ReadExactlyAsync(header, read.Token);
+        Assert.Equal((uint)WorldOpcode.MsgMoveTeleportAck, BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2)));
+        byte[] reply = new byte[BinaryPrimitives.ReadUInt16BigEndian(header) - 4];
+        await stream.ReadExactlyAsync(reply, read.Token);
+        Assert.Equal(16, reply.Length);
+        Assert.Equal(0x2AUL, BinaryPrimitives.ReadUInt64LittleEndian(reply));
+        Assert.Equal(7u, BinaryPrimitives.ReadUInt32LittleEndian(reply.AsSpan(8)));
+        Assert.Contains("MSG_MOVE_TELEPORT_ACK", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ATruncatedTeleportAck_IsNotAnswered_AndAWholeOneKeepsAnUnpackedGuidWithItsCounter()
+    {
+        Assert.Null(LiveSession.BuildTeleportAckReply([], 1));
+        Assert.Null(LiveSession.BuildTeleportAckReply([0x01], 1));
+        Assert.Null(LiveSession.BuildTeleportAckReply([0x01, 0x2A, 1, 0, 0], 1));
+
+        // Mask 0x81: bytes 0 and 7 of the GUID present.
+        byte[] reply = LiveSession.BuildTeleportAckReply([0x81, 0x2A, 0x10, 9, 0, 0, 0], 55)!;
+        Assert.Equal(0x10_0000_0000_00002AUL, BinaryPrimitives.ReadUInt64LittleEndian(reply));
+        Assert.Equal(9u, BinaryPrimitives.ReadUInt32LittleEndian(reply.AsSpan(8)));
+        Assert.Equal(55u, BinaryPrimitives.ReadUInt32LittleEndian(reply.AsSpan(12)));
+    }
+
+    /// <summary>
     /// In a crowd the server never falls silent (movement and update packets every few milliseconds). The session still sends its
     /// script lines and its say lines on the interval, and the stream stays framed: the next read after the session is a whole
     /// packet. Before, every send waited for 400 ms of silence first, so a mock client among the stress bots sent its first line

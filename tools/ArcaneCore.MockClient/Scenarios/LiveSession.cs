@@ -454,7 +454,7 @@ internal static class LiveSession
     /// at the deadline (<see cref="WorldClient.WaitForTrafficAsync"/> consumes nothing); a frame that has begun is read whole, so
     /// the caller sends between frames and the stream stays framed. Under constant traffic it returns at the deadline all the same.
     /// </summary>
-    private static async Task DrainAsync(WorldClient client, TextWriter output, string local, DateTime until, CancellationToken ct)
+    internal static async Task DrainAsync(WorldClient client, TextWriter output, string local, DateTime until, CancellationToken ct)
     {
         while (true)
         {
@@ -492,6 +492,21 @@ internal static class LiveSession
                 output.WriteLine(FormattableString.Invariant($"{Stamp()} [{local}] < SMSG_NEW_WORLD map {map} ({x:F1}, {y:F1}, {z:F1}); sending MSG_MOVE_WORLDPORT_ACK"));
                 await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, ct).ConfigureAwait(false);
             }
+            else if (frame.Opcode == (ushort)WorldOpcode.MsgMoveTeleportAck)
+            {
+                // A same-map teleport (.go xyz, .tele within a continent, a same-map summon): the server moves the player only when the
+                // client answers with MSG_MOVE_TELEPORT_ACK (vmangos WorldSession::HandleMoveTeleportAckOpcode); without it the player stays put.
+                byte[]? reply = BuildTeleportAckReply(frame.Payload, unchecked((uint)Environment.TickCount64));
+                if (reply is null)
+                {
+                    output.WriteLine($"{Stamp()} [{local}] < MSG_MOVE_TELEPORT_ACK (malformed, {frame.Payload.Length.ToString(CultureInfo.InvariantCulture)} bytes); not answered");
+                }
+                else
+                {
+                    output.WriteLine($"{Stamp()} [{local}] < MSG_MOVE_TELEPORT_ACK; sending MSG_MOVE_TELEPORT_ACK");
+                    await client.SendAsync((ushort)WorldOpcode.MsgMoveTeleportAck, reply, ct).ConfigureAwait(false);
+                }
+            }
             else if (frame.Opcode == (ushort)WorldOpcode.SmsgNotification)
             {
                 output.WriteLine($"{Stamp()} [{local}] < notification: {DecodeNotification(frame.Payload)}");
@@ -501,6 +516,48 @@ internal static class LiveSession
                 output.WriteLine($"{Stamp()} [{local}] < SMSG_TRANSFER_ABORTED {Convert.ToHexString(frame.Payload)}");
             }
         }
+    }
+
+    /// <summary>
+    /// The client's answer to a server MSG_MOVE_TELEPORT_ACK (packed GUID, u32 movement counter, movement block): u64 mover GUID
+    /// (unpacked), the same u32 counter, u32 client time (vmangos MoveTeleportAck::ReadFromWorldPacket reads a full ObjectGuid).
+    /// Null when the payload is too short to hold the GUID and the counter.
+    /// </summary>
+    internal static byte[]? BuildTeleportAckReply(ReadOnlySpan<byte> payload, uint clientTime)
+    {
+        if (payload.Length < 1)
+        {
+            return null;
+        }
+
+        byte mask = payload[0];
+        int at = 1;
+        ulong guid = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            if ((mask & (1 << i)) == 0)
+            {
+                continue;
+            }
+
+            if (at >= payload.Length)
+            {
+                return null;
+            }
+
+            guid |= (ulong)payload[at++] << (8 * i);
+        }
+
+        if (payload.Length < at + 4)
+        {
+            return null;
+        }
+
+        byte[] reply = new byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(reply, guid);
+        BinaryPrimitives.WriteUInt32LittleEndian(reply.AsSpan(8), BinaryPrimitives.ReadUInt32LittleEndian(payload[at..]));
+        BinaryPrimitives.WriteUInt32LittleEndian(reply.AsSpan(12), clientTime);
+        return reply;
     }
 
     private static string Stamp() => DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
