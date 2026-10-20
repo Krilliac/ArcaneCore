@@ -170,10 +170,19 @@ public sealed class WaypointGeneratorTests
         map.Combat.DealDamage(player, wolf, 1, direct: false);
         system.EnterEvadeMode(wolf);
         Assert.Equal(MovementGeneratorType.Home, wolf.Motion.CurrentType);
-        Run(world, 6000);
+        for (int i = 0; i < 60 && wolf.IsInEvadeMode; i++)
+        {
+            world.RunTick(100);
+        }
 
         Assert.False(wolf.IsInEvadeMode);
         Assert.Equal((10f, 0f), (MathF.Round(wolf.X, 1), MathF.Round(wolf.Y, 1)));
+
+        // Home, the path is reset (WaypointMovementGenerator::Reset -> StartMoveNow, WaypointMovementGenerator.cpp:108-125, .h:105-109):
+        // the rest of the node's 20 s delay is dropped and, having arrived at node 1, it sets off for node 2.
+        world.RunTick(100);
+        Assert.True(wolf.IsMoving);
+        Assert.Equal((10f, 40f), (wolf.Spline!.EndX, wolf.Spline.EndY));
     }
 
     [Fact]

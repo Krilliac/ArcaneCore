@@ -95,6 +95,18 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     internal static int NoPathRetryDelay(ICreatureMover mover, int failures)
         => mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs) << Math.Clamp(failures - 1, 0, MaxNoPathBackoffShift);
 
+    /// <summary>
+    /// vmangos RandomMovementGenerator::AddPauseTime (RandomMovementGenerator.h:51-55): the next leg waits at least
+    /// <paramref name="pauseMs"/>; a longer wait already running is kept.
+    /// </summary>
+    internal void AddPauseTime(int pauseMs)
+    {
+        if (_nextMoveMs < pauseMs)
+        {
+            _nextMoveMs = pauseMs;
+        }
+    }
+
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _nextMoveMs = 1000;

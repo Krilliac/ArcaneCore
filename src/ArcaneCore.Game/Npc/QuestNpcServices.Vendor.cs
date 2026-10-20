@@ -262,7 +262,11 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    /// <summary>vmangos WorldSession::SendListInventory (the creature's own npc_vendor rows, then its shared npc_vendor_template rows; NpcStore merges them).</summary>
+    /// <summary>
+    /// vmangos WorldSession::SendListInventory (the creature's own npc_vendor rows, then its shared npc_vendor_template rows; NpcStore merges
+    /// them). The vendor pauses its movement first (ItemHandler.cpp:716-718, <see cref="PauseInteractionMovement"/>): one that walked on
+    /// would leave INTERACTION_DISTANCE while the window is open, and the next sale would get SELL_ERR_CANT_FIND_VENDOR.
+    /// </summary>
     internal void SendListInventory(PlayerNpcState s, ObjectGuid guid)
     {
         Player player = s.Quests.Player;
@@ -273,6 +277,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        PauseInteractionMovement(player, npc);
         var entries = new List<VendorListEntry>();
         float discount = PriceDiscount(player, npc);
         foreach (var (vendorItem, proto, slot) in VisibleVendorItems(player, npc))

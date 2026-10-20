@@ -25,14 +25,15 @@ internal static class CreatureMovementGates
 /// the source is the creature, the target the relay MOVEMENT target or the creature) and tells the AI (MovementInform(WAYPOINT, node), :158-160) before the delay starts.</item>
 /// <item>The last reached node is where evade sends the creature (<see cref="GetResetPosition"/>, :292-303).</item>
 /// <item>A creature that cannot move starts no leg and its timers stand still; a casting one stops, and when the cast ends it sets off for the same node again (:249-272).</item>
-/// <item>Interrupted by combat it keeps its node; resumed it heads for the same node again (Reset, StartMoveNow, :108-126).</item>
+/// <item>Interrupted by combat it keeps its node; resumed it drops any wait and heads for the same node again, or for the next one when it had
+/// arrived (Reset, StartMoveNow, :108-126).</item>
 /// </list>
 /// Node ids are the ids of the data (1-based, possibly with gaps); vmangos stores them minus one and treats the first node as "none
 /// reached" (<c>!m_lastReachedWaypoint</c>), which cmangos does not. The data ArcaneCore loads is cmangos-shaped, so a node is reached
 /// when it is reached.
 /// <para>
-/// Limits (docs/areas/creature-movement-spawns.md): wander at a node, sub-paths (<c>path_id</c>), non-repeating paths and
-/// interaction pauses are not driven. A spawn group formation's leader walks its formation's path through this generator: a
+/// A player talking to the creature pauses the path (<see cref="AddPauseTime"/>, <see cref="Creature.PauseOutOfCombatMovement"/>).
+/// Limits (docs/areas/creature-movement-spawns.md): wander at a node, sub-paths (<c>path_id</c>) and non-repeating paths are not driven. A spawn group formation's leader walks its formation's path through this generator: a
 /// LINEAR_WP path (cmangos LinearWPMovementGenerator, MotionGenerators/WaypointMovementGenerator.cpp:617-647) turns back at either end
 /// instead of looping, and a new leader resumes at the node after the last one the old leader reached (FormationData::SetMasterMovement,
 /// <c>SetNextWaypoint(m_lastWP + 1)</c>).
@@ -82,14 +83,28 @@ internal sealed class WaypointMovementGenerator(
         StartMove(creature, mover);
     }
 
+    /// <summary>
+    /// vmangos WaypointMovementGenerator::AddPauseTime (WaypointMovementGenerator.h:89-93): the next leg waits at least
+    /// <paramref name="pauseMs"/>, a longer node wait already running is kept. A creature stopped mid-leg has not arrived, so it sets
+    /// off for the same node afterwards (StartMove, WaypointMovementGenerator.cpp:184-207).
+    /// </summary>
+    internal void AddPauseTime(int pauseMs)
+    {
+        if (_waitMs < pauseMs)
+        {
+            _waitMs = pauseMs;
+        }
+    }
+
+    /// <summary>
+    /// vmangos WaypointMovementGenerator::Reset (WaypointMovementGenerator.cpp:108-125) → StartMoveNow (WaypointMovementGenerator.h:105-109),
+    /// run when the generator above this one ends (an evade's way home, a distraction, a scripted point): the wait is dropped, a node
+    /// delay and an interaction pause alike, and the next leg starts now. A creature that had arrived at its node goes on to the next
+    /// node; one interrupted mid-leg heads for the same node again (StartMove, :184-207).
+    /// </summary>
     public void Resume(Creature creature, ICreatureMover mover)
     {
-        if (_waitMs > 0)
-        {
-            return; // still waiting at the node it reached
-        }
-
-        _arrivalDone = false;
+        _waitMs = 0;
         _retryStart = false;
         StartMove(creature, mover);
     }

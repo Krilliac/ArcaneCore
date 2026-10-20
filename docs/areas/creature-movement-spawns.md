@@ -31,6 +31,23 @@ Limits: `MOVEFLAG_SPLINE_ENABLED | FORWARD` are not maintained on the creature's
 `SplineEnabled` anyway, `UpdateBlockWriter.cs`); a late observer still gets a one-tick catch-up move instead of vmangos'
 live spline inside the create block (`packet_builder.cpp:152-200`).
 
+### Interaction pause (lane `vendor-hates-you`, 2026-10-19)
+
+A player talking to a creature stops it: `Creature.PauseOutOfCombatMovement` (vmangos `Creature::PauseOutOfCombatMovement`,
+`Movement/MotionMaster.cpp:947-969`) does nothing in combat; when the current generator is the random wander or a waypoint path it stops
+the spline where the creature stands and holds the next leg for `NPC_MOVEMENT_PAUSE_TIME`, 180 s (`Objects/CreatureDefines.h:222`;
+`AddPauseTime` keeps a longer wait already running, `RandomMovementGenerator.h:51-55`, `WaypointMovementGenerator.h:89-93`). A waypoint
+walker stopped mid-leg sets off for the same node afterwards. When a generator above the waypoint path ends (an evade's way home, a
+distraction, a scripted point) the path resumes at once as vmangos `Reset` → `StartMoveNow` does (`WaypointMovementGenerator.cpp:108-125`,
+`.h:105-109`): the pause, or what is left of a node delay, is dropped, and a creature that had arrived at a node goes on to the next one. Chase, follow, point, formation-slot and other movement is left alone. The
+NPC handlers call it through `QuestNpcServices.PauseInteractionMovement` after the interaction check passes: gossip hello and questgiver
+hello, gossip option select, the vendor list and battlemaster hello (`Handlers/NPCHandler.cpp:357-358,395-396`,
+`Handlers/QuestHandler.cpp:93-95`, `Handlers/ItemHandler.cpp:716-718`, `Handlers/BattleGroundHandler.cpp:50-52`). A template with the
+vmangos-dialect `NO_MOVEMENT_PAUSE` extra flag (0x20, `CreatureDefines.h:162`) keeps walking; the bit means RUN_DURING_WANDER in the
+cmangos dialect, so cmangos-imported creatures always pause. Before this a walking vendor left `INTERACTION_DISTANCE` while its window was
+open and the next sale got `SELL_ERR_CANT_FIND_VENDOR`, "That merchant doesn't like you." (live report 2026-10-19; see
+[vendors and trainers](vendors-trainers.md)). Tests: `Npc/VendorMovementPauseTests.cs`.
+
 ### 2. Random wander parity and generator type numbers (slice `random-wander`)
 
 * `RandomMovementGenerator` moved to `Movement/RandomMovementGenerator.cs` (no behaviour change to its timing: 1 s first move, 50 ms
@@ -164,7 +181,9 @@ Data (World schema version **23**, `CreatureMovementTemplateDataModule.Version`;
 Generator (`Movement/WaypointMovementGenerator.cs`, moved out of `CreatureMovement.cs`):
 
 * Evade goes to the **last reached node** (`GetResetPosition`, `WaypointMovementGenerator.cpp:292-303`), or to the spawn point when no
-  node was reached yet (`GetRespawnCoord`); it used to go to where the fight began. The generator then resumes the same leg.
+  node was reached yet (`GetRespawnCoord`); it used to go to where the fight began. The generator then resumes at once (`Reset` →
+  `StartMoveNow`, `WaypointMovementGenerator.cpp:108-125`, `.h:105-109`): the rest of a node delay is dropped; a creature interrupted
+  mid-leg heads for the same node again, one that had arrived goes on to the next node.
   A reset position carries no orientation (vmangos sets facing only for the spawn point, `HomeMovementGenerator.cpp:54-65`): the home
   leg ends facing its travel direction.
 * The AI is told of every arrival with the node's point id (`MovementInform(WAYPOINT, node)`, `:158-160`) before the delay starts.
@@ -185,7 +204,7 @@ upgrade from the previous schema version on every provider the machine has; **on
 CI**: the step is one `CREATE TABLE` with a composite integer key and float columns, no raw SQL).
 
 Limits (not delivered, no stubs): node script execution, wander at a node (`wander_distance`), sub-paths (`path_id`), non-repeating
-paths and `SetNextWaypoint`, the 30 s pause while a player talks to the creature, `creature_movement_special`, vmangos-dialect
+paths and `SetNextWaypoint`, `creature_movement_special`, vmangos-dialect
 columns of `creature_movement` (`wander_distance`, `path_id`, `script_id`), cmangos `waypoint_path`/spawn-group formations (163
 formation paths in classic-db), creature groups and linking. vmangos numbers nodes from 0 and treats the first reached node as "none"
 (`m_lastReachedWaypoint`); this lane keeps the data's 1-based ids (see the generator comment).
@@ -335,7 +354,6 @@ Tests: `Creatures/NoStraightPathTests.cs`, `Creatures/CreatureSplineSmoothingTes
   and run (member count, entry choice, aggro and respawn together, and since 2026-10-09 their 164 formations: the leader walks the
   formation's `waypoint_path`, linear or looping, and the others hold their slot; [content import](content-import.md), "Spawn groups"),
   and so are the pools ("Pools": max_limit members, rolled again when one despawns, nested pools). Creature linking is not implemented.
-* **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
 * **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
   `NO_LEASH_EVADE` already exist on the base.
 * ~~Home-leg teleport fallback~~ (done, see "No path" below); `RemoveAurasAtReset`,

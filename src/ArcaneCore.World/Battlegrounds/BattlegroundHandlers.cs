@@ -99,13 +99,21 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
         }
     }
 
-    /// <summary>vmangos HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:40-73): the list of the battlemaster's battleground.</summary>
+    /// <summary>
+    /// vmangos HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:40-73): the battlemaster pauses its movement (:50-52), then the list
+    /// of its battleground.
+    /// </summary>
     private static void BattlemasterHello(WorldSession session, Player player, byte[] payload)
     {
         if (!BattlegroundPackets.TryParseGuid(payload, out ObjectGuid guid) || Feature(session) is not { } feature
             || session.Services.GetService<QuestNpcFeature>() is not { } npcs
-            || npcs.Services.InteractableNpc(player, guid, NpcFlags.BattleMaster) is not { } npc
-            || !feature.Battlemasters.TryGetValue(npc.Entry, out BattlegroundType type))
+            || npcs.Services.InteractableNpc(player, guid, NpcFlags.BattleMaster) is not { } npc)
+        {
+            return;
+        }
+
+        npcs.Services.PauseInteractionMovement(player, npc);
+        if (!feature.Battlemasters.TryGetValue(npc.Entry, out BattlegroundType type))
         {
             return;
         }
