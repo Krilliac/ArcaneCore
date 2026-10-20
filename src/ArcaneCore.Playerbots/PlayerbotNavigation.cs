@@ -565,7 +565,9 @@ internal static class PlayerbotNavigation
     /// Whether <paramref name="goal"/> is a place no walk reaches from where the bot stands, by the map's region graph alone (no path
     /// search, no tile read beyond the two lookups): the walking graph (steep slopes excluded) puts the bot and the goal in different
     /// components, and the goal is outdoors (an indoor goal may be reached over steep stairs, <see cref="TryClimbIndoors"/>). False
-    /// when the graph is not built yet or either place is on no region. Transport (tram, lift, taxi) is the caller's to try first.
+    /// when the graph is not built yet or either place is on no region. <paramref name="fromComponent"/> and <paramref name="toComponent"/>
+    /// are each place's component whatever the answer, -1 for a place on no region (or with no graph). Transport (tram, lift, taxi) is the
+    /// caller's to try first.
     /// Live case: Chief Hawkwind's platform from the Valley of Trials ridge, 4,900 yards away, drew an 847-yard leg and a 3,349-yard
     /// walk toward a goal no walk reaches.
     /// </summary>
@@ -577,9 +579,12 @@ internal static class PlayerbotNavigation
             return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
         int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
-        if (from < 0 || to < 0) return false;
+        // Each side's component is given whether or not the other has one (ComponentOf answers -1 for no region): a goal off the walking
+        // mesh (a retreat point in a hillside or in the air) once also read as "bot -1" in nav/goal-unreachable, as if the bot were off it too
+        // (bot QA #807: on the real mesh the bot stood in its continent's component in ten of the eleven live cases probed).
         fromComponent = graph.ComponentOf(from);
         toComponent = graph.ComponentOf(to);
+        if (from < 0 || to < 0) return false;
         // Only a bot on a large walkable part may call a goal unreachable: on a fragment or indoors the bot's own component says nothing
         // about the world, and PlanToward's escapes (TryLeaveSteepGround, FromBeside, TryFragmentHop, the indoor climb) must run first.
         // A bot on steep ground is not told apart: the lookup snaps it to a walking region within a few yards (horizontally, or just above

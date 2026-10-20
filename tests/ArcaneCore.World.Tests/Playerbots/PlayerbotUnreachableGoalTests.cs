@@ -159,6 +159,41 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.Equal(2 + PlayerbotWorldDestinations.MaxPendingReports + 2, destinations.UnreachableReports);
     }
 
+    /// <summary>
+    /// Bot QA #807: a goal on no walking region (here 300 yards above the bot's own tile, as a retreat point in a hillside or in the air) is
+    /// no skip, and the bot's own component is still given: the <c>bot-nav/goal-unreachable</c> line read "bot -1, goal -1" in every such
+    /// live case although the bot stood on the continent's component.
+    /// </summary>
+    [Fact]
+    public async Task AGoalOnNoWalkingRegion_IsNoSkip_AndTheBotsOwnComponentIsStillGiven()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 offMesh = new(5, 25, 300);
+        (bool unreachable, int from, int to, int own) = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out int ownComponent, out _), "the control");
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, offMesh, out int fromComponent, out int toComponent);
+            return (answer, fromComponent, toComponent, ownComponent);
+        });
+        Assert.False(unreachable, "a place the graph cannot place is never called unreachable");
+        Assert.True(own >= 0, $"the bot's component {own}");
+        Assert.Equal(own, from);
+        Assert.Equal(-1, to);
+
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        await world.Host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < PlayerbotNavigationAnomalies.RepeatedRefusals; i++)
+                PlayerbotNavigationAnomalies.ObservePlan(world.Player, offMesh, PlayerbotMotion.CurrentPosition(world.Player), routed: false, inconclusive: false);
+            return true;
+        });
+        string key = PlayerbotAnomalies.Key("nav", "goal-unreachable");
+        Assert.Equal(1, cap.Count(key));
+        Assert.Contains($"(region components bot {own}, goal -1)", cap.Notices.Single(n => n.Key == key).Detail, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ACompletedQuestsReturn_IsNeverSkipped()
     {
