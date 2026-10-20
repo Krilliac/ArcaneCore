@@ -394,6 +394,9 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private const long MaxRepairQueryMsPerThink = 5;
 
+    /// <summary>The query time (Stopwatch ticks) a think may spend on repair plans: <see cref="MaxRepairQueryMsPerThink"/> by default; a test sets it to pin one budget without the other depending on the machine load.</summary>
+    internal long RepairQueryTicksLimit { get; set; } = MaxRepairQueryMsPerThink * System.Diagnostics.Stopwatch.Frequency / 1000;
+
     private int _queriesAtThinkStart;
     private long _queryTicksAtThinkStart;
 
@@ -408,7 +411,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private bool RepairQueryBudgetSpent()
         => PlayerbotThinkProbe.Active is { } probe
             && (probe.Queries - _queriesAtThinkStart >= MaxRepairQueriesPerThink
-                || (probe.QueryTicks - _queryTicksAtThinkStart) * 1000 >= MaxRepairQueryMsPerThink * System.Diagnostics.Stopwatch.Frequency);
+                || probe.QueryTicks - _queryTicksAtThinkStart >= RepairQueryTicksLimit);
 
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
