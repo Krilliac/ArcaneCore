@@ -193,7 +193,7 @@ internal static class PlayerbotSiegeCommander
     /// </summary>
     internal const float SiegeAnswerLeashYards = 30f;
 
-    /// <summary>How long the leader's answer (<see cref="PlayerbotSiegeRaid.AnsweringMs"/>) keeps the raid reading it as at its waypoint after the leader's last think that fought.</summary>
+    /// <summary>How long a request for an answer (<see cref="PlayerbotSiegeRaid.AnswerRequestedMs"/>, the leader's last think that fought from its waypoint) counts as fresh.</summary>
     internal const uint AnswerFreshMs = 3_000;
 
     /// <summary>A retreating leader is at its retreat point (the retreat becomes a rally) within this many yards (2D).</summary>
@@ -449,8 +449,26 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     public bool AtWaypoint { get; set; }
 
-    /// <summary>When the waiting pushing leader last fought an attacker of its own from its waypoint (<see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>); 0: it is not answering. Written by the leader's group AI, read by the coordinator.</summary>
-    public uint AnsweringMs { get; set; }
+    /// <summary>When the waiting pushing leader last fought an attacker of its own from its waypoint (<see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>); 0: never, or consumed. Written by the leader's group AI as a request; the coordinator (<see cref="PlayerbotGroupCoordinator.UpdateAnswer"/>) decides whether an answer begins.</summary>
+    public uint AnswerRequestedMs { get; set; }
+
+    /// <summary>The step an answer in progress belongs to (-1: no answer). It counts only at that step, for that leader, while the raid pushes.</summary>
+    public int AnsweringStep { get; set; } = -1;
+
+    /// <summary>The leader an answer in progress belongs to.</summary>
+    public ObjectGuid AnsweringLeader { get; set; }
+
+    /// <summary>When the answer in progress began (bounds it by <see cref="PlayerbotGroupCoordinator.LagHoldMs"/>).</summary>
+    public uint AnswerSinceMs { get; set; }
+
+    /// <summary>Ends the answer and forgets the request (a step change, a new leader, the end of the push, the leader back in the disk).</summary>
+    public void EndAnswer()
+    {
+        AnsweringStep = -1;
+        AnsweringLeader = default;
+        AnswerSinceMs = 0;
+        AnswerRequestedMs = 0;
+    }
 
     /// <summary>What the raid's current order executes in combat: the push in force (<see cref="PlayerbotSiegeCommander.PushOf"/>) while the raid advances, <see cref="PlayerbotSiegePush.None"/> otherwise and while the raid holds at a waypoint for the peer. <see cref="PlayerbotGroupAI"/> reads it: a pushing leader fights nothing away from its waypoint, its members answer any attacker of the raid, and a lift ride is not cancelled by combat.</summary>
     public PlayerbotSiegePush Push { get; set; }

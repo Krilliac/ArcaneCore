@@ -438,8 +438,12 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   flagged player, a long-reach melee unit). A leader that cannot hit that attacker from where it stands closes on it (a melee tank under fire from a ranged attacker; a ranged
   leader casts from where it stands) but only while the attacker is inside the leash: an attacker that kites beyond it is not followed, the leader walks back to the waypoint
   (and stands there taking what it takes until the lag hold ends, `LagHoldMs`), and so it does when the attacker dies or stops attacking. Units outside the disk that do not
-  attack the leader are ignored. While the leader answers, the raid reads it as at the waypoint (`PlayerbotSiegeRaid.AnsweringMs`, fresh for `AnswerFreshMs`, 3 s, and the leader
-  within the leash): the lag hold, the lockstep and the no-progress clock do not flip because it left the disk. Chasing without that leash drew the leader out of the 6-yard
+  attack the leader are ignored. While the leader answers, the raid reads it as at the waypoint, so the lag hold, the lockstep and the no-progress clock do not flip because it left the disk
+  (`PlayerbotGroupCoordinator.UpdateAnswer`). An answer **begins** only from a real, level-aware reading (`IsAtWaypoint`) at the current step, for the current leader, while the raid
+  pushes, when the leader's AI has asked for it (`AnswerRequestedMs`, fresh for `AnswerFreshMs`, 3 s). It **lasts** until the leader is back in the disk and no longer fighting (a
+  walk back longer than 3 s keeps it), and is **bounded**: it ends when the leader is more than `SiegeAnswerLeashYards` plus `WaypointYards` (36 yards) from the waypoint in the
+  plane or more than `WaypointLevelYards` (10 yards) off its level, and after `LagHoldMs`. It belongs to its step and its leader: a step change, a promoted leader or the end of
+  the push ends it, so it neither carries over to the next waypoint, nor is inherited, nor sustains itself (a leader fighting at waypoint N is not read at N+1). Chasing without that leash drew the leader out of the 6-yard
   radius, so that its target was none and it walked back, then chased again; the loop watch read that as an A, B, A pattern and refused the waypoint, the walk reported no path
   and the push was denied after 30 s. **A leader death is not a retreat**: a retreat needs every tank dead (`WouldRetreat`); the death of the leader promotes the next tank
   (`PromoteLeader`) and the push goes on. Members are unchanged (any attacker of a raid member within 50 yards). Since the push has its own no-progress bound

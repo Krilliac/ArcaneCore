@@ -570,4 +570,123 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.True(announcer.Offer("Advancing to waypoint 1", 33_000));
         Assert.Equal(["Advancing to waypoint 1", "Pulling", "Advancing to waypoint 1"], announcer.Sent);
     }
+
+    // --- the leader's answer (UpdateAnswer): scoped to a step and a leader, begun only from a real reading, bound ---------------------------------------------------------------------------
+
+    private static readonly System.Numerics.Vector3 Wp = new(100f, 50f, 40f);
+    private static readonly ArcaneCore.Game.ObjectGuid LeaderA = new(0x10UL);
+    private static readonly ArcaneCore.Game.ObjectGuid LeaderB = new(0x11UL);
+
+    private static PlayerbotSiegeRaid PushingRaid(uint requestedAt)
+    {
+        var siege = new PlayerbotSiege(1, 0, 990_000, [Wp, new System.Numerics.Vector3(115f, 50f, 40f), new System.Numerics.Vector3(160f, 50f, 40f)], System.Numerics.Vector3.Zero, 0);
+        return new PlayerbotSiegeRaid(siege, 1) { Push = PlayerbotSiegePush.Stalemate, AnswerRequestedMs = requestedAt };
+    }
+
+    private static bool Read(PlayerbotSiegeRaid raid, ArcaneCore.Game.ObjectGuid leader, int step, System.Numerics.Vector3 at, System.Numerics.Vector3 waypoint, uint now)
+    {
+        // What the coordinator does: the reading is the real one, or the answer's.
+        bool real = PlayerbotGroupCoordinator.IsAtWaypoint(at, waypoint);
+        return PlayerbotGroupCoordinator.UpdateAnswer(raid, leader, step, at, waypoint, real, now) || real;
+    }
+
+    [Fact]
+    public void AnAnswerBeginsOnlyFromARealReadingAtTheWaypoint_AndNotFromAnAttackerRequestAlone()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        // 20 yards out (out of the disk), requested: nothing begins.
+        Assert.False(Read(raid, LeaderA, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 10_100));
+        Assert.Equal(-1, raid.AnsweringStep);
+        // In the disk and requested: it begins, for this step and this leader.
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_200));
+        Assert.Equal(0, raid.AnsweringStep);
+        Assert.Equal(LeaderA, raid.AnsweringLeader);
+    }
+
+    [Fact]
+    public void AnAnswerBelongsToItsStep_ALeaderStillFightingAtTheOldWaypointIsNotReadAtTheNextOne()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        System.Numerics.Vector3 leaderAt = new(108f, 50f, 40f); // 8 yards from waypoint 0, 7 from waypoint 1 (out of both disks)
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        Assert.True(Read(raid, LeaderA, 0, leaderAt, Wp, 10_500)); // answering, out of the disk
+        // The step moves on to waypoint 1 (115): the leader, still at the old place and still fighting, is not at it and starts nothing.
+        raid.AnswerRequestedMs = 10_900;
+        Assert.False(Read(raid, LeaderA, 1, leaderAt, new System.Numerics.Vector3(115f, 50f, 40f), 11_000));
+        Assert.Equal(-1, raid.AnsweringStep);
+        raid.AnswerRequestedMs = 11_500;
+        Assert.False(Read(raid, LeaderA, 1, leaderAt, new System.Numerics.Vector3(115f, 50f, 40f), 11_600));
+    }
+
+    [Fact]
+    public void APromotedLeaderDoesNotInheritAnAnswer()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 11_000));
+        // Leader A died, B stands 20 yards out: B is not answering at this waypoint.
+        raid.AnswerRequestedMs = 11_900;
+        Assert.False(Read(raid, LeaderB, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 12_000));
+        Assert.Equal(-1, raid.AnsweringStep);
+    }
+
+    [Fact]
+    public void AnAnswerEndsWithThePush()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        raid.Push = PlayerbotSiegePush.None;
+        Assert.False(Read(raid, LeaderA, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 10_500));
+        Assert.Equal(-1, raid.AnsweringStep);
+    }
+
+    [Fact]
+    public void AWalkBackLongerThanTheFreshnessKeepsTheAnswer_UntilTheLeaderIsBackInTheDisk()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        // The attacker is dead (no more requests); the leader walks back for 10 s from 25 yards out: still read at the waypoint (the lag hold must not reset).
+        for (uint t = 11_000; t <= 20_000; t += 1_000)
+            Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(125f - ((t - 11_000) / 1_000f * 2.5f), 50f, 40f), Wp, t), $"at {t}");
+        // Back in the disk and not fighting: a real reading, and the answer is over.
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 21_000));
+        Assert.Equal(-1, raid.AnsweringStep);
+    }
+
+    [Fact]
+    public void AKiterAtTheLeashEdge_SteppingInAndOut_NeverFlipsTheReading()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        uint t = 10_000;
+        for (int round = 0; round < 6; round++)
+        {
+            // out to the edge, requesting while it chases, then back in without a request
+            for (int i = 0; i < 4; i++) { t += 500; raid.AnswerRequestedMs = t; Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(100f + (6f * (i + 1)), 50f, 40f), Wp, t)); }
+            for (int i = 0; i < 4; i++) { t += 500; Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(124f - (6f * (i + 1)), 50f, 40f), Wp, t)); }
+        }
+    }
+
+    [Fact]
+    public void AnAnswerIsBound_ByTheReachAndByTheLagHold_AndAnotherLevelIsNeverAnswering()
+    {
+        // Beyond leash plus disk (36 yards): over.
+        PlayerbotSiegeRaid far = PushingRaid(10_000);
+        Assert.True(Read(far, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        Assert.False(Read(far, LeaderA, 0, new System.Numerics.Vector3(100f + 37f, 50f, 40f), Wp, 10_500));
+        Assert.Equal(-1, far.AnsweringStep);
+        // Never returning: ends after LagHoldMs.
+        PlayerbotSiegeRaid never = PushingRaid(10_000);
+        Assert.True(Read(never, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        Assert.True(Read(never, LeaderA, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs - 1));
+        Assert.False(Read(never, LeaderA, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs));
+        // A leader 20 yards below the waypoint (the level under a lift top), in the plane right under it: not at it, never begins; an answer that was running ends when the leader drops a level.
+        PlayerbotSiegeRaid below = PushingRaid(10_000);
+        Assert.False(Read(below, LeaderA, 0, new System.Numerics.Vector3(100f, 50f, 20f), Wp, 10_100));
+        Assert.Equal(-1, below.AnsweringStep);
+        PlayerbotSiegeRaid dropped = PushingRaid(10_000);
+        Assert.True(Read(dropped, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
+        Assert.False(Read(dropped, LeaderA, 0, new System.Numerics.Vector3(112f, 50f, 20f), Wp, 10_500));
+        Assert.Equal(-1, dropped.AnsweringStep);
+    }
 }

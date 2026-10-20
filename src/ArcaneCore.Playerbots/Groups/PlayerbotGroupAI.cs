@@ -155,7 +155,7 @@ internal sealed class PlayerbotGroupAI
     /// <summary>Loot packets queued and not yet sent (a pushing siege leader off its waypoint sends none).</summary>
     internal int QueuedLootActions => _lootActions.Count;
 
-    /// <summary>Queues a loot packet as a looted corpse would (the world update thread).</summary>
+    /// <summary>Test seam: queues a loot packet as a looted corpse would (the world update thread).</summary>
     internal void QueueLootAction(WorldOpcode opcode, byte[] payload) => _lootActions.Enqueue((opcode, payload));
 
     /// <summary>Walking to a corpse, or opening and emptying its loot (a run waits for it after the last boss).</summary>
@@ -316,11 +316,15 @@ internal sealed class PlayerbotGroupAI
         {
             if (isLeader && group.Run is { } run && target is Creature boss) NoteBossFight(group, run, boss);
             PlayerbotSiegeRaid? waiting = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: true } w ? w : null;
-            if (waiting is not null) waiting.AnsweringMs = Math.Max(1u, _session.World.NowMs);
+            if (waiting is not null)
+            {
+                waiting.AnswerRequestedMs = Math.Max(1u, _session.World.NowMs);
+                // The chase out and the walk back are an A, B, A pattern to the loop watch; the waypoint's own refusal is lifted as LeadSiege does (only that place).
+                if (PlayerbotMotion.IsBlacklisted(player, waiting.MoveTo)) PlayerbotMotion.Unblacklist(player, waiting.MoveTo);
+            }
             Fight(player, target, interval, waiting?.MoveTo);
             return;
         }
-
 
         if (_target is not null)
         {

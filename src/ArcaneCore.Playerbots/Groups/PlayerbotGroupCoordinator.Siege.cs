@@ -452,6 +452,7 @@ public sealed partial class PlayerbotGroupCoordinator
             foreach (SiegeView view in _siegeViews)
             {
                 view.Raid.AtWaypoint = false;
+                view.Raid.EndAnswer();
                 view.Facts = view.Facts with
                 {
                     AtWaypoint = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, MsQuietInCombat = 0, ObjectiveLeg = OnFinalLeg(siege), PushBlocked = false, LagWaived = false,
@@ -464,10 +465,47 @@ public sealed partial class PlayerbotGroupCoordinator
         NotifyWatchers(siege, now);
     }
 
-    /// <summary>Whether the leader is answering an attacker of its own from this waypoint (<see cref="PlayerbotSiegeRaid.AnsweringMs"/> fresh) and is still within the leash of it.</summary>
-    internal static bool IsAnswering(PlayerbotSiegeRaid raid, Vector3 leader, Vector3 waypoint, uint now)
-        => raid.AnsweringMs != 0 && unchecked((int)(now - raid.AnsweringMs)) <= PlayerbotSiegeCommander.AnswerFreshMs
-            && Vector3.Distance(leader, waypoint) <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards;
+    /// <summary>The leader is within the answer's reach of the waypoint: the leash plus the disk in the plane, and on the waypoint's level (<see cref="PlayerbotSiegeCommander.WaypointLevelYards"/>).</summary>
+    internal static bool WithinAnswerReach(Vector3 leader, Vector3 waypoint)
+    {
+        float dx = leader.X - waypoint.X, dy = leader.Y - waypoint.Y;
+        return MathF.Sqrt((dx * dx) + (dy * dy)) <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards
+            && MathF.Abs(leader.Z - waypoint.Z) <= PlayerbotSiegeCommander.WaypointLevelYards;
+    }
+
+    /// <summary>
+    /// Reads the leader's answer for the raid and returns whether the leader counts as at the waypoint of <paramref name="step"/> because of it. An answer begins only from a real reading (<paramref name="real"/>:
+    /// <see cref="IsAtWaypoint"/>, level-aware) at this step, for this leader, while the raid pushes, and when the leader's group AI has asked for it (<see cref="PlayerbotSiegeRaid.AnswerRequestedMs"/>, fresh for
+    /// <see cref="PlayerbotSiegeCommander.AnswerFreshMs"/>). It lasts until the leader is back in the disk and no longer fighting, and is bound: it ends when the leader leaves the reach (<see cref="WithinAnswerReach"/>) or
+    /// after <see cref="LagHoldMs"/>. It belongs to its step and its leader (another step, another leader or the end of the push end it), so it neither carries over to the next waypoint nor sustains itself.
+    /// </summary>
+    internal static bool UpdateAnswer(PlayerbotSiegeRaid raid, ObjectGuid leaderGuid, int step, Vector3 leader, Vector3 waypoint, bool real, uint now)
+    {
+        bool requested = raid.AnswerRequestedMs != 0 && unchecked((int)(now - raid.AnswerRequestedMs)) <= PlayerbotSiegeCommander.AnswerFreshMs;
+        if (raid.AnsweringStep >= 0 && (!raid.PushingThrough || raid.AnsweringStep != step || raid.AnsweringLeader != leaderGuid)) raid.EndAnswer();
+        if (raid.AnsweringStep < 0)
+        {
+            if (!raid.PushingThrough || !real || !requested) return false;
+            raid.AnsweringStep = step;
+            raid.AnsweringLeader = leaderGuid;
+            raid.AnswerSinceMs = Math.Max(1u, now);
+            return true;
+        }
+
+        if (real && !requested)
+        {
+            raid.EndAnswer();
+            return true;
+        }
+
+        if (!WithinAnswerReach(leader, waypoint) || unchecked(now - raid.AnswerSinceMs) >= LagHoldMs)
+        {
+            raid.EndAnswer();
+            return real;
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Whether a leader at <paramref name="leader"/> stands at <paramref name="waypoint"/>: within <see cref="PlayerbotSiegeCommander.WaypointYards"/> in the plane, and on its level (no more than
@@ -593,8 +631,13 @@ public sealed partial class PlayerbotGroupCoordinator
         if (siege.Step < siege.Waypoints.Count)
         {
             var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
-            // A leader that left the waypoint's disk to answer an attacker of its own (within the leash) is still at the waypoint for the raid: the lag hold, the lockstep and the no-progress clock do not flip because of the answer.
-            atWaypoint = IsAtWaypoint(leaderAt, siege.Waypoints[siege.Step]) || IsAnswering(raid, leaderAt, siege.Waypoints[siege.Step], now);
+            // A leader that left the waypoint's disk to answer an attacker of its own (within the leash) is still at the waypoint for the raid until it is back: the lag hold, the lockstep and the no-progress clock do not flip because of the answer.
+            bool real = IsAtWaypoint(leaderAt, siege.Waypoints[siege.Step]);
+            atWaypoint = UpdateAnswer(raid, leader.Guid, siege.Step, leaderAt, siege.Waypoints[siege.Step], real, now) || real;
+        }
+        else
+        {
+            raid.EndAnswer();
         }
 
         raid.AtWaypoint = atWaypoint;
@@ -624,6 +667,7 @@ public sealed partial class PlayerbotGroupCoordinator
         {
             raid.LeaderSeen = group.LeaderBotId;
             raid.EndNoPathRally();
+            raid.EndAnswer();
         }
 
         // The leader at the retreat point (the waypoint behind the step, else where the siege began) turns a retreat into a rally.
