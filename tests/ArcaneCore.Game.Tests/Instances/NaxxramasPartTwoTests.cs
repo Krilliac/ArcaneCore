@@ -362,7 +362,9 @@ public sealed class NaxxramasPartTwoTests
         raid.Instance.Update(13999);
         Assert.NotEqual(EncounterState.Special, raid.Instance.GetData(12));
         raid.Instance.Update(1);
-        Assert.Equal(EncounterState.Special, raid.Instance.GetData(12));
+        // The overload sets SPECIAL and puts Thaddius in combat with the zone; his Aggro then sets IN_PROGRESS (boss_thaddius.cpp:117-123).
+        Assert.Equal(EncounterState.InProgress, raid.Instance.GetData(12));
+        Assert.True(raid.Boss.Combat.IsInCombat);
     }
 
     [Fact]
@@ -378,7 +380,8 @@ public sealed class NaxxramasPartTwoTests
         Assert.True(stalagg.IsAlive);
         Assert.True(raid.Instance.ConstructAddsDefeated);
         raid.Instance.Update(14000);
-        Assert.Equal(EncounterState.Special, raid.Instance.GetData(12));
+        Assert.Equal(EncounterState.InProgress, raid.Instance.GetData(12)); // SPECIAL, then his Aggro (zone combat) sets IN_PROGRESS
+        Assert.True(raid.Boss.Combat.IsInCombat);
         Assert.Contains(raid.Caster.Casts, c => c.Spell == 28359);
         Assert.Equal(0u, (uint)(raid.Boss.UnitFlags & (UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer)));
     }
