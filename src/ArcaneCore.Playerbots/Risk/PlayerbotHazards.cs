@@ -91,11 +91,16 @@ internal sealed class PlayerbotHazards
     /// A death-loop zone target choice must not pull in. One death or one retreat is not such a zone: a creature standing in that
     /// mark is still a fight. The second death of its entry sets the entry aside, and the third death in the place opens this zone.
     /// Counting the mark itself as the zone refused the fight after the first death, so the bot never reached the second.
+    /// Asked for every creature in sight at each target choice (<see cref="PlayerbotRisk.ChooseTarget"/>), so it is a plain loop: the
+    /// lambda it replaced allocated a closure and a delegate per creature (perf-tick 2026-10-20, about 124 MB in 40 s at 400 bots).
     /// </summary>
     internal bool CoversDeathLoop(uint mapId, Vector3 point, uint nowMs)
     {
         Expire(nowMs);
-        return _hazards.Any(h => h.Kind == DeathLoopKind && h.MapId == mapId && h.Covers(point));
+        foreach (PlayerbotHazard hazard in _hazards)
+            if (hazard.Kind == DeathLoopKind && hazard.MapId == mapId && hazard.Covers(point))
+                return true;
+        return false;
     }
 
     /// <summary>Start a look over the visible creatures (<see cref="SetStrong"/> for each strong one, then <see cref="EndStrongScan"/>).</summary>

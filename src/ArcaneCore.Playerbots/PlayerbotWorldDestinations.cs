@@ -230,15 +230,17 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         bool blockedEligible = false;
         bool liveEligible = false;
-        HashSet<(uint Entry, bool InHome)>? ineligible = null;
-        foreach (DestinationEntry entry in candidates.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
+        using RankLease ranked = RankEntries(player, candidates, filtered: false, now, 0, hunting: false);
+        HashSet<(uint Entry, bool InHome)> ineligible = ranked.Ineligible;
+        for (int rank = 0; rank < ranked.Count; rank++)
         {
+            DestinationEntry entry = ranked[rank];
             if (Suspended(entry.Entry) || !IsPresent(player, entry.Spawn)) continue;
             bool inHome = GiverInHome(entry.Spawn);
-            if (ineligible?.Contains((entry.Entry, inHome)) == true) continue;
+            if (ineligible.Contains((entry.Entry, inHome))) continue;
             if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, content, inHome, out _))
             {
-                (ineligible ??= []).Add((entry.Entry, inHome));
+                ineligible.Add((entry.Entry, inHome));
                 continue;
             }
             liveEligible = true;
@@ -251,7 +253,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 SettleArrival(player, entry.Entry);
                 if (Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, content, inHome, out _))
                     return false;
-                (ineligible ??= []).Add((entry.Entry, inHome));
+                ineligible.Add((entry.Entry, inHome));
                 continue;
             }
             if (IsBlocked(entry.Spawn.Guid, now))
@@ -478,8 +480,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return false;
         }
 
-        if (_entries.Count > 0 && _entries.Where(entry => preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry)
-            .All(entry => IsBlocked(entry.Spawn.Guid, now)))
+        if (_entries.Count > 0 && AllBlocked(preferredCreatureEntry, now))
         {
             _blockedSpawns.Clear();
             Backoff(now);
@@ -494,21 +495,19 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         bool attempted = false;
         bool waterJourneys = WaterJourneysAllowed(player);
         (uint Entry, uint Quest, Vector3 To)? waterGoal = null;
-        HashSet<(uint Entry, bool InHome)>? ineligible = null;
-        foreach (DestinationEntry entry in _entries
-            .Where(entry => !IsBlocked(entry.Spawn.Guid, now) && IsPresent(player, entry.Spawn))
-            .Where(entry => preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry)
-            .Where(entry => !hunting || !IsVisited(entry.Spawn.Guid, now))
-            .OrderBy(entry => DistanceSquared(player, entry.Spawn)))
+        using RankLease ranked = RankEntries(player, _entries, filtered: true, now, preferredCreatureEntry, hunting);
+        HashSet<(uint Entry, bool InHome)> ineligible = ranked.Ineligible;
+        for (int rank = 0; rank < ranked.Count; rank++)
         {
+            DestinationEntry entry = ranked[rank];
             if (++scanned > MaxEntryScan) break;
             if (Suspended(entry.Entry)) continue;
             bool inHome = GiverInHome(entry.Spawn);
-            if (ineligible?.Contains((entry.Entry, inHome)) == true) continue;
+            if (ineligible.Contains((entry.Entry, inHome))) continue;
             if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot,
                     Home, _content, inHome, out uint questId))
             {
-                (ineligible ??= []).Add((entry.Entry, inHome));
+                ineligible.Add((entry.Entry, inHome));
                 continue;
             }
             if (questId == 0 && preferredCreatureEntry != 0) questId = preferredQuestId;
@@ -1353,11 +1352,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // reusing that list after the bot has travelled drops the spawn it is now beside and judges the entry from
                 // the ones that were nearest at the first build (live: Fleeting Plainstrider 3246 has 208 spawns; the kept
                 // 128 can all lie in another region component, so the grind target is reported unreachable).
-                List<CreatureSpawn> ordered = content.GetSpawns(mapId, entry)
-                    .Where(spawn => IsDestinationEntry(content, quests, spawn, preferredCreatureEntry))
-                    .Where(spawn => returnQuestId != 0 || Home is not { } home || home.Contains(spawn))
-                    .OrderBy(spawn => DistanceSquared(player, spawn))
-                    .ToList();
+                List<CreatureSpawn> ordered = OrderedDestinationSpawns(player, content, quests, mapId, entry, preferredCreatureEntry, returnQuestId);
                 int room = MaxEntryScan - _entries.Count;
                 int take = Math.Min(room, ordered.Count);
                 for (int i = 0; i < take; i++)
@@ -1650,14 +1645,19 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         }
         if (preferred != 0) return true;
         if (services is null || state is not { Loaded: true }) return false;
-        foreach (uint id in services.Quests.EndersOf(entry))
+        // Indexed: a foreach over the IReadOnlyList allocated an enumerator per entry asked, every think (perf-tick 2026-10-20).
+        IReadOnlyList<uint> enders = services.Quests.EndersOf(entry);
+        for (int index = 0; index < enders.Count; index++)
         {
+            uint id = enders[index];
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
                 && state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
             { questId = id; return true; }
         }
-        foreach (uint id in services.Quests.StartersOf(entry))
+        IReadOnlyList<uint> starters = services.Quests.StartersOf(entry);
+        for (int index = 0; index < starters.Count; index++)
         {
+            uint id = starters[index];
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
                 && services.Quests.Get(id) is { } quest
                 // Travel is stricter than the giver: a quest the journal has ever held (rewarded repeatable, abandoned, removed by a GM)
@@ -1675,11 +1675,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return false;
     }
 
-    private bool VisibleTarget(Player player, uint entry, uint returnQuestId)
-        => returnQuestId != 0
-            ? FindArrivedEnder(player, entry, out _) is not null
-            : player.VisibleObjects.Any(guid => player.Map?.FindObject(guid) is Creature creature
-                && creature.Entry == entry && creature.IsInWorld && creature.IsAlive);
+    private static bool VisibleTarget(Player player, uint entry, uint returnQuestId)
+    {
+        if (returnQuestId != 0) return FindArrivedEnder(player, entry, out _) is not null;
+        // A loop, not Any with a lambda: asked per candidate entry at every think (perf-tick 2026-10-20).
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (player.Map?.FindObject(guid) is Creature creature && creature.Entry == entry && creature.IsInWorld && creature.IsAlive)
+                return true;
+        }
+
+        return false;
+    }
 
     private static Creature? FindArrivedEnder(Player player, uint entry, out float distance)
     {
@@ -1861,4 +1868,96 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     }
 
     private sealed record DestinationEntry(uint Entry, CreatureSpawn Spawn);
+
+    /// <summary>Whether every entry (of <paramref name="preferredCreatureEntry"/> when not 0) is blocked; true when there is none.</summary>
+    private bool AllBlocked(uint preferredCreatureEntry, uint now)
+    {
+        foreach (DestinationEntry entry in _entries)
+            if ((preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry) && !IsBlocked(entry.Spawn.Guid, now))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// The entries of <paramref name="source"/> nearest first, as the LINQ ordering it replaced (OrderBy is stable: equal distances keep
+    /// their list order). With <paramref name="filtered"/> only those <see cref="Update"/> may walk to: not blocked, present, of the
+    /// preferred entry when one is given and, while hunting, not visited, asked in that order. The entries are copied out first, so the
+    /// caller may change the list while it walks the ranking. Ranked into a reused array (<see cref="RankLease"/> gives it back): the
+    /// ordering ran at every think through <see cref="HasQuestCandidate"/> and <see cref="Update"/> and its buffers, keys and iterators
+    /// were, with the scans' ineligible sets, the largest allocation site of a bot's think (perf-tick 2026-10-20).
+    /// </summary>
+    private RankLease RankEntries(Player player, List<DestinationEntry> source, bool filtered, uint now, uint preferredCreatureEntry, bool hunting)
+    {
+        RankedEntry[] ranked = _rankScratch is { } scratch && scratch.Length >= source.Count ? scratch : new RankedEntry[Math.Max(source.Count, 16)];
+        HashSet<(uint Entry, bool InHome)> ineligible = _ineligibleScratch ?? [];
+        _rankScratch = null; // a nested ranking takes a fresh array and set instead of overwriting these
+        _ineligibleScratch = null;
+        int count = 0;
+        foreach (DestinationEntry entry in source)
+        {
+            if (filtered && (IsBlocked(entry.Spawn.Guid, now) || !IsPresent(player, entry.Spawn)
+                || preferredCreatureEntry != 0 && entry.Entry != preferredCreatureEntry
+                || hunting && IsVisited(entry.Spawn.Guid, now))) continue;
+            ranked[count] = new RankedEntry(DistanceSquared(player, entry.Spawn), count, entry);
+            count++;
+        }
+
+        ranked.AsSpan(0, count).Sort(static (a, b) =>
+        {
+            int order = a.DistanceSq.CompareTo(b.DistanceSq);
+            return order != 0 ? order : a.Order.CompareTo(b.Order);
+        });
+        return new RankLease(this, ranked, count, ineligible);
+    }
+
+    private RankedEntry[]? _rankScratch;
+    private HashSet<(uint Entry, bool InHome)>? _ineligibleScratch;
+
+    /// <summary>
+    /// The spawns of <paramref name="entry"/> on <paramref name="mapId"/> that are destinations (inside the home unless returning), nearest
+    /// first. A method of its own so the lambdas' closure is made only when <see cref="RefreshEntries"/> rebuilds its list, not at every
+    /// call of it (perf-tick 2026-10-20: <see cref="HasQuestCandidate"/> calls it at every think and the list is almost always kept).
+    /// </summary>
+    private List<CreatureSpawn> OrderedDestinationSpawns(Player player, CreatureContent content, QuestStore quests, uint mapId, uint entry,
+        uint preferredCreatureEntry, uint returnQuestId)
+        => content.GetSpawns(mapId, entry)
+            .Where(spawn => IsDestinationEntry(content, quests, spawn, preferredCreatureEntry))
+            .Where(spawn => returnQuestId != 0 || Home is not { } home || home.Contains(spawn))
+            .OrderBy(spawn => DistanceSquared(player, spawn))
+            .ToList();
+
+    /// <summary>One entry of <see cref="RankEntries"/>: its distance key and its place in the list (the tie-break).</summary>
+    private readonly record struct RankedEntry(float DistanceSq, int Order, DestinationEntry Entry);
+
+    /// <summary>
+    /// A ranking of <see cref="RankEntries"/> and an empty set for the scan's ineligible (entry, in home) pairs; disposing it clears both
+    /// and hands them back for the next scan (the set was a new one at each scan that met an ineligible giver).
+    /// </summary>
+    private readonly struct RankLease : IDisposable
+    {
+        private readonly PlayerbotWorldDestinations _owner;
+        private readonly RankedEntry[] _ranked;
+
+        internal RankLease(PlayerbotWorldDestinations owner, RankedEntry[] ranked, int count, HashSet<(uint Entry, bool InHome)> ineligible)
+        {
+            _owner = owner;
+            _ranked = ranked;
+            Count = count;
+            Ineligible = ineligible;
+        }
+
+        internal int Count { get; }
+
+        internal HashSet<(uint Entry, bool InHome)> Ineligible { get; }
+
+        internal DestinationEntry this[int rank] => _ranked[rank].Entry;
+
+        public void Dispose()
+        {
+            Array.Clear(_ranked, 0, Count);
+            Ineligible.Clear();
+            _owner._rankScratch = _ranked;
+            _owner._ineligibleScratch = Ineligible;
+        }
+    }
 }
