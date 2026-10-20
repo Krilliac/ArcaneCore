@@ -84,7 +84,13 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
 
     public string? DefendRefusal { get; set; }
 
+    public int DefendCalls { get; private set; }
+
     public int? RunningSiegeId { get; set; }
+
+    public List<Guid> SiegeBots { get; } = [];
+
+    public IReadOnlyCollection<Guid> SiegeMembers() => RunningSiegeId is null ? [] : [.. SiegeBots];
 
     public string? SiegeOutcome { get; set; }
 
@@ -109,7 +115,7 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
     public ScenarioBotProbe? Probe(Guid botId)
     {
         FakeBot? bot = Bots.FirstOrDefault(b => b.Id == botId);
-        return bot is { Online: true } ? new ScenarioBotProbe(bot.Alive, bot.InCombat, bot.Level, bot.Team, bot.Map, bot.Position, bot.HeldBy) : null;
+        return bot is { Online: true } ? new ScenarioBotProbe(bot.Alive, bot.InCombat, bot.Level, bot.Team, bot.Map, bot.Position, bot.HeldBy, Posts.GetValueOrDefault(bot.Id)?.PostId) : null;
     }
 
     public int CreateRoom() => Room - PendingCreates.Count;
@@ -181,6 +187,7 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
     public string? SetDefend(Guid botId, PlayerbotDefendPost? post)
     {
         if (post is not null && DefendRefusal is { } refusal) return refusal;
+        if (post is not null) DefendCalls++;
         Posts[botId] = post;
         return null;
     }
@@ -190,6 +197,8 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
         if (SiegeRefusal is { } refusal) return new ScenarioSiegeResult(false, 0, refusal, 0, 0);
         if (RunningSiegeId is not null) return new ScenarioSiegeResult(false, 0, "siege-running", 0, 0);
         SiegeStarts.Add(([.. botIds], siege));
+        SiegeBots.Clear();
+        SiegeBots.AddRange(botIds);
         RunningSiegeId = _nextSiege++;
         SiegeOutcome = null;
         return new ScenarioSiegeResult(true, RunningSiegeId.Value, null, botIds.Count, 0);

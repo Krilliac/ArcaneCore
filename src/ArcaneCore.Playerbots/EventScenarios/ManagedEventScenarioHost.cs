@@ -45,7 +45,7 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
         if (held is null && InGroup(player)) held = "in a group";
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
         return new ScenarioBotProbe(player.IsAlive && !ghost, player.Combat.IsInCombat, player.Level, player.Team == Team.Horde ? (byte)1 : (byte)0,
-            player.MapId, new Vector3(player.X, player.Y, player.Z), held);
+            player.MapId, new Vector3(player.X, player.Y, player.Z), held, PlayerbotDefend.PostOf(player)?.PostId);
     }
 
     private bool InGroup(Player player)
@@ -193,12 +193,17 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
 
     public int? RunningSiegeId => Coordinator?.Siege?.Id;
 
+    public IReadOnlyCollection<Guid> SiegeMembers()
+        => Coordinator?.Siege is { } siege ? [.. siege.Raids.SelectMany(r => r.Group?.Members.Select(m => m.BotId) ?? [])] : [];
+
     public string? SiegeOutcome => Coordinator?.SiegeOutcome;
 
     public ScenarioSiegeResult StartSiege(IReadOnlyList<Guid> botIds, EventScenarioSiege siege)
     {
         if (Coordinator is not { } coordinator) return new ScenarioSiegeResult(false, 0, "groups-unavailable", 0, 0);
-        if (coordinator.ClearSiegeWaypoints() < 0) return new ScenarioSiegeResult(false, 0, "siege-running", 0, 0);
+        // The stored waypoints (a GM may have staged some) are replaced only now, when this scenario is ready to start its own siege, and never
+        // while another siege runs.
+        if (coordinator.Siege is not null || coordinator.ClearSiegeWaypoints() < 0) return new ScenarioSiegeResult(false, 0, "siege-running", 0, 0);
         foreach (Vector3 waypoint in siege.Waypoints)
             if (coordinator.AddSiegeWaypoint(siege.Map, waypoint) is { } refusal)
                 return new ScenarioSiegeResult(false, 0, "waypoint-" + refusal, 0, 0);

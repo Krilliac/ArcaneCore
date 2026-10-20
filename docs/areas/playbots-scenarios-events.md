@@ -13,7 +13,7 @@ it drives are described in [playbots-groups.md](playbots-groups.md); the event s
 ## Tables (world schema version 54)
 
 All four are operator content: the schema step creates them empty. Every table has `event` (a `game_event.entry`) and `group_id`
-(1 to 255, per event) in its key.
+(0 to 255, per event) in its key; `post_id` and `seq` are keys of their own. The event number of a scenario is 1 to 4095.
 
 | Table | Key | Columns |
 |---|---|---|
@@ -24,8 +24,9 @@ All four are operator content: the schema step creates them empty. Every table h
 
 - `name_prefix` and `count`: the group's bots are the managed bots whose name starts with the prefix (case-insensitive). Missing bots
   are created with a generated name, the prefix plus four letters.
-- `class_spec`: `race:class` pairs separated by commas, for example `2:1,5:5`. Created bots take the pairs in turn. Races must be of
-  the group's team, classes are those of 1.12 (no death knight).
+- `class_spec`: `race:class` pairs separated by commas, for example `2:1,5:5`. Created bots take the pairs in turn. Each pair must
+  be one the 1.12 client offers (an orc paladin is not), and the race must be of the group's team. A bad pair rejects the row at load
+  with a log line; it is not a refused create every 30 seconds.
 - `provision`: when true the engine creates the missing bots and boosts them to `level` (the same path as `.character boost`). When
   false it only claims bots that already exist and reports the shortfall as "not provisioned".
 - `start_*`: the ring the bots are teleported to when they are further than 60 yards from it (or on another map).
@@ -38,7 +39,7 @@ All four are operator content: the schema step creates them empty. Every table h
 The rows are checked once, against `game_event`, when the scenario feature builds its catalog. A bad row is logged as
 `game_event_playerbot: ...` at warning level and left out, together with the group it belongs to; it never takes a good group with it
 and never throws. Rejected: an event that is not in `game_event`, a prefix that is not 2 to 8 letters, `count` outside 1 to 500, `team`
-not 0/1, `level` above 60, an unknown `role`, a bad `class_spec` (including a race of the other team), a non-finite position, a defend
+not 0/1, `level` above 60, an unknown `role`, a bad `class_spec` (a malformed entry, a race of the other team, or a race and class pair the game does not have), a non-finite position, a defend
 group without a post, a siege group without a siege row, without waypoints or with waypoints on more than one map or a map other than
 `start_map`, `raids` outside 1 to 2, an `objective_entry` of 0, duplicate keys, and post, siege or waypoint rows with no group. The
 `.playerbot eventscenario status` output shows what loaded.
@@ -54,13 +55,26 @@ for it) it ticks `EventScenarioEngine`, which holds the desired state (the runni
 1. For each group of a running event it drops claims of bots that are gone, claims bots by prefix (never a bot that is held by a GM
    command, belongs to the other team, or is claimed by another group), creates missing bots (2 per group per tick, 4 in flight,
    only when `provision` is on and the bot limit leaves room), starts them (6 in flight), boosts them (4 per tick), places them
-   (10 teleports per tick, retried after 15 seconds), and then gives each a defend post or hands the group to the siege.
+   (10 teleports per tick, retried after 15 seconds), and then gives each a defend post or hands the group to the siege. A bot
+   that another system took after it was claimed (a party, a battleground, a script) is neither boosted nor teleported; the status
+   shows why.
 2. A refused step is shown in the status and retried (30 seconds, siege 4 seconds). A bot that was not yet restored after a restart is
-   waited for up to 60 seconds before it is started.
-3. A siege group starts one siege when `min_ready_pct` percent of its bots are online, at level and placed (and at least two per
-   raid). A siege that has ended (won or stopped) is not started again while the event runs.
-4. When the event stops, the engine clears the defend posts it set, stops the siege only if it started that siege (the outcome reads
-   `stopped: event stopped`), and forgets its claims. The bots themselves stay where they are and stay managed bots.
+   waited for up to 60 seconds before it is started. **A bot of the scenario that an operator stopped (`.playerbot stop`) is started
+   again** by this step, because a claimed bot is wanted running while its event runs; stop a scenario with `.event stop`, not by
+   stopping its bots.
+3. The defend post is judged from what the bot holds now, every pass, not from a remembered flag. A bot that restarted (a stop and start,
+   a quarantine retry, the step above) has a new brain without the post and gets it again; the status counts only posts that are
+   really held. A bot that holds a post set by a GM (`.playerbot defend`) keeps it: the scenario does not overwrite it, reports
+   `defend: post-set-by-gm`, and does not clear it when the event stops.
+4. A siege group starts one siege when `min_ready_pct` percent of its bots are online, at level and placed (and at least two per
+   raid). A siege that has ended (won or stopped) is not started again while the event runs. To start it, the stored siege waypoints
+   (which a GM may have staged with `.playerbot siege waypoint`) are replaced by the group's; that happens only when the siege is
+   about to start, never while another siege runs. A siege that is already under way whose raids hold bots of the group's prefix, as
+   after a hot reload of the playerbot pack, is taken over (status `siege N running`): it is stopped with the event, and not started a
+   second time when it ends. A siege of other bots is waited for, and the group starts its own once it is over.
+5. When the event stops, the engine clears the defend posts it set (only posts with its own ids, only on bots that still hold them),
+   stops the siege only if it started or took over that siege (the outcome reads `stopped: event stopped`), and forgets its claims. The
+   bots themselves stay where they are and stay managed bots.
 
 Work with nothing to do costs one comparison per tick and allocates nothing (a test pins it).
 
@@ -71,22 +85,38 @@ command, so the two never collide and an id is the same after a reload.
 
 - The tables are read when the feature attaches (server start or a playerbot hot reload). There is no reload command; after
   installing or editing a content file, reload the playerbot pack or restart.
-- A hot reload during a running siege: the feature re-attaches and treats the bots that are held by the raid as unavailable, so the
-  siege keeps running with its raids and the group is reported "unavailable" until the siege ends.
+  The read is done on the world thread, once per attach, and stalls the world for as long as the database takes to return four small
+  tables (normally milliseconds; a slow or unreachable database stalls it for the connection timeout). It is not moved off the
+  thread, because the feature must know at attach whether it has rows (it subscribes to nothing without them).
+- A hot reload during a running siege: the bots held by the raids are "unavailable" to the new feature (shown in the status), the
+  running siege is taken over (see the reconciler), and the group does nothing more until it ends.
+- Bots of a group are matched by name prefix. Two groups, or a group and the bots of another system, with prefixes that start the same
+  way share candidates: the first group to claim a bot keeps it.
 - Event ids 900 to 999 are reserved for shipped scenarios; the SQL deletes and recreates the `game_event` row of its own id.
 
 ## Events, restarts and `start_time`
 
-The shipped event is a serverside event: `schedule_type` 0, `occurence` equal to `length` (5184000 minutes, about ten years), no
-`start_time`/`end_time`. The schedule never starts or stops a serverside event, only `.event start` and `.event stop` do.
+The shipped event is a serverside event: `schedule_type` 0, `length` 5184000 minutes (about ten years), `occurence` twice that, and
+`start_time`/`end_time` NULL. It works the same in both dialects: the schedule never starts it by itself, and only `.event start` and
+`.event stop` run it (tests load the shipped row through the loader and the service in CMangos, VMangos and Auto-with-a-neighbour-row
+and start and stop it).
+
+- CMangos: a serverside event (schedule 0) is never touched by the schedule; `occurence` only has to be at least `length`.
+- VMangos: the row is read as vmangos reads it. A NULL `start_time`/`end_time` is 0 (`Field::GetUInt64` of a NULL), so the event is
+  valid and never scheduled, and it is the manual start and stop that move it. A manual start sets its end to now plus `length`
+  **seconds** (`World:GameEvents:ManualStartLengthUnit` `Seconds`, the default and retail's behaviour; about 60 days for this row), and
+  the event then ends by itself: use `ManualStartLengthUnit` `Minutes` for the full ten years. A manual stop back-dates the start by
+  `length` minutes, which keeps a stopped event stopped only while `occurence` is greater than `length`; that is why the row has twice
+  the length (with equal values the VMangos schedule would start the event again at once).
 
 - **Restart.** Retail restores nothing for a serverside event: after a server restart the event is off and the scenario with it.
   Set `World:GameEvents:RestoreServersideEvents` to `true` (it needs the CMangos dialect) to have the event service re-apply the
   serverside events recorded in `game_event_status` at start-up, with the resume flag; the scenario feature then sees the event as
   running on its first tick and brings the bots back (bots already placed are recognised by where they stand).
-- **Dialect.** `World:GameEvents:Dialect` `Auto` becomes VMangos as soon as any `game_event` row has a `start_time`, and VMangos
-  validates events differently (length above 0, patch range). The shipped file therefore leaves `start_time` NULL; keep it that way in
-  your own scenario events unless you set the dialect explicitly.
+- **Dialect.** `World:GameEvents:Dialect` `Auto` becomes VMangos as soon as any `game_event` row has a `start_time` (every imported
+  vmangos table), and a CMangos world stays CMangos only while no row has one. The shipped file leaves `start_time` NULL so that it
+  never decides the dialect of a world; keep it that way in your own scenario events. Never give a scenario event a `start_time` to
+  schedule it on a CMangos world, because that flips `Auto` for every event.
 - A scenario can also hang on a scheduled holiday event; then the schedule starts and stops the scenario like any event.
 
 ## Commands
@@ -102,7 +132,8 @@ Before the first tick after an attach the commands say that the scenarios are re
 
 ## Tests
 
-`tests/ArcaneCore.Data.Tests/GameEventPlayerbotDataTests.cs` (tables, the shipped content applied to a clean database twice, all three
-providers), `tests/ArcaneCore.World.Tests/Playerbots/EventScenarios/` (catalog validation, the engine on a fake server, the feature in a
+`tests/ArcaneCore.Data.Tests/GameEventPlayerbotDataTests.cs` (tables; the shipped content applied to a clean SQLite database twice;
+the MariaDB and PostgreSQL files are only text-checked, for a DELETE before each INSERT and the table names, and the generated schema
+SQL of all three providers is golden-tested, but those two content files were never executed on a MariaDB or PostgreSQL server), `tests/ArcaneCore.World.Tests/Playerbots/EventScenarios/` (catalog validation, the engine on a fake server, the feature in a
 real world host including a detach and re-attach, the shipped file validated, and defend and siege scenarios on the scenario world),
 `GameEventFeatureListenerTests` and `GameEventListenerRemovalTests` (listener removal).

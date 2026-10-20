@@ -213,6 +213,20 @@ internal static class EventScenarioClassSpec
     // 1.12 races by team: Human 1, Dwarf 3, Night Elf 4, Gnome 7 (Alliance); Orc 2, Undead 5, Tauren 6, Troll 8 (Horde).
     private static bool IsTeamRace(byte race, byte team) => team == 0 ? race is 1 or 3 or 4 or 7 : race is 2 or 5 or 6 or 8;
 
+    // The race and class pairs the 1.12 client offers (class ids: warrior 1, paladin 2, hunter 3, rogue 4, priest 5, shaman 7, mage 8, warlock 9, druid 11).
+    private static bool IsPlayableClass(byte race, byte cls) => race switch
+    {
+        1 => cls is 1 or 2 or 4 or 5 or 8 or 9,
+        2 => cls is 1 or 3 or 4 or 7 or 9,
+        3 => cls is 1 or 2 or 3 or 4 or 5,
+        4 => cls is 1 or 3 or 4 or 5 or 11,
+        5 => cls is 1 or 4 or 5 or 8 or 9,
+        6 => cls is 1 or 3 or 7 or 11,
+        7 => cls is 1 or 4 or 8 or 9,
+        8 => cls is 1 or 3 or 4 or 5 or 7 or 8,
+        _ => false,
+    };
+
     /// <summary>Parse <paramref name="text"/>; false with the problem in <paramref name="problem"/> when it is empty, malformed or names a race of the other team.</summary>
     internal static bool TryParse(string? text, byte team, out IReadOnlyList<EventScenarioClassSlot> spec, out string? problem)
     {
@@ -231,6 +245,7 @@ internal static class EventScenarioClassSpec
             }
 
             if (!IsTeamRace(race, team)) { problem = $"entry '{entry}' names a race that is not on team {team}"; return false; }
+            if (!IsPlayableClass(race, cls)) { problem = $"entry '{entry}' is a race and class pair the game does not have"; return false; }
             slots.Add(new EventScenarioClassSlot(race, cls));
         }
 
@@ -245,6 +260,9 @@ internal static class EventScenarioPostIds
 {
     /// <summary>Bit 30: every scenario post id has it set.</summary>
     internal const int Base = 0x4000_0000;
+
+    /// <summary>Whether <paramref name="postId"/> was made by <see cref="For"/> (the GM defend command counts up from 1).</summary>
+    internal static bool IsScenario(int postId) => postId > 0 && (postId & Base) != 0;
 
     /// <summary>The id of post <paramref name="postId"/> of group <paramref name="groupId"/> of <paramref name="eventId"/> (ranges checked by the catalog).</summary>
     internal static int For(ushort eventId, uint groupId, uint postId)

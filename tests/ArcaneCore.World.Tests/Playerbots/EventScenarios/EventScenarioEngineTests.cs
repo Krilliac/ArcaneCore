@@ -545,6 +545,149 @@ public sealed class EventScenarioEngineTests
         Assert.Contains("Event 900 \"Test scenario\": 1 group, 3 bots, running.", rig.Engine.ListLines(_ => "Test scenario"));
         Assert.Contains("Event 5 has no bot scenario.", rig.Engine.StatusLines(5, _ => null));
     }
+
+    // --- review fixes -------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ADefenderThatRestarts_GetsItsPostAgain_AndTheStatusSaysWhatIsTrue()
+    {
+        var rig = new Rig(Defenders(count: 1));
+        FakeBot bot = rig.Host.Add("Ucltopaa").OnlineAt(0, Start, 60);
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(2);
+        Assert.NotNull(rig.Host.Posts[bot.Id]);
+        Assert.Contains("posts set 1", rig.Status());
+
+        // A restart: the bot goes offline and its new brain has no post (the post lived in the old brain only).
+        bot.Online = false;
+        bot.State = ManagedPlayerbotState.Stopped;
+        rig.Host.Posts.Remove(bot.Id);
+        rig.Ticks(1);
+        Assert.Contains("posts set 0", rig.Status());
+
+        bot.Online = true;
+        bot.State = ManagedPlayerbotState.Running;
+        rig.Ticks(2);
+
+        Assert.Equal(EventScenarioPostIds.For(Event, 2, 1), rig.Host.Posts[bot.Id]!.PostId);
+        Assert.Contains("posts set 1", rig.Status());
+    }
+
+    [Fact]
+    public void APostLostWhileTheBotStaysOnline_IsSetAgain_AndAPostThatIsStillThereIsNotSetTwice()
+    {
+        var rig = new Rig(Defenders(count: 1));
+        FakeBot bot = rig.Host.Add("Ucltopaa").OnlineAt(0, Start, 60);
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(2);
+        int sets = rig.Host.DefendCalls;
+        rig.Ticks(4);
+        Assert.Equal(sets, rig.Host.DefendCalls);
+
+        rig.Host.Posts.Remove(bot.Id);
+        rig.Ticks(1);
+
+        Assert.Equal(sets + 1, rig.Host.DefendCalls);
+        Assert.NotNull(rig.Host.Posts[bot.Id]);
+    }
+
+    [Fact]
+    public void AGmPost_IsNeverOverwrittenOrCleared_AndTheStatusSaysSo()
+    {
+        var rig = new Rig(Defenders(count: 2));
+        FakeBot gm = rig.Host.Add("Ucltopaa").OnlineAt(0, Start, 60);
+        FakeBot plain = rig.Host.Add("Ucltopbb").OnlineAt(0, Start, 60);
+        var gmPost = new PlayerbotDefendPost(0, Start, 15f, 3);
+        rig.Host.Posts[gm.Id] = gmPost;
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(3);
+
+        Assert.Same(gmPost, rig.Host.Posts[gm.Id]);
+        Assert.True(EventScenarioPostIds.IsScenario(rig.Host.Posts[plain.Id]!.PostId));
+        Assert.Contains("posts set 1", rig.Status());
+        Assert.Contains("defend: post-set-by-gm", rig.Status());
+
+        // A GM replaces the scenario's post of the other bot: from then on it is the GM's.
+        var later = new PlayerbotDefendPost(0, Start, 20f, 4);
+        rig.Host.Posts[plain.Id] = later;
+        rig.Ticks(2);
+        Assert.Same(later, rig.Host.Posts[plain.Id]);
+
+        rig.Engine.EventChanged(Event, active: false);
+        Assert.Same(gmPost, rig.Host.Posts[gm.Id]);
+        Assert.Same(later, rig.Host.Posts[plain.Id]);
+    }
+
+    [Fact]
+    public void ABotTakenByAnotherSystemAfterItWasClaimed_IsNotBoosted()
+    {
+        var rig = new Rig(Defenders(count: 1));
+        FakeBot bot = rig.Host.Add("Ucltopaa").OnlineAt(0, Start, 10);
+        bot.Alive = false;
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(2);
+        Assert.Empty(rig.Host.Boosts);
+
+        bot.Alive = true;
+        bot.HeldBy = "in a battleground";
+        rig.Ticks(3);
+        Assert.Empty(rig.Host.Boosts);
+        Assert.Contains("boost: in a battleground", rig.Status());
+
+        bot.HeldBy = null;
+        rig.Ticks(2);
+        Assert.Single(rig.Host.Boosts);
+    }
+
+    [Fact]
+    public void AReloadedFeature_AdoptsTheSiegeUnderWay_AndNeverStartsASecondOneWhenItEnds()
+    {
+        var first = new Rig(Raiders(count: 4));
+        for (int i = 0; i < 4; i++) FarBot(first.Host, "Siegebot" + (char)('a' + i), team: 0);
+        first.Engine.EventChanged(Event, active: true);
+        first.Ticks(6);
+        Assert.Single(first.Host.SiegeStarts);
+        foreach (FakeBot bot in first.Host.Bots) bot.HeldBy = "in a group"; // the raids hold them
+
+        // The feature is detached and attached again: a new engine over the same server, the event still running.
+        first.Engine.Dispose();
+        var engine = new EventScenarioEngine(first.Host, NullLogger.Instance);
+        engine.SetCatalog(EventScenarioCatalogFixtures.Catalog(Raiders(count: 4)));
+        engine.EventChanged(Event, active: true);
+        first.Host.Now += 2_000;
+        engine.Tick();
+        Assert.Contains("siege 1 running", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+
+        // The siege ends, the bots are free again: it is over for this event run, not started again.
+        first.Host.RunningSiegeId = null;
+        first.Host.SiegeOutcome = "won";
+        foreach (FakeBot bot in first.Host.Bots) bot.HeldBy = null;
+        for (int i = 0; i < 8; i++)
+        {
+            first.Host.Now += 2_000;
+            engine.Tick();
+        }
+
+        Assert.Single(first.Host.SiegeStarts);
+        Assert.Contains("siege ended: won", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+        engine.EventChanged(Event, active: false);
+        Assert.Empty(first.Host.SiegeStops); // it ended on its own
+    }
+
+    [Fact]
+    public void ASiegeOfOtherBots_IsNotAdopted_AndTheScenarioSiegeStartsWhenItEnds()
+    {
+        var rig = new Rig(Raiders(count: 4));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        rig.Host.RunningSiegeId = 77; // a GM's siege with other bots
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(3);
+        Assert.Empty(rig.Host.SiegeStarts);
+
+        rig.Host.RunningSiegeId = null;
+        rig.Ticks(3);
+        Assert.Single(rig.Host.SiegeStarts);
+    }
 }
 
 /// <summary>Catalogs built from groups directly.</summary>

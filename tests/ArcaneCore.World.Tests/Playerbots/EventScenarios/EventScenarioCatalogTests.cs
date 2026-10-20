@@ -72,6 +72,7 @@ public sealed class EventScenarioCatalogTests
         { "class_spec", Content([Group(spec: "")], [Post()]) },
         { "class_spec ", Content([Group(spec: "2:1,x")], [Post()]) },
         { "not on team", Content([Group(team: 1, spec: "1:1")], [Post()]) },
+        { "does not have", Content([Group(team: 1, spec: "2:2")], [Post()]) },
         { "not on team ", Content([Group(team: 0, spec: "2:1")], [Post(), Post(post: 2)]) },
         { "needs at least one valid post", Content([Group()], []) },
         { "needs a game_event_playerbot_siege row", Content([Group(role: 2)], [], [], [Way(1)]) },

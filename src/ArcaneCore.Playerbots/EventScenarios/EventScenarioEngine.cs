@@ -83,6 +83,9 @@ internal sealed class ScenarioGroupRun(EventScenarioGroup group)
     public long NextSiegeAttemptMs { get; set; }
 
     public int SiegeEnlisted { get; set; }
+
+    /// <summary>Whether a siege already under way was looked at (a re-attached feature adopts the one its bots are in) at the run's first pass.</summary>
+    public bool SiegeChecked { get; set; }
 }
 
 /// <summary>The groups of one wanted event.</summary>
@@ -215,8 +218,10 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             foreach (ScenarioClaim claim in g.Claims)
             {
                 _claimed.Remove(claim.BotId);
-                if (!claim.DefendSet) continue;
-                if (host.SetDefend(claim.BotId, null) is null) cleared++;
+                // Only a post this scenario made, and only while the bot still holds it: a GM's own post stays.
+                if (g.Group.Role == EventScenarioRole.Defend && host.Probe(claim.BotId) is { DefendPostId: { } held } && EventScenarioPostIds.IsScenario(held)
+                    && host.SetDefend(claim.BotId, null) is null)
+                    cleared++;
             }
 
             if (g.SiegeId != 0 && host.RunningSiegeId == g.SiegeId && host.StopSiege("event stopped"))
@@ -261,12 +266,34 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
     private void Reconcile(ScenarioGroupRun g, long now)
     {
+        if (g.Group.Role == EventScenarioRole.Siege && !g.SiegeChecked) AdoptSiegeUnderWay(g);
         DropGone(g);
         ClaimBots(g);
         CreateBots(g, now);
         g.ReadyCount = 0;
         for (int i = 0; i < g.Claims.Count; i++) Advance(g, g.Claims[i], now);
         if (g.Group.Role == EventScenarioRole.Siege) RunSiege(g, now);
+    }
+
+    /// <summary>
+    /// A feature that was detached and attached again has a new engine while the siege it started still runs: the group adopts a siege whose
+    /// raids hold bots of its own prefix, so it is neither started a second time when it ends nor left running when the event stops.
+    /// A siege of other bots (a GM's) is not adopted: this group waits for it and starts its own once it is over.
+    /// </summary>
+    private void AdoptSiegeUnderWay(ScenarioGroupRun g)
+    {
+        g.SiegeChecked = true;
+        if (host.RunningSiegeId is not { } running) return;
+        IReadOnlyCollection<Guid> members = host.SiegeMembers();
+        if (members.Count == 0) return;
+        var inRaids = new HashSet<Guid>(members);
+        int mine = 0;
+        foreach (PlayerbotStatus status in Roster())
+            if (status.Name.StartsWith(g.Group.NamePrefix, StringComparison.OrdinalIgnoreCase) && inRaids.Contains(status.BotId)) mine++;
+        if (mine == 0) return;
+        g.SiegeId = running;
+        g.SiegeEnlisted = mine;
+        logger.LogInformation("Bot event scenario {Event} group {Group}: siege {Siege} is already under way with {Bots} of its bots and is taken over", g.Group.EventId, g.Group.GroupId, running, mine);
     }
 
     /// <summary>A claim whose bot was deleted from the registry is forgotten (a stopped or offline bot stays claimed).</summary>
@@ -404,6 +431,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         {
             claim.Online = false;
             claim.Alive = false;
+            claim.DefendSet = false; // a restarted bot has a new brain, and the post lived in the old one
             Restore(g, claim, now);
             return;
         }
@@ -414,7 +442,8 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         claim.AtLevel = def.Level == 0 || probe.Level >= def.Level;
         if (!claim.AtLevel)
         {
-            if (!probe.Alive || probe.InCombat) claim.Refusal = probe.Alive ? "boost: bot-in-combat" : "boost: bot-dead";
+            if (probe.HeldBy is { } heldBy) claim.Refusal = "boost: " + heldBy; // another system owns it since it was claimed
+            else if (!probe.Alive || probe.InCombat) claim.Refusal = probe.Alive ? "boost: bot-in-combat" : "boost: bot-dead";
             else if (_boostBudget > 0)
             {
                 _boostBudget--;
@@ -430,7 +459,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
         if (claim.AtLevel && !claim.Placed) Place(g, claim, probe, now);
         if (claim.Placed && claim.Alive && claim.AtLevel) g.ReadyCount++;
-        if (def.Role == EventScenarioRole.Defend && claim.Placed && !claim.DefendSet) Defend(g, claim);
+        if (def.Role == EventScenarioRole.Defend && claim.Placed) Defend(g, claim, probe);
     }
 
     /// <summary>An offline claim: a stopped bot nobody will bring up is started; one that should come up by itself (restore) is waited for.</summary>
@@ -485,11 +514,30 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             : claim.TeleportAttempts >= TeleportAttemptsReported ? "place: not arrived" : null;
     }
 
-    private void Defend(ScenarioGroupRun g, ScenarioClaim claim)
+    /// <summary>
+    /// Keep the bot's post as the table says, judged each pass from the post its brain holds now: a bot that restarted has none and gets it
+    /// again, a bot holding a GM's post is left alone and reported.
+    /// </summary>
+    private void Defend(ScenarioGroupRun g, ScenarioClaim claim, ScenarioBotProbe probe)
     {
         EventScenarioGroup def = g.Group;
         EventScenarioPost post = def.Posts[claim.Slot % def.Posts.Count];
-        var defend = new PlayerbotDefendPost(post.Map, post.Centre, post.Radius, EventScenarioPostIds.For(def.EventId, def.GroupId, post.PostId));
+        int wanted = EventScenarioPostIds.For(def.EventId, def.GroupId, post.PostId);
+        if (probe.DefendPostId == wanted)
+        {
+            claim.DefendSet = true;
+            if (claim.Refusal is { } old && old.StartsWith("defend:", StringComparison.Ordinal)) claim.Refusal = null;
+            return;
+        }
+
+        if (probe.DefendPostId is { } other && !EventScenarioPostIds.IsScenario(other))
+        {
+            claim.DefendSet = false;
+            claim.Refusal = "defend: post-set-by-gm";
+            return;
+        }
+
+        var defend = new PlayerbotDefendPost(post.Map, post.Centre, post.Radius, wanted);
         string? refusal = host.SetDefend(claim.BotId, defend);
         claim.DefendSet = refusal is null;
         claim.Refusal = refusal is null ? null : "defend: " + refusal;
