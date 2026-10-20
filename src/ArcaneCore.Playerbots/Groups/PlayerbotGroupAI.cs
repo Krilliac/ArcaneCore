@@ -297,10 +297,12 @@ internal sealed class PlayerbotGroupAI
             return;
         }
 
-        if (_restUntilMs != 0 && ContinueRest(player)) { Step = "rest"; return; }
-
         Player? leader = group.LeaderPlayer(_session.World);
         bool isLeader = leader is not null && leader.Guid == player.Guid;
+        // A pushing leader away from its waypoint walks: it does not rest, eat, loot or buff on the way (the push has its own no-progress bound, and a rest that is not ended stands the leader still until the push is withdrawn).
+        bool pushWalks = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: false };
+        if (_restUntilMs != 0 && ContinueRest(player, pushWalks)) { Step = "rest"; return; }
+
         if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
         Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
@@ -320,7 +322,7 @@ internal sealed class PlayerbotGroupAI
         }
 
         TargetEntry = 0;
-        if (!player.Combat.IsInCombat)
+        if (!player.Combat.IsInCombat && !pushWalks)
         {
             if (FinishLoot(player)) { Step = "loot"; return; }
             if (Resurrect(player, group)) { Step = "resurrect"; return; }
@@ -423,6 +425,9 @@ internal sealed class PlayerbotGroupAI
 
         if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
         {
+            // A pushing leader that was drawn off its waypoint and walked back has made the loop watch refuse the waypoint (an A, B, A pattern), and the walk would report no path until the
+            // blacklist ends. The push has its own no-progress bound (PushStallMs), so the watch starts afresh, as at a retreat.
+            if (raid.PushingThrough && PlayerbotMotion.IsBlacklisted(player, raid.MoveTo)) PlayerbotMotion.ForgetLoops(player);
             bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
             raid.RetreatNoPath = !walked && raid.Order == PlayerbotSiegeOrder.Retreat;
             Step = string.Create(CultureInfo.InvariantCulture,
@@ -690,6 +695,11 @@ internal sealed class PlayerbotGroupAI
         if (group.Siege is { PushingThrough: true } pushing)
         {
             if (isLeader && !pushing.AtWaypoint) return null;
+            // The leader waiting at its waypoint fights back only what is at the waypoint (3D, so a unit on the other level of a lift top is not): an attacker farther out comes to it, and chasing it would draw the leader
+            // out of the waypoint, off its walk, and back.
+            if (isLeader)
+                return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= PlayerbotSiegeCommander.WaypointYards)
+                    .OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
             return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
 
@@ -1109,12 +1119,13 @@ internal sealed class PlayerbotGroupAI
         return true;
     }
 
-    private bool ContinueRest(Player player)
+    /// <summary>Keeps a rest going while it works. <paramref name="endNow"/> (a pushing siege leader off its waypoint) stands the bot up at once.</summary>
+    private bool ContinueRest(Player player, bool endNow)
     {
         if (!PlayerbotMovementControl.Stop(_session, player)) return true;
         SpellFeature? spells = _session.Services.GetService<SpellFeature>();
         bool eating = spells is not null && PlayerbotConsumables.HasActiveFoodDrink(player, spells.System);
-        if (!player.Combat.IsInCombat && eating && PlayerbotConsumables.NeedsRecovery(player, _restKind)
+        if (!endNow && !player.Combat.IsInCombat && eating && PlayerbotConsumables.NeedsRecovery(player, _restKind)
             && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
         {
             Goal = PlayerbotGoalKind.Rest;

@@ -413,8 +413,9 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   once per engagement, at most twice, with the same counting as before). A push never begins a retreat and is never counted as one.
   **A push is the siege's decision, not one raid's** (`GrantPushes`, every 400 ms): a raid that qualifies is held back while the other raid is in combat and
   does not qualify (the lockstep would wait for that fight and the pushing leader would idle among its hostiles), and once its leader stands at the waypoint
-  while a peer is not there (or a raid is unled, or the waypoint is the last) the order is Assault and the push is held (`Push` is none), but it stays in
-  force (`PushInForce`) and goes on when the hold ends. A push held back only by a member's lag stays granted (see the lockstep below).
+  while a peer is not there (or a raid is unled, or the waypoint is the last) the order is Assault and the push is held (`Push` is none). Only a push that was
+  **granted** is held: it stays in force (`PushInForce`) and goes on when the hold ends. A qualification that is refused starts nothing and is judged again at every read
+  (see "A push in force carries" below). A push held back only by a member's lag stays granted (see the lockstep below).
   **Clocks.** The *in-combat clock of a step* starts at the first coordinator read in combat at that step, takes that read's hostile count as the baseline of
   a stalemate, and resets when the step changes (starting again at once if the raid is still in combat) and after 5 s out of combat (`StepClockQuietMs`, the
   length of the retreat's quiet); a shorter gap does not break it. It does **not** reset when a retreat begins: a retreat keeps the step (its point is the
@@ -432,10 +433,18 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   waypoint it fights nothing (its target is none, so `PlayerbotGroupAI.Update` reaches the walk; its attackers follow it), and at its waypoint, waiting, it fights back.
   **Every member answers any attacker of any raid member** within `AssistYards` (50 yards), its own attacker first, then the nearest, and with none follows the leader;
   there are no marks and no new targets (`SelectTarget`). A rally is different: there a member fights back only its own attackers (a healer also a raid member's).
+  **At the waypoint the pushing leader fights back only what is at the waypoint** (within `WaypointYards`, 6 yards, of it, in 3D so that a unit on the other level of a
+  lift top is not): an attacker farther out comes to the leader, and chasing it drew the leader out of the 6-yard radius, so that its target was none and it walked back, then
+  chased again; the loop watch read that as an A, B, A pattern and refused the waypoint, the walk reported no path and the push was denied after 30 s. Members are unchanged
+  (any attacker of a raid member within 50 yards). Since the push has its own no-progress bound, `LeadSiege` also clears the loop watch (`ForgetLoops`) when the waypoint of a
+  pushing leader is refused, as a retreat does once. **A pushing leader away from its waypoint does not rest, eat, loot or buff** (no `FinishLoot`, `Resurrect`, `LootHeld`,
+  buffs or `Rest`, and a rest already running is ended): a sit at 30 % health with weak food stood the leader still until the push was withdrawn. **"At the waypoint" is
+  level-aware**: within `WaypointYards` in the plane and no more than `WaypointLevelYards` (25 yards) in height, because a lift-top waypoint shares its XY with the floor
+  about 100 yards below it.
   **The no-progress bound** (`NotePushProgress`): while the raid pushes and its leader is not at its waypoint, the leader's 2D distance to the step goal must set a
   new least value, by more than `PushProgressYards` (2 yards), within `PushStallMs` (30 s). A push that does not is withdrawn and denied for the rest of the step
   (`PushDeniedStep`): the raid is back at Assault, which is the baseline, a note and a log warning say so (`push withdrawn, the leader got no nearer to waypoint N`), and
-  the status detail ends in `push=denied`. Standing at the waypoint counts as progress (the lockstep and its own bound govern there), and so does an elevator trip of the leader at any stage (`PlayerbotElevator.IsTraveling`): both levels of an Undercity lift share their XY, so a wait and a ride gain no 2D yards; the elevator has its own 60 s no-progress bound.
+  the status detail ends in `push=denied`. Standing at the waypoint counts as progress (the lockstep and its own bound govern there), and so does an elevator trip of the leader at any stage (`PlayerbotElevator.IsTraveling`): both levels of an Undercity lift share their XY, so a wait and a ride gain no 2D yards; the elevator has its own bounds (60 s of no progress on the walk to the stop, two cycles and 30 s waiting for the car, a cycle and 30 s aboard).
   **Lockstep:** the step moves on once every leader stands at its waypoint, no living member of any raid is more than `LagYards` (30 yards) behind its leader, and each
   raid is out of combat or pushing. A pushing leader that reaches the next waypoint waits there, fighting back, until the members that disengaged (on the other lift
   level, say) have caught up. That wait is bound too: after `LagHoldMs` (90 s) of a member more than 30 yards behind, the lag is waived for that step change (`LagWaived`):
