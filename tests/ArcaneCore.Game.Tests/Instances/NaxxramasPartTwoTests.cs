@@ -798,8 +798,9 @@ public sealed class NaxxramasPartTwoTests
     [Fact]
     public void Thaddius_OverloadWithNoLivingPlayer_FailsTheEncounter()
     {
-        // The Tesla overload puts Thaddius in combat with the zone; with no living player that yields nobody (ArcaneCore-only fail: the
-        // reference leaves him unflagged and unattackable; precedent FrostwyrmBossAIs.StartPhaseTwo, Kel'Thuzad).
+        // The Tesla overload puts Thaddius in combat with the zone; with no living player that yields nobody. ArcaneCore-only fail: the
+        // reference leaves him attackable but never fighting (a soft-lock). Here he stays flagged unselectable and immune to players, so
+        // nobody can kill him for free; precedent FrostwyrmBossAIs.StartPhaseTwo (Kel'Thuzad).
         using var raid = new Raid(15928).Initialize(activateThaddius: false);
         raid.Instance.RecordConstructAddDeath(15929);
         raid.Instance.RecordConstructAddDeath(15930);
@@ -809,6 +810,77 @@ public sealed class NaxxramasPartTwoTests
         raid.Instance.Update(14000);
 
         Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.False(raid.Boss.Combat.IsInCombat);
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.NotSelectable));
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.ImmuneToPlayer));
+        Player late = AddPlayer2(raid);
+        Assert.False(raid.Map.Combat.Hooks.CanAttack(late, raid.Boss)); // a player cannot hit him
+    }
+
+    [Fact]
+    public void ThaddiusAdds_FailBeforeTheDeferredDespawn_IgnoresAnAddBroughtToOneHealthInTheWindow()
+    {
+        // SetData(FAIL) only schedules the despawn; an add dropped to 1 HP before it runs must not re-arm the revive or overload timers.
+        using var raid = new Raid(15928).Initialize(activateThaddius: false, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        Creature stalagg = Add(raid, 15929);
+        stalagg.AI!.AttackStart(raid.Tank);
+        raid.Instance.SetData(NaxxramasInstance.Thaddius, EncounterState.Fail);
+
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        Tick(raid, 20_000); // past the 10 s revive window and before the 30 s respawn
+
+        Assert.False(raid.Instance.ConstructAddsDefeated);
+        Assert.All(raid.Creatures.Creatures.Where(c => c.Entry is 15929 or 15930), c => Assert.False(c.IsAlive));
+        Tick(raid, 11_000);
+        AssertAddsRespawnedAtFullHealthAndIdle(raid);
+    }
+
+    [Fact]
+    public void ThaddiusAdds_FakingMoreThanTenSecondsApart_TheFirstRevivesThenEvadesAndFailsTheEncounter()
+    {
+        using var raid = new Raid(15928).Initialize(activateThaddius: false, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        Creature stalagg = Add(raid, 15929);
+        stalagg.AI!.AttackStart(raid.Tank);
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        Assert.True(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+
+        Tick(raid, 10_500); // Feugen never fell: Stalagg gets up
+        Assert.False(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+        Assert.Equal(stalagg.MaxHealth, stalagg.Health);
+        Assert.False(raid.Instance.ConstructAddsDefeated);
+
+        raid.Tank.Health = 0; // the raid dies: the revived add evades home
+        Tick(raid, 5000);
+
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.All(raid.Creatures.Creatures.Where(c => c.Entry is 15929 or 15930), c => Assert.False(c.IsAlive));
+        Tick(raid, 31_000);
+        AssertAddsRespawnedAtFullHealthAndIdle(raid);
+    }
+
+    [Fact]
+    public void Thaddius_PulledBeforeTheAddsFell_LeavesCombatFlaggedWithoutCallingAssistance_AndTheRealEngageStillDoes()
+    {
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        raid.Creatures.SpawnTemporary(Template(15929), 1, 0, 270, 0);
+        raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+
+        raid.Boss.AI!.AttackStart(raid.Tank);
+
+        Assert.False(raid.Boss.Combat.IsInCombat);
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.NotSelectable));
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.ImmuneToPlayer));
+        Assert.False(raid.Boss.CalledAssistance);
+
+        raid.Instance.RecordConstructAddDeath(15929);
+        raid.Instance.RecordConstructAddDeath(15930);
+        raid.Instance.Update(14000); // the overload pulls him for real
+
+        Assert.True(raid.Boss.Combat.IsInCombat);
+        Assert.Equal(0u, (uint)(raid.Boss.UnitFlags & (UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer)));
+        Assert.True(raid.Boss.CalledAssistance);
     }
 
     [Fact]
