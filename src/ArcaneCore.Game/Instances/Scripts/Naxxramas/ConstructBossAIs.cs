@@ -191,6 +191,9 @@ public sealed class ThaddiusAI : RaidBossAI
             System?.StopCombatInPlace(Me);
             return;
         }
+
+        // boss_thaddiusAI::Aggro (boss_thaddius.cpp:117-123): attackable only once he really engages.
+        Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
         base.OnAggro(target);
     }
 

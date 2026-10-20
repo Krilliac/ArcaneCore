@@ -77,7 +77,8 @@ public sealed partial class NaxxramasInstance
     /// <summary>SD2 boss_thaddiusAddsAI: both adds must fall within ten seconds; fourteen seconds later their Teslas overload.</summary>
     public void RecordConstructAddDeath(uint entry)
     {
-        if (entry is not (15929 or 15930) || GetData(Thaddius) == EncounterState.Done) return;
+        // A death between the FAIL and its deferred despawn belongs to the failed attempt: it must not re-arm the timers.
+        if (entry is not (15929 or 15930) || GetData(Thaddius) == EncounterState.Done || _despawnConstructAdds) return;
         _constructAddsDead.Add(entry);
         if (_constructAddsDead.Count == 2) { _addReviveMs = 0; _overloadMs = 14000; }
         else _addReviveMs = 10000;
@@ -98,6 +99,8 @@ public sealed partial class NaxxramasInstance
         {
             // Deferred from the FAIL SetData: its caller may be one of the adds, inside its own OnReachedHome.
             _despawnConstructAdds = false;
+            _constructAddsDead.Clear();
+            _addReviveMs = _overloadMs = 0;
             DespawnConstructAdds(30);
         }
         if (_guardianCheckMs > 0)
@@ -149,10 +152,10 @@ public sealed partial class NaxxramasInstance
                 SetData(Thaddius, EncounterState.Special);
                 if (GetSingleCreatureFromStorage(15928) is { IsAlive: true } thaddius)
                 {
-                    thaddius.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
-                    // ArcaneCore only: cmangos soft-locks here when nobody is alive (Creature.cpp:2382-2400 yields no target and he stays
-                    // unflagged but never fights). With no living player the encounter fails instead; precedent FrostwyrmBossAIs.StartPhaseTwo
-                    // (Kel'Thuzad), which fails when SetInCombatWithZone finds nobody.
+                    // His flags come off in his own Aggro (boss_thaddius.cpp:117-123), when he actually engages.
+                    // ArcaneCore only: cmangos soft-locks here when nobody is alive (Creature.cpp:2382-2400 yields no target and he never
+                    // fights). With no living player the encounter fails instead (the Fail handler keeps him flagged); precedent
+                    // FrostwyrmBossAIs.StartPhaseTwo (Kel'Thuzad), which fails when SetInCombatWithZone finds nobody.
                     if (thaddius.System?.SetInCombatWithZone(thaddius) == 0) SetData(Thaddius, EncounterState.Fail);
                 }
             }
@@ -320,6 +323,10 @@ public sealed partial class NaxxramasInstance
                     _constructAddsDead.Clear();
                     _addReviveMs = _overloadMs = 0;
                     _despawnConstructAdds = true; // UpdatePartTwo despawns both adds with a 30 s respawn (naxxramas.cpp:594-617)
+                    // Thaddius that is not fighting is unattackable again (boss_thaddius.cpp:109-115): his own evade reaches this too, but
+                    // a failed overload (nobody to pull) never put him in combat, so the handler re-applies the flags itself.
+                    if (GetSingleCreatureFromStorage(15928) is { IsAlive: true } thaddiusAtHome && !thaddiusAtHome.Combat.IsInCombat)
+                        thaddiusAtHome.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
                 }
                 if (state != EncounterState.Special) SetDoor(181121, state is not EncounterState.InProgress);
                 break;
