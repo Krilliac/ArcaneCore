@@ -45,6 +45,8 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
 {
     private const uint TheBarrens = 17, ThousandNeedles = 400, FreewindPost = 484, Mulgore = 215, ThunderBluff = 1638;
 
+    private const int MaxTileWaitAttempts = 200; // x 50 ms = 10 s for the pool to read a nav tile
+
     private static readonly Vector3 Bloodhoof = new(-2300f, -380f, -9f);
     private static readonly Vector3 ThunderBluffMesa = new(-1280f, 120f, 131f);
 
@@ -197,23 +199,37 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
         foreach (Vector3 botPos in (Vector3[])[new(-1284.7f, 250.3f, 129.0f), new(-1254.0f, 224.2f, 130.8f)])
         {
             await world.PlaceAsync(botPos);
-            (Vector3? reachable, bool onMesh, bool canPlan) = await world.OnWorldAsync(() =>
+            // The nav tiles round the lift are read on the pool (NonBlockingTiles): a query that needs one still being read answers
+            // "pending" (PathSearchCounters.TilesPending), which LandingBesideReachable reports as "no reachable landing". That is no
+            // verdict, so ask again on a later think, as a bot does, until a call runs with no tile pending (bounded: a read that never
+            // lands still fails the test, on the pending assertion below).
+            (Vector3? reachable, bool onMesh, bool canPlan, long pendingTiles) = (null, false, false, 0L);
+            int attempts = 0;
+            do
             {
-                Map kalimdor = world.Host.World.GetMap(1);
-                Player player = world.Player;
-                Vector3? found = null;
-                foreach (ElevatorCar car in tbLift.Cars)
+                if (attempts > 0) await Task.Delay(50);
+                attempts++;
+                (reachable, onMesh, canPlan, pendingTiles) = await world.OnWorldAsync(() =>
                 {
-                    found = PlayerbotElevator.LandingBesideReachable(player, kalimdor, car.At(ElevatorLevel.High), botPos, options);
-                    if (found is not null) break;
-                }
+                    long mark = PathSearchCounters.TilesPending;
+                    Map kalimdor = world.Host.World.GetMap(1);
+                    Player player = world.Player;
+                    Vector3? found = null;
+                    foreach (ElevatorCar car in tbLift.Cars)
+                    {
+                        found = PlayerbotElevator.LandingBesideReachable(player, kalimdor, car.At(ElevatorLevel.High), botPos, options);
+                        if (found is not null) break;
+                    }
 
-                bool mesh = found is not null && PlayerbotNavigation.OnWalkableMesh(kalimdor, found.Value);
-                bool plan = found is not null && PlayerbotNavigation.TryPlanToward(player, found.Value, options, out _);
-                return (found, mesh, plan);
-            });
+                    bool mesh = found is not null && PlayerbotNavigation.OnWalkableMesh(kalimdor, found.Value);
+                    bool plan = found is not null && PlayerbotNavigation.TryPlanToward(player, found.Value, options, out _);
+                    return (found, mesh, plan, PathSearchCounters.TilesPending - mark);
+                });
+            }
+            while (pendingTiles > 0 && attempts < MaxTileWaitAttempts);
 
-            output.WriteLine($"TB from {botPos} -> landing {reachable}");
+            output.WriteLine($"TB from {botPos} -> landing {reachable}; attempts {attempts}, tiles pending in the last call {pendingTiles}");
+            Assert.Equal(0, pendingTiles);
             Assert.NotNull(reachable);
             Assert.True(onMesh, $"Landing {reachable} is not on walkable mesh");
             Assert.True(canPlan, $"Cannot plan from {botPos} to {reachable}");
