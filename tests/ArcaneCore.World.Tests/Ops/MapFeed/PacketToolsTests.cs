@@ -111,6 +111,41 @@ public sealed class PacketToolsTests
         Assert.True((await on.HelloAsync()).GetProperty("tools").GetBoolean());
     }
 
+    [Theory]
+    [InlineData("Development", false)]
+    [InlineData("Development", true)]
+    [InlineData("Production", true)]
+    public async Task OnTheLiveServer_TheToolsAreRefused_WhateverTheOptionsSay(string environment, bool allowOutside)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using (FeedWorld live = await FeedWorld.StartAsync(new FeedWorldSetup
+        {
+            Terrain = true,
+            PacketTools = o =>
+            {
+                o.Enabled = true;
+                o.AllowOutsideDevelopment = allowOutside;
+            },
+            Environment = environment,
+            LiveServer = true,
+        }))
+        {
+            Assert.Null(live.Feed.Tools);
+            Assert.Single(live.FeedLog, e => e.Level == LogLevel.Warning && e.Message.Contains("packet tools refused: this is the live server (ARCANECORE_LIVE_SERVER)", StringComparison.Ordinal));
+            FeedClient client = await live.ConnectAsync(hello: false);
+            Assert.False((await client.HelloAsync()).TryGetProperty("tools", out _));
+            AssertRefused(await RequestAsync(client, """{"op":"console","id":1,"line":"reload status"}"""), 1, "console", MapFeedProtocol.ToolsOff);
+        }
+
+        // The same setup off the live server starts the tools (so the refusal above is the marker's).
+        await using FeedWorld dev = await FeedWorld.StartAsync(ToolsOn(environment: environment, allowOutside: allowOutside));
+        Assert.NotNull(dev.Feed.Tools);
+    }
+
     [WindowsFact]
     public async Task InDevelopment_TheToolsStart_WithAWarning_AndTheHelloSaysSo()
     {

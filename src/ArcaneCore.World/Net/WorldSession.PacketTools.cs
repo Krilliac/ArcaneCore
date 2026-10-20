@@ -178,6 +178,11 @@ public sealed partial class WorldSession
             {
                 throw;
             }
+            catch (OperationCanceledException) when (_kick.IsCancellationRequested)
+            {
+                // The session's own kick cancelled the handler: the session is already ending, which is not a fault and needs no second kick.
+                return InjectVerdict.Closed;
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // A session handler fault the dispatcher does not contain (a cancellation that is not the caller's included) leaves the

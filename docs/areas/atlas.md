@@ -136,7 +136,9 @@ can reject itself, and `Unavailable` when the daemon's packet tools are off or n
 Security model: the commands add no new way in. They speak only to the map feed's local named pipe, which keeps its access list
 (the daemon's own account and SYSTEM, NETWORK denied), `PIPE_REJECT_REMOTE_CLIENTS` and first-instance rule; the daemon serves them
 only when `World:Control:PacketTools:Enabled` is set and the environment is Development (or
-`World:Control:PacketTools:AllowOutsideDevelopment` is also set, with a startup warning); both default to `false`. The daemon logs
+`World:Control:PacketTools:AllowOutsideDevelopment` is also set, with a startup warning); both default to `false`. The local live
+server runs as Development, so it is kept out by a marker instead: `tools/ops/live/launch-daemon.ps1` sets `ARCANECORE_LIVE_SERVER=1`,
+and the daemon refuses the tools then, whatever the configuration says. The daemon logs
 every console line (redacted), injection and send (opcode, length, target, client process; never the payload) and counts injections
 and sends in `arcanecore_tools_packets_total`. Atlas itself only relays what its loopback, token-authenticated `serve` instance is
 asked.

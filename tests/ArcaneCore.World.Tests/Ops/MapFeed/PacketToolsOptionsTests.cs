@@ -27,8 +27,8 @@ public sealed class PacketToolsOptionsTests
         Assert.False(options.Enabled);
         Assert.False(options.AllowOutsideDevelopment);
         Assert.Equal("World:Control:PacketTools", WorldPacketToolsOptions.SectionName);
-        Assert.False(options.PermitsEnvironment("Development"));
-        Assert.False(options.PermitsEnvironment("Production"));
+        Assert.False(options.PermitsEnvironment("Development", liveServer: false));
+        Assert.False(options.PermitsEnvironment("Production", liveServer: false));
     }
 
     [Theory]
@@ -41,7 +41,46 @@ public sealed class PacketToolsOptionsTests
     [InlineData(false, true, "Production", false)]
     [InlineData(false, true, "Development", false)]
     public void TheEnvironmentGate_NeedsDevelopment_OrTheSecondOptIn(bool enabled, bool allowOutside, string environment, bool permitted)
-        => Assert.Equal(permitted, new WorldPacketToolsOptions { Enabled = enabled, AllowOutsideDevelopment = allowOutside }.PermitsEnvironment(environment));
+        => Assert.Equal(permitted, new WorldPacketToolsOptions { Enabled = enabled, AllowOutsideDevelopment = allowOutside }.PermitsEnvironment(environment, liveServer: false));
+
+    [Theory]
+    [InlineData("Development", false)]
+    [InlineData("Production", true)]
+    [InlineData("Development", true)]
+    public void TheLiveServer_IsRefused_WhateverTheOptionsSay(string environment, bool allowOutside)
+    {
+        var options = new WorldPacketToolsOptions { Enabled = true, AllowOutsideDevelopment = allowOutside };
+
+        Assert.True(options.PermitsEnvironment(environment, liveServer: false));
+        Assert.False(options.PermitsEnvironment(environment, liveServer: true));
+    }
+
+    [Fact]
+    public void TheLiveLauncher_SetsTheLiveServerMarker_TheWorldReads()
+    {
+        string script = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "live", "launch-daemon.ps1"));
+        Assert.Contains($"$env:{WorldPacketToolsOptions.LiveServerVariable} = '1'", script, StringComparison.Ordinal);
+        Assert.Equal("ARCANECORE_LIVE_SERVER", WorldPacketToolsOptions.LiveServerVariable);
+    }
+
+    [Fact]
+    public void TheConfigCheck_WarnsAboutAllowOutsideDevelopment_AndAboutEnabledOnTheLiveServer()
+    {
+        ConfigIssue outside = Assert.Single(Check(("World:Control:PacketTools:AllowOutsideDevelopment", "true")));
+        Assert.Equal(ConfigSeverity.Warning, outside.Severity);
+        Assert.Equal("World:Control:PacketTools:AllowOutsideDevelopment", outside.Key);
+
+        Assert.Empty(Check(("World:Control:PacketTools:AllowOutsideDevelopment", "false")));
+
+        ConfigIssue live = Assert.Single(Check(("World:Control:PacketTools:Enabled", "true"), ("World:Control:MapFeed:Enabled", "true"), ("ARCANECORE_LIVE_SERVER", "1")));
+        Assert.Equal(ConfigSeverity.Warning, live.Severity);
+        Assert.Equal("World:Control:PacketTools:Enabled", live.Key);
+        Assert.Contains("live server", live.Problem, StringComparison.Ordinal);
+
+        // The marker alone, with the tools off, is the normal live configuration: nothing to say.
+        Assert.Empty(Check(("ARCANECORE_LIVE_SERVER", "1")));
+        Assert.Empty(Check(("World:Control:PacketTools:Enabled", "true"), ("World:Control:MapFeed:Enabled", "true"), ("ARCANECORE_LIVE_SERVER", "0")));
+    }
 
     [Fact]
     public void TheConfigCheck_FlagsNonBooleans_AndToolsWithoutTheFeed()

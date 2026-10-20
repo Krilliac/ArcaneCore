@@ -16,8 +16,8 @@ services). Tests: `tests/ArcaneCore.World.Tests/Ops/MapFeed`.
 | `World:Control:MapFeed:MaxHz` | `5` | 1 to 60 | The fastest frame rate any subscription gets; a client asking for more gets this. |
 | `World:Control:MapFeed:MaxEntitiesPerFrame` | `4096` | 16 to 65536 | The most entities one frame carries; the rest are counted as `truncated`. |
 | `World:Control:MapFeed:MaxConnections` | `2` | 1 to 16 | The most clients at once (one pipe instance each). |
-| `World:Control:PacketTools:Enabled` | `false` | | Offer the [packet tools](#packet-tools) on this pipe (needs the feed on, and the Development environment unless the next key is set). |
-| `World:Control:PacketTools:AllowOutsideDevelopment` | `false` | | The second, deliberate opt-in: let the tools start in any other environment, with a warning naming it. Never on a server players use. |
+| `World:Control:PacketTools:Enabled` | `false` | | Offer the [packet tools](#packet-tools) on this pipe (needs the feed on, and the Development environment unless the next key is set). Always refused when the process environment variable `ARCANECORE_LIVE_SERVER` is `1`: the local live server runs as Development, so the environment alone does not guard it, and `tools/ops/live/launch-daemon.ps1` sets that marker. |
+| `World:Control:PacketTools:AllowOutsideDevelopment` | `false` | | The second, deliberate opt-in: let the tools start in any other environment, with a warning naming it. Never on a server players use; it does not lift the live-server refusal above. |
 
 A value outside its range keeps the feed off with a warning that names the key, and `check-config` reports it (an error while the feed
 is enabled, a warning while it is off). The generated reference is `docs/reference/configuration.md`.
@@ -103,7 +103,7 @@ A developer debugging tool: it lets an agent or a script drive and observe a loc
 feed's pipe a connected client may run a console line, hand a client opcode to an online session as if its client had sent it, queue a
 server opcode to a session's client, and watch a session's packets. Code: `PacketTools.cs`, `MapFeedConnection.Tools.cs`,
 `FeedPacketTap.cs` and `PacketToolOpcodes.cs` in `src/ArcaneCore.World/Ops/MapFeed`, and `src/ArcaneCore.World/Net/WorldSession.PacketTools.cs`.
-Tests: `PacketToolsTests` and `PacketToolsOptionsTests` in `tests/ArcaneCore.World.Tests/Ops/MapFeed`.
+Tests: `PacketToolsTests`, `PacketToolsOptionsTests` and `PacketToolsSessionTests` in `tests/ArcaneCore.World.Tests/Ops/MapFeed`.
 
 ### Security model
 
@@ -111,7 +111,14 @@ Tests: `PacketToolsTests` and `PacketToolsOptionsTests` in `tests/ArcaneCore.Wor
   (`World:Control:MapFeed:Enabled`), decided once at start; `check-config` warns when the tools are on without the feed.
 * **Development only.** In any host environment other than `Development` (`DOTNET_ENVIRONMENT`; unset counts as `Production`) the tools
   stay off with a Warning, unless `World:Control:PacketTools:AllowOutsideDevelopment` is also `true`; then they start with a Warning that
-  names the environment. Every start of the tools logs a Warning that says what they allow.
+  names the environment. Every start of the tools logs a Warning that says what they allow. `check-config` warns when
+  `AllowOutsideDevelopment` is on.
+* **Never on the live server.** The local live server runs as `Development` (`tools/ops/live/launch-daemon.ps1` sets
+  `DOTNET_ENVIRONMENT=Development`), so the environment alone does not guard it. The same script sets `ARCANECORE_LIVE_SERVER=1`, and
+  the World refuses the tools whenever that variable is `1`, whatever the configuration says (`Enabled` and `AllowOutsideDevelopment`
+  included): the feed logs one Warning (`packet tools refused: this is the live server (ARCANECORE_LIVE_SERVER)`), the session gate is
+  not created, and `check-config` warns when `Enabled` is set while the variable is. The decision reads the process environment once at
+  start; nothing in `appsettings` can lift it.
 * **Local pipe only.** No new endpoint: the requests ride on the map feed's pipe, with its access list (the daemon's account and SYSTEM,
   NETWORK denied), `PIPE_REJECT_REMOTE_CLIENTS` read back from the kernel, and `FILE_FLAG_FIRST_PIPE_INSTANCE` (see "The pipe").
   Whoever can open the pipe already runs as the daemon's account.
@@ -194,8 +201,10 @@ session handler at a time), and:
 * a packet over the connection's packet budget (`Net:Protection:World*`) is dropped as a client's is, and the injection answers
   `dropped`; the session stays up. A world-thread opcode queued on a session that closes meanwhile is discarded.
 
-The gate is only created while the tools are actually on (the same decision as above: the option, the map feed serving and the
-environment), so a daemon with the tools off, or refused in this environment, runs the dispatcher exactly as before. The decision is
+The gate follows the configuration (the options, the feed enabled, the environment, and not the live server), not whether the feed is
+actually serving: a feed that is configured on but failed to start still gates sessions, which is harmless (one uncontended semaphore
+per packet, and nothing can inject). A daemon with the tools off, or refused in this environment or as the live server, runs the
+dispatcher exactly as before. The decision is
 taken from the configuration when the server starts (`PacketToolsPermit`), not when the feed starts: the world host restores the
 playerbots before the feed's own start-up, and those sessions get the gate too. A session is `not-injectable` only when it was built
 while the tools were off.

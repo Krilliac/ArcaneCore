@@ -72,7 +72,10 @@ internal sealed class FeedWorldSetup
     /// <summary>The host environment the feed judges the packet tools by.</summary>
     public string Environment { get; init; } = "Development";
 
-    /// <summary>A permit to register as it is (instead of the parameterless one <see cref="PacketTools"/> registers), such as one built from configuration like the daemon's.</summary>
+    /// <summary>Whether the feed treats the process as the live server (<c>ARCANECORE_LIVE_SERVER</c>); false, never the test process's own environment.</summary>
+    public bool LiveServer { get; init; }
+
+    /// <summary>A permit to register as it is (instead of the one <see cref="PacketTools"/> registers: <c>AddSingleton&lt;PacketToolsPermit&gt;()</c> makes DI pick the longest constructor it can satisfy, the three-argument one), such as one built from configuration like the daemon's.</summary>
     internal PacketToolsPermit? Permit { get; init; }
 }
 
@@ -162,6 +165,7 @@ internal sealed class FeedWorld : IAsyncDisposable
             WriteStallTimeout = setup.WriteStallTimeout,
             QueryTimeout = setup.QueryTimeout,
             EnvironmentName = setup.Environment,
+            LiveServer = setup.LiveServer,
         };
         var world = new FeedWorld(host, feed, options, logs, loggers, terrainDirectory);
         if (setup.StartFeed)

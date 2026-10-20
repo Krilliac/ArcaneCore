@@ -44,7 +44,8 @@ internal sealed class PacketTools : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ToolConsole, byte> _retired = new();
     private readonly CancellationTokenSource _stopping = new();
-    private volatile bool _disposed;
+    private readonly Lock _retireGate = new();
+    private bool _disposed;
 
     /// <summary>The services are resolved here, so a host missing one fails when the tools are switched on, not at the first console line.</summary>
     public PacketTools(IServiceProvider services, WorldRuntime world, ILogger logger)
@@ -153,19 +154,38 @@ internal sealed class PacketTools : IAsyncDisposable
     /// </summary>
     public void Retire(ToolConsole console)
     {
-        _retired[console] = 0;
-        if (_disposed)
+        bool disposed;
+        lock (_retireGate)
         {
-            // DisposeAsync already swept the retired consoles (or is sweeping them): whichever of the two removes it disposes it.
-            if (_retired.TryRemove(console, out byte _))
+            // Under the gate with DisposeAsync's flag set: a console added here is either swept by DisposeAsync (it sets the flag after
+            // this add, then sweeps) or seen as disposed below and disposed at once, never left behind.
+            disposed = _disposed;
+            if (!disposed)
             {
-                _ = console.DisposeAsync().AsTask();
+                _retired[console] = 0;
             }
+        }
 
+        if (disposed)
+        {
+            _ = DisposeObservedAsync(console);
             return;
         }
 
         _ = RetireAsync(console);
+    }
+
+    /// <summary>Dispose a console, logging a fault instead of losing it (Retire's and the sweep's disposals have no caller to throw to).</summary>
+    private async Task DisposeObservedAsync(ToolConsole console)
+    {
+        try
+        {
+            await console.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning(ex, "Map feed: a console failed to dispose");
+        }
     }
 
     private async Task RetireAsync(ToolConsole console)
@@ -184,20 +204,24 @@ internal sealed class PacketTools : IAsyncDisposable
 
         if (_retired.TryRemove(console, out byte _))
         {
-            await console.DisposeAsync().ConfigureAwait(false);
+            await DisposeObservedAsync(console).ConfigureAwait(false);
         }
     }
 
-    /// <summary>Dispose every retired console (the feed is stopping).</summary>
+    /// <summary>Dispose every retired console (the feed is stopping); a console that faults to dispose is logged and does not stop the sweep.</summary>
     public async ValueTask DisposeAsync()
     {
-        _disposed = true;
+        lock (_retireGate)
+        {
+            _disposed = true;
+        }
+
         await _stopping.CancelAsync().ConfigureAwait(false);
         foreach (ToolConsole console in _retired.Keys)
         {
             if (_retired.TryRemove(console, out byte _))
             {
-                await console.DisposeAsync().ConfigureAwait(false);
+                await DisposeObservedAsync(console).ConfigureAwait(false);
             }
         }
 
@@ -265,8 +289,14 @@ internal sealed class PacketToolsPermit
 
     [ActivatorUtilitiesConstructor]
     public PacketToolsPermit(IOptions<WorldPacketToolsOptions> tools, IOptions<WorldMapFeedOptions> feed, IHostEnvironment? environment = null)
+        : this(tools, feed, environment, WorldPacketToolsOptions.IsLiveServer())
     {
-        Configured = environment is not null && feed.Value.Enabled && tools.Value.PermitsEnvironment(environment.EnvironmentName);
+    }
+
+    /// <summary>As the public constructor, with the live-server decision given (<see cref="WorldPacketToolsOptions.IsLiveServer"/> in production). Not public: DI must not see it.</summary>
+    internal PacketToolsPermit(IOptions<WorldPacketToolsOptions> tools, IOptions<WorldMapFeedOptions> feed, IHostEnvironment? environment, bool liveServer)
+    {
+        Configured = environment is not null && feed.Value.Enabled && tools.Value.PermitsEnvironment(environment.EnvironmentName, liveServer);
     }
 
     /// <summary>The options and the host environment permit the tools (the feed may still fail to serve; then nothing can reach a gate).</summary>

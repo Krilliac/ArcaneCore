@@ -29,9 +29,19 @@ public sealed class WorldPacketToolsOptions
     public bool AllowOutsideDevelopment { get; set; }
 
     /// <summary>
-    /// Whether the tools run in a host whose environment is <paramref name="environmentName"/>: <see cref="Enabled"/>, and either the
+    /// The process environment variable that marks the live server (set to "1" by <c>tools/ops/live/launch-daemon.ps1</c>, which runs the
+    /// live server as Development). The tools refuse there whatever the options say.
+    /// </summary>
+    public const string LiveServerVariable = "ARCANECORE_LIVE_SERVER";
+
+    /// <summary>Whether this process is the live server: <see cref="LiveServerVariable"/> is "1". Reads the environment; any thread.</summary>
+    public static bool IsLiveServer() => Environment.GetEnvironmentVariable(LiveServerVariable) == "1";
+
+    /// <summary>
+    /// Whether the tools run in a host whose environment is <paramref name="environmentName"/>: not the live server
+    /// (<paramref name="liveServer"/>, see <see cref="IsLiveServer"/>; refused whatever else is set), <see cref="Enabled"/>, and either the
     /// Development environment or <see cref="AllowOutsideDevelopment"/>. Pure; any thread.
     /// </summary>
-    public bool PermitsEnvironment(string environmentName)
-        => Enabled && (AllowOutsideDevelopment || string.Equals(environmentName, DevelopmentEnvironment, StringComparison.OrdinalIgnoreCase));
+    public bool PermitsEnvironment(string environmentName, bool liveServer)
+        => !liveServer && Enabled && (AllowOutsideDevelopment || string.Equals(environmentName, DevelopmentEnvironment, StringComparison.OrdinalIgnoreCase));
 }

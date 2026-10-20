@@ -125,6 +125,9 @@ public sealed class WorldMapFeed : IHostedService
     /// <summary>The host environment name the tools are judged by (tests set it; else the host's, "Production" when there is none).</summary>
     internal string? EnvironmentName { get; init; }
 
+    /// <summary>Whether this is the live server (null: read <see cref="WorldPacketToolsOptions.LiveServerVariable"/>); tests set it instead of the process environment.</summary>
+    internal bool? LiveServer { get; init; }
+
     /// <summary>The server streams of the pipe instances (tests read their security descriptors); empty when the pipe is off.</summary>
     internal IReadOnlyList<NamedPipeServerStream> Servers => _servers;
 
@@ -212,7 +215,7 @@ public sealed class WorldMapFeed : IHostedService
 
     /// <summary>
     /// Turn the packet tools on when the options and the environment permit (docs/areas/map-feed.md, "Packet tools"). Off by default;
-    /// refused outside Development unless <see cref="WorldPacketToolsOptions.AllowOutsideDevelopment"/> is also set. Either way the
+    /// refused outside Development unless <see cref="WorldPacketToolsOptions.AllowOutsideDevelopment"/> is also set, and always refused on the live server. Either way the
     /// decision is logged at Warning: the tools let a local tool act as any online character.
     /// </summary>
     private void EnableTools()
@@ -222,8 +225,14 @@ public sealed class WorldMapFeed : IHostedService
             return;
         }
 
+        if (LiveServer ?? WorldPacketToolsOptions.IsLiveServer())
+        {
+            _logger.LogWarning("packet tools refused: this is the live server ({Variable}); no setting turns them on here", WorldPacketToolsOptions.LiveServerVariable);
+            return;
+        }
+
         string environment = EnvironmentName ?? _services.GetService<IHostEnvironment>()?.EnvironmentName ?? Environments.Production;
-        if (!_toolsOptions.PermitsEnvironment(environment))
+        if (!_toolsOptions.PermitsEnvironment(environment, liveServer: false))
         {
             _logger.LogWarning(
                 "packet tools off: the environment is '{Environment}', not Development; set {Key}=true as well to allow them here",

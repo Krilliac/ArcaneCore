@@ -24,11 +24,12 @@ namespace ArcaneCore.World.Tests.Ops.MapFeed;
 /// </summary>
 public sealed class PacketToolsSessionTests
 {
-    private static PacketToolsPermit Permit(bool toolsEnabled, bool feedEnabled, bool allowOutside, string? environment)
+    private static PacketToolsPermit Permit(bool toolsEnabled, bool feedEnabled, bool allowOutside, string? environment, bool liveServer = false)
         => new(
             Options.Create(new WorldPacketToolsOptions { Enabled = toolsEnabled, AllowOutsideDevelopment = allowOutside }),
             Options.Create(new WorldMapFeedOptions { Enabled = feedEnabled }),
-            environment is null ? null : new TestHostEnvironment(environment));
+            environment is null ? null : new TestHostEnvironment(environment),
+            liveServer);
 
     /// <summary>A world with one player in it; the feed is never started, so only the permit built from configuration can give the session its gate.</summary>
     private static async Task<(FeedWorld World, WorldTestClient Player, WorldSession Session)> PlayerAsync(PacketToolsPermit permit)
@@ -66,6 +67,38 @@ public sealed class PacketToolsSessionTests
         Assert.Equal(expected, permit.Configured);
         Assert.Equal(expected, permit.GatesSessions);
         Assert.False(permit.Granted);
+    }
+
+    [Theory]
+    [InlineData("Development", false)]
+    [InlineData("Development", true)]
+    [InlineData("Production", true)]
+    public void ThePermit_IsNeverConfiguredOnTheLiveServer_WhateverTheOptionsSay(string environment, bool allowOutside)
+    {
+        PacketToolsPermit live = Permit(toolsEnabled: true, feedEnabled: true, allowOutside, environment, liveServer: true);
+        Assert.False(live.Configured);
+        Assert.False(live.GatesSessions);
+
+        // The same configuration off the live server is permitted (so the refusal above is the marker's).
+        Assert.True(Permit(toolsEnabled: true, feedEnabled: true, allowOutside, environment).Configured);
+    }
+
+    [Fact]
+    public async Task AnInjectedHandlerThatIsCancelledByTheSessionsOwnKick_IsClosed_NotAFault()
+    {
+        (FeedWorld world, WorldTestClient player, WorldSession session) = await PlayerAsync(Permit(true, true, false, "Development"));
+        await using (world)
+        await using (player)
+        {
+            ReplaceQueryTimeHandler(world, (s, _) =>
+            {
+                s.Kick("test kick");
+                throw new OperationCanceledException();
+            });
+
+            Assert.Equal(InjectVerdict.Closed, await InjectQueryTimeAsync(session));
+            await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session is closed after its own kick");
+        }
     }
 
     [Fact]
