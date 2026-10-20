@@ -806,7 +806,6 @@ internal static class PlayerbotElevator
             }
             case ElevatorStage.Aboard:
             {
-                if (trip.PendingStep is not null) return;
                 if (trip.Car is not { } car || trip.CarObject is not { IsInWorld: true } live || !ReferenceEquals(live.Map, map)
                     || map.FindUpdater<GameObjectMapSystem>() is not { } system || system.ElevatorPosition(live) is not { } position)
                 {
