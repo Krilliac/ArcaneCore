@@ -162,7 +162,10 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   change or the shutdown flush, and never reaches the world thread. `Announce` sends mangos_string 4
   (`|cffff0000[Event Message]: <description>|r`) to every player when the option is on.
 - `RestoreServersideEvents` (default false): with it, serverside events recorded in `game_event_status` are re-applied with
-  resume at start-up and kept out of the first pass that would stop them. Retail restores nothing.
+  resume at start-up and kept out of the first pass that would stop them. Retail restores nothing. A bot scenario on a serverside event
+  needs it to come back after a restart ([playbots-scenarios-events.md](playbots-scenarios-events.md)).
+- `GameEventFeature.AddListener` returns an `IDisposable` that removes the listener again (disposed with the owner's subscription bag on a
+  detach); the bot scenarios ([playbots-scenarios-events.md](playbots-scenarios-events.md)) are such a listener.
 - Event mails (`SendEventMails`) are not delivered (see limits).
 
 ### Event spawns (`game-event-spawn-gate`)

@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 552 |
+| `Administrator` | 6 | 555 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -578,6 +578,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot party add` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party add $id\|$name Invite a running bot into your party. |
 | `.playerbot party remove` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party remove $name Remove a bot from your party. |
 | `.playerbot party list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party list List the bots currently in your party. |
+| `.playerbot eventscenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot eventscenario list .playerbot eventscenario status [#event] Bot scenarios that start and stop with a game event (game_event_playerbot_* tables): which events have one, and for a running one how far each bot group is (claimed, online, at level, placed, posts or siege). |
+| `.playerbot eventscenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot eventscenario list The game events that have a bot scenario, and whether each is running. |
+| `.playerbot eventscenario status` | 6 | Administrator | stored level through the map | Syntax: .playerbot eventscenario status [#event] Per bot group of the event (or of every scenario event): bots claimed of wanted, online, at level, placed, posts set or the siege's state or last refusal, and bots short for lack of room. |
 | `.playerbot summon` | 6 | Administrator | stored level through the map | Syntax: .playerbot summon $name\|$prefix*\|all [#count] [force] [to $player] Teleport running bots to you (or to the named online player), in rings around the spot. With a count: the nearest bots on that player's map first. 'all' or a count above the cap needs 'force'. |
 | `.playerbot send` | 6 | Administrator | stored level through the map | Syntax: .playerbot send $name\|$prefix*\|all $tele\|here [force] [to $player] Teleport running bots to a game_tele place, or to your position (here, or the named player's), in rings. |
 | `.playerbot follow` | 6 | Administrator | stored level through the map | Syntax: .playerbot follow $name\|$prefix*\|all [to $player] The bots follow you (or the named player) without a party and fight back. .playerbot dismiss, or the master's whisper 'leave', sets them free. |
