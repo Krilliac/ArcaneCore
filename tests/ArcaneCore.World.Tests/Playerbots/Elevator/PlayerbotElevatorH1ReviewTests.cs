@@ -425,8 +425,8 @@ public sealed class PlayerbotElevatorH1ReviewTests
     public async Task ArrivedWrongLevel_FiresOnTheFloorBelow_AndIsSilentOnTheLanding()
     {
         await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
-        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
-        (ElevatorTrip trip, _) = await ArrivalTripAsync(world);
+        (ElevatorTrip trip, Vector3 stop) = await ArrivalTripAsync(world);
+        await world.PlaceAsync(new Vector3(stop.X - 14f, stop.Y, ElevatorTestWorld.BottomFloor)); // the canyon floor below the lift, within the arrival radius
         using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(world.Player);
         await world.OnWorldAsync(() => PlayerbotElevator.CheckArrivedAnomalies(world.Session, world.Player, world.Player.Map!, trip, Options(), trip.BeganMs + 1_000));
         Assert.True(Reported(capture, "arrived-wrong-level"), capture.Describe());
@@ -437,6 +437,61 @@ public sealed class PlayerbotElevatorH1ReviewTests
         Assert.False(Reported(onLanding, "arrived-wrong-level"), onLanding.Describe());
         Assert.False(Reported(onLanding, "arrived-off-landing"), onLanding.Describe());
         Assert.False(Reported(onLanding, "trip-slow"), onLanding.Describe());
+    }
+
+    [Fact]
+    public async Task ArrivalChecks_AreSkippedForABotFarFromTheStop()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart); // ~117 yd from the lift, on the wrong level
+        (ElevatorTrip trip, _) = await ArrivalTripAsync(world);
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(world.Player);
+        await world.OnWorldAsync(() => PlayerbotElevator.CheckArrivedAnomalies(world.Session, world.Player, world.Player.Map!, trip, Options(), trip.BeganMs + 3_600_000));
+        Assert.False(Reported(capture, "arrived-wrong-level"), capture.Describe());
+        Assert.False(Reported(capture, "arrived-off-landing"), capture.Describe());
+        Assert.False(Reported(capture, "trip-slow"), capture.Describe());
+    }
+
+    [Fact]
+    public async Task RelocatedAfterStepOff_TheTripIsAbandonedNotReportedAsAWrongLevelArrival()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        (ElevatorTrip trip, Vector3 stop) = await ArrivalTripAsync(world);
+        await world.PlaceAsync(new Vector3(stop.X, stop.Y, stop.Z) + new Vector3(PlayerbotElevator.LandingRadii[0] + 1f, 0f, 0f));
+        await world.OnWorldAsync(() =>
+        {
+            trip.StepOffLevel = ElevatorLevel.High;
+            trip.Stage = ElevatorStage.Aboard;
+            trip.PendingStep = ElevatorStep.Arrived; // the pump stepped it off; the brain's Drive has not reported it yet
+        });
+
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart); // a GM send / spirit-healer resurrection moves it away first
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(world.Player);
+        ElevatorStep step = await world.OnWorldAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, Options(), 100, out _));
+
+        Assert.Equal(ElevatorStep.Idle, step);
+        Assert.False(Reported(capture, "arrived-wrong-level"), capture.Describe());
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+    }
+
+    [Fact]
+    public async Task ArrivedNearTheStop_IsStillReportedByDrive_WhenOnTheWrongLevel()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        (ElevatorTrip trip, Vector3 stop) = await ArrivalTripAsync(world);
+        await world.PlaceAsync(new Vector3(stop.X - 14f, stop.Y, ElevatorTestWorld.BottomFloor));
+        await world.OnWorldAsync(() =>
+        {
+            trip.StepOffLevel = ElevatorLevel.High;
+            trip.Stage = ElevatorStage.Aboard;
+            trip.PendingStep = ElevatorStep.Arrived;
+        });
+
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(world.Player);
+        ElevatorStep step = await world.OnWorldAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, Options(), 100, out _));
+
+        Assert.Equal(ElevatorStep.Arrived, step);
+        Assert.True(Reported(capture, "arrived-wrong-level"), capture.Describe());
     }
 
     [Fact]

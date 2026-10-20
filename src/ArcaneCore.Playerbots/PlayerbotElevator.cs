@@ -1110,6 +1110,9 @@ internal static class PlayerbotElevator
 
         switch (step)
         {
+            case ElevatorStep.Arrived when Relocated(trip, player):
+                AbandonRelocated(session, player, trip);
+                return ElevatorStep.Idle;
             case ElevatorStep.Arrived:
                 trip.Stage = ElevatorStage.Done;
                 trip.StageMs = now; // when it arrived (inspection)
@@ -1998,8 +2001,42 @@ internal static class PlayerbotElevator
             AnomalySeverity.Warning);
     }
 
+    /// <summary>
+    /// A bot that completes a trip (steps off at a stop) stands within this of that stop (flat). Farther, it was relocated after it stepped
+    /// off (a GM <c>.playerbot send</c>, a teleport, a resurrection at a spirit healer, a catch-up teleport) between the pump's step-off and
+    /// the next <see cref="Drive"/> that reports it: the trip is abandoned (<see cref="Drive"/>) and the arrival checks are skipped
+    /// (<see cref="CheckArrivedAnomalies"/>). 25 yd is the outermost landing ring (<see cref="LandingRadii"/>, 13.5 yd) plus
+    /// <see cref="AtLandingYards"/> and a margin for the step-off ground search; a real wrong-level step-off lands within it.
+    /// </summary>
+    internal const float ArrivedNearYards = 25f;
+
+    /// <summary>The stop the trip's arrival is judged against: the car's stop at the level the bot stepped off at, else the lift's centre.</summary>
+    private static Vector2 ArrivalStopFlat(ElevatorTrip trip)
+    {
+        if (trip.Car is not { } car) return trip.Lift.Centre;
+        ElevatorLevel level = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
+        return ElevatorNetwork.Flat(car.At(level));
+    }
+
+    private static bool Relocated(ElevatorTrip trip, Player player)
+        => Vector2.Distance(new Vector2(player.X, player.Y), ArrivalStopFlat(trip)) > ArrivedNearYards;
+
+    /// <summary>
+    /// A trip reported as arrived whose bot is no longer near its stop was relocated, so it neither arrived nor failed: the trip is dropped
+    /// (no backoff, no anomaly) and the bot is idle for the brain. Logged at Debug.
+    /// </summary>
+    private static void AbandonRelocated(WorldSession session, Player player, ElevatorTrip trip)
+    {
+        Trips.Remove(player);
+        if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? state)) state.ElevatorTrip = null;
+        session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogDebug(
+            "Playerbot {Bot}: the trip on {Lift} was abandoned, the bot was relocated to {X:F1},{Y:F1},{Z:F1} before it was reported arrived",
+            player.Name, trip.Lift.Name, player.X, player.Y, player.Z);
+    }
+
     internal static void CheckArrivedAnomalies(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint now)
     {
+        if (Relocated(trip, player)) return; // not at its stop: nothing about the arrival (or its duration) can be judged
         if (trip.Car is { } car)
         {
             ElevatorLevel targetLevel = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
