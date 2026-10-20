@@ -59,7 +59,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         Team enemyTeam = BattlegroundConstants.OtherTeam(team);
         if (order.Duty == PlayerbotAbDuty.Retreat)
         {
-            if (_target is not null) ClearTarget(player);
+            if (_pvp.Target is not null) ClearTarget(player);
             EndRest(player);
             Activity = "retreating";
             TargetEntry = 0;
@@ -82,7 +82,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             return;
         }
 
-        if (_target is not null) ClearTarget(player);
+        if (_pvp.Target is not null) ClearTarget(player);
         TargetEntry = 0;
         if (RestBetweenFights(player, carrier: false)) return;
         if (!player.Combat.IsInCombat && _spells.UpdateOutOfCombat(player, interval)) return;
