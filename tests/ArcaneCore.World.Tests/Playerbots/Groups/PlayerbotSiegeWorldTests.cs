@@ -1141,6 +1141,7 @@ public sealed class PlayerbotSiegeWorldTests
         await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + 40_000, () =>
         {
             KeepInCombat(world, raid);
+            Hold();
             granted |= raid.Push == PlayerbotSiegePush.Quiet;
             if (siege.Step != 0) stepped.Add($"step {siege.Step} at {Now(world)} with the member {MaxLag(world, raid):F0} yd from the leader");
             return false;
