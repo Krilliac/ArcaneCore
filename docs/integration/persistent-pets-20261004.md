@@ -9,7 +9,7 @@ summons, critters and warlock pets are never written as hunter pets.
 
 The durable identity is the pet number (`character_pet.id` in vmangos), while the world GUID is
 transient. State is captured before logout and before map removal; death captures health zero
-before corpse decay. Snapshot writes are serialized per character and drained at shutdown;
+before corpse decay. Snapshot writes are serialized per character and drained at shutdown; a failed write is retained and retried by the login barrier and at shutdown (docs/areas/persistence.md);
 deletion drains writes, clears pending snapshots, and retains a generation tombstone so an
 in-flight read cannot repopulate deleted state. The current row stores entry, level, experience, health, mana, happiness, react
 state, action bar and spell/autocast state. Database rows are deleted with the character.
