@@ -19,6 +19,8 @@ they see a real 1.12 client. `PlayerbotMotion` is the bot's movement "client":
 - An exploring bot whose leg ends before its next expected think is handed the next leg in that think (`PlayerbotNavigation.TryChain`);
   a chase is planned again when the target is more than `ChaseReplanYards` (5) from the place the route was planned to (a route cut short of its target by the route bounds: once 75% of it is walked) or the route is finished.
   A stun, fear or confusion pauses a walking bot (`PlayerbotMotion.ControlLost`): nothing starts, and the brain keeps its route and refuses nothing.
+  While a teleport waits for its acknowledgement (a teleport home after a stall, an elevator rescue) no walk starts either: the server
+  ignores movement until then, so a start would only be reported as `bot-motion/move-rejected` (bot QA #792). The route is dropped and planned again from the new place.
 - Every 60 s the feature logs one `Playerbot cadence over the last minute` line: think-gap p50/p95/max, thinks per tick, the share of
   ticks that ended on the 8 ms time budget and on the action budget, and the bot count (`PlayerbotCadenceStats`).
 - Every packet's position is the exact route position at that packet's server time: distance is
