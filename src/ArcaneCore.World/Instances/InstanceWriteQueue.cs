@@ -22,7 +22,8 @@ namespace ArcaneCore.World.Instances;
 /// sweep, <see cref="FlushCharacterAsync"/> (the login and handoff barrier, which faults while the
 /// character's writes are still not durable), <see cref="RequestRetry"/> (logout) and
 /// <see cref="StopAsync"/> (a final retry that throws <see cref="InvalidOperationException"/> naming
-/// what is still not durable) all retry it.
+/// what is still not durable) all retry it. Instance script data waits, retained, behind a retained row save of its
+/// instance: it only updates an existing row, so it is written once the row has landed.
 /// </para>
 /// <para>
 /// A <see cref="CharacterOwnershipRejectedException"/> is terminal on the first attempt: it is never
@@ -696,8 +697,31 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         return false;
     }
 
+    /// <summary>
+    /// Under the gate: the retained row save of the instance an instance script data write belongs to, or null. The data write
+    /// only updates an existing row (<see cref="IInstanceStore.SaveInstanceDataAsync"/>; vmangos InstanceData::SaveToDB,
+    /// Maps/InstanceData.cpp:38, <c>UPDATE instance SET data</c>), so run before the retained row lands it would update nothing,
+    /// count as durable, and the row would later land without the data. It waits behind the row save instead, as vmangos'
+    /// ordered character database queue keeps it behind DungeonPersistentState::SaveToDB's <c>INSERT</c> (MapPersistentStateMgr.cpp:265).
+    /// </summary>
+    private Retained? RowSaveAheadOfUnderGate(Key key)
+        => key.Kind == KeyKind.InstanceData && _retained.TryGetValue(key with { Kind = KeyKind.InstanceSave }, out Retained? rowSave) ? rowSave : null;
+
     private async Task ExecuteWriteAsync(Work work)
     {
+        lock (_gate)
+        {
+            if (RowSaveAheadOfUnderGate(work.Key) is { } rowSave)
+            {
+                if (!IsObsoleteUnderGate(work.Key, work.Epoch))
+                {
+                    SetRetained(work.Key, work.Value, rowSave.Failure);
+                }
+
+                return;
+            }
+        }
+
         Exception? failure = await TryWriteAsync(work.Key, work.Value, MaxAttempts).ConfigureAwait(false);
         bool reportExhausted = false;
         lock (_gate)
@@ -845,6 +869,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             if (_terminalFailure is not null || !_retained.TryGetValue(key, out Retained? current) || !ReferenceEquals(current, retained))
             {
                 return _terminalFailure;
+            }
+
+            if (RowSaveAheadOfUnderGate(key) is { } rowSave)
+            {
+                retained.Failure = rowSave.Failure;
+                return rowSave.Failure;
             }
 
             value = retained.Value;
