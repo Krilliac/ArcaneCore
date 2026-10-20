@@ -4,8 +4,10 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
@@ -15,6 +17,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Npc;
 using ArcaneCore.World.Tests.Playerbots.Combat;
 using Microsoft.Extensions.Configuration;
@@ -34,6 +37,10 @@ public sealed class PlayerbotContentionQuestTests
     [Fact]
     public async Task AnItemObjective_IsHuntedAtTheCreaturesThatDropTheItem()
     {
+        // The bot hunts an item objective only while its bags can store the item (CanStoreObjectiveItem): the item needs a template.
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = Meat, Name = "Tough Wolf Meat", Class = (uint)ItemClass.Quest, Stackable = 10 });
+        using IDisposable itemScope = items.Use();
         await using Quest quest = await Quest.StartAsync(new QuestInteractionFixture { RepeatableItem = Meat, RepeatableItemCount = 3 });
         await quest.Host.OnWorldAsync(() =>
         {
