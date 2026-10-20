@@ -265,9 +265,9 @@ start is off the mesh, or whose ray ends where no mesh tile is loaded beyond (te
 edge), is not judged by the mesh and keeps (a) alone. The per-step check of a stepped leg (`PlayerbotMoveCheck.TryValidateStep`) also
 needs a walkable floor under the step: at most 2 yards above the step's height, and at most `DirectStepMaxDrapeYards` (11) below it, the
 step then draped onto that floor (a route whose waypoint heights drifted above the ground; the bot itself is draped first, before it steps),
-but never more than `DirectStepMaxDropYards` (2) below the lower of the step's two ends: a bot standing on the floor does not step off an
-edge into a pit or down a cliff (`AHazardDetour_KeepsEachLegsProof_TheMotionChecksTheSteppedLegs`,
-`DirectStepRouteWithElevatedWaypoints_DrapesToWalkableFloor_WithoutAirwalkAnomaly`). A blocked leg of the retreat trail (`TryClip`) is cut half a yard before the obstacle (bisection of the segment, 6
+but never more than `DirectStepMaxDropYards` (2.5, equal to `PlayerbotMotion.DirectStepDrapeMinYards`: a standing bot lower than that is not snapped first, so its first step is not refused) below the lower of the step's two ends, unless the bot stands on its floor and the floor falls no more than a walkable slope over the step (`DirectStepMaxSlope`, 1.19 rise per flat yard, about 50 degrees; floor under the start against floor under the end): a bot standing on the floor does not step off an
+edge into a pit or down a cliff, and does walk down a slope under drifted waypoints (`AHazardDetour_KeepsEachLegsProof_TheMotionChecksTheSteppedLegs`,
+`DirectStepRouteWithElevatedWaypoints_DrapesToWalkableFloor_WithoutAirwalkAnomaly`, `PlayerbotDirectStepDropTests`). A blocked leg of the retreat trail (`TryClip`) is cut half a yard before the obstacle (bisection of the segment, 6
 steps) when at least 1.5 yards of progress remain, else refused; a stepped terrain route is refused whole instead of
 cut, and `TryPlanToward` then plans a shorter chunk (down to 24 yards), so the mesh's own shorter step stays preferred. Cost: one raycast and one vmap query per leg when the route is planned, a few
 more only when blocked; the per-tick step check uses the line of sight alone; no allocation beyond the route. Tests:
