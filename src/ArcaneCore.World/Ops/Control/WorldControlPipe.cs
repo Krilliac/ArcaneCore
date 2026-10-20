@@ -188,11 +188,15 @@ public sealed partial class WorldControlPipe : IHostedService
     [SupportedOSPlatform("windows")]
     private async Task ServeAsync(NamedPipeServerStream server, CancellationToken token)
     {
+        int failures = 0;
         while (!token.IsCancellationRequested)
         {
+            bool connected = false;
             try
             {
                 await server.WaitForConnectionAsync(token).ConfigureAwait(false);
+                connected = true;
+                failures = 0;
                 Interlocked.Increment(ref _sessions);
                 await ServeSessionAsync(server, token).ConfigureAwait(false);
             }
@@ -203,16 +207,33 @@ public sealed partial class WorldControlPipe : IHostedService
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _logger.LogWarning(ex, "control pipe session ended with an error");
+                if (++failures >= 5)
+                {
+                    _logger.LogWarning("control pipe: pipe instance failed {Failures} times in a row and is closed", failures);
+                    break;
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100 * failures), token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
             finally
             {
-                try
+                if (connected)
                 {
-                    if (server.IsConnected) server.Disconnect();
-                }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
-                {
-                    // Not connected (the wait was cancelled) or already broken by the client: nothing to release.
+                    try
+                    {
+                        server.Disconnect();
+                    }
+                    catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+                    {
+                        // Already disconnected or disposed: nothing to release.
+                    }
                 }
             }
         }

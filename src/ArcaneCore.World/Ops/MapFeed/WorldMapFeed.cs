@@ -245,9 +245,11 @@ public sealed class WorldMapFeed : IHostedService
         int failures = 0;
         while (!token.IsCancellationRequested)
         {
+            bool connected = false;
             try
             {
                 await server.WaitForConnectionAsync(token).ConfigureAwait(false);
+                connected = true;
                 failures = 0;
                 Interlocked.Increment(ref _connections);
                 await ServeConnectionAsync(server, DescribeClient(server), token).ConfigureAwait(false);
@@ -276,13 +278,16 @@ public sealed class WorldMapFeed : IHostedService
             }
             finally
             {
-                try
+                if (connected)
                 {
-                    if (server.IsConnected) server.Disconnect();
-                }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
-                {
-                    // Not connected (the wait was cancelled) or already broken by the client: nothing to release.
+                    try
+                    {
+                        server.Disconnect();
+                    }
+                    catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+                    {
+                        // Already disconnected or disposed: nothing to release.
+                    }
                 }
             }
         }
