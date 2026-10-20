@@ -92,6 +92,7 @@ How to read the tables:
 - [`World:Honor`](#worldhonor)
 - [`World:HotCode`](#worldhotcode)
 - [`World:Instances`](#worldinstances)
+- [`World:PacketHeuristics`](#worldpacketheuristics)
 - [`World:Playerbots`](#worldplayerbots)
 - [`World:Playerbots:Qa`](#worldplayerbotsqa)
 - [`World:RemoteAdmin`](#worldremoteadmin)
@@ -1322,6 +1323,33 @@ How to read the tables:
 | `World:Instances:ResetRefusedNoticeSeconds` | `int` | `10` | - | Seconds between two "Please leave the instance so it can be reset." notices to the players inside an instance that a refused personal reset asks to leave (an ArcaneCore limit: the refusal itself is an ArcaneCore choice, see docs/integration/instances.md, and the requester can repeat CMSG_RESET_INSTANCES at will). The requester still gets SMSG_INSTANCE_RESET_FAILED every time. 0 sends the notice on every refusal. |
 | `World:Instances:ResetTimeHour` | `int` | `4` | - | Hour of the day (UTC, 0–23) of global raid resets (vmangos `Instance.ResetTimeHour`, default 4). |
 | `World:Instances:UnloadDelayMs` | `int` | `1800000` | - | How long an empty instance map stays loaded before it is unloaded (vmangos `Instance.UnloadDelay`, default 30 minutes). Its save and binds survive the unload. |
+
+## `World:PacketHeuristics`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:PacketHeuristics:Cadence` | `bool` | `true` | - | Report an opcode class sent faster than its ceiling (`cadence`). Default true. |
+| `World:PacketHeuristics:CadenceLimits:CastPerSecond` | `int` | `10` | - | CMSG_CAST_SPELL and CMSG_PET_CAST_SPELL per second. 0-1000, default 10. |
+| `World:PacketHeuristics:CadenceLimits:EmotePerSecond` | `int` | `5` | - | CMSG_EMOTE and CMSG_TEXT_EMOTE per second. 0-1000, default 5. |
+| `World:PacketHeuristics:CadenceLimits:PingMinIntervalMs` | `int` | `5000` | - | A CMSG_PING that follows the previous one by less than this many milliseconds is reported (a 1.12.1 client pings every 30 seconds). 0 switches it off. 0-60000, default 5000. |
+| `World:PacketHeuristics:CadenceLimits:QueryPerSecond` | `int` | `50` | - | Query opcodes (names containing QUERY) per second. A client entering a crowded city can burst; raise it if that is all you see. 0-1000, default 50. |
+| `World:PacketHeuristics:CadenceLimits:UsePerSecond` | `int` | `10` | - | CMSG_USE_ITEM, CMSG_GAMEOBJ_USE and CMSG_LOOT per second. 0-1000, default 10. |
+| `World:PacketHeuristics:Enabled` | `bool` | `false` | - | Run the checks at all. Default false: with it off a packet costs one volatile read and no per-session state exists. |
+| `World:PacketHeuristics:ExemptBots` | `bool` | `true` | - | The server's own managed playerbot sessions are not checked. Default true; with false their traffic is checked and counted as bot traffic. |
+| `World:PacketHeuristics:ExemptStaff` | `bool` | `true` | - | Staff (Moderator and above, or a player in GM mode) are not checked. Default true; with false their traffic is checked and counted as staff traffic. |
+| `World:PacketHeuristics:IncapacitatedAction` | `bool` | `true` | - | Report an action opcode received while the player is dead, stunned, on a taxi or being teleported (`incapacitated-action`). Default true. |
+| `World:PacketHeuristics:Malformed` | `bool` | `true` | - | Report a payload a handler rejected as malformed, or a bad frame header (`malformed`). Default true. |
+| `World:PacketHeuristics:OrphanAck` | `bool` | `true` | - | Report an unsolicited or mismatching movement acknowledgement (`orphan-ack`). Default true. |
+| `World:PacketHeuristics:Replay` | `bool` | `true` | - | Report the same opcode with the same payload repeated (`replay`). Default true. |
+| `World:PacketHeuristics:ReplayBuiltInExclusions` | `bool` | `true` | - | Keep the built-in list of opcodes that legitimately repeat an identical payload out of the replay check: movement and its acknowledgements, ping, every query, selection and attack toggles, cancels, stand state, loot release, area triggers, character enumeration and the polling a client or bot does (docs/areas/packet-heuristics.md has the list and the reason for each entry). Default true; set false to take full control with `ReplayExclude`. |
+| `World:PacketHeuristics:ReplayCount` | `int` | `5` | - | The same opcode and payload this many times within `ReplayWindowMs` is a replay. 2-1000, default 5. |
+| `World:PacketHeuristics:ReplayExclude` | `string[]` | `[]` | - | More opcodes never checked for replay, on top of the built-in list: exact opcode names (CMSG_PING) or names with a leading and/or trailing * (MSG_MOVE_*, *QUERY*). A configured list is added to the default (empty) one, so entries never remove anything; use `ReplayBuiltInExclusions` to drop the built-in list. Default empty. |
+| `World:PacketHeuristics:ReplayWindowMs` | `int` | `1000` | - | The window of the replay check, in milliseconds. 100-60000, default 1000. |
+| `World:PacketHeuristics:ReportIntervalSeconds` | `int` | `10` | - | At most one ledger report per session, check and opcode per this many seconds; every occurrence is still counted. 1-3600, default 10. |
+| `World:PacketHeuristics:Shape` | `bool` | `true` | - | Report a payload whose length differs from the fixed length of its message (`shape`). Default true. |
+| `World:PacketHeuristics:UnknownOpcode` | `bool` | `true` | - | Report an opcode with no handler or outside the opcode table (`unknown-opcode`). Default true. |
+| `World:PacketHeuristics:WrongState` | `bool` | `true` | - | Report an opcode dropped because the session state does not allow it (`wrong-state`). Default true. |
+| `World:PacketHeuristics:WrongStateGraceMs` | `int` | `5000` | - | After the player left the world (logout, back at the character screen) world opcodes are expected for this many milliseconds (packets in flight) and are not reported as `wrong-state`. 0-60000, default 5000. |
 
 ## `World:Playerbots`
 

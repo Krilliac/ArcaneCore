@@ -1,0 +1,109 @@
+using System.Diagnostics;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.AntiCheat.PacketHeuristics;
+using ArcaneCore.World.Net;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace ArcaneCore.World.Tests.PacketHeuristics;
+
+/// <summary>
+/// What the checks cost with 1500 sessions: the per-packet price of the network-path hook (shape, cadence, replay) on real <see cref="WorldSession"/>
+/// objects, and what one simulated 100 ms tick (every session sends one packet) adds. The numbers go to the test output; the assertions are generous
+/// bounds that only catch an order-of-magnitude regression, plus the exact claim that the steady state allocates nothing.
+/// </summary>
+public sealed class PacketHeuristicsPerformanceTests(ITestOutputHelper output)
+{
+    private const int Sessions = 1500;
+    private const int Rounds = 200;
+
+    [Fact]
+    public async Task ThePerPacketCost_With1500Sessions_IsSmall_AndTheSteadyStateAllocatesNothing()
+    {
+        await using var host = WorldTestHost.Start();
+        long fakeNow = 1_000_000;
+        (PacketHeuristicsFeature feature, _) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false, () => fakeNow);
+
+        var sessions = new WorldSession[Sessions];
+        for (int i = 0; i < sessions.Length; i++)
+        {
+            sessions[i] = await PacketHeuristicsKit.NewBotAtCharacterScreenAsync(host, "PERF" + i);
+        }
+
+        // Four message kinds a player sends all the time, each with a payload pool so that nothing repeats within a replay window.
+        WorldOpcode[] opcodes = [WorldOpcode.CmsgSetSelection, WorldOpcode.MsgMoveHeartbeat, WorldOpcode.CmsgCastSpell, WorldOpcode.CmsgNameQuery];
+        int[] lengths = [8, 28, 14, 8];
+        byte[][][] pool = new byte[opcodes.Length][][];
+        for (int k = 0; k < opcodes.Length; k++)
+        {
+            pool[k] = new byte[64][];
+            for (int p = 0; p < 64; p++)
+            {
+                pool[k][p] = new byte[lengths[k]];
+                BitConverter.GetBytes(p + 1).CopyTo(pool[k][p], 0);
+            }
+        }
+
+        void Round(int round)
+        {
+            fakeNow += 100;
+            for (int s = 0; s < sessions.Length; s++)
+            {
+                int kind = (round + s) & 3;
+                feature.OnClientPacket(sessions[s], opcodes[kind], pool[kind][(round + s) & 63]);
+            }
+        }
+
+        // Warm-up: creates the per-session state and JITs the path.
+        for (int round = 0; round < 8; round++)
+        {
+            Round(round);
+        }
+
+        long before = Total(feature);
+        long allocated = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+        for (int round = 8; round < Rounds + 8; round++)
+        {
+            Round(round);
+        }
+
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+
+        double packets = (double)Sessions * Rounds;
+        double nsPerPacket = elapsed.TotalMilliseconds * 1_000_000d / packets;
+        double msPerTick = elapsed.TotalMilliseconds / Rounds;
+        output.WriteLine($"PERF sessions={Sessions} rounds={Rounds} packets={packets:N0} elapsed={elapsed.TotalMilliseconds:F1} ms ns/packet={nsPerPacket:F1} ms/tick({Sessions} packets)={msPerTick:F4} allocatedBytes={allocated} findings={Total(feature) - before}");
+
+        Assert.Equal(0, Total(feature) - before); // the workload is legitimate traffic: nothing is flagged
+        Assert.Equal(0, allocated);
+        Assert.True(nsPerPacket < 5_000, $"{nsPerPacket:F1} ns per packet");
+        Assert.True(msPerTick < 5, $"{msPerTick:F3} ms per tick of {Sessions} packets");
+
+        // The same loop with the feature off, for the reference price of the gate.
+        feature.SetEnabled(false);
+        long offStart = Stopwatch.GetTimestamp();
+        for (int round = 0; round < Rounds; round++)
+        {
+            Round(round);
+        }
+
+        TimeSpan off = Stopwatch.GetElapsedTime(offStart);
+        output.WriteLine($"PERF off: ns/packet={off.TotalMilliseconds * 1_000_000d / packets:F1}");
+    }
+
+    private static long Total(PacketHeuristicsFeature feature)
+    {
+        long total = 0;
+        for (int c = 0; c < PacketChecks.Count; c++)
+        {
+            for (int t = 0; t < PacketChecks.TrafficKinds; t++)
+            {
+                total += feature.Count((PacketCheck)c, (PacketTraffic)t);
+            }
+        }
+
+        return total;
+    }
+}
