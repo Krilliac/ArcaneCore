@@ -60,6 +60,14 @@ public sealed partial class PlayerInventory
     /// </summary>
     public event Action<Item, byte, EquipmentChange>? EquipmentChanged;
 
+    /// <summary>
+    /// Raised at the end of <see cref="EquipItem"/> with the item worn afterwards (the item put into an own equipment or bag slot, or the worn
+    /// stack it merged into), once its create block is queued: vmangos Player::EquipItem's last step, ApplyEquipCooldown (Player.cpp:10380,
+    /// :10404). World thread. Not raised while the inventory loads (login places items without EquipItem, as vmangos QuickEquipItem does) or
+    /// for a shadow inventory without a player.
+    /// </summary>
+    public event Action<Item>? ItemEquipped;
+
     /// <summary>Raise <see cref="BagEquipChanged"/> (equipped) for every bag already worn, in slot order: for login, after the equipment is loaded.</summary>
     public void ReplayBagEquips()
     {
@@ -81,6 +89,11 @@ public sealed partial class PlayerInventory
         {
             existing.Count += item.Count;
             Discard(item);
+            if (Player is not null)
+            {
+                ItemEquipped?.Invoke(existing);
+            }
+
             return existing;
         }
 
@@ -99,6 +112,11 @@ public sealed partial class PlayerInventory
         }
 
         SendCreateIfNeeded(item);
+        if (Player is not null)
+        {
+            ItemEquipped?.Invoke(item);
+        }
+
         return item;
     }
 

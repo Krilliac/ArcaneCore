@@ -107,7 +107,7 @@ Known gaps and UNVERIFIED points:
 - Exact persisted item-cooldown owner metadata for relog/UI reconstruction: current server rows preserve durations/category IDs, while `ItemId` and effective item-category ownership remain pending. References: `SpellHandler.cpp:36-140`, `Spell.cpp:4991-5046, 7109-7175`, `Player.cpp:22139-22214`; proposed contract is documented in `docs/integration/item-use-20261004.md` and the cooldown reconnaissance report.
 - Random properties are delivered by the economy-items lane (code path; the content needs the developer-supplied ItemRandomProperties.dbc and an `item_enchantment_template` dump). CMSG_USE_ITEM, item charges and consumption, the item cooldown pick, bind-on-use and the consumable refusal are delivered (`SpellSystem.HandleItemUse`, docs/integration/item-use-20261004.md); ON_EQUIP item spells and item sets are delivered (next section); the enchantment engine is the crafting lane's (docs/areas/crafting.md), and weapon chance-on-hit spells and enchantment combat spells proc through `SpellSystem.ItemCombatProcs`.
 - Item loot containers (`CMSG_OPEN_ITEM`, `generated_loot`), lockboxes: need coordination with the loot-service owner (group-loot-xp).
-- Equip cooldown (the 30 s on-use cooldown of an item just put on, vmangos Player::ApplyEquipCooldown), food/drink sit and `MOD_REGEN` (aura 84), elixir exclusivity. The combat weapon-swap GCD and the 15-minute conjured rule are delivered by the economy-items lane; REAL_DURATION does not exist in 1.12.
+- Food/drink sit and `MOD_REGEN` (aura 84), elixir exclusivity. The equip cooldown is delivered (see "Equip cooldown" below). The combat weapon-swap GCD and the 15-minute conjured rule are delivered by the economy-items lane; REAL_DURATION does not exist in 1.12.
 - Gift wrapping and page text are delivered by the economy-items lane (classic-db papers use the cmangos paper-to-gift pairs; page text needs a `page_text` dump).
 - Spell `SummonChangeItem` (item transform keeping enchantments).
 
@@ -206,8 +206,38 @@ Characters **38** (`ItemGiftDataModule.Version`; reserved as 39, renumbered at t
 - **The page chain is bounded** by the page count as well as by the load-time loop cut (vmangos relies on the cut alone).
 - **Loot shows no random property**: vmangos rolls when the loot is generated and shows it in the loot window and roll packets (LootItem::randomPropertyId); here the roll happens when the item is stored, so the window shows 0 and the name suffix appears once it is in the bags. Group-loot roll packets likewise send 0.
 - **The weapon switch timer** is per Player object (a relog starts at 0, as in vmangos) and needs spells 6119/6123 in the spell store (Spell.dbc); without them nothing starts, as vmangos logs.
-- The equip cooldown (30 s on-use cooldown on equip, Player::ApplyEquipCooldown) is still not delivered.
 
 ### Tests
 
 Game: `ItemMechanics/DefenseDurabilityTests`, `ItemMechanics/GiftWrapTests`, `ItemMechanics/ItemRandomPropertyTests`, `ItemUse/WeaponSwapCooldownTests`, `ItemUse/ItemSetFormChangeTests`. Data: `ItemLootOrphanSweepTests`, `ItemGiftStoreTests` (round trip and the upgrade from step 38), `Items/PageTextDumpReaderTests`, `Items/ItemRandomPropertyReaderTests`, `IntegratedSchemaTests`. World: `Items/ConjuredLogoutWorldTests`, `Items/PageTextWorldTests`, `Items/ItemRandomPropertyWorldTests`, `Items/OptionalClientDataRealTests` (every optional key against the real DBCs and dump; runs with `ARCANECORE_TEST_DBC_DIR` and `ARCANECORE_CLASSICDB_DUMP`), and the playerbot scenarios `Playerbots/Scenarios/AuctionOutbidScenarioTests` (three bots) and `GiftWrapScenarioTests` (wrap, mail with the escrow row checked, open). Harness additions: `ScenarioAuctionWire`, `ScenarioItemWire`, `ScenarioTestWorld.StartAsync(configure)`.
+
+## Equip cooldown (parity-feature lane, 2026-10-19)
+
+vmangos `Player::EquipItem` ends with `Player::ApplyEquipCooldown` (`Objects/Player.cpp:10380`, and `:10404` for the worn stack an item
+merged into; the function is `:19235-19261`, the same in mangos-classic `Entities/Player.cpp:18235-18261`): an item put on starts a
+cooldown on each of its on-use spells, so a trinket or other on-use item cannot be used for 30 s after it is equipped.
+
+- **Where.** `PlayerInventory.EquipItem` raises `ItemEquipped` (equipment and bag slots, and the merge case) after the item's create
+  block is queued; the equip binding (`ItemEquipSpells`) hands it to `SpellSystem.ApplyEquipCooldown`. Login does not equip through
+  `EquipItem` (vmangos uses `QuickEquipItem` there), so relogging starts nothing.
+- **Which spells.** Every item spell with trigger ON_USE (0) that the spell store has; ON_EQUIP, chance-on-hit, soulstone and
+  no-delay-use spells get nothing. A template with `ITEM_FLAG_NO_EQUIP_COOLDOWN` (0x80, `ItemPrototype.h:71`) starts nothing.
+- **What starts** (`Player::AddCooldown` with `forcedDuration` 30000, `Player.cpp:22139-22243`): the spell's own recovery is replaced by
+  30 s and passed through the caster's cooldown spell mods; the spell's Spell.dbc category and category time start as well (the item
+  template's category fields are not used: the call passes no item prototype); the cooldown is not item-owned. An unexpired cooldown of
+  the spell (its own time, or a category time it started) is kept unchanged (`Player.cpp:22172-22178`). Not gated on being alive or in
+  combat, and not skipped by the no-cooldown GM cheat (vmangos checks that cheat in `Spell::SendSpellCooldown`, not here).
+- **Client.** `SMSG_ITEM_COOLDOWN` (0x0B0): u64 item guid, u32 spell id, sent for every on-use spell even when an older cooldown was
+  kept (vmangos `WorldPackets::Item::ItemCooldown`, `Server/Packets/Item.cpp:326-330`; gtker `wow_messages`
+  `world/item/smsg_item_cooldown.wowm`, an independent source, agrees on opcode and layout). Pending update blocks are flushed first so
+  the client already knows the item.
+
+Deliberate differences and limits:
+
+- A spell whose COOLDOWN_ON_EVENT aura is still active when the item is equipped again: vmangos replaces its held (permanent) cooldown
+  with the 30 s one, and the later aura end then finds a running cooldown and does not restart it. ArcaneCore keeps no held entry, so the
+  30 s start, and the aura end later starts the spell's full cooldown.
+- The `SCF_COOLDOWN_IS_GLOBAL` category flag (`Player.cpp:22245-22254`) is not modelled, as for every other cooldown here.
+- Real-client acceptance (the cooldown sweep on the action bar and bag slot after equipping) is pending.
+
+Tests: `tests/ArcaneCore.Game.Tests/ItemUse/EquipCooldownTests.cs`.

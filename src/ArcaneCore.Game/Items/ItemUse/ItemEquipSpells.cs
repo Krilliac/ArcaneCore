@@ -19,6 +19,8 @@ namespace ArcaneCore.Game.Items.ItemUse;
 /// (see <see cref="ItemSetBonuses"/>).</item>
 /// <item>The four equipped bag slots take part too (mangos applies for every slot below BAG_END), except quivers and ammo pouches, whose
 /// haste aura belongs to <c>QuiverHaste</c> (it has its own aura-stacking guard and condition on the ranged weapon).</item>
+/// <item>Every item worn through <see cref="PlayerInventory.EquipItem"/> starts the 30 s equip cooldown of its on-use spells
+/// (<see cref="PlayerInventory.ItemEquipped"/> → <see cref="SpellSystem.ApplyEquipCooldown"/>, mangos Player::ApplyEquipCooldown).</item>
 /// </list>
 /// <item>An "Equip:" spell that the wearer's shapeshift form does not allow is not cast, and a form change re-checks every worn item: the auras
 /// that no longer fit go, the ones that now fit come (mangos ApplyEquipSpell's form check and Player::UpdateEquipSpellsAtFormChange,
@@ -46,6 +48,7 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         {
             inventory.EquipmentChanged -= previous.OnEquipment;
             inventory.BagEquipChanged -= previous.OnBag;
+            inventory.ItemEquipped -= previous.OnEquipped;
             DetachState(player, previous);
             s_bindings.Remove(inventory);
         }
@@ -54,6 +57,7 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         s_bindings.Add(inventory, binding);
         inventory.EquipmentChanged += binding.OnEquipment;
         inventory.BagEquipChanged += binding.OnBag;
+        inventory.ItemEquipped += binding.OnEquipped;
         // The combat weapon switch timer (vmangos Player::m_weaponChangeTimer) lives in the spell system with the global cooldown it starts.
         inventory.WeaponChangeLocked = () => _spells.IsWeaponChangeLocked(player);
 
@@ -254,5 +258,8 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         }
 
         public void OnBag(Item item, byte slot, bool equipped) => _owner.OnBagChanged(_player, item, equipped);
+
+        // vmangos EquipItem's last step: the equip cooldown of the item's on-use spells (Player::ApplyEquipCooldown).
+        public void OnEquipped(Item item) => _owner._spells.ApplyEquipCooldown(_player, item);
     }
 }

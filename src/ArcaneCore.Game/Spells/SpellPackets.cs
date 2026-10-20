@@ -207,6 +207,18 @@ public static class SpellPackets
         return writer.ToArray();
     }
 
+    /// <summary>
+    /// SMSG_ITEM_COOLDOWN (0x0B0): u64 item GUID, u32 spell (vmangos WorldPackets::Item::ItemCooldown, Server/Packets/Item.cpp:326-330; gtker
+    /// world/item/smsg_item_cooldown.wowm agrees on opcode and layout).
+    /// </summary>
+    public static byte[] BuildItemCooldown(ObjectGuid item, uint spellId)
+    {
+        var writer = new PacketWriter(12);
+        writer.WriteUInt64(item.Value);
+        writer.WriteUInt32(spellId);
+        return writer.ToArray();
+    }
+
     /// <summary>SMSG_COOLDOWN_EVENT: u32 spell, u64 GUID (vmangos Player::SendCooldownEvent; gtker agrees).</summary>
     public static byte[] BuildCooldownEvent(uint spellId, ObjectGuid guid)
     {
