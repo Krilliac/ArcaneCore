@@ -11,6 +11,36 @@ internal enum FeedOp : byte
     Subscribe,
     Unsubscribe,
     Query,
+
+    /// <summary>Packet tools: run one console line.</summary>
+    Console,
+
+    /// <summary>Packet tools: hand a client opcode to an online session's dispatcher.</summary>
+    Inject,
+
+    /// <summary>Packet tools: queue a server opcode to an online session's client.</summary>
+    Send,
+
+    /// <summary>Packet tools: start watching a session's packets.</summary>
+    Tap,
+
+    /// <summary>Packet tools: stop the connection's tap.</summary>
+    Untap,
+}
+
+/// <summary>Which packets a tap passes.</summary>
+[Flags]
+internal enum TapDirections : byte
+{
+    None = 0,
+
+    /// <summary>Client to server, injected packets included.</summary>
+    In = 1,
+
+    /// <summary>Server to client.</summary>
+    Out = 2,
+
+    Both = In | Out,
 }
 
 /// <summary>The questions a <c>query</c> may ask.</summary>
@@ -55,6 +85,36 @@ internal struct FeedRequest
     public Vector3 A;
 
     public Vector3 B;
+
+    /// <summary>console: the line to run.</summary>
+    public string? Line;
+
+    /// <summary>inject, send, tap: the target's character name (null when <see cref="TargetGuid"/> names it).</summary>
+    public string? TargetName;
+
+    /// <summary>inject, send, tap: the target's player guid (0 when <see cref="TargetName"/> names it).</summary>
+    public ulong TargetGuid;
+
+    /// <summary>inject, send: the opcode value.</summary>
+    public uint Opcode;
+
+    /// <summary>inject, send: the payload bytes (empty for none).</summary>
+    public byte[]? Payload;
+
+    /// <summary>tap: which directions pass.</summary>
+    public TapDirections Directions;
+
+    /// <summary>tap: only these opcodes pass (null: all).</summary>
+    public ushort[]? TapOpcodes;
+
+    /// <summary>tap: the tap ends after this many packets.</summary>
+    public int MaxPackets;
+
+    /// <summary>tap: the tap ends after this many seconds.</summary>
+    public int Seconds;
+
+    /// <summary>tap: the most payload bytes each packet line carries as hex.</summary>
+    public int MaxBytes;
 }
 
 /// <summary>
@@ -124,6 +184,66 @@ internal static class MapFeedProtocol
     /// <summary>A query failed inside the server; the details are in the server log.</summary>
     public const string QueryFailed = "query-failed";
 
+    /// <summary>The longest client line while the packet tools are on: an injected payload of the largest client packet is 20 472 hex digits.</summary>
+    public const int MaxToolLineBytes = 64 * 1024;
+
+    /// <summary>The longest console line a tool may send (the control pipe's default line limit).</summary>
+    public const int MaxConsoleLineChars = 4096;
+
+    /// <summary>The most opcodes one tap filter may list.</summary>
+    public const int MaxTapOpcodes = 64;
+
+    /// <summary>The default and the largest number of packets one tap passes.</summary>
+    public const int DefaultTapPackets = 1000;
+
+    public const int MaxTapPackets = 100_000;
+
+    /// <summary>The default and the longest life of a tap, in seconds.</summary>
+    public const int DefaultTapSeconds = 60;
+
+    public const int MaxTapSeconds = 3600;
+
+    /// <summary>The default and the largest number of payload bytes a <c>packet</c> line carries as hex (the rest is cut and flagged).</summary>
+    public const int DefaultTapBytes = 256;
+
+    public const int MaxTapBytes = 4096;
+
+    /// <summary>The packet tools are off (World:Control:PacketTools), or refused in this environment.</summary>
+    public const string ToolsOff = "tools-off";
+
+    /// <summary>No online character has that name or guid.</summary>
+    public const string Offline = "offline";
+
+    /// <summary>The value names no opcode of the build-5875 table.</summary>
+    public const string UnknownOpcode = "unknown-opcode";
+
+    /// <summary>A server opcode given to inject, or a client opcode given to send.</summary>
+    public const string WrongDirection = "wrong-direction";
+
+    /// <summary>An authentication or session-lifecycle opcode, which the tools never inject or send.</summary>
+    public const string LifecycleOpcode = "lifecycle-opcode";
+
+    /// <summary>The payload is longer than the tools accept for that direction.</summary>
+    public const string Oversize = "oversize";
+
+    /// <summary>The server has no handler for the opcode.</summary>
+    public const string NoHandler = "no-handler";
+
+    /// <summary>The opcode's handler does not run in the session's current state.</summary>
+    public const string WrongState = "wrong-state";
+
+    /// <summary>The session cannot take an injection of that opcode (a playerbot and a session-task opcode, or a session older than the tools).</summary>
+    public const string NotInjectable = "not-injectable";
+
+    /// <summary>The session's dispatcher stayed busy.</summary>
+    public const string Busy = "busy";
+
+    /// <summary>The connection already has a tap.</summary>
+    public const string TapBusy = "tap-busy";
+
+    /// <summary>The connection has no tap to stop.</summary>
+    public const string NoTap = "no-tap";
+
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
         MaxDepth = MaxJsonDepth,
@@ -179,7 +299,13 @@ internal static class MapFeedProtocol
                 return ParseQuery(root, ref request, out error);
             }
 
-            error = new FeedError(UnknownOp, "unknown op; the ops are hello, subscribe, unsubscribe and query");
+            if (TryToolOp(op, out FeedOp toolOp))
+            {
+                request.Op = toolOp;
+                return ParseTool(root, ref request, out error);
+            }
+
+            error = new FeedError(UnknownOp, "unknown op; the ops are hello, subscribe, unsubscribe and query (and console, inject, send, tap and untap with the packet tools)");
             return false;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
@@ -331,6 +457,233 @@ internal static class MapFeedProtocol
         if (request.Kind is QueryKind.LineOfSight or QueryKind.Path)
         {
             return TryPoint(root, "b"u8, "b", out request.B, out error);
+        }
+
+        return true;
+    }
+
+    private static bool TryToolOp(JsonElement op, out FeedOp toolOp)
+    {
+        toolOp = op.ValueEquals("console"u8) ? FeedOp.Console
+            : op.ValueEquals("inject"u8) ? FeedOp.Inject
+            : op.ValueEquals("send"u8) ? FeedOp.Send
+            : op.ValueEquals("tap"u8) ? FeedOp.Tap
+            : op.ValueEquals("untap"u8) ? FeedOp.Untap
+            : FeedOp.Hello;
+        return toolOp != FeedOp.Hello;
+    }
+
+    /// <summary>
+    /// A packet-tools line (docs/areas/map-feed.md, "Packet tools"): every one carries an integer <c>id</c>, answered by a <c>result</c> of
+    /// the same id. Whether the tools are on is decided by the connection, not here.
+    /// </summary>
+    private static bool ParseTool(JsonElement root, ref FeedRequest request, out FeedError error)
+    {
+        error = default;
+        if (root.TryGetProperty("id"u8, out JsonElement id) && id.ValueKind == JsonValueKind.Number && id.TryGetInt64(out long value))
+        {
+            request.Id = value;
+            request.HasId = true;
+        }
+        else
+        {
+            error = new FeedError(BadArgs, "a packet-tools line needs an integer \"id\"");
+            return false;
+        }
+
+        switch (request.Op)
+        {
+            case FeedOp.Console:
+                if (!root.TryGetProperty("line"u8, out JsonElement line) || line.ValueKind != JsonValueKind.String
+                    || line.GetString() is not { Length: > 0 and <= MaxConsoleLineChars } text || string.IsNullOrWhiteSpace(text))
+                {
+                    error = new FeedError(BadArgs, $"console needs a \"line\": a command of 1 to {MaxConsoleLineChars} characters");
+                    return false;
+                }
+
+                request.Line = text;
+                return true;
+            case FeedOp.Inject:
+            case FeedOp.Send:
+                return TryTarget(root, ref request, out error)
+                    && TryOpcode(root, out request.Opcode, out error)
+                    && TryPayload(root, out request.Payload, out error);
+            case FeedOp.Tap:
+                return TryTarget(root, ref request, out error) && TryTapFilter(root, ref request, out error);
+            default:
+                return true;
+        }
+    }
+
+    /// <summary>Exactly one of <c>target</c> (a character name) and <c>guid</c> (the player guid as a hex string).</summary>
+    private static bool TryTarget(JsonElement root, ref FeedRequest request, out FeedError error)
+    {
+        error = default;
+        bool hasName = root.TryGetProperty("target"u8, out JsonElement name);
+        bool hasGuid = root.TryGetProperty("guid"u8, out JsonElement guid);
+        if (hasName == hasGuid)
+        {
+            error = new FeedError(BadArgs, "name the session with exactly one of \"target\" (a character name) and \"guid\" (its player guid in hex)");
+            return false;
+        }
+
+        if (hasName)
+        {
+            if (name.ValueKind != JsonValueKind.String || name.GetString() is not { Length: > 0 and <= 64 } text || string.IsNullOrWhiteSpace(text))
+            {
+                error = new FeedError(BadArgs, "\"target\" must be a character name");
+                return false;
+            }
+
+            request.TargetName = text.Trim();
+            return true;
+        }
+
+        string? hex = guid.ValueKind == JsonValueKind.String ? guid.GetString() : null;
+        if (hex is not null && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            hex = hex[2..];
+        }
+
+        if (hex is not { Length: > 0 and <= 16 }
+            || !ulong.TryParse(hex, System.Globalization.NumberStyles.AllowHexSpecifier, System.Globalization.CultureInfo.InvariantCulture, out ulong value)
+            || value == 0)
+        {
+            error = new FeedError(BadArgs, "\"guid\" must be a non-zero player guid as a hex string, for example \"0000000000000002\"");
+            return false;
+        }
+
+        request.TargetGuid = value;
+        return true;
+    }
+
+    /// <summary>An <c>opcode</c>: a number 0 to 65535 or a reference name (<c>CMSG_QUERY_TIME</c>); whether it is a known opcode is the tools' check.</summary>
+    private static bool TryOpcode(JsonElement root, out uint opcode, out FeedError error)
+    {
+        opcode = 0;
+        error = default;
+        if (!root.TryGetProperty("opcode"u8, out JsonElement element))
+        {
+            error = new FeedError(BadArgs, "an \"opcode\" is needed: a number or a name such as CMSG_QUERY_TIME");
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number && element.TryGetUInt32(out uint number) && number <= ushort.MaxValue)
+        {
+            opcode = number;
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.String && element.GetString() is { } text)
+        {
+            if (PacketToolOpcodes.TryParse(text, out ushort parsed))
+            {
+                opcode = parsed;
+                return true;
+            }
+
+            error = new FeedError(UnknownOpcode, $"'{(text.Length > 64 ? text[..64] : text)}' is not an opcode of the build-5875 table");
+            return false;
+        }
+
+        error = new FeedError(BadArgs, "\"opcode\" must be a number from 0 to 65535 or an opcode name");
+        return false;
+    }
+
+    /// <summary>A <c>payload</c> of hex digits (two per byte, no separators); absent or empty for none.</summary>
+    private static bool TryPayload(JsonElement root, out byte[] payload, out FeedError error)
+    {
+        payload = [];
+        error = default;
+        if (!root.TryGetProperty("payload"u8, out JsonElement element))
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.String || element.GetString() is not { } hex)
+        {
+            error = new FeedError(BadArgs, "\"payload\" must be a string of hex digits");
+            return false;
+        }
+
+        try
+        {
+            payload = Convert.FromHexString(hex);
+            return true;
+        }
+        catch (FormatException)
+        {
+            error = new FeedError(BadArgs, "\"payload\" must be an even number of hex digits with nothing between them");
+            return false;
+        }
+    }
+
+    private static bool TryTapFilter(JsonElement root, ref FeedRequest request, out FeedError error)
+    {
+        error = default;
+        request.Directions = TapDirections.Both;
+        if (root.TryGetProperty("dir"u8, out JsonElement dir))
+        {
+            request.Directions = dir.ValueKind != JsonValueKind.String ? TapDirections.None
+                : dir.ValueEquals("in"u8) ? TapDirections.In
+                : dir.ValueEquals("out"u8) ? TapDirections.Out
+                : dir.ValueEquals("both"u8) ? TapDirections.Both
+                : TapDirections.None;
+            if (request.Directions == TapDirections.None)
+            {
+                error = new FeedError(BadArgs, "\"dir\" must be in, out or both");
+                return false;
+            }
+        }
+
+        if (root.TryGetProperty("opcodes"u8, out JsonElement opcodes))
+        {
+            if (opcodes.ValueKind != JsonValueKind.Array || opcodes.GetArrayLength() is 0 or > MaxTapOpcodes)
+            {
+                error = new FeedError(BadArgs, $"\"opcodes\" must be an array of 1 to {MaxTapOpcodes} opcodes (numbers or names)");
+                return false;
+            }
+
+            var list = new List<ushort>(opcodes.GetArrayLength());
+            foreach (JsonElement item in opcodes.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Number && item.TryGetUInt16(out ushort number))
+                {
+                    list.Add(number);
+                }
+                else if (item.ValueKind == JsonValueKind.String && item.GetString() is { } name && PacketToolOpcodes.TryParse(name, out ushort parsed))
+                {
+                    list.Add(parsed);
+                }
+                else
+                {
+                    error = new FeedError(UnknownOpcode, "every entry of \"opcodes\" must be a number from 0 to 65535 or an opcode name of the build-5875 table");
+                    return false;
+                }
+            }
+
+            request.TapOpcodes = [.. list.Distinct()];
+        }
+
+        return TryBounded(root, "maxPackets"u8, "maxPackets", 1, MaxTapPackets, DefaultTapPackets, out request.MaxPackets, out error)
+            && TryBounded(root, "seconds"u8, "seconds", 1, MaxTapSeconds, DefaultTapSeconds, out request.Seconds, out error)
+            && TryBounded(root, "bytes"u8, "bytes", 0, MaxTapBytes, DefaultTapBytes, out request.MaxBytes, out error);
+    }
+
+    private static bool TryBounded(JsonElement root, ReadOnlySpan<byte> utf8Name, string name, int min, int max, int fallback, out int value, out FeedError error)
+    {
+        value = fallback;
+        error = default;
+        if (!root.TryGetProperty(utf8Name, out JsonElement element))
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt32(out value) || value < min || value > max)
+        {
+            value = fallback;
+            error = new FeedError(BadArgs, $"\"{name}\" must be a whole number from {min} to {max}");
+            return false;
         }
 
         return true;

@@ -193,7 +193,7 @@ public sealed partial class WorldSession
 
     /// <summary>A scenario tap, an outbound observer or a packet capture is attached: it must see every packet.</summary>
     private bool HasPacketObserver => ManagedPacketObserver is not null || _outboundPacketObserver is not null
-        || Volatile.Read(ref _packetCapture) is not null;
+        || Volatile.Read(ref _packetCapture) is not null || HasTaps;
 
     /// <summary>
     /// Whether the map builds SMSG_UPDATE_OBJECT blocks for this session (<see cref="IPlayerSession.WantsUpdateObjects"/>): always for a
@@ -451,6 +451,7 @@ public sealed partial class WorldSession
         }
         _registry.Unregister(this);
         DiscardQueuedPackets();
+        EndTaps();
         void Remove()
         {
             try

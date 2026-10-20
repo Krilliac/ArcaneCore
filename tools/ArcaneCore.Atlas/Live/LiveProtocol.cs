@@ -26,6 +26,16 @@ internal static class LiveProtocol
     public const string OpResult = "result";
     public const string OpError = "error";
 
+    // Packet tools (src/ArcaneCore.World/Ops/MapFeed/MapFeedConnection.Tools.cs; docs/areas/map-feed.md, "Packet tools").
+    public const string OpConsole = "console";
+    public const string OpInject = "inject";
+    public const string OpSend = "send";
+    public const string OpTap = "tap";
+    public const string OpUntap = "untap";
+    public const string OpPacket = "packet";
+    public const string OpTapEnd = "tapEnd";
+    public const string OpConsoleLine = "consoleLine";
+
     /// <summary>The pipe name of the world daemon with process id <paramref name="pid"/>.</summary>
     public static string PipeName(int pid) => PipePrefix + pid.ToString(CultureInfo.InvariantCulture);
 }

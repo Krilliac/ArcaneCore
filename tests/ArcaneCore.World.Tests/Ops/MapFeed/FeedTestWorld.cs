@@ -65,6 +65,12 @@ internal sealed class FeedWorldSetup
 
     /// <summary>Leave the pipe name at the production default, <c>arcanecore-mapfeed-{pid}</c>.</summary>
     public bool DefaultPipeName { get; init; }
+
+    /// <summary>The packet tools' options, registered with the host (sessions read them when built); null leaves them unconfigured (off).</summary>
+    public Action<WorldPacketToolsOptions>? PacketTools { get; init; }
+
+    /// <summary>The host environment the feed judges the packet tools by.</summary>
+    public string Environment { get; init; } = "Development";
 }
 
 /// <summary>
@@ -152,6 +158,7 @@ internal sealed class FeedWorld : IAsyncDisposable
             IdleTimeout = setup.IdleTimeout,
             WriteStallTimeout = setup.WriteStallTimeout,
             QueryTimeout = setup.QueryTimeout,
+            EnvironmentName = setup.Environment,
         };
         var world = new FeedWorld(host, feed, options, logs, loggers, terrainDirectory);
         if (setup.StartFeed)
@@ -191,7 +198,18 @@ internal sealed class FeedWorld : IAsyncDisposable
         GameObjectTestStore.Current.Value = objects;
         try
         {
-            void Services(IServiceCollection services) => services.AddSingleton<IWorldFeature, FeedManualClock>();
+            void Services(IServiceCollection services)
+            {
+                services.AddSingleton<IWorldFeature, FeedManualClock>();
+                if (setup.PacketTools is { } tools)
+                {
+                    services.Configure(tools);
+
+                    // The daemon registers its opcode table (WorldServiceCollectionExtensions); the test host builds its own outside DI.
+                    services.AddSingleton(_ => WorldServiceCollectionExtensions.BuildOpcodeTable());
+                }
+            }
+
             return setup.Bots
                 ? PartyTestHost.Start(configureServices: Services)
                 : WorldTestHost.Start(

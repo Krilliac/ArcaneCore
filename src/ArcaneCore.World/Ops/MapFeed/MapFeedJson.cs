@@ -25,6 +25,7 @@ internal static class MapFeedJson
     private static readonly JsonEncodedText Protocol = JsonEncodedText.Encode("protocol");
     private static readonly JsonEncodedText Sha = JsonEncodedText.Encode("sha");
     private static readonly JsonEncodedText Pid = JsonEncodedText.Encode("pid");
+    private static readonly JsonEncodedText Tools = JsonEncodedText.Encode("tools");
     private static readonly JsonEncodedText Maps = JsonEncodedText.Encode("maps");
     private static readonly JsonEncodedText Map = JsonEncodedText.Encode("map");
     private static readonly JsonEncodedText Instance = JsonEncodedText.Encode("instance");
@@ -133,14 +134,19 @@ internal static class MapFeedJson
 
     private static readonly JsonWriterOptions WriterOptions = new() { Indented = false };
 
-    /// <summary>The <c>hello</c> reply.</summary>
-    public static void WriteHello(Utf8JsonWriter writer, string sha, int pid, ReadOnlySpan<MapSummary> maps)
+    /// <summary>The <c>hello</c> reply; <c>"tools":true</c> only when the packet tools are on (a daemon without them says nothing).</summary>
+    public static void WriteHello(Utf8JsonWriter writer, string sha, int pid, ReadOnlySpan<MapSummary> maps, bool tools = false)
     {
         writer.WriteStartObject();
         writer.WriteString(Op, OpHello);
         writer.WriteNumber(Protocol, MapFeedProtocol.Version);
         writer.WriteString(Sha, sha);
         writer.WriteNumber(Pid, pid);
+        if (tools)
+        {
+            writer.WriteBoolean(Tools, true);
+        }
+
         writer.WriteStartArray(Maps);
         foreach (MapSummary map in maps)
         {
@@ -167,12 +173,12 @@ internal static class MapFeedJson
     }
 
     /// <summary>The finished <c>hello</c> line, newline included.</summary>
-    public static byte[] HelloLine(string sha, int pid, ReadOnlySpan<MapSummary> maps)
+    public static byte[] HelloLine(string sha, int pid, ReadOnlySpan<MapSummary> maps, bool tools = false)
     {
         var buffer = new ArrayBufferWriter<byte>(512);
         using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
         {
-            WriteHello(writer, sha, pid, maps);
+            WriteHello(writer, sha, pid, maps, tools);
         }
 
         return Finish(buffer);
@@ -202,7 +208,7 @@ internal static class MapFeedJson
         return Finish(buffer);
     }
 
-    private static byte[] Finish(ArrayBufferWriter<byte> buffer)
+    internal static byte[] Finish(ArrayBufferWriter<byte> buffer)
     {
         buffer.GetSpan(1)[0] = (byte)'\n';
         buffer.Advance(1);

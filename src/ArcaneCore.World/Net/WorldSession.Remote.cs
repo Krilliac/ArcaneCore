@@ -205,7 +205,7 @@ public sealed partial class WorldSession
                 }
 
                 CapturePacket(true, packet.Opcode, packet.Payload);
-                if (!await DispatchAsync(packet.Opcode, packet.Payload).ConfigureAwait(false))
+                if (!await DispatchFromClientAsync(packet.Opcode, packet.Payload, linked.Token).ConfigureAwait(false))
                 {
                     break;
                 }

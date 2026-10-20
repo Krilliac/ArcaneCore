@@ -124,6 +124,8 @@ internal static class LiveCommands
                 new CommandArg("limit", ArgType.Integer, $"Most hotspot cells to return (1..{MaxHotspotsLimit}, default {DefaultHotspotsLimit}).", Default: JsonValue.Create(DefaultHotspotsLimit)),
             ],
             (call, _) => Task.FromResult<JsonNode?>(Hotspots(feed, call))));
+
+        PacketToolCommands.Register(registry, feed);
     }
 
     private static async Task<JsonNode?> ConnectAsync(LiveFeed feed, CommandInvocation call, CancellationToken cancellationToken)
@@ -335,7 +337,7 @@ internal static class LiveCommands
     /// A guid argument, read as a string through the invocation's getter: hex digits with an optional 0x prefix, never decimal. A JSON
     /// number is refused with a hint to quote it (its source text cannot be told from a decimal or exponent). Absent or null gives null.
     /// </summary>
-    private static ulong? OptionalGuid(CommandInvocation call, string name)
+    internal static ulong? OptionalGuid(CommandInvocation call, string name)
     {
         string? text;
         try

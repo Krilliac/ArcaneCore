@@ -22,7 +22,8 @@ internal sealed record ParsedFrame(LiveFrame Frame, JsonObject Json, int Rejecte
 /// <param name="Maps">The maps and instances it has loaded.</param>
 /// <param name="MapsRejected">Entries of <c>maps</c> that were malformed and dropped.</param>
 /// <param name="FirstMapProblem">Why the first of them was dropped.</param>
-internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyList<ServerMap> Maps, int MapsRejected = 0, string? FirstMapProblem = null);
+/// <param name="Tools">The daemon offers the packet tools (its hello says <c>"tools":true</c>; docs/areas/map-feed.md, "Packet tools").</param>
+internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyList<ServerMap> Maps, int MapsRejected = 0, string? FirstMapProblem = null, bool Tools = false);
 
 /// <summary>
 /// Validates map-feed messages (design section 9). A message whose structure is wrong is refused whole; inside an accepted frame, an
@@ -122,7 +123,17 @@ internal static class FrameParser
             return false;
         }
 
-        hello = new HelloInfo((int)protocol, sha, pid, maps, mapsRejected, firstMapProblem);
+        bool tools = false;
+        if (root["tools"] is { } toolsNode)
+        {
+            if (toolsNode is not JsonValue toolsValue || !toolsValue.TryGetValue(out tools))
+            {
+                problem = "hello tools is not true or false";
+                return false;
+            }
+        }
+
+        hello = new HelloInfo((int)protocol, sha, pid, maps, mapsRejected, firstMapProblem, tools);
         problem = null;
         return true;
     }

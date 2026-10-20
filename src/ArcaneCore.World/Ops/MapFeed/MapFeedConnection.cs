@@ -18,7 +18,7 @@ namespace ArcaneCore.World.Ops.MapFeed;
 /// <see cref="WorldMapFeed.WriteStallTimeout"/> ends the connection.
 /// </para>
 /// </summary>
-internal sealed class MapFeedConnection
+internal sealed partial class MapFeedConnection
 {
     /// <summary>Frames one connection may hold (reserved by the capture until the writer has serialized them).</summary>
     internal const int MaxInFlightFrames = 2;
@@ -135,6 +135,7 @@ internal sealed class MapFeedConnection
             _feed.Unsubscribe(this);
             _subscribed = false;
             _outbound.Writer.TryComplete();
+            await EndToolsAsync().ConfigureAwait(false);
             try
             {
                 await writer.WaitAsync(CloseWait, CancellationToken.None).ConfigureAwait(false);
@@ -155,7 +156,9 @@ internal sealed class MapFeedConnection
 
     private async Task ReadLoopAsync()
     {
-        var reader = new MapFeedLineReader(_stream, MapFeedProtocol.MaxLineBytes);
+        // With the packet tools on, a line may carry the hex payload of the largest client packet.
+        int maxLine = _feed.Tools is null ? MapFeedProtocol.MaxLineBytes : MapFeedProtocol.MaxToolLineBytes;
+        var reader = new MapFeedLineReader(_stream, maxLine);
         while (true)
         {
             LineRead read;
@@ -186,8 +189,8 @@ internal sealed class MapFeedConnection
             if (read.Status == LineStatus.TooLong)
             {
                 _logger.LogWarning(
-                    "map feed: a line longer than {Max} bytes closed the connection ({Client}); nothing was run", MapFeedProtocol.MaxLineBytes, Client);
-                await QueueAsync(MapFeedJson.ErrorLine(MapFeedProtocol.LineTooLong, $"a line may hold at most {MapFeedProtocol.MaxLineBytes} bytes; closing the connection")).ConfigureAwait(false);
+                    "map feed: a line longer than {Max} bytes closed the connection ({Client}); nothing was run", maxLine, Client);
+                await QueueAsync(MapFeedJson.ErrorLine(MapFeedProtocol.LineTooLong, $"a line may hold at most {maxLine} bytes; closing the connection")).ConfigureAwait(false);
                 return;
             }
 
@@ -240,6 +243,8 @@ internal sealed class MapFeedConnection
                 _feed.Unsubscribe(this);
                 _subscribed = false;
                 return Outcome.Served;
+            case FeedOp.Console or FeedOp.Inject or FeedOp.Send or FeedOp.Tap or FeedOp.Untap:
+                return await HandleToolAsync(request).ConfigureAwait(false);
             default:
                 await QueryAsync(request).ConfigureAwait(false);
                 return Outcome.Served;
@@ -265,7 +270,7 @@ internal sealed class MapFeedConnection
             return Outcome.Served;
         }
 
-        await QueueAsync(MapFeedJson.HelloLine(WorldMapFeed.BuildSha, Environment.ProcessId, maps)).ConfigureAwait(false);
+        await QueueAsync(MapFeedJson.HelloLine(WorldMapFeed.BuildSha, Environment.ProcessId, maps, tools: _feed.Tools is not null)).ConfigureAwait(false);
         return Outcome.Served;
     }
 
@@ -292,9 +297,9 @@ internal sealed class MapFeedConnection
     private async Task<Outcome> RefuseAsync(FeedRequest request, FeedError error)
     {
         _logger.LogWarning("map feed: refused a line from {Client}: {Code}: {Message}", Client, error.Code, error.Message);
-        byte[] line = request.Op == FeedOp.Query && request.HasId
-            ? MapFeedJson.ResultLine(QueryAnswer.Refused(request.Id, error.Code, error.Message))
-            : MapFeedJson.ErrorLine(error.Code, error.Message);
+        byte[] line = !request.HasId ? MapFeedJson.ErrorLine(error.Code, error.Message)
+            : request.Op == FeedOp.Query ? MapFeedJson.ResultLine(QueryAnswer.Refused(request.Id, error.Code, error.Message))
+            : PacketToolsJson.Refused(request.Id, KindOf(request.Op), error.Code, error.Message);
         await QueueAsync(line).ConfigureAwait(false);
         return Outcome.Refused;
     }

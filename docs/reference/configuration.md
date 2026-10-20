@@ -78,6 +78,7 @@ How to read the tables:
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
 - [`World:Control:MapFeed`](#worldcontrolmapfeed)
+- [`World:Control:PacketTools`](#worldcontrolpackettools)
 - [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
 - [`World:Duel`](#worldduel)
@@ -1159,6 +1160,13 @@ How to read the tables:
 | `World:Control:MapFeed:MaxConnections` | `int` | `2` | - | The most tools connected at once: one pipe instance each, all created at start. A tool beyond the limit finds the pipe busy and is not served. 1 to 16. |
 | `World:Control:MapFeed:MaxEntitiesPerFrame` | `int` | `4096` | - | The most entities one frame carries. Players and bots come first, then creatures (moving ones before idle ones) and game objects; the rest are counted as truncated in the frame. 16 to 65536. |
 | `World:Control:MapFeed:MaxHz` | `int` | `5` | - | The most frames per second any subscription gets; a tool asking for more is given this rate. 1 to 60. |
+
+## `World:Control:PacketTools`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:PacketTools:AllowOutsideDevelopment` | `bool` | `false` | - | A second, deliberate opt-in: let Enabled take effect when the host environment is not Development (Staging, Production or unset). The tools then start with a warning naming the environment. Never set this on a server players use. Default off. |
+| `World:Control:PacketTools:Enabled` | `bool` | `false` | - | Offer the packet tools on the map feed's pipe (World:Control:MapFeed:Enabled must be on too). A connected tool may then run console commands with the console's Administrator authority, inject client opcodes as an online player or bot, send server opcodes to its client and watch its packets. Every console line, injection and send is logged and counted. Refused, with a warning at start, outside the Development environment unless AllowOutsideDevelopment is also true. Changing it needs a restart. Default off. |
 
 ## `World:Control:Pipe`
 
