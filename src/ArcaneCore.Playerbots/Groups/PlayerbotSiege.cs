@@ -184,8 +184,8 @@ internal static class PlayerbotSiegeCommander
     /// <summary>The leader is at its waypoint within this many yards.</summary>
     internal const float WaypointYards = 6f;
 
-    /// <summary>A leader is at its waypoint only on its level: no more than this many yards apart in height. The Undercity lifts run about 100 yards, and the lift top shares its XY with the floor below.</summary>
-    internal const float WaypointLevelYards = 25f;
+    /// <summary>A leader is at its waypoint only on its level: no more than this many yards apart in height. The Undercity levels are about 20 yards apart (the lift runs about 100, its top shares its XY with the floor below), and within the 6-yard plane bound walkable ground does not climb more than about 7 yards.</summary>
+    internal const float WaypointLevelYards = 10f;
 
     /// <summary>A retreating leader is at its retreat point (the retreat becomes a rally) within this many yards (2D).</summary>
     internal const float RallyYards = 8f;

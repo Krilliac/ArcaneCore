@@ -508,7 +508,10 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, -60f), waypoint));
         Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, 40f + PlayerbotSiegeCommander.WaypointLevelYards + 1f), waypoint));
         Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f + PlayerbotSiegeCommander.WaypointYards + 1f, 50f, 40f), waypoint));
-        Assert.True(PlayerbotSiegeCommander.WaypointLevelYards < 100f / 2);
+        // Undercity levels are about 20 yards apart (floors -59 to -62, the lift bottom -40.8): the level above or below is not the waypoint's level.
+        Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, 40f - 20f), waypoint));
+        Assert.False(PlayerbotGroupCoordinator.IsAtWaypoint(new System.Numerics.Vector3(100f, 50f, 40f + 20f), waypoint));
+        Assert.True(PlayerbotSiegeCommander.WaypointLevelYards <= 10f);
     }
     [Fact]
     public void TheNoProgressAndLagHoldBounds_AreThirtySeconds_TwoYards_AndNinetySeconds()

@@ -506,7 +506,7 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   onto the landing there nearest its destination, and the destination plans again from there. Nothing teleports the bot.
 * **Fails closed** with a stall reason (`elevator: ...`, the bot's own set-aside as for the tram, never every bot's): no way to the lift or
   its landing (no progress for 60 s), no car in the world, no floor beside a car, no car standing at the landing within two cycles and 30 s
-  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at.
+  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at, and a car that never stands anywhere drops the bot after two cycles and 30 s.
 * **Never off a car where it stands.** Under a car the static collision data has no floor but the bottom of the shaft (a car is a dynamic
   object, in no vmap; measured on the real Great Lift: 5.3 to 5.5 yards down into the pit at the foot, 134.8 yards at the top), so the bot
   is never stepped off or dropped where it stands. A car that leaves the world under the bot (or a bot knocked off it in the shaft) lets

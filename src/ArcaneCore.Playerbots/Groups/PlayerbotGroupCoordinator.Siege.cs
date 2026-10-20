@@ -466,7 +466,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
     /// <summary>
     /// Whether a leader at <paramref name="leader"/> stands at <paramref name="waypoint"/>: within <see cref="PlayerbotSiegeCommander.WaypointYards"/> in the plane, and on its level (no more than
-    /// <see cref="PlayerbotSiegeCommander.WaypointLevelYards"/> apart in height). A lift-top waypoint has the same XY as the floor under it, about 100 yards below in the Undercity, and a leader
+    /// <see cref="PlayerbotSiegeCommander.WaypointLevelYards"/> apart in height). A lift-top waypoint has the same XY as the floor under it (up to about 100 yards below in the Undercity, whose levels are about 20 yards apart), and a leader
     /// on the wrong level is not at it.
     /// </summary>
     internal static bool IsAtWaypoint(Vector3 leader, Vector3 waypoint)
@@ -679,7 +679,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>
     /// The no-progress bound of a push, advanced once per read of a led raid. While the raid pushes (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) the leader's 2D
     /// distance to its step goal must set a new least value (by more than <see cref="PlayerbotSiegeCommander.PushProgressYards"/>) within
-    /// <see cref="PlayerbotSiegeCommander.PushStallMs"/>; standing at the waypoint, or an elevator trip of the leader at any stage (<paramref name="riding"/>: a lift wait and ride gain no 2D yards, both levels share XY; the elevator has its own bounds: <see cref="PlayerbotElevator.NoProgressMs"/> on the walk to the stop, two cycles and 30 s waiting for the car, a cycle and 30 s aboard), counts as progress (the lockstep, the lag hold and its own bound govern at the waypoint). A push
+    /// <see cref="PlayerbotSiegeCommander.PushStallMs"/>; standing at the waypoint, or an elevator trip of the leader at any stage (<paramref name="riding"/>: a lift wait and ride gain no 2D yards, both levels share XY; the elevator has its own bounds: <see cref="PlayerbotElevator.NoProgressMs"/> on the walk to the stop, two cycles and 30 s waiting for the car, a cycle and 30 s aboard, dropped at two cycles and 30 s if the car never stands anywhere), counts as progress (the lockstep, the lag hold and its own bound govern at the waypoint). A push
     /// that does not is withdrawn: <see cref="PlayerbotSiegeRaid.PushInForce"/> ends and the step is denied a push (<see cref="PlayerbotSiegeRaid.PushDeniedStep"/>), so the
     /// raid is back at Assault, which is the baseline. A raid that does not push tracks nothing. Returns true at the read that withdraws the push.
     /// </summary>
