@@ -394,14 +394,24 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   living objective. Lifts are ridden by the ordinary walk (`PlayerbotElevator`, the three Undercity lifts).
 * **The commander** (`PlayerbotSiegeCommander.Decide`, a pure function; the coordinator re-reads the raids every 400 ms) picks an order for each
   raid in this order: **Retreat** (in combat: the tank dead, the average health under 35 % or a third of the raid dead *in this engagement*, i.e.
-  since the raid last entered combat; kept until the raid has been out of combat for 5 s; the leader walks back to the waypoint behind or the rally
-  point; nobody picks a new target or follows a mark, a member only fights back a hostile that attacks it, a healer also one that attacks a raid
-  member; a raid retreats at most **twice**, then it commits, says `No more retreat - press on!` once and fights on, and it never begins a retreat
-  while a member fights the objective or the skull is on it); out of combat **Regroup** (a member more
+  since the raid last entered combat after at least 5 s out of it; one latch in two phases, see below; a raid retreats at most **twice** and at most
+  **once per engagement**, then it commits, says `No more retreat - press on!` once and fights on, and it never begins a retreat while a member fights
+  the objective or the skull is on it); out of combat **Regroup** (a member more
   than 30 yards behind, resting, or hurt below 60 % for at most 90 s) or **Hold** (at the waypoint while the other raid is not); **Pull** (a
   hostile within 40 yards, kept until it is farther than 55: hysteresis); **AssignTank** (two or more hostiles and no cross); **Advance**; **Assault**
   (in combat). The scan for hostiles takes any creature the raid may attack and that is hostile to it, whatever its NPC flags (every Undercity
   target carries gossip or quest-giver flags); friendly and neutral NPCs are out, critters too (the objective entry excepted).
+* **The retreat, in two phases.** The retreat point is the waypoint behind the step (where the siege began when the step is the first).
+  **Retreat** (disengage) lasts while the leader is more than `RallyYards` (8 yards) from it: nobody fights or casts (a cast-time spell stops the
+  mover, so healers do not heal either), the leader walks to the point, the members follow it, and no mark is set. **Rally** (the order name once
+  the leader is within 8 yards) stands there: the leader holds, no mark is set and nothing new is pulled, and each member fights back only a hostile
+  that attacks it (a healer also one that attacks a raid member). The latch ends when the raid has been out of combat for 5 s, or has stood at the
+  point for `RallyHoldMs` (30 s) and still fights (the bound: a pursuit that does not end is fought, not run from again), or the objective is engaged.
+  A retreat is counted (`retreats=` in the status) where its latch begins, not on an order change: a raid that loses its leader holds meanwhile
+  and resumes the same retreat after the promotion, uncounted. A flicker of the combat flag is not a new engagement. The leader's loop watch starts
+  afresh at the start of a retreat (the walk back to the waypoint it came from reads as an A, B, A loop). Creatures leash after about 50 yards, and
+  a defender drops a target beyond its post radius plus 10 yards: space the waypoints at least 60 yards apart so that the retreat point is out of
+  the pursuit.
 * **Marks and warnings.** The leader sets the skull (the unit to kill) and, for AssignTank, the cross (the second hostile, followed first by
   the tanks) through its own client packet MSG_RAID_TARGET_UPDATE, and says one **raid warning** (CMSG_MESSAGECHAT, type raid warning; Orcish for
   the Horde, else Common) whenever the order changes, never twice the same line in a row and at most one per 3 s (`PlayerbotSiegeAnnouncer`).
@@ -412,7 +422,8 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   says so) and the siege goes on. A hot reload ends a siege as `stopped: reload` and tells the watchers.
   Bots with a defend post are not free for a siege (nor for a quest group). A siege whose raids have all ended is `stopped: raids-ended`.
 * **Status and watch.** `.playerbot siege status` prints the siege (step, running time) and a line per raid (leader, who lives, the last order and
-  its numbers, retreats); `status $leader` only that raid and its last three raid warnings. `.playerbot siege watch on|off` makes the coordinator
+  its numbers, retreats; the order is one of `hold`, `regroup`, `advance`, `pull`, `assigntank`, `assault`, `retreat`, `rally`); `status $leader` only that raid
+  and its last three raid warnings. `.playerbot siege watch on|off` makes the coordinator
   send the GM one system line per raid whenever its order, step or strength changes (at most one batch every 2 s), and one when the siege ends;
   without an argument it says whether you watch. Both are in memory with the siege.
 * **Status.** `.playerbot groups` adds ` siege=1:raid1:advance:step0/2` to a raid's line.

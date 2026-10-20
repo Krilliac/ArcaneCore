@@ -75,9 +75,11 @@ Do it in this order:
    enlisted in a siege nor matched into a quest group. A post is memory only: a restart ends it.
 4. **Stand at the points.** Starting outside Undercity, walk the way the raids should take (in, down through the lifts to the Royal Quarter) and
    `.playerbot siege waypoint add` at each point, in the order the raids take them; the last one is where the fight for the objective begins.
-   `.playerbot siege waypoint list` checks them; `waypoint clear` starts over.
+   `.playerbot siege waypoint list` checks them; `waypoint clear` starts over. Space the waypoints at least 60 yards apart: a lost fight retreats to
+   the previous waypoint (to where the siege began from the first), and creatures follow a retreating raid for about 50 yards, so a closer point is
+   fought at rather than left.
 5. **Start.** Stand at the first waypoint, `.playerbot send Siegebot* here` puts the Alliance attackers there (or `send $tele`), then
    `.playerbot siege start Siegebot* #entry raids 2` (the entry is the creature's `creature_template` id, Sylvanas is 10181; `raids 1` keeps one raid).
 6. **Watch.** With `.gm on` and `.gm visible off` you are invisible; `.playerbot siege watch on` sends you a line per raid as its order changes,
-   `.playerbot siege status` shows the step, who lives and the orders, `.playerbot siege status $leader` one raid and its last raid warnings.
+   `.playerbot siege status` shows the step, who lives and the orders (`retreat` while the raid walks back, `rally` once it stands at the point), `.playerbot siege status $leader` one raid and its last raid warnings.
    `.playerbot siege stop` ends it (the raids disband). Nothing is saved: a restart ends the siege and forgets the waypoints.
