@@ -1364,7 +1364,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 }
 
                 killed |= !attacker.IsAlive;
-                leaderOff = Math.Max(leaderOff, FlatYards(leader, waypoint));
+                if (siege.Step == stepAtPush) leaderOff = Math.Max(leaderOff, FlatYards(leader, waypoint)); // once the step moves the leader walks on from this waypoint
                 refused |= siege.Step == stepAtPush && PlayerbotMotion.IsBlacklisted(leader, waypoint);
                 // The raid still reads the leader at the waypoint while it answers out of the disk, and the lag hold keeps running.
                 if (siege.Step == stepAtPush && !killed && FlatYards(leader, waypoint) > PlayerbotSiegeCommander.WaypointYards + 2f)
@@ -1439,7 +1439,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (attacker is not null)
             {
                 float off = FlatYards(leader, waypoint);
-                leaderOff = Math.Max(leaderOff, off);
+                if (siege.Step == stepAtPush) leaderOff = Math.Max(leaderOff, off);
                 // The attacker stays 25 yards out until the leader has left the disk to answer it, then it kites to 45 yards (beyond the 30-yard leash) and stays there.
                 if (!kited && off > 8f) { chased = true; kited = true; kitedAt = Now(world); }
                 attacker.Relocate(waypoint.X + (kited ? 45f : 25f), waypoint.Y, attacker.Z, 0, Now(world));
