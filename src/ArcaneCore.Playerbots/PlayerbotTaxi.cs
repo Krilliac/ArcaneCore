@@ -1,7 +1,9 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
@@ -38,13 +40,20 @@ internal enum TaxiStep : byte
 
     /// <summary>The trip failed (reported once); the departure node is backed off (<see cref="PlayerbotTransitBackoff"/>). The goal walks.</summary>
     Failed,
+
+    /// <summary>
+    /// The bot stands at the spawn of its flight master, which was killed (dead, or gone and waiting for its respawn timer): normal play, not a
+    /// failure. Nothing is reported and no failure is counted; the departure node is held off until about the respawn
+    /// (<see cref="PlayerbotTransitBackoff.Defer"/>). The goal walks.
+    /// </summary>
+    MasterDead,
 }
 
 /// <summary>The stages of one bot's taxi trip (<see cref="PlayerbotTaxi"/>).</summary>
 internal enum TaxiStage : byte { ToMaster, Flying, Done, Failed }
 
 /// <summary>One bot's taxi trip: where it departs, where it lands, what the flight costs, and the walk to the flight master.</summary>
-internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterEntry, Vector3 master, Vector3 goal, uint nowMs)
+internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterEntry, uint masterSpawn, Vector3 master, Vector3 goal, uint nowMs)
 {
     public uint MapId { get; internal set; } = mapId;
 
@@ -55,6 +64,9 @@ internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterE
     public uint Fare { get; } = fare;
 
     public uint MasterEntry { get; } = masterEntry;
+
+    /// <summary>The spawn id (<see cref="CreatureSpawn.Guid"/>) of the flight master the trip walks to.</summary>
+    public uint MasterSpawn { get; } = masterSpawn;
 
     /// <summary>Where the departure node's flight master stands (its spawn).</summary>
     public Vector3 Master { get; } = master;
@@ -302,6 +314,26 @@ internal static class PlayerbotTransitBackoff
         uint wait = Math.Min(options.Travel.BackoffMs(entry.Failures), capMs);
         entry.UntilMs = unchecked(nowMs + wait);
         return wait;
+    }
+
+    /// <summary>
+    /// Hold <paramref name="point"/> off for <paramref name="waitMs"/> without counting a failure: the point is not broken, it is out of service
+    /// for a known time (a flight master that was killed, until it respawns). The failure count, and so the wait of a later real failure, is
+    /// unchanged; a later wait never shortens a longer one still running. <paramref name="waitMs"/> must be below 2^31.
+    /// </summary>
+    internal static void Defer(Player player, TransitKind kind, uint point, uint nowMs, uint waitMs)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(waitMs, (uint)int.MaxValue);
+        Dictionary<(TransitKind, uint), Entry> table = Tables.GetOrCreateValue(player);
+        if (!table.TryGetValue((kind, point), out Entry? entry))
+        {
+            if (table.Count >= MaxPoints) table.Clear();
+            table[(kind, point)] = entry = new Entry();
+        }
+
+        uint until = unchecked(nowMs + waitMs);
+        if (unchecked((int)(until - entry.UntilMs)) > 0 || unchecked((int)(entry.UntilMs - nowMs)) <= 0) entry.UntilMs = until;
     }
 
     /// <summary>Whether <paramref name="point"/> is waiting out a failure at <paramref name="nowMs"/>.</summary>
@@ -611,7 +643,7 @@ internal static class PlayerbotTaxi
         }
 
         if (best is null) return;
-        Trips.AddOrUpdate(player, new TaxiTrip(map.MapId, [bestNode], 0, best.Entry, new Vector3(best.X, best.Y, best.Z), new Vector3(best.X, best.Y, best.Z), now)
+        Trips.AddOrUpdate(player, new TaxiTrip(map.MapId, [bestNode], 0, best.Entry, best.Guid, new Vector3(best.X, best.Y, best.Z), new Vector3(best.X, best.Y, best.Z), now)
         {
             LearnOnly = true,
         });
@@ -659,7 +691,7 @@ internal static class PlayerbotTaxi
         if (IsActive(player)) return TaxiTravel.Walk; // a learning detour owns the bot; the goal walks meanwhile
         if (!TryPlanTaxi(session, player, mapId, destination, options, maxFare, out uint[] route, out uint fare, out CreatureSpawn master))
             return TaxiTravel.Walk;
-        Trips.AddOrUpdate(player, new TaxiTrip(mapId, route, fare, master.Entry, new Vector3(master.X, master.Y, master.Z), destination, session.World.NowMs));
+        Trips.AddOrUpdate(player, new TaxiTrip(mapId, route, fare, master.Entry, master.Guid, new Vector3(master.X, master.Y, master.Z), destination, session.World.NowMs));
         return TaxiTravel.Traveling;
     }
 
@@ -815,7 +847,7 @@ internal static class PlayerbotTaxi
 
     /// <summary>
     /// One think of the trip, before anything else the brain does. <see cref="TaxiStep.Idle"/>: no trip. <see cref="TaxiStep.Traveling"/>:
-    /// walking to the flight master or in the air. <see cref="TaxiStep.Arrived"/> and <see cref="TaxiStep.Failed"/> are reported once;
+    /// walking to the flight master or in the air. <see cref="TaxiStep.Arrived"/>, <see cref="TaxiStep.Failed"/> and <see cref="TaxiStep.MasterDead"/> are reported once;
     /// <paramref name="failure"/> then says why.
     /// </summary>
     internal static TaxiStep Drive(WorldSession session, Player player, PlayerbotOptions options, uint elapsedMs, out string? failure)
@@ -863,8 +895,14 @@ internal static class PlayerbotTaxi
 
         Vector3 here = new(player.X, player.Y, player.Z);
         if (Vector3.Distance(here, trip.Master) <= AtSpawnYards)
+        {
+            // A master that was killed is normal play: no anomaly, no failure counted, the node held off until about its respawn.
+            if (MasterRespawnWaitMs(map, trip.MasterSpawn) is { } respawnWaitMs)
+                return MasterDead(session, player, trip, options, now, respawnWaitMs, out failure);
             return Fail(session, player, trip, options, now, "master-missing", AnomalySeverity.Warning,
                 "no flight master of the departure node can be talked to where it stands", out failure);
+        }
+
         if (!Walk(session, player, trip, options, elapsedMs, now))
         {
             return Fail(session, player, trip, options, now, "master-unreachable", AnomalySeverity.Warning,
@@ -1070,6 +1108,41 @@ internal static class PlayerbotTaxi
         float off = Vector3.Distance(here, landing);
         if (off > LandingToleranceYards)
             PlayerbotAnomalies.Report(player, Area, "landed-off-node", $"the bot landed {off:F0} yards from landing node {last.Id} (route {string.Join('>', trip.Nodes)})");
+    }
+
+    /// <summary>The shortest hold of a node whose master is dead (a respawn already due is picked up at the next planning).</summary>
+    internal const uint MasterDeadMinHoldMs = 5_000;
+
+    /// <summary>
+    /// Milliseconds until the creature of flight master spawn <paramref name="spawnGuid"/> is back, when it was killed: dead or a corpse in the
+    /// map's creature system, or gone from the map with its respawn time kept (<see cref="CreatureMapSystem.PendingRespawnAt"/>). Null when the
+    /// spawn's creature is alive or the map knows nothing of the spawn (a master that is truly absent). A creature that never respawns
+    /// reports a very long wait. World thread.
+    /// </summary>
+    internal static long? MasterRespawnWaitMs(Map map, uint spawnGuid)
+    {
+        if (map.FindUpdater<CreatureMapSystem>() is not { } system) return null;
+        foreach (Creature creature in system.Creatures)
+        {
+            if (creature.Spawn is not { } spawn || spawn.Guid != spawnGuid) continue;
+            return creature.DeathState == CreatureDeathState.Alive ? null : system.RespawnRemainingMs(creature) ?? 0L;
+        }
+
+        return system.PendingRespawnAt(spawnGuid) is { } at ? Math.Max(0L, at - system.ClockMs) : null;
+    }
+
+    private static TaxiStep MasterDead(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, uint now, long respawnWaitMs,
+        out string? failure)
+    {
+        PlayerbotMovementControl.Stop(session, player);
+        trip.Failure = "taxi: the flight master of the departure node was killed and has not respawned";
+        trip.Stage = TaxiStage.Failed;
+        trip.Route = null;
+        uint capMs = (uint)Math.Clamp(options.Taxi.BackoffMinutes, 1, 1440) * 60_000u;
+        // Held until about the respawn, not counted as a failure (no memo, no repeated-failure, no growing wait).
+        PlayerbotTransitBackoff.Defer(player, TransitKind.Taxi, trip.Nodes[0], now, (uint)Math.Clamp(respawnWaitMs, MasterDeadMinHoldMs, capMs));
+        failure = trip.Failure;
+        return TaxiStep.MasterDead;
     }
 
     private static TaxiStep Fail(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, uint now, string code, AnomalySeverity severity,

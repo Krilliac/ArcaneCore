@@ -869,6 +869,13 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
   quest and its giver are not set aside and no dead-end pin is counted; while the point is backed off the destination waits without a
   set-aside. A completed quest across the tram for a bot below `TramMinLevel` is held (never abandoned or marked unreachable) and taken up
   again at the level. A fight on the way to the master cancels the trip without a backoff. Death cancels it.
+- **A killed flight master is not a failure.** A bot that stands at its master's spawn (within 6 yards, `AtSpawnYards`) and finds nobody to
+  talk to looks at the spawn's creature in the map's creature system. If it is dead or a corpse, or is gone from the map with its respawn
+  timer still running, the trip ends as `TaxiStep.MasterDead`: nothing is reported (no `bot-taxi/master-missing`, so bot QA files no issue),
+  no failure is counted (no `repeated-failure`, the node's failure count and its doubling wait stay as they were), and the departure node is
+  held off until about the respawn (at least 5 s, at most `BackoffMinutes`; a master that never respawns holds for the cap). The goal
+  walks meanwhile, and the node flies again once the hold ends. A master that is alive but not where the node says, or has no creature
+  and no respawn pending at the spawn, still ends the trip as a failure and reports `bot-taxi/master-missing` (Warning).
 - **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
   `BackoffMinutes` (10, 1..1440; the per-node cap of the Travel schedule).
 
