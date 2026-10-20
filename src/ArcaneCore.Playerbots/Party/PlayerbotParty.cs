@@ -170,6 +170,29 @@ internal static class PlayerbotParty
     }
 
     /// <summary>
+    /// vmangos PartyBotAI::SelectAttackTarget (PartyBotAI.cpp:366-377): the first group raid icon of <paramref name="focusOrder"/> (the bot's
+    /// <c>m_marksToFocus</c>, skull first by default) whose target <paramref name="find"/> still knows and <paramref name="valid"/> accepts.
+    /// The caller asks only while the bot or its leader is in combat.
+    /// </summary>
+    internal static T? MarkedTarget<T>(IReadOnlyList<ObjectGuid> icons, ReadOnlySpan<byte> focusOrder, Func<ObjectGuid, T?> find, Func<T, bool> valid)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(icons);
+        ArgumentNullException.ThrowIfNull(find);
+        ArgumentNullException.ThrowIfNull(valid);
+        foreach (byte icon in focusOrder)
+        {
+            if (icon >= icons.Count || icons[icon].IsEmpty) continue;
+            if (find(icons[icon]) is { } target && valid(target)) return target;
+        }
+
+        return null;
+    }
+
+    /// <summary>The raid icon index of the skull, the default focus (vmangos PlayerBotMgr.cpp:1323-1333 maps the icon names to RaidTargetIcon, skull last = 7).</summary>
+    internal const byte SkullIcon = 7;
+
+    /// <summary>
     /// vmangos PartyBotAI::ShouldAutoRevive (:237): a released ghost revives at once; while any other member fights, or a healer
     /// (priest, paladin, shaman, druid) is alive to resurrect it, the bot waits; otherwise it revives when a living member is within
     /// <see cref="ReviveCompanyRange"/> yards.

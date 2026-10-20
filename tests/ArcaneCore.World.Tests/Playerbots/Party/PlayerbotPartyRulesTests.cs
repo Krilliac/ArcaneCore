@@ -246,6 +246,26 @@ public sealed class PlayerbotPartyRulesTests
     [InlineData(Class.Mage, false)]
     public void HealerClasses_AreTheResurrectingOnes(Class @class, bool healer) => Assert.Equal(healer, PlayerbotParty.IsHealerClass(@class));
 
+    [Fact]
+    public void MarkedTargetSkullFirstThenFocusOrder()
+    {
+        ObjectGuid skull = ObjectGuid.Player(40), cross = ObjectGuid.Player(41), gone = ObjectGuid.Player(42);
+        ObjectGuid[] icons = new ObjectGuid[8];
+        icons[7] = skull;
+        icons[6] = cross;
+        var names = new Dictionary<ObjectGuid, string> { [skull] = "skull", [cross] = "cross" };
+        string? Find(ObjectGuid guid) => names.GetValueOrDefault(guid);
+        ReadOnlySpan<byte> order = [7, 6];
+
+        Assert.Equal("skull", PlayerbotParty.MarkedTarget(icons, order, Find, _ => true));
+        Assert.Equal("cross", PlayerbotParty.MarkedTarget(icons, order, Find, name => name != "skull"));
+        Assert.Null(PlayerbotParty.MarkedTarget(icons, order, Find, _ => false));
+        Assert.Null(PlayerbotParty.MarkedTarget(new ObjectGuid[8], order, Find, _ => true));
+        icons[7] = gone; // an icon on a target the map no longer has falls through to the next icon
+        Assert.Equal("cross", PlayerbotParty.MarkedTarget(icons, order, Find, _ => true));
+        Assert.Equal("cross", PlayerbotParty.MarkedTarget(icons, [6, 7, 200], Find, _ => true)); // an icon index past the list is ignored
+    }
+
     private static PlayerbotFollowFacts Facts(float distance)
         => new(PlayerbotPartyMode.Follow, MasterInWorld: true, SameMap: true, distance, TeleportToLeader: true, MasterMapAllowed: true);
 

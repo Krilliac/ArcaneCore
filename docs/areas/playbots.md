@@ -1203,6 +1203,17 @@ where the master goes.
 - **Combat** (vmangos `SelectAttackTarget`/`SelectPartyAttackTarget`): the target the master ordered, else the master's
   victim, else whoever attacks the bot, else whoever attacks another member within 50 yards; `PlayerbotCombatSpells`, then a
   chase to 4 yards and CMSG_ATTACKSWING.
+- **Players as targets** (`PlayerbotHostility`, one rule for the party AI, the brain and the battleground AI). A player is a target only
+  where the combat hooks allow the attack: never a teammate or a Game Master in GM mode, and an enemy player only while PvP-flagged
+  (or in a started duel with the bot). On top of that a bot starts on a player unprovoked only when ordered: the master's `attack` on a
+  selected player is obeyed (reply `Attacking <name>.`) when that player is a valid target, else the bot answers `I have no target
+  to attack.`. Without an order a bot fights back a player who attacks it, assists the master against a player the master attacks
+  and defends a member a player attacks, the same rule real players are held to. A managed bot outside a group does the same for itself:
+  the brain (`PlayerbotBrain.Pvp.cs`) fights back a player attacker through `PlayerbotPvpFight`, before the quest return, the creature
+  threat choice and the combat linger, and lets go past 45 yards or when the player is no longer hostile.
+- **Raid marks** (vmangos `PartyBotAI::SelectAttackTarget`, PartyBotAI.cpp:366-377). While the bot or its master is in combat, the
+  skull of the group (`MSG_RAID_TARGET_UPDATE`, set by the leader or an assistant) is attacked before the master's victim; an explicit
+  `attack` order still comes first. A mark on a unit that is gone or not attackable is skipped.
 - **Round-robin loot.** vmangos PartyBotAI.cpp:565-585 unassigns the bot's round-robin loot on every party kill
   (SMSG_PARTYKILLLOG, broadcast to the group there). ArcaneCore sends that packet to the killer alone, so at every think out of
   combat the bot looks over the corpses it can see (within 74 yards, the group reward distance) for loot it holds
