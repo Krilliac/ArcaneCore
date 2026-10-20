@@ -321,7 +321,6 @@ internal sealed class PlayerbotGroupAI
             return;
         }
 
-        if (isLeader && group.Siege is { AnsweringMs: not 0 } answered) answered.AnsweringMs = 0;
 
         if (_target is not null)
         {
