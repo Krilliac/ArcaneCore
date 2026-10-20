@@ -106,7 +106,7 @@ public sealed class CreatureStuckInCombatFixTests
     }
 
     [Fact]
-    public void SelectHostileTarget_WithStaleTauntCasterAndNoValidTargets_EvadesInsteadOfStickingInCombat()
+    public void SelectHostileTarget_WithStaleTauntCasterAndNoValidTargets_HoldsWhileTheTauntIsUp_AndEvadesOnceItFades()
     {
         using AnomalyCapture capture = CaptureStuckInCombat(DeadTaunterEntry);
         CreatureContent content = Content([Template(DeadTaunterEntry)], [Spawn(1, DeadTaunterEntry, 10, 0)]);
@@ -116,13 +116,19 @@ public sealed class CreatureStuckInCombatFixTests
             AddPlayer(world, 1, 100, 100);
             Creature wolf = Assert.Single(system.Creatures);
 
-            // Add a stale taunt caster GUID that is not a valid living unit on the map while the creature is in combat.
+            // A taunt caster GUID that is not a valid living unit on the map while the creature is in combat.
+            ObjectGuid taunter = ObjectGuid.Player(99999);
             map.Combat.SetInCombatState(wolf, 0);
-            wolf.Combat.Threat.AddTauntCaster(ObjectGuid.Player(99999));
+            wolf.Combat.Threat.AddTauntCaster(taunter);
 
-            bool selected = system.SelectHostileTarget(wolf);
+            // vmangos Unit::SelectHostileTarget (Unit.cpp:7589): no target, but the taunt aura is still up, so no evade yet ...
+            Assert.False(system.SelectHostileTarget(wolf));
+            Assert.True(wolf.Combat.IsInCombat);
+            Assert.False(wolf.IsInEvadeMode);
 
-            Assert.False(selected);
+            // ... and once it fades (Aura::HandleModTaunt removes the caster) nothing holds it: it evades instead of sticking in combat.
+            wolf.Combat.Threat.RemoveTauntCaster(taunter);
+            Assert.False(system.SelectHostileTarget(wolf));
             Assert.False(wolf.Combat.IsInCombat);
         }
     }

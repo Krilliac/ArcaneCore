@@ -177,7 +177,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             Map.Combat.AttackStop(creature);
         }
 
-        if (!combat.IsInCombat)
+        // vmangos :7589: out of combat, or a taunt aura is up (its caster dead or gone: no taunt target), it does not evade.
+        if (!combat.IsInCombat || combat.Threat.HasTauntCasters)
         {
             return false;
         }
@@ -354,6 +355,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         if (creature.CharmerOrOwnerGuid.IsEmpty
             && !creature.IsTempPacified
             && creature.AI is not null
+            && !creature.AI.CombatScriptRunning
             && (creature.AI is not CritterAI || creature.Motion.CurrentType != MovementGeneratorType.Fleeing)
             && !HasAnyLivingCombatantOnMap(creature))
         {
