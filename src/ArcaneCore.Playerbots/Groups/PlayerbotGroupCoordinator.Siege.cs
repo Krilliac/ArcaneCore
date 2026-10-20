@@ -418,6 +418,7 @@ public sealed partial class PlayerbotGroupCoordinator
                 _siegeUnled++;
                 TrackEngagement(group, raid, world, now);
                 raid.Order = PlayerbotSiegeOrder.Hold;
+                raid.Push = PlayerbotSiegePush.None;
                 raid.PullTarget = default;
                 continue;
             }
@@ -432,13 +433,16 @@ public sealed partial class PlayerbotGroupCoordinator
         // With none on the map the objective is not judged this tick.
         if (WatchObjective(siege, _siegeViews.FirstOrDefault(v => v.Leader.MapId == siege.MapId)?.Leader, now)) return;
 
-        // Lockstep: the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it.
+        // Lockstep: the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it. A raid
+        // that pushes through its fight (PlayerbotSiegeCommander.PushOf) does not wait for the fight or for the members still in it.
         if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
-            && _siegeViews.All(v => v.Facts.AtWaypoint && !v.Facts.InCombat && v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards))
+            && _siegeViews.All(v => v.Facts.AtWaypoint && (v.Facts.InCombat
+                ? PlayerbotSiegeCommander.PushOf(v.Facts) != PlayerbotSiegePush.None
+                : v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards)))
         {
             siege.Step++;
             foreach (SiegeView view in _siegeViews)
-                view.Facts = view.Facts with { AtWaypoint = false, PeersAtWaypoint = true };
+                view.Facts = view.Facts with { AtWaypoint = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, ObjectiveLeg = siege.Step >= siege.Waypoints.Count };
         }
 
         WatchProgress(siege, now);
@@ -527,6 +531,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         raid.AtWaypoint = atWaypoint;
+        (uint stepCombatMs, uint quietCombatMs) = ReadClocks(siege, raid, inCombat, sinceCombat, view.Hostiles.Count, now);
 
         // A new leader has its own path: the no-path rally is not inherited (and its time at the point restarts, once per latch). A rally at a real
         // retreat point keeps its time.
@@ -549,10 +554,53 @@ public sealed partial class PlayerbotGroupCoordinator
 
         view.Facts = new PlayerbotSiegeFacts(inCombat, sinceCombat, total, alive, hasTank, tankAlive, total == 0 ? 0f : healthSum / total, maxLag, anyResting, anyHurt,
             atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched,
-            deadSince, raid.Retreats, objectiveEngaged, atRally, msAtRally, raid.RetreatedThisEngagement);
+            deadSince, raid.Retreats, objectiveEngaged, atRally, msAtRally, raid.RetreatedThisEngagement,
+            stepCombatMs, quietCombatMs, raid.LastLossMs == 0 ? uint.MaxValue : unchecked(now - raid.LastLossMs), siege.Step >= siege.Waypoints.Count);
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
         view.Facts = view.Facts with { CrossValid = cross is not null };
         raid.LastFacts = view.Facts;
+    }
+
+    /// <summary>
+    /// The two clocks of the push-through rules (<see cref="PlayerbotSiegeCommander.PushOf"/>), advanced once per read of a led raid.
+    /// <b>Step clock</b> (<see cref="PlayerbotSiegeFacts.MsInCombatAtStep"/>): starts at the first read in combat at a step; a step change resets it
+    /// (and it starts again at once if the raid is in combat); <see cref="PlayerbotSiegeCommander.StepClockQuietMs"/> out of combat (the raid's
+    /// <paramref name="sinceCombat"/>) resets it; a shorter gap does not. <b>Quiet clock</b> (<see cref="PlayerbotSiegeFacts.MsQuietInCombat"/>):
+    /// runs while the raid is in combat with no hostile counted near its leader, and stops at the first read that is not.
+    /// </summary>
+    internal static (uint StepCombatMs, uint QuietCombatMs) ReadClocks(PlayerbotSiege siege, PlayerbotSiegeRaid raid, bool inCombat, uint sinceCombat, int hostiles, uint now)
+    {
+        if (raid.ClockStep != siege.Step)
+        {
+            raid.ClockStep = siege.Step;
+            raid.StepCombatSinceMs = 0;
+        }
+
+        if (inCombat)
+        {
+            if (raid.StepCombatSinceMs == 0) raid.StepCombatSinceMs = Math.Max(1u, now);
+        }
+        else if (sinceCombat >= PlayerbotSiegeCommander.StepClockQuietMs) raid.StepCombatSinceMs = 0;
+
+        if (inCombat && hostiles == 0)
+        {
+            if (raid.QuietCombatSinceMs == 0) raid.QuietCombatSinceMs = Math.Max(1u, now);
+        }
+        else raid.QuietCombatSinceMs = 0;
+
+        return (raid.StepCombatSinceMs == 0 ? 0u : unchecked(now - raid.StepCombatSinceMs),
+            raid.QuietCombatSinceMs == 0 ? 0u : unchecked(now - raid.QuietCombatSinceMs));
+    }
+
+    /// <summary>A member who is dead now and was not at the last read is a loss (<see cref="PlayerbotSiegeRaid.LastLossMs"/>); the first read counts none.</summary>
+    private void NoteLosses(PlayerbotSiegeRaid raid, uint now)
+    {
+        if (raid.LossWatchStarted)
+            foreach (ObjectGuid dead in _siegeDeadScratch)
+                if (!raid.DeadLastRead.Contains(dead)) raid.LastLossMs = Math.Max(1u, now);
+        raid.LossWatchStarted = true;
+        raid.DeadLastRead.Clear();
+        foreach (ObjectGuid dead in _siegeDeadScratch) raid.DeadLastRead.Add(dead);
     }
 
     /// <summary>
@@ -580,6 +628,7 @@ public sealed partial class PlayerbotGroupCoordinator
             raid.RetreatedThisEngagement = false;
         }
 
+        NoteLosses(raid, now);
         raid.WasInCombat = inCombat;
         if (inCombat)
         {
@@ -678,6 +727,7 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (SiegeView view in _siegeViews)
         {
             view.Raid.Order = PlayerbotSiegeOrder.Hold;
+            view.Raid.Push = PlayerbotSiegePush.None;
             view.Raid.PullTarget = default;
             List<string> sent = view.Raid.Announcer.Sent;
             if (sent.Count > 0 && sent[^1] == PlayerbotSiegeCommander.CompleteLine) continue;
@@ -706,6 +756,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         raid.Order = decision.Order;
+        raid.Push = decision.Push;
         raid.RetreatLatched = decision.RetreatLatched;
         raid.PullLatched = decision.PullLatched;
         if (!decision.RetreatLatched)
@@ -747,6 +798,8 @@ public sealed partial class PlayerbotGroupCoordinator
         {
             PlayerbotSiegeOrder.Hold => string.Create(CultureInfo.InvariantCulture, $"Holding at waypoint {siege.Step + 1} for the other raid"),
             PlayerbotSiegeOrder.Regroup => "Regrouping",
+            PlayerbotSiegeOrder.Advance when decision.Push != PlayerbotSiegePush.None => string.Create(CultureInfo.InvariantCulture,
+                $"Pushing through to waypoint {siege.Step + 1}"),
             PlayerbotSiegeOrder.Advance => siege.Step < siege.Waypoints.Count
                 ? string.Create(CultureInfo.InvariantCulture, $"Advancing to waypoint {siege.Step + 1}") : "Advancing on the objective",
             PlayerbotSiegeOrder.Pull => "Pulling " + NameOf(skull),
@@ -756,7 +809,7 @@ public sealed partial class PlayerbotGroupCoordinator
             _ => "Retreating",
         };
         raid.Detail = string.Create(CultureInfo.InvariantCulture,
-            $"{decision.Order.ToString().ToLowerInvariant()} step={siege.Step}/{siege.Waypoints.Count} hostiles={facts.Hostiles} alive={facts.Alive}/{facts.Total} hp={facts.AverageHealthPct:F0}%");
+            $"{decision.Order.ToString().ToLowerInvariant()} step={siege.Step}/{siege.Waypoints.Count} hostiles={facts.Hostiles} alive={facts.Alive}/{facts.Total} hp={facts.AverageHealthPct:F0}%{(decision.Push != PlayerbotSiegePush.None ? $" push={decision.Push.ToString().ToLowerInvariant()}" : string.Empty)}");
         raid.WatchLine = string.Create(CultureInfo.InvariantCulture,
             $"{decision.Order.ToString().ToLowerInvariant()} step {siege.Step}/{siege.Waypoints.Count}, alive {facts.Alive}/{facts.Total}");
         // A raid that has used up its retreats says so once, in place of the plan line of that decision.

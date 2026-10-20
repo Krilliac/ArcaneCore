@@ -883,4 +883,75 @@ public sealed class PlayerbotSiegeWorldTests
         Assert.True(ended, $"the latch outlived every bound after {flaps} flaps, {unchecked(Now(world) - began)} ms" + Environment.NewLine + string.Join(" ", trail));
         Assert.Equal(1, raid.Retreats);
     }
+
+    // --- push through a straggler fight -------------------------------------------------------------------------------------
+
+    /// <summary>The scenario world with the objective 300 yards out: nothing hostile is within the pull range of a leader on the way (waypoints at 20, 40 and 60 yards).</summary>
+    private static Task<GroupTestWorld> StartEmptyWay() => GroupTestWorld.StartAsync([], null, extraCreatures: [Guard(Objective, 300f, 0f, health: 120)]);
+
+    /// <summary>The combat flag a far-away attacker leaves on the members: set again on every check of the clock, so the raid is in combat for as long as the test runs.</summary>
+    private static void KeepInCombat(GroupTestWorld world, PlayerbotSiegeRaid raid)
+    {
+        foreach (Player member in Living(world, raid)) member.Map!.Combat.SetInCombatState(member, 5_500);
+    }
+
+    [Fact]
+    public async Task ARaidInCombatWithAFarAttackerAndNoHostileNearItsLeader_PushesThrough_AndAdvancesWithinTheBound()
+    {
+        await using GroupTestWorld world = await StartEmptyWay();
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        await world.OnWorldAsync(() => { KeepInCombat(world, raid); return true; });
+        float startX = await world.OnWorldAsync(() => Leader(world, raid).X);
+        uint began = Now(world);
+
+        bool pushed = false, detailed = false, leaderStep = false;
+        var orders = new HashSet<PlayerbotSiegeOrder>();
+        uint firstStepMs = 0;
+        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + 90_000, () =>
+        {
+            KeepInCombat(world, raid);
+            orders.Add(raid.Order);
+            Player leader = Leader(world, raid);
+            pushed |= raid.Push == PlayerbotSiegePush.Quiet && leader.Combat.IsInCombat && raid.LastFacts.Hostiles == 0;
+            detailed |= raid.Detail.Contains("push=quiet", StringComparison.Ordinal);
+            leaderStep |= raid.Group!.Find(raid.Group.LeaderBotId)?.AI?.Step.Contains(":push", StringComparison.Ordinal) == true;
+            if (siege.Step >= 1 && firstStepMs == 0) firstStepMs = unchecked(Now(world) - began);
+            return siege.Step >= 2;
+        });
+
+        Assert.True(done, $"the raid never pushed through (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + world.Trace());
+        Assert.True(pushed && detailed && leaderStep, $"pushed {pushed} detailed {detailed} leader step {leaderStep}");
+        Assert.InRange(firstStepMs, 1u, PlayerbotSiegeCommander.PushThroughQuietMs + 40_000);
+        Assert.True(await world.OnWorldAsync(() => Leader(world, raid).X - startX > 30f), "the leader walked on");
+        // No retreat began or was counted, and nobody was ever told to disengage.
+        Assert.Equal(0, raid.Retreats);
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Retreat, orders);
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Rally, orders);
+    }
+
+    [Fact]
+    public async Task OnTheObjectiveLeg_ARaidInCombatWithNoHostileNear_DoesNotPushThrough()
+    {
+        await using GroupTestWorld world = await StartEmptyWay();
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        await world.OnWorldAsync(() => { siege.Step = siege.Waypoints.Count; KeepInCombat(world, raid); return true; });
+
+        var pushes = new List<string>();
+        uint began = Now(world);
+        Assert.False(await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + 20_000, () =>
+        {
+            KeepInCombat(world, raid);
+            // The order of the decision before the fight (an advance) stands for the first tick of the commander.
+            if (unchecked(Now(world) - began) > 1_000 && (raid.Push != PlayerbotSiegePush.None || raid.Order == PlayerbotSiegeOrder.Advance))
+                pushes.Add($"{raid.Order}/{raid.Push} at {Now(world)}");
+            return false;
+        }));
+        Assert.Empty(pushes);
+        Assert.Equal(siege.Waypoints.Count, siege.Step);
+        Assert.Equal(0, raid.Retreats);
+    }
 }

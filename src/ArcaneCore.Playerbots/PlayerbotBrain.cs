@@ -233,8 +233,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return risk;
     }
 
-    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>).</summary>
-    internal string RiskReport => _options.Risk.Enabled ? Risk.Report : "decision=off";
+    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>); <c>decision=defend-wait-sickness</c> while a defender waits out its resurrection sickness.</summary>
+    internal string RiskReport => _defendWaitsSickness ? DefendWaitSicknessReport : _options.Risk.Enabled ? Risk.Report : "decision=off";
+
+    /// <summary>The risk line of a defender that holds where it stands until its resurrection sickness ends (<see cref="DefendWaitsSickness"/>).</summary>
+    internal const string DefendWaitSicknessReport = "decision=defend-wait-sickness";
 
     /// <summary>What the bot saves for (<see cref="PlayerbotBudget"/>; inspection and tests).</summary>
     internal PlayerbotBudget Budget => _budget;

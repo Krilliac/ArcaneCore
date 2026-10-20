@@ -399,8 +399,27 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   the objective or the skull is on it); out of combat **Regroup** (a member more
   than 30 yards behind, resting, or hurt below 60 % for at most 90 s) or **Hold** (at the waypoint while the other raid is not); **Pull** (a
   hostile within 40 yards, kept until it is farther than 55: hysteresis); **AssignTank** (two or more hostiles and no cross); **Advance**; **Assault**
-  (in combat). The scan for hostiles takes any creature the raid may attack and that is hostile to it, whatever its NPC flags (every Undercity
+  (in combat). Between the retreat rules and the rest, in combat, sit the two **push-through** rules (below). The scan for hostiles takes any creature the raid may attack and that is hostile to it, whatever its NPC flags (every Undercity
   target carries gossip or quest-giver flags); friendly and neutral NPCs are out, critters too (the objective entry excepted).
+* **Push through (`PlayerbotSiegeCommander.PushOf`).** The commander advances only out of combat, but a trickle of returning defenders and
+  respawning guards can keep a raid in combat at one waypoint for good. So a raid in combat gets the order **Advance** (no new order: the raid's
+  `Push` says why, `quiet` or `stalemate`; the status detail ends in `push=quiet`, the raid warning is `Pushing through to waypoint N`, the leader's AI
+  step is `lead:siege-advance:push`) in either case: (a) **quiet**, no hostile counted near the leader (`Hostiles == 0`, the 55-yard scan) for
+  `PushThroughQuietMs` (10 s) running; or (b) **stalemate**, the raid has been in combat at the same step for `StalemateMs` (180 s), its average health is
+  at least `StalemateHealthPct` (80 %) and no member died in the last `StalemateLossWindowMs` (60 s). Both are off while the raid fights the objective
+  (a member's victim is the objective, or the skull is on it), while the step is past the last waypoint (the approach to the objective), while a retreat
+  or rally latch runs, and in a fight the retreat rules call lost (tank dead, average health under 35 %, a third dead: those still retreat, once per
+  engagement, at most twice, with the same counting as before). A push never begins a retreat and is never counted as one. Clocks: the *in-combat clock of
+  a step* starts at the first coordinator read in combat at that step, resets when the step changes (and starts again at once if the raid is still in
+  combat) and after 5 s out of combat (`StepClockQuietMs`, the length of the retreat's quiet); a shorter gap does not break it. The *quiet clock* runs only
+  while the raid is in combat with `Hostiles == 0` and starts over at the first read that is not. The loss clock is the last read in which a member was
+  dead that was not at the read before (the first read counts nobody). While a raid pushes through: the **leader** fights nothing and walks to the
+  shared waypoint (`SelectTarget` returns null for it), the **members** fight whatever attacks them and the marks they already know, and follow the
+  leader; the lockstep step moves on once every leader stands at its waypoint and each raid is either out of combat and in order (no member more than
+  30 yards behind) or pushing (lag is ignored: the members still in the fight catch up). **Lifts:** a ride to the stop (`ElevatorStage.ToStop`) is
+  ended by combat (`PlayerbotGroupAI.Update`), so a raid in combat at the lift top would begin the ride and cancel it at every think for as long as it
+  stayed in combat (the cancel keeps no backoff). A raid that pushes through is exempt (`PlayerbotGroupAI.CombatEndsRide`): its leader and members ride on;
+  when the push ends (the raid is back to Assault, or retreats), the cancel applies again. A member aboard is never cancelled (as before).
 * **The retreat, in two phases.** The retreat point is the waypoint behind the step (where the siege began when the step is the first).
   **Retreat** (disengage) lasts while the leader is more than `RallyYards` (8 yards) from it: nobody fights or casts (a cast-time spell stops the
   mover, so healers do not heal either), the leader walks to the point, the members follow it, and no mark is set. **Rally** (the order name once

@@ -200,6 +200,12 @@ internal sealed class PlayerbotGroupAI
         _stuckSinceMs = _stuckLastMs = 0;
     }
 
+    /// <summary>
+    /// Whether a fight ends the lift ride of a member walking to the stop (<see cref="ElevatorStage.ToStop"/>). It does, except for the members of a
+    /// siege raid that pushes through its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>): they ride on.
+    /// </summary>
+    internal static bool CombatEndsRide(PlayerbotSiegeRaid? raid) => raid is not { PushingThrough: true };
+
     /// <summary>One tick of a member (world thread, inside the shared action budget like the brain).</summary>
     internal void Update(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me, uint elapsedMs)
     {
@@ -243,7 +249,10 @@ internal sealed class PlayerbotGroupAI
 
         // A lift ride (PlayerbotElevator) owns the bot until it stands on the other level, as it owns a brain's: a fight on the way to the
         // landing ends it. A failed ride is not fatal: the walk below plans again, and the lift's backoff keeps it off that lift for a while.
-        if (player.Combat.IsInCombat && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop }) PlayerbotElevator.Cancel(player);
+        // A raid pushing through its fight (PlayerbotSiegeRaid.PushingThrough) rides all the same: its leader walks on in combat, and the cancel
+        // would end the ride at the landing every think, the next walk beginning it again, for as long as the raid is in combat.
+        if (player.Combat.IsInCombat && CombatEndsRide(group.Siege) && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop })
+            PlayerbotElevator.Cancel(player);
         ElevatorStep lift = PlayerbotElevator.Drive(_session, player, _options, interval, out string? liftFailure);
         if (lift == ElevatorStep.Traveling)
         {
@@ -416,7 +425,8 @@ internal sealed class PlayerbotGroupAI
         {
             bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
             raid.RetreatNoPath = !walked && raid.Order == PlayerbotSiegeOrder.Retreat;
-            Step = string.Create(CultureInfo.InvariantCulture, $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(walked ? string.Empty : ":no-path")}");
+            Step = string.Create(CultureInfo.InvariantCulture,
+                $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(raid.PushingThrough ? ":push" : string.Empty)}{(walked ? string.Empty : ":no-path")}");
             return;
         }
 
@@ -640,7 +650,8 @@ internal sealed class PlayerbotGroupAI
     /// <see cref="PlayerbotGroupCoordinator.Member.FocusIcon"/>, then the skull; vmangos PartyBotAI.cpp:366-377), then it assists the leader's
     /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
     /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
-    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it.
+    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The leader of a raid that pushes through
+    /// its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) fights nothing and walks on; its members fight as usual.
     /// </summary>
     private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
@@ -650,6 +661,8 @@ internal sealed class PlayerbotGroupAI
         // to the retreat point and the members follow it.
         PlayerbotSiegeOrder? siegeOrder = group.Siege?.Order;
         if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
+        // The leader of a raid that pushes through its fight walks on and fights nothing; the members still fight whatever attacks them.
+        if (isLeader && group.Siege is { PushingThrough: true }) return null;
         GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
         Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;

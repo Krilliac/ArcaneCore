@@ -31,6 +31,19 @@ internal enum PlayerbotSiegeOrder : byte
     Rally,
 }
 
+/// <summary>Why a raid advances in combat (<see cref="PlayerbotSiegeCommander.PushOf"/>): the push-through rules of <see cref="PlayerbotSiegeCommander"/>.</summary>
+internal enum PlayerbotSiegePush : byte
+{
+    /// <summary>No push: the raid fights on, or advances because it is out of combat.</summary>
+    None,
+
+    /// <summary>In combat, but no hostile near the leader for <see cref="PlayerbotSiegeCommander.PushThroughQuietMs"/>: a straggler fight elsewhere.</summary>
+    Quiet,
+
+    /// <summary>In combat at one waypoint for <see cref="PlayerbotSiegeCommander.StalemateMs"/> with a healthy raid and no recent loss: a stalemate.</summary>
+    Stalemate,
+}
+
 /// <summary>
 /// What the siege commander knows about one raid at one moment. All of it is read from the world by the coordinator
 /// (<c>PlayerbotGroupCoordinator.Siege.cs</c>); the rules over it are <see cref="PlayerbotSiegeCommander.Decide"/>.
@@ -58,6 +71,10 @@ internal enum PlayerbotSiegeOrder : byte
 /// <param name="AtRally">The leader stands within <see cref="PlayerbotSiegeCommander.RallyYards"/> of the retreat point.</param>
 /// <param name="MsAtRally">How long the leader has stood at the retreat point during this retreat (0: not there yet).</param>
 /// <param name="RetreatedThisEngagement">The raid has already begun a retreat in this engagement (it begins no second one).</param>
+/// <param name="MsInCombatAtStep">How long the raid has been in combat at this step: the clock starts when the raid is first in combat at the step, resets when the step changes, and resets once the raid has been out of combat for <see cref="PlayerbotSiegeCommander.StepClockQuietMs"/> (0: not running).</param>
+/// <param name="MsQuietInCombat">How long the raid has been in combat with no hostile counted near the leader (<paramref name="Hostiles"/> is 0), without a break (0: not the case now).</param>
+/// <param name="MsSinceLoss">How long ago a member of the raid last died (<see cref="uint.MaxValue"/>: none did since the siege began).</param>
+/// <param name="ObjectiveLeg">The step is past the last waypoint: the raid is on the objective itself.</param>
 internal readonly record struct PlayerbotSiegeFacts(
     bool InCombat,
     uint MsSinceCombat,
@@ -81,13 +98,19 @@ internal readonly record struct PlayerbotSiegeFacts(
     bool ObjectiveEngaged = false,
     bool AtRally = false,
     uint MsAtRally = 0,
-    bool RetreatedThisEngagement = false);
+    bool RetreatedThisEngagement = false,
+    uint MsInCombatAtStep = 0,
+    uint MsQuietInCombat = 0,
+    uint MsSinceLoss = uint.MaxValue,
+    bool ObjectiveLeg = false);
 
 /// <summary>
 /// The commander's answer: the order, and the two latches to feed back in at the next decision. <paramref name="Committed"/>: the fight is lost by
-/// the retreat rules but the raid has used up its retreats and presses on (announced once).
+/// the retreat rules but the raid has used up its retreats and presses on (announced once). <paramref name="Push"/>: why an
+/// <see cref="PlayerbotSiegeOrder.Advance"/> is given in combat (<see cref="PlayerbotSiegePush.None"/> for every other decision).
 /// </summary>
-internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order, bool RetreatLatched, bool PullLatched, bool Committed = false);
+internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order, bool RetreatLatched, bool PullLatched, bool Committed = false,
+    PlayerbotSiegePush Push = PlayerbotSiegePush.None);
 
 /// <summary>
 /// The rules a siege raid's leader follows, in this order, over <see cref="PlayerbotSiegeFacts"/> (pure, no world):
@@ -99,6 +122,11 @@ internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order
 /// <see cref="RetreatQuietMs"/>, or has stood at the point <see cref="RallyHoldMs"/> and still fights (the bound: a pursuit that does not end is fought).
 /// It begins once per engagement (<see cref="PlayerbotSiegeFacts.RetreatedThisEngagement"/>), never while the raid fights the objective, nor after
 /// <see cref="MaxRetreats"/>.</item>
+/// <item>Push through, in combat (<see cref="PushOf"/>, an <see cref="PlayerbotSiegeOrder.Advance"/> in combat; never in a fight the retreat rules
+/// call lost, nor while a retreat latch runs, nor on the objective): the leader walks on and the members fight whatever attacks them. Either no
+/// hostile has been counted near the leader for <see cref="PushThroughQuietMs"/> (a straggler fight elsewhere), or the raid has been in combat
+/// at one step for <see cref="StalemateMs"/> at <see cref="StalemateHealthPct"/> health or better and lost no member in the last
+/// <see cref="StalemateLossWindowMs"/> (a stalemate). It begins no retreat and counts none.</item>
 /// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/>, rests or is hurt (Regroup); the raid is at its waypoint,
 /// the other raid is not, and nothing is worth pulling (Hold).</item>
 /// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis).</item>
@@ -148,13 +176,55 @@ internal static class PlayerbotSiegeCommander
     /// <summary>A rally that has stood at its point this long while still in combat ends (what followed the raid is fought on, not run from again).</summary>
     internal const uint RallyHoldMs = 30_000;
 
+    /// <summary>No hostile near the leader for this long in combat: the raid pushes through (<see cref="PushOf"/>).</summary>
+    internal const uint PushThroughQuietMs = 10_000;
+
+    /// <summary>In combat this long at one step: a stalemate, the raid pushes through when it is healthy and lost nobody lately (<see cref="PushOf"/>).</summary>
+    internal const uint StalemateMs = 180_000;
+
+    /// <summary>The average health a raid needs to push through a stalemate.</summary>
+    internal const float StalemateHealthPct = 80f;
+
+    /// <summary>A stalemate is pushed through only when no member died within this long.</summary>
+    internal const uint StalemateLossWindowMs = 60_000;
+
+    /// <summary>
+    /// The in-combat clock of a step (<see cref="PlayerbotSiegeFacts.MsInCombatAtStep"/>) resets once the raid has been out of combat this long
+    /// (and when the step changes), so a gap in the fighting shorter than this does not break a stalemate.
+    /// </summary>
+    internal const uint StepClockQuietMs = 5_000;
+
+    /// <summary>The fight is lost by the retreat rules (a retreat would begin, were it allowed to).</summary>
+    private static bool WouldRetreat(in PlayerbotSiegeFacts facts)
+    {
+        bool tankDead = facts.HasTank && !facts.TankAlive;
+        bool lost = facts.Total > 0 && facts.DeadSinceEngagement * 3 >= facts.Total;
+        return facts.InCombat && (tankDead || facts.AverageHealthPct < RetreatHealthPct || lost);
+    }
+
+    /// <summary>
+    /// Whether the raid advances through the fight it is in. Only in combat, never while the fight is lost by the retreat rules, a retreat latch
+    /// runs (a rally included), the raid has a member at the objective (<see cref="PlayerbotSiegeFacts.ObjectiveEngaged"/>) or the step is past
+    /// the last waypoint (<see cref="PlayerbotSiegeFacts.ObjectiveLeg"/>). Then: <see cref="PlayerbotSiegePush.Quiet"/> when
+    /// <see cref="PlayerbotSiegeFacts.Hostiles"/> is 0 and has been for <see cref="PushThroughQuietMs"/>; <see cref="PlayerbotSiegePush.Stalemate"/>
+    /// when the raid has been in combat at this step for <see cref="StalemateMs"/>, its average health is at least <see cref="StalemateHealthPct"/>
+    /// and no member died in the last <see cref="StalemateLossWindowMs"/>.
+    /// </summary>
+    internal static PlayerbotSiegePush PushOf(in PlayerbotSiegeFacts facts)
+    {
+        if (!facts.InCombat || facts.Alive <= 0 || facts.ObjectiveEngaged || facts.ObjectiveLeg || facts.RetreatLatched || WouldRetreat(facts))
+            return PlayerbotSiegePush.None;
+        if (facts.Hostiles == 0 && facts.MsQuietInCombat >= PushThroughQuietMs) return PlayerbotSiegePush.Quiet;
+        if (facts.MsInCombatAtStep >= StalemateMs && facts.AverageHealthPct >= StalemateHealthPct && facts.MsSinceLoss >= StalemateLossWindowMs)
+            return PlayerbotSiegePush.Stalemate;
+        return PlayerbotSiegePush.None;
+    }
+
     /// <summary>The order for <paramref name="facts"/>, and the latches after it.</summary>
     internal static PlayerbotSiegeDecision Decide(in PlayerbotSiegeFacts facts)
     {
         // 1. Retreat. It begins in a lost fight and is a latch: it lasts while the fight does and a while after.
-        bool tankDead = facts.HasTank && !facts.TankAlive;
-        bool lost = facts.Total > 0 && facts.DeadSinceEngagement * 3 >= facts.Total;
-        bool wouldRetreat = facts.InCombat && (tankDead || facts.AverageHealthPct < RetreatHealthPct || lost);
+        bool wouldRetreat = WouldRetreat(facts);
         // A raid that fights the objective, or has retreated MaxRetreats times, commits: it no longer begins a retreat.
         bool commit = facts.ObjectiveEngaged || facts.RetreatsUsed >= MaxRetreats;
         bool held = facts.RetreatLatched && !facts.ObjectiveEngaged;
@@ -165,6 +235,10 @@ internal static class PlayerbotSiegeCommander
         if ((held || begins) && !quiet && !chasedOut)
             return new PlayerbotSiegeDecision(facts.AtRally ? PlayerbotSiegeOrder.Rally : PlayerbotSiegeOrder.Retreat, true, false);
         bool committed = wouldRetreat && !facts.RetreatLatched && !facts.ObjectiveEngaged && facts.RetreatsUsed >= MaxRetreats;
+
+        // Push through a straggler fight or a stalemate: advance in combat (no retreat, no latch, no skull).
+        PlayerbotSiegePush push = PushOf(facts);
+        if (push != PlayerbotSiegePush.None) return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.Advance, false, false, false, push);
 
         // The pull latch: on within PullOnYards, kept until the hostile is beyond PullOffYards (hysteresis).
         bool pullCandidate = facts.Hostiles > 0
@@ -343,6 +417,30 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     public bool CommitAnnounced { get; set; }
 
     public bool AtWaypoint { get; set; }
+
+    /// <summary>Why the raid advances in combat now (<see cref="PlayerbotSiegeCommander.PushOf"/>); <see cref="PlayerbotSiegePush.None"/> otherwise. <see cref="PlayerbotGroupAI"/> reads it: a pushing leader fights nothing and a lift ride is not cancelled by combat.</summary>
+    public PlayerbotSiegePush Push { get; set; }
+
+    /// <summary>The raid pushes through the fight it is in.</summary>
+    public bool PushingThrough => Push != PlayerbotSiegePush.None;
+
+    /// <summary>The step the in-combat clock (<see cref="StepCombatSinceMs"/>) counts at; -1 before the first read.</summary>
+    public int ClockStep { get; set; } = -1;
+
+    /// <summary>When the raid was first in combat at <see cref="ClockStep"/> (0: the clock is not running). Reset by a step change, and by <see cref="PlayerbotSiegeCommander.StepClockQuietMs"/> out of combat.</summary>
+    public uint StepCombatSinceMs { get; set; }
+
+    /// <summary>When the raid was first in combat with no hostile counted near its leader, without a break (0: not the case at the last read).</summary>
+    public uint QuietCombatSinceMs { get; set; }
+
+    /// <summary>When a member of the raid last died (0: none did since the siege began).</summary>
+    public uint LastLossMs { get; set; }
+
+    /// <summary>The members dead at the last read (a death is a member in the set now and not then).</summary>
+    public HashSet<ObjectGuid> DeadLastRead { get; } = [];
+
+    /// <summary><see cref="DeadLastRead"/> holds a read (the first read counts nobody as lost).</summary>
+    public bool LossWatchStarted { get; set; }
 
     /// <summary>When a member first was hurt in the current stretch of regrouping (0: none is).</summary>
     public uint HurtSinceMs { get; set; }
