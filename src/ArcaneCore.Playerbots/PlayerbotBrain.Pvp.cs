@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots.Combat;
@@ -40,18 +41,27 @@ internal sealed partial class PlayerbotBrain
             return false;
         }
 
-        if (!ReferenceEquals(Pvp.Target, opponent))
+        FightUnit(player, opponent, interval);
+        return true;
+    }
+
+    /// <summary>
+    /// One think of the fight with <paramref name="target"/> through <see cref="PlayerbotPvpFight"/>: the route and creature intent are dropped once
+    /// when the opponent changes, the goal is Combat.
+    /// </summary>
+    private void FightUnit(Player player, Unit target, uint interval)
+    {
+        if (!ReferenceEquals(Pvp.Target, target))
         {
             DropIntent();
             AbandonRoute();
         }
 
         _goal = PlayerbotGoalKind.Combat;
-        TargetEntry = 0;
+        TargetEntry = target is Creature creature ? creature.Entry : 0;
         _pvpWalk ??= PvpWalk;
         _pvpDropRoute ??= AbandonRoute;
-        Pvp.Fight(player, opponent, interval, _pvpWalk, _pvpDropRoute);
-        return true;
+        Pvp.Fight(player, target, interval, _pvpWalk, _pvpDropRoute);
     }
 
     /// <summary>The walk of <see cref="PlayerbotPvpFight"/>: a chase route planned as the brain plans its creature chase. False when the way is refused.</summary>

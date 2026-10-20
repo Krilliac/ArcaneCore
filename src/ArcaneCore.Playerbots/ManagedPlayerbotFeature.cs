@@ -1307,6 +1307,37 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return new(true, "dismissed", botId, player.Name);
     }
 
+    /// <summary>
+    /// <c>.playerbot defend</c> (world thread): give the running autonomous bots <paramref name="botIds"/> a defend post, or end theirs with
+    /// null. Memory only (<see cref="PlayerbotBrain.Defend"/>), so a restart ends it. A bot that is scripted, grouped or leashed, in a
+    /// battleground, or not running is refused with its reason (the brain does not drive it).
+    /// </summary>
+    internal IReadOnlyList<PlayerbotOperationResult> SetDefend(IReadOnlyList<Guid> botIds, PlayerbotDefendPost? post)
+    {
+        ArgumentNullException.ThrowIfNull(botIds);
+        if (_world is not { } world || !world.IsWorldThread) throw new InvalidOperationException("playerbot-defend-thread");
+        var results = new List<PlayerbotOperationResult>(botIds.Count);
+        foreach (Guid botId in botIds)
+        {
+            if (!_active.TryGetValue(botId, out ActiveBot? bot) || bot.Paused || bot.Session.State != SessionState.InWorld
+                || bot.Session.Player is not { } player)
+            {
+                results.Add(new(false, "bot-not-running", botId));
+                continue;
+            }
+
+            if (bot.Controller is not null) results.Add(new(false, "bot-scripted", botId, player.Name));
+            else if (post is not null && (bot.PartyDriven || bot.GroupDriven || bot.BattlegroundDriven)) results.Add(new(false, "bot-busy", botId, player.Name));
+            else
+            {
+                bot.Brain.Defend = post;
+                results.Add(new(true, post is null ? "defend-cleared" : "defending", botId, player.Name));
+            }
+        }
+
+        return results;
+    }
+
     /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
     private enum StartKind { Operator, Restore, QuarantineRetry }
 
@@ -2885,7 +2916,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotSetAside[] current = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
                 active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             active.Brain.Stop();
+            PlayerbotDefendPost? defend = active.Brain.Defend;
             active.Brain = NewBrain(active.Session, active.Record.BotId, restoreLoaded: false);
+            active.Brain.Defend = defend;
             active.Brain.Suspensions.Restore(current, active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             Volatile.Write(ref active.SavedSetAsideVersion, -1);
         }

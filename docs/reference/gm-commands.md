@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 544 |
+| `Administrator` | 6 | 545 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -585,6 +585,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot dismiss` | 6 | Administrator | stored level through the map | Syntax: .playerbot dismiss $name\|$prefix*\|all End a follow or stay: the bots go back to their own autonomous play. |
 | `.playerbot near` | 3 | GameMaster | stored level through the map | Syntax: .playerbot near [#radius] List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal and distance. |
 | `.playerbot revive` | 6 | Administrator | stored level through the map | Syntax: .playerbot revive $name\|$prefix*\|all Revive the dead bots among the selection, as .revive does. |
+| `.playerbot defend` | 6 | Administrator | stored level through the map | Syntax: .playerbot defend $name\|$prefix*\|all here #radius [force] .playerbot defend $name\|$prefix*\|all clear The running bots hold a post at your position: they turn their PvP flag on, fight the PvP-flagged enemy players and help friendly creatures in combat within #radius yards (10 to 200), heal each other and walk back to the post. 'clear' ends it. More bots than the bulk cap need 'force'. Memory only: a restart ends it. |
 | `.playerbot fleet` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot fleet reset [confirm $code] Destructive fleet operations. |
 | `.playerbot fleet reset` | 6 | Administrator | stored level through the map | Syntax: .playerbot fleet reset .playerbot fleet reset confirm $code Simulate a fresh server launch: stop every managed bot and delete every character on a playerbot account (the bot accounts stay). The first form only prints what would happen and a confirm code valid for 60 seconds; the second one does it. Real players' characters are never touched. |
 | `.playerbot population` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot population [status\|enable\|disable\|adopt\|target #count\|rush #count [#perSecond]\|rush stop] Keep a number of bots online, spread over the level bands, as long as the world's tick time allows. |

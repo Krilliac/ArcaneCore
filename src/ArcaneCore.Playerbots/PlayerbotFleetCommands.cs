@@ -74,6 +74,9 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
         new ChatCommand("revive", AccountSecurity.Administrator,
             "Syntax: .playerbot revive $name|$prefix*|all\nRevive the dead bots among the selection, as .revive does.",
             Revive),
+        new ChatCommand("defend", AccountSecurity.Administrator,
+            "Syntax: .playerbot defend $name|$prefix*|all here #radius [force]\n.playerbot defend $name|$prefix*|all clear\nThe running bots hold a post at your position: they turn their PvP flag on, fight the PvP-flagged enemy players and help friendly creatures in combat within #radius yards (10 to 200), heal each other and walk back to the post. 'clear' ends it. More bots than the bulk cap need 'force'. Memory only: a restart ends it.",
+            Defend),
         new ChatCommand("fleet", AccountSecurity.Administrator,
             "Syntax: .playerbot fleet reset [confirm $code]\nDestructive fleet operations.",
             Children:
@@ -420,6 +423,69 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
         }
 
         ReportSkips(context, "revive", matches.Count, "revived", done, skipped);
+        return true;
+    }
+
+    // --- defend ----------------------------------------------------------------------------------------------------
+
+    private static int s_nextPostId;
+
+    private static bool Defend(CommandContext context, string text)
+    {
+        if (!PlayerbotFleetSelection.TryParse(text, FleetVerb.Defend, out FleetRequest request)) return false;
+        if (Services(context) is not { } env) return true;
+        bool clear = request.Head == "clear";
+        Player? anchor = null;
+        if (!clear)
+        {
+            anchor = Anchor(context, null);
+            if (anchor is null) return true;
+        }
+
+        List<PlayerbotStatus> matches = PlayerbotFleetSelection.Match(request, env.Feature.Snapshot());
+        if (matches.Count == 0)
+        {
+            context.Reply(PlayerbotFleetSelection.NothingMatches(request));
+            return true;
+        }
+
+        int cap = env.Options.MaxBulkCommand;
+        if (!clear && PlayerbotFleetSelection.NeedsForce(matches.Count, null, request.Force, cap))
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture, $"Playerbot defend: {matches.Count} bots match; add 'force' above {cap}."));
+            return true;
+        }
+
+        PlayerbotDefendPost? post = anchor is null ? null : new PlayerbotDefendPost(anchor.MapId, new Vector3(anchor.X, anchor.Y, anchor.Z),
+            PlayerbotDefend.ClampRadius(request.Radius), Interlocked.Increment(ref s_nextPostId));
+        var skipped = new List<Outcome>();
+        var chosen = new List<Guid>(matches.Count);
+        var names = new Dictionary<Guid, string>(matches.Count);
+        foreach (PlayerbotStatus status in matches)
+        {
+            string? reason = Running(env, status, out Player bot);
+            if (reason is null && !clear)
+            {
+                if (env.Groups.HasRealPlayer(bot, context)) reason = "in-player-group";
+                else if (SecurityBlocks(env, bot)) reason = "security";
+            }
+
+            if (reason is not null) skipped.Add(new Outcome(status.Name, reason));
+            else
+            {
+                chosen.Add(status.BotId);
+                names[status.BotId] = status.Name;
+            }
+        }
+
+        int done = 0;
+        foreach (PlayerbotOperationResult result in env.Feature.SetDefend(chosen, post))
+        {
+            if (result.Success) done++;
+            else skipped.Add(new Outcome(result.BotId is { } id && names.TryGetValue(id, out string? name) ? name : result.Name ?? "?", result.Code));
+        }
+
+        ReportSkips(context, "defend", matches.Count, clear ? "cleared" : "defending", done, skipped);
         return true;
     }
 

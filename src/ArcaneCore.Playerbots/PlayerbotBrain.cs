@@ -903,6 +903,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
+        // A defend post (.playerbot defend) owns the live bot: nothing below it (retreat, quests, grind, explore) runs.
+        if (TryDefend(player, interval)) return;
+
         // A retreat owns the bot until nothing threatens it (PlayerbotRetreat); out of combat the bot lays the trail back.
         PlayerbotThinkProbe.Phase("risk");
         if (Risk.UpdateRetreat(player, interval))
@@ -1564,7 +1567,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// teleport) is suspended then (ManagedPlayerbotFeature.Think).
     /// </para>
     /// </summary>
-    private bool TryReturnHome(Player player, PlayerbotHomeArea home, uint interval)
+    private bool TryReturnHome(Player player, PlayerbotHomeArea home, uint interval, bool errandsFirst = true)
     {
         uint now = _session.World.NowMs;
         PlayerbotHomeOptions homeOptions = _options.Home;
@@ -1582,8 +1585,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 break;
         }
 
-        if (_quests.Busy || _town.HasCandidate(player)
-            || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player))) return false;
+        if (errandsFirst && (_quests.Busy || _town.HasCandidate(player)
+            || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player)))) return false;
         if (TryTravelHome(player, home, state))
         {
             DropIntent();
