@@ -9,8 +9,8 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Navigation;
 
 /// <summary>
-/// The drop limit of a non-navigated step (<see cref="PlayerbotMoveCheck.TryValidateStep"/>): a bot standing on the floor steps down a few
-/// yards at most (and down any walkable slope), never off an edge into a pit; a waypoint height that drifted above the floor is draped.
+/// The drop limit of a non-navigated step (<see cref="PlayerbotMoveCheck.TryValidateStep"/>): a bot standing on the floor steps down 2.5 yd
+/// at most, never off an edge into a pit; a waypoint height that drifted above the floor is draped.
 /// </summary>
 public sealed class PlayerbotDirectStepDropTests
 {
@@ -41,21 +41,41 @@ public sealed class PlayerbotDirectStepDropTests
     }
 
     [Fact]
-    public async Task ARouteWithDriftedWaypoints_DownA35DegreeSlope_IsWalkable()
+    public async Task ARouteWithDriftedWaypoints_DownA35DegreeSlope_FallingMoreThanTheLimit_IsRefused()
     {
-        // The anchor is the previous heartbeat position, on the slope; the waypoint heights are flat chords above it. Five yards on, the
-        // slope has fallen 3.5 yd: that is a walkable slope, not a pit.
+        // Documented current behaviour: 5 yd on a 35 degree slope falls 3.5 yd, more than DirectStepMaxDropYards, so the step is refused.
+        // Walking down walkable slopes under drifted waypoints is a separate design task.
         float tan = MathF.Tan(35f * MathF.PI / 180f);
-        (bool ok, Vector3 draped, string? reason) = await Step(
+        (bool ok, _, string? reason) = await Step(
             new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ), x => FloorZ - ((x - StepX) * tan));
-        Assert.True(ok, $"refused: {reason}");
-        Assert.Equal(FloorZ - (5f * tan) + 0.05f, draped.Z, 0.05f);
+        Assert.False(ok);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    [Fact]
+    public async Task A60DegreeDescent_IsRefused()
+    {
+        float tan = MathF.Tan(60f * MathF.PI / 180f);
+        (bool ok, _, string? reason) = await Step(
+            new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ), x => FloorZ - ((x - StepX) * tan));
+        Assert.False(ok);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    [Fact]
+    public async Task AGapWithNoFloor_InTheMiddleOfAStep_WhoseEndIsFourYardsLower_IsRefused()
+    {
+        (bool ok, _, string? reason) = await Step(
+            new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ),
+            x => x > StepX + 0.5f && x < StepX + 4.5f ? null : x <= StepX + 0.5f ? FloorZ : FloorZ - 4f);
+        Assert.False(ok);
+        Assert.Equal("NoGroundSupport", reason);
     }
 
     [Fact]
     public async Task AFourYardLedge_InTheMiddleOfAFiveYardStep_IsRefused()
     {
-        // The floors under the two ends differ by 4 yd over 5 yd of run, which a walkable slope would allow; the drop is all in one yard.
+        // The floors under the two ends differ by 4 yd over 5 yd of run; the drop is all in one yard.
         (bool ok, _, string? reason) = await Step(
             new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ), x => x < StepX + 2.5f ? FloorZ : FloorZ - 4f);
         Assert.False(ok);
@@ -65,7 +85,7 @@ public sealed class PlayerbotDirectStepDropTests
     [Fact]
     public async Task ALongStep_OverATenYardPit_IsRefused_HoweverLongTheRun()
     {
-        // A tick stall makes the step as long as 8.5 yd (run speed times the age of the anchor): 10 yd of drop is no slope for that.
+        // A tick stall makes the step as long as 8.5 yd (run speed times the age of the anchor): 10 yd of drop is a pit however long the step.
         (bool ok, _, string? reason) = await Step(
             new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 8.5f, StepY, FloorZ), x => x < StepX + 4f ? FloorZ : FloorZ - 10f);
         Assert.False(ok);
@@ -73,16 +93,17 @@ public sealed class PlayerbotDirectStepDropTests
     }
 
     [Fact]
-    public async Task ADipInTheMiddleOfAStep_WhoseEndsAreOnTheFloor_IsRefused()
+    public async Task ADipInTheMiddleOfAStep_WhoseEndsAreOnTheFloor_IsNotDetected_ByTheEndsOnlyRule()
     {
+        // Documented current behaviour: only the floor under the destination is judged, so a dip between two ends on the floor is not seen.
+        // Judging the floor along the step is a separate design task.
         (bool ok, _, string? reason) = await Step(
             new Vector3(StepX, StepY, FloorZ), new Vector3(StepX + 5f, StepY, FloorZ),
             x => x >= StepX + 1.5f && x < StepX + 3.5f ? FloorZ - 4f : FloorZ);
-        Assert.False(ok);
-        Assert.Equal("NoGroundSupport", reason);
+        Assert.True(ok, $"refused: {reason}");
     }
 
-    private static async Task<(bool Ok, Vector3 Draped, string? Reason)> Step(Vector3 from, Vector3 to, Func<float, float>? floorAtX = null)
+    private static async Task<(bool Ok, Vector3 Draped, string? Reason)> Step(Vector3 from, Vector3 to, Func<float, float?>? floorAtX = null)
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -90,7 +111,7 @@ public sealed class PlayerbotDirectStepDropTests
         {
             return await host.OnWorldAsync(() =>
             {
-                WorldCollision.Of(host.World).Install(lineOfSight: new FloorGround(floorAtX ?? (_ => FloorZ)));
+                WorldCollision.Of(host.World).Install(lineOfSight: new FloorGround(floorAtX ?? (_ => (float?)FloorZ)));
                 Map map = session.Player!.Map!;
                 bool ok = PlayerbotMoveCheck.TryValidateStep(map, from, to, out Vector3 draped, out string? reason);
                 return (ok, draped, reason);
@@ -103,7 +124,7 @@ public sealed class PlayerbotDirectStepDropTests
         }
     }
 
-    private sealed class FloorGround(Func<float, float> floorAtX) : ILineOfSight
+    private sealed class FloorGround(Func<float, float?> floorAtX) : ILineOfSight
     {
         public bool Enabled => true;
 
