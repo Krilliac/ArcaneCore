@@ -294,7 +294,9 @@ All of these are minimal and additive unless stated otherwise.
   its save string lives on the instance save (`InstanceSave.Data`) and the next map of the instance loads it. It also survives a
   restart: each script save is queued to `instance.data` (characters schema 42, `InstanceScriptDataModule`; vmangos
   InstanceData::SaveToDB `UPDATE instance SET data`, which only updates an existing row), the startup load puts it back on the
-  instance save, and the next map loads it as above (vmangos Map::CreateInstanceData).
+  instance save, and the next map loads it as above (vmangos Map::CreateInstanceData). Because that write needs the row, a script
+  save queued while the instance's own row save is a retained (not yet durable) write waits, retained too, behind it in
+  `InstanceWriteQueue` and is written once the row lands, as vmangos' ordered queue keeps it behind the row `INSERT`.
 - **Homebind on raid-group loss** teleports to the hearthstone bind point, as vmangos does:
   `Player::UpdateHomebindTime` calls `TeleportToHomebind` (Player.cpp:18534-18556); it does not use
   graveyards (those serve released spirits, docs/areas/graveyards-resurrection.md).
