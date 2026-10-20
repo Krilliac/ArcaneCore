@@ -279,6 +279,9 @@ public sealed class ThaddiusAddAI : RaidBossAI
     /// <summary>Whether the add lies at one health point waiting for its partner (SD2 m_isFakingDeath).</summary>
     internal bool IsFakingDeath => _fakingDeath;
 
+    /// <summary>boss_thaddiusAddsAI::JustPreventedDeath SetCombatScriptStatus(true) (boss_thaddius.cpp:275), dropped by Revive (:235) and Reset (:208).</summary>
+    public override bool CombatScriptRunning => _fakingDeath;
+
     internal void Revive()
     {
         // mangos-classic boss_thaddiusAddsAI::Revive -> DoResetThreat, Reset: full health, selectable, chasing and swinging again.

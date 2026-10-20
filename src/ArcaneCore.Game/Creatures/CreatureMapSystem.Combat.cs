@@ -204,6 +204,13 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             return false;
         }
 
+        // cmangos Unit::SelectHostileTarget (Entities/Unit.cpp:8717-8721): "do not evade during combat script running". cmangos returns
+        // before picking a target while the script runs; here the pick above is unchanged and only the fallback evade is held.
+        if (creature.AI is { CombatScriptRunning: true })
+        {
+            return false;
+        }
+
         EnterEvadeMode(creature);
         return false;
     }
