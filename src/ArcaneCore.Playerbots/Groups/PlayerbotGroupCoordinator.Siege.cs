@@ -30,7 +30,9 @@ namespace ArcaneCore.World.Playerbots.Groups;
 /// into <see cref="PlayerbotSiegeFacts"/>, advances the shared <see cref="PlayerbotSiege.Step"/> once every raid's leader stands at the
 /// waypoint and none fights, asks <see cref="PlayerbotSiegeCommander.Decide"/> and applies the order: the skull and cross through the
 /// leader's own MSG_RAID_TARGET_UPDATE, one raid warning when the order changed (<see cref="PlayerbotSiegeAnnouncer"/>), the leader's
-/// destination and target for <see cref="PlayerbotGroupAI"/>. The siege is won when the objective entry has been seen alive and none is while the grid at its last known position is loaded.
+/// destination and target for <see cref="PlayerbotGroupAI"/>. A lost fight is a retreat in two phases under one latch: the raid disengages to the
+/// waypoint behind the step (<see cref="PlayerbotSiegeOrder.Retreat"/>), then stands there and fights back what followed it
+/// (<see cref="PlayerbotSiegeOrder.Rally"/>); a retreat is counted once, where its latch begins, and begins once per engagement. The siege is won when the objective entry has been seen alive and none is while the grid at its last known position is loaded.
 /// </para>
 /// </summary>
 public sealed partial class PlayerbotGroupCoordinator
@@ -412,7 +414,9 @@ public sealed partial class PlayerbotGroupCoordinator
             if (group.LeaderPlayer(world) is not { IsAlive: true, Map: not null } leader || groups?.GetGroup(leader.Guid) is not { } server)
             {
                 // A raid without a leader holds the others at their waypoint until it has one again (or ends): it is not dropped from the plan.
+                // Its engagement is still tracked, so the fight is not stale when a new leader takes over (the retreat latch is kept too).
                 _siegeUnled++;
+                TrackEngagement(group, raid, world, now);
                 raid.Order = PlayerbotSiegeOrder.Hold;
                 raid.PullTarget = default;
                 continue;
@@ -424,7 +428,9 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         if (_siegeViews.Count == 0) return;
-        if (WatchObjective(siege, _siegeViews[0].Leader, now)) return;
+        // The witness stands on the siege's map (a raid whose leader is elsewhere cannot see the objective's grid).
+        SiegeView witness = _siegeViews.FirstOrDefault(v => v.Leader.MapId == siege.MapId) ?? _siegeViews[0];
+        if (WatchObjective(siege, witness.Leader, now)) return;
 
         // Lockstep: the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it.
         if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
@@ -446,7 +452,8 @@ public sealed partial class PlayerbotGroupCoordinator
     /// </summary>
     private void WatchProgress(PlayerbotSiege siege, uint now)
     {
-        bool fighting = _siegeViews.Any(v => v.Facts.InCombat);
+        // A retreat, and the fight at its rally point, is no progress: only a raid that fights on its way counts.
+        bool fighting = _siegeViews.Any(v => v.Facts.InCombat && !v.Raid.RetreatLatched);
         if (siege.ProgressMs == 0 || siege.Step != siege.ProgressStep || fighting)
         {
             siege.ProgressMs = Math.Max(1u, now);
@@ -472,45 +479,31 @@ public sealed partial class PlayerbotGroupCoordinator
         PlayerbotSiegeRaid raid = view.Raid;
         Player leader = view.Leader;
         int total = 0, alive = 0;
-        bool hasTank = false, tankAlive = false, inCombat = false, anyResting = false, anyHurt = false;
+        bool hasTank = false, tankAlive = false, anyResting = false, anyHurt = false;
         float healthSum = 0f, maxLag = 0f;
         bool objectiveEngaged = false;
-        _siegeDeadScratch.Clear();
+        bool inCombat = TrackEngagement(group, raid, world, now);
         foreach (Member member in group.Members)
         {
             if (member.Real || !member.Joined) continue;
             total++;
             bool tank = member.Role == PlayerbotGroupRole.Tank;
             hasTank |= tank;
-            if (world.FindOnlinePlayer(member.Guid) is not { IsAlive: true } player)
-            {
-                _siegeDeadScratch.Add(member.Guid);
-                continue;
-            }
+            if (world.FindOnlinePlayer(member.Guid) is not { IsAlive: true } player) continue;
 
             alive++;
             tankAlive |= tank;
             healthSum += player.HealthPercent;
-            inCombat |= player.Combat.IsInCombat;
             objectiveEngaged |= player.Combat.Victim is Creature { } victim && victim.Entry == siege.ObjectiveEntry;
             anyResting |= member.AI is { Resting: true };
             anyHurt |= player.HealthPercent < HurtPercent;
             if (player.Guid != leader.Guid) maxLag = Math.Max(maxLag, ReferenceEquals(player.Map, leader.Map) ? Distance(player, leader) : 1_000f);
         }
 
-        // "A third lost" is judged over the deaths of this engagement: the dead at the moment the raid entered combat are not counted again.
-        if (inCombat && !raid.WasInCombat)
-        {
-            raid.DeadAtEngagement.Clear();
-            foreach (ObjectGuid dead in _siegeDeadScratch) raid.DeadAtEngagement.Add(dead);
-        }
-
-        raid.WasInCombat = inCombat;
         int deadSince = 0;
         foreach (ObjectGuid dead in _siegeDeadScratch)
             if (!raid.DeadAtEngagement.Contains(dead)) deadSince++;
 
-        if (inCombat) group.LastCombatMs = Math.Max(1u, now);
         uint sinceCombat = inCombat ? 0u : group.LastCombatMs == 0 ? uint.MaxValue : unchecked(now - group.LastCombatMs);
 
         // A hurt member holds the raid back for a while; one that stays hurt (nobody heals it) no longer does.
@@ -534,6 +527,12 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         raid.AtWaypoint = atWaypoint;
+
+        // The leader at the retreat point (the waypoint behind the step, else where the siege began) turns a retreat into a rally.
+        Vector3 retreatPoint = RetreatPointOf(siege);
+        float rx = leader.X - retreatPoint.X, ry = leader.Y - retreatPoint.Y;
+        bool atRally = MathF.Sqrt((rx * rx) + (ry * ry)) <= PlayerbotSiegeCommander.RallyYards;
+        uint msAtRally = raid.RallySinceMs == 0 ? 0u : unchecked(now - raid.RallySinceMs);
         // The skull the commander last set on the objective counts as fighting it too.
         if (!objectiveEngaged && !raid.PullTarget.IsEmpty)
             foreach ((Unit unit, float _) in view.Hostiles)
@@ -541,10 +540,49 @@ public sealed partial class PlayerbotGroupCoordinator
 
         view.Facts = new PlayerbotSiegeFacts(inCombat, sinceCombat, total, alive, hasTank, tankAlive, total == 0 ? 0f : healthSum / total, maxLag, anyResting, anyHurt,
             atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched,
-            deadSince, raid.Retreats, objectiveEngaged);
+            deadSince, raid.Retreats, objectiveEngaged, atRally, msAtRally, raid.RetreatedThisEngagement);
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
         view.Facts = view.Facts with { CrossValid = cross is not null };
+        raid.LastFacts = view.Facts;
     }
+
+    /// <summary>
+    /// Read the raid's combat state: who is dead (into <c>_siegeDeadScratch</c>) and whether a living member is in combat. A raid entering combat
+    /// after <see cref="PlayerbotSiegeCommander.RetreatQuietMs"/> out of it begins an engagement: the dead are snapshotted (their deaths do not
+    /// count towards "a third lost") and the raid may retreat once more. Runs for a led raid (<see cref="ReadRaid"/>) and an unled one alike, so a raid without a leader does not keep a stale engagement.
+    /// </summary>
+    private bool TrackEngagement(BotGroup group, PlayerbotSiegeRaid raid, WorldRuntime world, uint now)
+    {
+        bool inCombat = false;
+        _siegeDeadScratch.Clear();
+        foreach (Member member in group.Members)
+        {
+            if (member.Real || !member.Joined) continue;
+            if (world.FindOnlinePlayer(member.Guid) is not { IsAlive: true } player) _siegeDeadScratch.Add(member.Guid);
+            else inCombat |= player.Combat.IsInCombat;
+        }
+
+        // A flicker of the combat flag (a member dies, the creatures re-target) is not a new engagement: the raid must have been out of combat for
+        // RetreatQuietMs, the time a retreat needs to end by itself.
+        if (inCombat && !raid.WasInCombat && (raid.CombatSeenMs == 0 || unchecked(now - raid.CombatSeenMs) >= PlayerbotSiegeCommander.RetreatQuietMs))
+        {
+            raid.DeadAtEngagement.Clear();
+            foreach (ObjectGuid dead in _siegeDeadScratch) raid.DeadAtEngagement.Add(dead);
+            raid.RetreatedThisEngagement = false;
+        }
+
+        raid.WasInCombat = inCombat;
+        if (inCombat)
+        {
+            raid.CombatSeenMs = Math.Max(1u, now);
+            group.LastCombatMs = Math.Max(1u, now);
+        }
+
+        return inCombat;
+    }
+
+    /// <summary>Where a retreat goes: the waypoint behind the step, or where the siege began when the step is the first.</summary>
+    private static Vector3 RetreatPointOf(PlayerbotSiege siege) => siege.Step > 0 ? siege.Waypoints[siege.Step - 1] : siege.Rally;
 
     /// <summary>The living things the leader would fight within the pull range: hostile creatures, and players the siege may engage.</summary>
     private void ScanHostiles(BotGroup group, SiegeView view, uint now)
@@ -651,10 +689,18 @@ public sealed partial class PlayerbotGroupCoordinator
             PeersAtWaypoint = _siegeUnled == 0 && _siegeViews.All(v => ReferenceEquals(v, view) || v.Facts.AtWaypoint),
         };
         PlayerbotSiegeDecision decision = PlayerbotSiegeCommander.Decide(facts);
-        if (decision.Order == PlayerbotSiegeOrder.Retreat && raid.Order != PlayerbotSiegeOrder.Retreat) raid.Retreats++;
+        // A retreat is counted where its latch begins, not on an order change: a raid that lost its leader holds meanwhile and resumes uncounted.
+        if (decision.RetreatLatched && !raid.RetreatLatched)
+        {
+            raid.Retreats++;
+            raid.RetreatedThisEngagement = true;
+        }
+
         raid.Order = decision.Order;
         raid.RetreatLatched = decision.RetreatLatched;
         raid.PullLatched = decision.PullLatched;
+        if (!decision.RetreatLatched) raid.RallySinceMs = 0;
+        else if (facts.AtRally && raid.RallySinceMs == 0) raid.RallySinceMs = Math.Max(1u, now);
 
         Unit? skull = null;
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
@@ -678,7 +724,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
         raid.MoveTo = decision.Order switch
         {
-            PlayerbotSiegeOrder.Retreat => siege.Step > 0 ? siege.Waypoints[siege.Step - 1] : siege.Rally,
+            PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally => RetreatPointOf(siege),
             PlayerbotSiegeOrder.Advance => siege.Step < siege.Waypoints.Count ? siege.Waypoints[siege.Step] : ObjectivePointOf(siege, view.Leader),
             _ => raid.MoveTo,
         };
@@ -692,6 +738,7 @@ public sealed partial class PlayerbotGroupCoordinator
             PlayerbotSiegeOrder.Pull => "Pulling " + NameOf(skull),
             PlayerbotSiegeOrder.AssignTank => "Tanks on the cross, everyone else on the skull",
             PlayerbotSiegeOrder.Assault => "Assault the skull",
+            PlayerbotSiegeOrder.Rally => siege.Step > 0 ? string.Create(CultureInfo.InvariantCulture, $"Rallying at waypoint {siege.Step}") : "Rallying at the start",
             _ => "Retreating",
         };
         raid.Detail = string.Create(CultureInfo.InvariantCulture,

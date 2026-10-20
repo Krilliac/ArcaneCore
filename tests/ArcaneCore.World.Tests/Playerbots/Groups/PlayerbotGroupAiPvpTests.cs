@@ -107,14 +107,14 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit);
     }));
 
-    private static void Retreating(Rig rig)
+    private static void Retreating(Rig rig, PlayerbotSiegeOrder order = PlayerbotSiegeOrder.Retreat)
     {
         var siege = new PlayerbotSiege(1, rig.BotPlayer.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
-        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1) { Order = PlayerbotSiegeOrder.Retreat };
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1) { Order = order };
     }
 
     [Fact]
-    public Task MemberFightsBackAnAttackerWhileTheSiegeRaidRetreats() => Run(rig => rig.Host.OnWorldAsync(() =>
+    public Task MemberFightsBackAnAttackerWhileTheSiegeRaidRallies_ButNotWhileItDisengages() => Run(rig => rig.Host.OnWorldAsync(() =>
     {
         Retreating(rig);
         PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
@@ -122,7 +122,11 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.True(rig.BotPlayer.Map!.Combat.Attack(rig.EnemyPlayer, rig.BotPlayer));
         rig.BotPlayer.Map!.Combat.DealDamage(rig.EnemyPlayer, rig.BotPlayer, 1);
         rig.Think();
-        Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit);
+        Assert.Null(rig.Ai.TargetUnit); // disengaging: nobody fights
+
+        Retreating(rig, PlayerbotSiegeOrder.Rally);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit); // at the rally point the member answers its attacker
     }));
 
     [Fact]

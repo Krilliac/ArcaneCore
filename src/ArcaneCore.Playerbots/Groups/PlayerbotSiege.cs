@@ -24,8 +24,11 @@ internal enum PlayerbotSiegeOrder : byte
     /// <summary>In combat: everyone kills the skull.</summary>
     Assault,
 
-    /// <summary>The fight is lost: back to the last waypoint (or the rally point), the members not fighting.</summary>
+    /// <summary>The fight is lost: the raid disengages to the last waypoint (or where the siege began). Nobody fights or casts; the leader walks and the members follow.</summary>
     Retreat,
+
+    /// <summary>The retreat reached its point: the raid stands there and fights back what followed it, marking nothing.</summary>
+    Rally,
 }
 
 /// <summary>
@@ -52,6 +55,9 @@ internal enum PlayerbotSiegeOrder : byte
 /// <param name="DeadSinceEngagement">Members who died since the raid last entered combat (deaths of earlier fights do not count towards "a third lost").</param>
 /// <param name="RetreatsUsed">Retreats the raid has begun so far; past <see cref="PlayerbotSiegeCommander.MaxRetreats"/> it commits.</param>
 /// <param name="ObjectiveEngaged">A member fights the siege objective, or the skull is on it: the raid never retreats from it.</param>
+/// <param name="AtRally">The leader stands within <see cref="PlayerbotSiegeCommander.RallyYards"/> of the retreat point.</param>
+/// <param name="MsAtRally">How long the leader has stood at the retreat point during this retreat (0: not there yet).</param>
+/// <param name="RetreatedThisEngagement">The raid has already begun a retreat in this engagement (it begins no second one).</param>
 internal readonly record struct PlayerbotSiegeFacts(
     bool InCombat,
     uint MsSinceCombat,
@@ -72,7 +78,10 @@ internal readonly record struct PlayerbotSiegeFacts(
     bool PullLatched,
     int DeadSinceEngagement = 0,
     int RetreatsUsed = 0,
-    bool ObjectiveEngaged = false);
+    bool ObjectiveEngaged = false,
+    bool AtRally = false,
+    uint MsAtRally = 0,
+    bool RetreatedThisEngagement = false);
 
 /// <summary>
 /// The commander's answer: the order, and the two latches to feed back in at the next decision. <paramref name="Committed"/>: the fight is lost by
@@ -84,8 +93,12 @@ internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order
 /// The rules a siege raid's leader follows, in this order, over <see cref="PlayerbotSiegeFacts"/> (pure, no world):
 /// <list type="number">
 /// <item>Retreat: in combat with the tank dead, the average health below <see cref="RetreatHealthPct"/> or a third of the raid lost in this
-/// engagement (<see cref="PlayerbotSiegeFacts.DeadSinceEngagement"/>). A latch: the retreat goes on while the fight does and until the raid has
-/// been out of combat for <see cref="RetreatQuietMs"/>. It never begins while the raid fights the objective, nor after <see cref="MaxRetreats"/>.</item>
+/// engagement (<see cref="PlayerbotSiegeFacts.DeadSinceEngagement"/>). A latch in two phases: <see cref="PlayerbotSiegeOrder.Retreat"/> disengages
+/// (nobody fights, the leader walks to the retreat point, the members follow) until the leader is within <see cref="RallyYards"/> of it, then
+/// <see cref="PlayerbotSiegeOrder.Rally"/> stands there and fights back what followed. The latch ends when the raid has been out of combat for
+/// <see cref="RetreatQuietMs"/>, or has stood at the point <see cref="RallyHoldMs"/> and still fights (the bound: a pursuit that does not end is fought).
+/// It begins once per engagement (<see cref="PlayerbotSiegeFacts.RetreatedThisEngagement"/>), never while the raid fights the objective, nor after
+/// <see cref="MaxRetreats"/>.</item>
 /// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/>, rests or is hurt (Regroup); the raid is at its waypoint,
 /// the other raid is not, and nothing is worth pulling (Hold).</item>
 /// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis).</item>
@@ -129,6 +142,12 @@ internal static class PlayerbotSiegeCommander
     /// <summary>The leader is at its waypoint within this many yards.</summary>
     internal const float WaypointYards = 6f;
 
+    /// <summary>A retreating leader is at its retreat point (the retreat becomes a rally) within this many yards (2D).</summary>
+    internal const float RallyYards = 8f;
+
+    /// <summary>A rally that has stood at its point this long while still in combat ends (what followed the raid is fought on, not run from again).</summary>
+    internal const uint RallyHoldMs = 30_000;
+
     /// <summary>The order for <paramref name="facts"/>, and the latches after it.</summary>
     internal static PlayerbotSiegeDecision Decide(in PlayerbotSiegeFacts facts)
     {
@@ -138,9 +157,13 @@ internal static class PlayerbotSiegeCommander
         bool wouldRetreat = facts.InCombat && (tankDead || facts.AverageHealthPct < RetreatHealthPct || lost);
         // A raid that fights the objective, or has retreated MaxRetreats times, commits: it no longer begins a retreat.
         bool commit = facts.ObjectiveEngaged || facts.RetreatsUsed >= MaxRetreats;
-        bool retreat = facts.RetreatLatched && !facts.ObjectiveEngaged || wouldRetreat && !commit;
-        if (retreat && (facts.InCombat || facts.MsSinceCombat < RetreatQuietMs))
-            return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.Retreat, true, false);
+        bool held = facts.RetreatLatched && !facts.ObjectiveEngaged;
+        // One retreat per engagement: a latch already running is not cut short, but a lost fight begins a second one only in a new engagement.
+        bool begins = wouldRetreat && !commit && !facts.RetreatLatched && !facts.RetreatedThisEngagement;
+        bool quiet = !facts.InCombat && facts.MsSinceCombat >= RetreatQuietMs;
+        bool chasedOut = facts.AtRally && facts.MsAtRally >= RallyHoldMs;
+        if ((held || begins) && !quiet && !chasedOut)
+            return new PlayerbotSiegeDecision(facts.AtRally ? PlayerbotSiegeOrder.Rally : PlayerbotSiegeOrder.Retreat, true, false);
         bool committed = wouldRetreat && !facts.RetreatLatched && !facts.ObjectiveEngaged && facts.RetreatsUsed >= MaxRetreats;
 
         // The pull latch: on within PullOnYards, kept until the hostile is beyond PullOffYards (hysteresis).
@@ -264,7 +287,7 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     public PlayerbotSiegeOrder Order { get; set; } = PlayerbotSiegeOrder.Hold;
 
-    /// <summary>Where the leader walks under <see cref="PlayerbotSiegeOrder.Advance"/> and <see cref="PlayerbotSiegeOrder.Retreat"/>.</summary>
+    /// <summary>Where the leader walks under <see cref="PlayerbotSiegeOrder.Advance"/>, <see cref="PlayerbotSiegeOrder.Retreat"/> and <see cref="PlayerbotSiegeOrder.Rally"/> (the retreat point).</summary>
     public Vector3 MoveTo { get; set; }
 
     /// <summary>The unit the leader opens on under Pull, AssignTank and Assault: the skull's.</summary>
@@ -272,12 +295,24 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     public bool RetreatLatched { get; set; }
 
+    /// <summary>The raid has begun a retreat in the current engagement (cleared when the raid enters combat from quiet).</summary>
+    public bool RetreatedThisEngagement { get; set; }
+
+    /// <summary>When the leader first stood at the retreat point during the current retreat (0: not there during this latch).</summary>
+    public uint RallySinceMs { get; set; }
+
+    /// <summary>The facts the last read of the raid saw (status and tests).</summary>
+    internal PlayerbotSiegeFacts LastFacts { get; set; }
+
     public bool PullLatched { get; set; }
 
     public int Retreats { get; set; }
 
-    /// <summary>The raid was in combat at the last tick (a new engagement begins when it was not).</summary>
+    /// <summary>The raid was in combat at the last tick.</summary>
     public bool WasInCombat { get; set; }
+
+    /// <summary>When the raid was last seen in combat (0: never); a new engagement begins only after <see cref="PlayerbotSiegeCommander.RetreatQuietMs"/> without it.</summary>
+    public uint CombatSeenMs { get; set; }
 
     /// <summary>The members dead when the current engagement began: their deaths do not count towards "a third lost".</summary>
     public HashSet<ObjectGuid> DeadAtEngagement { get; } = [];

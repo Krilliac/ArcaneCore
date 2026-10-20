@@ -94,6 +94,54 @@ public sealed class PlayerbotSiegeCommanderTests
     }
 
     [Fact]
+    public void ARetreatBecomesARally_AtItsPoint_AndEndsAfterRallyHoldMs_StillInCombat()
+    {
+        Assert.Equal(30_000u, PlayerbotSiegeCommander.RallyHoldMs);
+        PlayerbotSiegeFacts latched = Fight with { RetreatLatched = true, AtRally = true };
+
+        PlayerbotSiegeDecision rally = PlayerbotSiegeCommander.Decide(latched with { MsAtRally = 29_999 });
+        Assert.Equal((PlayerbotSiegeOrder.Rally, true), (rally.Order, rally.RetreatLatched));
+
+        PlayerbotSiegeDecision chasedOut = PlayerbotSiegeCommander.Decide(latched with { MsAtRally = 30_000 });
+        Assert.Equal((PlayerbotSiegeOrder.Assault, false), (chasedOut.Order, chasedOut.RetreatLatched));
+
+        // Not at the point, the bound does not apply: the raid is still walking.
+        PlayerbotSiegeDecision walking = PlayerbotSiegeCommander.Decide(Fight with { RetreatLatched = true, AtRally = false, MsAtRally = 30_000 });
+        Assert.Equal((PlayerbotSiegeOrder.Retreat, true), (walking.Order, walking.RetreatLatched));
+    }
+
+    [Fact]
+    public void ARetreatThatBeginsAtItsPoint_IsARallyAtOnce()
+    {
+        PlayerbotSiegeDecision begun = PlayerbotSiegeCommander.Decide(Fight with { TankAlive = false, AtRally = true });
+        Assert.Equal((PlayerbotSiegeOrder.Rally, true), (begun.Order, begun.RetreatLatched));
+    }
+
+    [Fact]
+    public void OneRetreatPerEngagement()
+    {
+        PlayerbotSiegeFacts lost = Fight with { TankAlive = false, RetreatedThisEngagement = true };
+
+        PlayerbotSiegeDecision refused = PlayerbotSiegeCommander.Decide(lost);
+        Assert.Equal((PlayerbotSiegeOrder.Assault, false, false), (refused.Order, refused.RetreatLatched, refused.Committed));
+
+        // A retreat already running is not cut short by it.
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(lost with { RetreatLatched = true }));
+    }
+
+    [Fact]
+    public void ARallyEndsWhenQuiet_LikeARetreat()
+    {
+        PlayerbotSiegeFacts quiet = Calm with { RetreatLatched = true, AtRally = true };
+
+        PlayerbotSiegeDecision over = PlayerbotSiegeCommander.Decide(quiet with { MsSinceCombat = 5_000 });
+        Assert.Equal((PlayerbotSiegeOrder.Advance, false), (over.Order, over.RetreatLatched));
+
+        PlayerbotSiegeDecision still = PlayerbotSiegeCommander.Decide(quiet with { MsSinceCombat = 4_999 });
+        Assert.Equal((PlayerbotSiegeOrder.Rally, true), (still.Order, still.RetreatLatched));
+    }
+
+    [Fact]
     public void ALaggingResting_OrHurtMember_RegroupsTheRaid_WhenItIsNotFighting()
     {
         Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(Calm with { MaxLagYards = 30.5f }));

@@ -32,10 +32,10 @@ public sealed class PlayerbotSiegeWorldTests
     /// <summary>Where a fresh bot character stands (the graveyard it logs in at): the way and its creatures are laid out from here.</summary>
     private static readonly Vector3 Origin = new(-8913f, 550f, StartZ);
 
-    private static (CreatureTemplate Template, CreatureSpawn Spawn) Guard(uint entry, float dx, float dy, uint health = 60, uint npcFlags = 0) => (
+    private static (CreatureTemplate Template, CreatureSpawn Spawn) Guard(uint entry, float dx, float dy, uint health = 60, uint npcFlags = 0, uint faction = 14, byte creatureType = 7) => (
         new CreatureTemplate
         {
-            Entry = entry, Name = "Siege Guard " + entry, Faction = 14, CreatureType = 7, MinLevel = 10, MaxLevel = 10, DisplayIds = [903], NpcFlags = npcFlags,
+            Entry = entry, Name = "Siege Guard " + entry, Faction = faction, CreatureType = creatureType, MinLevel = 10, MaxLevel = 10, DisplayIds = [903], NpcFlags = npcFlags,
             MinLevelHealth = health, MaxLevelHealth = health, MinMeleeDamage = 1, MaxMeleeDamage = 1, MeleeBaseAttackTime = 2000, Rank = 0,
         },
         new CreatureSpawn
@@ -355,5 +355,353 @@ public sealed class PlayerbotSiegeWorldTests
             if (flagged is not null && world.GroupManager.GetGroup(leader.Guid) is { } server && server.TargetIcons[7] == flagged.Guid) skulled = true;
             return skulled;
         }), world.Trace());
+    }
+
+    // --- the retreat: disengage, rally, one per engagement ------------------------------------------------------------------
+
+    private static uint Now(GroupTestWorld world) => world.World.Host.World.NowMs;
+
+    private static ObjectGuid Skull(GroupTestWorld world, PlayerbotSiegeRaid raid)
+        => world.GroupManager.GetGroup(raid.Group!.LeaderGuid) is { } server ? server.TargetIcons[7] : default;
+
+    private static List<Player> Living(GroupTestWorld world, PlayerbotSiegeRaid raid)
+        => [.. raid.Group!.Members.Where(m => !m.Real && m.Joined).Select(m => world.World.Host.World.FindOnlinePlayer(m.Guid)).OfType<Player>().Where(p => p.IsAlive)];
+
+    private static float YardsFrom(Player player, Vector3 point) => MathF.Sqrt(((player.X - point.X) * (player.X - point.X)) + ((player.Y - point.Y) * (player.Y - point.Y)));
+
+    /// <summary>Kill every living member of <paramref name="raid"/> whose name contains <paramref name="part"/> (the bots are named after their class).</summary>
+    private static Task<bool> KillAsync(GroupTestWorld world, PlayerbotSiegeRaid raid, string part) => world.OnWorldAsync(() =>
+    {
+        foreach (var member in raid.Group!.Members.Where(m => m.Name.Contains(part, StringComparison.Ordinal)))
+            if (world.World.Host.World.FindOnlinePlayer(member.Guid) is { IsAlive: true } player)
+            {
+                player.Health = 0;
+                player.Map!.Combat.KillPlayer(player);
+            }
+
+        return true;
+    });
+
+    /// <summary>The scenario world with guards a raid cannot kill during a test (600 health at 62 and 63 yards), the objective far behind them (150 yards, out of the fight).</summary>
+    private static async Task<GroupTestWorld> StartStrongGuards()
+        => await GroupTestWorld.StartAsync([], null, extraCreatures: [Guard(GuardA, 62f, 2f, health: 600), Guard(GuardB, 63f, -2f, health: 600), Guard(Objective, 150f, 0f, health: 120)]);
+
+    /// <summary>Where a retreat of <paramref name="siege"/> goes: the waypoint behind the step (the raid pulls from the second waypoint, so this is 40 yards out).</summary>
+    private static Vector3 RetreatPoint(PlayerbotSiege siege) => siege.Step > 0 ? siege.Waypoints[siege.Step - 1] : siege.Rally;
+
+    /// <summary>One raid of six, waypoints at 20 and 40 yards, run until it fights the guards with its leader more than 12 yards from its retreat point.</summary>
+    private static async Task<(PlayerbotSiege Siege, PlayerbotSiegeRaid Raid)> IntoTheFight(GroupTestWorld world)
+    {
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        Assert.True(await world.RunUntilAsync(240_000, () => siege.Step >= 1 && raid.WasInCombat && YardsFrom(Leader(world, raid), RetreatPoint(siege)) > 12f), world.Trace());
+        return (siege, raid);
+    }
+
+    /// <summary>Keep the two strong guards at full health (a test that needs the fight to outlast the rally hold).</summary>
+    private static void TopUpGuards(GroupTestWorld world, PlayerbotSiegeRaid raid)
+    {
+        if (Leader(world, raid).Map?.FindUpdater<CreatureMapSystem>() is not { } system) return;
+        foreach (Creature guard in system.Creatures)
+            if (guard.Entry is GuardA or GuardB && guard.IsAlive) guard.Health = guard.MaxHealth;
+    }
+
+    [Fact]
+    public async Task ARetreatUnderAttack_WalksToThePreviousWaypoint_ThenFightsBackThere()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Assert.Equal(1, raid.Retreats);
+        ObjectGuid skull = Skull(world, raid);
+        uint since = Now(world);
+        Vector3 point = RetreatPoint(siege);
+        int step = siege.Step;
+        float lastYards = YardsFrom(Leader(world, raid), point);
+        var violations = new List<string>();
+        var trail = new List<string>();
+
+        // The disengage: nobody fights or casts, the leader walks to the first waypoint, nothing is re-marked.
+        bool rallied = await world.RunUntilAsync(60_000, () =>
+        {
+            Player leader = Leader(world, raid);
+            if (raid.Order == PlayerbotSiegeOrder.Retreat)
+            {
+                if (unchecked(Now(world) - since) >= 1_500)
+                    foreach (var member in raid.Group!.Members)
+                        if (world.World.Host.World.FindOnlinePlayer(member.Guid) is { IsAlive: true } player && (member.AI?.TargetUnit is not null || player.Combat.Victim is not null))
+                            violations.Add($"{member.Name} fights during the retreat (ai target {member.AI?.TargetUnit?.Guid}, victim {player.Combat.Victim?.Guid}) at +{unchecked(Now(world) - since)}ms");
+                if (YardsFrom(leader, point) > lastYards + 1f) violations.Add($"the leader moved away from the retreat point: {lastYards:F1} to {YardsFrom(leader, point):F1} yd");
+                if (Skull(world, raid) != skull) violations.Add("the skull changed during the retreat");
+            }
+
+            lastYards = YardsFrom(leader, point);
+            if (unchecked(Now(world) - since) / 2_000 >= trail.Count)
+                trail.Add($"+{unchecked(Now(world) - since)}ms order={raid.Order} leader {lastYards:F1} yd from the point, step {raid.Group!.Find(raid.Group.LeaderBotId)?.AI?.Step}, hp {leader.HealthPercent:F0}%, loop-blacklisted {ArcaneCore.World.Playerbots.PlayerbotMotion.IsBlacklisted(leader, point)}");
+            return raid.Order == PlayerbotSiegeOrder.Rally;
+        });
+        Assert.True(rallied, string.Join(Environment.NewLine, trail) + Environment.NewLine + string.Join(Environment.NewLine, violations));
+        Assert.Empty(violations);
+        Assert.InRange(YardsFrom(Leader(world, raid), point), 0f, PlayerbotSiegeCommander.RallyYards + 1.5f);
+        Assert.Equal(1, raid.Retreats);
+
+        // At the rally point a member answers what attacks it.
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group!.Members.Any(m =>
+            m.AI?.TargetUnit is { } target && world.World.Host.World.FindOnlinePlayer(m.Guid) is { } player && player.Combat.Attackers.Any(a => ReferenceEquals(a, target)))),
+            world.Trace());
+
+        // The latch ends by quiet or by the bound, and that was one retreat.
+        Assert.True(await world.RunUntilAsync(90_000, () => !raid.RetreatLatched), world.Trace());
+        Assert.Equal(1, raid.Retreats);
+        Assert.Equal(step, siege.Step);
+    }
+
+    [Fact]
+    public async Task ARaidChasedToItsRallyPoint_FightsOnAfterRallyHoldMs_AndDoesNotRetreatAgainUntilANewEngagement()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+
+        // The guards cannot die, so what followed the raid fights on past the hold.
+        var stray = new List<string>();
+        Vector3 point = RetreatPoint(siege);
+        Assert.True(await world.RunUntilAsync(60_000, () => { TopUpGuards(world, raid); return raid.Order == PlayerbotSiegeOrder.Rally; }), world.Trace());
+        Assert.True(await world.RunUntilAsync(PlayerbotSiegeCommander.RallyHoldMs + 30_000, () =>
+        {
+            TopUpGuards(world, raid);
+            if (raid.Order == PlayerbotSiegeOrder.Rally && YardsFrom(Leader(world, raid), point) > PlayerbotSiegeCommander.RallyYards + 1.5f)
+                stray.Add($"the leader left the rally point: {YardsFrom(Leader(world, raid), point):F1} yd");
+            return !raid.RetreatLatched;
+        }), world.Trace());
+        Assert.Empty(stray);
+        Assert.True(raid.WasInCombat, "the latch ended because the fight ended, not by the bound" + Environment.NewLine + world.Trace());
+        Assert.Equal(1, raid.Retreats);
+
+        // Still fighting, still a lost fight by the numbers: no second retreat and no rally in this engagement.
+        var orders = new List<PlayerbotSiegeOrder>();
+        bool fought = true;
+        await world.RunUntilAsync(10_000, () => { TopUpGuards(world, raid); orders.Add(raid.Order); fought &= raid.WasInCombat; return false; });
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Retreat, orders);
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Rally, orders);
+        Assert.Equal(1, raid.Retreats);
+        Assert.True(fought, "the raid left combat in the window: no engagement was kept" + Environment.NewLine + world.Trace());
+        Assert.True(raid.RetreatedThisEngagement);
+        Assert.Contains(raid.Order, new[] { PlayerbotSiegeOrder.Assault, PlayerbotSiegeOrder.AssignTank });
+    }
+
+    [Fact]
+    public async Task ARetreatThatLosesItsLeader_IsCountedOnce()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Guid oldLeader = raid.Group!.LeaderBotId;
+
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            leader.Health = 0;
+            leader.Map!.Combat.KillPlayer(leader);
+            raid.PromoteTriedMs = Math.Max(1u, Now(world));
+            return true;
+        });
+
+        // The raid stays unled for a few commander ticks (the promotion is held off), then the next tank takes over.
+        int most = raid.Retreats;
+        var states = new List<string>();
+        string last = string.Empty;
+        void Sample()
+        {
+            most = Math.Max(most, raid.Retreats);
+            string now = $"{Now(world)}ms order={raid.Order} latched={raid.RetreatLatched} retreats={raid.Retreats} thisEngagement={raid.RetreatedThisEngagement} combat={raid.WasInCombat} leader={raid.Group!.LeaderBotId == oldLeader}";
+            if (now[(now.IndexOf(' ', StringComparison.Ordinal))..] != last) states.Add(now);
+            last = now[(now.IndexOf(' ', StringComparison.Ordinal))..];
+        }
+
+        await world.RunUntilAsync(2_000, () => { raid.PromoteTriedMs = Math.Max(1u, Now(world)); Sample(); return false; });
+        Assert.Equal(oldLeader, raid.Group.LeaderBotId);
+
+        // After the promotion the retreat goes on (the latch survived the unled ticks) and was begun only once.
+        Assert.True(await world.RunUntilAsync(60_000, () =>
+        {
+            Sample();
+            return raid.Group.LeaderBotId != oldLeader && raid.Order is PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally;
+        }), world.Trace());
+        await world.RunUntilAsync(5_000, () => { Sample(); return false; });
+        Assert.True(most == 1, string.Join(Environment.NewLine, states));
+        Assert.Equal(1, raid.Retreats);
+        Assert.NotNull(siege);
+    }
+
+    [Fact]
+    public async Task DeathsBeforeTheEngagement_AreNotLost_DeathsDuringItAre()
+    {
+        // Regression guard: the engagement snapshot already worked on the old code; this pins it.
+        await using GroupTestWorld world = await StartStrongGuards();
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        await KillAsync(world, raid, "heal");
+
+        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat), world.Trace());
+        var orders = new List<PlayerbotSiegeOrder>();
+        await world.RunUntilAsync(3_000, () => { orders.Add(raid.Order); return false; });
+        Assert.Equal(2, raid.DeadAtEngagement.Count);
+        Assert.Equal(0, raid.LastFacts.DeadSinceEngagement);
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Retreat, orders);
+
+        await KillAsync(world, raid, "Sgamage");
+        await world.RunUntilAsync(3_000, () => { orders.Add(raid.Order); return false; });
+        Assert.Equal(1, raid.LastFacts.DeadSinceEngagement);
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Retreat, orders);
+        Assert.Equal(0, raid.Retreats);
+
+        await KillAsync(world, raid, "Sgbmage");
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Assert.Equal(1, raid.Retreats);
+    }
+
+    [Fact]
+    public async Task AnUnledRaid_StillTracksItsEngagement()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat && Leader(world, raid).X - Origin.X > 45f), world.Trace());
+
+        // The leader falls and nobody takes over (the promotion is kept off for the rest of the test).
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            leader.Health = 0;
+            leader.Map!.Combat.KillPlayer(leader);
+            raid.PromoteTriedMs = Math.Max(1u, Now(world));
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(10_000, () => { raid.PromoteTriedMs = Math.Max(1u, Now(world)); return !Leader(world, raid).IsAlive; }), world.Trace());
+        await world.RunUntilAsync(3_000, () => { raid.PromoteTriedMs = Math.Max(1u, Now(world)); return false; });
+        Assert.True(raid.WasInCombat, "the members still fight while the raid is unled");
+
+        // The fight ends while the raid is unled: the raid is out of combat at the next ticks.
+        await world.OnWorldAsync(() =>
+        {
+            Player attacker = Living(world, raid)[0];
+            foreach (Creature guard in attacker.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.Where(c => c.Entry is GuardA or GuardB or Objective && c.IsAlive).ToArray())
+                attacker.Map.Combat.DealDamage(attacker, guard, guard.Health, direct: true, meleeDamage: true);
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(30_000, () =>
+        {
+            raid.PromoteTriedMs = Math.Max(1u, Now(world));
+            return !raid.WasInCombat;
+        }), "WasInCombat froze while the raid was unled" + Environment.NewLine + world.Trace());
+        Assert.All(Living(world, raid), p => Assert.False(p.Combat.IsInCombat));
+    }
+
+    [Fact]
+    public async Task ACommittedRaid_SaysTheCommitLineOnce_ThenItsPlanLines()
+    {
+        // Regression guard: this already held on the old code.
+        await using GroupTestWorld world = await StartStrongGuards();
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        raid.Retreats = PlayerbotSiegeCommander.MaxRetreats;
+        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat && Leader(world, raid).X - Origin.X > 45f), world.Trace());
+        await KillAsync(world, raid, "mage");
+
+        var orders = new List<PlayerbotSiegeOrder>();
+        Assert.True(await world.RunUntilAsync(30_000, () => { orders.Add(raid.Order); return raid.CommitAnnounced; }), world.Trace());
+        Assert.True(await world.RunUntilAsync(40_000, () =>
+        {
+            orders.Add(raid.Order);
+            int at = raid.Announcer.Sent.IndexOf(PlayerbotSiegeCommander.CommitLine);
+            return at >= 0 && raid.Announcer.Sent.Count > at + 1;
+        }), string.Join(Environment.NewLine, raid.Announcer.Sent));
+
+        Assert.Equal(1, raid.Announcer.Sent.Count(line => line == PlayerbotSiegeCommander.CommitLine));
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Retreat, orders);
+        Assert.DoesNotContain(PlayerbotSiegeOrder.Rally, orders);
+        Assert.Contains(raid.Order, new[] { PlayerbotSiegeOrder.Assault, PlayerbotSiegeOrder.AssignTank });
+        Assert.Equal(PlayerbotSiegeCommander.MaxRetreats, raid.Retreats);
+    }
+
+    [Theory]
+    [InlineData(12u)]
+    [InlineData(7u)]
+    public async Task AFriendlyOrNeutralNpcWithNpcFlags_IsNeitherAHostileNorSkulled(uint faction)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], null,
+            extraCreatures: [Guard(GuardA, 62f, 2f, npcFlags: 3, faction: faction), Guard(Objective, 70f, 0f, health: 120)]);
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+
+        ObjectGuid npc = await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            Creature creature = leader.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.First(c => c.Entry == GuardA);
+            Assert.False(leader.Map.Combat.Hooks.IsHostileTo(creature, leader), $"faction {faction} must not be hostile to the raid for this test to mean anything");
+            return creature.Guid;
+        });
+
+        var seen = new List<string>();
+        Assert.True(await world.RunUntilAsync(300_000, () =>
+        {
+            if (raid.LastFacts.Hostiles > 1) seen.Add($"{raid.LastFacts.Hostiles} hostiles counted (only the objective is hostile)");
+            if (Skull(world, raid) == npc) seen.Add("the npc is skulled");
+            if (raid.PullTarget == npc) seen.Add("the npc is the pull target");
+            return world.Coordinator.Siege is null;
+        }), world.Trace());
+        Assert.Empty(seen);
+        Assert.Equal("won", world.Coordinator.SiegeOutcome);
+        Assert.NotNull(siege);
+    }
+
+    [Fact]
+    public async Task ACritter_IsExcluded_UnlessItIsTheObjective()
+    {
+        // (a) A hostile critter (creature type 8) beside the objective is neither counted nor skulled.
+        await using (GroupTestWorld world = await GroupTestWorld.StartAsync([], null,
+            extraCreatures: [Guard(GuardA, 62f, 2f, creatureType: 8), Guard(Objective, 70f, 0f, health: 120)]))
+        {
+            (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+            PlayerbotSiege siege = await Start(world, bots, raids: 1);
+            PlayerbotSiegeRaid raid = siege.Raids[0];
+            ObjectGuid critter = await world.OnWorldAsync(() => Leader(world, raid).Map!.FindUpdater<CreatureMapSystem>()!.Creatures.First(c => c.Entry == GuardA).Guid);
+            var seen = new List<string>();
+            Assert.True(await world.RunUntilAsync(300_000, () =>
+            {
+                if (raid.LastFacts.Hostiles > 1) seen.Add($"{raid.LastFacts.Hostiles} hostiles counted (only the objective counts)");
+                if (Skull(world, raid) == critter) seen.Add("the critter is skulled");
+                if (raid.PullTarget == critter) seen.Add("the critter is the pull target");
+                return world.Coordinator.Siege is null;
+            }), world.Trace());
+            Assert.Empty(seen);
+        }
+
+        // (b) A critter that is the objective is skulled and its death wins the siege.
+        await using (GroupTestWorld world = await GroupTestWorld.StartAsync([], null, extraCreatures: [Guard(Objective, 70f, 0f, health: 120, creatureType: 8)]))
+        {
+            (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+            PlayerbotSiege siege = await Start(world, bots, raids: 1);
+            PlayerbotSiegeRaid raid = siege.Raids[0];
+            bool skulled = false;
+            Assert.True(await world.RunUntilAsync(300_000, () =>
+            {
+                Creature? objective = Leader(world, raid).Map?.FindUpdater<CreatureMapSystem>()?.Creatures.FirstOrDefault(c => c.Entry == Objective && c.IsAlive);
+                if (objective is not null && Skull(world, raid) == objective.Guid) skulled = true;
+                return world.Coordinator.Siege is null;
+            }), world.Trace());
+            Assert.True(skulled, "the objective critter was never skulled");
+            Assert.Equal("won", world.Coordinator.SiegeOutcome);
+        }
     }
 }

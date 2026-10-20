@@ -92,6 +92,9 @@ internal sealed class PlayerbotGroupAI
     private PlayerbotRoute? _runRoute;
     private long _runRouteAtMs;
     private long _stuckSinceMs, _stuckLastMs;
+
+    /// <summary>The leader has started the loop watch afresh for the retreat it is walking (once per retreat, see <see cref="LeadSiege"/>).</summary>
+    private bool _retreatFresh;
     private uint _rangedIdleMs;
 
     internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options, PlayerbotEquipment? equipment = null)
@@ -370,10 +373,21 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>
     /// A siege raid's leader does what the commander ordered (<see cref="PlayerbotSiegeCommander"/>): walks to <see cref="PlayerbotSiegeRaid.MoveTo"/>
-    /// to advance or retreat, otherwise stands (the pull and the fight are <see cref="SelectTarget"/>'s).
+    /// to advance or retreat (the leader of a retreat has no target, see <see cref="SelectTarget"/>), otherwise stands: a rally holds the retreat
+    /// point (the pull and the fight are <see cref="SelectTarget"/>'s).
     /// </summary>
     private void LeadSiege(Player player, PlayerbotSiegeRaid raid, uint interval)
     {
+        // The retreat point is the waypoint the raid walked to, then broke off the walk to pull: the loop watch reads the walk back as an A, B, A
+        // pattern and refuses the place, and the retreat would stand and be hit for the whole blacklist. A retreat is a new errand (as the walk of a
+        // revived bot is, PlayerbotMotion.ForgetLoops): the watch starts afresh once per retreat, so a retreat that loops is still caught.
+        if (raid.Order == PlayerbotSiegeOrder.Retreat)
+        {
+            if (!_retreatFresh) PlayerbotMotion.ForgetLoops(player);
+            _retreatFresh = true;
+        }
+        else if (raid.Order != PlayerbotSiegeOrder.Rally) _retreatFresh = false;
+
         if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
         {
             bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
@@ -599,7 +613,9 @@ internal sealed class PlayerbotGroupAI
     /// What this member fights now, by role. Everyone first answers a creature (or a player it may fight back) attacking a member, the tank
     /// especially one that attacks someone else (its rotation taunts it); in a fight the group's raid marks come first (the member's
     /// <see cref="PlayerbotGroupCoordinator.Member.FocusIcon"/>, then the skull; vmangos PartyBotAI.cpp:366-377), then it assists the leader's
-    /// victim; the leader also pulls the objective and what stands in the way while engaging.
+    /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
+    /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
+    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it.
     /// </summary>
     private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
@@ -623,9 +639,13 @@ internal sealed class PlayerbotGroupAI
             }
         }
 
-        // A lost fight is left: a retreating siege raid picks no new targets and follows no marks. It only fights back what attacks the member
-        // (or, for a healer, the raid member it heals), the member itself first, then the nearest.
-        if (group.Siege is { Order: PlayerbotSiegeOrder.Retreat })
+        // A lost fight is left: a retreating siege raid fights nothing and casts nothing (every cast-time spell stops the mover first), so the
+        // leader walks to the retreat point and the members follow it. Once the leader is there (Rally) the raid picks no new targets and follows
+        // no marks either: it only fights back what attacks the member (or, for a healer, the raid member it heals), the member itself first,
+        // then the nearest.
+        PlayerbotSiegeOrder? siegeOrder = group.Siege?.Order;
+        if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
+        if (siegeOrder == PlayerbotSiegeOrder.Rally)
         {
             bool heals = me.Role == PlayerbotGroupRole.Healer;
             return loose.Where(l => l.OnSelf || heals).OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
