@@ -735,6 +735,7 @@ public sealed partial class WorldSession : IPlayerSession
 
                         return false;
                     case OpcodeRateVerdict.Dropped:
+                        _budgetDropped = true;
                         if (_guard is not null)
                         {
                             _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));

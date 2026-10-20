@@ -6,6 +6,7 @@ using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Ops.ServerConsole;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -43,6 +44,7 @@ internal sealed class PacketTools : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ToolConsole, byte> _retired = new();
     private readonly CancellationTokenSource _stopping = new();
+    private volatile bool _disposed;
 
     /// <summary>The services are resolved here, so a host missing one fails when the tools are switched on, not at the first console line.</summary>
     public PacketTools(IServiceProvider services, WorldRuntime world, ILogger logger)
@@ -152,6 +154,17 @@ internal sealed class PacketTools : IAsyncDisposable
     public void Retire(ToolConsole console)
     {
         _retired[console] = 0;
+        if (_disposed)
+        {
+            // DisposeAsync already swept the retired consoles (or is sweeping them): whichever of the two removes it disposes it.
+            if (_retired.TryRemove(console, out byte _))
+            {
+                _ = console.DisposeAsync().AsTask();
+            }
+
+            return;
+        }
+
         _ = RetireAsync(console);
     }
 
@@ -178,6 +191,7 @@ internal sealed class PacketTools : IAsyncDisposable
     /// <summary>Dispose every retired console (the feed is stopping).</summary>
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         await _stopping.CancelAsync().ConfigureAwait(false);
         foreach (ToolConsole console in _retired.Keys)
         {
@@ -194,10 +208,10 @@ internal sealed class PacketTools : IAsyncDisposable
     public void LogConsole(string client, string line)
         => _logger.LogInformation("Map feed console command: {Line} ({Client})", ConsoleCommandRedactor.Redact(line), client);
 
-    /// <summary>Log an injection about to reach the session's dispatcher (before it runs, so a fault or a stall still leaves the audit line).</summary>
+    /// <summary>Log an injection request before the session takes it (so a fault or a stall still leaves the audit line); <see cref="LogInjected"/> or a refusal line follows.</summary>
     public void LogInjecting(string client, ToolTarget target, uint opcode, int length)
         => _logger.LogInformation(
-            "Map feed inject dispatching: {Opcode} ({Length} bytes) as '{Target}' (guid {Guid:X16}{Bot}) from {Client}",
+            "Map feed inject requested: {Opcode} ({Length} bytes) as '{Target}' (guid {Guid:X16}{Bot}) from {Client}",
             PacketToolOpcodes.Name(opcode), length, target.Name, target.Guid, target.Bot ? ", bot" : string.Empty, client);
 
     /// <summary>Log and count an injection that reached the session's dispatcher, with its verdict.</summary>
@@ -206,7 +220,7 @@ internal sealed class PacketTools : IAsyncDisposable
         _logger.LogInformation(
             "Map feed inject: {Opcode} ({Length} bytes) as '{Target}' (guid {Guid:X16}{Bot}) from {Client}: {Verdict}",
             PacketToolOpcodes.Name(opcode), length, target.Name, target.Guid, target.Bot ? ", bot" : string.Empty, client, verdict);
-        PacketToolsMeters.Count(PacketToolsMeters.Inject, verdict is InjectVerdict.Queued or InjectVerdict.Handled or InjectVerdict.Disconnected);
+        PacketToolsMeters.Count(PacketToolsMeters.Inject, verdict is InjectVerdict.Queued or InjectVerdict.Handled or InjectVerdict.Dropped or InjectVerdict.Disconnected);
     }
 
     /// <summary>Log and count a send that was queued to the session's client.</summary>
@@ -235,18 +249,38 @@ internal sealed class PacketTools : IAsyncDisposable
 }
 
 /// <summary>
-/// Whether the packet tools are on in this host (options, map feed serving, environment: decided once by <see cref="WorldMapFeed"/> when
-/// it starts). Sessions read it when they are built, so only then do they pay for the dispatcher gate.
+/// Whether the packet tools are on in this host. Sessions read it when they are built, so only they pay for the dispatcher gate.
+/// <see cref="Configured"/> is decided from the options and the host environment when the permit is built, before any session exists:
+/// the world host restores playerbots in its own start, which runs before the map feed's, so a permit that only the feed's start set would
+/// leave every restored bot without a gate (not injectable) for the life of the process. <see cref="Granted"/> is the feed's own decision
+/// once it serves (also the only one in hosts without an <see cref="IHostEnvironment"/>, such as the test worlds).
 /// </summary>
 internal sealed class PacketToolsPermit
 {
     private volatile bool _granted;
 
+    public PacketToolsPermit()
+    {
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public PacketToolsPermit(IOptions<WorldPacketToolsOptions> tools, IOptions<WorldMapFeedOptions> feed, IHostEnvironment? environment = null)
+    {
+        Configured = environment is not null && feed.Value.Enabled && tools.Value.PermitsEnvironment(environment.EnvironmentName);
+    }
+
+    /// <summary>The options and the host environment permit the tools (the feed may still fail to serve; then nothing can reach a gate).</summary>
+    public bool Configured { get; }
+
+    /// <summary>The map feed is serving with the tools on (set by <see cref="WorldMapFeed"/>).</summary>
     public bool Granted
     {
         get => _granted;
         set => _granted = value;
     }
+
+    /// <summary>Whether a session built now gets the dispatcher gate.</summary>
+    public bool GatesSessions => Configured || _granted;
 }
 
 /// <summary>The packet tools' instruments (docs/ops/metrics.md): <c>arcanecore.tools.packets{op,result}</c>.</summary>

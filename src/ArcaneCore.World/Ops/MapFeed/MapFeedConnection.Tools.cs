@@ -133,17 +133,8 @@ internal sealed partial class MapFeedConnection
 
         bool worldHandler = target.Session.HandlesOnWorldThread((WorldOpcode)request.Opcode);
         tools.LogInjecting(Client, target, request.Opcode, payload.Length);
-        InjectVerdict verdict;
-        try
-        {
-            verdict = await target.Session.InjectAsync((WorldOpcode)request.Opcode, payload, InjectWait, _lifetime.Token).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException))
-        {
-            _logger.LogWarning(ex, "map feed inject: the session's handler threw ({Client})", Client);
-            await RefuseToolAsync(tools, request, "inject", new FeedError(MapFeedProtocol.QueryFailed, "the handler failed inside the server; see the server log")).ConfigureAwait(false);
-            return;
-        }
+        // InjectAsync answers a handler fault itself (it ends the session, as the reader would); what it throws is not the handler's.
+        InjectVerdict verdict = await target.Session.InjectAsync((WorldOpcode)request.Opcode, payload, InjectWait, _lifetime.Token).ConfigureAwait(false);
 
         FeedError? refusal = verdict switch
         {

@@ -71,6 +71,9 @@ internal sealed class FeedWorldSetup
 
     /// <summary>The host environment the feed judges the packet tools by.</summary>
     public string Environment { get; init; } = "Development";
+
+    /// <summary>A permit to register as it is (instead of the parameterless one <see cref="PacketTools"/> registers), such as one built from configuration like the daemon's.</summary>
+    internal PacketToolsPermit? Permit { get; init; }
 }
 
 /// <summary>
@@ -201,10 +204,22 @@ internal sealed class FeedWorld : IAsyncDisposable
             void Services(IServiceCollection services)
             {
                 services.AddSingleton<IWorldFeature, FeedManualClock>();
-                if (setup.PacketTools is { } tools)
+                if (setup.PacketTools is { } || setup.Permit is not null)
                 {
-                    services.Configure(tools);
-                    services.AddSingleton<PacketToolsPermit>();
+                    services.AddOptions();
+                    if (setup.PacketTools is { } tools)
+                    {
+                        services.Configure(tools);
+                    }
+
+                    if (setup.Permit is { } permit)
+                    {
+                        services.AddSingleton(permit);
+                    }
+                    else
+                    {
+                        services.AddSingleton<PacketToolsPermit>();
+                    }
 
                     // The daemon registers its opcode table (WorldServiceCollectionExtensions); the test host builds its own outside DI.
                     services.AddSingleton(_ => WorldServiceCollectionExtensions.BuildOpcodeTable());

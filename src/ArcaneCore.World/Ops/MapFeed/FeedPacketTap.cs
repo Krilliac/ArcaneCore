@@ -159,6 +159,7 @@ internal static class PacketToolsJson
             {
                 InjectVerdict.Queued => "queued",
                 InjectVerdict.Handled => "handled",
+                InjectVerdict.Dropped => "dropped",
                 _ => "disconnected",
             });
         });

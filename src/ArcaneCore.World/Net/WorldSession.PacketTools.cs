@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Ops.MapFeed;
@@ -32,6 +33,9 @@ internal enum InjectVerdict : byte
     /// <summary>The dispatcher refused the packet the way it refuses a client's (malformed, a flood, a full queue), or its session handler faulted the way that ends a client's session, and the session was disconnected.</summary>
     Disconnected,
 
+    /// <summary>The dispatcher dropped the packet over the connection's packet budget, as it drops a client's (Net:Protection:World*); the session stays up.</summary>
+    Dropped,
+
     /// <summary>The server has no handler for the opcode (the dispatcher would count and drop it).</summary>
     NoHandler,
 
@@ -62,6 +66,9 @@ public sealed partial class WorldSession
     [ThreadStatic]
     private static bool t_toolPacket;
 
+    /// <summary>Set by <see cref="DispatchAsync"/> when it drops a packet over the packet budget; read by an injection under the dispatch gate.</summary>
+    private bool _budgetDropped;
+
     /// <summary>
     /// Serializes <see cref="DispatchAsync"/> between the session's own reader and an injection, so the dispatcher keeps its single-producer
     /// rules (the world-queue bound, the packet limiter, one session handler at a time). Null, and never taken, unless the packet tools were
@@ -79,7 +86,7 @@ public sealed partial class WorldSession
     /// switches the tools on (<see cref="PacketToolsPermit"/>: options, map feed serving, environment), not merely the Enabled option.
     /// </summary>
     private static SemaphoreSlim? CreateDispatchGate(IServiceProvider services)
-        => services.GetService<PacketToolsPermit>()?.Granted == true ? new SemaphoreSlim(1, 1) : null;
+        => services.GetService<PacketToolsPermit>()?.GatesSessions == true ? new SemaphoreSlim(1, 1) : null;
 
     /// <summary>
     /// <see cref="DispatchAsync"/> for a packet the client sent (socket or gateway reader), behind the dispatcher gate when there is one.
@@ -156,15 +163,27 @@ public sealed partial class WorldSession
             }
 
             bool dispatched;
+            _budgetDropped = false;
             try
             {
                 dispatched = await DispatchAsync(opcode, payload).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException))
+            catch (InvariantViolationException)
             {
-                // A session handler fault the dispatcher does not contain leaves the reader's loop and ends the session; an injection
-                // ends it the same way instead of reporting a failed query with the session still up.
-                _logger.LogError(ex, "[{Endpoint}] an injected {Opcode} faulted its handler; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                // The reader's loop ends the session on a broken invariant before it propagates; an injection does too.
+                Kick("an injected packet broke an invariant in its session handler");
+                throw;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A session handler fault the dispatcher does not contain (a cancellation that is not the caller's included) leaves the
+                // reader's loop and ends the session; an injection ends it the same way instead of reporting a failed query with the
+                // session still up.
+                _logger.LogFault("session", ex, "[{Endpoint}] an injected {Opcode} faulted its handler; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
                 Kick("an injected packet faulted its session handler");
                 return InjectVerdict.Disconnected;
             }
@@ -174,6 +193,11 @@ public sealed partial class WorldSession
                 // The reader would end the connection here; an injection ends it the same way.
                 Kick("an injected packet was refused by the dispatcher");
                 return InjectVerdict.Disconnected;
+            }
+
+            if (_budgetDropped)
+            {
+                return InjectVerdict.Dropped;
             }
 
             if (handler.World is null)
