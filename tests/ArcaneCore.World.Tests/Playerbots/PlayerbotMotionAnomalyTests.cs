@@ -2,10 +2,12 @@ using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Code = ArcaneCore.World.Playerbots.PlayerbotMotionAnomalies.Code;
@@ -208,6 +210,32 @@ public sealed class PlayerbotMotionAnomalyTests
             Assert.False(cap.Any(Key(Code.MoveRejected)), cap.Describe());
         }
         finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Bot QA #792: a bot that stalled teleports home (a near teleport, waiting for its acknowledgement), and the same think walked on.
+    /// The server ignores movement while a teleport is under way (MovementHandlers), so the MSG_MOVE_START_FORWARD went nowhere and was
+    /// reported as rejected at the spot the bot was leaving. The walk waits for the teleport instead: no packet, no report.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhileATeleportIsUnderWay_WaitsForIt_NotARejectedMove()
+    {
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false);
+        (bool started, bool teleporting) = await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            TeleportService teleports = scenario.Session.Services.GetRequiredService<TeleportFeature>().Teleports;
+            Assert.True(teleports.TeleportTo(player, player.MapId, player.X - 40f, player.Y, Floor, player.Orientation));
+            scenario.Session.ManagedBudget = new ManagedActionBudget(4);
+            bool follow = PlayerbotMotion.Follow(scenario.Session, player, scenario.Route, new PlayerbotOptions { Enabled = true },
+                scenario.Host.World.NowMs);
+            return (follow, teleports.IsBeingTeleported(player));
+        });
+
+        Assert.True(teleporting, "the near teleport was acknowledged before the walk began: the test proves nothing");
+        Assert.False(started);
+        Assert.False(scenario.Capture.Any(Key(Code.MoveRejected)), scenario.Capture.Describe());
+        Assert.False(scenario.Capture.Any(Key(Code.StartBlocked)), scenario.Capture.Describe());
     }
 
     // ---- stuck -----------------------------------------------------------------------------------------------------------------

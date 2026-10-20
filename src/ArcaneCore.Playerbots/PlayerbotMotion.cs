@@ -234,6 +234,12 @@ internal static class PlayerbotMotion
         // A stun, fear or confusion pauses the walk: nothing starts (no packet), and the caller keeps its route (TryAdvance answers true).
         if (ControlLost(player)) return false;
 
+        // A teleport under way (a stalled bot's teleport home, an elevator rescue) waits for its acknowledgement: the server takes no
+        // movement until then (MovementHandlers; vmangos MovementHandler.cpp:311-313), so a start sent now would go nowhere and read as a
+        // rejected move at the spot the bot is leaving (bot QA #792). Nothing is sent or reported; the route, planned from the spot the
+        // bot is leaving, is dropped by the caller and planned again from where the teleport puts it.
+        if (state.TeleportsOf(session)?.IsBeingTeleported(player) == true) return false;
+
         if (!Speed(player, options.MoveSpeed, out float speed, out bool walk))
         {
             if (!keepMotion) Stop(session, player);
