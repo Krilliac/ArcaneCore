@@ -1185,16 +1185,22 @@ public sealed class PlayerbotSiegeWorldTests
         await using GroupTestWorld _ = world;
         Guid leaderBot = raid.Group!.LeaderBotId;
 
-        // Nothing is ever killed or dealt: the guards stay at full health for the whole run, the members are healthy until the push shows.
+        // Nothing is killed or dealt by the test: the guards stay at full health for the whole run; the members are kept healthy, the leader is left to the guards.
         bool pushed = false;
         int stepAtPush = -1;
         uint pushSince = 0;
         float maxX = float.MinValue;
+        var trail = new List<string>();
+        uint began = Now(world);
         var problems = new List<string>();
         bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 200_000, () =>
         {
+            if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
+                trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} order={raid.Order} push={raid.Push} force={raid.PushInForce} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} x={Leader(world, raid).X - Origin.X:F1} lag={MaxLag(world, raid):F0} best={raid.PushBestYards:F0} progAgo={(raid.PushProgressMs == 0 ? -1 : (long)unchecked(Now(world) - raid.PushProgressMs))} aiStep={raid.Group!.Members.First(m => m.BotId == leaderBot).AI?.Step} target={raid.Group.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit?.Guid} moveTo={raid.MoveTo.X - Origin.X:F0} attackers={Leader(world, raid).Combat.Attackers.Count}");
             TopUpGuards(world, raid);
+            // The members are kept alive (the healers cannot out-heal guards that are never killed); the leader is not: it must survive the push on its own.
             if (!pushed) TopUpMembers(world, raid);
+            else foreach (Player member in Living(world, raid).Where(p => p.Guid != Leader(world, raid).Guid)) member.Health = member.MaxHealth;
             Player leader = Leader(world, raid);
             if (raid.Group.LeaderBotId != leaderBot) problems.Add($"the leader changed at {Now(world)}");
             if (!leader.IsAlive) problems.Add($"the leader died at {Now(world)} (push {raid.Push}, step {siege.Step})");
@@ -1211,10 +1217,10 @@ public sealed class PlayerbotSiegeWorldTests
         });
 
         Assert.True(pushed, "the raid never pushed through: " + raid.LastFacts);
-        Assert.True(done, $"the push neither moved the step nor was withdrawn (step {siege.Step}, push {raid.Push}, denied {raid.PushDeniedStep}, leader at x+{maxX:F1}, {raid.LastFacts})" + Environment.NewLine + world.Trace());
+        Assert.True(done, $"the push neither moved the step nor was withdrawn (step {siege.Step}, push {raid.Push}, denied {raid.PushDeniedStep}, leader at x+{maxX:F1}, {raid.LastFacts})" + Environment.NewLine + world.Trace() + Environment.NewLine + string.Join(Environment.NewLine, trail));
         Assert.Empty(problems);
         // The leader really walked on (the path exists here, and the guards cannot be killed): it passed 60 yards from the start and the step moved, no denial.
-        Assert.True(maxX > 60f && siege.Step > stepAtPush, $"the leader reached x+{maxX:F1}, step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}");
+        Assert.True(maxX > 60f && siege.Step > stepAtPush, $"the leader reached x+{maxX:F1}, step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}" + Environment.NewLine + string.Join(Environment.NewLine, trail));
         Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
         Assert.Equal(0, raid.Retreats);
     }
