@@ -346,6 +346,33 @@ public sealed class GameEventSpawnTests
         Assert.Equal([100u], spawns.GatedCreatures);
     }
 
+    [Fact]
+    public void AllowsCreature_OnListedGuids_AllocatesNothing()
+    {
+        // A bot's quest-candidate scan asks the gate for every listed giver every think (the perf-tick allocation trace, 2026-10-19: a
+        // delegate per ask). Guid 100 is spawned with running event 1; guid 101 is removed with event 27, which is not running.
+        var state = new FakeState();
+        state.Active.Add(1);
+        var spawns = new GameEventSpawns(
+            state,
+            new GameEventRows
+            {
+                Creatures = new Dictionary<int, IReadOnlyList<uint>> { [1] = [100u], [-27] = [101u] },
+            },
+            () => []);
+        Assert.True(spawns.AllowsCreature(100));
+        Assert.True(spawns.AllowsCreature(101));
+
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
+        {
+            for (int i = 0; i < 128; i++)
+            {
+                spawns.AllowsCreature(100);
+                spawns.AllowsCreature(101);
+            }
+        }, 0, "AllowsCreature x256");
+    }
+
     private sealed class FakeState : IGameEventState
     {
         public HashSet<ushort> Active { get; } = [];

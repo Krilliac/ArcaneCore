@@ -47,7 +47,7 @@ public sealed partial class QuestNpcServices : IConditionQuests
             return null;
         }
 
-        return Quests.Get(questId) is { } quest && CanTakeQuest(state, quest, []);
+        return Quests.Get(questId) is { } quest && CanTakeQuest(state, quest, null);
     }
 
     private PlayerNpcState? LoadedState(Player player)

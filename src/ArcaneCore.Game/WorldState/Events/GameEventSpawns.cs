@@ -52,12 +52,29 @@ public sealed class GameEventSpawns : ISpawnGate, IGameEventEffects
 
     private bool Allows(Dictionary<uint, ushort[]> positive, Dictionary<uint, ushort[]> negative, uint guid)
     {
-        if (positive.TryGetValue(guid, out ushort[]? spawnWith) && !spawnWith.Any(_state.IsActiveEvent))
+        if (positive.TryGetValue(guid, out ushort[]? spawnWith) && !AnyActive(spawnWith))
         {
             return false;
         }
 
-        return !negative.TryGetValue(guid, out ushort[]? removeWith) || !removeWith.Any(_state.IsActiveEvent);
+        return !negative.TryGetValue(guid, out ushort[]? removeWith) || !AnyActive(removeWith);
+    }
+
+    /// <summary>
+    /// Whether any of <paramref name="events"/> is running. A loop, not <c>Any(_state.IsActiveEvent)</c>: bots ask the gate for every
+    /// listed quest giver every think, and the method group allocated a delegate per ask.
+    /// </summary>
+    private bool AnyActive(ushort[] events)
+    {
+        foreach (ushort eventId in events)
+        {
+            if (_state.IsActiveEvent(eventId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void Refresh(int signedEventId)

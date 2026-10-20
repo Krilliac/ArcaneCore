@@ -89,7 +89,7 @@ public static class QuestNeeds
             needs |= QuestAdapter.SrcSpell;
         }
 
-        if (quest.ReqSourceId.Any(id => id != 0) || quest.ReqSourceCount.Any(count => count != 0))
+        if (AnyNonZero(quest.ReqSourceId) || AnyNonZero(quest.ReqSourceCount))
         {
             needs |= QuestAdapter.ReqSource;
         }
@@ -115,6 +115,20 @@ public static class QuestNeeds
         }
 
         return needs;
+    }
+
+    /// <summary>A loop, not LINQ <c>Any</c>: its enumerator was allocated per call, and bots classify every candidate quest every think.</summary>
+    private static bool AnyNonZero(IReadOnlyList<uint> values)
+    {
+        for (int i = 0; i < values.Count; i++)
+        {
+            if (values[i] != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
@@ -198,12 +212,30 @@ public sealed partial class QuestNpcServices
         // Read per query, never cached: a module's coverage may depend on content that loads after this service is built
         // (the spell store attaches after the quest feature). Only event quests ask.
         if ((needs & QuestAdapter.EventCredit) != 0
-            && (HasAreaTrigger(quest.Id) || s_adapterModules.Value.Any(module => module.EventQuestsCovered(this).Contains(quest.Id))))
+            && (HasAreaTrigger(quest.Id) || ModuleCoversEventQuest(quest.Id)))
         {
             provided |= QuestAdapter.EventCredit;
         }
 
         return needs & ~provided;
+    }
+
+    /// <summary>
+    /// Whether an adapter module credits event quest <paramref name="questId"/>. A separate loop, not a lambda in
+    /// <see cref="MissingAdapters"/>: its closure was allocated on every call, and bots ask for every candidate quest every think.
+    /// </summary>
+    private bool ModuleCoversEventQuest(uint questId)
+    {
+        IReadOnlyList<IQuestAdapterModule> modules = s_adapterModules.Value;
+        for (int i = 0; i < modules.Count; i++)
+        {
+            if (modules[i].EventQuestsCovered(this).Contains(questId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Every behaviour the quest needs is delivered, so it may be accepted and abandoned.</summary>
