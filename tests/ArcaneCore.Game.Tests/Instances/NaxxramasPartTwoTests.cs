@@ -638,28 +638,174 @@ public sealed class NaxxramasPartTwoTests
         Assert.False(ai.CombatScriptRunning);
     }
 
-    [Fact]
-    public void ThaddiusAdds_BothFakingDeathWhenTheRaidWipesBeforeThaddiusIsEngaged_DoNotStayInCombatForever()
+    private static readonly CreatureSpawn[] ConstructAddSpawns =
+    [
+        Spawn(53311, 15929, 2, 0, 270, 533, respawnSeconds: 604800), Spawn(53312, 15930, 3, 0, 270, 533, respawnSeconds: 604800),
+    ];
+
+    private static void Tick(Raid raid, int ms)
     {
-        using var raid = new Raid(15928).Initialize(activateThaddius: false);
-        Creature stalagg = raid.Creatures.SpawnTemporary(Template(15929), 1, 0, 270, 0);
-        Creature feugen = raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+        for (int elapsed = 0; elapsed < ms; elapsed += 100) raid.World.RunTick(100);
+    }
+
+    private static Creature Add(Raid raid, uint entry) => raid.Creatures.Creatures.Single(c => c.Entry == entry);
+
+    private static Player AddPlayer2(Raid raid)
+    {
+        Player player = TestWorld.CreatePlayer(2, 0, 0, new FakeSession(), 533);
+        player.Relocate(0, 1, 270, 0, 0);
+        raid.World.AddPlayer(player);
+        raid.World.RunTick(0);
+        return player;
+    }
+
+    private static void AssertAddsRespawnedAtFullHealthAndIdle(Raid raid)
+    {
+        foreach (uint entry in new uint[] { 15929, 15930 })
+        {
+            Creature add = Add(raid, entry);
+            Assert.True(add.IsAlive);
+            Assert.Equal(add.MaxHealth, add.Health);
+            Assert.False(((ThaddiusAddAI)add.AI!).IsFakingDeath);
+            Assert.False(add.Combat.IsInCombat);
+        }
+    }
+
+    [Fact]
+    public void ThaddiusAdds_OnePlatformDeadWhileTheOtherFights_NoFailNoHeal()
+    {
+        // cmangos has no per-add wipe rule: a feigning add whose own enemies died, while its partner still fights, changes nothing.
+        using var raid = new Raid(15928).Initialize(activateThaddius: false, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        Player second = AddPlayer2(raid);
+        Creature stalagg = Add(raid, 15929), feugen = Add(raid, 15930);
+        stalagg.AI!.AttackStart(second);
+        feugen.AI!.AttackStart(raid.Tank);
+        feugen.Health = feugen.MaxHealth / 2;
+        uint feugenHealth = feugen.Health;
+        raid.Map.Combat.DealDamage(second, stalagg, stalagg.Health, direct: false);
+        Assert.True(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+
+        second.Health = 0;
+        Tick(raid, 5000);
+
+        Assert.Equal(EncounterState.InProgress, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.Equal(feugenHealth, feugen.Health);
+        Assert.True(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+        Assert.True(stalagg.IsAlive);
+        Assert.True(feugen.IsAlive);
+    }
+
+    [Fact]
+    public void Thaddius_WipeAfterTheOverloadWhileEngaged_FailsDespawnsTheAddsAndRespawnsThemIn30s()
+    {
+        // naxxramas.cpp SetData(TYPE_THADDIUS, FAIL) :594-617: both adds are set to a 30 s respawn and despawned; Thaddius is re-flagged
+        // at home (boss_thaddius.cpp:109-115, :125-129).
+        using var raid = new Raid(15928).Initialize(activateThaddius: true, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        Assert.Equal(EncounterState.InProgress, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        raid.Tank.Health = 0;
+
+        Tick(raid, 5000);
+
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.All(raid.Creatures.Creatures.Where(c => c.Entry is 15929 or 15930), c => Assert.False(c.IsAlive));
+        Assert.False(raid.Instance.ConstructAddsDefeated);
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.NotSelectable));
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.ImmuneToPlayer));
+
+        Tick(raid, 31_000);
+        AssertAddsRespawnedAtFullHealthAndIdle(raid);
+    }
+
+    [Fact]
+    public void Thaddius_KilledThenPlayersLeave_StaysDoneAndTheAddsAreGone()
+    {
+        // boss_thaddiusAI::JustDied (boss_thaddius.cpp:131-145) despawns both adds; nothing later can fail a finished encounter.
+        using var raid = new Raid(15928).Initialize(activateThaddius: true, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        raid.Map.Combat.Kill(raid.Tank, raid.Boss);
+        Assert.Equal(EncounterState.Done, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+
+        raid.Tank.Health = 0;
+        Tick(raid, 5000);
+
+        Assert.Equal(EncounterState.Done, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.All(raid.Creatures.Creatures.Where(c => c.Entry is 15929 or 15930), c => Assert.False(c.IsAlive));
+    }
+
+    [Fact]
+    public void ThaddiusAdds_BothFakingWhenTheRaidDiesBeforeTheOverload_FailsAndRespawnsThem()
+    {
+        using var raid = new Raid(15928).Initialize(activateThaddius: false, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        Creature stalagg = Add(raid, 15929), feugen = Add(raid, 15930);
         stalagg.AI!.AttackStart(raid.Tank);
         feugen.AI!.AttackStart(raid.Tank);
         raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
         raid.Map.Combat.DealDamage(raid.Tank, feugen, feugen.Health, direct: false);
         Assert.True(raid.Instance.ConstructAddsDefeated);
 
-        raid.Tank.Health = 0; // the wipe: nobody is left to fight
-        for (int i = 0; i < 300; i++) raid.World.RunTick(100); // 30 s: past the 14 s overload and every leash check
+        raid.Tank.Health = 0; // the wipe: nobody is left to fight when the Teslas overload
+        Tick(raid, 15_000);
 
-        foreach (Creature add in new[] { stalagg, feugen })
-        {
-            var addAi = (ThaddiusAddAI)add.AI!;
-            Assert.False(addAi.IsFakingDeath);
-            Assert.False(addAi.CombatScriptRunning);
-            Assert.False(add.Combat.IsInCombat);
-        }
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.All(raid.Creatures.Creatures.Where(c => c.Entry is 15929 or 15930), c => Assert.False(c.IsAlive));
+
+        Tick(raid, 31_000);
+        AssertAddsRespawnedAtFullHealthAndIdle(raid);
+    }
+
+    [Fact]
+    public void ThaddiusAdds_OneFakingWhenThePartnerEvades_FailsAndRespawnsBoth()
+    {
+        using var raid = new Raid(15928).Initialize(activateThaddius: false, spawns: ConstructAddSpawns);
+        raid.World.RunTick(0);
+        Creature stalagg = Add(raid, 15929), feugen = Add(raid, 15930);
+        stalagg.AI!.AttackStart(raid.Tank);
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        Assert.True(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+        Assert.True(feugen.Combat.IsInCombat);
+
+        raid.Tank.Health = 0; // Feugen has nobody to fight: it evades home, which fails the encounter
+        Tick(raid, 5000);
+
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.All(raid.Creatures.Creatures.Where(c => c.Entry is 15929 or 15930), c => Assert.False(c.IsAlive));
+
+        Tick(raid, 31_000);
+        AssertAddsRespawnedAtFullHealthAndIdle(raid);
+    }
+
+    [Fact]
+    public void ThaddiusAdd_ReviveOnAnAddThatIsNotFaking_DoesNothing()
+    {
+        // boss_thaddiusAddsAI::Revive is only reached from the revive timer of a feigning add; a living partner is not healed.
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        Creature feugen = raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+        feugen.AI!.AttackStart(raid.Tank);
+        feugen.Health = feugen.MaxHealth / 2;
+        uint health = feugen.Health;
+
+        ((ThaddiusAddAI)feugen.AI).Revive();
+
+        Assert.Equal(health, feugen.Health);
+    }
+
+    [Fact]
+    public void Thaddius_OverloadWithNoLivingPlayer_FailsTheEncounter()
+    {
+        // The Tesla overload puts Thaddius in combat with the zone; with no living player that yields nobody (ArcaneCore-only fail: the
+        // reference leaves him unflagged and unattackable; precedent FrostwyrmBossAIs.StartPhaseTwo, Kel'Thuzad).
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        raid.Instance.RecordConstructAddDeath(15929);
+        raid.Instance.RecordConstructAddDeath(15930);
+        raid.Tank.Health = 0;
+        raid.World.RunTick(100);
+
+        raid.Instance.Update(14000);
+
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.Thaddius));
     }
 
     [Fact]
