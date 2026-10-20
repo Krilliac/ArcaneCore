@@ -423,10 +423,11 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   the first read that is not, and also starts over at a step change (each waypoint needs its own 10 s). The loss clock is the last read in which a member was
   dead that was not at the read before (the first read counts nobody); **a member that goes offline is not found alive and counts as a loss**, as does one
   that logs back in dead.
-  **A push in force carries.** The coordinator keeps the push it granted in `PushInForce` and feeds it back (`PlayerbotSiegeFacts.Pushing`); `PushOf` returns it
+  **A push in force carries.** A push **begins only from a granted one** (`GrantPushes` said yes, the order is Advance): a qualification the siege refused starts nothing, so it is judged again at every read and cannot be carried later past the 80 %, loss-window and hostile-count checks it passed only at the moment of the refusal (`NextPushInForce`). A granted push the coordinator keeps in `PushInForce` and feeds back (`PlayerbotSiegeFacts.Pushing`); `PushOf` returns it
   unchanged, through the step bump (which zeroes both clocks), a hold at the waypoint for the peer, a falling hostile count and a dip under 80 % health. It ends on:
-  out of combat, nobody alive, a member fighting the objective, the final leg, a retreat latch, `PushBlocked` (the siege's grant, or the denial below) and a fight the
-  retreat rules call lost (those still retreat).
+  out of combat, nobody alive, a member fighting the objective, the final leg, a retreat latch, the denial below (`PushDeniedStep`) and a fight the
+  retreat rules call lost (those still retreat). A block of the siege's grant (the peer is in a fight that does not qualify, or the leader waits at the waypoint for a peer that
+  is not there) only **holds** the push: the order is Assault meanwhile (`Push` is none, `PushInForce` stays), and it resumes when the block ends.
   **While a raid pushes through** the skull and cross are taken off their units when the push begins (and `PullTarget` is empty). The **leader walks**: away from its
   waypoint it fights nothing (its target is none, so `PlayerbotGroupAI.Update` reaches the walk; its attackers follow it), and at its waypoint, waiting, it fights back.
   **Every member answers any attacker of any raid member** within `AssistYards` (50 yards), its own attacker first, then the nearest, and with none follows the leader;
@@ -434,13 +435,13 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   **The no-progress bound** (`NotePushProgress`): while the raid pushes and its leader is not at its waypoint, the leader's 2D distance to the step goal must set a
   new least value, by more than `PushProgressYards` (2 yards), within `PushStallMs` (30 s). A push that does not is withdrawn and denied for the rest of the step
   (`PushDeniedStep`): the raid is back at Assault, which is the baseline, a note and a log warning say so (`push withdrawn, the leader got no nearer to waypoint N`), and
-  the status detail ends in `push=denied`. Standing at the waypoint counts as progress (the lockstep and its own bound govern there).
+  the status detail ends in `push=denied`. Standing at the waypoint counts as progress (the lockstep and its own bound govern there), and so does an elevator trip of the leader at any stage (`PlayerbotElevator.IsTraveling`): both levels of an Undercity lift share their XY, so a wait and a ride gain no 2D yards; the elevator has its own 60 s no-progress bound.
   **Lockstep:** the step moves on once every leader stands at its waypoint, no living member of any raid is more than `LagYards` (30 yards) behind its leader, and each
   raid is out of combat or pushing. A pushing leader that reaches the next waypoint waits there, fighting back, until the members that disengaged (on the other lift
   level, say) have caught up. That wait is bound too: after `LagHoldMs` (90 s) of a member more than 30 yards behind, the lag is waived for that step change (`LagWaived`):
   an event note, a log warning and the raid warning `Pushing on without the stragglers` say so, and the status detail ends in `lag=waived` while the step cannot move
-  yet (a peer is not there). Assault between waypoints ignores the lag because its leader does not walk. **Stall watch:** a hold of a push for the peer, a push whose
-  leader gets no nearer, and a fight that has lasted longer than `StalemateMs` at one step are not progress (a pushing leader that is getting nearer is), so such a siege is
+  yet because the peer, standing at its waypoint too, has a straggler of its own that is not waived yet (a peer that is not at its waypoint blocks the push instead, which resets the lag clock). Assault between waypoints ignores the lag because its leader does not walk. **Stall watch:** a hold of a push for the peer (`PushInForce` set, no progress), a push whose
+  leader gets no nearer, and a fight that has lasted longer than `StalemateMs` at one step, the objective's fight and the one on the leg to it excepted, are not progress (a pushing leader that is getting nearer is), so such a siege is
   reported stalled 120 s later.
   **Lifts:** a ride to the stop (`ElevatorStage.ToStop`) is ended by combat
   (`PlayerbotGroupAI.Update`), so a raid in combat at the lift top would begin the ride and cancel it at every think for as long as it stayed in combat

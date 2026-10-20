@@ -1213,7 +1213,9 @@ public sealed class PlayerbotSiegeWorldTests
         Assert.True(pushed, "the raid never pushed through: " + raid.LastFacts);
         Assert.True(done, $"the push neither moved the step nor was withdrawn (step {siege.Step}, push {raid.Push}, denied {raid.PushDeniedStep}, leader at x+{maxX:F1}, {raid.LastFacts})" + Environment.NewLine + world.Trace());
         Assert.Empty(problems);
-        Assert.True(maxX > 60f || raid.PushDeniedStep == stepAtPush && raid.Push == PlayerbotSiegePush.None, $"the leader reached x+{maxX:F1} and the push was not withdrawn (denied {raid.PushDeniedStep}, push {raid.Push})");
+        // The leader really walked on (the path exists here, and the guards cannot be killed): it passed 60 yards from the start and the step moved, no denial.
+        Assert.True(maxX > 60f && siege.Step > stepAtPush, $"the leader reached x+{maxX:F1}, step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}");
+        Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
         Assert.Equal(0, raid.Retreats);
     }
 
