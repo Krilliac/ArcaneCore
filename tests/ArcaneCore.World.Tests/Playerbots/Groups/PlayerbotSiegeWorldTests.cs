@@ -1372,6 +1372,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
             if (attacker is null) return false;
             if (unchecked(Now(world) - lastLine) >= 500) { lastLine = Now(world); trail.Add(AnswerLine(world, raid, leaderBot, leader, waypoint, attacker, began)); }
+            if (attacker.IsAlive && !ReferenceEquals(attacker.Combat.Victim, leader)) attacker.Combat.Threat.AddThreat(leader, 100_000f); // it keeps shooting the leader
             float off = FlatYards(leader, waypoint);
             if (siege.Step == stepAtPush) leaderOff = Math.Max(leaderOff, off);
             // Reached out in the open: the leader is out of the disk and within a blow of the attacker, and has it as its target.
@@ -1451,10 +1452,11 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
             if (attacker is null) return false;
             if (unchecked(Now(world) - lastLine) >= 500) { lastLine = Now(world); trail.Add(AnswerLine(world, raid, leaderBot, leader, waypoint, attacker, began)); }
+            if (attacker.IsAlive && !ReferenceEquals(attacker.Combat.Victim, leader)) attacker.Combat.Threat.AddThreat(leader, 100_000f); // it keeps shooting the leader
             float off = FlatYards(leader, waypoint);
             if (siege.Step == stepAtPush) leaderOff = Math.Max(leaderOff, off);
             // The attacker stays 25 yards out until the leader has left the disk to answer it, then it kites to 45 yards (beyond the 30-yard leash) and stays there.
-            if (!kited && off > 8f)
+            if (!kited && off > 8f && ReferenceEquals(raid.Group.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit, attacker))
             {
                 chased = true;
                 kited = true;
@@ -1464,7 +1466,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
             refused |= siege.Step == stepAtPush && PlayerbotMotion.IsBlacklisted(leader, waypoint);
             back |= kited && unchecked(Now(world) - kitedAt) > 2_000 && (off <= PlayerbotSiegeCommander.WaypointYards || siege.Step > stepAtPush);
-            return back || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 80_000;
+            return back || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 80_000 || !raid.PushingThrough;
         });
 
         string Story() => $"done={done} sent={attacker is not null} chased={chased} kited={kited} back={back} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
