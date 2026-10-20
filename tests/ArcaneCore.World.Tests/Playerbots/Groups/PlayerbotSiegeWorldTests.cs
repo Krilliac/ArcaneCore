@@ -1320,7 +1320,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
         int stepAtPush = -1;
         bool sent = false, targeted = false, leaderDied = false, refused = false;
-        uint sentAt = 0;
+        uint sentAt = 0, pinnedAt = 0;
         float guardOff = 0f, leaderOff = 0f;
         var trail = new List<string>();
         uint began = Now(world);
@@ -1350,7 +1350,9 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 leader.Relocate(waypoint.X + 5.5f, waypoint.Y, leader.Z, 0, Now(world));
                 attacker.Relocate(waypoint.X + 10f, waypoint.Y, attacker.Z, 0, Now(world));
                 guardOff = Math.Max(guardOff, MathF.Sqrt(((attacker.X - waypoint.X) * (attacker.X - waypoint.X)) + ((attacker.Y - waypoint.Y) * (attacker.Y - waypoint.Y))));
-                if (raid.Group.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit is { } t && ReferenceEquals(t, attacker)) targeted = true;
+                // Counted only once the attacker has stood outside the disk for 3 s: a target chosen while it was still on its way in does not show the leader answers it out there.
+                if (pinnedAt == 0) pinnedAt = Now(world);
+                if (unchecked(Now(world) - pinnedAt) > 3_000 && raid.Group.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit is { } t && ReferenceEquals(t, attacker)) targeted = true;
             }
 
             leaderDied |= !leader.IsAlive;
