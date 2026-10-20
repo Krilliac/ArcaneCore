@@ -10,8 +10,10 @@ DELETE FROM `game_event_playerbot_post` WHERE `event` = 900;
 DELETE FROM `game_event_playerbot_group` WHERE `event` = 900;
 DELETE FROM `game_event` WHERE `entry` = 900;
 
+-- Serverside event: schedule_type 0 and no start_time/end_time, so only .event start and .event stop run it, in both dialects. occurence is twice the length
+-- so that a stop sticks where the schedule is read as vmangos (the window of a stopped event reopens only after another occurence).
 INSERT INTO `game_event` (`entry`, `schedule_type`, `occurence`, `length`, `holiday`, `linked_to`, `description`, `hardcoded`, `disabled`, `patch_min`, `patch_max`)
-VALUES (900, 0, 5184000, 5184000, 0, 0, 'Bot scenario: Undercity siege', 0, 0, 0, 10);
+VALUES (900, 0, 10368000, 5184000, 0, 0, 'Bot scenario: Undercity siege', 0, 0, 0, 10);
 
 INSERT INTO `game_event_playerbot_group` (`event`, `group_id`, `name_prefix`, `count`, `team`, `class_spec`, `level`, `provision`, `start_map`, `start_x`, `start_y`, `start_z`, `start_o`, `role`, `comment`) VALUES
 (900, 1, 'Siegebot', 80, 0, '1:1,3:2,1:5,4:11,1:8,1:4,3:5,7:9,4:3,1:2,3:1,4:5,7:8,4:4,1:9,3:3,1:5,3:2,1:8,1:4', 60, 1, 0, 1925, 225, 49.41, 2.94, 2, 'Alliance attackers: marched in two raids from Tirisfal to the Undercity throne room'),

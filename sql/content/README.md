@@ -41,3 +41,17 @@ Same clients and cautions as for the schema files ([sql/updates/README.md](../up
 
 The server reads the scenario tables when the playerbot pack attaches (server start or a playerbots hot reload), so restart or reload
 after installing a file. Then `.event start 900` brings the scenario up.
+
+## Order against the content importer
+
+`arcane-content-importer` ([content import](../../docs/areas/content-import.md)) and a content file both write `game_event`, so the order matters:
+
+- **`arcane-content-importer import --replace`** deletes every `game_event` row, including 900. The `game_event_playerbot_*` rows stay, but they name an
+  event that no longer exists and the scenario feature rejects them at load (`no such entry`). Apply `0001_undercity_siege.sql` again after
+  such an import.
+- **`arcane-content-importer refresh`** fills the seven game-event tables only when the world has no `game_event` row at all. If you install the
+  content file first, the world then has an event (900) and the refresh skips the holidays and the rest of the event data. On a new world,
+  run the importer first, then the content file.
+- The event row of the file is a serverside event (`schedule_type` 0, `start_time` NULL) that works in the CMangos and the VMangos dialect;
+  it never starts by itself. The details, and why `occurence` is twice `length`, are in
+  [bot event scenarios](../../docs/areas/playbots-scenarios-events.md#events-restarts-and-start_time).

@@ -2,6 +2,8 @@ using Microsoft.EntityFrameworkCore;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Data.World.WorldState;
+using ArcaneCore.Game.WorldState;
+using Microsoft.Extensions.Logging.Abstractions;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
@@ -101,6 +103,73 @@ public sealed class EventScenarioFeatureWiringTests
             Assert.Empty(catalog.Issues);
             Assert.Equal(6, catalog.GroupsOf(900).Count);
             Assert.Equal(10, catalog.GroupsOf(900).Single(g => g.Siege is not null).Siege!.Waypoints.Count);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(GameEventDialect.CMangos, false)]
+    [InlineData(GameEventDialect.VMangos, false)]
+    [InlineData(GameEventDialect.Auto, true)] // another row has a start_time: Auto reads the table as vmangos
+    public async Task TheShippedEventRow_IsValid_NeverStartsByItself_AndStartsAndStopsByCommand_InBothDialects(GameEventDialect dialect, bool vmangosNeighbour)
+    {
+        string script = RepoRoot.ReadText("sql/content/world/sqlite/0001_undercity_siege.sql");
+        string path = Path.Combine(Path.GetTempPath(), $"arcanecore-evevent-{Guid.NewGuid():N}.db");
+        string connectionString = $"Data Source={path};Pooling=False";
+        try
+        {
+            var options = new DbContextOptionsBuilder<ArcaneCore.Data.Content.WorldDbContext>().UseSqlite(connectionString).Options;
+            await using (var db = new ArcaneCore.Data.Content.WorldDbContext(options))
+            {
+                await db.Database.EnsureCreatedAsync();
+            }
+
+            await using (var connection = new SqliteConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using SqliteCommand command = connection.CreateCommand();
+                command.CommandText = script;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            GameEventContent content;
+            await using (var read = new ArcaneCore.Data.Content.WorldDbContext(options))
+            {
+                content = await new EfGameEventDataStore(read).LoadAsync();
+            }
+
+            if (vmangosNeighbour)
+                content = content with { Events = [.. content.Events, new GameEventRecord(7, 0, 1440, 60, 0, 0, "A dated event", "2020-01-01 00:00:00", "2030-01-01 00:00:00")] };
+            var now = new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero);
+            var gameOptions = new GameEventOptions { Dialect = dialect };
+            GameEventLoadResult load = GameEventLoader.Load(content, gameOptions, now, TimeZoneInfo.Utc);
+            var service = new GameEventService(load, gameOptions, () => now, TimeZoneInfo.Utc, NullLogger.Instance);
+
+            Assert.Equal(dialect == GameEventDialect.CMangos ? GameEventDialect.CMangos : GameEventDialect.VMangos, service.Dialect);
+            Assert.DoesNotContain(service.LoadIssues, issue => issue.Contains("game_event 900", StringComparison.Ordinal));
+            Assert.True(service.IsValidEvent(900));
+            Assert.False(service.Find(900)!.Disabled);
+
+            service.Initialize(new HashSet<ushort>());
+            now = now.AddDays(3);
+            service.Update();
+            Assert.False(service.IsActiveEvent(900)); // the schedule never starts it
+
+            Assert.True(service.StartEvent(900, overwrite: true)); // what .event start does
+            Assert.True(service.IsActiveEvent(900));
+            now = now.AddDays(3);
+            service.Update();
+            Assert.True(service.IsActiveEvent(900)); // and the schedule does not stop it
+
+            Assert.True(service.StopEvent(900, overwrite: true)); // what .event stop does
+            Assert.False(service.IsActiveEvent(900));
+            now = now.AddDays(3);
+            service.Update();
+            Assert.False(service.IsActiveEvent(900));
         }
         finally
         {

@@ -120,7 +120,7 @@ public static class GameEventValidation
     /// <summary>
     /// vmangos <c>GameEventMgr::LoadFromDB</c> (GameEventMgr.cpp:183-259) for one row: a length of 0 makes the event
     /// invalid, an invalid patch range is reset to 0..10, and an event outside the 1.12 patch range is disabled.
-    /// A row without a start or end time is invalid.
+    /// A row without a start or end time loads as vmangos loads it (start and end 0): valid, never scheduled, started by hand.
     /// </summary>
     public static GameEventDefinition BuildVMangos(GameEventSource source, ICollection<string> issues)
     {
@@ -130,12 +130,10 @@ public static class GameEventValidation
         GameEventDefinition definition = new(
             source.Id, source.Start ?? s_defaultStart, source.End ?? s_defaultEnd, source.OccurenceMinutes, source.LengthMinutes,
             source.HolidayId, source.Description, source.Hardcoded, source.Disabled);
-        if (source.Start is null || source.End is null)
-        {
-            issues.Add($"game_event {source.Id} has no start_time or end_time and can't be used");
-            definition = definition with { LengthMinutes = 0 };
-        }
-
+        // A NULL start_time or end_time is not an error: vmangos selects UNIX_TIMESTAMP(NULL) and Field::GetUInt64 turns a NULL into 0
+        // (Field.h:68-75), so the row loads with start 0 and end 0. Such an event is valid (only a length of 0 is not), the schedule never
+        // makes it active (GameEventMgr.cpp:42 needs start <= now < end), and .event start / stop run it by hand. The defaults above
+        // (start 1, end 0) have the same effect. Serverside content that must work in both dialects relies on this.
         if (source.LengthMinutes == 0)
         {
             issues.Add($"game_event {source.Id} has length 0 and can't be used");
