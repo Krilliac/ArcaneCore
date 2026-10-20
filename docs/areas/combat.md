@@ -54,6 +54,9 @@ with `GetMeleeMissChance`, `Unit::GetUnitCriticalChance` and the dodge/parry/blo
   - Capped at 60%.
 - **From behind.** Nobody parries or blocks from behind, and players cannot dodge from
   behind. Creatures parry and block unless flagged otherwise.
+- **Melee spells.** `VanillaSpellCombatRules.MeleeSpellHitResult` rolls miss, dodge and parry with the same skill terms and
+  the same from-behind and NO_PARRY rules; a spell with SPELL_ATTR_NO_ACTIVE_DEFENSE (Overpower, Ambush, Cheap Shot, Garrote)
+  can only miss (vmangos `SpellCaster.cpp:553-582,732-740`).
 - **Glancing.** Player attackers against non-player victims: 10% + 2% per point of victim
   defense over the attacker's skill, capped at 40%. The skill used is capped at level×5. The
   damage multiplier is frand(low, high) from vmangos `Unit::CalculateMeleeDamage`; the bounds
@@ -144,8 +147,9 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
   proc call); melee and ranged class spells report their per-target outcome through the spell observer.
 - **Limits.** The custom states 9-11 (health 15, 10, 5 percent) are not 1.12 data and are not implemented; the Berserking crit
   state exists only for clients up to 1.8.4 and is omitted; the creature health states and speed changes are the creature area's;
-  melee spell Block outcomes appear once the spell hit table produces them; Overpower's "cannot be dodged, parried or blocked"
-  attribute is honoured by the hit table slice, not here.
+  melee spell Block outcomes appear once the spell hit table produces them. Overpower's "cannot be dodged, parried or blocked"
+  attribute (SPELL_ATTR_NO_ACTIVE_DEFENSE) is honoured by the melee spell table (`VanillaSpellCombatRules.MeleeSpellHitResult`),
+  not here; see "Hit table".
 
 ### Combo points (warrior-mechanics S09)
 `ComboPointService` (`Combat/Combo/`, installed by `ComboFeature`) follows vmangos `Player::AddComboPoints`,
