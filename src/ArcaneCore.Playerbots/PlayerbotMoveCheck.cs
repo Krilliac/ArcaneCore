@@ -50,6 +50,13 @@ internal static class PlayerbotMoveCheck
     /// </summary>
     internal const float DirectStepMaxDrapeYards = 11f;
 
+    /// <summary>
+    /// Maximum drop from the lower of a <c>DirectStep</c>'s two ends to the floor under its destination. The drape
+    /// (<see cref="DirectStepMaxDrapeYards"/>) brings a step whose waypoint height drifted above the floor down onto it; it never lets a bot
+    /// that stands on the floor step off an edge into a pit or down a cliff deeper than this.
+    /// </summary>
+    internal const float DirectStepMaxDropYards = 2f;
+
     /// <summary>How far past a mesh edge the "is there mesh beyond" probe is taken.</summary>
     private const float BeyondYards = 1f;
 
@@ -89,7 +96,10 @@ internal static class PlayerbotMoveCheck
             }
         }
 
-        if (!PlayerbotMotion.ValidHeight(ground) || ground - to.Z > DirectStepMaxStepUpYards || to.Z - ground > DirectStepMaxDrapeYards)
+        // The drape is for a waypoint height that drifted above the floor (the bot is draped onto it before it steps,
+        // PlayerbotMotion.TrySnapDirectStepStart): measured from the lower end, a floor far below both is a drop, not drift.
+        if (!PlayerbotMotion.ValidHeight(ground) || ground - to.Z > DirectStepMaxStepUpYards || to.Z - ground > DirectStepMaxDrapeYards
+            || MathF.Min(from.Z, to.Z) - ground > DirectStepMaxDropYards)
         {
             rejectReason = "NoGroundSupport";
             return false;

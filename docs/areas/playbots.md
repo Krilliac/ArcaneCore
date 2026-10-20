@@ -262,7 +262,12 @@ stepped terrain route (`TryTerrainRoute`: no mesh, or an endpoint tile not loade
 (`ignoreM2: false`; spell line of sight is unchanged, the shared default stays) and (b) where a mesh is loaded under the leg, the mesh
 raycast (`IMeshPointQuery.Raycast`): a leg that leaves the mesh (a hole, a building's footprint, a wall edge) stops there. A leg whose
 start is off the mesh, or whose ray ends where no mesh tile is loaded beyond (tested with a second, zero-length query one yard past the
-edge), is not judged by the mesh and keeps (a) alone. A blocked leg of the retreat trail (`TryClip`) is cut half a yard before the obstacle (bisection of the segment, 6
+edge), is not judged by the mesh and keeps (a) alone. The per-step check of a stepped leg (`PlayerbotMoveCheck.TryValidateStep`) also
+needs a walkable floor under the step: at most 2 yards above the step's height, and at most `DirectStepMaxDrapeYards` (11) below it, the
+step then draped onto that floor (a route whose waypoint heights drifted above the ground; the bot itself is draped first, before it steps),
+but never more than `DirectStepMaxDropYards` (2) below the lower of the step's two ends: a bot standing on the floor does not step off an
+edge into a pit or down a cliff (`AHazardDetour_KeepsEachLegsProof_TheMotionChecksTheSteppedLegs`,
+`DirectStepRouteWithElevatedWaypoints_DrapesToWalkableFloor_WithoutAirwalkAnomaly`). A blocked leg of the retreat trail (`TryClip`) is cut half a yard before the obstacle (bisection of the segment, 6
 steps) when at least 1.5 yards of progress remain, else refused; a stepped terrain route is refused whole instead of
 cut, and `TryPlanToward` then plans a shorter chunk (down to 24 yards), so the mesh's own shorter step stays preferred. Cost: one raycast and one vmap query per leg when the route is planned, a few
 more only when blocked; the per-tick step check uses the line of sight alone; no allocation beyond the route. Tests:
