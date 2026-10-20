@@ -271,9 +271,42 @@ public sealed class ThaddiusAddAI : RaidBossAI
         (Instance as NaxxramasInstance)?.RecordConstructAddDeath(Me.Entry);
     }
 
+    /// <summary>
+    /// boss_thaddiusAddsAI::Reset (boss_thaddius.cpp:197-210): an evade ends the fake death (full health, selectable, standing, death
+    /// prevention back, combat script off, combat movement on).
+    /// </summary>
+    protected override void ResetActions()
+    {
+        base.ResetActions();
+        _fakingDeath = false;
+        Me.Health = Me.MaxHealth;
+        Me.InvincibilityHpThreshold = 1;
+        Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
+        SetMeleeEnabled(true);
+        SetCombatMovement(true);
+    }
+
     public override void OnUpdate(uint diffMs)
     {
-        if (!_fakingDeath) base.OnUpdate(diffMs);
+        if (!_fakingDeath)
+        {
+            base.OnUpdate(diffMs);
+            return;
+        }
+
+        // Not in the reference: its combat script keeps a feigning add in combat for good, and nothing else clears a raid that wiped while
+        // both adds lay there (the encounter is not yet engaged, so Thaddius never fails). With no living enemy left, fail the encounter:
+        // the instance revives both adds (Revive), which then evade through the normal victim selection.
+        if (!HasLivingEnemy()) Instance?.SetData(NaxxramasInstance.Thaddius, EncounterState.Fail);
+    }
+
+    private bool HasLivingEnemy()
+    {
+        foreach (ThreatEntry entry in Me.Combat.Threat.Entries)
+            if (entry.Target.IsAlive && ReferenceEquals(entry.Target.Map, Me.Map)) return true;
+        foreach (ThreatEntry entry in Me.Combat.Threat.OfflineEntries)
+            if (entry.Target.IsAlive && ReferenceEquals(entry.Target.Map, Me.Map)) return true;
+        return false;
     }
 
     /// <summary>Whether the add lies at one health point waiting for its partner (SD2 m_isFakingDeath).</summary>

@@ -10,9 +10,10 @@ using static ArcaneCore.Game.Tests.CreatureTestSupport;
 namespace ArcaneCore.Game.Tests.CreatureAi;
 
 /// <summary>
-/// The stranded-combat evade of <c>CreatureMapSystem.CheckHardLeash</c> (a creature in combat with no living combatant on the map evades on the
-/// leash check) and its <see cref="CreatureAI.CombatScriptRunning"/> exemption (a boss whose script is mid-sequence, e.g. Thekal's fake death,
-/// has no combatant by design and must not be reset).
+/// The two evades that <see cref="CreatureAI.CombatScriptRunning"/> exempts (a boss whose script is mid-sequence, e.g. Thekal's fake death,
+/// has no combatant by design and must not be reset): the stranded-combat evade of <c>CreatureMapSystem.CheckHardLeash</c> (a creature in
+/// combat with no living combatant on the map evades on the leash check) and the fallback evade at the end of
+/// <c>CreatureMapSystem.SelectHostileTarget</c> (no victim, threat or attacker). Each is tested with the flag off (evades) and on (holds).
 /// </summary>
 public sealed class CombatScriptRunningEvadeTests
 {
