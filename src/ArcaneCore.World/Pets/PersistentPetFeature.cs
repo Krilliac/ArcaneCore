@@ -16,7 +16,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     : IWorldFeature, ICharacterHooks, ICharacterDeleteHook
 {
     private readonly Lock _pendingGate = new();
-    private readonly Dictionary<Player, PersistentPetSnapshot?> _pending = [];
+    private readonly Dictionary<Player, LoadedPet> _pending = [];
     private PetsFeature? _pets;
 
     public void Attach(WorldRuntime world)
@@ -52,7 +52,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().DeleteAsync(id, ct).ConfigureAwait(false);
         };
-        world.PlayerLoggedIn += player => PublishLoaded(player, pets);
+        world.PlayerLoggedIn += player => PublishLoaded(world, player, pets);
         world.PlayerLoggingOut += player => _ = SaveAsync(player, pets);
     }
 
@@ -62,21 +62,58 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         if (session.Services.GetService<CharacterSaveQueue>() is { } saves)
             await saves.FlushCharacterAsync(character.Id).ConfigureAwait(false);
         await _pets.Service.FlushCharacterAsync(character.Id).ConfigureAwait(false);
-        PersistentPetSnapshot? snapshot = await _pets.Service.ReadCurrentPetAsync(player).ConfigureAwait(false);
-        if (snapshot is null)
-        {
-            snapshot = await _pets.Service.ReadCallablePetAsync(player).ConfigureAwait(false);
-        }
-        lock (_pendingGate) _pending[player] = snapshot;
+        LoadedPet loaded = await ReadAsync(player, _pets).ConfigureAwait(false);
+        lock (_pendingGate) _pending[player] = loaded;
     }
 
-    private void PublishLoaded(Player player, PetsFeature pets)
+    /// <summary>The stored pet with the pet generation it was read at (taken before the read, so any change during it shows).</summary>
+    private static async Task<LoadedPet> ReadAsync(Player player, PetsFeature pets)
     {
-        PersistentPetSnapshot? snapshot;
-        lock (_pendingGate) { if (!_pending.Remove(player, out snapshot)) return; }
-        if (snapshot is not null && player.IsInWorld && player.Class == ArcaneCore.Game.Class.Hunter
+        long generation = pets.Service.PetGeneration((int)player.Guid.Low);
+        PersistentPetSnapshot? snapshot = await pets.Service.ReadCurrentPetAsync(player).ConfigureAwait(false);
+        if (snapshot is null)
+        {
+            snapshot = await pets.Service.ReadCallablePetAsync(player).ConfigureAwait(false);
+        }
+        return new LoadedPet(snapshot, generation);
+    }
+
+    private void PublishLoaded(WorldRuntime world, Player player, PetsFeature pets)
+    {
+        LoadedPet? loaded;
+        lock (_pendingGate) { if (!_pending.Remove(player, out loaded)) return; }
+        Publish(world, player, pets, loaded);
+    }
+
+    /// <summary>
+    /// World thread. A GM .pet rename/.pet delete may have run between the login's read and its world entry (the owner was not online yet to
+    /// refuse it); then the read is stale and restoring it would bring the old pet back and save it over the change at logout, so read again.
+    /// </summary>
+    private void Publish(WorldRuntime world, Player player, PetsFeature pets, LoadedPet loaded)
+    {
+        if (!player.IsInWorld) return;
+        if (!pets.Service.IsPetGenerationCurrent((int)player.Guid.Low, loaded.Generation))
+        {
+            _ = ReloadAsync(world, player, pets);
+            return;
+        }
+        if (loaded.Snapshot is { } snapshot && player.Class == ArcaneCore.Game.Class.Hunter
             && player.PetGuid.IsEmpty && !player.IsQuestSettlementPending)
             pets.Service.RestoreCurrentPet(player, snapshot);
+    }
+
+    private async Task ReloadAsync(WorldRuntime world, Player player, PetsFeature pets)
+    {
+        try
+        {
+            await pets.Service.WaitForStoredPetChangesAsync((int)player.Guid.Low).ConfigureAwait(false);
+            LoadedPet loaded = await ReadAsync(player, pets).ConfigureAwait(false);
+            world.Post(() => Publish(world, player, pets, loaded));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogError(ex, "rereading the persistent pet of {CharacterId} after a stored pet change failed", player.Guid.Low);
+        }
     }
 
     private async Task SaveAsync(Player player, PetsFeature pets)
@@ -98,4 +135,6 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     }
 
     public Task StopAsync() => _pets?.Service.StopAsync() ?? Task.CompletedTask;
+
+    private sealed record LoadedPet(PersistentPetSnapshot? Snapshot, long Generation);
 }

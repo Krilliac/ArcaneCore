@@ -23,6 +23,7 @@ public sealed partial class SummonService
     private readonly Dictionary<int, PersistentPetSnapshot> _cached = [];
     private readonly Dictionary<int, Task> _saveTails = [];
     private readonly Dictionary<int, long> _cacheGeneration = [];
+    private readonly Dictionary<int, (int Count, TaskCompletionSource Done)> _storedPetChanges = [];
 
     /// <summary>Capture only the current player controlled pet; guardians, critters and wild summons are excluded.</summary>
     public PersistentPetSnapshot? CaptureCurrentPet(Player owner)
@@ -227,6 +228,69 @@ public sealed partial class SummonService
             _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
             _saveTails.Remove(characterId);
         }
+    }
+
+    /// <summary>The character's pet generation: a login records it before reading the stored pet and checks it before restoring that read.</summary>
+    public long PetGeneration(int characterId)
+    {
+        lock (_cacheGate) return _cacheGeneration.GetValueOrDefault(characterId);
+    }
+
+    /// <summary>
+    /// True when the character's stored pet still matches a read made at <paramref name="generation"/>: no cache invalidation since and no
+    /// <see cref="BeginStoredPetChange"/> under way.
+    /// </summary>
+    public bool IsPetGenerationCurrent(int characterId, long generation)
+    {
+        lock (_cacheGate) return !_storedPetChanges.ContainsKey(characterId) && _cacheGeneration.GetValueOrDefault(characterId) == generation;
+    }
+
+    /// <summary>Completes when no <see cref="BeginStoredPetChange"/> of the character is under way.</summary>
+    public Task WaitForStoredPetChangesAsync(int characterId)
+    {
+        lock (_cacheGate) return _storedPetChanges.TryGetValue(characterId, out (int Count, TaskCompletionSource Done) change) ? change.Done.Task : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Fence an offline owner's stored pet rows for a change made outside the pet lifecycle (GM .pet rename / .pet delete). Call it on the
+    /// world thread in the same step that finds the owner offline, so a login that has already read the rows sees the fence when it enters the
+    /// world and reads them again after <see cref="EndStoredPetChange"/>. Every call needs one <see cref="EndStoredPetChange"/>.
+    /// </summary>
+    public void BeginStoredPetChange(int characterId)
+    {
+        lock (_cacheGate)
+        {
+            _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
+            _storedPetChanges[characterId] = _storedPetChanges.TryGetValue(characterId, out (int Count, TaskCompletionSource Done) change)
+                ? (change.Count + 1, change.Done)
+                : (1, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+    }
+
+    /// <summary>End a <see cref="BeginStoredPetChange"/>: forget the cached pet (as <see cref="ForgetCharacter"/>) and release the fence.</summary>
+    public void EndStoredPetChange(int characterId)
+    {
+        TaskCompletionSource? released = null;
+        lock (_cacheGate)
+        {
+            _cached.Remove(characterId);
+            _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
+            _saveTails.Remove(characterId);
+            if (_storedPetChanges.TryGetValue(characterId, out (int Count, TaskCompletionSource Done) change))
+            {
+                if (change.Count > 1)
+                {
+                    _storedPetChanges[characterId] = (change.Count - 1, change.Done);
+                }
+                else
+                {
+                    _storedPetChanges.Remove(characterId);
+                    released = change.Done;
+                }
+            }
+        }
+
+        released?.SetResult();
     }
 
     /// <summary>Read the login-preloaded current snapshot on the world thread; no database I/O.</summary>

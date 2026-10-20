@@ -227,6 +227,12 @@ The 2026-10-04 continuation adds a thin current hunter-pet lifecycle in
 `Game/Pets/PersistentPetService.cs`, `Data/Characters/Pets/PersistentPetDataModule.cs`, and
 `World/Pets/PersistentPetFeature.cs`. Character loading reads the detached snapshot before
 world entry through `ICharacterHooks`, then publishes synchronously on `PlayerLoggedIn`.
+The read records the character's pet generation first. GM `.pet rename` / `.pet delete` find the
+owner offline and fence the owner's pet (`SummonService.BeginStoredPetChange`) in one world-thread
+step, so a login that read the row before the change but entered the world after the owner check
+does not restore that stale read (which its logout would save over the change): the publish sees
+the fence or the moved generation, waits for `EndStoredPetChange`, reads the row again and restores
+that instead.
 Writes are captured before logout/map removal and before corpse decay, serialized per character,
 drained at shutdown, and drained/forgotten during character deletion. The stable pet number is
 preserved in the charm state while each world spawn receives a fresh transient GUID counter.
