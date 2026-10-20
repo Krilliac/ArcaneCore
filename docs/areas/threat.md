@@ -128,6 +128,7 @@ their auras and spell modifiers.
   default true). The per-spell "not removed on evade" custom flag of vmangos' spell_template is data this repository does not have.
 - A charmed creature keeps its auras and does not run home.
 - `CreatureMapSystem.Evaded` is raised once per evade (not for a dead creature, not for an evade already running).
+- `ForcedDespawn` of a living creature strips its auras through `RemoveAurasOnDeath` (vmangos `SetDeathState(JUST_DIED)`, Creature.cpp:2427-2428), so it now raises `SpellSystem.UnitDied` (diminishing-returns reset, charm end). It is not a kill: kill-only consumers hang on `MapCombat.UnitKilled` instead, e.g. the elemental invasion count (`HolidayObjectsFeature`, vmangos `npc_invaderAI::JustDied`, elemental_invasions.cpp:198-204).
 
 Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service yet; the new
 event is the hook), a creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is
