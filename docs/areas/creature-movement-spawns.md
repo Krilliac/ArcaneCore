@@ -37,7 +37,9 @@ A player talking to a creature stops it: `Creature.PauseOutOfCombatMovement` (vm
 `Movement/MotionMaster.cpp:947-969`) does nothing in combat; when the current generator is the random wander or a waypoint path it stops
 the spline where the creature stands and holds the next leg for `NPC_MOVEMENT_PAUSE_TIME`, 180 s (`Objects/CreatureDefines.h:222`;
 `AddPauseTime` keeps a longer wait already running, `RandomMovementGenerator.h:51-55`, `WaypointMovementGenerator.h:89-93`). A waypoint
-walker stopped mid-leg sets off for the same node afterwards. Chase, follow, point, formation-slot and other movement is left alone. The
+walker stopped mid-leg sets off for the same node afterwards. When a generator above the waypoint path ends (an evade's way home, a
+distraction, a scripted point) the path resumes at once as vmangos `Reset` → `StartMoveNow` does (`WaypointMovementGenerator.cpp:108-125`,
+`.h:105-109`): the pause, or what is left of a node delay, is dropped, and a creature that had arrived at a node goes on to the next one. Chase, follow, point, formation-slot and other movement is left alone. The
 NPC handlers call it through `QuestNpcServices.PauseInteractionMovement` after the interaction check passes: gossip hello and questgiver
 hello, gossip option select, the vendor list and battlemaster hello (`Handlers/NPCHandler.cpp:357-358,395-396`,
 `Handlers/QuestHandler.cpp:93-95`, `Handlers/ItemHandler.cpp:716-718`, `Handlers/BattleGroundHandler.cpp:50-52`). A template with the
@@ -179,7 +181,9 @@ Data (World schema version **23**, `CreatureMovementTemplateDataModule.Version`;
 Generator (`Movement/WaypointMovementGenerator.cs`, moved out of `CreatureMovement.cs`):
 
 * Evade goes to the **last reached node** (`GetResetPosition`, `WaypointMovementGenerator.cpp:292-303`), or to the spawn point when no
-  node was reached yet (`GetRespawnCoord`); it used to go to where the fight began. The generator then resumes the same leg.
+  node was reached yet (`GetRespawnCoord`); it used to go to where the fight began. The generator then resumes at once (`Reset` →
+  `StartMoveNow`, `WaypointMovementGenerator.cpp:108-125`, `.h:105-109`): the rest of a node delay is dropped; a creature interrupted
+  mid-leg heads for the same node again, one that had arrived goes on to the next node.
   A reset position carries no orientation (vmangos sets facing only for the spawn point, `HomeMovementGenerator.cpp:54-65`): the home
   leg ends facing its travel direction.
 * The AI is told of every arrival with the node's point id (`MovementInform(WAYPOINT, node)`, `:158-160`) before the delay starts.

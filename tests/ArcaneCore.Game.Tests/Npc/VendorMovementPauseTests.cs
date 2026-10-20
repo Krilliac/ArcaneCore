@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -67,9 +68,70 @@ public sealed class VendorMovementPauseTests
         Assert.False(kit.Vendor.IsMoving);
         (float x, float y) = (kit.Vendor.X, kit.Vendor.Y);
 
+        var wander = Assert.IsType<RandomMovementGenerator>(kit.Vendor.Motion.Top);
+        Assert.Equal(PauseMs, (uint)wander.NextMoveMs);
+        Assert.Equal(PauseMs, (uint)Creature.NpcMovementPauseMs);
+
         Run(kit.World, 60_000, step: 500);
         Assert.Equal((x, y), (kit.Vendor.X, kit.Vendor.Y));
-        Assert.True(Assert.IsType<RandomMovementGenerator>(kit.Vendor.Motion.Top).NextMoveMs > 100_000);
+        Assert.Equal(PauseMs - 60_000, (uint)wander.NextMoveMs);
+    }
+
+    [Fact]
+    public void GossipSelectOption_PausesTheVendorToo()
+    {
+        // HandleGossipSelectOptionOpcode pauses once the creature passes the interaction check (NPCHandler.cpp:395-396), whatever the line.
+        using var kit = new Kit(movementType: 2);
+        kit.Services.GossipSelectOption(kit.Player, kit.Vendor.Guid, 0, null);
+
+        Assert.False(kit.Vendor.IsMoving);
+        Assert.Equal(PauseMs, (uint)Assert.IsType<WaypointMovementGenerator>(kit.Vendor.Motion.Top).WaitMs);
+    }
+
+    [Fact]
+    public void InCombat_TheCreatureIsNotPaused()
+    {
+        // Creature::PauseOutOfCombatMovement returns at once in combat (MotionMaster.cpp:949-950).
+        using var kit = new Kit(movementType: 2);
+        kit.Vendor.UnitFlags |= UnitFlags.InCombat;
+        kit.Vendor.PauseOutOfCombatMovement();
+
+        Assert.True(kit.Vendor.IsMoving);
+        Assert.Equal(0, Assert.IsType<WaypointMovementGenerator>(kit.Vendor.Motion.Top).WaitMs);
+    }
+
+    [Fact]
+    public void ALongerNodeWait_IsKept_NotShortenedByThePause()
+    {
+        // AddPauseTime only lengthens the wait (WaypointMovementGenerator.h:89-93): a 300 s node delay stays 300 s.
+        using var kit = new Kit(movementType: 2, firstNodeX: 5, firstNodeWaitMs: 300_000);
+        Run(kit.World, 3000); // 5 yd at walk speed: it stands at node 1 and waits
+        Assert.False(kit.Vendor.IsMoving);
+        var path = Assert.IsType<WaypointMovementGenerator>(kit.Vendor.Motion.Top);
+        int before = path.WaitMs;
+        Assert.InRange(before, 290_000, 300_000);
+
+        kit.Services.ListInventory(kit.Player, kit.Vendor.Guid);
+        Assert.Equal(before, path.WaitMs);
+    }
+
+    [Fact]
+    public void AWaypointVendorPausedByTalk_ThatFightsAndEvades_SetsOffAgainWhenItIsHome()
+    {
+        // vmangos WaypointMovementGenerator::Reset -> StartMoveNow (WaypointMovementGenerator.cpp:108-125, .h:105-109) clears the wait,
+        // the interaction pause included: after the evade the path goes on at once, not at the end of the 180 s.
+        using var kit = new Kit(movementType: 2);
+        Run(kit.World, 1000);
+        kit.Services.ListInventory(kit.Player, kit.Vendor.Guid);
+        Assert.False(kit.Vendor.IsMoving);
+
+        kit.Map.Combat.DealDamage(kit.Player, kit.Vendor, 1, direct: false);
+        kit.System.EnterEvadeMode(kit.Vendor);
+        Run(kit.World, 3000);
+
+        Assert.False(kit.Vendor.IsInEvadeMode);
+        Assert.True(kit.Vendor.IsMoving);
+        Assert.Equal((kit.FirstNodeX, 0f), (kit.Vendor.Spline!.EndX, kit.Vendor.Spline.EndY)); // the same node: it had not arrived
     }
 
     [Fact]
@@ -90,8 +152,9 @@ public sealed class VendorMovementPauseTests
     {
         public const float FarNodeX = 40f;
 
-        public Kit(byte movementType, uint extraFlags = 0)
+        public Kit(byte movementType, uint extraFlags = 0, float firstNodeX = FarNodeX, uint firstNodeWaitMs = 0)
         {
+            FirstNodeX = firstNodeX;
             CreatureTemplate template = Template() with
             {
                 NpcFlags = (uint)NpcFlags.Vendor,
@@ -100,10 +163,10 @@ public sealed class VendorMovementPauseTests
                 ExtraFlagsDialect = CreatureExtraFlagsDialect.VMangos,
             };
             CreatureContent content = Content([template], [Spawn(1, WolfEntry, 0, 0, movementType: movementType, wander: 10)],
-                waypoints: [(1u, new CreatureWaypoint(1, FarNodeX, 0, 83.5f, 100f, 0)), (1u, new CreatureWaypoint(2, 0, 0, 83.5f, 100f, 0))]);
-            (World, _, CreatureMapSystem system) = CreateAiSystem(content);
+                waypoints: [(1u, new CreatureWaypoint(1, firstNodeX, 0, 83.5f, 100f, firstNodeWaitMs)), (1u, new CreatureWaypoint(2, 0, 0, 83.5f, 100f, 0))]);
+            (World, Map, System) = CreateAiSystem(content);
             (Player, Session) = AddPlayer(World, 1, 2, 0);
-            Vendor = Assert.Single(system.Creatures);
+            Vendor = Assert.Single(System.Creatures);
             if (movementType == 1)
             {
                 // The first wander leg starts 1 s after spawn (RandomMovementGenerator.cpp:75).
@@ -124,6 +187,12 @@ public sealed class VendorMovementPauseTests
         }
 
         public WorldRuntime World { get; }
+
+        public Map Map { get; }
+
+        public CreatureMapSystem System { get; }
+
+        public float FirstNodeX { get; }
 
         public Player Player { get; }
 
