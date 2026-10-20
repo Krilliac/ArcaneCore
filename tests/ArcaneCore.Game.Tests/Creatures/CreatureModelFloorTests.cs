@@ -134,7 +134,7 @@ public sealed class CreatureModelFloorTests : IDisposable
         }
 
         Assert.True(wolf.IsMoving, "the wanderer never started a leg");
-        Assert.Equal(LowFloor, wolf.Spline!.EndZ, 3);
+        Assert.Equal(LowFloor + GroundHeight.StandOffset, wolf.Spline!.EndZ, 3); // the floor plus the stand offset (GroundHeight)
     }
 
     [Fact]
@@ -161,8 +161,8 @@ public sealed class CreatureModelFloorTests : IDisposable
 
         Assert.True(wolf.IsMoving, "the wanderer never started a leg");
         Assert.Contains("1 wanderers outside the gate", breakdown, StringComparison.Ordinal);
-        Assert.Equal(LowFloor, wolf.Spline!.EndZ, 3);
-        Assert.Equal(0, world.ParallelCounters.OwnerViolations);
+        Assert.Equal(LowFloor + GroundHeight.StandOffset, wolf.Spline!.EndZ, 3);
+        Assert.Equal(0, world.ParallelCounters.OwnerViolations); // the leg's ground snap read the model trees inside the gate, as the guard demands
     }
 
     [Fact]

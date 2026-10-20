@@ -133,7 +133,9 @@ public sealed class SteepSlopeLegTests
         PlannedPath plan = scene.Creatures.PlanPath(scene.Wolf, EastOfSlope);
 
         Assert.Equal(PathOutcome.Mesh, plan.Outcome);
-        Assert.True(Vector3.Distance(EastOfSlope, plan.Corners[^1]) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
+        // The ends are compared in the plane: this world has a mesh and no terrain or models, so the leg's ground is the mesh less its bias
+        // (GroundHeight.MeshBias), not the mesh's own height.
+        Assert.True(Vector2.Distance(new Vector2(EastOfSlope.X, EastOfSlope.Y), new Vector2(plan.Corners[^1].X, plan.Corners[^1].Y)) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
         Assert.Null(FirstPointOnSlope(WestOfSlope, plan.Corners));
         Assert.True(plan.Corners.Count >= 2, $"the {motion} leg is a straight line to {plan.Corners[^1]}");
     }
@@ -168,7 +170,7 @@ public sealed class SteepSlopeLegTests
         PlannedPath plan = scene.Creatures.PlanPath(scene.Wolf, flat);
 
         Assert.Equal(PathOutcome.Mesh, plan.Outcome);
-        Assert.True(Vector3.Distance(flat, plan.Corners[^1]) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
+        Assert.True(Vector2.Distance(new Vector2(flat.X, flat.Y), new Vector2(plan.Corners[^1].X, plan.Corners[^1].Y)) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
     }
 
     [Fact]

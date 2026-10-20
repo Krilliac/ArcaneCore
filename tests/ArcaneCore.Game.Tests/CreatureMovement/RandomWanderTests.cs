@@ -2,6 +2,7 @@ using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -281,7 +282,10 @@ public sealed class RandomWanderTests
 
         Run(world, 6_000, 50);
 
-        Assert.Equal(83.5f, wendigo.Z, 0.05f);
+        // The map has no terrain or model data here, so the mesh surface less its measured bias (GroundHeight.MeshBias, the detail mesh
+        // sits +0.2 yd over the floor) plus the stand offset is the ground: 83.5 - 0.20 + 0.05. The corner 3 yd under the arch is raised
+        // to it, not left under the floor.
+        Assert.Equal(83.5f - GroundHeight.MeshBias + GroundHeight.StandOffset, wendigo.Z, 0.05f);
     }
 
     [Fact]
