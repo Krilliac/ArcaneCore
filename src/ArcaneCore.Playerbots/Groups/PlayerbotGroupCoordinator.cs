@@ -1439,7 +1439,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             if (!member.Joined || member.AI is not { } ai || world.FindOnlinePlayer(member.Guid) is not { } player) continue;
             members.Add(new PlayerbotGroupStallMember(member.BotId, player.MapId, new Vector3(player.X, player.Y, player.Z),
-                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.Target?.Guid.Value ?? 0));
+                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.TargetUnit?.Guid.Value ?? 0));
         }
 
         PlayerbotGroupStallVerdict verdict = group.Stall.Observe(group.State, members, now, (uint)Math.Max(1, _options.StallSeconds) * 1000u);
@@ -1787,8 +1787,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         public int Id { get; } = id;
         public PlayerbotGroupGoal Goal { get; } = goal;
-        public Guid LeaderBotId { get; } = leaderBotId;
-        public ObjectGuid LeaderGuid { get; } = leaderGuid;
+        public Guid LeaderBotId { get; set; } = leaderBotId;
+        public ObjectGuid LeaderGuid { get; set; } = leaderGuid;
         public uint FormedMs { get; } = formedMs;
         public List<Member> Members { get; } = [];
         public PlayerbotGroupState State { get; set; } = PlayerbotGroupState.Forming;
@@ -1940,6 +1940,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public bool Refused { get; set; }
         public uint InvitedMs { get; set; }
         public PlayerbotGroupAI? AI { get; set; }
+
+        public byte FocusIcon { get; set; } = Party.PlayerbotParty.SkullIcon;
 
         /// <summary>The member's outcome clocks (<see cref="PlayerbotMemberWatch"/>).</summary>
         public PlayerbotMemberWatch Watch { get; } = new();

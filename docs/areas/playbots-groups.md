@@ -113,6 +113,22 @@ closes into melee after `PlayerbotBrain.RangedIdleLimitMs` (8 s). Without it a h
 healer role keeps caster range) that has no attack spell it can cast never pulled, and the members, who assist the leader's victim, stood
 with it (replays 2026-10-11 on the real terrain, quest 9 "The Killing Fields": 260-840 s in `engaging`).
 
+**Raid marks and players.** In a fight a member first sticks to the group's raid marks: its own focus icon (`Member.FocusIcon`, the
+skull by default), then the skull (`PlayerbotParty.MarkedTarget`, the one the party AI uses, within `PlayerbotParty.MarkRangeYards`,
+100 yards), before it assists the leader's victim. A target may be a player: a player who attacked a member (or the bot) and a leader's
+victim pass the one hostility rule (`PlayerbotHostility.MayEngage`, flagged or dueling enemies only), so the group fights back and
+assists against players the way a party bot does; `Target` stays the creature view, `TargetUnit` is the unit either way.
+
+**Lifts.** Every think first lets `PlayerbotElevator.Drive` run: a member whose way leads over a lift (`WalkTo` asks
+`PlayerbotElevator.TryBegin` before it plans a far walk, the mesh route it found is used when the lift is not the way) rides it to the
+other level, as a brain does (the Great Lift, the three Undercity lifts); a fight on the way to the landing ends the ride, a failed ride
+plans the walk again after the lift's backoff.
+
+**A dead leader.** `PlayerbotGroupCoordinator.PromoteLeader` passes the lead to the best living bot member with the leader's own
+`CMSG_GROUP_SET_LEADER` (`PlayerbotGroupLeadership.BestSuccessor`: alive, tank before healer before damage, the higher level first) and
+follows the server group's answer. It is called by the siege machinery only (design commit 6); other groups keep waiting for their
+leader as before.
+
 **Between fights**: a member below 50% health or mana eats or drinks (the leader does not pull meanwhile); a healer resurrects a dead
 member it can see (Resurrection, Redemption, Ancestral Spirit, and Rebirth when it carries the seed, through the ordinary cast; the dead
 member's party intake accepts a group member's offer). The real rows (classic-db 2006, 7328, 2008, 20484) name no implicit target and the
@@ -425,6 +441,11 @@ fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the b
 `StartRun(plan, bots)` starts a selected catalogue
 wing through the normal formation checks without the random roll. On a retry, a living member still inside walks through the exit to
 join an outside leader before the group gathers. This test does not establish an imported-world or real-terrain RFC clear.
+
+`PlayerbotGroupAiPvpTests` (a member assists the leader against a flagged player and leaves an unflagged one alone, defends the leader
+against a flagged attacker, follows the skull over the leader's victim and its own focus icon over the skull), `PlayerbotGroupLeadershipTests`
+(the successor choice, and a dead leader passing the lead to the living tank with the client packet) and `PlayerbotGroupLiftTests` (a
+group leader whose way leads up the Great Lift rides it).
 
 `PlayerbotLeaderHandoffTests`: the clear list (nearest first, the current target kept, the dead dropped, a shunned creature skipped
 but kept, a given-up one never rebuilt), the role assignment (one tank and one healer for five, never a refusal), the wing choice and
