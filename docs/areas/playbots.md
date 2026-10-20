@@ -1221,6 +1221,17 @@ where the master goes.
 - **Combat** (vmangos `SelectAttackTarget`/`SelectPartyAttackTarget`): the target the master ordered, else the master's
   victim, else whoever attacks the bot, else whoever attacks another member within 50 yards; `PlayerbotCombatSpells`, then a
   chase to 4 yards and CMSG_ATTACKSWING.
+- **Players as targets** (`PlayerbotHostility`, one rule for the party AI, the brain and the battleground AI). A player is a target only
+  where the combat hooks allow the attack: never a teammate or a Game Master in GM mode, and an enemy player only while PvP-flagged
+  (or in a started duel with the bot). On top of that a bot starts on a player unprovoked only when ordered: the master's `attack` on a
+  selected player is obeyed (reply `Attacking <name>.`) when that player is a valid target, else the bot answers `I have no target
+  to attack.`. Without an order a bot fights back a player who attacks it, assists the master against a player the master attacks
+  and defends a member a player attacks, the same rule real players are held to. A managed bot outside a group does the same for itself:
+  the brain (`PlayerbotBrain.Pvp.cs`) fights back a player attacker through `PlayerbotPvpFight`, before the quest return, the creature
+  threat choice and the combat linger, and lets go past 45 yards or when the player is no longer hostile.
+- **Raid marks** (vmangos `PartyBotAI::SelectAttackTarget`, PartyBotAI.cpp:366-377). While the bot or its master is in combat, the
+  skull of the group (`MSG_RAID_TARGET_UPDATE`, set by the leader or an assistant) is attacked before the master's victim; an explicit
+  `attack` order still comes first. A mark on a unit that is gone or not attackable is skipped.
 - **Round-robin loot.** vmangos PartyBotAI.cpp:565-585 unassigns the bot's round-robin loot on every party kill
   (SMSG_PARTYKILLLOG, broadcast to the group there). ArcaneCore sends that packet to the killer alone, so at every think out of
   combat the bot looks over the corpses it can see (within 74 yards, the group reward distance) for loot it holds
@@ -1270,6 +1281,8 @@ bots in the service snapshot only, never on a real player.
 | `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
 | `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
 | `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
+| `.playerbot defend <sel> here #radius [force]`, `.playerbot defend <sel> clear` | Administrator | The running bots hold a defend post at your position ([Defend posts](#defend-posts)); radius 10 to 200 yards (clamped). More bots than the bulk cap need `force`. `clear` ends it. |
+| `.playerbot siege waypoint add\|list\|clear`, `siege start <sel> #entry [raids 1\|2] [force]`, `siege stop`, `siege status [$leader]`, `siege watch [on\|off]` | Administrator | Bot-led raids march the stored waypoints in step and kill the creature with the entry ([Siege](playbots-groups.md#siege-playerbot-siege)). Memory only. |
 | `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the refusal (a controller, the party AI, a bot-led group or a battleground holds the bot; or the planner's: travel off, no route, a leg of another journey under way). |
 | `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
 
@@ -1279,11 +1292,11 @@ matches nothing answers `No playerbot matches '<sel>'`. Any other argument shape
 
 **Bulk cap.** `World:Playerbots:MaxBulkCommand` (default 50, live; see [configuration](../reference/configuration.md)) is the
 most bots one command moves or starts. A selection larger than the cap, with no smaller `#count`, is refused with
-`give a count <= N or add 'force'`; `force` lifts the cap. `all` plus `force` is the explicit "everyone" form.
+`give a count <= N or add 'force'`; `force` lifts the cap. `all` plus `force` is the explicit "everyone" form. `defend ... here` has no count: it answers `N bots match; add 'force' above CAP`.
 
 **Console.** The interactive server console ([server-console](server-console.md)) has no invoking player. `summon`, `send ...
 here`, `follow`, `stay` and `near` mean "to me", so from the console they refuse unless `to $player` names an online player
-(`near` takes no target and always refuses). `send $tele`, `dismiss`, `revive`, `start` and `stop` need no player.
+(`near` takes no target and always refuses). `defend ... here` also refuses from the console (it has no `to $player`); `defend ... clear`, `send $tele`, `dismiss`, `revive`, `start` and `stop` need no player.
 
 **Instances.** A bot is moved into an instanceable map only when it is in the target player's group or already in that very
 instance (vmangos `HandleGroupgoCommand`, `TeleportCommands.cpp:181-266`); otherwise it is skipped as `instance`. A bot
@@ -1317,6 +1330,33 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 | `not-leashed` | `dismiss`: the bot was not following or staying. |
 
 `start` and `stop` list the operation's own failure code instead (for example `playerbot-capacity`) under `failed=`.
+
+#### Defend posts
+
+`.playerbot defend <sel> here #radius [force]` gives the running autonomous bots a post: the GM's map and position and a radius (10 to 200
+yards, clamped). Bots in a real player's group, scripted, or driven by the party AI, a bot-led group or a battleground are skipped
+(`in-player-group`, `bot-busy`, `bot-scripted`). Every bot of one command shares a post id. A post is **memory only** (`PlayerbotDefendPost`
+on the brain): it is not saved: a restart, a bot stop, a playerbots hot reload or `.playerbot defend <sel> clear` ends it. A brain replacement (a bot leaving a
+real player's party, a controller detaching) keeps it. The PvP flag the post turned on is tracked per player (`PlayerbotDefend.OwnFlag`), so
+whichever of those ends the post also turns `PvpDesired` off again, before the character is saved; a flag the post did not turn on is left alone.
+
+A bot with a post owns its think right after death and recovery and the transit legs (a lift ride), before any quest, grind or explore step
+(`PlayerbotBrain.Defend.cs`). In order:
+
+1. **PvP flag.** It sends CMSG_TOGGLE_PVP on when the server does not show `PvpDesired`, again at every think until it does; `clear` sends it
+   off (the server's five-minute linger then runs out, vmangos `Player::UpdatePvPFlagTimer`). Undercity's guards are flagged, so Alliance bots
+   flag on their first swing; Horde defenders are not, so they flag themselves.
+2. **Fight.** A player attacking the bot first, then what it fights already while inside the post (10 yards of chase margin), a creature
+   attacking it, then the scan of the post: the nearest PvP-flagged hostile player inside the radius (`PlayerbotHostility.MayEngage` with the
+   `Defend` grant), else what a friendly creature (`Hooks.IsFriendly`, so a guard) that is in combat inside the radius fights: its victim and
+   its attackers. The scan runs at most once per second per defender (as does the heal's look at the post mates); the fight is `PlayerbotPvpFight`, for players and creatures alike.
+3. **Heal.** A priest, paladin, druid or shaman heals the most wounded defender of the same post (below 85% health) within 40 yards when
+   the heal is safe (`IsSafeHealTarget`, as for a tagger).
+4. **Return.** Outside the full radius, the bot walks back with the home walk (`TryReturnHome`: lift-aware, the Auto return mode's teleport
+   rules apply) and stops once it is within 0.75 times the radius of the centre (`PlayerbotHome`); no errand holds a defender off its post.
+5. Otherwise it holds, rests and buffs. The goal shows as `Home`; `.playerbot inspect` prints `defend=r=40 post=3 map=0 centre=x,y,z`.
+
+An unflagged enemy player is never attacked, and a hostile player outside the radius only if it attacks the bot.
 
 #### Following and catch-up
 

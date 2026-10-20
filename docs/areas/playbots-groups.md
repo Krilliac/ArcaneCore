@@ -113,6 +113,22 @@ closes into melee after `PlayerbotBrain.RangedIdleLimitMs` (8 s). Without it a h
 healer role keeps caster range) that has no attack spell it can cast never pulled, and the members, who assist the leader's victim, stood
 with it (replays 2026-10-11 on the real terrain, quest 9 "The Killing Fields": 260-840 s in `engaging`).
 
+**Raid marks and players.** In a fight a member first sticks to the group's raid marks: its own focus icon (`Member.FocusIcon`, the
+skull by default), then the skull (`PlayerbotParty.MarkedTarget`, the one the party AI uses, within `PlayerbotParty.MarkRangeYards`,
+100 yards), before it assists the leader's victim. A target may be a player: a player who attacked a member (or the bot) and a leader's
+victim pass the one hostility rule (`PlayerbotHostility.MayEngage`, flagged or dueling enemies only), so the group fights back and
+assists against players the way a party bot does; `Target` stays the creature view, `TargetUnit` is the unit either way.
+
+**Lifts.** Every think first lets `PlayerbotElevator.Drive` run: a member whose way leads over a lift (`WalkTo` asks
+`PlayerbotElevator.TryBegin` before it plans a far walk, the mesh route it found is used when the lift is not the way) rides it to the
+other level, as a brain does (the Great Lift, the three Undercity lifts); a fight on the way to the landing ends the ride, a failed ride
+plans the walk again after the lift's backoff.
+
+**A dead leader.** `PlayerbotGroupCoordinator.PromoteLeader` passes the lead to the best living bot member with the leader's own
+`CMSG_GROUP_SET_LEADER` (`PlayerbotGroupLeadership.BestSuccessor`: alive, tank before healer before damage, the higher level first) and
+follows the server group's answer. It is called by the siege machinery only (design commit 6); other groups keep waiting for their
+leader as before.
+
 **Between fights**: a member below 50% health or mana eats or drinks (the leader does not pull meanwhile); a healer resurrects a dead
 member it can see (Resurrection, Redemption, Ancestral Spirit, and Rebirth when it carries the seed, through the ordinary cast; the dead
 member's party intake accepts a group member's offer). The real rows (classic-db 2006, 7328, 2008, 20484) name no implicit target and the
@@ -356,6 +372,63 @@ CMSG_GROUP_SET_LEADER) hands the clear to the bots (`PlayerbotGroupCoordinator.H
 * **Status.** `.playerbot groups` shows `handoff-from=<player>` (and `clear-list=<left>/<total>`) on the group's line, `:handoff` on a
   bot's group tag, and a summary line `leader handoffs: 1 leading, 3 adopted, 1 cleared, 1 ended early.`.
 
+## Siege (`.playerbot siege`)
+
+A siege is a GM-ordered march of one or two **bot-led raids** along stored waypoints to a creature entry, and its death. A bot leads each
+raid and commands it alone; nobody has to be in a group (the GM may watch invisibly, `.gm on` and `.gm visible off`), and a real player can
+still be fought, or lead a group of his own. All state is in memory (`PlayerbotGroupCoordinator.Siege.cs`); there is no configuration key.
+
+* **Commands (Administrator).** `.playerbot siege waypoint add` stores the invoker's position as the next waypoint (all on one map, at most 64);
+  `waypoint list` prints them, `waypoint clear` forgets them (both refused as `siege-running` while a siege runs); `siege start $name|$prefix*|all
+  #entry [raids 1|2] [force]` enlists the running bots; `siege stop` ends it (outcome `stopped: gm`).
+* **Forming.** Free, living, ungrouped bots of one team on the waypoints' map are split over the raids: tanks, then healers, then damage dealers,
+  dealt round the raids (the highest level first); the best tank leads a raid. Each is an ordinary bot-led group (same invitations, raid conversion,
+  subgroups of five) with goal kind `Siege`, always a raid, and goes straight to `Engaging`. A siege raid takes no slot of `MaxGroups`, has no goal
+  timeout and no wipe rule of the quest groups, and works with the groups kill switch off: the GM stops it. Refusals: `siege-running`,
+  `no-waypoints`, `bad-raids`, `bad-objective`, `groups-unavailable`, `too-few-bots` (two for every raid); skipped bots carry `not-running`,
+  `busy`, `grouped`, `dead`, `other-map`, `in-group`, `other-team`, `raid-full`.
+* **Lockstep.** The raids share one `Step`, the index of the waypoint they head for. It moves on only when every raid's leader stands within
+  6 yards of that waypoint and none fights; a raid that is there first holds for the others, and a raid whose leader is dead holds them too until it
+  has a leader again or ends. A siege that makes no progress (the step unmoved, nobody fighting) for 120 s is reported stalled: one event note, a
+  log warning, a raid warning from each led raid and `, stalled: ...` in the status line; a step or a fight clears it. Past the last waypoint the leaders walk to the
+  living objective. Lifts are ridden by the ordinary walk (`PlayerbotElevator`, the three Undercity lifts).
+* **The commander** (`PlayerbotSiegeCommander.Decide`, a pure function; the coordinator re-reads the raids every 400 ms) picks an order for each
+  raid in this order: **Retreat** (in combat: the tank dead, the average health under 35 % or a third of the raid dead *in this engagement*, i.e.
+  since the raid last entered combat after at least 5 s out of it; one latch in two phases, see below; a raid retreats at most **twice** and at most
+  **once per engagement**, then it commits, says `No more retreat - press on!` once and fights on, and it never begins a retreat while a member fights
+  the objective or the skull is on it); out of combat **Regroup** (a member more
+  than 30 yards behind, resting, or hurt below 60 % for at most 90 s) or **Hold** (at the waypoint while the other raid is not); **Pull** (a
+  hostile within 40 yards, kept until it is farther than 55: hysteresis); **AssignTank** (two or more hostiles and no cross); **Advance**; **Assault**
+  (in combat). The scan for hostiles takes any creature the raid may attack and that is hostile to it, whatever its NPC flags (every Undercity
+  target carries gossip or quest-giver flags); friendly and neutral NPCs are out, critters too (the objective entry excepted).
+* **The retreat, in two phases.** The retreat point is the waypoint behind the step (where the siege began when the step is the first).
+  **Retreat** (disengage) lasts while the leader is more than `RallyYards` (8 yards) from it: nobody fights or casts (a cast-time spell stops the
+  mover, so healers do not heal either), the leader walks to the point, the members follow it, and no mark is set. **Rally** (the order name once
+  the leader is within 8 yards) stands there: the leader holds, no mark is set and nothing new is pulled, and each member fights back only a hostile
+  that attacks it (a healer also one that attacks a raid member). The latch ends when the raid has been out of combat for 5 s, or has stood at the
+  point for `RallyHoldMs` (30 s) and still fights (the bound: a pursuit that does not end is fought, not run from again), or the objective is engaged.
+  A leader that can find no path to the retreat point (`lead:siege-retreat:no-path`) rallies where it stands, so the raid fights back and the 30 s bound applies.
+  A retreat is counted (`retreats=` in the status) where its latch begins, not on an order change: a raid that loses its leader holds meanwhile
+  and resumes the same retreat after the promotion, uncounted. A flicker of the combat flag is not a new engagement. The leader's loop watch starts
+  afresh at the start of a retreat (the walk back to the waypoint it came from reads as an A, B, A loop). Creatures leash after about 50 yards, and
+  a defender drops a target beyond its post radius plus 10 yards: space the waypoints at least 60 yards apart so that the retreat point is out of
+  the pursuit.
+* **Marks and warnings.** The leader sets the skull (the unit to kill) and, for AssignTank, the cross (the second hostile, followed first by
+  the tanks) through its own client packet MSG_RAID_TARGET_UPDATE, and says one **raid warning** (CMSG_MESSAGECHAT, type raid warning; Orcish for
+  the Horde, else Common) whenever the order changes, never twice the same line in a row and at most one per 3 s (`PlayerbotSiegeAnnouncer`).
+* **Leader.** When the leader dies the raid's best living member (a tank first) takes over through the old leader's own CMSG_GROUP_SET_LEADER
+  (`PromoteLeader`); a leader that leaves is replaced by the member the server group now names. A raid with nobody alive ends.
+* **Winning.** The objective entry is seen alive and later none is alive on the map *while the grid at its last known position is loaded*: each
+  leader says `Siege complete`, the raids disband and the outcome is `won`. With that grid unloaded the objective is only unseen (the status line
+  says so) and the siege goes on. A hot reload ends a siege as `stopped: reload` and tells the watchers.
+  Bots with a defend post are not free for a siege (nor for a quest group). A siege whose raids have all ended is `stopped: raids-ended`.
+* **Status and watch.** `.playerbot siege status` prints the siege (step, running time) and a line per raid (leader, who lives, the last order and
+  its numbers, retreats; the order is one of `hold`, `regroup`, `advance`, `pull`, `assigntank`, `assault`, `retreat`, `rally`); `status $leader` only that raid
+  and its last three raid warnings. `.playerbot siege watch on|off` makes the coordinator
+  send the GM one system line per raid whenever its order, step or strength changes (at most one batch every 2 s), and one when the siege ends;
+  without an argument it says whether you watch. Both are in memory with the siege.
+* **Status.** `.playerbot groups` adds ` siege=1:raid1:advance:step0/2` to a raid's line.
+
 ## Configuration (`World:Playerbots:Groups`, live)
 
 | Key | Default | Range | Meaning |
@@ -425,6 +498,11 @@ fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the b
 `StartRun(plan, bots)` starts a selected catalogue
 wing through the normal formation checks without the random roll. On a retry, a living member still inside walks through the exit to
 join an outside leader before the group gathers. This test does not establish an imported-world or real-terrain RFC clear.
+
+`PlayerbotGroupAiPvpTests` (a member assists the leader against a flagged player and leaves an unflagged one alone, defends the leader
+against a flagged attacker, follows the skull over the leader's victim and its own focus icon over the skull), `PlayerbotGroupLeadershipTests`
+(the successor choice, and a dead leader passing the lead to the living tank with the client packet) and `PlayerbotGroupLiftTests` (a
+group leader whose way leads up the Great Lift rides it).
 
 `PlayerbotLeaderHandoffTests`: the clear list (nearest first, the current target kept, the dead dropped, a shunned creature skipped
 but kept, a given-up one never rebuilt), the role assignment (one tank and one healer for five, never a refusal), the wing choice and

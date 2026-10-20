@@ -33,10 +33,16 @@ internal enum FleetVerb
 
     /// <summary><c>[to $player]</c> (follow, stay)</summary>
     Leash,
+
+    /// <summary><c>here #radius [force]</c> or <c>clear</c> (defend)</summary>
+    Defend,
+
+    /// <summary><c>#entry [raids 1|2] [force]</c> (siege start)</summary>
+    Siege,
 }
 
 /// <summary>A parsed bulk command line. <see cref="Head"/> is the tele name of <c>send</c> (the words between selector and tail).</summary>
-internal sealed record FleetRequest(FleetSelectorKind Kind, string Text, Guid BotId, int? Count, bool Force, string? ToPlayer, string Head, string RawTail)
+internal sealed record FleetRequest(FleetSelectorKind Kind, string Text, Guid BotId, int? Count, bool Force, string? ToPlayer, string Head, string RawTail, float Radius = 0f, uint Entry = 0, int Raids = 1)
 {
     /// <summary>The selector as typed, for messages.</summary>
     public string Selector => Kind == FleetSelectorKind.Prefix ? Text + "*" : Text;
@@ -109,8 +115,19 @@ internal static class PlayerbotFleetSelection
 
         int? count = null;
         string head = string.Empty;
+        float radius = 0f;
+        uint entry = 0;
+        int raids = 1;
         switch (verb)
         {
+            case FleetVerb.Siege:
+                if (to is not null || tail.Count is not (1 or 3)) return false;
+                if (!uint.TryParse(tail[0], NumberStyles.None, CultureInfo.InvariantCulture, out entry) || entry == 0) return false;
+                if (tail.Count == 3
+                    && (!tail[1].Equals("raids", StringComparison.OrdinalIgnoreCase)
+                        || !int.TryParse(tail[2], NumberStyles.None, CultureInfo.InvariantCulture, out raids) || raids is < 1 or > 2))
+                    return false;
+                break;
             case FleetVerb.Summon:
                 if (tail.Count > 1) return false;
                 if (tail.Count == 1)
@@ -124,12 +141,20 @@ internal static class PlayerbotFleetSelection
                 if (tail.Count == 0) return false;
                 head = string.Join(' ', tail);
                 break;
+            case FleetVerb.Defend:
+                if (to is not null) return false;
+                if (tail.Count == 1 && tail[0].Equals("clear", StringComparison.OrdinalIgnoreCase)) head = "clear";
+                else if (tail.Count == 2 && tail[0].Equals("here", StringComparison.OrdinalIgnoreCase)
+                    && float.TryParse(tail[1], NumberStyles.Float, CultureInfo.InvariantCulture, out radius) && float.IsFinite(radius) && radius > 0f)
+                    head = "here";
+                else return false;
+                break;
             default:
                 if (tail.Count != 0) return false;
                 break;
         }
 
-        request = new FleetRequest(kind, name, id, count, force, to, head, raw);
+        request = new FleetRequest(kind, name, id, count, force, to, head, raw, radius, entry, raids);
         return true;
     }
 

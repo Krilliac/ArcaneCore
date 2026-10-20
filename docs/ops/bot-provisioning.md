@@ -54,3 +54,32 @@ Use this to give an account a ready-made character (the boost needs an online ch
 
 The boost state that is saved with the character (spells, items, buttons, money) comes through the dump; a changed bar layout is shown after a relog
 (see the in-session redraw limit in the area page).
+
+## Run a bot siege (bots lead, you watch)
+
+Two bot-led raids march a stored way and kill a creature, with no real player in either (details: [Siege](../areas/playbots-groups.md#siege-playerbot-siege)).
+Do it in this order:
+
+1. **Capacity.** Check there is room for the fleet (`.playerbot status`, the capacity lines of the provisioning runs above).
+2. **Provision** the bots at the level of the content (the first section), enough for two to forty per raid.
+3. **Station the Horde.** The Horde bots that hold Undercity are defenders with a post. For each post, stand at it and run
+   `.playerbot send HordeDef* here` (the bots arrive) and then `.playerbot defend HordeDef* here 40` (`here` is your position; the radius is 10 to
+   200 yards; more bots than the bulk cap need a trailing `force`; `.playerbot defend HordeDef* clear` ends the post). Use a different prefix per post.
+   Example posts inside Undercity (map 0): the three lift tops at (1596, 292), (1544, 241) and (1595, 189); the entrance of the Royal Quarter; the
+   Royal Quarter itself, near (1290, 316, -57). What a defender does (`PlayerbotBrain.Defend.cs`): it holds the post (it walks back when it is outside
+   the radius, and stands, rests and buffs while nothing happens); it engages a hostile player inside the radius, or one that attacks it, and helps a
+   friendly creature that fights inside it; the defenders of one post heal each other. It turns its own PvP flag on (CMSG_TOGGLE_PVP) and keeps it
+   while it has the post: a player may only be attacked while flagged (`CombatHooks.CanAttack`), so the Alliance bots can fight the defenders only
+   once they are flagged, and a defender in turn fights only a player the same rule lets it attack (a flagged one; an Alliance bot flags itself on its
+   first swing at a flagged Undercity guard). Defend is for the Horde side only: the siege attackers get no post, and a bot with a post is neither
+   enlisted in a siege nor matched into a quest group. A post is memory only: a restart ends it.
+4. **Stand at the points.** Starting outside Undercity, walk the way the raids should take (in, down through the lifts to the Royal Quarter) and
+   `.playerbot siege waypoint add` at each point, in the order the raids take them; the last one is where the fight for the objective begins.
+   `.playerbot siege waypoint list` checks them; `waypoint clear` starts over. Space the waypoints at least 60 yards apart: a lost fight retreats to
+   the previous waypoint (to where the siege began from the first), and creatures follow a retreating raid for about 50 yards, so a closer point is
+   fought at rather than left.
+5. **Start.** Stand at the first waypoint, `.playerbot send Siegebot* here` puts the Alliance attackers there (or `send $tele`), then
+   `.playerbot siege start Siegebot* #entry raids 2` (the entry is the creature's `creature_template` id, Sylvanas is 10181; `raids 1` keeps one raid).
+6. **Watch.** With `.gm on` and `.gm visible off` you are invisible; `.playerbot siege watch on` sends you a line per raid as its order changes,
+   `.playerbot siege status` shows the step, who lives and the orders (`retreat` while the raid walks back, `rally` once it stands at the point), `.playerbot siege status $leader` one raid and its last raid warnings.
+   `.playerbot siege stop` ends it (the raids disband). Nothing is saved: a restart ends the siege and forgets the waypoints.

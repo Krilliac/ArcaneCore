@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 544 |
+| `Administrator` | 6 | 552 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -585,6 +585,16 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot dismiss` | 6 | Administrator | stored level through the map | Syntax: .playerbot dismiss $name\|$prefix*\|all End a follow or stay: the bots go back to their own autonomous play. |
 | `.playerbot near` | 3 | GameMaster | stored level through the map | Syntax: .playerbot near [#radius] List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal and distance. |
 | `.playerbot revive` | 6 | Administrator | stored level through the map | Syntax: .playerbot revive $name\|$prefix*\|all Revive the dead bots among the selection, as .revive does. |
+| `.playerbot defend` | 6 | Administrator | stored level through the map | Syntax: .playerbot defend $name\|$prefix*\|all here #radius [force] .playerbot defend $name\|$prefix*\|all clear The running bots hold a post at your position: they turn their PvP flag on, fight the PvP-flagged enemy players and help friendly creatures in combat within #radius yards (10 to 200), heal each other and walk back to the post. 'clear' ends it. More bots than the bulk cap need 'force'. Memory only: a restart ends it. |
+| `.playerbot siege` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot siege waypoint add\|list\|clear .playerbot siege start $name\|$prefix*\|all #entry [raids 1\|2] [force] .playerbot siege stop .playerbot siege status [$leader] .playerbot siege watch [on\|off] Bot-led raids march the stored waypoints in step and kill the creature with the entry. Memory only: a restart ends it. |
+| `.playerbot siege waypoint` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot siege waypoint add\|list\|clear add stores your position as the next waypoint (all on one map, at most 64); list prints them; clear forgets them. Refused while a siege runs. |
+| `.playerbot siege waypoint add` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege waypoint add Store your position as the next waypoint of the siege. |
+| `.playerbot siege waypoint list` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege waypoint list List the stored waypoints in order. |
+| `.playerbot siege waypoint clear` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege waypoint clear Forget the stored waypoints (refused while a siege runs). |
+| `.playerbot siege start` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege start $name\|$prefix*\|all #entry [raids 1\|2] [force] Form the running bots into one or two bot-led raids (tanks, healers and damage dealt round them; the best tank leads) that march the waypoints in step and kill the creature with the entry. Needs two bots per raid and at least one waypoint. |
+| `.playerbot siege stop` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege stop End the siege: the raids disband and the bots go back to their own play. |
+| `.playerbot siege status` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege status [$leader] The siege under way: step, and for each raid its leader, who lives and what it is doing; with a leader's name, that raid only and the raid warnings it said last. |
+| `.playerbot siege watch` | 6 | Administrator | stored level through the map | Syntax: .playerbot siege watch [on\|off] You are sent a line for each raid whenever its order changes (at most one every 2 seconds), and when the siege ends. Without an argument: whether you are watching. Memory only. |
 | `.playerbot fleet` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot fleet reset [confirm $code] Destructive fleet operations. |
 | `.playerbot fleet reset` | 6 | Administrator | stored level through the map | Syntax: .playerbot fleet reset .playerbot fleet reset confirm $code Simulate a fresh server launch: stop every managed bot and delete every character on a playerbot account (the bot accounts stay). The first form only prints what would happen and a confirm code valid for 60 seconds; the second one does it. Real players' characters are never touched. |
 | `.playerbot population` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot population [status\|enable\|disable\|adopt\|target #count\|rush #count [#perSecond]\|rush stop] Keep a number of bots online, spread over the level bands, as long as the world's tick time allows. |

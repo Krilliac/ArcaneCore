@@ -212,11 +212,17 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         _detaching = true;
         try
         {
+            // A siege ends with the reload (memory only, never carried over): the watching GMs are told why.
+            if (_siege is { } running) TellWatchers(running, $"Siege {running.Id} ended: stopped: reload");
             foreach (Guid botId in _memberOf.Keys.Concat(_waiting.Keys).Distinct().ToArray()) Forget(botId);
             foreach (BotGroup group in _groups.ToArray()) Finish(group, success: false, "coordinator-detached");
         }
         finally
         {
+            _siege = null;
+            _siegeWaypoints.Clear();
+            _siegeWaypointMap = 0;
+            _siegeViews.Clear();
             _groups.Clear();
             _memberOf.Clear();
             _waiting.Clear();
@@ -278,7 +284,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     private void AdvanceGroups()
     {
-        if (_groups.Count == 0) return;
+        if (_groups.Count == 0)
+        {
+            if (_siege is not null) TickSiegeSafely(); // every raid is gone: the siege ends
+            return;
+        }
+
         _groupsScratch.Clear();
         _groupsScratch.AddRange(_groups);
         for (int i = 0; i < _groupsScratch.Count; i++)
@@ -293,6 +304,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
             }
         }
+
+        if (_siege is not null) TickSiegeSafely();
     }
 
     private void RebuildBotSnapshot(IReadOnlyList<PlayerbotGroupBot> bots)
@@ -422,6 +435,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             if (group.Handoff is { } handoff)
                 text.Append(CultureInfo.InvariantCulture, $" handoff-from={handoff.HandedByName}{(handoff.Sweep is { } sweep ? $" clear-list={sweep.Remaining}/{sweep.Initial}" : string.Empty)}");
             if (group.Run is { } reported) text.Append(' ').Append(DescribeRun(reported));
+            if (group.Siege is { } sieged)
+                text.Append(CultureInfo.InvariantCulture, $" siege={sieged.Siege.Id}:raid{sieged.Index}:{sieged.Order.ToString().ToLowerInvariant()}:step{sieged.Siege.Step}/{sieged.Siege.Waypoints.Count}");
             text.Append(" members=");
             text.AppendJoin(',', group.Members.Select(m =>
                 $"{m.Name}({m.Role.ToString().ToLowerInvariant()}{(m.Guid == group.LeaderGuid ? ",leader" : string.Empty)}{(m.Real ? ",player" : string.Empty)}{(m.Joined ? string.Empty : ",invited")}{(group.Raid ? $",g{m.SubGroup + 1}" : string.Empty)})"));
@@ -870,10 +885,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
     }
 
-    private bool QuestGroupSlotFree() => OwnGroupCount < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null && g.Handoff is null) < QuestGroupLimit;
+    private bool QuestGroupSlotFree() => OwnGroupCount < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null && g.Handoff is null && g.Siege is null) < QuestGroupLimit;
 
     /// <summary>The groups the bots formed themselves: a handed-over group (a player's own, <see cref="BotGroup.Handoff"/>) takes no slot of <c>MaxGroups</c>.</summary>
-    private int OwnGroupCount => _groups.Count(g => g.Handoff is null);
+    private int OwnGroupCount => _groups.Count(g => g.Handoff is null && g.Siege is null);
 
     private void Match()
     {
@@ -959,7 +974,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return null;
     }
 
-    private void Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null)
+    private BotGroup Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null)
     {
         var group = new BotGroup(_nextId++, goal, plan.Leader.BotId, new ObjectGuid(plan.Leader.Guid), Now) { Run = run };
         foreach ((PlayerbotGroupCandidate bot, PlayerbotGroupRole role, byte subGroup) in plan.Members)
@@ -989,6 +1004,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Note($"group {group.Id} formed for {goal}: leader {plan.Leader.Name}, "
              + string.Join(", ", group.Members.Select(m => $"{m.Name} {m.Role.ToString().ToLowerInvariant()}")));
         logger.LogInformation("Playerbot group {Group} formed for {Goal}, leader {Leader}, {Count} members", group.Id, goal, plan.Leader.Name, group.Members.Count);
+        return group;
     }
 
     // --- the group's life -------------------------------------------------------------------------------------------
@@ -1018,6 +1034,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (!_groups.Contains(group)) return;
         if (group.LeaderPlayer(world) is not { } leader)
         {
+            if (group.Siege is not null && AdoptServerLeader(group)) return;
             if (!_shuttingDown)
                 PlayerbotGroupAnomalies.ReportNamed(group.Find(group.LeaderBotId)?.Name ?? "unknown", group.LeaderGuid, PlayerbotGroupAnomalies.LeaderGone,
                     string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader (not online) in state {group.State}; the group ends"),
@@ -1051,6 +1068,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 Finish(group, success: false, "too-few");
                 return;
             }
+        }
+
+        // A siege raid has no wipe, goal timeout or stall rules of the quest groups: the commander (PlayerbotGroupCoordinator.Siege.cs) runs it.
+        if (group.Siege is not null && group.State == PlayerbotGroupState.Engaging)
+        {
+            AdvanceSiegeRaid(group, leader, now);
+            return;
         }
 
         SyncRun(group);
@@ -1263,7 +1287,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         foreach (Member member in group.Members.Where(m => !m.Joined))
             if (formed?.IsMember(member.Guid) == true) member.Joined = true;
 
-        bool needsRaid = group.Goal.Size > PlayerbotGroupContent.PartySize;
+        bool needsRaid = group.Goal.Size > PlayerbotGroupContent.PartySize || group.Siege is not null;
         if (needsRaid && formed is { IsRaid: false } && formed.MemberCount >= Group.MinMemberCount && formed.IsLeader(leader.Guid))
         {
             LeaderAct(group, leader, WorldOpcode.CmsgGroupRaidConvert, []);
@@ -1321,7 +1345,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 foreach (Member member in group.Members.Where(m => formed.Find(m.Guid) is { } slot && slot.SubGroup != m.SubGroup))
                     LeaderAct(group, leader, WorldOpcode.CmsgGroupChangeSubGroup, SubGroupPayload(member.Name, member.SubGroup));
             Note($"group {group.Id} complete: {formed.MemberCount} members{(formed.IsRaid ? ", raid" : string.Empty)}");
-            Enter(group, PlayerbotGroupState.Gathering);
+            Enter(group, group.Siege is not null ? PlayerbotGroupState.Engaging : PlayerbotGroupState.Gathering);
         }
     }
 
@@ -1445,7 +1469,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             if (!member.Joined || member.AI is not { } ai || world.FindOnlinePlayer(member.Guid) is not { } player) continue;
             members.Add(new PlayerbotGroupStallMember(member.BotId, player.MapId, new Vector3(player.X, player.Y, player.Z),
-                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.Target?.Guid.Value ?? 0));
+                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.TargetUnit?.Guid.Value ?? 0));
         }
 
         PlayerbotGroupStallVerdict verdict = group.Stall.Observe(group.State, members, now, (uint)Math.Max(1, _options.StallSeconds) * 1000u);
@@ -1625,6 +1649,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Note($"group {group.Id}: {member.Name} {reason}");
         if (member.BotId == group.LeaderBotId && !member.Real)
         {
+            if (group.Siege is not null && !_detaching && AdoptServerLeader(group)) return;
             if (!_shuttingDown && !_detaching)
                 PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.LeaderGone,
                     string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader ({reason}) in state {group.State}; the group ends"),
@@ -1793,8 +1818,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         public int Id { get; } = id;
         public PlayerbotGroupGoal Goal { get; } = goal;
-        public Guid LeaderBotId { get; } = leaderBotId;
-        public ObjectGuid LeaderGuid { get; } = leaderGuid;
+        public Guid LeaderBotId { get; set; } = leaderBotId;
+        public ObjectGuid LeaderGuid { get; set; } = leaderGuid;
         public uint FormedMs { get; } = formedMs;
         public List<Member> Members { get; } = [];
         public PlayerbotGroupState State { get; set; } = PlayerbotGroupState.Forming;
@@ -1821,6 +1846,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         /// <summary>A player's own group whose lead was handed to a bot inside an instance (<c>PlayerbotGroupCoordinator.Handoff.cs</c>), else null.</summary>
         public PlayerbotHandoff? Handoff { get; init; }
+
+        /// <summary>The siege raid this group is (<c>PlayerbotGroupCoordinator.Siege.cs</c>), else null.</summary>
+        public PlayerbotSiegeRaid? Siege { get; set; }
 
         /// <summary>A reason the group AI found that the run cannot go on (no path to the boss or the entrance); the coordinator gives the run up.</summary>
         public string? RunFault { get; set; }
@@ -1946,6 +1974,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public bool Refused { get; set; }
         public uint InvitedMs { get; set; }
         public PlayerbotGroupAI? AI { get; set; }
+
+        public byte FocusIcon { get; set; } = Party.PlayerbotParty.SkullIcon;
 
         /// <summary>The member's outcome clocks (<see cref="PlayerbotMemberWatch"/>).</summary>
         public PlayerbotMemberWatch Watch { get; } = new();

@@ -169,6 +169,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
+    private PlayerbotPvpFight? _pvpFight;
+    private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
     private PlayerbotOpportunities? _opportunities;
     private readonly PlayerbotRecovery _recovery = new(session, options);
@@ -346,6 +348,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal PlayerbotGoalKind Goal => _goal;
     internal void CancelNavigationPlanning() => _destinations.CancelPlanning();
     internal Creature? InspectionTarget => _target;
+
+    /// <summary>The player the bot fights back or defends against (<see cref="PlayerbotPvpFight"/>; inspection and tests).</summary>
+    internal Unit? InspectionPvpTarget => _pvpFight?.Target;
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
 
@@ -902,6 +907,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
+        // A defend post (.playerbot defend) owns the live bot: nothing below it (retreat, quests, grind, explore) runs.
+        if (TryDefend(player, interval)) return;
+
         // A retreat owns the bot until nothing threatens it (PlayerbotRetreat); out of combat the bot lays the trail back.
         PlayerbotThinkProbe.Phase("risk");
         if (Risk.UpdateRetreat(player, interval))
@@ -960,6 +968,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             else _lootResponseReceived = LootManagedPackets(player, pendingLoot.Guid.Value);
             return;
         }
+
+        PlayerbotThinkProbe.Phase("pvp");
+        if (TryFightPlayer(player, interval)) return;
 
         PlayerbotThinkProbe.Phase("quest return");
         if (_quests.AbandonDistantCompletedQuest(player))
@@ -1560,7 +1571,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// teleport) is suspended then (ManagedPlayerbotFeature.Think).
     /// </para>
     /// </summary>
-    private bool TryReturnHome(Player player, PlayerbotHomeArea home, uint interval)
+    private bool TryReturnHome(Player player, PlayerbotHomeArea home, uint interval, bool errandsFirst = true)
     {
         uint now = _session.World.NowMs;
         PlayerbotHomeOptions homeOptions = _options.Home;
@@ -1578,8 +1589,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 break;
         }
 
-        if (_quests.Busy || _town.HasCandidate(player)
-            || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player))) return false;
+        if (errandsFirst && (_quests.Busy || _town.HasCandidate(player)
+            || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player)))) return false;
         if (TryTravelHome(player, home, state))
         {
             DropIntent();
@@ -1923,6 +1934,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     private void RetireDeathIntent()
     {
+        if (_pvpFight is { } pvp)
+        {
+            if (pvp.Target is not null && _session.Player is { } self) pvp.Stop(self);
+            (pvp.Target, pvp.Attacking) = (null, false);
+        }
         // Death starts a new gameplay lifetime. Drop only controller-owned, transient
         // intent; the recovery helper still owns the ordinary release/reclaim flow.
         _contention.ReleaseClaim();
@@ -2011,8 +2027,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         TargetEntry = 0;
     }
 
-    private void DropIntent()
+    internal void DropIntent()
     {
+        // A PvP swing in progress is stopped on the wire too (CMSG_ATTACKSTOP), not only forgotten.
+        if (_pvpFight is { } pvp)
+        {
+            if (pvp.Target is not null && _session.Player is { } self) pvp.Stop(self);
+            else (pvp.Target, pvp.Attacking) = (null, false);
+        }
+
         _destinations.CancelPlanning();
         _target = null;
         AbandonRoute();

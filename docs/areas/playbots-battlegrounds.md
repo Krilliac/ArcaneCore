@@ -104,7 +104,9 @@ taken on where it stands. A bot taken by a controller is forgotten where it stan
 * **Fighting.** The enemy is a living participant of the other team on the bot's map; teammates never (the match's teams decide, not the
   faction templates). In order: the enemy carrying the bot's own flag within 80 yards (Warsong Gulch), an enemy attacking the bot, the
   enemy it already fights, the nearest enemy within 30 yards (in Warsong Gulch the enemy its order names comes first: the enemy carrier for
-  a hunter wherever it is, an intruder of the flag room for a defender). The fight is the brain's and the group AI's: the class rotation
+  a hunter wherever it is, an intruder of the flag room for a defender). Whether a player is an enemy is the one hostility rule of the playerbots
+  (`PlayerbotHostility.IsHostilePlayer`: the combat hooks, so a PvP-flagged player of the other team) plus the match's team check. The fight itself is
+  `PlayerbotPvpFight`, shared with the brain (a bot hits back a player who attacks it) and defend mode: the class rotation
   (`PlayerbotCombatSpells`), the position (`PlayerbotBrain.DecidePosition`), facing the victim, the melee swing. A ranged bot with nothing
   to cast for 8 s (`RangedIdleLimitMs`), or below 10% mana, closes in and swings (vmangos `CombatBotBaseAI::BeginChasing`). A flag
   carrier does not stop to fight.

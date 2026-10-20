@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -75,8 +76,10 @@ internal sealed partial class PlayerbotBattlegroundAI
     private readonly float _followDistance;
     private PlayerbotRoute? _route;
     private Vector3 _routeGoal;
-    private Unit? _target;
-    private bool _attacking;
+    private readonly PlayerbotPvpFight _pvp;
+    private readonly Func<Vector3, uint, bool, bool> _chase;
+    private readonly Action _dropRoute;
+    private Player? _fighter;
     private uint _thinkElapsed;
     private bool _deathRetired;
 
@@ -85,6 +88,9 @@ internal sealed partial class PlayerbotBattlegroundAI
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _spells = new PlayerbotCombatSpells(session);
+        _pvp = new PlayerbotPvpFight(session, _spells);
+        _chase = (goal, interval, chase) => WalkTo(_fighter!, goal, interval, toward: false, chase: chase);
+        _dropRoute = () => _route = null;
         _recovery = new PlayerbotRecovery(session, options);
         var random = new Random(session.AccountId);
         _followAngle = (float)(random.NextDouble() * MathF.Tau);
@@ -98,7 +104,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     internal uint TargetEntry { get; private set; }
 
     /// <summary>The enemy the bot fights (inspection and tests).</summary>
-    internal Unit? Target => _target;
+    internal Unit? Target => _pvp.Target;
 
     /// <summary>A short word for the status line: what the bot does in the match now.</summary>
     internal string Activity { get; private set; } = "idle";
@@ -132,7 +138,6 @@ internal sealed partial class PlayerbotBattlegroundAI
 
     private uint _atMasterMs;
     private uint _inMatchIdleMs;
-    private uint _rangedIdleMs;
     private Vector3? _lastThinkAt;
     private PlayerbotWsgDuty? _stillDuty;
     private bool _reportedObjectiveUnreachable;
@@ -143,15 +148,16 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// <summary>Drop every route, target and cast intention (the coordinator lets the bot go, or it changes its phase).</summary>
     internal void Release(Player player)
     {
-        if (_attacking || player.Combat.Victim is not null) StopAttacking(player);
+        _fighter = null;
+        if (_pvp.Attacking || player.Combat.Victim is not null) StopAttacking(player);
         PlayerbotMovementControl.Stop(_session, player);
         _route = null;
-        _target = null;
-        _attacking = false;
+        _pvp.Target = null;
+        _pvp.Attacking = false;
         TravelRefused = false;
         _atMasterMs = 0;
         _inMatchIdleMs = 0;
-        _rangedIdleMs = 0;
+        _pvp.RangedIdleMs = 0;
         _lastThinkAt = null;
         _stillDuty = null;
         StillMs = 0;
@@ -186,7 +192,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             return true;
         }
 
-        if (_target is not null) ClearTarget(player);
+        if (_pvp.Target is not null) ClearTarget(player);
         if (Vector3.Distance(Position(player), at) <= InteractYards - 1f)
         {
             Hold(player);
@@ -224,8 +230,8 @@ internal sealed partial class PlayerbotBattlegroundAI
         bool dead = !player.IsAlive;
         if (dead && !_deathRetired)
         {
-            _target = null;
-            _attacking = false;
+            _pvp.Target = null;
+            _pvp.Attacking = false;
             _route = null;
             _spells.Reset();
             _buffs.Reset(player.Guid);
@@ -257,7 +263,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             // Bound to the match but not on its map (on the way in or out, or put elsewhere): its objectives are coordinates of the
             // battleground map and mean nothing here; never route to them on another map.
-            if (_target is not null) ClearTarget(player);
+            if (_pvp.Target is not null) ClearTarget(player);
             Activity = "off-map";
             Order = null;
             _inMatchIdleMs = 0;
@@ -268,7 +274,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         if (match.Status != BattlegroundStatus.InProgress)
         {
             // Behind the gates before the start, frozen at the end (BattleGround.cpp:290-464, 651-769).
-            if (_target is not null) ClearTarget(player);
+            if (_pvp.Target is not null) ClearTarget(player);
             Activity = match.Status == BattlegroundStatus.WaitLeave ? "match-over" : "waiting-start";
             _inMatchIdleMs = 0;
             Hold(player);
@@ -314,7 +320,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             return;
         }
 
-        if (_target is not null) ClearTarget(player);
+        if (_pvp.Target is not null) ClearTarget(player);
         TargetEntry = 0;
         // vmangos BattleBotAI::UpdateAI: DrinkAndEat (:852) before the out-of-combat spells (:870).
         if (RestBetweenFights(player, carrier))
@@ -392,7 +398,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             _ => GuardYards + 2f,
         };
         // A bot that swings at its enemy in reach fights (the swing puts it in combat a moment later); one that only stands beside it does not.
-        bool engaged = player.Combat.IsInCombat || (fighting is not null && _attacking);
+        bool engaged = player.Combat.IsInCombat || (fighting is not null && _pvp.Attacking);
         float enemyYards = fighting is not null ? Distance(player, fighting)
             : named is not null && order.Duty is PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom or PlayerbotWsgDuty.Midfield
                 ? Distance(player, named) : float.MaxValue;
@@ -581,8 +587,8 @@ internal sealed partial class PlayerbotBattlegroundAI
             if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker, requireHostile: false)) return npcAttacker;
         }
 
-        if (_target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
-        if (match is AlteracValley && _target is Game.Creatures.Creature currentNpc && IsEnemyCreature(player, currentNpc) && Distance(player, currentNpc) <= EngageYards * 1.5f) return currentNpc;
+        if (_pvp.Target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
+        if (match is AlteracValley && _pvp.Target is Game.Creatures.Creature currentNpc && IsEnemyCreature(player, currentNpc) && Distance(player, currentNpc) <= EngageYards * 1.5f) return currentNpc;
 
         Unit? nearest = null;
         float best = EngageYards;
@@ -614,9 +620,7 @@ internal sealed partial class PlayerbotBattlegroundAI
 
     /// <summary>A living, attackable participant of the other team on the bot's map.</summary>
     private static bool IsEnemy(Player player, Player other, Battleground match, Team enemyTeam)
-        => !ReferenceEquals(other, player) && other.IsInWorld && other.IsAlive && (other.Flags & PlayerFlags.Ghost) == 0
-            && ReferenceEquals(other.Map, player.Map) && match.PlayerTeam(other.Guid) == enemyTeam && player.Map is { } map
-            && map.Combat.Hooks.CanAttack(player, other);
+        => match.PlayerTeam(other.Guid) == enemyTeam && PlayerbotHostility.IsHostilePlayer(player, other);
 
     /// <summary>
     /// A living, attackable and hostile Alterac Valley NPC guard, captain, commander or general on the bot's map: the neutral wildlife of the
@@ -634,90 +638,27 @@ internal sealed partial class PlayerbotBattlegroundAI
 
     /// <summary>A carrier does not stop to fight; it only keeps hitting a target it already fights in melee reach.</summary>
     private Unit? FirstAttackerIfStill(Player player)
-        => _target is { IsAlive: true } current && player.Combat.Attackers.Contains(current) && MapCombat.CanReachWithMeleeAutoAttack(player, current)
+        => _pvp.Target is { IsAlive: true } current && player.Combat.Attackers.Contains(current) && MapCombat.CanReachWithMeleeAutoAttack(player, current)
             ? current : null;
 
     private void Fight(Player player, Unit target, uint interval)
     {
-        if (!ReferenceEquals(_target, target))
-        {
-            _target = target;
-            _attacking = false;
-            _route = null;
-            _rangedIdleMs = 0;
-        }
-
         TargetEntry = target is Game.Creatures.Creature creature ? creature.Entry : 0;
-        if (_spells.Update(player, target, interval))
-        {
-            _rangedIdleMs = 0;
-            return;
-        }
-
-        float distance = Distance(player, target);
-        // A ranged bot with nothing to cast at its range (out of mana, or no spell for this target) closes in and swings instead of standing
-        // there for the whole fight (live 2026-10-16 ~20:10-20:22: Bokae, a mage, and Poforound, a shaman, held in the Horde flag room below
-        // 10% mana for 45 s of one fight each while an enemy fought there). vmangos CombatBotBaseAI::BeginChasing keeps the 25-yard caster
-        // distance only above 10% mana or with a ranged weapon; the brain closes in after RangedIdleLimitMs (PlayerbotBrain.Update).
-        PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_spells.PreferredRange(player), distance,
-            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
-            idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs || LowMana(player),
-            inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
-        switch (position)
-        {
-            case PlayerbotFightPosition.Hold:
-                _rangedIdleMs = unchecked(_rangedIdleMs + Math.Max(1u, interval));
-                _route = null;
-                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
-                return;
-            case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
-                if (!WalkTo(player, Position(target), interval, toward: false, chase: true)) _target = null;
-                return;
-        }
-
-        if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
-        {
-            PlayerbotMovementControl.Stop(_session, player);
-            _route = null;
-            return;
-        }
-
-        // The server refuses a swing outside the auto-attack arc; a managed player turns to its victim as the client does.
-        if (MathF.Sqrt(MathF.Pow(target.X - player.X, 2) + MathF.Pow(target.Y - player.Y, 2)) > CombatConstants.NoFacingChecksDistance
-            && !MapCombat.HasInArc(player, target, CombatConstants.AutoAttackArc))
-        {
-            PlayerbotMotion.Face(_session, player, MathF.Atan2(target.Y - player.Y, target.X - player.X));
-            return;
-        }
-
-        if (!_attacking || !ReferenceEquals(player.Combat.Victim, target))
-            _attacking = Act(WorldOpcode.CmsgAttackswing, PlayerbotNavigation.GuidPayload(target.Guid.Value));
+        _fighter = player;
+        _pvp.Fight(player, target, interval, _chase, _dropRoute);
     }
-
-    /// <summary>A mana user below <see cref="LowManaPct"/> of its mana (vmangos CombatBotBaseAI::BeginChasing's 10%).</summary>
-    internal static bool LowMana(Player player)
-    {
-        if (player.PowerType != PowerType.Mana) return false;
-        uint max = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
-        return max > 0 && Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) * 100UL < max * (ulong)LowManaPct;
-    }
-
-    /// <summary>Below this share of its mana a caster fights in melee (vmangos CombatBotBaseAI::BeginChasing).</summary>
-    internal const int LowManaPct = 10;
 
     private void ClearTarget(Player player)
     {
-        if (_attacking || player.Combat.Victim is not null) StopAttacking(player);
-        _target = null;
-        _attacking = false;
+        if (_pvp.Attacking || player.Combat.Victim is not null) StopAttacking(player);
+        _pvp.Target = null;
+        _pvp.Attacking = false;
         _route = null;
     }
 
     private void StopAttacking(Player player)
     {
-        if (player.Combat.Victim is not null) Act(WorldOpcode.CmsgAttackstop, [], budgeted: false);
-        _attacking = false;
-        _target = null;
+        _pvp.Stop(player);
         _route = null;
         TargetEntry = 0;
     }

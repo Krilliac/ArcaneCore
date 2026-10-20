@@ -473,6 +473,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     active.Session.World.NowMs, unixNow);
             }
 
+            // A hot reload ends the posts (memory only): the PvP flag a post turned on goes off before the brain is dropped.
+            if (_world is { IsStopped: false } held)
+            {
+                if (held.IsWorldThread) ReleaseDefendFlag(active);
+                else _ = held.InvokeAsync(() => { ReleaseDefendFlag(active); return true; });
+            }
+
             active.Brain.Stop();
             if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controllers[active.Entry.BotId] = controller;
         }
@@ -1311,6 +1318,38 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return new(true, "dismissed", botId, player.Name);
     }
 
+    /// <summary>
+    /// <c>.playerbot defend</c> (world thread): give the running autonomous bots <paramref name="botIds"/> a defend post, or end theirs with
+    /// null. Memory only (<see cref="PlayerbotBrain.Defend"/>), so a restart ends it. A bot that is scripted, grouped or leashed, in a
+    /// battleground, or not running is refused with its reason (the brain does not drive it).
+    /// </summary>
+    internal IReadOnlyList<PlayerbotOperationResult> SetDefend(IReadOnlyList<Guid> botIds, PlayerbotDefendPost? post)
+    {
+        ArgumentNullException.ThrowIfNull(botIds);
+        if (_world is not { } world || !world.IsWorldThread) throw new InvalidOperationException("playerbot-defend-thread");
+        var results = new List<PlayerbotOperationResult>(botIds.Count);
+        foreach (Guid botId in botIds)
+        {
+            if (!_active.TryGetValue(botId, out ActiveBot? bot) || bot.Paused || bot.Session.State != SessionState.InWorld
+                || bot.Session.Player is not { } player)
+            {
+                results.Add(new(false, "bot-not-running", botId));
+                continue;
+            }
+
+            if (bot.Controller is not null) results.Add(new(false, "bot-scripted", botId, player.Name));
+            else if (post is not null && (bot.PartyDriven || bot.GroupDriven || bot.BattlegroundDriven)) results.Add(new(false, "bot-busy", botId, player.Name));
+            else
+            {
+                bot.Brain.Defend = post;
+                if (post is null) PlayerbotDefend.ReleaseFlag(bot.Session, player);
+                results.Add(new(true, post is null ? "defend-cleared" : "defending", botId, player.Name));
+            }
+        }
+
+        return results;
+    }
+
     /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
     private enum StartKind { Operator, Restore, QuarantineRetry }
 
@@ -1778,6 +1817,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 return;
             }
 
+            await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
             void Quiesce()
             {
                 if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
@@ -1995,7 +2035,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                            active.Controller is null && !active.PartyDriven && fields?.Holds(active.Record.BotId) != true,
+                            // A bot with a defend post holds it: it is neither matched into a quest group nor enlisted in a siege.
+                            active.Controller is null && !active.PartyDriven && fields?.Holds(active.Record.BotId) != true && active.Brain.Defend is null,
                             Scripted: active.Controller is not null));
                 try { groups.Update(_groupBotsScratch, elapsedMs); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -2783,6 +2824,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
+        await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
@@ -2882,6 +2924,26 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return $"bot={active.Record.BotId.ToString("N")[..8]} drv={driver} goal={goal}/{target}/q{quest} stall={stall} home={home} risk={risk} {snap}";
     }
 
+    /// <summary>World thread: the PvP flag a defend post turned on goes off (<see cref="PlayerbotDefend.ReleaseFlag"/>), so the saved character keeps none.</summary>
+    private static void ReleaseDefendFlag(ActiveBot active)
+    {
+        if (active.Session.Player is { IsInWorld: true } player) PlayerbotDefend.ReleaseFlag(active.Session, player);
+    }
+
+    /// <summary>As <see cref="ReleaseDefendFlag"/> from any thread, done before the bot's session closes and the character is saved.</summary>
+    private async Task ReleaseDefendFlagAsync(ActiveBot active)
+    {
+        if (_world is not { IsStopped: false } world) return;
+        if (world.IsWorldThread)
+        {
+            ReleaseDefendFlag(active);
+            return;
+        }
+
+        try { await world.InvokeAsync(() => { ReleaseDefendFlag(active); return true; }).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { }
+    }
+
     private void ReplaceBrain(ActiveBot active)
     {
         lock (active.SetAsideGate)
@@ -2889,7 +2951,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotSetAside[] current = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
                 active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             active.Brain.Stop();
+            PlayerbotDefendPost? defend = active.Brain.Defend;
             active.Brain = NewBrain(active.Session, active.Record.BotId, restoreLoaded: false);
+            active.Brain.Defend = defend;
             active.Brain.Suspensions.Restore(current, active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             Volatile.Write(ref active.SavedSetAsideVersion, -1);
         }

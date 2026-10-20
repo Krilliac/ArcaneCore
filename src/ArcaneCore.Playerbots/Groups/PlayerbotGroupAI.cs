@@ -16,6 +16,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
+using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
@@ -73,7 +74,7 @@ internal sealed class PlayerbotGroupAI
     private readonly Random _random;
     private PlayerbotRoute? _route;
     private Vector3 _routeGoal;
-    private Creature? _target;
+    private Unit? _target;
     private bool _attacking;
     private uint _thinkElapsed;
     private uint _restUntilMs;
@@ -91,6 +92,9 @@ internal sealed class PlayerbotGroupAI
     private PlayerbotRoute? _runRoute;
     private long _runRouteAtMs;
     private long _stuckSinceMs, _stuckLastMs;
+
+    /// <summary>The leader has started the loop watch afresh for the retreat it is walking (once per retreat, see <see cref="LeadSiege"/>).</summary>
+    private bool _retreatFresh;
     private uint _rangedIdleMs;
 
     internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options, PlayerbotEquipment? equipment = null)
@@ -112,8 +116,11 @@ internal sealed class PlayerbotGroupAI
 
     internal uint TargetEntry { get; private set; }
 
-    /// <summary>The fight the bot is in (inspection and tests).</summary>
-    internal Creature? Target => _target;
+    /// <summary>The creature the bot fights (inspection and tests); null while it fights a player.</summary>
+    internal Creature? Target => _target as Creature;
+
+    /// <summary>The unit the bot fights, a creature or a player (inspection and tests).</summary>
+    internal Unit? TargetUnit => _target;
 
     /// <summary>What the bot did at its last think (inspection, the group stall line): <c>lead:hold-not-ready</c>, <c>fight:114:hold</c>, ...</summary>
     internal string Step { get; private set; } = "none";
@@ -227,6 +234,21 @@ internal sealed class PlayerbotGroupAI
         _deathRetired = false;
         _deadSinceMs = -1;
         _recovery.Reset();
+
+        // A lift ride (PlayerbotElevator) owns the bot until it stands on the other level, as it owns a brain's: a fight on the way to the
+        // landing ends it. A failed ride is not fatal: the walk below plans again, and the lift's backoff keeps it off that lift for a while.
+        if (player.Combat.IsInCombat && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop }) PlayerbotElevator.Cancel(player);
+        ElevatorStep lift = PlayerbotElevator.Drive(_session, player, _options, interval, out string? liftFailure);
+        if (lift == ElevatorStep.Traveling)
+        {
+            Step = "lift";
+            _target = null;
+            _attacking = false;
+            _route = null;
+            return;
+        }
+
+        if (lift == ElevatorStep.Failed) Step = "lift-failed:" + liftFailure;
         _risk.Track(player);
         PlayerbotNavigation.Guard(player, null); // a group goes where its leader goes; the leader chose the way
 
@@ -264,11 +286,11 @@ internal sealed class PlayerbotGroupAI
 
         Player? leader = group.LeaderPlayer(_session.World);
         bool isLeader = leader is not null && leader.Guid == player.Guid;
-        Creature? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
+        Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
         {
-            if (isLeader && group.Run is { } run) NoteBossFight(group, run, target);
+            if (isLeader && group.Run is { } run && target is Creature boss) NoteBossFight(group, run, boss);
             Fight(player, target, interval);
             return;
         }
@@ -324,6 +346,7 @@ internal sealed class PlayerbotGroupAI
                 WalkTo(player, group.Goal.Meeting, interval, toward: true);
                 return;
             case PlayerbotGroupState.Engaging:
+                if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
                 if (group.Goal.InInstance && player.MapId == group.Goal.MeetingMap)
                 {
                     WalkTo(player, group.Goal.Meeting, interval, toward: true);
@@ -346,6 +369,35 @@ internal sealed class PlayerbotGroupAI
                 else Hold(player);
                 return;
         }
+    }
+
+    /// <summary>
+    /// A siege raid's leader does what the commander ordered (<see cref="PlayerbotSiegeCommander"/>): walks to <see cref="PlayerbotSiegeRaid.MoveTo"/>
+    /// to advance or retreat (the leader of a retreat has no target, see <see cref="SelectTarget"/>), otherwise stands: a rally holds the retreat
+    /// point (the pull and the fight are <see cref="SelectTarget"/>'s).
+    /// </summary>
+    private void LeadSiege(Player player, PlayerbotSiegeRaid raid, uint interval)
+    {
+        // The retreat point is the waypoint the raid walked to, then broke off the walk to pull: the loop watch reads the walk back as an A, B, A
+        // pattern and refuses the place, and the retreat would stand and be hit for the whole blacklist. A retreat is a new errand (as the walk of a
+        // revived bot is, PlayerbotMotion.ForgetLoops): the watch starts afresh once per retreat, so a retreat that loops is still caught.
+        if (raid.Order == PlayerbotSiegeOrder.Retreat)
+        {
+            if (!_retreatFresh) PlayerbotMotion.ForgetLoops(player);
+            _retreatFresh = true;
+        }
+        else if (raid.Order != PlayerbotSiegeOrder.Rally) _retreatFresh = false;
+
+        if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
+        {
+            bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
+            raid.RetreatNoPath = !walked && raid.Order == PlayerbotSiegeOrder.Retreat;
+            Step = string.Create(CultureInfo.InvariantCulture, $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(walked ? string.Empty : ":no-path")}");
+            return;
+        }
+
+        Step = "lead:siege-" + raid.Order.ToString().ToLowerInvariant();
+        HoldRun(player);
     }
 
     /// <summary>
@@ -559,45 +611,82 @@ internal sealed class PlayerbotGroupAI
     // --- fighting -------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// What this member fights now, by role. Everyone first answers a creature attacking a member (the tank especially one that
-    /// attacks someone else: its rotation taunts it), then assists the leader's victim; the leader also pulls the objective and what
-    /// stands in the way while engaging.
+    /// What this member fights now, by role. Everyone first answers a creature (or a player it may fight back) attacking a member, the tank
+    /// especially one that attacks someone else (its rotation taunts it); in a fight the group's raid marks come first (the member's
+    /// <see cref="PlayerbotGroupCoordinator.Member.FocusIcon"/>, then the skull; vmangos PartyBotAI.cpp:366-377), then it assists the leader's
+    /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
+    /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
+    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it.
     /// </summary>
-    private Creature? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
+    private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
     {
         if (player.Map is not { } map) return null;
+        // A retreating siege raid disengages: it fights nothing and casts nothing (every cast-time spell stops the mover first), so the leader walks
+        // to the retreat point and the members follow it.
+        PlayerbotSiegeOrder? siegeOrder = group.Siege?.Order;
+        if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
+        GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
-        Creature? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
-        var loose = new List<(Creature Creature, float Distance, bool OnSelf)>();
+        Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
+        var loose = new List<(Unit Unit, float Distance, bool OnSelf)>();
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
             Player? other = member.Guid == player.Guid ? player : _session.World.FindOnlinePlayer(member.Guid);
             if (other is null || !ReferenceEquals(other.Map, map)) continue;
             foreach (Unit unit in other.Combat.Attackers)
-                if (unit is Creature attacker && IsValidTarget(player, attacker) && Distance(player, attacker) <= AssistYards)
-                    loose.Add((attacker, Distance(player, attacker), ReferenceEquals(other, player)));
+            {
+                // A player attacker is fought only when it provoked the bot or a member (the one hostility rule).
+                bool fightable = unit is Creature creature ? IsValidTarget(player, creature)
+                    : unit is Player attacker && PlayerbotHostility.MayEngage(player, attacker, PlayerbotEngageReason.GroupProvoked, groups);
+                if (fightable && Distance(player, unit) <= AssistYards)
+                    loose.Add((unit, Distance(player, unit), ReferenceEquals(other, player)));
+            }
         }
+
+        // At the retreat point (Rally) the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for
+        // a healer, the raid member it heals), the member itself first, then the nearest.
+        if (siegeOrder == PlayerbotSiegeOrder.Rally)
+        {
+            bool heals = me.Role == PlayerbotGroupRole.Healer;
+            return loose.Where(l => l.OnSelf || heals).OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
+        }
+
+        Unit? marked = null;
+        if (player.Combat.IsInCombat || group.InFight(_session.World.NowMs) || leader is not null && leader.Combat.Victim is not null)
+            marked = MarkedTarget(player, me, map, groups);
 
         if (me.Role == PlayerbotGroupRole.Tank)
         {
-            // Peel: a creature on someone else first (the nearest), then the one being fought, then whatever attacks the tank.
-            Creature? peel = loose.Where(l => !l.OnSelf && !ReferenceEquals(l.Creature.Combat.Victim, player))
-                .OrderBy(l => l.Distance).Select(l => l.Creature).FirstOrDefault();
+            // Peel: a creature on someone else first (the nearest), then the mark, then the one being fought, then whatever attacks the tank.
+            Unit? peel = loose.Where(l => !l.OnSelf && !ReferenceEquals(l.Unit.Combat.Victim, player))
+                .OrderBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
             if (peel is not null) return peel;
+            if (marked is not null) return marked;
             if (current is not null && player.Combat.IsInCombat) return current;
-            if (loose.Count > 0) return loose.OrderBy(l => l.Distance).First().Creature;
+            if (loose.Count > 0) return loose.OrderBy(l => l.Distance).First().Unit;
         }
         else
         {
+            if (marked is not null) return marked;
             if (current is not null && player.Combat.IsInCombat && (!isLeader || current.Combat.IsInCombat)) return current;
-            if (!isLeader && leader is not null && ReferenceEquals(leader.Map, map) && leader.Combat.Victim is Creature victim
+            if (!isLeader && leader is not null && ReferenceEquals(leader.Map, map) && leader.Combat.Victim is { } victim
+                && (victim is Creature || victim is Player victimPlayer && PlayerbotHostility.MayEngage(player, victimPlayer, PlayerbotEngageReason.GroupProvoked, groups))
                 && IsValidTarget(player, victim) && Distance(player, victim) <= AssistYards)
                 return victim;
-            if (loose.Count > 0) return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).First().Creature;
+            if (loose.Count > 0) return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).First().Unit;
         }
 
-        // The leader pulls: the objective, or what stands in its way.
+        // A siege leader opens on the skull's unit the commander named; nothing else is pulled.
+        if (isLeader && group.Siege is { } siegeRaid)
+        {
+            if (siegeRaid.Order is PlayerbotSiegeOrder.Pull or PlayerbotSiegeOrder.AssignTank or PlayerbotSiegeOrder.Assault
+                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled))
+                return pulled;
+            return null;
+        }
+
+        // The leader pulls: the objective, or what stands in the way.
         if (isLeader && group.Run is not null && group.State == PlayerbotGroupState.Travelling && player.MapId == group.Goal.MeetingMap
             && !MembersBehind(player, group) && !group.AnyResting(_session.World) && Ready(player))
         {
@@ -608,7 +697,7 @@ internal sealed class PlayerbotGroupAI
         if (isLeader && group.State == PlayerbotGroupState.Engaging && !MembersBehind(player, group) && !group.AnyResting(_session.World)
             && Ready(player))
         {
-            if (group.Run is { } run) return SelectRunTarget(player, group, run, current);
+            if (group.Run is { } run) return SelectRunTarget(player, group, run, current as Creature);
             if (current is not null) return current;
             if (group.Handoff?.Sweep is not null)
             {
@@ -630,6 +719,20 @@ internal sealed class PlayerbotGroupAI
 
         return null;
     }
+
+    /// <summary>
+    /// The unit of the group's raid marks this member sticks to: its focus icon first, then the skull (<see cref="PlayerbotParty.MarkedTarget{T}"/>),
+    /// within <see cref="PlayerbotParty.MarkRangeYards"/> and valid for it.
+    /// </summary>
+    private Unit? MarkedTarget(Player player, PlayerbotGroupCoordinator.Member me, Map map, GroupManager? groups)
+    {
+        if (groups?.GetGroup(player.Guid) is not { } server) return null;
+        byte[] order = me.FocusIcon == PlayerbotParty.SkullIcon ? SkullOnly : [me.FocusIcon, PlayerbotParty.SkullIcon];
+        return PlayerbotParty.MarkedTarget(server.TargetIcons, order, guid => map.FindObject(guid) as Unit,
+            unit => Distance(player, unit) <= PlayerbotParty.MarkRangeYards && IsValidTarget(player, unit));
+    }
+
+    private static readonly byte[] SkullOnly = [PlayerbotParty.SkullIcon];
 
     /// <summary>
     /// The leader fights a boss of the wing that is not the objective noted (one met on the way to an earlier boss, or one that came with
@@ -706,7 +809,7 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
-    private void Fight(Player player, Creature target, uint interval)
+    private void Fight(Player player, Unit target, uint interval)
     {
         if (!ReferenceEquals(_target, target))
         {
@@ -717,12 +820,14 @@ internal sealed class PlayerbotGroupAI
         }
 
         Goal = PlayerbotGoalKind.Assist;
-        TargetEntry = target.Entry;
+        uint targetEntry = target is Creature creatureTarget ? creatureTarget.Entry : 0;
+        string targetLabel = target is Creature ? targetEntry.ToString(CultureInfo.InvariantCulture) : "player";
+        TargetEntry = targetEntry;
         if (_restUntilMs != 0) { _restUntilMs = 0; Act(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u), budgeted: false); }
         if (_spells.Update(player, target, interval))
         {
             _rangedIdleMs = 0;
-            Step = string.Create(CultureInfo.InvariantCulture, $"fight:{target.Entry}:cast");
+            Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:cast");
             return;
         }
 
@@ -735,7 +840,7 @@ internal sealed class PlayerbotGroupAI
             player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
             idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs && !engaged,
             inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
-        Step = string.Create(CultureInfo.InvariantCulture, $"fight:{target.Entry}:{position.ToString().ToLowerInvariant()}:{distance:F0}yd");
+        Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:{position.ToString().ToLowerInvariant()}:{distance:F0}yd");
         switch (position)
         {
             case PlayerbotFightPosition.Hold:
@@ -746,7 +851,7 @@ internal sealed class PlayerbotGroupAI
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
                 if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false))
                 {
-                    Step = string.Create(CultureInfo.InvariantCulture, $"fight:{target.Entry}:no-path");
+                    Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:no-path");
                     _target = null;
                 }
 
@@ -791,6 +896,9 @@ internal sealed class PlayerbotGroupAI
     }
 
     /// <summary>vmangos IsValidHostileTarget: in the world, alive, on the bot's map and attackable by it.</summary>
+    private static bool IsValidTarget(Player player, Unit target)
+        => target is Player enemy ? PlayerbotHostility.IsHostilePlayer(player, enemy) : target is Creature creature && IsValidTarget(player, creature);
+
     private static bool IsValidTarget(Player player, Creature target)
         => target.IsInWorld && target.IsAlive && player.Map is { } map && ReferenceEquals(target.Map, map) && !target.IsInEvadeMode
             && float.IsFinite(target.X) && float.IsFinite(target.Y) && float.IsFinite(target.Z) && map.Combat.Hooks.CanAttack(player, target);
@@ -1024,9 +1132,19 @@ internal sealed class PlayerbotGroupAI
 
         if (_route is null || _route.Complete || _route.IsStaleFor(player.Map) || Vector3.Distance(_routeGoal, goal) > 2f)
         {
-            PlanOutcome planned = toward
-                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
-                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route);
+            // A lift is the way when the mesh has none (the Undercity lifts, the Great Lift): the ride is driven from the next think.
+            PlayerbotRoute? direct = null;
+            if (toward && PlayerbotElevator.TryBegin(_session, player, goal, _options, out direct))
+            {
+                _route = null;
+                return true;
+            }
+
+            PlanOutcome planned = direct is not null ? PlanOutcome.Route
+                : toward
+                    ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct)
+                    : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct);
+            _route = direct;
             if (planned != PlanOutcome.Route || _route is null)
             {
                 _route = null;

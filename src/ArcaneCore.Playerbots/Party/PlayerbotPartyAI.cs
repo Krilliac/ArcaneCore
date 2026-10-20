@@ -24,6 +24,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
@@ -107,7 +108,7 @@ internal sealed class PlayerbotPartyAI
     private Vector3 _routeGoal;
     private float _followAngle;
     private float _followDistance = 3f;
-    private Creature? _target;
+    private Unit? _target;
     private bool _attacking;
     private uint _thinkElapsed;
     private uint _restUntilMs;
@@ -242,7 +243,10 @@ internal sealed class PlayerbotPartyAI
 
     internal uint TargetEntry { get; private set; }
 
-    internal Creature? InspectionTarget => _target;
+    internal Creature? InspectionTarget => _target as Creature;
+
+    /// <summary>The unit the bot fights, a creature or a player (inspection and tests).</summary>
+    internal Unit? InspectionUnit => _target;
 
     /// <summary>How the bot follows its master and catches up (<see cref="PlayerbotFollower"/>; inspection and tests).</summary>
     internal PlayerbotFollower Follower => _follower;
@@ -727,12 +731,14 @@ internal sealed class PlayerbotPartyAI
                 if (acknowledge) Tell(player, master.Name, "Staying here.");
                 break;
             case PlayerbotPartyCommand.Attack:
-                if (player.Map?.FindObject(master.Selection) is Creature target && IsValidTarget(player, target))
+                // The master's selection may be a creature or a player; a player is ordered on only when the combat hooks allow it (a
+                // PvP-flagged enemy, a duel opponent): the order grants the engagement, not the hostility (PlayerbotHostility).
+                if (player.Map?.FindObject(master.Selection) is Unit target && target is Creature or Player && IsValidTarget(player, target))
                 {
                     _ordered = target.Guid;
                     if (_mode != PlayerbotPartyMode.Follow) _mode = PlayerbotPartyMode.Follow;
                     _comeRequested = false;
-                    if (acknowledge) Tell(player, master.Name, "Attacking " + target.Template.Name + ".");
+                    if (acknowledge) Tell(player, master.Name, "Attacking " + (target is Creature creature ? creature.Template.Name : ((Player)target).Name) + ".");
                 }
                 else
                 {
@@ -1157,7 +1163,7 @@ internal sealed class PlayerbotPartyAI
     {
         if (!player.IsAlive) return "dead";
         if (_restUntilMs != 0) return "resting";
-        if (_target is { IsAlive: true } target) return "fighting " + target.Template.Name;
+        if (_target is { IsAlive: true } target) return "fighting " + (target is Creature creature ? creature.Template.Name : (target as Player)?.Name);
         return _mode switch
         {
             PlayerbotPartyMode.Stay => "staying",
@@ -1379,7 +1385,7 @@ internal sealed class PlayerbotPartyAI
             foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
                 if (unit is Creature creature && creature.IsAlive && ReferenceEquals(creature.Map, player.Map) && !enemies.Contains(creature))
                     enemies.Add(creature);
-            if (_target is { IsAlive: true } fighting && !enemies.Contains(fighting)) enemies.Add(fighting);
+            if (_target is Creature { IsAlive: true } fighting && !enemies.Contains(fighting)) enemies.Add(fighting);
             if (enemies.Count > 0)
             {
                 _wipe = master is { IsAlive: false } ? "master-dead" : "group-wipe";
@@ -1393,7 +1399,7 @@ internal sealed class PlayerbotPartyAI
 
         if (_restUntilMs != 0 && ContinueRest(player, master)) return;
 
-        Creature? target = _mode == PlayerbotPartyMode.Passive ? null : SelectTarget(player, master);
+        Unit? target = _mode == PlayerbotPartyMode.Passive ? null : SelectTarget(player, master);
         if (target is not null)
         {
             Fight(player, target, interval);
@@ -1501,40 +1507,69 @@ internal sealed class PlayerbotPartyAI
         return best;
     }
 
-    private Creature? SelectTarget(Player player, Player? master)
+    private Unit? SelectTarget(Player player, Player? master)
     {
         if (player.Map is not { } map) return null;
-        Creature? ordered = _ordered.IsEmpty ? null : map.FindObject(_ordered) as Creature;
+        GroupManager? groups = Services.Social?.Groups;
+        Unit? ordered = _ordered.IsEmpty ? null : map.FindObject(_ordered) as Unit;
         if (ordered is not null && !IsValidTarget(player, ordered)) ordered = null;
         if (ordered is null) _ordered = ObjectGuid.Empty;
         bool stay = _mode == PlayerbotPartyMode.Stay;
-        Creature? masterVictim = !stay && master is not null && ReferenceEquals(master.Map, map) ? master.Combat.Victim as Creature : null;
-        IEnumerable<Creature> own = player.Combat.Attackers.OfType<Creature>().OrderBy(attacker => Distance(player, attacker));
-        IEnumerable<(Creature, float)> members = stay ? [] : MemberAttackers(player, map);
-        Creature? selected = PlayerbotParty.SelectAttackTarget(stay ? null : ordered, masterVictim, own, members, unit => IsValidTarget(player, unit));
+        bool masterHere = !stay && master is not null && ReferenceEquals(master.Map, map);
+        // The master's victim: a creature, or a player the group may fight (the master attacks it, so it is the group's fight: GroupProvoked).
+        Unit? masterVictim = masterHere && master!.Combat.Victim is { } victim
+            && (victim is Creature || (victim is Player pv && PlayerbotHostility.MayEngage(player, pv, PlayerbotEngageReason.GroupProvoked, groups)))
+            ? victim : null;
+        // A player attacker is fought back only when it provoked the bot, as for a real player (PlayerbotHostility.MayEngage).
+        IEnumerable<Unit> own = player.Combat.Attackers.Where(attacker => attacker is Creature
+                || (attacker is Player p && PlayerbotHostility.MayEngage(player, p, PlayerbotEngageReason.Provoked, groups)))
+            .OrderBy(attacker => Distance(player, attacker));
+        IEnumerable<(Unit, float)> members = stay ? [] : MemberAttackers(player, map, groups);
+        // vmangos PartyBotAI::SelectAttackTarget (PartyBotAI.cpp:366-377): in combat, the leader's raid marks come before its victim. An explicit
+        // 'attack' order still wins over a mark.
+        Unit? selected = ordered is not null && !stay ? ordered : null;
+        if (selected is null && !stay && groups?.GetGroup(player.Guid) is { } group
+            && (player.Combat.IsInCombat || (master is not null && master.Combat.Victim is not null)))
+            selected = PlayerbotParty.MarkedTarget(group.TargetIcons, FocusIcons, guid => map.FindObject(guid) as Unit,
+                unit => Distance(player, unit) <= PlayerbotParty.MarkRangeYards && IsValidTarget(player, unit));
+        selected ??= PlayerbotParty.SelectAttackTarget(null, masterVictim, own, members, unit => IsValidTarget(player, unit));
         // FightThrough: what blocks the way to the master is fought, not run past (World:Playerbots:Follow:CatchUpMode).
         if (selected is null && !stay && _follower.Blocker(player) is { } blocker && IsValidTarget(player, blocker)) selected = blocker;
         return selected;
     }
 
-    private IEnumerable<(Creature, float)> MemberAttackers(Player player, Map map)
+    /// <summary>The raid icons the bot sticks to in a fight, in order (vmangos <c>m_marksToFocus</c>; skull by default).</summary>
+    private static readonly byte[] FocusIcons = [PlayerbotParty.SkullIcon];
+
+    private IEnumerable<(Unit, float)> MemberAttackers(Player player, Map map, GroupManager? groups)
     {
         if (Services.Social?.Groups.GetGroup(player.Guid) is not { } group) yield break;
         foreach (GroupMemberSlot slot in group.Members)
         {
             if (slot.Guid == player.Guid || _session.World.FindOnlinePlayer(slot.Guid) is not { } member || !ReferenceEquals(member.Map, map)) continue;
-            foreach (Creature attacker in member.Combat.Attackers.OfType<Creature>())
-                yield return (attacker, Distance(player, attacker));
+            foreach (Unit attacker in member.Combat.Attackers)
+            {
+                if (attacker is Creature || (attacker is Player p && PlayerbotHostility.MayEngage(player, p, PlayerbotEngageReason.GroupProvoked, groups)))
+                    yield return (attacker, Distance(player, attacker));
+            }
         }
     }
 
-    /// <summary>vmangos IsValidHostileTarget: in the world, alive, on the bot's map and attackable by it.</summary>
-    private static bool IsValidTarget(Player player, Creature target)
-        => target.IsInWorld && target.IsAlive && player.Map is { } map && ReferenceEquals(target.Map, map)
-            && float.IsFinite(target.X) && float.IsFinite(target.Y) && float.IsFinite(target.Z)
-            && map.Combat.Hooks.CanAttack(player, target);
+    /// <summary>
+    /// vmangos IsValidHostileTarget: in the world, alive, on the bot's map and attackable by it. A player is a valid target only under the one
+    /// hostility rule (<see cref="PlayerbotHostility.IsHostilePlayer"/>); whether the bot may start on it is decided where the candidates are taken.
+    /// </summary>
+    private static bool IsValidTarget(Player player, Unit target)
+        => target switch
+        {
+            Creature creature => creature.IsInWorld && creature.IsAlive && player.Map is { } map && ReferenceEquals(creature.Map, map)
+                && float.IsFinite(creature.X) && float.IsFinite(creature.Y) && float.IsFinite(creature.Z)
+                && map.Combat.Hooks.CanAttack(player, creature),
+            Player other => PlayerbotHostility.IsHostilePlayer(player, other),
+            _ => false,
+        };
 
-    private void Fight(Player player, Creature target, uint interval)
+    private void Fight(Player player, Unit target, uint interval)
     {
         if (!ReferenceEquals(_target, target))
         {
@@ -1546,7 +1581,7 @@ internal sealed class PlayerbotPartyAI
         }
 
         Goal = PlayerbotGoalKind.Assist;
-        TargetEntry = target.Entry;
+        TargetEntry = target is Creature creature ? creature.Entry : 0;
         if (_combatSpells.Update(player, target, interval))
         {
             if ((player.Movement.Flags & MovementFlags.MaskMoving) == 0)
@@ -1581,7 +1616,7 @@ internal sealed class PlayerbotPartyAI
                     return;
                 }
 
-                if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval)) _follower.NoteUnreachable(target);
+                if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval) && target is Creature unreachable) _follower.NoteUnreachable(unreachable);
                 return;
         }
 
@@ -1598,7 +1633,7 @@ internal sealed class PlayerbotPartyAI
             _attacking = Act(WorldOpcode.CmsgAttackswing, PlayerbotNavigation.GuidPayload(target.Guid.Value));
     }
 
-    private void FaceTargetIfNeeded(Player player, Creature target)
+    private void FaceTargetIfNeeded(Player player, Unit target)
     {
         float flatDist = MathF.Sqrt(MathF.Pow(target.X - player.X, 2) + MathF.Pow(target.Y - player.Y, 2));
         if (flatDist > CombatConstants.NoFacingChecksDistance && !MapCombat.HasInArc(player, target, CombatConstants.AutoAttackArc))

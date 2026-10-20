@@ -148,13 +148,53 @@ public sealed class PlayerbotFleetSelectionTests
         string[] after = root.SubCommands.Select(c => c.Name).ToArray();
 
         Assert.Equal(before, after.Take(before.Length));
-        Assert.Equal(["summon", "send", "follow", "stay", "dismiss", "near", "revive", "fleet"], after.Skip(before.Length));
-        foreach (string admin in new[] { "summon", "send", "follow", "stay", "dismiss", "revive", "fleet", "start", "stop" })
+        Assert.Equal(["summon", "send", "follow", "stay", "dismiss", "near", "revive", "defend", "siege", "fleet"], after.Skip(before.Length));
+        foreach (string admin in new[] { "summon", "send", "follow", "stay", "dismiss", "revive", "defend", "siege", "fleet", "start", "stop" })
             Assert.Equal(AccountSecurity.Administrator, root.SubCommands.Single(c => c.Name == admin).Security);
         Assert.Equal(AccountSecurity.GameMaster, root.SubCommands.Single(c => c.Name == "near").Security);
         // The fleet reset deletes every bot character: its rank is Administrator at the group and at the child.
         ChatCommand fleet = root.SubCommands.Single(c => c.Name == "fleet");
         Assert.Equal(AccountSecurity.Administrator, fleet.SubCommands.Single(c => c.Name == "reset").Security);
         Assert.Contains("summon|send|follow|stay|dismiss|near|revive", root.Help, StringComparison.Ordinal);
+    }
+    [Fact]
+    public void Parse_Defend_HereRadiusAndForce_OrClear()
+    {
+        Assert.True(PlayerbotFleetSelection.TryParse("Wfbot* here 40", FleetVerb.Defend, out FleetRequest here));
+        Assert.Equal("here", here.Head);
+        Assert.Equal(40f, here.Radius);
+        Assert.False(here.Force);
+        Assert.Equal(FleetSelectorKind.Prefix, here.Kind);
+
+        Assert.True(PlayerbotFleetSelection.TryParse("all HERE 12.5 force", FleetVerb.Defend, out FleetRequest all));
+        Assert.Equal("here", all.Head);
+        Assert.Equal(12.5f, all.Radius);
+        Assert.True(all.Force);
+        Assert.Equal(FleetSelectorKind.All, all.Kind);
+
+        Assert.True(PlayerbotFleetSelection.TryParse("Wfbotone clear", FleetVerb.Defend, out FleetRequest clear));
+        Assert.Equal("clear", clear.Head);
+        Assert.Equal(FleetSelectorKind.Name, clear.Kind);
+
+        foreach (string bad in new[] { "Wfbot*", "Wfbot* here", "Wfbot* here abc", "Wfbot* here 0", "Wfbot* here -5", "Wfbot* here NaN", "Wfbot* here 40 50",
+                     "Wfbot* clear 40", "Wfbot* there 40", "Wfbot* here 40 to Gmone" })
+            Assert.False(PlayerbotFleetSelection.TryParse(bad, FleetVerb.Defend, out _), bad);
+    }
+
+    [Theory]
+    [InlineData(500f, 200f)]
+    [InlineData(200f, 200f)]
+    [InlineData(40f, 40f)]
+    [InlineData(10f, 10f)]
+    [InlineData(3f, 10f)]
+    public void DefendRadius_IsClampedToTenThroughTwoHundredYards(float requested, float expected)
+        => Assert.Equal(expected, PlayerbotDefend.ClampRadius(requested));
+
+    [Fact]
+    public void Defend_AboveTheBulkCap_NeedsForce()
+    {
+        Assert.True(PlayerbotFleetSelection.NeedsForce(51, null, force: false, cap: 50));
+        Assert.False(PlayerbotFleetSelection.NeedsForce(50, null, force: false, cap: 50));
+        Assert.False(PlayerbotFleetSelection.NeedsForce(51, null, force: true, cap: 50));
     }
 }
