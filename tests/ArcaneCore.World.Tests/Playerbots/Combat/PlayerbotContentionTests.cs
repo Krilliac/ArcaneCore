@@ -344,6 +344,44 @@ public sealed class PlayerbotContentionTests
         Assert.Empty(PlayerbotDropIndex.DroppersOf(loot, other));
     }
 
+    /// <summary>
+    /// The hunt index leaves out a trace dropper (GitHub #809: Small Crag Boar's 0.02% Crag Boar Rib against Crag Boar's 52%), reads a
+    /// quest chance by its absolute value, gives an equal-chanced group row its share of what the group leaves, and scales a reference.
+    /// </summary>
+    [Fact]
+    public void HuntIndexLeavesOutTraceDroppers()
+    {
+        const uint smallBoar = 708, cragBoar = 1125, plainstrider = 2955, groupBoar = 3000, refBoar = 3001;
+        const uint rib = 2886, meat = 4739, tusk = 5000, bristle = 5001;
+        var loot = new LootContent(
+            [
+                (LootTableKind.Creature, new LootStoreRow(smallBoar, rib, 0.02f, 0, 1, 1)),
+                (LootTableKind.Creature, new LootStoreRow(cragBoar, rib, 52.3719f, 0, 1, 1)),
+                (LootTableKind.Creature, new LootStoreRow(plainstrider, meat, -80f, 0, 1, 1)),
+                (LootTableKind.Creature, new LootStoreRow(cragBoar, tusk, 1f, 0, 1, 1)),
+                // An equal-chanced row of a group with 60% explicit takes 20% (two rows share 40%).
+                (LootTableKind.Creature, new LootStoreRow(groupBoar, tusk, 0f, 1, 1, 1)),
+                (LootTableKind.Creature, new LootStoreRow(groupBoar, bristle, 0f, 1, 1, 1)),
+                (LootTableKind.Creature, new LootStoreRow(groupBoar, 9999, 60f, 1, 1, 1)),
+                // A 50% reference to a table with the bristle at 1%: 0.5%, under a twentieth of the group's 20%.
+                (LootTableKind.Creature, new LootStoreRow(refBoar, 0, 50f, 0, -77, 1)),
+                (LootTableKind.Reference, new LootStoreRow(77, bristle, 1f, 0, 1, 1)),
+                (LootTableKind.Reference, new LootStoreRow(77, tusk, 100f, 0, 1, 1)),
+            ],
+            [
+                new CreatureLootInfo(smallBoar, smallBoar, 0, 0, 0), new CreatureLootInfo(cragBoar, cragBoar, 0, 0, 0),
+                new CreatureLootInfo(plainstrider, plainstrider, 0, 0, 0), new CreatureLootInfo(groupBoar, groupBoar, 0, 0, 0),
+                new CreatureLootInfo(refBoar, refBoar, 0, 0, 0),
+            ]);
+
+        Assert.Equal([smallBoar, cragBoar], PlayerbotDropIndex.DroppersOf(loot, rib));
+        Assert.Equal([cragBoar], PlayerbotDropIndex.HuntedDroppersOf(loot, rib));
+        Assert.Equal([plainstrider], PlayerbotDropIndex.HuntedDroppersOf(loot, meat));
+        Assert.Equal([groupBoar, refBoar], PlayerbotDropIndex.HuntedDroppersOf(loot, tusk)); // 20% and 50%; Crag Boar's 1% is a trace
+        Assert.Equal([groupBoar], PlayerbotDropIndex.HuntedDroppersOf(loot, bristle));
+        Assert.Empty(PlayerbotDropIndex.HuntedDroppersOf(loot, 12));
+    }
+
     /// <summary>A few thinks (the first ones may be spent acknowledging movement orders).</summary>
     private static void NoSpells(WorldSession session)
         => session.Services.GetRequiredService<SpellFeature>().System.Store = new SpellStore([], [], []);

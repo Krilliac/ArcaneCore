@@ -187,6 +187,70 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
         });
     }
 
+    /// <summary>
+    /// GitHub #809 (<c>bot-quest/objective-no-progress ... reason=no-credit-timeout</c>, quest 384 and 317 at entry 708 the most frequent
+    /// pairs on live): classicdb has Small Crag Boar (708, level 3) drop Crag Boar Rib (2886) at 0.02% where Crag Boar (1125, level 5-6)
+    /// drops it at 52.37%. A level 2 bot, too low for Crag Boar, took Small Crag Boar as its item objective's creature and hunted it with no
+    /// credit until the contention clock set it aside. A trace dropper is no objective: the low bot has none, and at level 5 the real one.
+    /// </summary>
+    [Fact]
+    public async Task ItemObjective_IsNotHuntedAtATraceDropper()
+    {
+        const uint ribQuest = 384, ribItem = 2886, smallBoar = 708, cragBoar = 1125;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = ribItem, Name = "Crag Boar Rib", Class = (uint)ItemClass.Quest, Stackable = 20 });
+        using IDisposable itemScope = items.Use();
+
+        await using ObjectiveTestHost env = await ObjectiveTestHost.StartDamnedQuestAsync();
+        await env.Host.OnWorldAsync(() =>
+        {
+            Player player = env.Session.Player!;
+            QuestNpcFeature feature = env.Feature;
+            feature.Services.ReplaceQuests(new QuestStore(new QuestContent(
+                [new QuestTemplate
+                {
+                    Entry = ribQuest, Method = 2, MinLevel = 1, QuestLevel = 2, Title = "Beer Basted Boar Ribs",
+                    Details = "Bring Crag Boar Ribs.", RequestItemsText = "The ribs?", ReqItemId1 = ribItem, ReqItemCount1 = 6,
+                }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = ribQuest }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = ribQuest }])));
+            env.Host.WorldServices.GetRequiredService<GameObjectLootFeature>().ReplaceLootContent(new LootContent(
+                [
+                    (LootTableKind.Creature, new LootStoreRow(smallBoar, ribItem, 0.02f, 0, 1, 1)),
+                    (LootTableKind.Creature, new LootStoreRow(cragBoar, ribItem, 52.3719f, 0, 1, 1)),
+                ],
+                [new CreatureLootInfo(smallBoar, smallBoar, 0, 0, 0), new CreatureLootInfo(cragBoar, cragBoar, 0, 0, 0)]));
+            env.Host.WorldServices.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent(
+                [
+                    new CreatureTemplate { Entry = smallBoar, Name = "Small Crag Boar", MinLevel = 3, MaxLevel = 3, DisplayIds = [49] },
+                    new CreatureTemplate { Entry = cragBoar, Name = "Crag Boar", MinLevel = 5, MaxLevel = 6, DisplayIds = [49] },
+                ],
+                [
+                    new CreatureSpawn { Guid = 910011, Entry = smallBoar, MapId = player.MapId, X = player.X + 30f, Y = player.Y, Z = player.Z },
+                    new CreatureSpawn { Guid = 910012, Entry = cragBoar, MapId = player.MapId, X = player.X + 40f, Y = player.Y, Z = player.Z },
+                ],
+                [], [], []));
+            Assert.Equal(GmQuestAddResult.Added, feature.Services.GmAddQuest(player, feature.Services.Quests.Get(ribQuest)!));
+            PlayerNpcState state = feature.Services.StateOf(player)!;
+
+            var goals = new PlayerbotQuestGoals(env.Session, new PlayerbotOptions { Enabled = true })
+            {
+                Contention = new PlayerbotContention(new PlayerbotOptions { Enabled = true }),
+                Suspensions = new PlayerbotSuspensions(),
+            };
+
+            player.Level = 2; // Crag Boar (MinLevel 5) is more than two levels above: only the trace dropper is in range
+            goals.RefreshObjectiveEntry(player, feature.Services, state);
+            Assert.Equal(0u, goals.PreferredCreatureEntry);
+
+            player.Level = 5;
+            goals.RefreshObjectiveEntry(player, feature.Services, state);
+            Assert.Equal(cragBoar, goals.PreferredCreatureEntry);
+            Assert.Equal(ribQuest, goals.PreferredQuestId);
+            return true;
+        });
+    }
+
     private sealed class ObjectiveTestHost : IAsyncDisposable
     {
         private ObjectiveTestHost(WorldTestHost host, WorldSession session)

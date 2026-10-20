@@ -804,7 +804,12 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   `ContentionSuspendMinutes` (5). Only time at the spawns with every creature in sight taken by others counts (a lost or stolen mob adds 20 seconds); resting, dying and town trips add nothing, a gap of over five seconds pauses the clock, and walking around the spawns while every creature of the entry is taken does count. The bot then moves on: the bot hunts its next unfinished objective, or raises a `contention` group signal when none is left. Among
   its objectives a bot takes the one a hash of its guid ranks first, so bots with the same quests do not all take the first. A quest item
   objective is hunted at the creatures that drop the item (read once from the loot tables; items with more than 24 droppers, elites and
-  creatures that do not spawn on the bot's map are left out).
+  creatures that do not spawn on the bot's map are left out). A trace dropper is left out too: one whose chance for the item, times 20,
+  is below the best dropper's (`PlayerbotDropIndex.HuntedDroppersOf`; a row's chance is its absolute ChanceOrQuestChance, an
+  equal-chanced group row an equal share of what the group's explicit chances leave, a reference row's chance scales the table it
+  names). Small Crag Boar drops Crag Boar Rib at 0.02% and Chunk of Boar Meat at 0.0094% where Crag Boar drops the rib at 52%: a bot
+  too low for the other droppers hunted it with no credit until the contention clock set it aside (GitHub #809); now it has no item
+  objective there until it can hunt a real dropper.
 * **Empty camps.** With nothing of the quest's entry in sight the bot walks to its spawn points (`PlayerbotWorldDestinations`). A spawn
   point it reaches (within 8 yards) with no live creature of the entry in sight is marked visited, with the spawns of the entry within 10
   yards of it (one camp), for the spawn's respawn delay (the mean of its min and max, clamped to 30 s to 10 min; at most 128 visits,
