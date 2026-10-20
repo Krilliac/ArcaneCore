@@ -749,6 +749,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
+        // The window of a gather, skin or disenchant cast likewise, on the update after it came rather than on the crafting rung's next
+        // think, which higher rungs, other loot readers and the bounded packet ring stood between (GitHub #774).
+        if (_crafting.UpdateGatherLoot(player)) return;
+
         _thinkElapsed = checked(_thinkElapsed + elapsedMs);
         if (_thinkElapsed < _options.ThinkIntervalMs)
             return;

@@ -1275,6 +1275,28 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant cast {spellId} on {target} failed {failures} times in a row (no loot window, last result {result ?? "none sent"})");
     }
 
+    /// <summary>
+    /// The wait for a gather, skin or disenchant window on every brain update, between thinks too (GitHub #774). The window opens in the
+    /// tick the cast lands, while the crafting rung reads it only on a later think that reaches the rung: seconds later, after any higher
+    /// rung (the policy, the quests, a fight and its corpse loot, which discards every other SMSG_LOOT_RESPONSE) and after the bounded
+    /// received-packet ring may have dropped it under the casts around the bot. Taken here, the reply is read the tick after it came, and
+    /// its takes and release go out as a corpse's do (<c>PlayerbotBrain</c>'s loot actions). True while it sends them.
+    /// </summary>
+    internal bool UpdateGatherLoot(Player player)
+    {
+        if ((!_waitingForGatherLoot && _pendingLoot.Count == 0) || !player.IsInWorld || !player.IsAlive)
+            return false;
+
+        // Still on its cast bar (a pushback can stretch it past the wait's deadline): no window is due yet.
+        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
+            { State: SpellCastState.Preparing or SpellCastState.Casting })
+        {
+            return false;
+        }
+
+        return DrainGatherLoot(player, _session.World.NowMs);
+    }
+
     private bool DrainGatherLoot(Player player, uint now)
     {
         if (_pendingLoot.TryPeek(out (WorldOpcode Opcode, byte[] Payload) next))

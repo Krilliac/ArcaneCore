@@ -39,10 +39,10 @@ public sealed class PlayerbotGatherLootWaitTests
 
         public Player Player => Bot.Player;
 
-        public static async Task<Rig> StartAsync()
+        public static async Task<Rig> StartAsync(PlayerbotOptions? options = null)
         {
             WorldTestHost host = Start([Node], out _, manualClock: true);
-            Bot bot = await EnterAsync(host, "GATHERBOT", "Gatherone", 1, new PlayerbotOptions { Enabled = true }, new PlayerbotClaims(8), () => 0);
+            Bot bot = await EnterAsync(host, "GATHERBOT", "Gatherone", 1, options ?? new PlayerbotOptions { Enabled = true }, new PlayerbotClaims(8), () => 0);
             var node = new ObjectGuid(ChestGuid(Node));
             Assert.True(await host.World.AdvanceClockUntilAsync(10_000, () => bot.Player.VisibleObjects.Contains(node)), "the herb node never became visible");
             await host.OnWorldAsync(() =>
@@ -155,6 +155,58 @@ public sealed class PlayerbotGatherLootWaitTests
         Assert.Equal(1, capture.Count(CraftFailed));
         Assert.Contains($"failed {PlayerbotCrafting.MaxGatherCasts} times in a row", capture.Notices.Single(n => n.Key == CraftFailed).Detail, StringComparison.Ordinal);
         Assert.False(await rig.Host.OnWorldAsync(rig.Casting), "the bot went on casting at a node it had given up on");
+    }
+
+    [Fact]
+    public async Task AWindowThatLeavesTheRingBeforeTheNextThink_IsTakenByTheBrain_NotReportedAsATimeout()
+    {
+        // GitHub #774. The window opens in the tick the cast lands, but the crafting rung only reads it on the bot's next think that reaches
+        // that rung: seconds later (live think gap p95 13-16 s), and only when no higher rung (policy, quests, a fight) owns that think.
+        // Meanwhile the reply sits in the bounded received-packet ring (128 packets), which every nearby SMSG_SPELL_START/GO also fills,
+        // and which other readers drain (the corpse loot after a fight discards every SMSG_LOOT_RESPONSE that is not its corpse's). Here
+        // the ring fills before the next think. The brain must take its gather window on the ticks between thinks, as it takes a corpse's.
+        const int ThinkMs = 15_000;
+        await using Rig rig = await Rig.StartAsync(new PlayerbotOptions { Enabled = true, ThinkIntervalMs = ThinkMs });
+        using AnomalyCapture capture = await rig.Host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        PlayerbotBrain brain = rig.Bot.Brain;
+        bool Tick(uint elapsedMs)
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            brain.Update(elapsedMs);
+            return true;
+        }
+
+        // The think that goes for the node: the bot stands 3 yd from it, so it casts at once.
+        await rig.Host.OnWorldAsync(() => Tick(ThinkMs));
+        Assert.True(await rig.Host.OnWorldAsync(rig.Casting), "the brain did not start Herb Gathering on the node");
+
+        // The ticks between thinks while the 5 s cast bar runs and lands.
+        for (int i = 0; i < 70 && await rig.Host.OnWorldAsync(rig.Casting); i++)
+        {
+            await rig.Host.World.AdvanceClockAsync(100);
+            await rig.Host.OnWorldAsync(() => Tick(100));
+        }
+
+        Assert.False(await rig.Host.OnWorldAsync(rig.Casting), "the 5 s cast never landed");
+        for (int i = 0; i < 5; i++)
+        {
+            await rig.Host.World.AdvanceClockAsync(100);
+            await rig.Host.OnWorldAsync(() => Tick(100));
+        }
+
+        // Before the next think, the casts of the creatures and players around fill the ring past its 128 packets.
+        await rig.Host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < 160; i++)
+                rig.Bot.Session.Send(WorldOpcode.SmsgSpellGo, new byte[24]);
+            return true;
+        });
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        for (int i = 0; i < 3; i++)
+            await rig.Host.OnWorldAsync(() => Tick(ThinkMs));
+
+        Assert.False(capture.Any(CraftFailed), capture.Describe());
+        Assert.Equal(1u, await rig.Host.OnWorldAsync(() => rig.Player.Inventory.GetItemCount(GreyItem)));
     }
 
     [Fact]
