@@ -301,6 +301,25 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     /// <summary>The retreating leader reported that it has no path to the retreat point (set by <see cref="PlayerbotGroupAI"/>; the raid then rallies in place).</summary>
     public bool RetreatNoPath { get; set; }
 
+    /// <summary>The time at the retreat point was restarted once in this latch (see <see cref="EndNoPathRally"/>); cleared where the latch ends.</summary>
+    public bool RallyClockRestarted { get; set; }
+
+    /// <summary>
+    /// The no-path rally ends (the leader planned a walk again, or a new leader took over). The time at the point restarts at most once per latch,
+    /// and only when the flag was set: a path that flaps (a plan that is "pending", then refused) must not keep the 30 s bound from ever being reached.
+    /// </summary>
+    public void EndNoPathRally()
+    {
+        if (!RetreatNoPath) return;
+        RetreatNoPath = false;
+        if (RallyClockRestarted) return;
+        RallyClockRestarted = true;
+        RallySinceMs = 0;
+    }
+
+    /// <summary>The bot that led the raid at the last read; a change (a promotion) starts the retreat afresh for the new leader.</summary>
+    public Guid LeaderSeen { get; set; }
+
     /// <summary>When the leader first stood at the retreat point during the current retreat (0: not there during this latch).</summary>
     public uint RallySinceMs { get; set; }
 

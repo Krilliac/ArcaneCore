@@ -499,7 +499,7 @@ public sealed class PlayerbotSiegeWorldTests
     public async Task ARetreatThatLosesItsLeader_IsCountedOnce()
     {
         await using GroupTestWorld world = await StartStrongGuards();
-        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        (_, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
         await KillAsync(world, raid, "mage");
         Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
         Guid oldLeader = raid.Group!.LeaderBotId;
@@ -537,7 +537,6 @@ public sealed class PlayerbotSiegeWorldTests
         await world.RunUntilAsync(5_000, () => { Sample(); return false; });
         Assert.True(most == 1, string.Join(Environment.NewLine, states));
         Assert.Equal(1, raid.Retreats);
-        Assert.NotNull(siege);
     }
 
     [Fact]
@@ -663,7 +662,6 @@ public sealed class PlayerbotSiegeWorldTests
         }), world.Trace());
         Assert.Empty(seen);
         Assert.Equal("won", world.Coordinator.SiegeOutcome);
-        Assert.NotNull(siege);
     }
 
     [Fact]
@@ -774,5 +772,115 @@ public sealed class PlayerbotSiegeWorldTests
 
         Assert.False(won, "a witness on another map judged the objective dead");
         Assert.False(siege.ObjectiveUnseen);
+    }
+
+    [Fact]
+    public async Task ANoPathRally_RetriesTheWalk_AndRetreatsAgainOnceThePathIsBack()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        uint[] allowed = world.Options.AllowedMaps;
+
+        world.Options.AllowedMaps = [1];
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath), world.Trace());
+        Vector3 point = RetreatPoint(siege);
+        Assert.True(YardsFrom(Leader(world, raid), point) > PlayerbotSiegeCommander.RallyYards);
+
+        // The path comes back: within a few retries the flag clears and the raid retreats again, the leader walking to its point.
+        world.Options.AllowedMaps = allowed;
+        Assert.True(await world.RunUntilAsync(15_000, () => !raid.RetreatNoPath), world.Trace());
+        Assert.True(await world.RunUntilAsync(15_000, () => raid.Order == PlayerbotSiegeOrder.Retreat || raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => YardsFrom(Leader(world, raid), point) <= PlayerbotSiegeCommander.RallyYards + 1.5f), world.Trace());
+        Assert.Equal(1, raid.Retreats);
+    }
+
+    [Fact]
+    public async Task APromotion_DuringANoPathRally_RestartsTheClockAndClearsTheFlag()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (_, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        world.Options.AllowedMaps = [1];
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath && raid.RallySinceMs != 0), world.Trace());
+        (uint oldSince, Guid oldLeader) = (raid.RallySinceMs, raid.Group!.LeaderBotId);
+
+        // The maps stay refused: the new leader has no path either, so only the promotion itself can restart the clock.
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            leader.Health = 0;
+            leader.Map!.Combat.KillPlayer(leader);
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), world.Trace());
+        Assert.True(await world.RunUntilAsync(1_500, () => raid.RallySinceMs != oldSince), "the new leader inherited the clock of the no-path rally" + Environment.NewLine + world.Trace());
+        Assert.True(raid.RallyClockRestarted);
+    }
+
+    [Fact]
+    public async Task APromotion_AtARealRetreatPoint_KeepsTheTimeAtThePoint()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (_, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        Assert.True(await world.RunUntilAsync(60_000, () => { TopUpGuards(world, raid); return raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath && raid.RallySinceMs != 0; }), world.Trace());
+        (uint since, Guid oldLeader) = (raid.RallySinceMs, raid.Group!.LeaderBotId);
+
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            leader.Health = 0;
+            leader.Map!.Combat.KillPlayer(leader);
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), world.Trace());
+        var changed = new List<uint>();
+        await world.RunUntilAsync(2_000, () => { TopUpGuards(world, raid); if (raid.RallySinceMs != since) changed.Add(raid.RallySinceMs); return false; });
+        Assert.Empty(changed);
+        Assert.False(raid.RallyClockRestarted);
+    }
+
+    [Fact]
+    public async Task AFlappingPath_DoesNotKeepTheRallyBoundFromEver_BeingReached()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        await KillAsync(world, raid, "mage");
+        uint[] allowed = world.Options.AllowedMaps;
+        world.Options.AllowedMaps = [1];
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.RetreatLatched), world.Trace());
+
+        // The path flaps: it is back when a retry comes (the flag clears), and refused again at once (the next walk finds none).
+        Vector3 point = RetreatPoint(siege);
+        int flaps = 0;
+        uint refusedAt = Now(world);
+        var trail = new List<string>();
+        bool wasFlagged = false;
+        uint began = Now(world);
+        bool ended = await world.RunUntilAsync(2 * PlayerbotSiegeCommander.RallyHoldMs + 3_000 + 20_000, () =>
+        {
+            TopUpGuards(world, raid);
+            if (unchecked(Now(world) - began) % 2000 < 50) trail.Add($"[{unchecked(Now(world) - began)} {raid.Order} noPath={raid.RetreatNoPath} since={raid.RallySinceMs} restarted={raid.RallyClockRestarted} leader={Leader(world, raid).IsAlive}]");
+            if (raid.RetreatNoPath)
+            {
+                // Refused for a while, so the leader rallies (and a retry finds the path back only after that).
+                if (unchecked(Now(world) - refusedAt) >= 3_500) { world.Options.AllowedMaps = allowed; PlayerbotMotion.ForgetLoops(Leader(world, raid)); wasFlagged = true; }
+            }
+            else if (wasFlagged)
+            {
+                // The route the retry planned is dropped (a stale route, a lift ride that ended): the next walk plans again and finds none.
+                world.Options.AllowedMaps = [1];
+                refusedAt = Now(world);
+                Player dragged = Leader(world, raid);
+                dragged.Relocate(point.X + 25f, point.Y, point.Z, 0, Now(world)); // pursuit keeps the leader off the point
+                typeof(PlayerbotGroupAI).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(raid.Group!.Find(raid.Group.LeaderBotId)!.AI, null);
+                wasFlagged = false;
+                flaps++;
+            }
+            return !raid.RetreatLatched;
+        });
+        Assert.True(ended, $"the latch outlived every bound after {flaps} flaps, {unchecked(Now(world) - began)} ms" + Environment.NewLine + string.Join(" ", trail));
+        Assert.Equal(1, raid.Retreats);
     }
 }
