@@ -2,7 +2,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Ops.MapFeed;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Net;
 
@@ -29,7 +29,7 @@ internal enum InjectVerdict : byte
     /// <summary>A session-task opcode: its handler ran to completion, serialized with the session's own reader.</summary>
     Handled,
 
-    /// <summary>The dispatcher refused the packet the way it refuses a client's (malformed, a flood, a full queue) and the session was disconnected.</summary>
+    /// <summary>The dispatcher refused the packet the way it refuses a client's (malformed, a flood, a full queue), or its session handler faulted the way that ends a client's session, and the session was disconnected.</summary>
     Disconnected,
 
     /// <summary>The server has no handler for the opcode (the dispatcher would count and drop it).</summary>
@@ -74,9 +74,12 @@ public sealed partial class WorldSession
     /// <summary>Whether a packet tap is attached (lean bots then build and keep every packet, so the tap sees what a client would).</summary>
     private bool HasTaps => Volatile.Read(ref _taps).Length != 0;
 
-    /// <summary>The dispatcher gate when the packet tools are configured on (read once, when the session is built).</summary>
+    /// <summary>
+    /// The dispatcher gate when the packet tools are actually permitted (read once, when the session is built): the same decision that
+    /// switches the tools on (<see cref="PacketToolsPermit"/>: options, map feed serving, environment), not merely the Enabled option.
+    /// </summary>
     private static SemaphoreSlim? CreateDispatchGate(IServiceProvider services)
-        => services.GetService<IOptions<WorldPacketToolsOptions>>()?.Value.Enabled == true ? new SemaphoreSlim(1, 1) : null;
+        => services.GetService<PacketToolsPermit>()?.Granted == true ? new SemaphoreSlim(1, 1) : null;
 
     /// <summary>
     /// <see cref="DispatchAsync"/> for a packet the client sent (socket or gateway reader), behind the dispatcher gate when there is one.
@@ -152,14 +155,40 @@ public sealed partial class WorldSession
                 t_toolPacket = false;
             }
 
-            if (!await DispatchAsync(opcode, payload).ConfigureAwait(false))
+            bool dispatched;
+            try
+            {
+                dispatched = await DispatchAsync(opcode, payload).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException))
+            {
+                // A session handler fault the dispatcher does not contain leaves the reader's loop and ends the session; an injection
+                // ends it the same way instead of reporting a failed query with the session still up.
+                _logger.LogError(ex, "[{Endpoint}] an injected {Opcode} faulted its handler; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                Kick("an injected packet faulted its session handler");
+                return InjectVerdict.Disconnected;
+            }
+
+            if (!dispatched)
             {
                 // The reader would end the connection here; an injection ends it the same way.
                 Kick("an injected packet was refused by the dispatcher");
                 return InjectVerdict.Disconnected;
             }
 
-            return handler.World is not null ? InjectVerdict.Queued : InjectVerdict.Handled;
+            if (handler.World is null)
+            {
+                return InjectVerdict.Handled;
+            }
+
+            // Close discards the world queue without taking the gate: a packet enqueued after that discard would sit on a closed session
+            // for good. Close sets the state before it discards, so a closed session seen here is discarded again.
+            if (_state == SessionState.Closed)
+            {
+                DiscardQueuedPackets();
+            }
+
+            return InjectVerdict.Queued;
         }
         finally
         {

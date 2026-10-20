@@ -232,6 +232,11 @@ public sealed class WorldMapFeed : IHostedService
         }
 
         Tools = new PacketTools(_services, _world, _logger);
+        if (_services.GetService<PacketToolsPermit>() is { } permit)
+        {
+            permit.Granted = true;
+        }
+
         if (string.Equals(environment, WorldPacketToolsOptions.DevelopmentEnvironment, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogWarning(
@@ -672,6 +677,11 @@ public sealed class WorldMapFeed : IHostedService
         foreach (NamedPipeServerStream server in _servers)
         {
             server.Dispose();
+        }
+
+        if (_services.GetService<PacketToolsPermit>() is { } stoppedPermit)
+        {
+            stoppedPermit.Granted = false;
         }
 
         if (Tools is { } tools)

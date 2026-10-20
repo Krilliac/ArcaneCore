@@ -15,6 +15,7 @@ public static class WorldMapFeedServiceCollectionExtensions
     {
         services.Configure<WorldMapFeedOptions>(configuration.GetSection(WorldMapFeedOptions.SectionName));
         services.Configure<WorldPacketToolsOptions>(configuration.GetSection(WorldPacketToolsOptions.SectionName));
+        services.AddSingleton<PacketToolsPermit>();
         services.AddHostedService<WorldMapFeed>();
         return services;
     }

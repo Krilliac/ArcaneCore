@@ -145,21 +145,34 @@ internal sealed class PacketTools : IAsyncDisposable
         return new ToolConsole(scope, executor, sink);
     }
 
-    /// <summary>Keep a finished connection's console for <see cref="ScopeGrace"/>, then dispose it (or at stop, whichever is first).</summary>
+    /// <summary>
+    /// Keep a finished connection's console until its last command settled (waited for at most <see cref="ScopeGrace"/>) and then for
+    /// <see cref="ScopeGrace"/> more, then dispose it (or at stop, whichever is first).
+    /// </summary>
     public void Retire(ToolConsole console)
     {
         _retired[console] = 0;
-        _ = Task.Delay(ScopeGrace, _stopping.Token).ContinueWith(
-            _ =>
-            {
-                if (_retired.TryRemove(console, out byte _))
-                {
-                    _ = console.DisposeAsync().AsTask();
-                }
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        _ = RetireAsync(console);
+    }
+
+    private async Task RetireAsync(ToolConsole console)
+    {
+        try
+        {
+            // A command that holds itself open (.botctl wait) still uses the scope; a command that replies later (a reload) gets the grace.
+            await console.LastSettled.WaitAsync(ScopeGrace, _stopping.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await Task.Delay(ScopeGrace, _stopping.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The tools were disposed: DisposeAsync disposes every retired console.
+            return;
+        }
+
+        if (_retired.TryRemove(console, out byte _))
+        {
+            await console.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>Dispose every retired console (the feed is stopping).</summary>
@@ -181,7 +194,13 @@ internal sealed class PacketTools : IAsyncDisposable
     public void LogConsole(string client, string line)
         => _logger.LogInformation("Map feed console command: {Line} ({Client})", ConsoleCommandRedactor.Redact(line), client);
 
-    /// <summary>Log and count an injection that reached the session's dispatcher.</summary>
+    /// <summary>Log an injection about to reach the session's dispatcher (before it runs, so a fault or a stall still leaves the audit line).</summary>
+    public void LogInjecting(string client, ToolTarget target, uint opcode, int length)
+        => _logger.LogInformation(
+            "Map feed inject dispatching: {Opcode} ({Length} bytes) as '{Target}' (guid {Guid:X16}{Bot}) from {Client}",
+            PacketToolOpcodes.Name(opcode), length, target.Name, target.Guid, target.Bot ? ", bot" : string.Empty, client);
+
+    /// <summary>Log and count an injection that reached the session's dispatcher, with its verdict.</summary>
     public void LogInjected(string client, ToolTarget target, uint opcode, int length, InjectVerdict verdict)
     {
         _logger.LogInformation(
@@ -215,6 +234,21 @@ internal sealed class PacketTools : IAsyncDisposable
             tapId, target.Name, target.Guid, target.Bot ? ", bot" : string.Empty, directions, maxPackets, seconds, client);
 }
 
+/// <summary>
+/// Whether the packet tools are on in this host (options, map feed serving, environment: decided once by <see cref="WorldMapFeed"/> when
+/// it starts). Sessions read it when they are built, so only then do they pay for the dispatcher gate.
+/// </summary>
+internal sealed class PacketToolsPermit
+{
+    private volatile bool _granted;
+
+    public bool Granted
+    {
+        get => _granted;
+        set => _granted = value;
+    }
+}
+
 /// <summary>The packet tools' instruments (docs/ops/metrics.md): <c>arcanecore.tools.packets{op,result}</c>.</summary>
 internal static class PacketToolsMeters
 {
@@ -233,7 +267,7 @@ internal static class PacketToolsMeters
 
 /// <summary>
 /// One connection's console: the scope its console session lives in, the executor and the reply sink. Disposed by the connection when it
-/// ends, after any command still holding itself open has settled (bounded).
+/// ends, after any command still holding itself open has settled (bounded, <see cref="PacketTools.Retire"/>).
 /// </summary>
 internal sealed class ToolConsole(AsyncServiceScope scope, WorldConsoleExecutor executor, ToolConsoleSink sink) : IAsyncDisposable
 {
@@ -241,8 +275,8 @@ internal sealed class ToolConsole(AsyncServiceScope scope, WorldConsoleExecutor 
 
     public ToolConsoleSink Sink { get; } = sink;
 
-    /// <summary>The settle task of the last command (a <c>.botctl wait</c> holds itself open).</summary>
-    public Task LastSettled { get; set; } = Task.CompletedTask;
+    /// <summary>The settle task of the last command (a <c>.botctl wait</c> holds itself open); <see cref="PacketTools.Retire"/> waits for it, bounded, before disposing.</summary>
+    public volatile Task LastSettled = Task.CompletedTask;
 
     public async ValueTask DisposeAsync()
     {
@@ -259,19 +293,46 @@ internal sealed class ToolConsoleSink(Action<string> lateLine) : TextWriter
 {
     private readonly System.Text.StringBuilder _partial = new();
     private readonly Lock _gate = new();
+    private readonly AsyncLocal<long> _runTag = new();
     private List<string>? _collecting;
+    private long _collectingId;
+    private long _lastId;
 
     /// <inheritdoc />
     public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
 
-    /// <summary>Start collecting the lines of a command.</summary>
-    public void Begin()
+    /// <summary>Start collecting the lines of a command; the request's tag, for <see cref="Enter"/>.</summary>
+    public long Begin()
     {
         lock (_gate)
         {
             _collecting = [];
+            _collectingId = ++_lastId;
+            return _collectingId;
         }
     }
+
+    /// <summary>
+    /// The command of request <paramref name="id"/> starts running (on the world thread): its output, and the output of whatever it
+    /// starts, is tagged with the request, so a command that runs after its request ended can never fill a later request's result.
+    /// False when the request already ended (the command must not run). Pair with <see cref="Exit"/>.
+    /// </summary>
+    public bool Enter(long id)
+    {
+        lock (_gate)
+        {
+            if (_collecting is null || _collectingId != id)
+            {
+                return false;
+            }
+
+            _runTag.Value = id;
+            return true;
+        }
+    }
+
+    /// <summary>The synchronous part of the command ended.</summary>
+    public void Exit() => _runTag.Value = 0;
 
     /// <summary>Stop collecting; the lines collected since <see cref="Begin"/>. Later lines go to the late-line callback.</summary>
     public IReadOnlyList<string> End()
@@ -280,6 +341,7 @@ internal sealed class ToolConsoleSink(Action<string> lateLine) : TextWriter
         {
             List<string> lines = _collecting ?? [];
             _collecting = null;
+            _collectingId = 0;
             return lines;
         }
     }
@@ -325,7 +387,8 @@ internal sealed class ToolConsoleSink(Action<string> lateLine) : TextWriter
         string text = line.StartsWith(WorldConsoleExecutor.Prefix, StringComparison.Ordinal) ? line[WorldConsoleExecutor.Prefix.Length..] : line;
         lock (_gate)
         {
-            if (_collecting is { } lines)
+            long tag = _runTag.Value;
+            if (_collecting is { } lines && (tag == 0 || tag == _collectingId))
             {
                 lines.Add(text);
                 return;

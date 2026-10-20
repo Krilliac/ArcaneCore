@@ -5,21 +5,28 @@ namespace ArcaneCore.Atlas.Live;
 /// <summary>
 /// What the daemon's packet tools stream on one connection (docs/areas/map-feed.md, "Packet tools"): a tap's <c>packet</c> lines and its
 /// <c>tapEnd</c>, and console lines printed after their command's result. Filled by the session's reader loop, drained by
-/// <c>live.tap.read</c>. Bounded: packets beyond <see cref="MaxPackets"/> waiting to be read are dropped here and counted, so a tap
-/// nobody reads cannot grow Atlas without limit. Thread-safe.
+/// <c>live.tap.read</c>. Bounded: packets beyond <see cref="MaxPackets"/> waiting to be read, or beyond <see cref="MaxBytes"/> of
+/// estimated memory, are dropped here and counted, so a tap nobody reads cannot grow Atlas without limit. Thread-safe.
 /// </summary>
 internal sealed class PacketToolTraffic
 {
     /// <summary>Packet lines kept until read.</summary>
     public const int MaxPackets = 20_000;
 
+    /// <summary>Estimated memory of the packet lines kept until read (a 4096-byte payload is 8192 hex characters, 16 KiB as a string).</summary>
+    public const long MaxBytes = 64L * 1024 * 1024;
+
+    /// <summary>What a packet line costs besides its hex text (the object, its properties and strings).</summary>
+    private const int LineOverheadBytes = 512;
+
     /// <summary>Late console lines kept until read.</summary>
     public const int MaxConsoleLines = 1_000;
 
     private readonly Lock _gate = new();
-    private readonly Queue<JsonObject> _packets = new();
+    private readonly Queue<(JsonObject Line, long Cost)> _packets = new();
     private readonly Queue<JsonObject> _consoleLines = new();
     private JsonObject? _tapEnd;
+    private long _packetBytes;
     private long _droppedHere;
     private long _received;
 
@@ -32,13 +39,15 @@ internal sealed class PacketToolTraffic
             {
                 case "packet":
                     _received++;
-                    if (_packets.Count >= MaxPackets)
+                    long cost = LineOverheadBytes + (line["hex"] is JsonValue hex && hex.TryGetValue(out string? text) ? 2L * text.Length : 0L);
+                    if (_packets.Count >= MaxPackets || _packetBytes + cost > MaxBytes)
                     {
                         _droppedHere++;
                     }
                     else
                     {
-                        _packets.Enqueue(line);
+                        _packets.Enqueue((line, cost));
+                        _packetBytes += cost;
                     }
 
                     return true;
@@ -65,6 +74,7 @@ internal sealed class PacketToolTraffic
         lock (_gate)
         {
             _packets.Clear();
+            _packetBytes = 0;
             _tapEnd = null;
             _droppedHere = 0;
             _received = 0;
@@ -92,9 +102,10 @@ internal sealed class PacketToolTraffic
         lock (_gate)
         {
             var packets = new JsonArray();
-            while (packets.Count < max && _packets.TryDequeue(out JsonObject? packet))
+            while (packets.Count < max && _packets.TryDequeue(out (JsonObject Line, long Cost) packet))
             {
-                packets.Add(packet);
+                _packetBytes -= packet.Cost;
+                packets.Add(packet.Line);
             }
 
             var console = new JsonArray();

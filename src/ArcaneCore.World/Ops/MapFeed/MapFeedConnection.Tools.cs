@@ -60,9 +60,15 @@ internal sealed partial class MapFeedConnection
         _console ??= tools.CreateConsole(LateConsoleLine);
         ToolConsole console = _console;
         Volatile.Write(ref _consoleId, request.Id);
-        console.Sink.Begin();
+        long requestTag = console.Sink.Begin();
         (ConsoleRun? run, FeedError? failure) = await InvokeWorldAsync(() =>
         {
+            if (!console.Sink.Enter(requestTag))
+            {
+                // The request gave up waiting for the world thread (its refusal is out): the command must not run, nor print into a later request.
+                return new ConsoleRun(null);
+            }
+
             CommandContext? context = null;
             try
             {
@@ -73,6 +79,10 @@ internal sealed partial class MapFeedConnection
                 // Like the console window: a command that throws fails that command, not the connection.
                 _logger.LogError(ex, "map feed console command could not be run ({Client})", Client);
                 console.Executor.WriteLine("The command failed; see the server log.");
+            }
+            finally
+            {
+                console.Sink.Exit();
             }
 
             return new ConsoleRun(context);
@@ -122,12 +132,13 @@ internal sealed partial class MapFeedConnection
         }
 
         bool worldHandler = target.Session.HandlesOnWorldThread((WorldOpcode)request.Opcode);
+        tools.LogInjecting(Client, target, request.Opcode, payload.Length);
         InjectVerdict verdict;
         try
         {
             verdict = await target.Session.InjectAsync((WorldOpcode)request.Opcode, payload, InjectWait, _lifetime.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException))
         {
             _logger.LogWarning(ex, "map feed inject: the session's handler threw ({Client})", Client);
             await RefuseToolAsync(tools, request, "inject", new FeedError(MapFeedProtocol.QueryFailed, "the handler failed inside the server; see the server log")).ConfigureAwait(false);
@@ -201,7 +212,19 @@ internal sealed partial class MapFeedConnection
 
         _tap = tap;
         tools.LogTap(Client, target, tap.Id, request.Directions, request.MaxPackets, request.Seconds);
-        await QueueAsync(PacketToolsJson.TapStarted(request.Id, tap, request.MaxPackets, request.Seconds)).ConfigureAwait(false);
+        try
+        {
+            await QueueAsync(PacketToolsJson.TapStarted(request.Id, tap, request.MaxPackets, request.Seconds)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // No pump will run to detach it: do it here.
+            tap.End("closed");
+            target.Session.DetachTap(tap);
+            _tap = null;
+            throw;
+        }
+
         TimeSpan life = TimeSpan.FromSeconds(request.Seconds);
         _tapPump = Task.Run(() => PumpTapAsync(tap, life));
     }

@@ -204,6 +204,7 @@ internal sealed class FeedWorld : IAsyncDisposable
                 if (setup.PacketTools is { } tools)
                 {
                     services.Configure(tools);
+                    services.AddSingleton<PacketToolsPermit>();
 
                     // The daemon registers its opcode table (WorldServiceCollectionExtensions); the test host builds its own outside DI.
                     services.AddSingleton(_ => WorldServiceCollectionExtensions.BuildOpcodeTable());

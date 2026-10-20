@@ -118,7 +118,9 @@ Tests: `PacketToolsTests` and `PacketToolsOptionsTests` in `tests/ArcaneCore.Wor
 * **Audited.** Every console line is logged at Information (`Map feed console command: <line> (<client>)`, passwords and secrets masked
   by `ConsoleCommandRedactor`) and written to the GM audit as the console (player `Console`). Every injection and send is logged at
   Information with the client (pid and process name), the target's name and guid, the opcode name and the payload length, never the
-  payload (`Map feed inject: CMSG_QUERY_TIME (0 bytes) as 'Name' (guid ...) from client pid 1234 arcane-atlas: Handled`), and counted in
+  payload: an injection is logged before it is dispatched (`Map feed inject dispatching: CMSG_QUERY_TIME (0 bytes) as 'Name' (guid ...)
+  from client pid 1234 arcane-atlas`) and again with its verdict (`Map feed inject: CMSG_QUERY_TIME (0 bytes) as 'Name' (guid ...) from
+  client pid 1234 arcane-atlas: Handled`), and counted in
   `arcanecore_tools_packets_total{op,result}` ([metrics](../ops/metrics.md)). Refusals are logged at Warning.
 * **No handler bypass.** An injected packet goes through the session's own dispatcher (below), with every check a client's packet gets.
   Authentication and session-lifecycle opcodes are refused outright, in both directions.
@@ -131,16 +133,17 @@ The control pipe is one client at a time, plain text with a `#done` marker, and 
 
 The hello says `"tools":true` when the tools are on (a daemon without them says nothing). Every tool line carries an integer `id` and
 is answered by one `result` of that id: `{"op":"result","id":n,"ok":true,"kind":"console|inject|send|tap|untap",...}`, or
-`{"op":"result","id":n,"ok":false,"kind":"...","code":"...","message":"..."}`. A refusal is an answer, not a strike against the
-connection. A malformed tool line with a readable id is answered the same way (`bad-args`); with the tools off a well-formed tool line
-is refused with `tools-off`. A session is named by exactly one of `"target":"<character name>"` (any case) and
+`{"op":"result","id":n,"ok":false,"kind":"...","code":"...","message":"..."}`. A refusal by a tool (every code below except those
+two) is an answer, not a strike against the connection. A malformed tool line with a readable id is answered the same way (`bad-args`);
+with the tools off a well-formed tool line is refused with `tools-off`; both of those, like any refused line, count as a strike, and
+5 refused lines in a row close the connection. A session is named by exactly one of `"target":"<character name>"` (any case) and
 `"guid":"<player guid in hex>"`, real client or playerbot; an opcode by its number or its reference name (`"CMSG_QUERY_TIME"`, any
 case); a payload by hex digits.
 
 | Line | Answer |
 |---|---|
 | `{"op":"console","id":n,"line":".reload status"}` | Runs the line through the console executor on the world thread, as the server console (the control pipe's path; one console session per connection). `lines` (the reply, without the `[console] ` prefix), `settled` (false when a command that holds itself open, such as `.botctl wait`, did not finish within 2 minutes), `failed` (the command's failure, when it failed). Lines a command prints later arrive as `{"op":"consoleLine","id":<the latest console id>,"line":"..."}`. |
-| `{"op":"inject","id":n,"target":"Name","opcode":"CMSG_PLAYED_TIME","payload":""}` | `target` (`name`, `guid`, `bot`), `opcode`, `name`, `length`, `handler` (`world` or `session`) and `verdict`: `queued` (a world-thread handler: on the session's world queue; it runs in the player's next map update), `handled` (a session-task handler: it ran to completion) or `disconnected` (the dispatcher refused the packet the way it refuses a client's, and the session was disconnected as its reader would have done). |
+| `{"op":"inject","id":n,"target":"Name","opcode":"CMSG_PLAYED_TIME","payload":""}` | `target` (`name`, `guid`, `bot`), `opcode`, `name`, `length`, `handler` (`world` or `session`) and `verdict`: `queued` (a world-thread handler: on the session's world queue; it runs in the player's next map update), `handled` (a session-task handler: it ran to completion) or `disconnected` (the dispatcher refused the packet the way it refuses a client's, or the session handler threw a fault that ends a client's session, and the session was disconnected as its reader would have done). |
 | `{"op":"send","id":n,"guid":"0000000000000002","opcode":459,"payload":"68656C6C6F00"}` | `target`, `opcode`, `name`, `length`: the packet is queued to the client through the session's own `Send` (header cipher, outbound bound, observers, capture). |
 | `{"op":"tap","id":n,"target":"Name","dir":"in\|out\|both","opcodes":[462,"SMSG_QUERY_TIME_RESPONSE"],"maxPackets":1000,"seconds":60,"bytes":256}` | `tap` (this id, carried by the stream lines), `target`, the bounds. Every field after the target is optional: both directions, every opcode (at most 64 listed), 1000 packets (1 to 100000), 60 s (1 to 3600), 256 payload bytes per packet as hex (0 to 4096). One tap per connection. |
 | `{"op":"untap","id":n}` | `tap`; the tap's `tapEnd` (reason `stopped`) follows the result. |
@@ -181,10 +184,15 @@ session handler at a time), and:
   of the reader's but never at the same time as the reader; a playerbot has no session task, so these are refused with `not-injectable`;
 * the packet is offered to the session's packet capture and taps first, as the reader does, marked as injected;
 * a state the handler does not accept, or an opcode with no handler, is reported (`wrong-state`, `no-handler`) instead of being dropped
-  silently as the dispatcher would.
+  silently as the dispatcher would;
+* an injected packet counts against the player's packet budgets like a client's (`Net:Protection:World*`, [netguard](../ops/netguard.md)):
+  a burst of injections can be dropped and, past the flood limit, disconnects the session;
+* a session handler that throws a fault the dispatcher does not contain ends the session, as it ends the reader's loop for a client's
+  packet; the injection answers `disconnected`. A world-thread opcode queued on a session that closes meanwhile is discarded.
 
-The gate is only created while `World:Control:PacketTools:Enabled` is set, so a daemon with the tools off runs the dispatcher exactly as
-before.
+The gate is only created while the tools are actually on (the same decision as above: the option, the map feed serving and the
+environment), so a daemon with the tools off, or refused in this environment, runs the dispatcher exactly as before. Sessions built
+before the feed started are not injectable (`not-injectable`).
 
 ### Taps never block
 

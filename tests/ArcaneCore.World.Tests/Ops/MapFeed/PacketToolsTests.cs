@@ -186,6 +186,91 @@ public sealed class PacketToolsTests
         Assert.Equal(1, counted.Count("inject", "accepted"));
     }
 
+    /// <summary>Replace the session handler of CMSG_QUERY_TIME on the host's table (the sessions share it).</summary>
+    private static void ReplaceQueryTimeHandler(FeedWorld world, SessionHandler handler)
+    {
+        var replacement = new OpcodeTable();
+        replacement.OnSession(WorldOpcode.CmsgQueryTime, SessionStates.Authenticated, handler);
+        OpcodeTable swapped = world.Host.Opcodes.TrySwap([WorldOpcode.CmsgQueryTime], replacement, out string? error)!;
+        Assert.Null(error);
+        world.Host.Opcodes.Replace(swapped);
+    }
+
+    [WindowsFact]
+    public async Task Inject_ASessionHandlerThatThrows_EndsTheSession_LikeTheReader_AndTheVerdictSaysSo()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using FeedWorld world = await FeedWorld.StartAsync(ToolsOn());
+        await using WorldTestClient player = await world.AddPlayerAsync("Feedalice");
+        WorldSession session = world.Host.Registry.Sessions.Single(s => s.Player?.Name == "Feedalice");
+        FeedClient client = await world.ConnectAsync();
+        ReplaceQueryTimeHandler(world, (_, _) => throw new InvalidOperationException("injected handler fault"));
+
+        JsonElement result = await RequestAsync(client, """{"op":"inject","id":1,"target":"Feedalice","opcode":"CMSG_QUERY_TIME"}""");
+
+        Assert.True(result.GetProperty("ok").GetBoolean(), result.ToString());
+        Assert.Equal("disconnected", result.GetProperty("verdict").GetString());
+        await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the faulted session is closed");
+    }
+
+    [Fact]
+    public void ConsoleSink_ACommandOfAnEndedRequest_NeverFillsALaterRequest()
+    {
+        var late = new List<string>();
+        var sink = new ToolConsoleSink(late.Add);
+
+        long abandoned = sink.Begin();
+        sink.End();
+        Assert.False(sink.Enter(abandoned)); // gave up before the world thread got to it: the command must not run
+
+        long running = sink.Begin();
+        Assert.True(sink.Enter(running));
+        sink.WriteLine("[console] mine");
+        IReadOnlyList<string> mine = sink.End(); // the request ended while its command was still printing
+        long next = sink.Begin();
+        sink.WriteLine("[console] straggler");
+        sink.Exit();
+        sink.WriteLine("[console] next request");
+        IReadOnlyList<string> nextLines = sink.End();
+
+        Assert.Equal(["mine"], mine);
+        Assert.Equal(["straggler"], late);
+        Assert.Equal(["next request"], nextLines);
+        Assert.True(next > running);
+    }
+
+    [WindowsFact]
+    public async Task Inject_WhileTheReaderOrAnotherInjectionHoldsTheDispatcher_IsBusy_AndRunsOnceItIsFree()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using FeedWorld world = await FeedWorld.StartAsync(ToolsOn());
+        await using WorldTestClient player = await world.AddPlayerAsync("Feedalice");
+        WorldSession session = world.Host.Registry.Sessions.Single(s => s.Player?.Name == "Feedalice");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ReplaceQueryTimeHandler(world, async (_, _) =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+        });
+
+        Task<InjectVerdict> first = session.InjectAsync(WorldOpcode.CmsgQueryTime, [], TimeSpan.FromSeconds(5), CancellationToken.None);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(InjectVerdict.Busy, await session.InjectAsync(WorldOpcode.CmsgQueryTime, [], TimeSpan.FromMilliseconds(100), CancellationToken.None));
+
+        release.SetResult();
+        Assert.Equal(InjectVerdict.Handled, await first);
+        Assert.Equal(InjectVerdict.Handled, await session.InjectAsync(WorldOpcode.CmsgQueryTime, [], TimeSpan.FromSeconds(5), CancellationToken.None));
+    }
+
     [WindowsFact]
     public async Task Inject_AWorldOpcode_IsQueued_AndHandledOnTheWorldThreadInTheNextUpdate()
     {
