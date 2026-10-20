@@ -434,20 +434,60 @@ public sealed partial class PlayerbotGroupCoordinator
         if (WatchObjective(siege, _siegeViews.FirstOrDefault(v => v.Leader.MapId == siege.MapId)?.Leader, now)) return;
 
         // Lockstep: the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it. A raid
-        // that pushes through its fight (PlayerbotSiegeCommander.PushOf) does not wait for the fight or for the members still in it.
+        // that pushes through its fight (PlayerbotSiegeCommander.PushOf) does not wait for the fight, but no raid moves the step while a living member
+        // is more than LagYards behind its leader (the members of a pushing raid disengage and catch up).
+        GrantPushes(siege);
         if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
-            && _siegeViews.All(v => v.Facts.AtWaypoint && (v.Facts.InCombat
-                ? PlayerbotSiegeCommander.PushOf(v.Facts) != PlayerbotSiegePush.None
-                : v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards)))
+            && _siegeViews.All(v => v.Facts.AtWaypoint && v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards
+                && (!v.Facts.InCombat || PlayerbotSiegeCommander.PushOf(v.Facts) != PlayerbotSiegePush.None)))
         {
             siege.Step++;
             foreach (SiegeView view in _siegeViews)
-                view.Facts = view.Facts with { AtWaypoint = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, ObjectiveLeg = siege.Step >= siege.Waypoints.Count };
+                view.Facts = view.Facts with
+                {
+                    AtWaypoint = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, MsQuietInCombat = 0, ObjectiveLeg = OnFinalLeg(siege), PushBlocked = false,
+                };
         }
 
         WatchProgress(siege, now);
         foreach (SiegeView view in _siegeViews) Command(siege, view, now);
         NotifyWatchers(siege, now);
+    }
+
+    /// <summary>The step heads for the last waypoint or beyond it: the final leg to the objective, where no raid is pushed through (<see cref="PlayerbotSiegeFacts.ObjectiveLeg"/>).</summary>
+    private static bool OnFinalLeg(PlayerbotSiege siege) => siege.Step >= siege.Waypoints.Count - 1;
+
+    /// <summary>
+    /// A push is a decision of the siege, not of one raid: a raid that qualifies (<see cref="PlayerbotSiegeCommander.PushOf"/>) is granted it unless
+    /// (1) another raid is in combat and does not qualify (the lockstep would wait for that fight, and the pushing leader would idle among its hostiles), or
+    /// (2) its leader stands at the waypoint and the lockstep cannot leave it because a peer is not there (or a raid is unled). A push held back by a
+    /// member's lag stays granted: the leader waits at the waypoint, fights back what attacks it, and the members catch up.
+    /// </summary>
+    private void GrantPushes(PlayerbotSiege siege)
+    {
+        int count = _siegeViews.Count;
+        Span<bool> qualifies = count <= 8 ? stackalloc bool[count] : new bool[count];
+        for (int i = 0; i < count; i++)
+        {
+            _siegeViews[i].Facts = _siegeViews[i].Facts with { PushBlocked = false };
+            qualifies[i] = PlayerbotSiegeCommander.PushOf(_siegeViews[i].Facts) != PlayerbotSiegePush.None;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!qualifies[i]) continue;
+            bool blocked = false;
+            bool peersAtWaypoint = true;
+            for (int j = 0; j < count; j++)
+            {
+                if (j == i) continue;
+                if (_siegeViews[j].Facts.InCombat && !qualifies[j]) blocked = true;
+                if (!_siegeViews[j].Facts.AtWaypoint) peersAtWaypoint = false;
+            }
+
+            if (_siegeViews[i].Facts.AtWaypoint && (!peersAtWaypoint || _siegeUnled > 0 || siege.Step >= siege.Waypoints.Count)) blocked = true;
+            if (blocked) _siegeViews[i].Facts = _siegeViews[i].Facts with { PushBlocked = true };
+        }
     }
 
     /// <summary>
@@ -555,7 +595,8 @@ public sealed partial class PlayerbotGroupCoordinator
         view.Facts = new PlayerbotSiegeFacts(inCombat, sinceCombat, total, alive, hasTank, tankAlive, total == 0 ? 0f : healthSum / total, maxLag, anyResting, anyHurt,
             atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched,
             deadSince, raid.Retreats, objectiveEngaged, atRally, msAtRally, raid.RetreatedThisEngagement,
-            stepCombatMs, quietCombatMs, raid.LastLossMs == 0 ? uint.MaxValue : unchecked(now - raid.LastLossMs), siege.Step >= siege.Waypoints.Count);
+            stepCombatMs, quietCombatMs, raid.LastLossMs == 0 ? uint.MaxValue : unchecked(now - raid.LastLossMs), OnFinalLeg(siege), PushBlocked: false,
+            raid.HostilesAtStepStart, raid.PushingThrough);
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
         view.Facts = view.Facts with { CrossValid = cross is not null };
         raid.LastFacts = view.Facts;
@@ -574,11 +615,16 @@ public sealed partial class PlayerbotGroupCoordinator
         {
             raid.ClockStep = siege.Step;
             raid.StepCombatSinceMs = 0;
+            raid.QuietCombatSinceMs = 0;
         }
 
         if (inCombat)
         {
-            if (raid.StepCombatSinceMs == 0) raid.StepCombatSinceMs = Math.Max(1u, now);
+            if (raid.StepCombatSinceMs == 0)
+            {
+                raid.StepCombatSinceMs = Math.Max(1u, now);
+                raid.HostilesAtStepStart = hostiles;
+            }
         }
         else if (sinceCombat >= PlayerbotSiegeCommander.StepClockQuietMs) raid.StepCombatSinceMs = 0;
 
@@ -756,7 +802,9 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         raid.Order = decision.Order;
+        bool pushBegins = decision.Push != PlayerbotSiegePush.None && !raid.PushingThrough;
         raid.Push = decision.Push;
+        if (pushBegins) ClearMarks(view);
         raid.RetreatLatched = decision.RetreatLatched;
         raid.PullLatched = decision.PullLatched;
         if (!decision.RetreatLatched)
@@ -834,6 +882,19 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>Where the leader walks once past the last waypoint: the nearest living objective, else the last waypoint.</summary>
     private static Vector3 ObjectivePointOf(PlayerbotSiege siege, Player leader)
         => FindLivingOnMap(leader, siege.ObjectiveEntry) is { } objective ? new Vector3(objective.X, objective.Y, objective.Z) : siege.Waypoints[^1];
+
+    /// <summary>A push begins: the leader takes the skull and the cross off their units (MSG_RAID_TARGET_UPDATE with no guid), so no member keeps a mark to fight or comes back to one later.</summary>
+    private void ClearMarks(SiegeView view)
+    {
+        foreach (byte icon in new[] { Party.PlayerbotParty.SkullIcon, PlayerbotSiegeCommander.CrossIcon })
+        {
+            if (view.Server.TargetIcons[icon].IsEmpty) continue;
+            var writer = new PacketWriter(9);
+            writer.WriteByte(icon);
+            writer.WriteUInt64(0);
+            LeaderAct(view.Group, view.Leader, WorldOpcode.MsgRaidTargetUpdate, writer.ToArray());
+        }
+    }
 
     /// <summary>The leader marks <paramref name="target"/> with <paramref name="icon"/> (MSG_RAID_TARGET_UPDATE: icon, guid) unless it already does.</summary>
     private void Mark(SiegeView view, byte icon, Unit target)

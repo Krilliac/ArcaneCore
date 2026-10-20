@@ -932,13 +932,13 @@ public sealed class PlayerbotSiegeWorldTests
     }
 
     [Fact]
-    public async Task OnTheObjectiveLeg_ARaidInCombatWithNoHostileNear_DoesNotPushThrough()
+    public async Task OnTheFinalLeg_TheLegToTheLastWaypoint_ARaidInCombatWithNoHostileNear_DoesNotPushThrough()
     {
         await using GroupTestWorld world = await StartEmptyWay();
         (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
         PlayerbotSiege siege = await Start(world, bots, raids: 1);
         PlayerbotSiegeRaid raid = siege.Raids[0];
-        await world.OnWorldAsync(() => { siege.Step = siege.Waypoints.Count; KeepInCombat(world, raid); return true; });
+        await world.OnWorldAsync(() => { siege.Step = siege.Waypoints.Count - 1; /* NB3: the leg to the last waypoint is the final leg */ KeepInCombat(world, raid); return true; });
 
         var pushes = new List<string>();
         uint began = Now(world);
@@ -951,7 +951,207 @@ public sealed class PlayerbotSiegeWorldTests
             return false;
         }));
         Assert.Empty(pushes);
-        Assert.Equal(siege.Waypoints.Count, siege.Step);
+        Assert.Equal(siege.Waypoints.Count - 1, siege.Step);
         Assert.Equal(0, raid.Retreats);
+    }
+
+    // --- the real paths: stalemate, two raids, lag ----------------------------------------------------------------------------
+
+    private static float MaxLag(GroupTestWorld world, PlayerbotSiegeRaid raid)
+    {
+        Player leader = Leader(world, raid);
+        return Living(world, raid).Where(p => p.Guid != leader.Guid).Select(p => MathF.Sqrt(((p.X - leader.X) * (p.X - leader.X)) + ((p.Y - leader.Y) * (p.Y - leader.Y)))).DefaultIfEmpty(0f).Max();
+    }
+
+    [Fact]
+    public async Task AStalemateWithARealHostileNearTheLeader_DisengagesTheMembers_AndTheRaidAdvancesTogether()
+    {
+        // Two guards 45 yards out that the raid cannot kill while they are topped up; the way: a waypoint at the start, then 150, 200 and 250 yards.
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], null,
+            extraCreatures: [Guard(GuardA, 45f, 2f, health: 600), Guard(GuardB, 46f, -2f, health: 600), Guard(Objective, 600f, 0f, health: 120)]);
+        (Guid Id, string Name)[] bots = await Enlist(world, 4f, 150f, 200f, 250f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+
+        bool pushed = false, hostileNear = false, engagedBefore = false, guardsDown = false;
+        float lagAtStep = -1f;
+        var engagedWhilePushing = new List<string>();
+        var wrongSince = new Dictionary<ObjectGuid, uint>();
+        var trail = new List<string>();
+        uint startedAt = Now(world), pushSince = 0;
+        int stepSeen = 0;
+        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 250_000, () =>
+        {
+            // The guards cannot be killed until the push begins (then the raid, fighting back what attacks it, may finish them).
+            if (!pushed) TopUpGuards(world, raid);
+            // The healers cannot keep up with the guards over three minutes in this fixture: the raid is kept healthy, as a stalemate needs.
+            foreach (Player member in Living(world, raid)) member.Health = member.MaxHealth;
+            if (unchecked(Now(world) - startedAt) / 10_000 >= trail.Count)
+                trail.Add($"+{unchecked(Now(world) - startedAt)}ms step={siege.Step} order={raid.Order} push={raid.Push} combat={raid.LastFacts.InCombat} hostiles={raid.LastFacts.Hostiles} inCombatMs={raid.LastFacts.MsInCombatAtStep} hp={raid.LastFacts.AverageHealthPct:F0} leaderx={Leader(world, raid).X - Origin.X:F1}");
+            if (raid.Push == PlayerbotSiegePush.None && raid.LastFacts.InCombat)
+                engagedBefore |= raid.Group!.Members.Any(m => !m.Real && m.AI?.TargetUnit is not null);
+            if (raid.Push == PlayerbotSiegePush.Stalemate)
+            {
+                pushed = true;
+                hostileNear |= raid.LastFacts.Hostiles > 0;
+                if (pushSince == 0) pushSince = Now(world);
+                // Three seconds into the push (the marks are off, the targets dropped) a member fights only what attacks it.
+                if (unchecked(Now(world) - pushSince) >= 3_000)
+                    foreach (var member in raid.Group!.Members.Where(m => !m.Real && m.Joined))
+                    {
+                        // A member's target may be one think old (the creature switched victims since): only a target that stays wrong for 2.5 s counts.
+                        bool wrong = world.World.Host.World.FindOnlinePlayer(member.Guid) is { IsAlive: true } player && member.AI?.TargetUnit is { } target
+                            && !player.Combat.Attackers.Any(a => ReferenceEquals(a, target))
+                            // (a healer also answers what attacks a raid member, as at a rally)
+                            && !(member.Role == PlayerbotGroupRole.Healer && target.Combat.Victim is Player victim && raid.Group.Members.Any(m => m.Guid == victim.Guid));
+                        if (!wrong) wrongSince.Remove(member.Guid);
+                        else if (!wrongSince.TryAdd(member.Guid, Now(world)) && unchecked(Now(world) - wrongSince[member.Guid]) >= 2_500)
+                            engagedWhilePushing.Add($"{member.Name} fights {member.AI?.TargetUnit?.Guid} that has not attacked it for 2.5 s, {unchecked(Now(world) - pushSince)} ms into the push");
+                    }
+
+                // The leader fights back what attacks it and does not walk until that is done: the guards on it fall to that, six seconds into the push.
+                if (!guardsDown && unchecked(Now(world) - pushSince) >= 6_000)
+                {
+                    guardsDown = true;
+                    Player tank = Leader(world, raid);
+                    foreach (Creature guard in tank.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.Where(c => c.Entry is GuardA or GuardB && c.IsAlive).ToArray())
+                        tank.Map.Combat.DealDamage(tank, guard, guard.Health);
+                }
+            }
+            else pushSince = 0;
+
+            if (siege.Step != stepSeen)
+            {
+                stepSeen = siege.Step;
+                if (stepSeen == 2) lagAtStep = MaxLag(world, raid);
+            }
+
+            return siege.Step >= 2;
+        });
+
+        string story = string.Join(Environment.NewLine, trail);
+        Assert.True(done, $"the step never moved (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + story + Environment.NewLine + world.Trace());
+        Assert.True(engagedBefore && pushed && hostileNear, $"engaged before {engagedBefore}, pushed {pushed}, hostile near the leader {hostileNear}" + Environment.NewLine + story);
+        Assert.Empty(engagedWhilePushing);
+        Assert.Equal(0, raid.Retreats);
+        // The step moved with every member within LagYards of the leader (a tick of walking as tolerance), and nobody is left behind afterwards.
+        Assert.InRange(lagAtStep, 0f, PlayerbotSiegeCommander.LagYards + 6f);
+        Assert.True(await world.RunUntilAsync(30_000, () => MaxLag(world, raid) <= PlayerbotSiegeCommander.LagYards + 6f), "a member was left behind: " + MaxLag(world, raid));
+    }
+
+    [Fact]
+    public async Task TwoRaids_OnlyOneQualifies_NoPush_UntilBothDo_AndTheStepThenMovesTogether()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], null,
+            extraCreatures: [Guard(GuardA, 0f, 85f, health: 600), Guard(Objective, 300f, 0f, health: 120)]);
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 2);
+        PlayerbotSiegeRaid first = siege.Raids[0], second = siege.Raids[1];
+
+        // The second raid stands by a guard it cannot kill; the first has nothing hostile within 55 yards.
+        await world.OnWorldAsync(() =>
+        {
+            foreach (var member in second.Group!.Members.Where(m => !m.Real))
+            {
+                Player shifted = world.World.Host.World.FindOnlinePlayer(member.Guid)!;
+                shifted.Relocate(Origin.X, Origin.Y + 75f, shifted.Z, 0, Now(world));
+            }
+
+            KeepInCombat(world, first);
+            KeepInCombat(world, second);
+            return true;
+        });
+
+        var violations = new List<string>();
+        bool Invariant()
+        {
+            // A raid pushes only when the other is out of combat or pushes too.
+            foreach ((PlayerbotSiegeRaid a, PlayerbotSiegeRaid b, string name) in new[] { (first, second, "first"), (second, first, "second") })
+                if (a.PushingThrough && b.LastFacts.InCombat && PlayerbotSiegeCommander.PushOf(b.LastFacts) == PlayerbotSiegePush.None)
+                    violations.Add($"{name} raid pushes ({a.Push}) at {Now(world)} while the other fights without qualifying: {b.LastFacts}");
+            return false;
+        }
+
+        // Phase 1: the first raid qualifies by the quiet rule long before the end, and does not push.
+        bool firstQualified = false;
+        await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + 30_000, () =>
+        {
+            TopUpGuards(world, second);
+            KeepInCombat(world, first);
+            KeepInCombat(world, second);
+            firstQualified |= PlayerbotSiegeCommander.PushOf(first.LastFacts) == PlayerbotSiegePush.Quiet;
+            return Invariant();
+        });
+        Assert.True(firstQualified, "the first raid never qualified for a push: " + first.LastFacts + Environment.NewLine + world.Trace());
+        Assert.Empty(violations);
+        Assert.Equal((PlayerbotSiegePush.None, PlayerbotSiegeOrder.Assault, 0), (first.Push, first.Order, siege.Step));
+        Assert.True(second.LastFacts.Hostiles > 0 && second.LastFacts.InCombat, "the second raid fights the guard: " + second.LastFacts);
+
+        // Phase 2: the guard dies, the second raid goes quiet and qualifies; the push starts for both and the step moves on together.
+        await world.OnWorldAsync(() =>
+        {
+            Player killer = Leader(world, second);
+            Creature guard = killer.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.First(c => c.Entry == GuardA);
+            killer.Map.Combat.DealDamage(killer, guard, guard.Health);
+            return true;
+        });
+        bool bothPushed = false;
+        bool moved = await world.RunUntilAsync(150_000, () =>
+        {
+            KeepInCombat(world, first);
+            KeepInCombat(world, second);
+            bothPushed |= first.PushingThrough && second.PushingThrough;
+            Invariant();
+            return siege.Step >= 1;
+        });
+        Assert.True(moved, $"the step never moved (first {first.Order}/{first.Push} {first.LastFacts}; second {second.Order}/{second.Push} {second.LastFacts})" + Environment.NewLine + world.Trace());
+        Assert.True(bothPushed, "the raids never pushed together");
+        Assert.Empty(violations);
+        Assert.Equal(0, first.Retreats + second.Retreats);
+    }
+
+    [Fact]
+    public async Task AMemberHeldFarAway_BlocksTheStepOfAPushingRaid_UntilItCatchesUp()
+    {
+        await using GroupTestWorld world = await StartEmptyWay();
+        world.Options.Party.TeleportToLeader = false; // the member walks back, it is not summoned
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        var held = raid.Group!.Members.First(m => !m.Real && m.BotId != raid.Group.LeaderBotId);
+        void Hold()
+        {
+            Player far = world.World.Host.World.FindOnlinePlayer(held.Guid)!;
+            far.Relocate(Origin.X, Origin.Y + 120f, far.Z, 0, Now(world));
+        }
+
+        await world.OnWorldAsync(() => { KeepInCombat(world, raid); Hold(); return true; });
+
+        // The raid qualifies, the leader walks to the first waypoint and waits there: the member is 120 yards away.
+        bool granted = false;
+        var stepped = new List<string>();
+        await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + 40_000, () =>
+        {
+            KeepInCombat(world, raid);
+            Hold();
+            granted |= raid.Push == PlayerbotSiegePush.Quiet;
+            if (siege.Step != 0) stepped.Add($"step {siege.Step} at {Now(world)} with the member {MaxLag(world, raid):F0} yd from the leader");
+            return false;
+        });
+        Assert.True(granted, "the push was never granted: " + raid.LastFacts);
+        Assert.Empty(stepped);
+        Assert.InRange(YardsFrom(Leader(world, raid), siege.Waypoints[0]), 0f, PlayerbotSiegeCommander.WaypointYards + 2f);
+        Assert.True(raid.LastFacts.MaxLagYards > PlayerbotSiegeCommander.LagYards, "the member is far: " + raid.LastFacts);
+
+        // Released, the member catches up (it walks), and the step moves on with it inside the bound.
+        float lagAtStep = -1f;
+        bool moved = await world.RunUntilAsync(120_000, () =>
+        {
+            KeepInCombat(world, raid);
+            if (siege.Step >= 1 && lagAtStep < 0f) lagAtStep = MaxLag(world, raid);
+            return siege.Step >= 1;
+        });
+        Assert.True(moved, $"the step never moved after the member was released: {raid.LastFacts}" + Environment.NewLine + world.Trace());
+        Assert.InRange(lagAtStep, 0f, PlayerbotSiegeCommander.LagYards + 6f);
     }
 }

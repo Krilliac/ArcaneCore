@@ -74,7 +74,10 @@ internal enum PlayerbotSiegePush : byte
 /// <param name="MsInCombatAtStep">How long the raid has been in combat at this step: the clock starts when the raid is first in combat at the step, resets when the step changes, and resets once the raid has been out of combat for <see cref="PlayerbotSiegeCommander.StepClockQuietMs"/> (0: not running).</param>
 /// <param name="MsQuietInCombat">How long the raid has been in combat with no hostile counted near the leader (<paramref name="Hostiles"/> is 0), without a break (0: not the case now).</param>
 /// <param name="MsSinceLoss">How long ago a member of the raid last died (<see cref="uint.MaxValue"/>: none did since the siege began).</param>
-/// <param name="ObjectiveLeg">The step is past the last waypoint: the raid is on the objective itself.</param>
+/// <param name="ObjectiveLeg">The step heads for the last waypoint or beyond it (the step is at least the waypoint count minus one): the raid is on the final leg to the objective, where it is never pushed through.</param>
+/// <param name="PushBlocked">The siege forbids a push for this raid now (set by the coordinator: another raid is in a fight that does not qualify, this raid stands at a waypoint the lockstep cannot leave, or a raid is unled).</param>
+/// <param name="HostilesAtStepStart"><paramref name="Hostiles"/> when the in-combat clock of the step started; a stalemate needs the count not to have fallen since (a slow win is not a stalemate).</param>
+/// <param name="Pushing">The raid is pushing through now (the coordinator sets it from its last decision): a push that has begun is not cancelled because the hostile count falls, as it does when the leader walks out of the scan range or the members kill what attacks them.</param>
 internal readonly record struct PlayerbotSiegeFacts(
     bool InCombat,
     uint MsSinceCombat,
@@ -102,7 +105,10 @@ internal readonly record struct PlayerbotSiegeFacts(
     uint MsInCombatAtStep = 0,
     uint MsQuietInCombat = 0,
     uint MsSinceLoss = uint.MaxValue,
-    bool ObjectiveLeg = false);
+    bool ObjectiveLeg = false,
+    bool PushBlocked = false,
+    int HostilesAtStepStart = 0,
+    bool Pushing = false);
 
 /// <summary>
 /// The commander's answer: the order, and the two latches to feed back in at the next decision. <paramref name="Committed"/>: the fight is lost by
@@ -123,10 +129,10 @@ internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order
 /// It begins once per engagement (<see cref="PlayerbotSiegeFacts.RetreatedThisEngagement"/>), never while the raid fights the objective, nor after
 /// <see cref="MaxRetreats"/>.</item>
 /// <item>Push through, in combat (<see cref="PushOf"/>, an <see cref="PlayerbotSiegeOrder.Advance"/> in combat; never in a fight the retreat rules
-/// call lost, nor while a retreat latch runs, nor on the objective): the leader walks on and the members fight whatever attacks them. Either no
+/// call lost, nor while a retreat latch runs, nor on the objective or the final leg to it, nor while the siege blocks it): the leader walks on, the members disengage and follow. Either no
 /// hostile has been counted near the leader for <see cref="PushThroughQuietMs"/> (a straggler fight elsewhere), or the raid has been in combat
 /// at one step for <see cref="StalemateMs"/> at <see cref="StalemateHealthPct"/> health or better and lost no member in the last
-/// <see cref="StalemateLossWindowMs"/> (a stalemate). It begins no retreat and counts none.</item>
+/// <see cref="StalemateLossWindowMs"/> and the hostile count has not fallen since (a stalemate). It begins no retreat and counts none.</item>
 /// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/>, rests or is hurt (Regroup); the raid is at its waypoint,
 /// the other raid is not, and nothing is worth pulling (Hold).</item>
 /// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis).</item>
@@ -205,17 +211,19 @@ internal static class PlayerbotSiegeCommander
     /// <summary>
     /// Whether the raid advances through the fight it is in. Only in combat, never while the fight is lost by the retreat rules, a retreat latch
     /// runs (a rally included), the raid has a member at the objective (<see cref="PlayerbotSiegeFacts.ObjectiveEngaged"/>) or the step is past
-    /// the last waypoint (<see cref="PlayerbotSiegeFacts.ObjectiveLeg"/>). Then: <see cref="PlayerbotSiegePush.Quiet"/> when
+    /// the last waypoint (<see cref="PlayerbotSiegeFacts.ObjectiveLeg"/>: the step heads for the last waypoint or beyond). Then: <see cref="PlayerbotSiegePush.Quiet"/> when
     /// <see cref="PlayerbotSiegeFacts.Hostiles"/> is 0 and has been for <see cref="PushThroughQuietMs"/>; <see cref="PlayerbotSiegePush.Stalemate"/>
     /// when the raid has been in combat at this step for <see cref="StalemateMs"/>, its average health is at least <see cref="StalemateHealthPct"/>
-    /// and no member died in the last <see cref="StalemateLossWindowMs"/>.
+    /// and no member died in the last <see cref="StalemateLossWindowMs"/> (a member going offline counts as a death), and the hostile count has not fallen
+    /// since the clock started (a raid already pushing is exempt from that last test). Never while <see cref="PlayerbotSiegeFacts.PushBlocked"/>: the siege grants a push only when its lockstep can use it.
     /// </summary>
     internal static PlayerbotSiegePush PushOf(in PlayerbotSiegeFacts facts)
     {
-        if (!facts.InCombat || facts.Alive <= 0 || facts.ObjectiveEngaged || facts.ObjectiveLeg || facts.RetreatLatched || WouldRetreat(facts))
+        if (!facts.InCombat || facts.Alive <= 0 || facts.ObjectiveEngaged || facts.ObjectiveLeg || facts.RetreatLatched || facts.PushBlocked || WouldRetreat(facts))
             return PlayerbotSiegePush.None;
         if (facts.Hostiles == 0 && facts.MsQuietInCombat >= PushThroughQuietMs) return PlayerbotSiegePush.Quiet;
-        if (facts.MsInCombatAtStep >= StalemateMs && facts.AverageHealthPct >= StalemateHealthPct && facts.MsSinceLoss >= StalemateLossWindowMs)
+        if (facts.MsInCombatAtStep >= StalemateMs && facts.AverageHealthPct >= StalemateHealthPct && facts.MsSinceLoss >= StalemateLossWindowMs
+            && (facts.Pushing || facts.Hostiles >= facts.HostilesAtStepStart))
             return PlayerbotSiegePush.Stalemate;
         return PlayerbotSiegePush.None;
     }
@@ -429,6 +437,9 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     /// <summary>When the raid was first in combat at <see cref="ClockStep"/> (0: the clock is not running). Reset by a step change, and by <see cref="PlayerbotSiegeCommander.StepClockQuietMs"/> out of combat.</summary>
     public uint StepCombatSinceMs { get; set; }
+
+    /// <summary>The hostile count at the read that started <see cref="StepCombatSinceMs"/> (<see cref="PlayerbotSiegeFacts.HostilesAtStepStart"/>).</summary>
+    public int HostilesAtStepStart { get; set; }
 
     /// <summary>When the raid was first in combat with no hostile counted near its leader, without a break (0: not the case at the last read).</summary>
     public uint QuietCombatSinceMs { get; set; }

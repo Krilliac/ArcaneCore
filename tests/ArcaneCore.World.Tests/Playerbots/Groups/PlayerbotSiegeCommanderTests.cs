@@ -342,6 +342,53 @@ public sealed class PlayerbotSiegeCommanderTests
     }
 
     [Fact]
+    public void APushTheSiegeBlocks_IsNoPush_TheRaidFightsOn()
+    {
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(Straggler with { PushBlocked = true }));
+        PlayerbotSiegeDecision blocked = PlayerbotSiegeCommander.Decide(Straggler with { PushBlocked = true });
+        Assert.Equal((PlayerbotSiegeOrder.Assault, PlayerbotSiegePush.None), (blocked.Order, blocked.Push));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Stalemate with { PushBlocked = true, Hostiles = 1 }));
+        Assert.Equal(PlayerbotSiegeOrder.AssignTank, Order(Stalemate with { PushBlocked = true }));
+    }
+
+    [Fact]
+    public void AStalemateWhoseHostileCountFell_IsASlowWin_NotAStalemate()
+    {
+        // The clock started with 4 hostiles near the leader and 3 are left: the raid is winning, slowly.
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 3, HostilesAtStepStart = 4 }));
+        // As many as at the start, or more (a trickle that refills): a stalemate.
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 3, HostilesAtStepStart = 3 }));
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 5, HostilesAtStepStart = 3 }));
+        // A push that has begun goes on when the count falls (the leader walked out of the scan range, or the raid killed what attacked it).
+        Assert.Equal(PlayerbotSiegePush.Stalemate, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = true }));
+        Assert.Equal(PlayerbotSiegePush.None, PlayerbotSiegeCommander.PushOf(Stalemate with { Hostiles = 1, HostilesAtStepStart = 4, Pushing = true, AverageHealthPct = 70f }));
+        // The quiet rule is no slow win: no hostile is no hostile.
+        Assert.Equal(PlayerbotSiegePush.Quiet, PlayerbotSiegeCommander.PushOf(Straggler with { HostilesAtStepStart = 4 }));
+    }
+
+    [Fact]
+    public void TheStepClock_TakesTheHostileCountOfItsFirstRead_AsTheBaseline_AndAStepChangeRestartsTheQuietClock()
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new System.Numerics.Vector3(10f, 0f, 0f), new System.Numerics.Vector3(20f, 0f, 0f)], default, 0);
+        var raid = new PlayerbotSiegeRaid(siege, 1);
+
+        PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, hostiles: 4, now: 1_000);
+        PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, hostiles: 2, now: 2_000);
+        Assert.Equal(4, raid.HostilesAtStepStart);
+        // Five seconds out of combat ends the clock; the next fight takes its own baseline.
+        PlayerbotGroupCoordinator.ReadClocks(siege, raid, false, 5_000, 0, 8_000);
+        PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, hostiles: 1, now: 9_000);
+        Assert.Equal(1, raid.HostilesAtStepStart);
+
+        // No hostile for 12 s, then the step changes: the quiet clock starts over (10 s more are needed at the new waypoint).
+        PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, 0, 10_000);
+        Assert.Equal(12_000u, PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, 0, 22_000).QuietCombatMs);
+        siege.Step = 1;
+        Assert.Equal(0u, PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, 0, 23_000).QuietCombatMs);
+        Assert.Equal(10_000u, PlayerbotGroupCoordinator.ReadClocks(siege, raid, true, 0, 0, 33_000).QuietCombatMs);
+    }
+
+    [Fact]
     public void ALiftRideIsKeptThroughCombat_OnlyByARaidThatPushesThrough()
     {
         var siege = new PlayerbotSiege(1, 0, 1, [new System.Numerics.Vector3(10f, 0f, 0f)], default, 0);

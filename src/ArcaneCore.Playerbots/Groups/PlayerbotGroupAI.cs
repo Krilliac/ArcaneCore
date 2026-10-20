@@ -651,7 +651,7 @@ internal sealed class PlayerbotGroupAI
     /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
     /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
     /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The leader of a raid that pushes through
-    /// its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) fights nothing and walks on; its members fight as usual.
+    /// its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) picks no new targets and follows no marks, like a rally: leader and members drop what they fight and fight back only what attacks them, then follow the leader.
     /// </summary>
     private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
@@ -661,8 +661,6 @@ internal sealed class PlayerbotGroupAI
         // to the retreat point and the members follow it.
         PlayerbotSiegeOrder? siegeOrder = group.Siege?.Order;
         if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
-        // The leader of a raid that pushes through its fight walks on and fights nothing; the members still fight whatever attacks them.
-        if (isLeader && group.Siege is { PushingThrough: true }) return null;
         GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
         Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
@@ -681,9 +679,9 @@ internal sealed class PlayerbotGroupAI
             }
         }
 
-        // At the retreat point (Rally) the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for
+        // At the retreat point (Rally), and while the raid pushes through its fight, the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for
         // a healer, the raid member it heals), the member itself first, then the nearest.
-        if (siegeOrder == PlayerbotSiegeOrder.Rally)
+        if (siegeOrder == PlayerbotSiegeOrder.Rally || group.Siege is { PushingThrough: true })
         {
             bool heals = me.Role == PlayerbotGroupRole.Healer;
             return loose.Where(l => l.OnSelf || heals).OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();

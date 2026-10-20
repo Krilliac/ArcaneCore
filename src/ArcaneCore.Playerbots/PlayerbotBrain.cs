@@ -233,8 +233,23 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return risk;
     }
 
-    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>); <c>decision=defend-wait-sickness</c> while a defender waits out its resurrection sickness.</summary>
-    internal string RiskReport => _defendWaitsSickness ? DefendWaitSicknessReport : _options.Risk.Enabled ? Risk.Report : "decision=off";
+    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>); while a defender waits out its resurrection sickness it is prefixed with <c>decision=defend-wait-sickness; </c>, the real risk line follows.</summary>
+    internal string RiskReport => _defendWaitsSickness ? WaitingRiskReport(_options.Risk.Enabled ? Risk.Report : "decision=off") : _options.Risk.Enabled ? Risk.Report : "decision=off";
+
+    private string _waitingRiskInner = string.Empty;
+    private string _waitingRiskText = string.Empty;
+
+    /// <summary>The sickness wait in front of the real risk line; the text is rebuilt only when that line changes (the status reads it every tick).</summary>
+    private string WaitingRiskReport(string inner)
+    {
+        if (!string.Equals(inner, _waitingRiskInner, StringComparison.Ordinal))
+        {
+            _waitingRiskInner = inner;
+            _waitingRiskText = DefendWaitSicknessReport + "; " + inner;
+        }
+
+        return _waitingRiskText;
+    }
 
     /// <summary>The risk line of a defender that holds where it stands until its resurrection sickness ends (<see cref="DefendWaitsSickness"/>).</summary>
     internal const string DefendWaitSicknessReport = "decision=defend-wait-sickness";
@@ -637,6 +652,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
+            _defendWaitsSickness = false;
         }
         else
         {
@@ -905,6 +921,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
+            _defendWaitsSickness = false; // dead or a ghost: the sickness wait is not the decision any more
             PlayerbotThinkProbe.Phase("recovery update");
             _recovery.Update(player, interval);
             return;

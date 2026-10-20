@@ -195,7 +195,8 @@ public sealed class PlayerbotDefendTests
                 Assert.False(Moving(bot), $"the sick defender walks at think {think}");
                 Assert.Equal(graveyard.X, bot.X);
                 Assert.Equal(graveyard.Y, bot.Y);
-                Assert.Equal("decision=defend-wait-sickness", rig.Brain.RiskReport);
+                // The wait is shown with the real risk decision, not instead of it.
+                Assert.Equal("decision=defend-wait-sickness; decision=off", rig.Brain.RiskReport);
                 Assert.True(rig.Brain.DefendWaitsSickness);
                 Assert.Equal(PlayerbotGoalKind.Home, rig.Brain.Goal);
             });
@@ -209,7 +210,7 @@ public sealed class PlayerbotDefendTests
             rig.Think();
             Assert.True(Moving(rig.BotPlayer), "the defender does not walk back once the aura is gone");
             Assert.False(rig.Brain.DefendWaitsSickness);
-            Assert.NotEqual("decision=defend-wait-sickness", rig.Brain.RiskReport);
+            Assert.DoesNotContain("defend-wait-sickness", rig.Brain.RiskReport, StringComparison.Ordinal);
         });
     });
 
@@ -229,12 +230,30 @@ public sealed class PlayerbotDefendTests
     }));
 
     [Fact]
+    public Task ASickDefenderWhoDies_NoLongerReportsTheWait_ButTheRealDecision() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        rig.Brain.Defend = rig.Post(40f);
+        PlayerbotSicknessTestKit.Apply(rig.Host.WorldServices, bot);
+        rig.Think();
+        Assert.True(rig.Brain.DefendWaitsSickness);
+        Assert.StartsWith("decision=defend-wait-sickness", rig.Brain.RiskReport, StringComparison.Ordinal);
+
+        bot.Health = 0;
+        bot.Map!.Combat.KillPlayer(bot);
+        Assert.False(bot.IsAlive);
+        rig.Think();
+        Assert.False(rig.Brain.DefendWaitsSickness);
+        Assert.Equal("decision=off", rig.Brain.RiskReport);
+    }));
+
+    [Fact]
     public Task ADefenderWithoutTheAura_ReportsNoWait() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
     {
         rig.Brain.Defend = rig.Post(40f);
         rig.Think();
         Assert.False(rig.Brain.DefendWaitsSickness);
-        Assert.NotEqual("decision=defend-wait-sickness", rig.Brain.RiskReport);
+        Assert.DoesNotContain("defend-wait-sickness", rig.Brain.RiskReport, StringComparison.Ordinal);
     }));
 
     [Fact]

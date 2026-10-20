@@ -1358,7 +1358,7 @@ A bot with a post owns its think right after death and recovery and the transit 
    `PlayerbotSickness.Holder`; a permanent aura does not count): a defender the spirit healer revived stays at the graveyard where it stands,
    rests, sits and buffs (steps 1 to 3 still apply, so it fights back what attacks it) and walks back the think after the aura ends. Without this the
    walk-back took it under the raid that had killed it, where it died again (live 2026-10-20: 3 deaths in 253 s near the Undercity lift top). The
-   risk line of `.playerbot status` and `inspect` reads `decision=defend-wait-sickness` meanwhile. A defender without the aura is unchanged.
+   risk line of `.playerbot status` and `inspect` reads `decision=defend-wait-sickness; <the real risk line>` meanwhile (both are shown); a dead or ghost defender shows the real line only. A defender without the aura is unchanged.
 5. Otherwise it holds, rests and buffs. The goal shows as `Home`; `.playerbot inspect` prints `defend=r=40 post=3 map=0 centre=x,y,z`.
 
 An unflagged enemy player is never attacked, and a hostile player outside the radius only if it attacks the bot.
