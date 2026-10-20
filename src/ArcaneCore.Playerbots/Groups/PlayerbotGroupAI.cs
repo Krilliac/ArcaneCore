@@ -605,8 +605,6 @@ internal sealed class PlayerbotGroupAI
         Player? leader, bool isLeader)
     {
         if (player.Map is not { } map) return null;
-        // A lost fight is left: nobody in a retreating siege raid fights.
-        if (group.Siege is { Order: PlayerbotSiegeOrder.Retreat }) return null;
         GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
         Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
@@ -623,6 +621,14 @@ internal sealed class PlayerbotGroupAI
                 if (fightable && Distance(player, unit) <= AssistYards)
                     loose.Add((unit, Distance(player, unit), ReferenceEquals(other, player)));
             }
+        }
+
+        // A lost fight is left: a retreating siege raid picks no new targets and follows no marks. It only fights back what attacks the member
+        // (or, for a healer, the raid member it heals), the member itself first, then the nearest.
+        if (group.Siege is { Order: PlayerbotSiegeOrder.Retreat })
+        {
+            bool heals = me.Role == PlayerbotGroupRole.Healer;
+            return loose.Where(l => l.OnSelf || heals).OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
 
         Unit? marked = null;

@@ -22,14 +22,15 @@ namespace ArcaneCore.World.Playerbots.Groups;
 /// <b>Plan.</b> The waypoints are the invoker's positions (<see cref="AddSiegeWaypoint"/>). <see cref="StartSiege"/> splits the enlisted bots
 /// over the raids (tanks, then healers, then damage, dealt round the raids; the leader is the best tank), forms each as an ordinary bot-led
 /// group (the same invitations, raid conversion and subgroups) and goes straight to <see cref="PlayerbotGroupState.Engaging"/>. A siege raid
-/// is always a raid, takes no slot of <c>MaxGroups</c> and has no goal timeout or stall watch of its own: the GM stops it.
+/// is always a raid, takes no slot of <c>MaxGroups</c> and has no goal timeout of its own: the GM stops it. A siege that makes no progress
+/// for <see cref="PlayerbotSiegeCommander.StallMs"/> is reported stalled (<see cref="WatchProgress"/>), not ended.
 /// </para>
 /// <para>
 /// <b>Command.</b> About every <see cref="SiegeTickMs"/> <see cref="TickSiege"/> reads each raid (health, lag, hostiles near its leader)
 /// into <see cref="PlayerbotSiegeFacts"/>, advances the shared <see cref="PlayerbotSiege.Step"/> once every raid's leader stands at the
 /// waypoint and none fights, asks <see cref="PlayerbotSiegeCommander.Decide"/> and applies the order: the skull and cross through the
 /// leader's own MSG_RAID_TARGET_UPDATE, one raid warning when the order changed (<see cref="PlayerbotSiegeAnnouncer"/>), the leader's
-/// destination and target for <see cref="PlayerbotGroupAI"/>. The siege is won when the objective entry has been seen alive and none is.
+/// destination and target for <see cref="PlayerbotGroupAI"/>. The siege is won when the objective entry has been seen alive and none is while the grid at its last known position is loaded.
 /// </para>
 /// </summary>
 public sealed partial class PlayerbotGroupCoordinator
@@ -56,6 +57,10 @@ public sealed partial class PlayerbotGroupCoordinator
     private bool _siegeTicked = false;
     private int _nextSiegeId = 1;
     private readonly List<SiegeView> _siegeViews = [];
+    private readonly List<ObjectGuid> _siegeDeadScratch = [];
+
+    /// <summary>Raids of the siege still alive as groups whose leader cannot command them this tick (dead or gone): they still hold the others.</summary>
+    private int _siegeUnled = 0;
 
     /// <summary>The siege under way, or null (tests, status and the GM commands).</summary>
     internal PlayerbotSiege? Siege => _siege;
@@ -290,7 +295,7 @@ public sealed partial class PlayerbotGroupCoordinator
         bool all = string.IsNullOrEmpty(leaderName);
         if (all)
             lines.Add(string.Create(CultureInfo.InvariantCulture,
-                $"Siege {siege.Id}: {siege.Raids.Count} raids, objective {siege.ObjectiveEntry}, step {siege.Step}/{siege.Waypoints.Count}, running {unchecked(Now - siege.StartedMs) / 1000}s{(siege.Won ? ", won" : string.Empty)}."));
+                $"Siege {siege.Id}: {siege.Raids.Count} raids, objective {siege.ObjectiveEntry}, step {siege.Step}/{siege.Waypoints.Count}, running {unchecked(Now - siege.StartedMs) / 1000}s{(siege.Won ? ", won" : string.Empty)}{(siege.ObjectiveUnseen ? ", objective unseen (its grid is not loaded)" : string.Empty)}{(siege.Stalled ? $", stalled: no progress for {unchecked(Now - siege.ProgressMs) / 1000}s" : string.Empty)}."));
         foreach (PlayerbotSiegeRaid raid in siege.Raids)
         {
             if (raid.Group is not { } group) continue;
@@ -400,11 +405,14 @@ public sealed partial class PlayerbotGroupCoordinator
 
         GroupManager? groups = GroupManagerOrNull();
         _siegeViews.Clear();
+        _siegeUnled = 0;
         foreach (PlayerbotSiegeRaid raid in siege.Raids)
         {
             if (raid.Group is not { } group || !_groups.Contains(group)) continue;
             if (group.LeaderPlayer(world) is not { IsAlive: true, Map: not null } leader || groups?.GetGroup(leader.Guid) is not { } server)
             {
+                // A raid without a leader holds the others at their waypoint until it has one again (or ends): it is not dropped from the plan.
+                _siegeUnled++;
                 raid.Order = PlayerbotSiegeOrder.Hold;
                 raid.PullTarget = default;
                 continue;
@@ -418,8 +426,8 @@ public sealed partial class PlayerbotGroupCoordinator
         if (_siegeViews.Count == 0) return;
         if (WatchObjective(siege, _siegeViews[0].Leader, now)) return;
 
-        // Lockstep: the step moves on once every commanded raid's leader stands at the waypoint and nothing fights.
-        if (siege.Step < siege.Waypoints.Count
+        // Lockstep: the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it.
+        if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
             && _siegeViews.All(v => v.Facts.AtWaypoint && !v.Facts.InCombat && v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards))
         {
             siege.Step++;
@@ -427,8 +435,34 @@ public sealed partial class PlayerbotGroupCoordinator
                 view.Facts = view.Facts with { AtWaypoint = false, PeersAtWaypoint = true };
         }
 
+        WatchProgress(siege, now);
         foreach (SiegeView view in _siegeViews) Command(siege, view, now);
         NotifyWatchers(siege, now);
+    }
+
+    /// <summary>
+    /// The stall watch: a siege whose step has not moved and whose raids have not fought for <see cref="PlayerbotSiegeCommander.StallMs"/> is stalled.
+    /// It is reported once (event note, log, a raid warning from each led raid) and shown by <see cref="SiegeStatus"/>; a step or a fight ends it.
+    /// </summary>
+    private void WatchProgress(PlayerbotSiege siege, uint now)
+    {
+        bool fighting = _siegeViews.Any(v => v.Facts.InCombat);
+        if (siege.ProgressMs == 0 || siege.Step != siege.ProgressStep || fighting)
+        {
+            siege.ProgressMs = Math.Max(1u, now);
+            siege.ProgressStep = siege.Step;
+            siege.Stalled = false;
+            return;
+        }
+
+        if (siege.Stalled || unchecked(now - siege.ProgressMs) < PlayerbotSiegeCommander.StallMs) return;
+        siege.Stalled = true;
+        string where = siege.Step < siege.Waypoints.Count ? string.Create(CultureInfo.InvariantCulture, $"waypoint {siege.Step + 1}") : "the objective";
+        Note($"siege {siege.Id}: no progress towards {where} for {PlayerbotSiegeCommander.StallMs / 1000}s");
+        logger.LogWarning("Playerbot siege {Siege} stalled: no progress towards {Where} for {Seconds}s", siege.Id, where, PlayerbotSiegeCommander.StallMs / 1000);
+        string line = "Stalled: no progress towards " + where;
+        foreach (SiegeView view in _siegeViews)
+            if (view.Raid.Announcer.Offer(line, now)) RaidWarning(view.Group, view.Leader, line);
     }
 
     /// <summary>Read one raid into <see cref="PlayerbotSiegeFacts"/> and its hostiles.</summary>
@@ -440,21 +474,41 @@ public sealed partial class PlayerbotGroupCoordinator
         int total = 0, alive = 0;
         bool hasTank = false, tankAlive = false, inCombat = false, anyResting = false, anyHurt = false;
         float healthSum = 0f, maxLag = 0f;
+        bool objectiveEngaged = false;
+        _siegeDeadScratch.Clear();
         foreach (Member member in group.Members)
         {
             if (member.Real || !member.Joined) continue;
             total++;
             bool tank = member.Role == PlayerbotGroupRole.Tank;
             hasTank |= tank;
-            if (world.FindOnlinePlayer(member.Guid) is not { IsAlive: true } player) continue;
+            if (world.FindOnlinePlayer(member.Guid) is not { IsAlive: true } player)
+            {
+                _siegeDeadScratch.Add(member.Guid);
+                continue;
+            }
+
             alive++;
             tankAlive |= tank;
             healthSum += player.HealthPercent;
             inCombat |= player.Combat.IsInCombat;
+            objectiveEngaged |= player.Combat.Victim is Creature { } victim && victim.Entry == siege.ObjectiveEntry;
             anyResting |= member.AI is { Resting: true };
             anyHurt |= player.HealthPercent < HurtPercent;
             if (player.Guid != leader.Guid) maxLag = Math.Max(maxLag, ReferenceEquals(player.Map, leader.Map) ? Distance(player, leader) : 1_000f);
         }
+
+        // "A third lost" is judged over the deaths of this engagement: the dead at the moment the raid entered combat are not counted again.
+        if (inCombat && !raid.WasInCombat)
+        {
+            raid.DeadAtEngagement.Clear();
+            foreach (ObjectGuid dead in _siegeDeadScratch) raid.DeadAtEngagement.Add(dead);
+        }
+
+        raid.WasInCombat = inCombat;
+        int deadSince = 0;
+        foreach (ObjectGuid dead in _siegeDeadScratch)
+            if (!raid.DeadAtEngagement.Contains(dead)) deadSince++;
 
         if (inCombat) group.LastCombatMs = Math.Max(1u, now);
         uint sinceCombat = inCombat ? 0u : group.LastCombatMs == 0 ? uint.MaxValue : unchecked(now - group.LastCombatMs);
@@ -480,8 +534,14 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         raid.AtWaypoint = atWaypoint;
+        // The skull the commander last set on the objective counts as fighting it too.
+        if (!objectiveEngaged && !raid.PullTarget.IsEmpty)
+            foreach ((Unit unit, float _) in view.Hostiles)
+                if (unit.Guid == raid.PullTarget && unit is Creature { } skulled && skulled.Entry == siege.ObjectiveEntry) { objectiveEngaged = true; break; }
+
         view.Facts = new PlayerbotSiegeFacts(inCombat, sinceCombat, total, alive, hasTank, tankAlive, total == 0 ? 0f : healthSum / total, maxLag, anyResting, anyHurt,
-            atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched);
+            atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched,
+            deadSince, raid.Retreats, objectiveEngaged);
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
         view.Facts = view.Facts with { CrossValid = cross is not null };
     }
@@ -499,7 +559,11 @@ public sealed partial class PlayerbotGroupCoordinator
             switch (unit)
             {
                 case Creature creature:
-                    if (!creature.IsInWorld || !creature.IsAlive || creature.IsInEvadeMode || creature.Template.NpcFlags != 0 || creature.Template.CreatureType == 8
+                    // NpcFlags (gossip, quest giver, vendor) do not exempt a creature the raid is hostile to: in the live world every Undercity target
+                    // carries them (Sylvanas 268435459, Varimathras 3, the guardians 1, the Royal Dreadguard and the Seekers 2). A friendly or
+                    // neutral NPC is out by the hostility test below; the objective entry is a valid target whatever its type.
+                    bool objective = creature.Entry == view.Raid.Siege.ObjectiveEntry;
+                    if (!creature.IsInWorld || !creature.IsAlive || creature.IsInEvadeMode || !objective && creature.Template.CreatureType == 8
                         || !float.IsFinite(creature.X) || !float.IsFinite(creature.Y) || !float.IsFinite(creature.Z)
                         || !map.Combat.Hooks.CanAttack(leader, creature) || !map.Combat.Hooks.IsHostileTo(creature, leader)
                         || group.IsShunned(creature.Guid, now)) continue;
@@ -540,12 +604,25 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         if (!siege.Won)
         {
-            if (FindLivingOnMap(witness, siege.ObjectiveEntry) is not null) siege.ObjectiveSeen = true;
+            if (FindLivingOnMap(witness, siege.ObjectiveEntry) is { } living)
+            {
+                siege.ObjectiveSeen = true;
+                siege.ObjectivePosition = new Vector3(living.X, living.Y, living.Z);
+                siege.ObjectiveUnseen = false;
+            }
             else if (siege.ObjectiveSeen)
             {
-                siege.Won = true;
-                siege.WonMs = Math.Max(1u, now);
-                Note($"siege {siege.Id}: objective {siege.ObjectiveEntry} is dead");
+                // Absent says nothing while the grid it stood in is unloaded (a creature there is not in the creature system): the objective is
+                // dead only when the grid at its last known position is loaded and none lives. Else the siege goes on, the objective unseen.
+                bool unseen = !GridLoadedAt(witness, siege.ObjectivePosition);
+                if (unseen != siege.ObjectiveUnseen) Note($"siege {siege.Id}: objective {siege.ObjectiveEntry} {(unseen ? "is unseen (its grid is not loaded)" : "is in a loaded grid again")}");
+                siege.ObjectiveUnseen = unseen;
+                if (!unseen)
+                {
+                    siege.Won = true;
+                    siege.WonMs = Math.Max(1u, now);
+                    Note($"siege {siege.Id}: objective {siege.ObjectiveEntry} is dead");
+                }
             }
         }
 
@@ -571,7 +648,7 @@ public sealed partial class PlayerbotGroupCoordinator
         PlayerbotSiegeRaid raid = view.Raid;
         PlayerbotSiegeFacts facts = view.Facts with
         {
-            PeersAtWaypoint = _siegeViews.All(v => ReferenceEquals(v, view) || v.Facts.AtWaypoint),
+            PeersAtWaypoint = _siegeUnled == 0 && _siegeViews.All(v => ReferenceEquals(v, view) || v.Facts.AtWaypoint),
         };
         PlayerbotSiegeDecision decision = PlayerbotSiegeCommander.Decide(facts);
         if (decision.Order == PlayerbotSiegeOrder.Retreat && raid.Order != PlayerbotSiegeOrder.Retreat) raid.Retreats++;
@@ -621,7 +698,16 @@ public sealed partial class PlayerbotGroupCoordinator
             $"{decision.Order.ToString().ToLowerInvariant()} step={siege.Step}/{siege.Waypoints.Count} hostiles={facts.Hostiles} alive={facts.Alive}/{facts.Total} hp={facts.AverageHealthPct:F0}%");
         raid.WatchLine = string.Create(CultureInfo.InvariantCulture,
             $"{decision.Order.ToString().ToLowerInvariant()} step {siege.Step}/{siege.Waypoints.Count}, alive {facts.Alive}/{facts.Total}");
-        if (raid.Announcer.Offer(line, now)) RaidWarning(view.Group, view.Leader, line);
+        // A raid that has used up its retreats says so once, in place of the plan line of that decision.
+        if (decision.Committed && !raid.CommitAnnounced)
+        {
+            if (raid.Announcer.Offer(PlayerbotSiegeCommander.CommitLine, now))
+            {
+                raid.CommitAnnounced = true;
+                RaidWarning(view.Group, view.Leader, PlayerbotSiegeCommander.CommitLine);
+            }
+        }
+        else if (raid.Announcer.Offer(line, now)) RaidWarning(view.Group, view.Leader, line);
     }
 
     private static string NameOf(Unit? unit) => unit switch

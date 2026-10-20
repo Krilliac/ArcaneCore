@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Numerics;
+using System.Reflection;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -30,10 +32,10 @@ public sealed class PlayerbotSiegeWorldTests
     /// <summary>Where a fresh bot character stands (the graveyard it logs in at): the way and its creatures are laid out from here.</summary>
     private static readonly Vector3 Origin = new(-8913f, 550f, StartZ);
 
-    private static (CreatureTemplate Template, CreatureSpawn Spawn) Guard(uint entry, float dx, float dy, uint health = 60) => (
+    private static (CreatureTemplate Template, CreatureSpawn Spawn) Guard(uint entry, float dx, float dy, uint health = 60, uint npcFlags = 0) => (
         new CreatureTemplate
         {
-            Entry = entry, Name = "Siege Guard " + entry, Faction = 14, CreatureType = 7, MinLevel = 10, MaxLevel = 10, DisplayIds = [903],
+            Entry = entry, Name = "Siege Guard " + entry, Faction = 14, CreatureType = 7, MinLevel = 10, MaxLevel = 10, DisplayIds = [903], NpcFlags = npcFlags,
             MinLevelHealth = health, MaxLevelHealth = health, MinMeleeDamage = 1, MaxMeleeDamage = 1, MeleeBaseAttackTime = 2000, Rank = 0,
         },
         new CreatureSpawn
@@ -241,5 +243,117 @@ public sealed class PlayerbotSiegeWorldTests
         Assert.True(world.Coordinator.SiegeOutcome == "won", world.Coordinator.SiegeOutcome + Environment.NewLine + world.Trace());
         Assert.Contains(siege.Raids, r => r.Announcer.Sent.Any(line => line.Contains("Siege complete", StringComparison.Ordinal)));
         Assert.True(await world.OnWorldAsync(() => world.Coordinator.Groups.Count(g => g.Siege is not null) == 0));
+    }
+
+    /// <summary>One raid of two is left without a living leader (nobody promotes a new one): the other raid must keep waiting for it.</summary>
+    private static async Task<(PlayerbotSiege Siege, PlayerbotSiegeRaid Fallen)> LeaderlessRaid(GroupTestWorld world)
+    {
+        (Guid Id, string Name)[] bots = await Enlist(world, 10f, 20f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 2);
+        PlayerbotSiegeRaid fallen = siege.Raids[1];
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, fallen);
+            leader.Health = 0;
+            leader.Map!.Combat.KillPlayer(leader);
+            fallen.PromoteTriedMs = Math.Max(1u, world.World.Host.World.NowMs); // no promotion before the run below keeps it off
+            return true;
+        });
+        return (siege, fallen);
+    }
+
+    [Fact]
+    public async Task ARaidWhoseLeaderIsDead_StillHoldsTheOtherRaidAtItsWaypoint()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (PlayerbotSiege siege, PlayerbotSiegeRaid fallen) = await LeaderlessRaid(world);
+
+        // The fallen raid's promotion is kept off for the whole run, so it stays without a leader while the first raid walks to the waypoint.
+        int highestStep = 0;
+        await world.RunUntilAsync(30_000, () =>
+        {
+            fallen.PromoteTriedMs = Math.Max(1u, world.World.Host.World.NowMs);
+            highestStep = Math.Max(highestStep, siege.Step);
+            return false;
+        });
+
+        Assert.Equal(0, highestStep);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.False(Leader(world, fallen).IsAlive);
+            float x = Leader(world, siege.Raids[0]).X - Origin.X;
+            Assert.InRange(x, 10f - 7f, 10f + 7f); // it got there, and waited
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ASiegeWithoutProgressFor120Seconds_IsReportedStalled_InTheStatus()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (PlayerbotSiege siege, PlayerbotSiegeRaid fallen) = await LeaderlessRaid(world);
+
+        bool stalled = await world.RunUntilAsync(PlayerbotSiegeCommander.StallMs + 60_000, () =>
+        {
+            fallen.PromoteTriedMs = Math.Max(1u, world.World.Host.World.NowMs);
+            return world.Coordinator.SiegeStatus(null)[0].Contains("stalled", StringComparison.Ordinal);
+        });
+
+        Assert.True(stalled, world.Trace());
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("no progress", StringComparison.Ordinal));
+        Assert.Equal(0, siege.Step);
+        Assert.NotNull(world.Coordinator.Siege);
+    }
+
+    [Fact]
+    public async Task AnObjectiveWhoseGridUnloads_IsUnseen_NotDead_AndTheSiegeGoesOn()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        Assert.True(await world.RunUntilAsync(60_000, () => siege.ObjectiveSeen), world.Trace());
+
+        await world.OnWorldAsync(() =>
+        {
+            CreatureMapSystem system = Leader(world, siege.Raids[0]).Map!.FindUpdater<CreatureMapSystem>()!;
+            Creature objective = system.Creatures.First(c => c.Entry == Objective && c.IsAlive);
+            Assert.True(system.IsGridLoaded(objective.X, objective.Y));
+            typeof(CreatureMapSystem).GetMethod("UnloadGrid", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(system, [CreatureMapSystem.ComputeGrid(objective.X, objective.Y)]);
+            Assert.False(system.IsGridLoaded(objective.X, objective.Y));
+            Assert.DoesNotContain(system.Creatures, c => c.Entry == Objective && c.IsAlive);
+            return true;
+        });
+
+        await world.RunAsync(8_000);
+
+        await world.OnWorldAsync(() =>
+        {
+            Assert.Same(siege, world.Coordinator.Siege);
+            Assert.False(siege.Won);
+            Assert.True(siege.ObjectiveUnseen);
+            Assert.Null(world.Coordinator.SiegeOutcome);
+            Assert.Contains("objective unseen", world.Coordinator.SiegeStatus(null)[0], StringComparison.Ordinal);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AHostileCreatureWithGossipAndQuestFlags_IsPulledAndMarked_LikeAnyOther()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], null,
+            extraCreatures: [Guard(GuardA, 62f, 2f, npcFlags: 3), Guard(Objective, 70f, 0f, health: 120)]);
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+
+        bool skulled = false;
+        Assert.True(await world.RunUntilAsync(120_000, () =>
+        {
+            Player leader = Leader(world, raid);
+            Creature? flagged = leader.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.FirstOrDefault(c => c.Entry == GuardA);
+            if (flagged is not null && world.GroupManager.GetGroup(leader.Guid) is { } server && server.TargetIcons[7] == flagged.Guid) skulled = true;
+            return skulled;
+        }), world.Trace());
     }
 }

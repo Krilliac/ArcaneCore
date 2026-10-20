@@ -94,4 +94,25 @@ public sealed class PlayerbotSiegeStatusTests
         List<string> bad = await FleetWorld.SayAsync(gm, ".playerbot siege watch maybe", lines: 2);
         Assert.StartsWith("Syntax: .playerbot siege watch", bad[0], StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task ADetachDuringTheSiege_TellsTheWatchersItEnded_WithReasonReload()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([]);
+        (WorldTestClient gm, PlayerbotSiege siege) = await StartedSiege(world);
+        await using WorldTestClient _ = gm;
+        Assert.Equal(["Playerbot siege: watching on."], await FleetWorld.SayAsync(gm, ".playerbot siege watch on"));
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Coordinator.Detach(new ArcaneCore.World.Features.FeatureHandover());
+            return true;
+        });
+
+        while (true)
+        {
+            ChatMessage message = await gm.ReadChatAsync();
+            if (message.Type == ChatType.System && message.Text == $"Siege {siege.Id} ended: stopped: reload") break;
+        }
+    }
 }

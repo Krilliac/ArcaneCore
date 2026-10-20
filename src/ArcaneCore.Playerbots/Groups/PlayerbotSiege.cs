@@ -49,6 +49,9 @@ internal enum PlayerbotSiegeOrder : byte
 /// <param name="CrossValid">The cross icon marks a living hostile.</param>
 /// <param name="RetreatLatched">The raid is in a retreat that has not ended.</param>
 /// <param name="PullLatched">The raid is in a pull that has not ended.</param>
+/// <param name="DeadSinceEngagement">Members who died since the raid last entered combat (deaths of earlier fights do not count towards "a third lost").</param>
+/// <param name="RetreatsUsed">Retreats the raid has begun so far; past <see cref="PlayerbotSiegeCommander.MaxRetreats"/> it commits.</param>
+/// <param name="ObjectiveEngaged">A member fights the siege objective, or the skull is on it: the raid never retreats from it.</param>
 internal readonly record struct PlayerbotSiegeFacts(
     bool InCombat,
     uint MsSinceCombat,
@@ -66,16 +69,23 @@ internal readonly record struct PlayerbotSiegeFacts(
     float NearestHostileYards,
     bool CrossValid,
     bool RetreatLatched,
-    bool PullLatched);
+    bool PullLatched,
+    int DeadSinceEngagement = 0,
+    int RetreatsUsed = 0,
+    bool ObjectiveEngaged = false);
 
-/// <summary>The commander's answer: the order, and the two latches to feed back in at the next decision.</summary>
-internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order, bool RetreatLatched, bool PullLatched);
+/// <summary>
+/// The commander's answer: the order, and the two latches to feed back in at the next decision. <paramref name="Committed"/>: the fight is lost by
+/// the retreat rules but the raid has used up its retreats and presses on (announced once).
+/// </summary>
+internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order, bool RetreatLatched, bool PullLatched, bool Committed = false);
 
 /// <summary>
 /// The rules a siege raid's leader follows, in this order, over <see cref="PlayerbotSiegeFacts"/> (pure, no world):
 /// <list type="number">
-/// <item>Retreat: in combat with the tank dead, the average health below <see cref="RetreatHealthPct"/> or a third of the raid lost. A latch: the
-/// retreat goes on while the fight does and until the raid has been out of combat for <see cref="RetreatQuietMs"/>.</item>
+/// <item>Retreat: in combat with the tank dead, the average health below <see cref="RetreatHealthPct"/> or a third of the raid lost in this
+/// engagement (<see cref="PlayerbotSiegeFacts.DeadSinceEngagement"/>). A latch: the retreat goes on while the fight does and until the raid has
+/// been out of combat for <see cref="RetreatQuietMs"/>. It never begins while the raid fights the objective, nor after <see cref="MaxRetreats"/>.</item>
 /// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/>, rests or is hurt (Regroup); the raid is at its waypoint,
 /// the other raid is not, and nothing is worth pulling (Hold).</item>
 /// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis).</item>
@@ -101,6 +111,15 @@ internal static class PlayerbotSiegeCommander
     /// <summary>A retreat ends once the raid has been out of combat this long.</summary>
     internal const uint RetreatQuietMs = 5_000;
 
+    /// <summary>The most retreats a raid begins; after them it presses on whatever the fight looks like.</summary>
+    internal const int MaxRetreats = 2;
+
+    /// <summary>The raid warning of a raid that has used up its retreats.</summary>
+    internal const string CommitLine = "No more retreat - press on!";
+
+    /// <summary>The siege makes no waypoint progress and fights nothing for this long: it is reported stalled.</summary>
+    internal const uint StallMs = 120_000;
+
     /// <summary>The raid icon index of the cross (skull is 7): the tanks' mark for the second hostile.</summary>
     internal const byte CrossIcon = 6;
 
@@ -115,10 +134,14 @@ internal static class PlayerbotSiegeCommander
     {
         // 1. Retreat. It begins in a lost fight and is a latch: it lasts while the fight does and a while after.
         bool tankDead = facts.HasTank && !facts.TankAlive;
-        bool lost = facts.Total > 0 && (facts.Total - facts.Alive) * 3 >= facts.Total;
-        bool retreat = facts.RetreatLatched || facts.InCombat && (tankDead || facts.AverageHealthPct < RetreatHealthPct || lost);
+        bool lost = facts.Total > 0 && facts.DeadSinceEngagement * 3 >= facts.Total;
+        bool wouldRetreat = facts.InCombat && (tankDead || facts.AverageHealthPct < RetreatHealthPct || lost);
+        // A raid that fights the objective, or has retreated MaxRetreats times, commits: it no longer begins a retreat.
+        bool commit = facts.ObjectiveEngaged || facts.RetreatsUsed >= MaxRetreats;
+        bool retreat = facts.RetreatLatched && !facts.ObjectiveEngaged || wouldRetreat && !commit;
         if (retreat && (facts.InCombat || facts.MsSinceCombat < RetreatQuietMs))
             return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.Retreat, true, false);
+        bool committed = wouldRetreat && !facts.RetreatLatched && !facts.ObjectiveEngaged && facts.RetreatsUsed >= MaxRetreats;
 
         // The pull latch: on within PullOnYards, kept until the hostile is beyond PullOffYards (hysteresis).
         bool pullCandidate = facts.Hostiles > 0
@@ -139,10 +162,10 @@ internal static class PlayerbotSiegeCommander
 
         // 4. Two hostiles and no cross: mark one for the tanks.
         if (facts.Hostiles >= 2 && !facts.CrossValid)
-            return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.AssignTank, false, pullLatch);
+            return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.AssignTank, false, pullLatch, committed);
 
         // 5. Advance when quiet, 6. assault when fighting.
-        return new PlayerbotSiegeDecision(facts.InCombat ? PlayerbotSiegeOrder.Assault : PlayerbotSiegeOrder.Advance, false, false);
+        return new PlayerbotSiegeDecision(facts.InCombat ? PlayerbotSiegeOrder.Assault : PlayerbotSiegeOrder.Advance, false, false, committed);
     }
 }
 
@@ -201,6 +224,21 @@ internal sealed class PlayerbotSiege(int id, uint mapId, uint objectiveEntry, IR
     /// <summary>The objective was seen alive (its death then ends the siege).</summary>
     public bool ObjectiveSeen { get; set; }
 
+    /// <summary>Where the objective was last seen alive; its death is concluded only when the grid there is loaded and none lives.</summary>
+    public Vector3 ObjectivePosition { get; set; }
+
+    /// <summary>The objective was seen alive and is not now, but the grid at <see cref="ObjectivePosition"/> is not loaded: it is unseen, not dead.</summary>
+    public bool ObjectiveUnseen { get; set; }
+
+    /// <summary>When the siege last made progress (the step moved, or a raid fought); 0 before the first tick.</summary>
+    public uint ProgressMs { get; set; }
+
+    /// <summary>The step <see cref="ProgressMs"/> was taken at.</summary>
+    public int ProgressStep { get; set; }
+
+    /// <summary>No progress for <see cref="PlayerbotSiegeCommander.StallMs"/> (reported once per stall; status shows it).</summary>
+    public bool Stalled { get; set; }
+
     /// <summary>The objective died: the raids announce it and the siege ends.</summary>
     public bool Won { get; set; }
 
@@ -237,6 +275,15 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     public bool PullLatched { get; set; }
 
     public int Retreats { get; set; }
+
+    /// <summary>The raid was in combat at the last tick (a new engagement begins when it was not).</summary>
+    public bool WasInCombat { get; set; }
+
+    /// <summary>The members dead when the current engagement began: their deaths do not count towards "a third lost".</summary>
+    public HashSet<ObjectGuid> DeadAtEngagement { get; } = [];
+
+    /// <summary>The raid has said <see cref="PlayerbotSiegeCommander.CommitLine"/>.</summary>
+    public bool CommitAnnounced { get; set; }
 
     public bool AtWaypoint { get; set; }
 

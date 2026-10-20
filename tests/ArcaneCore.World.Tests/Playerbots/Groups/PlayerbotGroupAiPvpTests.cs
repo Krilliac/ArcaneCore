@@ -95,9 +95,50 @@ public sealed class PlayerbotGroupAiPvpTests
     [Fact]
     public Task MemberLeavesAnUnflaggedEnemyPlayerAlone() => Run(rig => rig.Host.OnWorldAsync(() =>
     {
+        // The unflagged player is the leader's victim and attacks the leader: the same setup as the flagged assist, so the flag alone decides.
+        rig.LeaderPlayer.Combat.Victim = rig.EnemyPlayer;
+        rig.EnemyPlayer.Combat.Victim = rig.LeaderPlayer;
+        Assert.False(rig.BotPlayer.Map!.Combat.Hooks.CanAttack(rig.BotPlayer, rig.EnemyPlayer));
+        rig.Think();
+        Assert.Null(rig.Ai.TargetUnit);
+
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit);
+    }));
+
+    private static void Retreating(Rig rig)
+    {
+        var siege = new PlayerbotSiege(1, rig.BotPlayer.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1) { Order = PlayerbotSiegeOrder.Retreat };
+    }
+
+    [Fact]
+    public Task MemberFightsBackAnAttackerWhileTheSiegeRaidRetreats() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        Retreating(rig);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        PlayerbotPvpTestKit.Flag(rig.BotPlayer);
+        Assert.True(rig.BotPlayer.Map!.Combat.Attack(rig.EnemyPlayer, rig.BotPlayer));
+        rig.BotPlayer.Map!.Combat.DealDamage(rig.EnemyPlayer, rig.BotPlayer, 1);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit);
+    }));
+
+    [Fact]
+    public Task MemberPicksNoNewTargetWhileTheSiegeRaidRetreats_NeitherTheLeadersVictimNorAMarkedOne() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        Retreating(rig);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
         rig.LeaderPlayer.Combat.Victim = rig.EnemyPlayer;
         rig.Think();
         Assert.Null(rig.Ai.TargetUnit);
+        Assert.Null(rig.Ai.Target);
+
+        // The same setup without the retreat assists the leader (the control: the retreat alone made the member hold back).
+        rig.Group.Siege = null;
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit);
     }));
 
     [Fact]

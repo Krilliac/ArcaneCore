@@ -30,10 +30,49 @@ public sealed class PlayerbotSiegeCommanderTests
     {
         Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { TankAlive = false, Alive = 5 }));
         Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { AverageHealthPct = 34f }));
-        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { Alive = 4 }));
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { Alive = 4, DeadSinceEngagement = 2 }));
         Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { AverageHealthPct = 36f }));
-        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Alive = 5 }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Alive = 5, DeadSinceEngagement = 1 }));
         Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { HasTank = false, TankAlive = false }));
+    }
+
+    [Fact]
+    public void DeathsOfEarlierFights_DoNotMakeAThirdLost_OnlyThoseOfThisEngagementDo()
+    {
+        // Four of six are dead, all of them before this fight began: the raid fights on. Two dying in this fight is a third.
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Alive = 2, DeadSinceEngagement = 0 }));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { Alive = 2, DeadSinceEngagement = 1 }));
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(Fight with { Alive = 2, DeadSinceEngagement = 2 }));
+    }
+
+    [Fact]
+    public void AfterTwoRetreats_TheRaidCommits_AndSaysSoOnce_ButARetreatInProgressRunsOut()
+    {
+        Assert.Equal(2, PlayerbotSiegeCommander.MaxRetreats);
+        PlayerbotSiegeFacts lost = Fight with { TankAlive = false };
+
+        PlayerbotSiegeDecision second = PlayerbotSiegeCommander.Decide(lost with { RetreatsUsed = 1 });
+        Assert.Equal((PlayerbotSiegeOrder.Retreat, false), (second.Order, second.Committed));
+
+        PlayerbotSiegeDecision committed = PlayerbotSiegeCommander.Decide(lost with { RetreatsUsed = 2 });
+        Assert.Equal((PlayerbotSiegeOrder.Assault, true, false), (committed.Order, committed.Committed, committed.RetreatLatched));
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { AverageHealthPct = 5f, DeadSinceEngagement = 4, Alive = 2, RetreatsUsed = 3 }));
+
+        // The second retreat itself (latched, RetreatsUsed already 2) is not cut short.
+        Assert.Equal(PlayerbotSiegeOrder.Retreat, Order(lost with { RetreatsUsed = 2, RetreatLatched = true }));
+        // A fight that is going well says nothing of retreats.
+        Assert.False(PlayerbotSiegeCommander.Decide(Fight with { RetreatsUsed = 2 }).Committed);
+    }
+
+    [Fact]
+    public void ARaidFightingTheObjective_NeverRetreats()
+    {
+        PlayerbotSiegeFacts atTheObjective = Fight with { TankAlive = false, AverageHealthPct = 10f, Alive = 2, DeadSinceEngagement = 4, ObjectiveEngaged = true };
+        PlayerbotSiegeDecision commit = PlayerbotSiegeCommander.Decide(atTheObjective);
+        Assert.Equal((PlayerbotSiegeOrder.Assault, false), (commit.Order, commit.Committed));
+
+        // Not even a retreat latched before the raid got to the objective goes on.
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(atTheObjective with { RetreatLatched = true }));
     }
 
     [Fact]

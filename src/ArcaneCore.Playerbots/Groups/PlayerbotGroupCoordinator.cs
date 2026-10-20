@@ -212,6 +212,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         _detaching = true;
         try
         {
+            // A siege ends with the reload (memory only, never carried over): the watching GMs are told why.
+            if (_siege is { } running) TellWatchers(running, $"Siege {running.Id} ended: stopped: reload");
             foreach (Guid botId in _memberOf.Keys.Concat(_waiting.Keys).Distinct().ToArray()) Forget(botId);
             foreach (BotGroup group in _groups.ToArray()) Finish(group, success: false, "coordinator-detached");
         }
