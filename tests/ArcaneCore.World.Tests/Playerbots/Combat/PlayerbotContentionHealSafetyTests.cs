@@ -47,6 +47,11 @@ public sealed class PlayerbotContentionHealSafetyTests
                 friend.Player!.Flags &= ~PlayerFlags.FfaPvp;
                 Assert.True(PlayerbotBrain.IsSafeHealTarget(me, friend.Player!));
 
+                // Both entered at the same start spot: objects within each other's bounding radius are in sight without a ray
+                // (vmangos WorldObject::IsWithinLOSInMap, Object.cpp:1759-1760; MapCollision.IsWithinLineOfSight), so a wall can only
+                // stand between them once they are apart.
+                friend.Player!.Relocate(me.X + 10, me.Y, me.Z, me.Orientation, host.World.NowMs);
+                Assert.True(PlayerbotBrain.IsSafeHealTarget(me, friend.Player!)); // apart, nothing in the way yet
                 WorldCollision.Of(host.World).Install(lineOfSight: new Blocked());
                 Assert.False(PlayerbotBrain.IsSafeHealTarget(me, friend.Player!)); // a wall between them
                 return true;
