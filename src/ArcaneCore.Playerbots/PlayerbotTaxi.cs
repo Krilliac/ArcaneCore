@@ -609,7 +609,8 @@ internal static class PlayerbotTaxi
 
         if (!Trips.TryGetValue(player, out TaxiTrip? current) || current.Stage is TaxiStage.Done or TaxiStage.Failed)
         {
-            if (!PlayerbotTram.IsTraveling(player) && !PlayerbotElevator.IsTraveling(player))
+            if (!PlayerbotTram.IsTraveling(player) && !PlayerbotElevator.IsTraveling(player)
+                && !PlayerbotHearthstone.IsActive(player) && !PlayerbotMageService.IsActive(player))
                 TryBeginLearnTrip(session, player, services, index, state, content, now);
         }
 
@@ -707,6 +708,7 @@ internal static class PlayerbotTaxi
         master = default!;
         PlayerbotTaxiOptions taxi = options.Taxi;
         if (!player.IsInWorld || !player.IsAlive || player.Map is not { } map || map.MapId != mapId || player.Combat.IsInCombat || IsFlying(player)
+            || PlayerbotHearthstone.IsActive(player) || PlayerbotMageService.IsActive(player)
             || player.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0)
             return false;
         uint now = session.World.NowMs;

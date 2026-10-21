@@ -142,4 +142,38 @@ public sealed class HearthstoneLegTests
                 Assert.False(cap.Any(PlayerbotAnomalies.Key(PlayerbotHearthstone.Area, code)), cap.Describe());
         }
     }
+
+    [Fact]
+    public async Task ADelayedFirstDrivePastStartBound_WithZeroAttempts_AnchorsBeganMsAndStartsTheCast_InsteadOfFailingWithZeroAttempts()
+    {
+        (MageTravelRig rig, WorldSession session, Player player) = await StartAsync("Hearthdelay");
+        await using (rig)
+        {
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
+            PlayerbotOptions options = MageTravelRig.Options();
+            await rig.OnWorld(() =>
+            {
+                // A competing travel leg is cancelled when TryBegin starts the hearthstone leg.
+                rig.Teach(player, MageTravelFixture.TeleportSpell);
+                MageTravelRig.Give(player, MageTravelFixture.RuneOfTeleportation);
+                Assert.True(PlayerbotMageService.TryBeginTeleport(session, player, MageTravelFixture.TeleportSpell, options, out _));
+                Assert.True(PlayerbotMageService.IsActive(player));
+
+                Assert.True(PlayerbotHearthstone.TryBegin(session, player, options, out string? why), why);
+                Assert.False(PlayerbotMageService.IsActive(player));
+                TravelCastLeg leg = PlayerbotHearthstone.LegOf(player)!;
+                Assert.Equal(0, leg.Attempts);
+
+                // 35,000 ms elapse before Drive is first reached (e.g. resting or competing leg before the first cast attempt).
+                leg.BeganMs = unchecked(session.World.NowMs - 35_000u);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                Assert.Equal(TravelLegStep.Traveling, PlayerbotHearthstone.Drive(session, player, options, 500, out string? failure));
+                Assert.Null(failure);
+                Assert.True(PlayerbotTravelCast.IsCasting(rig.Spells.System, player, MageTravelFixture.HearthSpell),
+                    "the first Drive after a pre-Drive delay did not start the hearthstone cast");
+                return 0;
+            });
+            Assert.Empty(MageTravelRig.Codes(cap, PlayerbotHearthstone.Area));
+        }
+    }
 }

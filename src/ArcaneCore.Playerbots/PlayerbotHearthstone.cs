@@ -318,6 +318,14 @@ internal static class PlayerbotHearthstone
             return false;
         }
 
+        if (PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active } journey && journey.Current?.Means != TravelMeans.Hearthstone)
+            PlayerbotTravel.Cancel(player);
+        PlayerbotShip.Cancel(player);
+        PlayerbotMageService.Cancel(session, player);
+        PlayerbotMageService.CancelMage(session, player);
+        PlayerbotTaxi.Cancel(player);
+        PlayerbotTram.Cancel(player);
+        PlayerbotElevator.Cancel(player);
         Legs.AddOrUpdate(player, new TravelCastLeg(TravelMeans.Hearthstone, spell!.Id, bind, session.World.NowMs));
         return true;
     }
@@ -356,6 +364,7 @@ internal static class PlayerbotHearthstone
                 return TravelLegStep.Idle;
             }
 
+            if (leg.Attempts == 0) leg.BeganMs = now;
             if (unchecked(now - leg.BeganMs) > PlayerbotTravelCast.StartBoundMs)
                 return Fail(player, leg, "use-refused", $"the hearthstone use was not taken within {PlayerbotTravelCast.StartBoundMs} ms ({leg.Attempts} attempts)",
                     AnomalySeverity.Warning, out failure);
