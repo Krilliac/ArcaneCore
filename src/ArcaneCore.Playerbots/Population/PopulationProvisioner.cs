@@ -76,6 +76,15 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
         return TeleportTo(player, location);
     }
 
+    /// <summary>Whether the bot is currently on a taxi flight, ship, tram, elevator, or active travel leg and must not be relocated mid-transit.</summary>
+    internal static bool IsInTransit(Player player)
+        => PlayerbotTaxi.IsFlying(player)
+            || PlayerbotTaxi.IsActive(player)
+            || PlayerbotShip.IsActive(player)
+            || PlayerbotTram.IsTraveling(player)
+            || PlayerbotElevator.IsTraveling(player)
+            || PlayerbotTravel.IsMidLeg(player);
+
     /// <summary>Teleport an idle bot to a graveyard (no boost). Null on success, otherwise the refusal code.</summary>
     public string? Relocate(Guid botId, WorldSafeLoc location)
     {
@@ -83,6 +92,7 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
             return "bot-not-running";
         if (!player.IsAlive) return "bot-dead";
         if (player.Combat.IsInCombat) return "bot-in-combat";
+        if (IsInTransit(player)) return "bot-in-transit";
         if (!IsSafe(session.World, location, player.Level, player.FactionTemplate))
         {
             string unsafeDetail = TryGetUnsafeSurfaceReason(session.World, location, out string? surfaceReason)

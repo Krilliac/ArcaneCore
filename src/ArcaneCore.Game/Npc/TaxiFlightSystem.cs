@@ -40,6 +40,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     private const float DriftTolerance = 0.5f;
 
     private readonly Dictionary<ObjectGuid, Flight> _flights = [];
+    private readonly HashSet<ObjectGuid> _aborted = [];
     private readonly NpcStore _npcs;
     private readonly TaxiPathNodeCatalog _pathNodes;
     private readonly Func<uint, uint> _mountDisplay;
@@ -67,8 +68,14 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>Raised after a flight ended at its destination (the player was put down).</summary>
     public event Action<Player, uint>? Landed;
 
+    /// <summary>Raised when an in-progress flight is aborted before reaching its destination (external teleport, drift, or explicit abort).</summary>
+    public event Action<Player, uint>? Aborted;
+
     /// <summary>Raised when a route finishes or is interrupted, so its persisted resume state can be cleared.</summary>
     public event Action<Player>? FlightEnded;
+
+    /// <summary>Whether the player's last flight was aborted before reaching its destination (consumed once read).</summary>
+    public bool TryConsumeAborted(Player player) => player is not null && _aborted.Remove(player.Guid);
 
     public int ActiveFlights => _flights.Count;
 
@@ -138,6 +145,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         // vmangos Player::ActivateTaxiPathTo (Player.cpp:18081): a validated taxi start
         // consumes pending extra attacks before flight state and client-control fields publish.
         player.Combat.ResetExtraAttacks();
+        _aborted.Remove(player.Guid);
         _flights[player.Guid] = flight;
 
         // Unit::Mount + FlightPathMovementGenerator::Initialize.
@@ -505,7 +513,13 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
 
         if (landed)
         {
+            _aborted.Remove(player.Guid);
             Landed?.Invoke(player, flight.Destination);
+        }
+        else if (!retainRoute)
+        {
+            _aborted.Add(player.Guid);
+            Aborted?.Invoke(player, flight.Destination);
         }
 
         if (!retainRoute)

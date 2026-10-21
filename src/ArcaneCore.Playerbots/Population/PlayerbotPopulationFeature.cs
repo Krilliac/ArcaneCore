@@ -1988,12 +1988,14 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 continue;
             }
 
-            PopulationSafeSelection? selected = await world.InvokeAsync(() =>
+            (PopulationSafeSelection? selected, bool inTransit) = await world.InvokeAsync(() =>
             {
                 Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
-                return player is null ? null : atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
-                    (location, level) => _provisioner.IsSafe(world, location, checked((byte)level), player.FactionTemplate));
+                if (player is null || PopulationProvisioner.IsInTransit(player)) return (null, true);
+                return (atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
+                    (location, level) => _provisioner.IsSafe(world, location, checked((byte)level), player.FactionTemplate)), false);
             }, ct).ConfigureAwait(false);
+            if (inTransit) continue;
             if (selected is null)
             {
                 if (!loggedNoSafe) logger.LogInformation("Playerbot population: no safe zone for out-levelled bot {BotId} (level {Level}); it stays where it is", bot.BotId, bot.Level);
@@ -2003,6 +2005,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             PopulationPlacement placement = selected.Placement;
             string? refusal = await world.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
+            if (refusal == "bot-in-transit") continue;
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
             member = member with { ZoneId = placement.Zone.ZoneId, UpdatedUnix = NowUnix() };

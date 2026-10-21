@@ -558,10 +558,10 @@ internal static class PlayerbotTaxi
     /// <summary>The next <see cref="Discover"/> scans at once instead of waiting out <see cref="ScanIntervalMs"/> (tests, inspection).</summary>
     internal static void ForceNextScan(Player player) => Memos.GetOrCreateValue(player).NextScanMs = 0;
 
-    /// <summary>Drop the trip without a packet (death, a controller taking the bot over). A flight in the air is the server's and goes on.</summary>
+    /// <summary>Drop the trip without a packet (death, a controller taking the bot over, or an aborted flight). A flight still in the air is the server's and goes on.</summary>
     internal static void Cancel(Player player)
     {
-        if (Trips.TryGetValue(player, out TaxiTrip? trip) && trip.Stage == TaxiStage.ToMaster) Trips.Remove(player);
+        if (Trips.TryGetValue(player, out TaxiTrip? trip) && (trip.Stage == TaxiStage.ToMaster || !IsFlying(player))) Trips.Remove(player);
     }
 
     /// <summary>
@@ -609,7 +609,8 @@ internal static class PlayerbotTaxi
 
         if (!Trips.TryGetValue(player, out TaxiTrip? current) || current.Stage is TaxiStage.Done or TaxiStage.Failed)
         {
-            if (!PlayerbotTram.IsTraveling(player) && !PlayerbotElevator.IsTraveling(player))
+            if (!PlayerbotTram.IsTraveling(player) && !PlayerbotElevator.IsTraveling(player)
+                && !PlayerbotHearthstone.IsActive(player) && !PlayerbotMageService.IsActive(player))
                 TryBeginLearnTrip(session, player, services, index, state, content, now);
         }
 
@@ -707,6 +708,7 @@ internal static class PlayerbotTaxi
         master = default!;
         PlayerbotTaxiOptions taxi = options.Taxi;
         if (!player.IsInWorld || !player.IsAlive || player.Map is not { } map || map.MapId != mapId || player.Combat.IsInCombat || IsFlying(player)
+            || PlayerbotHearthstone.IsActive(player) || PlayerbotMageService.IsActive(player)
             || player.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0)
             return false;
         uint now = session.World.NowMs;
@@ -872,6 +874,16 @@ internal static class PlayerbotTaxi
             {
                 if (unchecked((int)(now - trip.NextWatchMs)) >= 0) WatchFlight(session, player, trip, now);
                 return TaxiStep.Traveling;
+            }
+
+            if (session.Services.GetService<NpcServicesFeature>()?.Flights?.TryConsumeAborted(player) == true)
+            {
+                trip.Interrupted = true;
+                trip.Stage = TaxiStage.Failed;
+                trip.Failure = "taxi: the flight was aborted before reaching its destination";
+                failure = trip.Failure;
+                Trips.Remove(player);
+                return TaxiStep.Failed;
             }
 
             trip.Stage = TaxiStage.Done;

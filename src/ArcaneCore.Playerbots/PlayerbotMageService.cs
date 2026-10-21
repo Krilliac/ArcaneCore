@@ -435,6 +435,14 @@ internal static class PlayerbotMageService
         else if (TeleportRefusal(feature, player, spellId, out TravelPlace destination) is { } refused) why = refused;
         else
         {
+            if (PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active } journey && journey.Current?.Means != TravelMeans.MageTeleport)
+                PlayerbotTravel.Cancel(player);
+            PlayerbotShip.Cancel(player);
+            PlayerbotHearthstone.Cancel(session, player);
+            CancelMage(session, player);
+            PlayerbotTaxi.Cancel(player);
+            PlayerbotTram.Cancel(player);
+            PlayerbotElevator.Cancel(player);
             uint now = session.World.NowMs;
             Legs.AddOrUpdate(player, new MageLeg(TravelMeans.MageTeleport, spellId, destination, now)
             {
@@ -578,6 +586,7 @@ internal static class PlayerbotMageService
                 return TravelLegStep.Idle;
             }
 
+            if (cast.Attempts == 0) cast.BeganMs = now;
             if (unchecked(now - cast.BeganMs) > PlayerbotTravelCast.StartBoundMs)
                 return FailLeg(session, player, leg, "teleport-cast-refused",
                     $"the Teleport cast was not taken within {PlayerbotTravelCast.StartBoundMs} ms ({cast.Attempts} attempts)", AnomalySeverity.Warning, out failure);
