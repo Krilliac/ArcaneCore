@@ -12,6 +12,8 @@ findings are scored, logged and written to the violation log, and nothing is don
 ceiling. vmangos ships its own anticheat off (`Anticheat.Enable = 0`), so the default is listed in the release-caveat
 register of [operations](../guide/operations.md).
 
+A separate, report-only analysis of the packets themselves (shape, cadence, replay, wrong state, orphan acknowledgements, actions while incapacitated) is described in [packet heuristics](packet-heuristics.md); it is off by default and never feeds these scores.
+
 ## What runs where
 
 | Piece | Code | Notes |

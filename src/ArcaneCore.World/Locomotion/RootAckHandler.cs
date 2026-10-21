@@ -39,6 +39,7 @@ public sealed class RootAckHandler : IOpcodeHandlerGroup
         MovementChangeAck ack = MovementChangePackets.ReadRootAck(payload, rooted);
         if (ack.Guid != player.Guid.Value)
         {
+            session.NoteOrphanAck(rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, "acknowledgement names another mover");
             return;
         }
 
@@ -48,6 +49,7 @@ public sealed class RootAckHandler : IOpcodeHandlerGroup
         }
         if (!MovementControl.Acknowledge(player, MovementChangeType.Root, ack.Counter, rooted))
         {
+            session.NoteOrphanAck(rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, "no pending root change matches the counter");
             return;
         }
 

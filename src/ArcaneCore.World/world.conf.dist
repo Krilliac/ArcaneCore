@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       615 keys
+#   WORLD                       637 keys
 #
 ###############################################################################
 
@@ -11139,6 +11139,281 @@ World.Instances.ResetTimeHour = 4
 #        Docs: docs/reference/configuration.md#worldinstances
 #
 World.Instances.UnloadDelayMs = 1800000
+
+#----------------------------------------------------------------------------
+# World:PacketHeuristics
+#----------------------------------------------------------------------------
+
+#
+#    World.PacketHeuristics.Cadence
+#        Description: Report an opcode class sent faster than its ceiling (cadence). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.Cadence = true
+
+#
+#    World.PacketHeuristics.CadenceLimits.CastPerSecond
+#        Description: CMSG_CAST_SPELL and CMSG_PET_CAST_SPELL per second. 0-1000, default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.CadenceLimits.CastPerSecond = 10
+
+#
+#    World.PacketHeuristics.CadenceLimits.EmotePerSecond
+#        Description: CMSG_EMOTE and CMSG_TEXT_EMOTE per second. 0-1000, default 5.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.CadenceLimits.EmotePerSecond = 5
+
+#
+#    World.PacketHeuristics.CadenceLimits.PingMinIntervalMs
+#        Description: A CMSG_PING that follows the previous one by less than this many milliseconds
+#                     is reported (a 1.12.1 client pings every 30 seconds). 0 switches it off.
+#                     0-60000, default 5000.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.CadenceLimits.PingMinIntervalMs = 5000
+
+#
+#    World.PacketHeuristics.CadenceLimits.QueryPerSecond
+#        Description: Query opcodes (names containing QUERY) per second. A client entering a crowded
+#                     city can burst; raise it if that is all you see. 0-1000, default 50.
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.CadenceLimits.QueryPerSecond = 50
+
+#
+#    World.PacketHeuristics.CadenceLimits.UsePerSecond
+#        Description: CMSG_USE_ITEM, CMSG_GAMEOBJ_USE and CMSG_LOOT per second. 0-1000, default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.CadenceLimits.UsePerSecond = 10
+
+#
+#    World.PacketHeuristics.Enabled
+#        Description: Run the checks at all. Default false: with it off a packet costs one volatile
+#                     read and no per-session state exists.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.Enabled = false
+
+#
+#    World.PacketHeuristics.ExemptBots
+#        Description: The server's own managed playerbot sessions are not checked. Default true;
+#                     with false their traffic is checked and counted as bot traffic.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ExemptBots = true
+
+#
+#    World.PacketHeuristics.ExemptStaff
+#        Description: Staff (Moderator and above, or a player in GM mode) are not checked. Default
+#                     true; with false their traffic is checked and counted as staff traffic.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ExemptStaff = true
+
+#
+#    World.PacketHeuristics.IncapacitatedAction
+#        Description: Report an action opcode received while the player is dead or a ghost, on a
+#                     taxi flight or in a far transfer (incapacitated-action; a near teleport such
+#                     as Blink is not one). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.IncapacitatedAction = true
+
+#
+#    World.PacketHeuristics.Malformed
+#        Description: Report a payload a handler rejected as malformed, or a bad frame header
+#                     (malformed). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.Malformed = true
+
+#
+#    World.PacketHeuristics.OrphanAck
+#        Description: Report an unsolicited or mismatching movement acknowledgement (orphan-ack).
+#                     Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.OrphanAck = true
+
+#
+#    World.PacketHeuristics.Replay
+#        Description: Report the same opcode with the same payload repeated (replay). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.Replay = true
+
+#
+#    World.PacketHeuristics.ReplayBuiltInExclusions
+#        Description: Keep the built-in list of opcodes that legitimately repeat an identical
+#                     payload out of the replay check: movement and its acknowledgements, ping,
+#                     every query, selection and attack toggles, cancels, stand state, loot release,
+#                     area triggers, character enumeration and the polling a client or bot does
+#                     (docs/areas/packet-heuristics.md has the list and the reason for each entry).
+#                     Default true; set false to take full control with ReplayExclude.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ReplayBuiltInExclusions = true
+
+#
+#    World.PacketHeuristics.ReplayCount
+#        Description: The same opcode and payload this many times within ReplayWindowMs is a replay.
+#                     2-1000, default 5.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ReplayCount = 5
+
+#
+#    World.PacketHeuristics.ReplayExclude
+#        Description: More opcodes never checked for replay, on top of the built-in list: exact
+#                     opcode names (CMSG_PING) or names with a leading and/or trailing *
+#                     (MSG_MOVE_*, *QUERY*). A configured list is added to the default (empty) one,
+#                     so entries never remove anything; use ReplayBuiltInExclusions to drop the
+#                     built-in list. Default empty.
+#        Type: string[]
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+# Empty by default.
+# World.PacketHeuristics.ReplayExclude.0 =
+
+#
+#    World.PacketHeuristics.ReplayWindowMs
+#        Description: The window of the replay check, in milliseconds. 100-60000, default 1000.
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ReplayWindowMs = 1000
+
+#
+#    World.PacketHeuristics.ReportIntervalSeconds
+#        Description: At most one ledger report per session, check and opcode per this many seconds;
+#                     every occurrence is still counted. 1-3600, default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ReportIntervalSeconds = 10
+
+#
+#    World.PacketHeuristics.Shape
+#        Description: Report a payload whose length differs from the fixed length of its message
+#                     (shape). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.Shape = true
+
+#
+#    World.PacketHeuristics.UnknownOpcode
+#        Description: Report an opcode with no handler or outside the opcode table (unknown-opcode).
+#                     Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.UnknownOpcode = true
+
+#
+#    World.PacketHeuristics.WrongState
+#        Description: Report an opcode dropped because the session state does not allow it
+#                     (wrong-state). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.WrongState = true
+
+#
+#    World.PacketHeuristics.WrongStateGraceMs
+#        Description: After the player left the world (logout, back at the character screen) world
+#                     opcodes are expected for this many milliseconds (packets in flight) and are
+#                     not reported as wrong-state. Only this post-logout window is timed: a map-less
+#                     player in a far teleport is excused by the teleport stage, however long the
+#                     loading screen takes. 0-60000, default 5000.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.WrongStateGraceMs = 5000
 
 #----------------------------------------------------------------------------
 # World:Playerbots

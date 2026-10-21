@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 552 |
+| `Administrator` | 6 | 558 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -363,6 +363,13 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.pet delete` | 3 | GameMaster | declared retail level | Syntax: .pet delete #petnumber Delete a stored pet, current or stabled (see .pet list). Its owner must be offline. |
 | `.pet learnspell` | 5 | Administrator | declared retail level | Syntax: .pet learnspell #spellid Teach the selected pet a spell. |
 | `.pet unlearnspell` | 5 | Administrator | declared retail level | Syntax: .pet unlearnspell #spellid Make the selected pet forget a spell. |
+| `.packetcheck` ... | 6 | Administrator | stored level through the map | Report-only packet heuristics (findings go to the anomaly ledger under packet/*). |
+| `.packetcheck status` | 6 | Administrator | stored level through the map | Syntax: .packetcheck status Show whether the checks run, who is exempt and the per-check counts of player, bot and staff traffic. |
+| `.packetcheck on` | 6 | Administrator | stored level through the map | Syntax: .packetcheck on Start the checks until the next restart. |
+| `.packetcheck off` | 6 | Administrator | stored level through the map | Syntax: .packetcheck off Stop the checks until the next restart. Counters and ledger findings stay. |
+| `.packetcheck bots` | 6 | Administrator | stored level through the map | Syntax: .packetcheck bots on\|off On: check the managed playerbot sessions too. Off: exempt them (the default). |
+| `.packetcheck staff` | 6 | Administrator | stored level through the map | Syntax: .packetcheck staff on\|off On: check staff accounts and GM-mode players too. Off: exempt them (the default). |
+| `.packetcheck reset` | 6 | Administrator | stored level through the map | Syntax: .packetcheck reset Zero the counters and let every session report again at once. |
 | `.cluster` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
 | `.cluster status` | 3 | GameMaster | stored level through the map | Syntax: .cluster status Show the cluster node identity, durable ownership fence, map routing summary, and authority leases. |
 | `.cluster node` | 3 | GameMaster | stored level through the map | Syntax: .cluster node [$player] Show which cluster node and map worker host the selected or named player (or this daemon at the console), along with their ownership token and map coordinates. |
