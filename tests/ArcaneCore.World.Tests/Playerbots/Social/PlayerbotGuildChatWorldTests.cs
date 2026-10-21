@@ -143,6 +143,8 @@ public sealed class PlayerbotGuildChatWorldTests
         await using SocialWorld world = await SocialWorld.StartAsync(options =>
         {
             options.Chat.Enabled = true;
+            options.Chat.Conversation.Enabled = false;
+            options.Chat.Voice.Enabled = false;
             options.Social.Guilds.Enabled = false;
             // The listener stands beside the bots: with emotes on, a bot greets it with a /say half the time (a CMSG_MESSAGECHAT that is no guild line).
             options.Social.Emotes.Enabled = false;

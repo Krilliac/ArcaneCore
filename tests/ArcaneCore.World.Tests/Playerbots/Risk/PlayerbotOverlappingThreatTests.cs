@@ -19,19 +19,13 @@ public sealed class PlayerbotOverlappingThreatTests
         CreatureTemplate template = RiskTestWorld.Template(991091, level, health: 60, minDamage: damage, maxDamage: damage)
             with { ExtraFlagsDialect = CreatureExtraFlagsDialect.VMangos, CallForHelp = 0 };
 
-        await world.OnWorldAsync(() =>
-        {
-            world.Spawn(template, 25, 0);
-            return true;
-        });
+        Creature first = await world.OnWorldAsync(() => world.Spawn(template, 25, 0));
+        await world.SeeAsync(first);
         Vector3 landing = await world.OnWorldAsync(() => new Vector3(world.Player.X + 25, world.Player.Y, world.Player.Z));
         Assert.Null(await world.OnWorldAsync(() => world.Brain.Risk.TooStrongAt(world.Player, landing)));
 
-        await world.OnWorldAsync(() =>
-        {
-            world.Spawn(template with { Entry = 991092 }, 28, 0);
-            return true;
-        });
+        Creature second = await world.OnWorldAsync(() => world.Spawn(template with { Entry = 991092 }, 28, 0));
+        await world.SeeAsync(first, second);
         PlayerbotEngagement? combined = await world.OnWorldAsync(() => world.Brain.Risk.TooStrongAt(world.Player, landing));
         Assert.NotNull(combined);
         Assert.Equal(1, combined.Value.Adds);

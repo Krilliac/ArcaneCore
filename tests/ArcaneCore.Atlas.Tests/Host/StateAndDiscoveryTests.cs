@@ -206,9 +206,29 @@ public sealed class DiscoveryTests
     [Fact]
     public async Task IsAlive_IsFalseOnceTheProcessHasExited()
     {
-        using Process child = StartShortLivedProcess();
-        DiscoveryRecord record = Record(child.Id, started: child.StartTime.ToUniversalTime());
-        await child.WaitForExitAsync();
+        DiscoveryRecord record;
+        using (Process child = StartShortLivedProcess())
+        {
+            DateTimeOffset started;
+            try
+            {
+                started = child.StartTime.ToUniversalTime();
+            }
+            catch (InvalidOperationException)
+            {
+                started = DateTimeOffset.UtcNow;
+            }
+
+            record = Record(child.Id, started: started);
+            await child.WaitForExitAsync();
+        }
+
+        long deadline = Environment.TickCount64 + 500;
+        while (Discovery.IsAlive(record) && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(10);
+        }
+
 
         Assert.False(Discovery.IsAlive(record));
     }
