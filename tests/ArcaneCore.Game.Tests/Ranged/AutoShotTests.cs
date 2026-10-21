@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
@@ -518,5 +519,45 @@ public sealed class AutoShotTests
         rig.Spells.CancelAutoRepeat(rig.Player);
         rig.Step(200, 100);
         Assert.True(rig.Session.Sent.Count(p => p.Opcode == WorldOpcode.SmsgAttackerstateupdate) >= 1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AutoRepeat_CancelsWhenTargetEntersSpiritOfRedemptionOrInvincibilityFloor(bool wand)
+    {
+        using var rig = new Rig();
+        uint spellId;
+        if (wand)
+        {
+            Equip(rig.Player, Wand);
+            spellId = Shoot;
+        }
+        else
+        {
+            rig.ArmBow();
+            spellId = AutoShot;
+        }
+
+        rig.Press(spellId);
+        Assert.NotNull(rig.State?.AutoRepeatCast);
+
+        // 1) InvincibilityHpThreshold at or above current health (e.g. Spirit of Redemption / scripted floor) cancels auto-repeat on the next tick.
+        rig.Session.Clear();
+        rig.Target.InvincibilityHpThreshold = rig.Target.Health;
+        rig.Step(3000, 100);
+        Assert.Null(rig.State?.AutoRepeatCast);
+        Assert.Equal(1, rig.Count(WorldOpcode.SmsgCancelAutoRepeat));
+
+        // 2) Re-arm and verify UnitFlags.NonAttackable2 (Spirit of Redemption / banish) also cancels auto-repeat on the next tick.
+        rig.Target.InvincibilityHpThreshold = 0;
+        rig.Step(2000, 100);
+        rig.Press(spellId);
+        Assert.NotNull(rig.State?.AutoRepeatCast);
+        rig.Session.Clear();
+        rig.Target.UnitFlags |= UnitFlags.NonAttackable2;
+        rig.Step(3000, 100);
+        Assert.Null(rig.State?.AutoRepeatCast);
+        Assert.Equal(1, rig.Count(WorldOpcode.SmsgCancelAutoRepeat));
     }
 }

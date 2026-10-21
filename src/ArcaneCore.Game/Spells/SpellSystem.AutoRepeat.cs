@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Protocol;
 
@@ -195,6 +196,14 @@ public sealed partial class SpellSystem
         }
 
         Unit? target = ResolveUnitTarget(unit, master.Targets);
+        if (NeedsUnitTarget(master.Spell)
+            && (target is null
+                || !Relations.IsHostile(unit, target)
+                || (target.InvincibilityHpThreshold > 0 && target.Health <= target.InvincibilityHpThreshold)))
+        {
+            CancelAutoRepeat(unit);
+            return;
+        }
         SpellCastResult result = CheckCast(state, master.Spell, master.Targets, target, triggered: false, strict: true, skipCooldown: true);
         if (result is SpellCastResult.Moving or SpellCastResult.NotReady)
         {
