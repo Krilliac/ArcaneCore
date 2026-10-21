@@ -1180,6 +1180,121 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    private sealed class StarterPlusRemoteEnderQuests(QuestInteractionFixture original) : IQuestContentStore
+    {
+        public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            QuestContent content = await ((IQuestContentStore)original).LoadAsync(cancellationToken);
+            var unrelated = new QuestTemplate
+            {
+                Entry = QuestInteractionFixture.UnrelatedId,
+                Method = 2,
+                MinLevel = 1,
+                QuestLevel = 1,
+                Title = "Starter quest",
+                Details = "Take starter quest.",
+                RequestItemsText = "Finish starter.",
+                ReqCreatureOrGOId1 = 90,
+                ReqCreatureOrGOCount1 = 1,
+            };
+            var templates = content.Templates.Where(t => t.Entry != QuestInteractionFixture.UnrelatedId).Append(unrelated).ToArray();
+            var starters = new[]
+            {
+                new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId },
+                new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.UnrelatedId },
+            };
+            var enders = new[]
+            {
+                new CreatureQuestRelation { Id = QuestInteractionFixture.RemoteEnder, Quest = QuestInteractionFixture.QuestId },
+                new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.UnrelatedId },
+            };
+            return new QuestContent(templates, starters, enders);
+        }
+    }
+
+    [Fact]
+    public async Task VisibleStarterBeforeEnder_DoesNotPreemptCompletedQuestTurnIn_AndStageCompletionContinues()
+    {
+        var enderSpawn = new ArcaneCore.Kernel.WorldData.Creatures.CreatureSpawn
+        {
+            Guid = 900021,
+            Entry = QuestInteractionFixture.RemoteEnder,
+            MapId = 0,
+            X = -8948.95f + 2f,
+            Y = -132.49f,
+            Z = 83.53f,
+        };
+        await using QuestHost quest = await QuestHost.StartAsync(
+            new QuestInteractionFixture { EnderSpawns = [enderSpawn] },
+            quests: original => new StarterPlusRemoteEnderQuests(original));
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var enderGuid = ObjectGuid.WithEntry(HighGuid.Unit, QuestInteractionFixture.RemoteEnder, 900021);
+            player.VisibleObjects.Add(enderGuid);
+
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            var opcodes = new List<WorldOpcode>();
+            session.ManagedDispatchObserver = op => opcodes.Add(op);
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true })
+            {
+                ReturnQuest = QuestInteractionFixture.QuestId,
+            };
+
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.Update(player, 500));
+            Assert.Contains(WorldOpcode.CmsgQuestgiverCompleteQuest, opcodes);
+            Assert.DoesNotContain(WorldOpcode.CmsgQuestgiverQueryQuest, opcodes);
+            Assert.Equal(QuestInteractionFixture.QuestId, goals.QuestId);
+            Assert.Equal(QuestInteractionFixture.RemoteEnder, goals.TargetEntry);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task CloseApproachFailure_ReportsNonZeroEnderGuid()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 40f, player.Y, player.Z, 0);
+            WorldCollision.Of(quest.Host.World).Install(lineOfSight: new BlockedFloor(player.Z), pathfinder: new BlockedPathfinder());
+
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true })
+            {
+                ReturnQuest = QuestInteractionFixture.QuestId,
+            };
+            for (int think = 0; think < 3; think++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(player, 500);
+            }
+
+            Assert.True(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
+            Assert.Contains($"guid=0x{QuestInteractionFixture.Guid.Value:X}", capture.Describe());
+            Assert.DoesNotContain("guid=0x0 ", capture.Describe());
+            return true;
+        });
+    }
+
     /// <summary>A world with the synthetic quest giver beside a managed player and a SQLite character database.</summary>
     private sealed class QuestHost : IAsyncDisposable
     {

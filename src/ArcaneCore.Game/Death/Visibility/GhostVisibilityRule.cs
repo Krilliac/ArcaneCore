@@ -134,6 +134,11 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
             return !(viewer.IsAlive && target.IsAlive && IsGhostCreature(target));
         }
 
+        if ((target.GetUInt32(UpdateFields.UnitNpcFlags) & (uint)NpcFlags.SpiritGuide) != 0)
+        {
+            return IsSpiritGuideFriendlyTo(viewer, target);
+        }
+
         if (IsGhostCreature(target))
         {
             return true;
@@ -141,6 +146,44 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
 
         float range = CreatureRange * (aggroRate?.Invoke() ?? 1f);
         return target.IsAlive && WithinOfCorpse(viewer, target, range);
+    }
+
+    public static bool IsSpiritGuideFriendlyTo(Player viewer, Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(viewer);
+        ArgumentNullException.ThrowIfNull(target);
+        if ((viewer.Map ?? target.Map)?.Combat?.Hooks is { } hooks && !ReferenceEquals(hooks, CombatHooks.Default))
+        {
+            if (hooks is FactionCombatHooks fc)
+            {
+                if (fc.Factions.Find(target.FactionTemplate) is not null && fc.Factions.Find(viewer.FactionTemplate) is not null)
+                {
+                    return hooks.IsFriendly(target, viewer) && !hooks.IsHostileTo(target, viewer);
+                }
+            }
+            else if (hooks is Reputation.ReputationCombatHooks { Fallback: FactionCombatHooks repFc })
+            {
+                if (repFc.Factions.Find(target.FactionTemplate) is not null && repFc.Factions.Find(viewer.FactionTemplate) is not null)
+                {
+                    return repFc.IsFriendly(target, viewer) && !hooks.IsHostileTo(target, viewer);
+                }
+            }
+            else
+            {
+                return hooks.IsFriendly(target, viewer) && !hooks.IsHostileTo(target, viewer);
+            }
+        }
+
+        uint entry = target.GetUInt32(UpdateFields.ObjectFieldEntry);
+        if (entry is 13117 or 13177) return viewer.Team == Team.Horde;
+        if (entry is 13116 or 13176) return viewer.Team == Team.Alliance;
+        uint faction = target.FactionTemplate;
+        if (faction == 0 || faction == viewer.FactionTemplate) return true;
+        if (faction is 2 or 5 or 6 or 29 or 67 or 83 or 85 or 104 or 105 or 106 or 116 or 714 or 1214 or 1315 or 1515)
+            return viewer.Team == Team.Horde;
+        if (faction is 1 or 3 or 4 or 8 or 11 or 12 or 35 or 55 or 56 or 57 or 64 or 80 or 84 or 115 or 715 or 1216 or 1314 or 1514)
+            return viewer.Team == Team.Alliance;
+        return true;
     }
 
     /// <summary>WorldObject::IsWithinDistInMap(corpse, dist): the viewer's body, on this map, within the distance (3D, less both radii).</summary>

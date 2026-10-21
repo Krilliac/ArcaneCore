@@ -853,6 +853,17 @@ internal static class PlayerbotNavigation
             return !straightRefused;
         }
 
+        if (partial && from is null && !noFallbacks && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
+            && !map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f)
+            && Vector2.Distance(Flat(path.End), Flat(destination)) <= ClimbReachYards
+            && MathF.Abs(path.End.Z - destination.Z) > ProjectedEndYards)
+        {
+            using (PlayerbotThinkProbe.Fallback())
+            {
+                if (TryClimbIndoors(map, start, destination, options, path, out route)) return true;
+            }
+        }
+
         if (Usable(player, path, start, destination, goal, partial, nearestEnd, options, out PlayerbotRoute? usable))
         {
             // The corners are the navigation mesh's, which already proves each leg walkable; they are not re-tested against the
@@ -1311,13 +1322,21 @@ internal static class PlayerbotNavigation
     {
         route = null;
         if (map.Template is { IsDungeon: true } or { IsBattleground: true }) return false;
-        if (map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f)) return false;
+        bool destIndoors = !map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f);
+        bool startIndoors = !map.Collision.IsOutdoors(start.X, start.Y, start.Z + 1f);
+        if (!destIndoors && !startIndoors) return false;
         PathResult reach = walk ?? Query(map, start, destination, options, partial: true, steep: false);
         if (!reach.HasPath || (reach.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0 || Reaches(reach) || EndsAt(reach, destination)
-            || Vector2.Distance(Flat(reach.End), Flat(destination)) > ClimbReachYards)
+            || (!(destIndoors && Vector2.Distance(Flat(reach.End), Flat(destination)) <= ClimbReachYards)
+                && !(startIndoors && Vector2.Distance(Flat(reach.End), Flat(start)) <= ClimbReachYards)))
             return false;
         PathResult climb = Query(map, start, destination, options, partial: false, steep: true);
-        if (!IsUsablePath(climb, options.MaxPathPoints, reach.Length + ClimbExtraYards) || !(Reaches(climb) || EndsAt(climb, destination)))
+        float maxClimbLength = MathF.Abs(reach.End.Z - destination.Z) > ProjectedEndYards
+            ? MathF.Max(reach.Length, Vector2.Distance(Flat(start), Flat(destination))) + 90f
+            : (destIndoors && Vector2.Distance(Flat(reach.End), Flat(destination)) <= ClimbReachYards
+                ? reach.Length
+                : MathF.Max(reach.Length, Vector2.Distance(Flat(start), Flat(destination)))) + ClimbExtraYards;
+        if (!IsUsablePath(climb, options.MaxPathPoints, maxClimbLength) || !(Reaches(climb) || EndsAt(climb, destination)))
             return false;
         route = Bounded(climb.Points, options, complete: true);
         return route is not null;

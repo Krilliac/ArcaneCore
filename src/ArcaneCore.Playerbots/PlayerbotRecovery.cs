@@ -1999,7 +1999,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature creature || !creature.IsInWorld || !creature.IsAlive
-                || !ReferenceEquals(creature.Map, map) || (creature.NpcFlags & (uint)NpcFlags.SpiritGuide) == 0)
+                || !ReferenceEquals(creature.Map, map) || (creature.NpcFlags & (uint)NpcFlags.SpiritGuide) == 0
+                || !ArcaneCore.Game.Death.Visibility.GhostVisibilityRule.IsSpiritGuideFriendlyTo(player, creature))
                 continue;
             float distance = Distance(player, creature.X, creature.Y, creature.Z);
             if (distance < best)

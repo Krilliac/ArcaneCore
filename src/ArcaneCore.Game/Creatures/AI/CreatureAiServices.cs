@@ -638,6 +638,13 @@ public sealed class CreatureAiFactory
             return new CritterAI(creature); // vmangos selects CritterAI for type 8 before the permit contest (AI/CreatureAISelector.cpp:78-79)
         }
 
+        const uint SpiritHealerFlags = (uint)(NpcFlags.SpiritHealer | NpcFlags.SpiritGuide) | 16384u | 32768u;
+        if (string.IsNullOrEmpty(name) && creature.Summon is null
+            && ((creature.NpcFlags | creature.Template.NpcFlags) & SpiritHealerFlags) != 0)
+        {
+            return new NullCreatureAI(creature);
+        }
+
         return creature.Template.Civilian ? new ReactorAI(creature) : new AggressorAI(creature);
     }
 

@@ -587,6 +587,49 @@ public sealed class PlayerbotRecoveryTests
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null) => PathResult.None(start);
     }
 
+    [Fact]
+    public async Task BattlegroundGhost_IgnoresEnemySpiritGuide_AndQueuesAtFriendlySpiritGuide()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(
+            configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());
+                Player player = session.Player!;
+                player.Health = 0;
+                player.Map!.Combat.KillPlayer(player);
+                Assert.True(player.Map!.Combat.RepopPlayer(player));
+
+                Creature enemyGuide = Dungeon.DungeonBotHost.AddCreature(player.Map!, 13117u, player.X - 2f, player.Y, player.Z,
+                    (uint)NpcFlags.SpiritGuide, host.World.NowMs, faction: 67);
+                Creature friendlyGuide = Dungeon.DungeonBotHost.AddCreature(player.Map!, 13116u, player.X - 30f, player.Y, player.Z,
+                    (uint)NpcFlags.SpiritGuide, host.World.NowMs, faction: 1);
+                player.VisibleObjects.Add(enemyGuide.Guid);
+                player.VisibleObjects.Add(friendlyGuide.Guid);
+
+                var rule = new ArcaneCore.Game.Death.Visibility.GhostVisibilityRule();
+                Assert.False(rule.CanSee(player, enemyGuide, alreadyVisible: false, detect: false));
+                Assert.True(rule.CanSee(player, friendlyGuide, alreadyVisible: false, detect: false));
+
+                var graveyard = new WorldSafeLoc(769, player.MapId, player.X, player.Y, player.Z, 0f, "WSG Alliance graveyard");
+                var recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 400, AllowedMaps = [0, 1] })
+                {
+                    GraveyardLookup = (_, _) => graveyard,
+                    AreaSpiritGuides = _ => true,
+                };
+                session.ManagedBudget = new ManagedActionBudget(4);
+                recovery.Update(player, 500);
+                Assert.Equal(PlayerbotSpiritHealerStep.WalkToHealer, recovery.LastSpiritHealerStep);
+                Assert.Equal(0, recovery.AreaQueueRequests);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     private sealed class FlatFloor : ILineOfSight
     {
         public bool Enabled => true;
