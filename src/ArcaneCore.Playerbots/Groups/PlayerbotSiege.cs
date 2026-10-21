@@ -372,6 +372,28 @@ internal sealed class PlayerbotSiege(int id, uint mapId, uint objectiveEntry, IR
     /// <summary>When the siege came to <see cref="Step"/> (its start for the first): the per-step deadline counts from here (<see cref="PlayerbotGroupCoordinator.StepDeadlineMs"/>).</summary>
     public uint StepSinceMs { get; set; } = startedMs;
 
+    /// <summary>When a raid first had no leader in the current stretch (0: every raid is led); see <see cref="TrackLeaders"/>.</summary>
+    public uint UnledSinceMs { get; private set; }
+
+    /// <summary>
+    /// Called once per tick with whether any raid is without a leader. The step deadline pauses while one is: when every raid is led again, <see cref="StepSinceMs"/> moves forward by the time spent unled
+    /// (never past <paramref name="nowMs"/>), so an outage costs exactly its length and a leader that dies again and again cannot hold the step for good.
+    /// </summary>
+    public void TrackLeaders(bool anyUnled, uint nowMs)
+    {
+        if (anyUnled)
+        {
+            if (UnledSinceMs == 0) UnledSinceMs = Math.Max(1u, nowMs);
+            return;
+        }
+
+        if (UnledSinceMs == 0) return;
+        uint outage = unchecked(nowMs - UnledSinceMs);
+        uint since = unchecked(StepSinceMs + outage);
+        StepSinceMs = unchecked((int)(since - nowMs)) > 0 ? nowMs : since; // clamped to now (the shifted start is never in the future)
+        UnledSinceMs = 0;
+    }
+
     /// <summary>The step logic has run once (the forming time is over and <see cref="StepSinceMs"/> was restarted).</summary>
     public bool StepClockStarted { get; set; }
 
@@ -576,9 +598,6 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     /// <summary>When the last promotion of a fallen leader was tried.</summary>
     public uint PromoteTriedMs { get; set; }
-
-    /// <summary>The raid had no leader at its last tick (a leader that returns restarts the step deadline).</summary>
-    public bool WasUnled { get; set; }
 
     public PlayerbotSiegeAnnouncer Announcer { get; } = new();
 

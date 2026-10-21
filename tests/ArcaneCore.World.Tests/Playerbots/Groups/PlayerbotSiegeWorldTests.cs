@@ -2311,7 +2311,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         }), "the step never moved at the deadline: " + await world.TraceAsync());
         Assert.Equal(step + 1, siege.Step);
         Assert.Contains(world.Coordinator.Events, e => e.Contains($"waypoint {step + 1} not taken in {PlayerbotGroupCoordinator.StepDeadlineMs / 1000}s, moving on to waypoint {step + 2}", StringComparison.Ordinal));
-        Assert.Contains(siege.Raids, r => r.Announcer.Sent.Any(line => line.Contains("not taken", StringComparison.Ordinal)));
+        Assert.All(siege.Raids, r => Assert.Contains(r.Announcer.Sent, line => line.Contains("not taken", StringComparison.Ordinal)));
         await world.RunAsync(1_000);
         Assert.Contains(siege.Raids, r => r.Detail.Contains("furthest=", StringComparison.Ordinal) && r.Detail.Contains("deadline=", StringComparison.Ordinal));
     }
@@ -2379,6 +2379,36 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step != step + 1;
         });
         Assert.Equal(step + 2, siege.Step);
+    }
+
+    [Fact]
+    public void ARaidFlippingBetweenUnledAndLed_OnlyPausesTheDeadline_ByTheTimeItWasUnled()
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new Vector3(10f, 0f, 0f), new Vector3(20f, 0f, 0f)], default, 1_000);
+        uint now = 1_000, unledTotal = 0, moved = 0;
+        // Every 10 s the raid loses its leader for 1 s (a death and a prompt promotion), every second tick-step of 500 ms is simulated.
+        while (moved == 0 && now < 1_000 + (2 * PlayerbotGroupCoordinator.StepDeadlineMs))
+        {
+            now += 500;
+            bool unled = (now / 500) % 20 == 0 || (now / 500) % 20 == 1; // 1 s in every 10 s
+            if (unled) unledTotal += 500;
+            siege.TrackLeaders(unled, now);
+            if (!unled && PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, false, now)) moved = now;
+        }
+
+        Assert.NotEqual(0u, moved);
+        uint expected = 1_000 + PlayerbotGroupCoordinator.StepDeadlineMs + unledTotal;
+        Assert.InRange(moved, expected - 1_000, expected + 2_000);
+    }
+
+    [Fact]
+    public void TheAnnouncer_Force_SendsTheLineWithinTheGap_WhereOfferDoesNot()
+    {
+        var announcer = new PlayerbotSiegeAnnouncer();
+        Assert.True(announcer.Offer("first", 10_000));
+        Assert.False(announcer.Offer("second", 11_000)); // within the gap
+        announcer.Force("forced", 11_500);
+        Assert.Equal(new[] { "first", "forced" }, announcer.Sent);
     }
 
     [Fact]
@@ -2490,7 +2520,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await world.RunUntilAsync(30_000, () =>
         {
             string step = leaderMember.AI?.Step ?? string.Empty;
-            noPath |= step.EndsWith(":no-path", StringComparison.Ordinal);
+            noPath |= step == $"fight:{Objective}:no-path";
             if (!noPath) return false;
             shunned |= raid.Group.IsShunned(objective, Now(world));
             hostileGone |= raid.LastFacts.Hostiles < 1;

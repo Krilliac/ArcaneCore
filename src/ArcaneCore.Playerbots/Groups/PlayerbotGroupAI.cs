@@ -757,7 +757,8 @@ internal sealed class PlayerbotGroupAI
         if (isLeader && group.Siege is { } siegeRaid)
         {
             if (siegeRaid.Order is PlayerbotSiegeOrder.Pull or PlayerbotSiegeOrder.AssignTank or PlayerbotSiegeOrder.Assault
-                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled) && !group.IsShunned(pulled.Guid, _session.World.NowMs))
+                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled)
+                && (pulled is Creature { } pulledCreature && pulledCreature.Entry == siegeRaid.Siege.ObjectiveEntry || !group.IsShunned(pulled.Guid, _session.World.NowMs)))
                 return pulled;
             return null;
         }

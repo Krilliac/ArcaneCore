@@ -432,7 +432,6 @@ public sealed partial class PlayerbotGroupCoordinator
                 // A raid without a leader holds the others at their waypoint until it has one again (or ends): it is not dropped from the plan.
                 // Its engagement is still tracked, so the fight is not stale when a new leader takes over (the retreat latch is kept too).
                 _siegeUnled++;
-                raid.WasUnled = true;
                 TrackEngagement(group, raid, world, now);
                 raid.Order = PlayerbotSiegeOrder.Hold;
                 raid.Push = PlayerbotSiegePush.None;
@@ -441,18 +440,13 @@ public sealed partial class PlayerbotGroupCoordinator
                 continue;
             }
 
-            // A raid that has a leader again: the time it had none made no progress possible, so the step deadline starts afresh.
-            if (raid.WasUnled)
-            {
-                raid.WasUnled = false;
-                siege.StepSinceMs = Math.Max(1u, now);
-            }
-
             var view = new SiegeView(raid, group, leader, server);
             ReadRaid(siege, view, world, now);
             _siegeViews.Add(view);
         }
 
+        // The step deadline pauses while a raid has no leader (it does not restart: a leader that dies again and again must not hold the step for good).
+        siege.TrackLeaders(_siegeUnled > 0, now);
         if (_siegeViews.Count == 0) return;
         // The witness stands on the siege's map: a leader elsewhere sees another map's creatures and grids, which says nothing of the objective.
         // With none on the map the objective is not judged this tick.
@@ -509,7 +503,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>
     /// Whether the step has lasted <see cref="StepDeadlineMs"/> and the siege moves on: a waypoint still ahead, every raid led (<paramref name="unled"/> raids without a leader hold it), none in a retreat latch
     /// (<paramref name="retreatLatched"/>: a lost fight is not a reason to go on). The clock (<see cref="PlayerbotSiege.StepSinceMs"/>) restarts where progress was impossible: the siege's first tick past forming,
-    /// the end of a retreat latch, a raid that has a leader again.
+    /// and the end of a retreat latch (a latch is bounded by the retreat limit); the time a raid spends without a leader is paused (<see cref="PlayerbotSiege.TrackLeaders"/>), not restarted.
     /// </summary>
     internal static bool StepDeadlineDue(PlayerbotSiege siege, int unled, bool retreatLatched, uint now)
         => siege.Step < siege.Waypoints.Count && unled == 0 && !retreatLatched && unchecked(now - siege.StepSinceMs) >= StepDeadlineMs;
