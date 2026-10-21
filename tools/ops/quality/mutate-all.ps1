@@ -18,7 +18,7 @@ param(
     [switch]$Resume,
     [string]$RunId,
     [string[]]$Projects,
-    [string]$BatchFilter,
+    [string[]]$BatchFilter,
     [ValidateRange(1, 64)] [int]$Concurrency = 2,
     [ValidateRange(1, 500)] [int]$MaxFiles = 40,
     [ValidateRange(100, 200000)] [int]$MaxLines = 6000,
@@ -82,7 +82,7 @@ if ($Resume) {
 else {
     $plan = New-MutateAllPlan -Root $repo -MaxFiles $MaxFiles -MaxLines $MaxLines -Projects $Projects -TestOverride $TestOverride
     $batches = @($plan.Batches)
-    if ($BatchFilter) { $batches = @($batches | Where-Object { $_.id -like $BatchFilter -or $_.name -like $BatchFilter }) }
+    if ($BatchFilter) { $batches = @($batches | Where-Object { $b = $_; @($BatchFilter | Where-Object { $b["id"] -like $_ -or $b["name"] -like $_ }).Count -gt 0 }) }
     if ($batches.Count -eq 0) { Stop-MutateAll 'the plan has no batch (check -Projects / -BatchFilter).' }
     if ($PlanOnly) {
         "Batch plan: $($batches.Count) batches, $(($batches | ForEach-Object { $_['lines'] } | Measure-Object -Sum).Sum) non-blank lines, caps $MaxFiles files / $MaxLines lines"
