@@ -118,6 +118,10 @@ public sealed class TeleportAckTimeoutRecoveryTests
         Assert.True(f.Teleports.TeleportTo(bot, 0, 320f, -180f, 45f, 1.25f));
         Assert.True(f.Teleports.IsBeingTeleportedNear(bot));
 
+        // Wall time passing between the teleport and the sweep must not matter: the sweep deadlines below are computed from
+        // NowMs, so on the wall clock even 1 ms here pushed the "fallback - 1" sweep to the fallback and completed it early.
+        Thread.Sleep(5);
+
         // Before the bot fallback window elapses, the pending near teleport remains open for the bot's own brain think.
         f.Teleports.CheckStalled(f.World.NowMs + TeleportService.BotNearAckFallbackMs - 1);
         Assert.True(f.Teleports.IsBeingTeleportedNear(bot));
