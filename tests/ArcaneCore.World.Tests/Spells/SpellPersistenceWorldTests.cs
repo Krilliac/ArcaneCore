@@ -128,6 +128,78 @@ public sealed class SpellPersistenceWorldTests
     }
 
     [Fact]
+    public async Task Save_RetriesTransientSqliteBusy_WithoutRecordingFault_AndSerializesAcrossCharacters()
+    {
+        int busyRemaining = 2;
+        int concurrent = 0;
+        int maxConcurrent = 0;
+        var store = new TransientBusySpellStateStore(() =>
+        {
+            int active = Interlocked.Increment(ref concurrent);
+            try
+            {
+                int prevMax;
+                do
+                {
+                    prevMax = Volatile.Read(ref maxConcurrent);
+                    if (active <= prevMax) break;
+                }
+                while (Interlocked.CompareExchange(ref maxConcurrent, active, prevMax) != prevMax);
+
+                if (Interlocked.Decrement(ref busyRemaining) >= 0)
+                {
+                    throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'", 5);
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref concurrent);
+            }
+        });
+        await using ServiceProvider provider = new ServiceCollection()
+            .AddScoped<ICharacterSpellStateStore>(_ => store)
+            .BuildServiceProvider();
+        var persistence = new SpellStatePersistence(provider.GetRequiredService<IServiceScopeFactory>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        long faultsBefore = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue-spellstate")?.Count ?? 0;
+
+        for (int id = 1; id <= 8; id++)
+        {
+            persistence.Save(id, new SpellStateSnapshot([new PersistedCooldown(SpellCooldownKind.Spell, Cooldown, 99_999)], []));
+        }
+
+        await persistence.FlushAsync();
+
+        long faultsAfter = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue-spellstate")?.Count ?? 0;
+        Assert.Equal(faultsBefore, faultsAfter);
+        for (int id = 1; id <= 8; id++)
+        {
+            Assert.False(persistence.HasUnsaved(id));
+        }
+        Assert.Equal(1, maxConcurrent);
+    }
+
+    private sealed class TransientBusySpellStateStore(Action onSave) : ICharacterSpellStateStore
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, CharacterSpellState> _states = new();
+
+        public Task<CharacterSpellState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
+            => Task.FromResult(_states.GetValueOrDefault(characterId) ?? new CharacterSpellState([], []));
+
+        public async Task SaveAsync(int characterId, CharacterSpellState state, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+            onSave();
+            _states[characterId] = state;
+        }
+
+        public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+        {
+            _states.TryRemove(characterId, out _);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task MeleeDamage_PushesBackACastInProgress()
     {
         await using var host = WorldTestHost.Start();

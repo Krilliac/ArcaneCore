@@ -503,6 +503,47 @@ public sealed class ManagedPlayerbotCheckpointTests
     }
 
     [Fact]
+    public async Task CreateAndDelete_KickTemporaryBotSessionsWithAReason()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture kicks = ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(
+            n => n.Detail.Contains("CreateAsync", StringComparison.Ordinal)
+                || n.Detail.Contains("DeleteAsync", StringComparison.Ordinal));
+
+        PlayerbotOperationResult created = await feature.CreateAsync("Kickreason", 1, 1);
+        Assert.True(created.Success, created.Code);
+        PlayerbotOperationResult deleted = await feature.DeleteAsync(created.BotId!.Value.ToString());
+        Assert.True(deleted.Success, deleted.Code);
+
+        Assert.False(kicks.Any("session/kick-no-reason"), kicks.Describe());
+    }
+
+    [Fact]
+    public async Task Shutdown_RetriesTransientSqliteBusyOnStoreUpdate_AndSucceedsWithoutThrowing()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = await StartBotsAsync(feature, 1);
+        int busyAttempts = 0;
+        owners.BeforeUpdate = (_, _) =>
+        {
+            if (Interlocked.Increment(ref busyAttempts) <= 2)
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'", 5);
+            return Task.CompletedTask;
+        };
+
+        await feature.ShutdownBeforeWorldStopAsync();
+
+        Assert.True(busyAttempts >= 3);
+        Assert.Equal(ManagedPlayerbotState.Stopped, owners.Peek(ids[0])!.State);
+    }
+
+    [Fact]
     public async Task TheSplitBrainGauge_IsOneWhileLatched_AndZeroAfterAClear()
     {
         using var store = new ArcaneCore.Kernel.Ops.Metrics.MetricsStore();

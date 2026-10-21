@@ -211,7 +211,7 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
         _logger.LogWarning("{Count} managed bot(s) are still logged in at shutdown with no playerbot feature attached; closing their sessions", orphans.Length);
         foreach (ManagedBot bot in orphans)
         {
-            bot.Session.Kick();
+            bot.Session.Kick("managed bot orphan shutdown");
         }
 
         try

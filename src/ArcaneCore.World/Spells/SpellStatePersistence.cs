@@ -21,6 +21,7 @@ public sealed class SpellStatePersistence
     private readonly IServiceScopeFactory? _scopes;
     private readonly ILogger _logger;
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly Dictionary<int, Task> _chains = [];
     private readonly Dictionary<int, SpellStateSnapshot> _unsaved = [];
     private readonly Dictionary<int, Exception> _lastFailure = [];
@@ -316,14 +317,33 @@ public sealed class SpellStatePersistence
             return;
         }
 
+        await _writeLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            try
+            const int maxAttempts = 4;
+            CharacterSpellState? rows = null;
+            for (int attempt = 1; ; attempt++)
             {
-                if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is not { } store)
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                try
                 {
-                    // No store: the state lives in memory for this process only.
+                    if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is not { } store)
+                    {
+                        // No store: the state lives in memory for this process only.
+                        lock (_lock)
+                        {
+                            if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
+                            {
+                                _unsaved.Remove(characterId);
+                                _lastFailure.Remove(characterId);
+                            }
+                        }
+
+                        return;
+                    }
+
+                    rows ??= ToRows(snapshot);
+                    await store.SaveAsync(characterId, rows).ConfigureAwait(false);
                     lock (_lock)
                     {
                         if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
@@ -335,26 +355,22 @@ public sealed class SpellStatePersistence
 
                     return;
                 }
-
-                await store.SaveAsync(characterId, ToRows(snapshot)).ConfigureAwait(false);
-                lock (_lock)
+                catch (CharacterOwnershipRejectedException ex)
                 {
-                    if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
+                    FaultLedger.Shared.Record("writequeue-spellstate-ownership", ex);
+                    lock (_lock)
                     {
-                        _unsaved.Remove(characterId);
-                        _lastFailure.Remove(characterId);
+                        _lastFailure[characterId] = ex;
                     }
-                }
-            }
-            catch (CharacterOwnershipRejectedException ex)
-            {
-                FaultLedger.Shared.Record("writequeue-spellstate-ownership", ex);
-                lock (_lock)
-                {
-                    _lastFailure[characterId] = ex;
-                }
 
-                FailTerminal(ex, scope.ServiceProvider);
+                    FailTerminal(ex, scope.ServiceProvider);
+                    return;
+                }
+                catch (Exception ex) when (attempt < maxAttempts && ArcaneCore.Data.Resilience.DatabaseTransience.IsBusy(ex))
+                {
+                    _logger.LogWarning(ex, "Saving the cooldowns and auras of character {Character} hit a transient database lock (attempt {Attempt} of {Max}); retrying", characterId, attempt, maxAttempts);
+                    await Task.Delay(TimeSpan.FromMilliseconds(50 * (1 << (attempt - 1)))).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -365,6 +381,10 @@ public sealed class SpellStatePersistence
             }
 
             _logger.LogFault("writequeue-spellstate", ex, "Saving the cooldowns and auras of character {Character} failed; kept in memory", characterId);
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 

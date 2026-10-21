@@ -774,7 +774,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
             finally
             {
-                session.Kick();
+                session.Kick("playerbot character created");
                 await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
             }
         }
@@ -831,7 +831,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
                 finally
                 {
-                    session.Kick();
+                    session.Kick("playerbot spare account cleanup");
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
                     catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
                 }
@@ -1523,7 +1523,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     if (session is not null)
                     {
-                        session.Kick();
+                        session.Kick("playerbot start aborted");
                         await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
                         if (bot is not null) await FlushBoundedAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                     }
@@ -1607,7 +1607,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
                 finally
                 {
-                    session.Kick();
+                    session.Kick("playerbot character deleted");
                     // A close that is slow after a committed deletion must not skip the cleanup below.
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
                     catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
@@ -1642,7 +1642,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // Each stop waits for its own world-thread removal and character flush. Start a bounded
             // group together so those waits overlap, while the operation lock keeps other lifecycle
             // work out until all members of the group have finished.
-            foreach (ActiveBot[] batch in _active.Values.ToArray().Chunk(32))
+            foreach (ActiveBot[] batch in _active.Values.ToArray().Chunk(8))
             {
                 Task[] stops = [.. batch.Select(active => StopCoreAsync(active.Record, true, CancellationToken.None))];
                 try { await Task.WhenAll(stops).ConfigureAwait(false); }
@@ -3033,7 +3033,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) = snapshot;
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
-            await store.ReplaceAsync(active.Record.BotId, rows).ConfigureAwait(false);
+            await RetryTransientBusyAsync(() => store.ReplaceAsync(active.Record.BotId, rows), CancellationToken.None).ConfigureAwait(false);
         if (force) _loadedSetAsides[active.Record.BotId] = rows;
         lock (active.SetAsideGate)
             if (ReferenceEquals(active.Brain, brain)) Volatile.Write(ref active.SavedSetAsideVersion, version);
@@ -3054,7 +3054,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         (PlayerbotSetAside[] rows, int version) = snapshot;
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
-            await store.ReplaceAsync(Guid.Empty, rows).ConfigureAwait(false);
+            await RetryTransientBusyAsync(() => store.ReplaceAsync(Guid.Empty, rows), CancellationToken.None).ConfigureAwait(false);
         Volatile.Write(ref _savedSharedSetAsideVersion, version);
     }
 
@@ -3329,7 +3329,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
             finally
             {
-                session.Kick();
+                session.Kick("playerbot provisioning cleanup");
                 await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
             }
             if ((await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false)).Count != 0
@@ -3352,9 +3352,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private static async Task<ManagedPlayerbot> PersistAsync(IServiceProvider services, ManagedPlayerbot next, CancellationToken cancellationToken)
     {
         ManagedPlayerbot updated = next with { Revision = next.Revision + 1, UpdatedUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() };
-        if (!await services.GetRequiredService<IManagedPlayerbotStore>().UpdateAsync(updated, next.Revision, cancellationToken).ConfigureAwait(false))
+        IManagedPlayerbotStore store = services.GetRequiredService<IManagedPlayerbotStore>();
+        if (!await RetryTransientBusyAsync(() => store.UpdateAsync(updated, next.Revision, cancellationToken), cancellationToken).ConfigureAwait(false))
             throw new ManagedRevisionConflictException();
         return updated;
+    }
+
+    private static Task RetryTransientBusyAsync(Func<Task> action, CancellationToken cancellationToken)
+        => RetryTransientBusyAsync(async () => { await action().ConfigureAwait(false); return true; }, cancellationToken);
+
+    private static async Task<T> RetryTransientBusyAsync<T>(Func<Task<T>> action, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 5;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await action().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < maxAttempts && !cancellationToken.IsCancellationRequested && ArcaneCore.Data.Resilience.DatabaseTransience.IsBusy(ex))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * (1 << (attempt - 1))), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>The store refused a revision-checked write: someone else changed or removed the row since this process read it.</summary>
