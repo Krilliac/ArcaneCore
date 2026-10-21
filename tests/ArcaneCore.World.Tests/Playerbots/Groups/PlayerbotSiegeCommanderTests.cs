@@ -575,6 +575,17 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.False(PlayerbotGroupCoordinator.BlocksCredit(Calm, raid));
     }
 
+    [Fact]
+    public void AMemberBeyondLagYards_ForLagHoldMs_OutOfCombat_NoLongerHoldsTheRegroup()
+    {
+        PlayerbotSiegeFacts lagging = Calm with { MaxLagYards = 50f };
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(lagging));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(lagging with { LagWaived = true }));
+        // Resting and hurt members still hold it.
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(lagging with { LagWaived = true, AnyResting = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(lagging with { LagWaived = true, AnyHurt = true }));
+    }
+
     // --- the route tether ----------------------------------------------------------------------------------------------------
 
     private static System.Numerics.Vector3 V(float x, float y, float z = 0f) => new(x, y, z);

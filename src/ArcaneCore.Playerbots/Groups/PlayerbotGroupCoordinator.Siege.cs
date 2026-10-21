@@ -46,7 +46,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>A hurt member holds its raid back no longer than this (a bot that cannot be healed back must not stop the siege for good).</summary>
     internal const uint HurtHoldMs = 90_000;
 
-    /// <summary>A pushing leader waiting at its waypoint for a member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind waits this long; then the lag is waived for that step change.</summary>
+    /// <summary>A leader waits this long, wherever it is, for a member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind (the regroup holds it, the lockstep and the credit wait); then the lag is waived (<see cref="PlayerbotSiegeFacts.LagWaived"/>) until the lag clears or the step changes.</summary>
     internal const uint LagHoldMs = 90_000;
 
     /// <summary>
@@ -769,8 +769,9 @@ public sealed partial class PlayerbotGroupCoordinator
             logger.LogWarning("Playerbot siege {Siege} raid {Raid}: push withdrawn, the leader got no nearer to waypoint {Waypoint} for {Seconds}s", siege.Id, siege.Raids.IndexOf(raid), siege.Step + 1, PlayerbotSiegeCommander.PushStallMs / 1000);
         }
 
-        // A pushing leader waiting at its waypoint for a straggler waits LagHoldMs, then the lockstep goes on without it.
-        if (raid.PushingThrough && atWaypoint && maxLag > PlayerbotSiegeCommander.LagYards)
+        // A member more than LagYards behind its leader holds the raid back for LagHoldMs wherever it is (pushing or not, at the waypoint or on the way), then the lag is waived: the regroup
+        // ends and the lockstep and the credit go on without the straggler. A step change restarts the clock (SetStep).
+        if (maxLag > PlayerbotSiegeCommander.LagYards)
         {
             if (raid.LagSinceMs == 0) raid.LagSinceMs = Math.Max(1u, now);
         }

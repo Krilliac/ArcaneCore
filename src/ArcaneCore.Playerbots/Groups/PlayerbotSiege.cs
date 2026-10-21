@@ -79,7 +79,7 @@ internal enum PlayerbotSiegePush : byte
 /// <param name="HostilesAtStepStart"><paramref name="Hostiles"/> when the in-combat clock of the step started; a stalemate needs the count not to have fallen since (a slow win is not a stalemate).</param>
 /// <param name="Pushing">The push in force, carried by the coordinator (<see cref="PlayerbotSiegeRaid.PushInForce"/>): it ends only by the exclusions of <see cref="PlayerbotSiegeCommander.PushOf"/>, not by a falling hostile count, a dip in health, a step change or a hold for the peer.</param>
 /// <param name="AtWaypointReal">The leader really stands in the waypoint's disk (<see cref="PlayerbotGroupCoordinator.IsAtWaypoint"/>, level-aware), not only answering an attacker from the leash: the lockstep advance needs this, while <paramref name="AtWaypoint"/> (which includes the answer) serves the lag hold and the no-progress clock.</param>
-/// <param name="LagWaived">A pushing leader at its waypoint has waited <see cref="PlayerbotGroupCoordinator.LagHoldMs"/> for a member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind: the lockstep waives the lag for this bump.</param>
+/// <param name="LagWaived">A member has been more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind the leader for <see cref="PlayerbotGroupCoordinator.LagHoldMs"/> without a break, wherever the leader is: the regroup ends and the lockstep and the credit waive the lag for this step (the step change restarts the clock).</param>
 /// <param name="OffRoute">The leader is more than <see cref="PlayerbotSiegeCommander.RouteTetherYards"/> from the route of the step (the segment from the waypoint behind it to its goal, on that segment's levels): out of combat it advances back to the route before it pulls anything.</param>
 internal readonly record struct PlayerbotSiegeFacts(
     bool InCombat,
@@ -139,7 +139,7 @@ internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order
 /// hostile has been counted near the leader for <see cref="PushThroughQuietMs"/> (a straggler fight elsewhere), or the raid has been in combat
 /// at one step for <see cref="StalemateMs"/> at <see cref="StalemateHealthPct"/> health or better and lost no member in the last
 /// <see cref="StalemateLossWindowMs"/> and the hostile count has not fallen since (a stalemate). It begins no retreat and counts none.</item>
-/// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/>, rests or is hurt (Regroup); the raid is at its waypoint,
+/// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/> (for less than <see cref="PlayerbotGroupCoordinator.LagHoldMs"/>: then the lag is waived), rests or is hurt (Regroup); the raid is at its waypoint,
 /// the other raid is not, and nothing is worth pulling (Hold).</item>
 /// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis). Not while
 /// the leader is off the route (<see cref="PlayerbotSiegeFacts.OffRoute"/>): it advances back first.</item>
@@ -291,7 +291,7 @@ internal static class PlayerbotSiegeCommander
         if (!facts.InCombat)
         {
             // 2. Regroup for a laggard, a member who rests, a hurt one; hold at the waypoint for the other raid.
-            if (facts.MaxLagYards > LagYards || facts.AnyResting || facts.AnyHurt)
+            if (facts.MaxLagYards > LagYards && !facts.LagWaived || facts.AnyResting || facts.AnyHurt)
                 return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.Regroup, false, false);
             if (facts.AtWaypoint && !facts.PeersAtWaypoint && !pullCandidate)
                 return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.Hold, false, false);
@@ -534,7 +534,7 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     /// <summary>When the push last made progress (a new least distance, or standing at the waypoint); 0: not pushing.</summary>
     public uint PushProgressMs { get; set; }
 
-    /// <summary>When a pushing leader at its waypoint first had a member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind, without a break (0: not the case).</summary>
+    /// <summary>When a member first was more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind the leader, without a break (0: not the case); restarted by every step change.</summary>
     public uint LagSinceMs { get; set; }
 
     /// <summary>The step the in-combat clock (<see cref="StepCombatSinceMs"/>) counts at; -1 before the first read.</summary>

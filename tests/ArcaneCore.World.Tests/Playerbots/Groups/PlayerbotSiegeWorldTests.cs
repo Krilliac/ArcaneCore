@@ -1320,9 +1320,21 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     /// A ranged attacker on the waiting leader, as the tests make one: a guard 25 yards from the waypoint that cannot move (rooted, so it neither walks to the leader nor is pushed about by the test) and has the leader on its threat
     /// list. Returns it once the waiting leader's lag hold has run for 5 s, or null before.
     /// </summary>
+    private sealed class WaitingSince { public uint Since; }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<PlayerbotSiegeRaid, WaitingSince> Waiting = new();
+
     private static Creature? SendRangedAttacker(PlayerbotSiege siege, PlayerbotSiegeRaid raid, Player leader, int stepAtPush, uint now, float yards = 25f)
     {
-        if (siege.Step != stepAtPush || !raid.AtWaypoint || raid.PushInForce == PlayerbotSiegePush.None || raid.LagSinceMs == 0 || unchecked(now - raid.LagSinceMs) <= 5_000
+        // The lag clock runs from the first read of the straggler, before the leader arrives: "waiting 5 s" is counted here, from the leader's arrival at the waypoint with its push in force.
+        WaitingSince box = Waiting.GetOrCreateValue(raid);
+        if (siege.Step != stepAtPush || !raid.AtWaypoint || raid.PushInForce == PlayerbotSiegePush.None) box.Since = 0;
+        else if (box.Since == 0)
+        {
+            box.Since = Math.Max(1u, now);
+            raid.LagSinceMs = 0; // the members were already behind (they fight the guards): the lag hold of these tests counts from the leader's arrival, so the clock starts afresh here
+        }
+        if (box.Since == 0 || raid.LagSinceMs == 0 || unchecked(now - box.Since) <= 5_000
             || leader.Map?.FindUpdater<CreatureMapSystem>() is not { } system || NextAttacker(leader) is not { } guard)
             return null;
         Vector3 waypoint = siege.Waypoints[stepAtPush];
@@ -1595,7 +1607,9 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                     // The lockstep moves the step only with the leader really in the old waypoint's disk (level-aware); a little slack for the leader's move within the tick.
                     Vector3 old = siege.Waypoints[stepAtPush];
                     float oldFlat = FlatYards(leader, old), oldLevel = Math.Abs(leader.Z - old.Z);
-                    movedWhileOut = oldFlat > PlayerbotSiegeCommander.WaypointYards + 1f || oldLevel > PlayerbotSiegeCommander.WaypointLevelYards;
+                    // The lockstep is meant here. A step moved by the credit after the answer's bound was spent (LagHoldMs out of the disk) and the lag was waived is the credit's rule (tested apart).
+                    bool credited = world.Coordinator.Events.Any(e => e.Contains($"step {stepAtPush} -> {stepAtPush + 1}", StringComparison.Ordinal));
+                    movedWhileOut = !credited && (oldFlat > PlayerbotSiegeCommander.WaypointYards + 1f || oldLevel > PlayerbotSiegeCommander.WaypointLevelYards);
                     stepChange = $"the step moved at +{unchecked(Now(world) - began)}ms with the leader {oldFlat:F1} yards (level {oldLevel:F1}) from the old waypoint and {toNext:F1} from the next, atWp={raid.AtWaypoint} real={raid.AtWaypointReal} answerStep={raid.AnsweringStep}";
                 }
 
@@ -1876,13 +1890,14 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
         // The member is held for the whole run: the step moves once the leader has waited LagHoldMs at the waypoint, not before.
         bool waived = false, noted = false;
-        uint arrivedAt = 0, movedAt = 0;
+        uint arrivedAt = 0, movedAt = 0, lagBegan = 0;
         float lagWhenMoved = -1f;
         bool moved = await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + PlayerbotGroupCoordinator.LagHoldMs + 60_000, () =>
         {
             KeepInCombat(world, raid);
             Hold();
             if (arrivedAt == 0 && raid.AtWaypoint && raid.PushingThrough) arrivedAt = Now(world);
+            if (lagBegan == 0 && raid.LastFacts.MaxLagYards > PlayerbotSiegeCommander.LagYards) lagBegan = Now(world);
             waived |= raid.LastFacts.LagWaived;
             noted |= world.Coordinator.Events.Any(e => e.Contains("pushing on from waypoint 1"));
             if (siege.Step >= 1 && movedAt == 0)
@@ -1897,7 +1912,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.True(moved, $"the step never moved: {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync());
         Assert.True(arrivedAt != 0, "the pushing leader never waited at the waypoint");
         Assert.True(lagWhenMoved > PlayerbotSiegeCommander.LagYards, $"the member was within reach when the step moved: {lagWhenMoved:F0} yd");
-        Assert.True(unchecked(movedAt - arrivedAt) >= PlayerbotGroupCoordinator.LagHoldMs - 1_000, $"the step moved {unchecked(movedAt - arrivedAt)} ms after the leader arrived (the hold is {PlayerbotGroupCoordinator.LagHoldMs} ms)");
+        // The lag clock runs from the first read of the straggler (the leader need not have arrived), so the hold is counted from there.
+        Assert.True(lagBegan != 0 && unchecked(movedAt - lagBegan) >= PlayerbotGroupCoordinator.LagHoldMs - 1_000, $"the step moved {unchecked(movedAt - lagBegan)} ms after the lag began (the hold is {PlayerbotGroupCoordinator.LagHoldMs} ms)");
         Assert.True(waived, "the lag was never waived: " + raid.LastFacts);
         Assert.True(noted, "no event note says the raid pushed on:" + Environment.NewLine + await world.TraceAsync());
         Assert.Contains(PlayerbotGroupCoordinator.PushOnLine, raid.Announcer.Sent);
@@ -2199,7 +2215,35 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task APeerAwayAfterReachingTheWaypoint_WithAStragglerBeyondLagYards_GetsNeitherAWaiverNorACredit()
+    public async Task AMemberBeyondLagYardsForLagHoldMs_OutOfCombat_NoLongerHoldsTheRegroup_InTheWorld()
+    {
+        await using GroupTestWorld world = await StartEmptyWay();
+        world.Options.Party.TeleportToLeader = false;
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        var held = raid.Group!.Members.First(m => !m.Real && m.BotId != raid.Group.LeaderBotId);
+        bool regrouped = false;
+        uint since = 0;
+        bool released = await world.RunUntilAsync(PlayerbotGroupCoordinator.LagHoldMs + 60_000, () =>
+        {
+            world.World.Host.World.FindOnlinePlayer(held.Guid)!.Relocate(Origin.X, Origin.Y + 120f, Origin.Z, 0, Now(world));
+            if (raid.LastFacts.MaxLagYards > PlayerbotSiegeCommander.LagYards)
+            {
+                if (since == 0) since = Now(world);
+                regrouped |= raid.Order == PlayerbotSiegeOrder.Regroup;
+            }
+
+            return raid.LastFacts.LagWaived && raid.Order != PlayerbotSiegeOrder.Regroup;
+        });
+
+        Assert.True(regrouped, "the raid never regrouped for the straggler");
+        Assert.True(released, $"the regroup was never lifted: {raid.Order} {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync());
+        Assert.True(unchecked(Now(world) - since) >= PlayerbotGroupCoordinator.LagHoldMs - 2_000, "the lag was waived before LagHoldMs");
+    }
+
+    [Fact]
+    public async Task APeerAwayAfterReachingTheWaypoint_WithAStragglerBeyondLagYards_StepsByCreditOnceTheLagIsWaived()
     {
         await using GroupTestWorld world = await StartEmptyWay();
         world.Options.Party.TeleportToLeader = false;
@@ -2233,10 +2277,11 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step != step;
         });
 
-        // The siege blocks a push while a peer is away from the waypoint, so no lag waiver runs for the straggler, and the credit has to wait for the lag.
-        Assert.Equal(step, siege.Step);
-        Assert.False(waived, "the lag was waived with the peer away: " + raid.LastFacts);
-        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("every raid has reached waypoint", StringComparison.Ordinal));
+        // The lag clock runs wherever the leader is: after LagHoldMs the lag is waived, and the credit (the peer stood at the waypoint once) moves the step by one and says the lag was waived.
+        Assert.True(waived, "the lag was never waived: " + raid.LastFacts);
+        Assert.Equal(step + 1, siege.Step);
+        Assert.Contains(world.Coordinator.Events, e => e.Contains($"every raid has reached waypoint {step + 1}", StringComparison.Ordinal));
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("pushing on from waypoint", StringComparison.Ordinal));
     }
 
     // --- the per-step deadline ------------------------------------------------------------------------------------------------
