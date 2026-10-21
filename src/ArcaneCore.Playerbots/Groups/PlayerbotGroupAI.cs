@@ -876,8 +876,8 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
+    /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
     /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent.</param>
-    /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
     private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
     {
         if (!ReferenceEquals(_target, target))

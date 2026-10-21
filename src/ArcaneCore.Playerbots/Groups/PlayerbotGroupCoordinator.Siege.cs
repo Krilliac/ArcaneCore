@@ -646,7 +646,7 @@ public sealed partial class PlayerbotGroupCoordinator
         if (siege.Step < siege.Waypoints.Count)
         {
             var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
-            // A leader that left the waypoint's disk to answer an attacker of its own (within the leash) is still at the waypoint for the raid until it is back: the lag hold, the lockstep and the no-progress clock do not flip because of the answer.
+            // A leader that left the waypoint's disk to answer an attacker of its own (within the leash) is still at the waypoint for the lag hold and the no-progress clock until it is back.
             // Only the real reading lets the lockstep advance; the answer serves the lag hold and the no-progress clock.
             bool real = IsAtWaypoint(leaderAt, siege.Waypoints[siege.Step]);
             atWaypointReal = real;
