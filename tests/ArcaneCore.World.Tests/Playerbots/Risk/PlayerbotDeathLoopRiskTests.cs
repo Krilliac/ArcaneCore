@@ -295,4 +295,47 @@ public sealed class PlayerbotDeathLoopRiskTests
 
         Assert.True(capture.Any("bot-risk/died-in-known-hazard"));
     }
+
+    [Fact]
+    public async Task ChooseTarget_SkipsCreatureCoveredByActiveFledOrRetreatHazard_AndSecondRetreatInCamp_AddsCampHazard()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        Creature c1 = await world.OnWorldAsync(() => world.Spawn(Feeble(992041, health: 4000), 20, 0));
+        Creature c2 = await world.OnWorldAsync(() => world.Spawn(Feeble(992042, health: 4000), 35, 0));
+        Creature c3 = await world.OnWorldAsync(() => world.Spawn(Feeble(992043, health: 4000), 60, 0));
+        await world.SeeAsync(c1, c2, c3);
+
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            PlayerbotRisk risk = world.Brain.Risk;
+
+            // 1. Retreat from two creatures at +20 yd. Neither kind is remembered alone,
+            //    but a non-remembered neighbour standing inside c1's active "fled" hazard is passed over.
+            float startX = player.X, startY = player.Y;
+            Creature nearLair = world.Spawn(Feeble(992044, health: 4000), 25, 0);
+            player.VisibleObjects.Add(nearLair.Guid);
+            player.SetPosition(startX + 20f, startY, player.Z, player.Orientation);
+            risk.StartRetreat(player, [c1, c2], "losing");
+            Assert.False(risk.UpdateRetreat(player, RiskTestWorld.ThinkMs));
+            player.SetPosition(startX, startY, player.Z, player.Orientation);
+
+            Creature? chosenNearRetreat = risk.ChooseTarget(player, 0u,
+                creature => !ReferenceEquals(creature, nearLair), questObjective: false);
+            Assert.Null(chosenNearRetreat);
+
+            // 2. Second retreat within RetreatLoopWatch.WindowMs and RetreatCampYards (at +35 yd)
+            //    records an 80-yard camp hazard so a 3rd pull in the same camp (c3 at +60 yd) is refused.
+            player.SetPosition(startX + 35f, startY, player.Z, player.Orientation);
+            risk.StartRetreat(player, [c1, c2], "losing");
+            Assert.False(risk.UpdateRetreat(player, RiskTestWorld.ThinkMs));
+            player.SetPosition(startX, startY, player.Z, player.Orientation);
+
+            Assert.True(risk.Hazards.CoversDeathLoop(player.MapId, new Vector3(c3.X, c3.Y, c3.Z), world.Host.World.NowMs));
+            Creature? chosenInCamp = risk.ChooseTarget(player, 0u,
+                creature => !ReferenceEquals(creature, c3), questObjective: false);
+            Assert.Null(chosenInCamp);
+            return true;
+        });
+    }
 }

@@ -43,6 +43,7 @@ internal sealed class PlayerbotMount
     private int _failures;
     private bool _casting;
     private uint _activeSpellId;
+    private Vector3 _castStartPos;
     private uint _scanAt;
     private bool _scanned;
     private PlayerbotMountChoice _choice;
@@ -81,9 +82,10 @@ internal sealed class PlayerbotMount
             if (IsCasting(spells, player, _activeSpellId)) return true;
             _casting = false;
             _activeSpellId = 0;
-            if (CanMountHere(player) && player.StandState == StandState.Stand
+            bool moved = Vector3.DistanceSquared(new Vector3(player.X, player.Y, player.Z), _castStartPos) > 0.01f;
+            if (!moved && CanMountHere(player) && player.StandState == StandState.Stand
                 && !PlayerbotMotion.ControlLost(player) && !player.Movement.HasFlag(MovementFlags.MaskMoving)
-                && !RefusedForNow(session))
+                && !IsCasting(spells, player) && !RefusedForNow(session))
             {
                 Fail(session, player, now, "mount cast ended without applying mount aura");
             }
@@ -108,7 +110,9 @@ internal sealed class PlayerbotMount
             return false;
         }
 
-        if (_choice.Kind == PlayerbotMountKind.Spell && !CanCastMountSpell(spells.System, player, _choice.SpellId))
+        if (player.StandState != StandState.Stand || PlayerbotMotion.ControlLost(player)
+            || player.Movement.HasFlag(MovementFlags.Jumping | MovementFlags.FallingFar)
+            || (_choice.SpellId != 0 && !CanCastMountSpell(spells.System, player, _choice.SpellId)))
         {
             _backoffUntil = Math.Max(1u, unchecked(now + TransientRetryMs));
             return false;
@@ -146,6 +150,7 @@ internal sealed class PlayerbotMount
         if (IsCasting(spells, player, expectedSpell))
         {
             _casting = true;
+            _castStartPos = new Vector3(player.X, player.Y, player.Z);
             _activeSpellId = spells.System.GetState(player.Guid)?.CurrentCast?.Spell.Id ?? attempted.SpellId;
             return true;
         }
@@ -207,7 +212,8 @@ internal sealed class PlayerbotMount
     internal static bool IsTransientRefusal(SpellCastResult result)
         => result is SpellCastResult.NotReady or SpellCastResult.SpellInProgress or SpellCastResult.ItemNotReady or SpellCastResult.Moving
             or SpellCastResult.NoPower or SpellCastResult.Silenced or SpellCastResult.Pacified
-            or SpellCastResult.TryAgain or SpellCastResult.OnlyAbovewater;
+            or SpellCastResult.TryAgain or SpellCastResult.OnlyAbovewater
+            or SpellCastResult.Interrupted or SpellCastResult.AffectingCombat or SpellCastResult.NotStanding;
 
     private void Fail(WorldSession session, Player player, uint now, string detail)
     {

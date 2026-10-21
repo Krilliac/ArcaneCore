@@ -517,11 +517,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             if (EvacuateIfStranded(bot, player)) continue;
             if (!_options.Groups.Enabled || !player.IsAlive || groupManager is null) continue;
             // Never a battleground raid: the match owns it (BattlegroundFeature.LeaveBattlegroundRaid takes the bot out when it leaves).
-            if (groupManager.GetGroup(player.Guid) is { IsBattlegroundGroup: false } stale && stale.Members.All(m => m.Guid == player.Guid || IsOnlineBot(m.Guid)))
+            if (groupManager.GetGroup(player.Guid) is { IsBattlegroundGroup: false } stale
+                && stale.Members.All(m => m.Guid == player.Guid || !IsRealOnline(m.Guid))
+                && stale.Members.All(m => !_botByPlayer.TryGetValue(m.Guid, out Guid other) || !_memberOf.ContainsKey(other)))
             {
-                // A group of bots nobody leads any more (a world restart restores the server groups but not the coordinator's): the
-                // bot leaves it, as a client would. Only when every other member is a bot online: an offline member may be a real
-                // player its party AI waits for (PlayerbotPartyAI, MasterTimeoutSeconds).
+                // A group of bots nobody leads any more (a world restart restores the server groups but not the coordinator's, or a
+                // member logged out after the coordinator dissolved its group): a free bot (not driven by PlayerbotPartyAI waiting for
+                // an offline master) leaves it at once, as a client would.
                 Unhold(bot.BotId, null);
                 Act(bot.Session, WorldOpcode.CmsgGroupDisband, [], budgeted: false);
                 Note($"{player.Name} left a group of bots nobody leads");

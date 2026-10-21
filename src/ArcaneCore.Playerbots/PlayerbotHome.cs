@@ -509,6 +509,7 @@ internal sealed class PlayerbotHomeReturn
         _teleportRetryPending = false;
         _returnTracked = false;
         _returnOverdue = false;
+        _returnUpdated = false;
     }
 
     /// <summary>Decide where the bot stands against <paramref name="area"/>; keeps the hysteresis of a walk in progress.</summary>
@@ -532,7 +533,10 @@ internal sealed class PlayerbotHomeReturn
     private bool _returnTracked;
     private bool _returnReported;
     private bool _returnOverdue;
+    private bool _returnUpdated;
     private uint _returnSince;
+    private uint _lastTrackMs;
+    private float _returnBestDistance = float.MaxValue;
 
     /// <summary>A home that can hold nothing: no finite centre, no radius, or the null island of a map where that is no place (<c>home/invalid</c>). Once per area.</summary>
     private static void CheckArea(Player player, PlayerbotHomeArea area)
@@ -556,6 +560,7 @@ internal sealed class PlayerbotHomeReturn
         {
             _returnTracked = false;
             _returnOverdue = false;
+            _returnUpdated = false;
             return;
         }
 
@@ -564,7 +569,31 @@ internal sealed class PlayerbotHomeReturn
             _returnTracked = true;
             _returnReported = false;
             _returnOverdue = false;
+            _returnUpdated = false;
             _returnSince = nowMs;
+            _lastTrackMs = nowMs;
+            _returnBestDistance = float.IsFinite(Distance) ? Distance : float.MaxValue;
+            return;
+        }
+
+        uint dt = unchecked(nowMs - _lastTrackMs);
+        _lastTrackMs = nowMs;
+        if (!player.IsAlive || player.Combat.IsInCombat)
+        {
+            _returnSince = unchecked(_returnSince + Math.Min(dt, ReturnBudgetMs));
+            return;
+        }
+
+        if (float.IsFinite(Distance) && Distance <= _returnBestDistance - 25f)
+        {
+            _returnBestDistance = Distance;
+            _returnSince = nowMs;
+            return;
+        }
+
+        if (state == PlayerbotHomeState.Returning && !_returnUpdated && dt is > 100 and <= 15_000)
+        {
+            _returnSince = unchecked(_returnSince + dt);
             return;
         }
 
@@ -635,6 +664,7 @@ internal sealed class PlayerbotHomeReturn
     internal PlayerbotHomeTeleportReason Judge(Player player, PlayerbotHomeArea area, PlayerbotHomeOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _returnUpdated = true;
         bool onMap = State != PlayerbotHomeState.OffMap;
         uint mapId = player.Map?.MapId ?? player.MapId;
         if (onMap
@@ -815,6 +845,7 @@ internal sealed class PlayerbotHomeReturn
     /// </summary>
     internal bool Update(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options, uint elapsedMs, uint nowMs)
     {
+        _returnUpdated = true;
         if (State != PlayerbotHomeState.Returning || elapsedMs == 0) return false;
         float distance = area.DistanceTo(player.X, player.Y);
         Distance = distance;
