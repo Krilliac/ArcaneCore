@@ -87,7 +87,7 @@ public sealed class PlayerbotTileHoldTests
         long realMs = 0;
         var wait = new TileWait { RealTicks = () => realMs * System.Diagnostics.Stopwatch.Frequency / 1000 };
         PathSearchCounters.RecordTilePending();
-        Assert.True(wait.Hold(1_000));
+        for (uint t = 1_000; t <= 1_000 + TileWait.MaxMs; t += 3_000) Assert.True(wait.Hold(t));
         Assert.False(wait.Hold(1_000 + TileWait.MaxMs + 1), "no read in flight: nothing to give wall time to");
     }
 
@@ -134,20 +134,24 @@ public sealed class PlayerbotTileHoldTests
             Volatile.Write(ref armed, true);
             Vector3 goal = new(30, 5, 0);
             var options = new PlayerbotOptions { MaxRouteYards = 30, MaxPathPoints = 22 };
-            var wait = new TileWait();
+            long realMs = 0;
+            var wait = new TileWait { RealTicks = () => realMs * System.Diagnostics.Stopwatch.Frequency / 1000 };
 
             PlanOutcome Plan(uint now) => PlayerbotNavigation.PlanToward(world.Player, goal, options, ref wait, now, out _);
 
             Assert.Equal(PlanOutcome.Pending, await world.Host.OnWorldAsync(() => Plan(10_000)));
             foreach (uint at in new uint[] { 15_000, 20_000, 25_000 })
                 Assert.Equal(PlanOutcome.Pending, await world.Host.OnWorldAsync(() => Plan(at)));
-            Assert.Equal(PlanOutcome.Refused, await world.Host.OnWorldAsync(() => Plan(10_000 + TileWait.MaxMs + 1)));
+            // The tile is really being read on a background thread: game time past the bound is not enough while the wall clock has not.
+            Assert.Equal(PlanOutcome.Pending, await world.Host.OnWorldAsync(() => Plan(10_000 + TileWait.MaxMs + 1)));
+            Interlocked.Exchange(ref realMs, TileWait.MaxMs + 1);
+            Assert.Equal(PlanOutcome.Refused, await world.Host.OnWorldAsync(() => Plan(10_000 + TileWait.MaxMs + 2)));
 
             gate.Set();
             await world.Nav.PendingTileRead(0, 31, 31)!;
             PlayerbotRoute? route = null;
             PlanOutcome done = await world.Host.OnWorldAsync(() =>
-                PlayerbotNavigation.PlanToward(world.Player, goal, options, ref wait, 10_000 + TileWait.MaxMs + 2, out route));
+                PlayerbotNavigation.PlanToward(world.Player, goal, options, ref wait, 10_000 + TileWait.MaxMs + 3, out route));
             Assert.Equal(PlanOutcome.Route, done);
             Assert.NotNull(route);
             Assert.False(wait.Active);
