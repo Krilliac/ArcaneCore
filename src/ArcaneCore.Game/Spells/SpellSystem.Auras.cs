@@ -391,6 +391,7 @@ public sealed partial class SpellSystem
 
         if (!MakeRoomForVisibleAura(state, holder))
         {
+            holder.IsSlotLimited = true;
             holder.IsRemoved = true;
             return;
         }

@@ -248,6 +248,8 @@ public sealed partial class SpellSystem
 
         public bool Critical { get; set; }
 
+        public bool SlotLimited { get; set; }
+
         /// <summary>The target's procs already ran (the first direct damage fires them before the sink, Spell.cpp:1444-1456).</summary>
         public bool ProcsDone { get; set; }
 
@@ -260,7 +262,7 @@ public sealed partial class SpellSystem
 
         public List<DeferredNonMeleeDamageLog> DeferredNonMeleeLogs { get; } = [];
 
-        public SpellTargetOutcome Build() => new(Target, SpellMissInfo.None, Damage, Healing, Critical, EffectMask);
+        public SpellTargetOutcome Build() => new(Target, SpellMissInfo.None, Damage, Healing, Critical, EffectMask, SlotLimited);
     }
 
     /// <summary>Credit damage dealt by <paramref name="spell"/> to the outcome being built, if it is for that cast and target.</summary>

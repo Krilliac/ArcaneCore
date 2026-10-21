@@ -309,6 +309,9 @@ public sealed class SpellAuraHolder
 
     public bool IsRemoved { get; internal set; }
 
+    /// <summary>Whether <see cref="SpellSystem.AddAuraHolder"/> rejected this holder because the target's visible aura slots were full of more important auras (<see cref="VisibleSlotLimit"/>).</summary>
+    public bool IsSlotLimited { get; internal set; }
+
     /// <summary>Why this holder was removed (vmangos SpellAuraHolder::m_removeMode); set before the remove handlers and <see cref="SpellSystem.HolderRemoved"/> run.</summary>
     public AuraRemoveMode RemoveMode { get; internal set; }
 

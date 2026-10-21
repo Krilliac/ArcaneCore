@@ -388,6 +388,51 @@ public sealed class PlayerbotQaSpellMonitorTests
     }
 
     [Fact]
+    public void ADebuffRejectedByTheSixteenVisibleSlotLimit_MarksOutcomeSlotLimited_AndIsNotNoEffect()
+    {
+        const uint deepWound = 12721;
+        const uint firstCurse = 990_200;
+        SpellInfo[] curses = Enumerable.Range(0, 16)
+            .Select(i => QaSpellKit.Spell(firstCurse + (uint)i, QaSpellKit.Effect(SpellEffectName.ApplyAura, -1 - i, SpellImplicitTarget.UnitEnemy, AuraType.ModResistance)) with
+            {
+                Duration = new SpellDuration(60_000, 0, 60_000),
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                SpellVisual = 1,
+                Attributes = SpellAttributes.AuraIsDebuff,
+            })
+            .ToArray();
+        SpellInfo deepWoundSpell = QaSpellKit.Spell(deepWound, QaSpellKit.Effect(SpellEffectName.ApplyAura, 10, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicDamage)) with
+        {
+            Duration = new SpellDuration(12_000, 0, 12_000),
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            SpellVisual = 1,
+            Attributes = SpellAttributes.AuraIsDebuff,
+        };
+
+        using var kit = new QaSpellKit(extra: [.. curses, deepWoundSpell]);
+        var capture = new CastCapture();
+        kit.System.RegisterObserver(capture);
+
+        foreach (SpellInfo curse in curses)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(kit.Human, curse.Id, SpellCastTargets.ForUnit(kit.Human.Guid), triggered: true));
+        }
+
+        Assert.Equal(16, kit.System.GetAuras(kit.Human).Count(h => !h.IsPositive));
+
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats + 1; i++)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(kit.Bot, deepWound, SpellCastTargets.ForUnit(kit.Human.Guid), triggered: true));
+        }
+
+        Assert.False(kit.System.HasAura(kit.Human, deepWound));
+        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+        Assert.True(capture.Outcome?.SlotLimited, "outcome should be marked SlotLimited when the 16-slot visible debuff cap refuses the holder");
+    }
+
+    [Fact]
     public void AnExpectedRefusal_IsReportedOnlyWhenOneBotRepeatsItInsideTheWindow()
     {
         using var kit = new QaSpellKit();

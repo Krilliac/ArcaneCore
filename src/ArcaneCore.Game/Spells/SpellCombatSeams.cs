@@ -102,7 +102,7 @@ public interface ISpellCastCheck
 /// <param name="Healing">Health the spell actually restored on the target.</param>
 /// <param name="Critical">Whether a direct damage or healing effect critically struck.</param>
 /// <param name="EffectMask">The effects selected for this target (bit i = effect i).</param>
-public readonly record struct SpellTargetOutcome(Unit Target, SpellMissInfo Miss, uint Damage, uint Healing, bool Critical, int EffectMask);
+public readonly record struct SpellTargetOutcome(Unit Target, SpellMissInfo Miss, uint Damage, uint Healing, bool Critical, int EffectMask, bool SlotLimited = false);
 
 /// <summary>
 /// Observes casts: the hook point for combo points, aura-state reactives, procs and threat. All members have
