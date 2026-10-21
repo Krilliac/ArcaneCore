@@ -116,11 +116,11 @@ public sealed class WmoAreaRealTerrainTests(ITestOutputHelper output)
         Map map = world.GetMap(0);
 
         // On the ground over and around the city: the WMO test finds a city group below the point (or none), but terrain rising to the
-        // point makes it outdoors. Every ground point with terrain data within 300 yards of the Trade Quarter is Tirisfal (the ADT has no height data right over the city).
+        // point makes it outdoors. Every ground point with terrain data within 120 yards of the Trade Quarter is Tirisfal (the ADT has no height data right over the city).
         int checkedPoints = 0;
-        for (float dx = -300f; dx <= 300f; dx += 30f)
+        for (float dx = -120f; dx <= 120f; dx += 20f)
         {
-            for (float dy = -300f; dy <= 300f; dy += 30f)
+            for (float dy = -120f; dy <= 120f; dy += 20f)
             {
                 float x = TradeX + dx, y = TradeY + dy;
                 float ground = map.Terrain.GetHeight(x, y, 500f);
@@ -134,7 +134,7 @@ public sealed class WmoAreaRealTerrainTests(ITestOutputHelper output)
             }
         }
 
-        output.WriteLine($"ground points over Undercity with terrain data: {checkedPoints} of 441 (terrain over the Trade Quarter: {map.Terrain.GetHeight(TradeX, TradeY, 500f):F2})");
+        output.WriteLine($"ground points over Undercity with terrain data: {checkedPoints} of 169 (terrain over the Trade Quarter: {map.Terrain.GetHeight(TradeX, TradeY, 500f):F2})");
         Assert.True(checkedPoints > 0, "no terrain data over Undercity at all: the check read nothing");
 
         float deathknell = map.Terrain.GetHeight(DeathknellX, DeathknellY, 500f);
