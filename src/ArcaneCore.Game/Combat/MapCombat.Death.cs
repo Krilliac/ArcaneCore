@@ -22,6 +22,12 @@ public sealed partial class MapCombat
         }
 
         UnitCombat c = player.Combat;
+        if ((player.Flags & PlayerFlags.Ghost) == 0)
+        {
+            player.LastReleasedGraveyard = null;
+            player.RepopDestinationResolved = false;
+        }
+
         SetDeathState(player, DeathState.Corpse);
         player.SetUInt32(UpdateFields.UnitDynamicFlags, 0);
 

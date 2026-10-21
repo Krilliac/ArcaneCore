@@ -1085,6 +1085,8 @@ public sealed partial class MapCombat
             if (unit is Player player)
             {
                 Death.Resurrection.ResurrectionRequests.Clear(player); // Player::SetDeathState(JUST_DIED): ClearResurrectRequestData (Player.cpp:1522)
+                player.LastReleasedGraveyard = null;
+                player.RepopDestinationResolved = false;
                 player.SetRooted(true);
             }
 
