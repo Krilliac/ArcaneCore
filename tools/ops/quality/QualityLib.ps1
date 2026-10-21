@@ -233,16 +233,16 @@ function Get-QualityDescendantIds {
 }
 
 function Get-QualityProcessTable {
-    <# .SYNOPSIS Every running process as { ProcessId, ParentProcessId, Start } (Start is MinValue where the platform gives none). Reads the OS process list only. #>
+    <# .SYNOPSIS Every running process as { ProcessId, ParentProcessId, Start, Name, CommandLine } (Start is MinValue where the platform gives none). Reads the OS process list only. #>
     if ($IsWindows) {
-        Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate | ForEach-Object {
-            [pscustomobject]@{ ProcessId = [int]$_.ProcessId; ParentProcessId = [int]$_.ParentProcessId; Start = [datetime]$_.CreationDate }
+        Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate, Name, CommandLine | ForEach-Object {
+            [pscustomobject]@{ ProcessId = [int]$_.ProcessId; ParentProcessId = [int]$_.ParentProcessId; Start = [datetime]$_.CreationDate; Name = [string]$_.Name; CommandLine = [string]$_.CommandLine }
         }
     }
     else {
         & ps -A -o 'pid=,ppid=' | ForEach-Object {
             $p = $_.Trim() -split '\s+'
-            if ($p.Count -eq 2) { [pscustomobject]@{ ProcessId = [int]$p[0]; ParentProcessId = [int]$p[1]; Start = [datetime]::MinValue } }
+            if ($p.Count -eq 2) { [pscustomobject]@{ ProcessId = [int]$p[0]; ParentProcessId = [int]$p[1]; Start = [datetime]::MinValue; Name = ''; CommandLine = '' } }
         }
     }
 }
@@ -250,7 +250,27 @@ function Get-QualityProcessTable {
 function Add-QualityDescendants {
     <# .SYNOPSIS Adds the current descendants of -RootId to the -Tracked hashtable (id -> start). Call it while the root runs: once it has exited, its children are orphans that only the process table still ties to it. #>
     param([Parameter(Mandatory)] [hashtable]$Tracked, [Parameter(Mandatory)] [int]$RootId, [datetime]$RootStart = [datetime]::MinValue)
-    foreach ($d in (Get-QualityDescendantIds -Table @(Get-QualityProcessTable) -RootId $RootId -RootStart $RootStart)) { $Tracked[$d.ProcessId] = $d.Start }
+    $table = @(Get-QualityProcessTable)
+    $byId = @{}
+    foreach ($row in $table) { $byId[[int]$row.ProcessId] = $row }
+    foreach ($d in (Get-QualityDescendantIds -Table $table -RootId $RootId -RootStart $RootStart)) {
+        if (Test-QualitySharedBuildServer -Row $byId[$d.ProcessId]) { continue }
+        $Tracked[$d.ProcessId] = $d.Start
+    }
+}
+
+function Test-QualitySharedBuildServer {
+    <#
+    .SYNOPSIS
+      Whether a process-table row is a build server another build may be using: the Roslyn compiler server (VBCSCompiler) or an MSBuild
+      node ("/nodemode:", reused between builds unless MSBUILDDISABLENODEREUSE=1 or -nodeReuse:false). A server that a run of ours started
+      with reuse off ends by itself, so leaving these alone costs nothing and never takes out another slot's build.
+    #>
+    param($Row)
+    if ($null -eq $Row) { return $false }
+    $name = if ($Row.PSObject.Properties['Name']) { [string]$Row.Name } else { '' }
+    $command = if ($Row.PSObject.Properties['CommandLine']) { [string]$Row.CommandLine } else { '' }
+    $name -match '^VBCSCompiler' -or $command -match 'VBCSCompiler' -or $command -match '/nodemode:\d|-nodemode:\d'
 }
 
 function Stop-QualityTracked {
@@ -273,24 +293,38 @@ function Invoke-QualityProcess {
     <#
     .SYNOPSIS
       Runs -FilePath with -Arguments, output to -LogFile (stderr to <LogFile>.err), and waits at most -TimeoutSec. Output goes to files, not
-      a pipe: a child the tool leaves running (vstest.console, testhost, an MSBuild node) holds a pipe open and a pipe reader would
-      wait for it forever. When the process ends, normally or by the limit, every process that descended from it is stopped.
-      Returns { ExitCode, TimedOut, Stopped } (ExitCode is -1 after a timeout).
+      a pipe: a child the tool leaves running (vstest.console, testhost) holds a pipe open and a pipe reader would wait for it forever.
+      When the process ends, normally or by the limit, every process that descended from it is stopped, except shared build servers
+      (see Test-QualitySharedBuildServer). -Environment sets variables for the child only; -OnTick is called after every 3 s poll and once
+      after the end (to show a growing log). Returns { ExitCode, TimedOut, Stopped } (ExitCode is -1 after a timeout).
     #>
     param([Parameter(Mandatory)] [string]$FilePath, [Parameter(Mandatory)] [string[]]$Arguments, [Parameter(Mandatory)] [string]$LogFile,
-        [Parameter(Mandatory)] [int]$TimeoutSec, [string]$WorkingDirectory = (Get-Location).Path)
-    $process = Start-Process $FilePath -ArgumentList (ConvertTo-QualityArgumentString $Arguments) -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru `
-        -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
+        [Parameter(Mandatory)] [int]$TimeoutSec, [string]$WorkingDirectory = (Get-Location).Path, [hashtable]$Environment, [scriptblock]$OnTick)
+    $saved = @{}
+    if (-not $Environment) { $Environment = @{} }
+    foreach ($key in @($Environment.Keys)) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key)
+        [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key])
+    }
+    try {
+        $process = Start-Process $FilePath -ArgumentList (ConvertTo-QualityArgumentString $Arguments) -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru `
+            -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
+    }
+    finally {
+        foreach ($key in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
+    }
     $start = try { $process.StartTime } catch { [datetime]::MinValue }
     $tracked = @{}
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
     $timedOut = $false
     while (-not $process.WaitForExit(3000)) {
         Add-QualityDescendants -Tracked $tracked -RootId $process.Id -RootStart $start
+        if ($OnTick) { & $OnTick }
         if ([DateTime]::UtcNow -gt $deadline) { $timedOut = $true; break }
     }
     Add-QualityDescendants -Tracked $tracked -RootId $process.Id -RootStart $start
-    if ($timedOut) { try { $process.Kill($true) } catch { } } else { $process.WaitForExit() }
+    if ($timedOut) { try { $process.Kill() } catch { } } else { $process.WaitForExit() }
     $stopped = Stop-QualityTracked -Tracked $tracked
+    if ($OnTick) { & $OnTick }
     [pscustomobject]@{ ExitCode = $(if ($timedOut) { -1 } else { $process.ExitCode }); TimedOut = $timedOut; Stopped = $stopped }
 }

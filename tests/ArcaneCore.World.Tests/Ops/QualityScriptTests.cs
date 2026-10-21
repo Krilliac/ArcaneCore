@@ -238,6 +238,59 @@ public sealed class QualityScriptTests
     }
 
     [PwshFact]
+    public void InvokeProcess_StopsTheChildAtTheLimit_AndItsDescendantsAfterAnyEnd()
+    {
+        // A pwsh that starts a sleeping pwsh and then sleeps itself: at -TimeoutSec 3 it is stopped and so is its child. A second parent
+        // that exits at once leaves its sleeping child behind (an orphan); that one is stopped too.
+        using var temp = new TempDirectory();
+        JsonElement r = Eval($$"""
+            . '{{Path.Combine(Quality, "QualityLib.ps1").Replace("'", "''")}}'
+            $dir = '{{temp.Path.Replace("'", "''")}}'
+            $child = 'Start-Sleep 120'
+            $parentSleeps = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$dir\child1.pid' `$p.Id; Start-Sleep 120"
+            $parentExits = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$dir\child2.pid' `$p.Id"
+            $started = Get-Date
+            $timeout = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', $parentSleeps) -LogFile (Join-Path $dir 'a.log') -TimeoutSec 3
+            $elapsed = ((Get-Date) - $started).TotalSeconds
+            $normal = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', $parentExits) -LogFile (Join-Path $dir 'b.log') -TimeoutSec 60
+            Start-Sleep -Milliseconds 500
+            [ordered]@{
+                timedOut = $timeout.TimedOut; exit = $timeout.ExitCode; elapsed = $elapsed
+                child1Alive = [bool](Get-Process -Id ([int](Get-Content "$dir\child1.pid")) -ErrorAction SilentlyContinue)
+                normalTimedOut = $normal.TimedOut; normalExit = $normal.ExitCode
+                child2Alive = [bool](Get-Process -Id ([int](Get-Content "$dir\child2.pid")) -ErrorAction SilentlyContinue)
+            }
+            """);
+        Assert.True(r.GetProperty("timedOut").GetBoolean());
+        Assert.Equal(-1, r.GetProperty("exit").GetInt32());
+        Assert.True(r.GetProperty("elapsed").GetDouble() < 60, "the limit of 3 s was not honoured");
+        Assert.False(r.GetProperty("child1Alive").GetBoolean(), "the descendant of the timed-out process was left running");
+        Assert.False(r.GetProperty("normalTimedOut").GetBoolean());
+        Assert.Equal(0, r.GetProperty("normalExit").GetInt32());
+        Assert.False(r.GetProperty("child2Alive").GetBoolean(), "the orphan of the process that exited was left running");
+    }
+
+    [PwshFact]
+    public void SharedBuildServers_AreRecognised_AndNeverKilledAsLeftovers()
+    {
+        JsonElement r = Eval("""
+            function Row($name, $cmd) { [pscustomobject]@{ ProcessId = 1; ParentProcessId = 0; Start = [datetime]::MinValue; Name = $name; CommandLine = $cmd } }
+            [ordered]@{
+                vbcs = Test-QualitySharedBuildServer -Row (Row 'VBCSCompiler.exe' 'C:\sdk\VBCSCompiler.exe')
+                node = Test-QualitySharedBuildServer -Row (Row 'dotnet.exe' 'dotnet MSBuild.dll /nodemode:1 /nodeReuse:true')
+                vstest = Test-QualitySharedBuildServer -Row (Row 'vstest.console.exe' 'vstest.console.exe --port:5')
+                testhost = Test-QualitySharedBuildServer -Row (Row 'testhost.exe' 'testhost.exe --port 5')
+                bare = Test-QualitySharedBuildServer -Row ([pscustomobject]@{ ProcessId = 1 })
+            }
+            """);
+        Assert.True(r.GetProperty("vbcs").GetBoolean());
+        Assert.True(r.GetProperty("node").GetBoolean());
+        Assert.False(r.GetProperty("vstest").GetBoolean());
+        Assert.False(r.GetProperty("testhost").GetBoolean());
+        Assert.False(r.GetProperty("bare").GetBoolean());
+    }
+
+    [PwshFact]
     public void ArgumentString_QuotesWhatNeedsIt()
     {
         JsonElement r = Eval("""

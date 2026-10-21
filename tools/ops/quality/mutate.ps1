@@ -90,16 +90,12 @@ $log = Join-Path $out 'stryker.log'
 & dotnet restore $testProjectPath --locked-mode 2>&1 | Tee-Object -FilePath (Join-Path $out 'restore.log') | Out-Null
 if ($LASTEXITCODE -ne 0) { Stop-Mutate "dotnet restore --locked-mode of $TestProject failed (log: $(Join-Path $out 'restore.log'))." }
 # Stryker's output goes to a file, not a pipe: the vstest.console processes it starts can outlive it holding the pipe open, and a pipe
-# reader would then wait for them forever. The wait is on the Stryker process itself, with a limit.
-$stryker = Start-Process dotnet -ArgumentList (ConvertTo-QualityArgumentString $arguments) -WorkingDirectory (Split-Path $testProjectPath -Parent) -NoNewWindow -PassThru `
-    -RedirectStandardOutput $log -RedirectStandardError (Join-Path $out 'stryker.err')
-# Stryker leaves vstest.console / testhost processes behind (after a timeout, a crash and sometimes a normal end). They are found while
-# Stryker runs (once it has exited they are orphans) and stopped when it is done; only processes that descend from this Stryker are touched.
-$strykerStart = try { $stryker.StartTime } catch { [datetime]::MinValue }
-$descendants = @{}
+# reader would then wait for them forever. Invoke-QualityProcess waits on the Stryker process itself, with a limit, and afterwards stops
+# the vstest / testhost processes that descended from it (found while it ran: once it has exited they are orphans). The builds Stryker
+# starts get MSBUILDDISABLENODEREUSE=1 and UseSharedCompilation=false, so they leave no MSBuild node or VBCSCompiler behind, and those
+# two kinds of server are never killed here (another slot's build may be using one).
 $printed = 0L
 $runStartedUtc = [DateTime]::UtcNow
-$deadline = [DateTime]::UtcNow.AddMinutes($TimeoutMin)
 function Write-NewLog {
     $stream = [IO.File]::Open($log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     try {
@@ -110,20 +106,12 @@ function Write-NewLog {
     }
     finally { $stream.Dispose() }
 }
-while (-not $stryker.WaitForExit(5000)) {
-    Write-NewLog
-    Add-QualityDescendants -Tracked $descendants -RootId $stryker.Id -RootStart $strykerStart
-    if ([DateTime]::UtcNow -gt $deadline) {
-        try { $stryker.Kill($true) } catch { }
-        [void](Stop-QualityTracked -Tracked $descendants)
-        Stop-Mutate "Stryker did not finish within $TimeoutMin minutes and was stopped with its child processes (log: $log). Name fewer files, or give -TestFilter."
-    }
-}
-Write-NewLog
-$strykerExit = $stryker.ExitCode
-Add-QualityDescendants -Tracked $descendants -RootId $stryker.Id -RootStart $strykerStart
-$leftover = Stop-QualityTracked -Tracked $descendants
-if ($leftover -gt 0) { "mutate.ps1: stopped $leftover process(es) Stryker left running (vstest.console, testhost or a build node)." }
+$run = Invoke-QualityProcess -FilePath 'dotnet' -Arguments $arguments.ToArray() -LogFile $log -TimeoutSec ($TimeoutMin * 60) `
+    -WorkingDirectory (Split-Path $testProjectPath -Parent) -OnTick { Write-NewLog } `
+    -Environment @{ MSBUILDDISABLENODEREUSE = '1'; UseSharedCompilation = 'false' }
+if ($run.TimedOut) { Stop-Mutate "Stryker did not finish within $TimeoutMin minutes and was stopped with its child processes (log: $log). Name fewer files, or give -TestFilter." }
+$strykerExit = $run.ExitCode
+if ($run.Stopped -gt 0) { "mutate.ps1: stopped $($run.Stopped) process(es) Stryker left running (vstest.console or testhost)." }
 
 # Stryker itself exits 1 when the filter leaves no test ("Number of tests found: 0", then "No test result reported"); say why.
 if ((Get-Content -LiteralPath $log -Raw) -match 'Number of tests found:\s*0(?!\d)') {

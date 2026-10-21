@@ -39,10 +39,12 @@ public sealed class ReadsDifferentlyAuditTests(ITestOutputHelper output)
         Assert.True(scanner.FilesScanned > 1000, $"only {scanner.FilesScanned} source files were found under src/");
         Assert.True(scanner.PacketScopeFiles >= 20, $"only {scanner.PacketScopeFiles} files are in the packet scope");
         Assert.True(scanner.CastsClassified >= 100, $"only {scanner.CastsClassified} integer casts in the packet scope were classified");
-        Assert.True(scanner.UnresolvedCasts * 4 <= scanner.CastsClassified + scanner.UnresolvedCasts,
-            $"{scanner.UnresolvedCasts} of {scanner.CastsClassified + scanner.UnresolvedCasts} integer casts in the packet scope could not be typed (references missing?)");
+        // With the project's generated global usings fed to the semantic model every cast and every async lambda resolves today (0 of 398,
+        // 0 of 201); a rise means references or usings went missing and a construct may be passing unseen, so there is no tolerance.
+        Assert.True(scanner.UnresolvedCasts == 0,
+            $"{scanner.UnresolvedCasts} of {scanner.CastsClassified + scanner.UnresolvedCasts} integer casts in the packet scope could not be typed (references missing?); the scan must resolve all of them");
         Assert.True(scanner.AsyncLambdas >= 10, $"only {scanner.AsyncLambdas} async lambdas were looked at");
-        Assert.True(scanner.UnresolvedLambdas * 4 <= scanner.AsyncLambdas,
+        Assert.True(scanner.UnresolvedLambdas == 0,
             $"{scanner.UnresolvedLambdas} of {scanner.AsyncLambdas} async lambdas had no resolved delegate type (references missing?); first sites:\n  " + string.Join("\n  ", scanner.UnresolvedLambdaSites.Take(15)));
 
         Dictionary<string, int> baseline = ParseBaseline(File.ReadAllLines(Path.Combine(root, BaselinePath)));
@@ -128,6 +130,39 @@ public sealed class ReadsDifferentlyAuditTests(ITestOutputHelper output)
             Assert.Empty(scanner.SyntaxErrors);
             Assert.Equal(1, scanner.UnresolvedLambdas); // 'Mystery' does not exist: the lambda's delegate type is unknown, which must show
             Assert.Equal(3, scanner.AsyncLambdas);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Scanner_FallsBackToTheSdkImplicitUsings_WhenAProjectHasNoObjFolder()
+    {
+        // No obj folder and no using in the file: Task, HttpClient and GetFromJsonAsync (System.Net.Http.Json) must still resolve, or the
+        // async lambda and the cast below would count as unresolved.
+        string root = Path.Combine(Path.GetTempPath(), "arcane-reads-" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(root, "src", "ArcaneCore.Fake", "Net");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Implicit.cs"), """
+                namespace Fake.Net;
+                public sealed class Implicit
+                {
+                    public int Fetch(HttpClient client) => (int)client.GetFromJsonAsync<double>("u").Result;
+                    public void Run() { Func<Task> f = async () => await Task.Yield(); _ = f; }
+                }
+                """);
+            var scanner = new ReadsDifferentlyScanner(root, AssemblyName);
+            scanner.Load();
+            _ = scanner.Scan();
+            Assert.Empty(scanner.SyntaxErrors);
+            Assert.Equal(0, scanner.UnresolvedCasts);
+            Assert.Equal(1, scanner.CastsClassified);
+            Assert.Equal(1, scanner.AsyncLambdas);
+            Assert.Equal(0, scanner.UnresolvedLambdas);
         }
         finally
         {

@@ -76,13 +76,9 @@ if ($Il) {
     if (Test-Path -LiteralPath $outDir) { Stop-Decompile "the output folder $outDir exists already; run again." }
     New-Item -ItemType Directory $outDir | Out-Null
     $ilFile = Join-Path $outDir 'assembly.il'
-    $process = Start-Process dotnet -ArgumentList @('tool', 'run', 'ilspycmd', '--', "`"$dll`"", '--ilcode') -WorkingDirectory $repo -NoNewWindow -PassThru `
-        -RedirectStandardOutput $ilFile -RedirectStandardError (Join-Path $outDir 'ilspycmd.err')
-    if (-not $process.WaitForExit($IlTimeoutSec * 1000)) {
-        $process.Kill($true)
-        Stop-Decompile "ilspycmd did not finish the IL of $dll within $IlTimeoutSec s (raise -IlTimeoutSec, or use C# mode, which selects a member)."
-    }
-    if ($process.ExitCode -ne 0) { Stop-Decompile "ilspycmd exited $($process.ExitCode) (see $(Join-Path $outDir 'ilspycmd.err'))." }
+    $run = Invoke-QualityProcess -FilePath 'dotnet' -Arguments @('tool', 'run', 'ilspycmd', '--', $dll, '--ilcode') -LogFile $ilFile -TimeoutSec $IlTimeoutSec -WorkingDirectory $repo
+    if ($run.TimedOut) { Stop-Decompile "ilspycmd did not finish the IL of $dll within $IlTimeoutSec s (raise -IlTimeoutSec, or use C# mode, which selects a member)." }
+    if ($run.ExitCode -ne 0) { Stop-Decompile "ilspycmd exited $($run.ExitCode) (see $ilFile.err)." }
     # The type is matched by its whole path (namespace.Outer+Inner): a nested type is found inside its outer type's block, and a
     # type of the same short name elsewhere is not taken for it.
     $cut = Get-QualityIlBlock -Lines ([IO.File]::ReadLines($ilFile)) -Type $Type -Method $Method
