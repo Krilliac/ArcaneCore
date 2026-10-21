@@ -1392,6 +1392,9 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         if (box.Since == 0 || raid.LagSinceMs == 0 || unchecked(now - box.Since) <= 5_000
             || leader.Map?.FindUpdater<CreatureMapSystem>() is not { } system || NextAttacker(leader) is not { } guard)
             return null;
+        // Any other guard that already followed the leader into melee would be answered first (the leader fights the nearest attacker) and TopUpGuards keeps it at full health, so whether the probe was ever answered would
+        // depend on how soon that guard evades. Only the rooted probe is to attack the leader.
+        foreach (Creature other in system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive && !ReferenceEquals(g, guard) && ReferenceEquals(g.Combat.Victim, leader))) system.EnterEvadeMode(other);
         Vector3 waypoint = siege.Waypoints[stepAtPush];
         guard.Relocate(waypoint.X + yards, waypoint.Y, guard.Z, 0, now);
         system.SetAiImmobilized(guard, true, combatOnly: false);
