@@ -247,7 +247,11 @@ DB column meanings, PascalCase column names as elsewhere in ArcaneCore) and regi
 `EfMapDataStore` as `IMapDataStore`. A world database at version 1 is upgraded in place; its
 rows are kept. The tables start empty: `arcane-content-importer refresh --dbc-dir` (or `import-map-dbc`) fills `map_template` and
 `area_template` with every Map.dbc map and AreaTable.dbc area and the dump's instance rows, `areatrigger_template` from AreaTrigger.dbc,
-and `import` the teleports (docs/areas/content-import.md).
+and `import` the teleports (docs/areas/content-import.md). `WmoAreaDataModule` (world schema **55**) adds `wmo_area_template` (the
+client WMOAreaTable.dbc: the area of each WMO group, read by `EfMapDataStore` into `MapContent.WmoAreas`); the same two commands fill it
+when `WMOAreaTable.dbc` is given, and a world without its rows runs as before (a warning at start). A world upgraded to step 55
+starts with the table empty: run `refresh --dbc-dir` with `WMOAreaTable.dbc` present (only the three-path `import-map-dbc` is the other
+way, and it refuses an existing world unless `--replace` is given, which rewrites map_template and area_template too).
 
 ## Configuration (`World:Maps`)
 

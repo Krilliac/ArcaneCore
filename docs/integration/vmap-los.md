@@ -122,8 +122,10 @@ models with liquid were rejected) and NUL-terminated doodad names (1298 models n
 
 ## Known gaps
 
-* No WMO liquid query (liquid is parsed and kept on `GroupModel.Liquid`); no `WMOAreaTable` lookup
-  (callers get MOGP flags, root/group ids and the floor).
+* No WMO liquid query (liquid is parsed and kept on `GroupModel.Liquid`). The `WMOAreaTable` lookup is done on the caller side:
+  `TryGetAreaInfo` still returns only MOGP flags, root/ADT/group ids and the floor, and `TerrainInfo.GetAreaFlag` maps them to an area
+  through `wmo_area_template` (docs/areas/world-state.md, "WMO areas"). It needs a loaded vmap tile at the position, so a place no grid
+  holds reads the terrain area.
 * No dynamic (game object) line of sight; static models only. Terrain does not block line of sight
   (only static models are checked).
 * Line-of-sight heights: units look from `Unit.CollisionHeight` (`LocomotionState.CollisionHeight` times the unit's scale override `TransformScale` / `Creature.NativeScaleOverride`, 2 yd fallback without model data), non-units look from `1.0 yd`, and target objects are checked at `+1.0 yd` (`ObjectTargetHeight`, vmangos `WorldObject::GetLosCheckPosition`; game objects do not load model display bounds, so they also use `+1.0 yd`).
@@ -146,7 +148,7 @@ None.
 
 ## Suggested next slice
 
-Combat `IsWithinLineOfSight` checks for melee/ranged; WMO liquid and `WMOAreaTable` lookups;
+Combat `IsWithinLineOfSight` checks for melee/ranged; WMO liquid;
 game-object LOS; `findSmoothPath` stepping. (The creature chase/follow generator listed here before
 is done: it paths through `CreatureMapSystem.PlanPath`, see
 [How other areas use it](#how-other-areas-use-it).)

@@ -30,6 +30,7 @@
     map_template                                   Map.dbc (every map) + the dump's instance_template (player limit, reset
                                                    delay, ghost entrance, script of the dungeons and raids)
     area_template                                  AreaTable.dbc (every area, instance areas included)
+    wmo_area_template                              WMOAreaTable.dbc (the area of each WMO group: Undercity, Ironforge interiors)
     taxi_nodes, taxi_path                          TaxiNodes.dbc, TaxiPath.dbc (the flight masters' nodes and routes)
 
   TaxiPathNode.dbc is read to check every ship's route (data0 of its type 15 row): a route the world server would refuse at
@@ -42,7 +43,8 @@
     1. refuses a database another process holds open (stop the world server first),
     2. copies the database to -BackupDirectory and checks the copy's SHA-256, and the same for a leftover -wal file (committed
        pages not yet checkpointed, which the refresh's own connection would fold into the database),
-    3. takes AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, TaxiNodes.dbc, TaxiPath.dbc and TaxiPathNode.dbc from
+    3. takes AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, WMOAreaTable.dbc, TaxiNodes.dbc, TaxiPath.dbc and
+       TaxiPathNode.dbc from
        -DbcDirectory (checked against its SHA256SUMS file when it has one), or extracts them from the client's MPQs with -MpqTool
        (mpqcli; patch-2.MPQ over patch.MPQ over dbc.MPQ, the client's own precedence). Nothing is downloaded.
 
@@ -64,9 +66,9 @@
   The classic-db or vmangos world dump (.sql or .sql.gz). Default: D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz.
 
 .PARAMETER DbcDirectory
-  A directory holding the build-5875 AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, TaxiNodes.dbc, TaxiPath.dbc and
-  TaxiPathNode.dbc (the effective copies, patch-2 first), for example D:\refs\client-dbc-5875-effective. A SHA256SUMS file there
-  (sha256sum format) must list all seven and is checked before anything is written.
+  A directory holding the build-5875 AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, WMOAreaTable.dbc, TaxiNodes.dbc,
+  TaxiPath.dbc and TaxiPathNode.dbc (the effective copies, patch-2 first), for example D:\refs\client-dbc-5875-effective. A SHA256SUMS file there
+  (sha256sum format) must list all eight and is checked before anything is written.
 
 .PARAMETER MpqTool
   mpqcli.exe, used to extract the DBCs from -ClientData when -DbcDirectory is not given.
@@ -118,7 +120,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # The client DBCs the refresh reads (all required: a missing one stops the script before anything is written).
-$dbcNames = @('AreaTrigger.dbc', 'WorldSafeLocs.dbc', 'Map.dbc', 'AreaTable.dbc', 'TaxiNodes.dbc', 'TaxiPath.dbc', 'TaxiPathNode.dbc')
+$dbcNames = @('AreaTrigger.dbc', 'WorldSafeLocs.dbc', 'Map.dbc', 'AreaTable.dbc', 'WMOAreaTable.dbc', 'TaxiNodes.dbc', 'TaxiPath.dbc', 'TaxiPathNode.dbc')
 
 function Get-Sha256([string]$Path) {
     $stream = [System.IO.File]::OpenRead($Path)

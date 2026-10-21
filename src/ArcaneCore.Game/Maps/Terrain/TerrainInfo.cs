@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Grid;
 
 namespace ArcaneCore.Game.Maps.Terrain;
@@ -172,13 +173,43 @@ public sealed class TerrainInfo
     }
 
     /// <summary>
-    /// The area flag at a position (vmangos <c>TerrainInfo::GetAreaFlag</c> without WMO area
-    /// info: the tile's cell value).
+    /// The area flag at a position (vmangos <c>TerrainInfo::GetAreaFlag</c>, GridMap.cpp:914-950): the explore flag of the area of the WMO
+    /// group the position is inside (<see cref="WmoAreaTable"/>), else the tile's cell value. The group is the one the world's model
+    /// service finds (<see cref="TryGetWmoGroup"/>); without model data, without <c>wmo_area_template</c> rows, in a group with no row or
+    /// no area, or whose area is not in the area table, the cell value is the answer, as it was before WMO areas were read.
     /// </summary>
     public ushort GetAreaFlag(float x, float y, float z)
     {
-        _ = z;
+        WmoAreaTable wmoAreas = _manager.WmoAreas;
+        if (wmoAreas.Count != 0 && _manager.Collision?.LineOfSight is { Enabled: true } models
+            && TryGetWmoGroup(models, x, y, z, out ModelAreaInfo group)
+            && wmoAreas.TryGetAreaId(group.RootId, group.AdtId, group.GroupId, out uint areaId)
+            && _manager.Areas.GetById(areaId) is { } area)
+        {
+            // vmangos keeps the flag in a uint16.
+            return unchecked((ushort)area.ExploreFlag);
+        }
+
         return GetTile(x, y).GetAreaFlag(x, y);
+    }
+
+    /// <summary>
+    /// vmangos <c>TerrainInfo::GetAreaInfo</c> (GridMap.cpp:892-912): the WMO group a point is inside, found from 1 yard above it. A group
+    /// under terrain that rises to the point (the terrain above the group's floor and no more than 2 yards over the raised point) does not
+    /// count: the position is on the ground over a building, not in it. False outside every WMO, without model data, and where the model
+    /// tile is not loaded (vmangos loads it with the grid).
+    /// </summary>
+    public bool TryGetWmoGroup(ILineOfSight models, float x, float y, float z, out ModelAreaInfo group)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        z += 1.0f;
+        if (!models.TryGetAreaInfo(MapId, x, y, z, out group))
+        {
+            return false;
+        }
+
+        float terrain = GetTile(x, y).GetHeight(x, y);
+        return !(z + 2.0f > terrain && terrain > group.GroundZ);
     }
 
     /// <summary>The zone and area at a position (vmangos <c>TerrainInfo::GetZoneAndAreaId</c>).</summary>
