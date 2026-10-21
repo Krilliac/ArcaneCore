@@ -276,8 +276,19 @@ internal static class PlayerbotMotion
         float skipDistance = moving ? 0.30f : 0.05f;
         while (route.NextPoint < route.Points.Count - 1 && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= skipDistance)
             route.NextPoint++;
+        if (route.LegsNavigated(route.NextPoint, route.NextPoint) && !OnLeg(route, route.NextPoint, current))
+        {
+            for (int idx = route.NextPoint + 1; idx < route.Points.Count; idx++)
+            {
+                if (route.LegsNavigated(idx, idx) && OnLeg(route, idx, current))
+                {
+                    route.NextPoint = idx;
+                    break;
+                }
+            }
+        }
         // The first stretch must be walkable before anything is announced.
-        float probeStep = MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f));
+        float probeStep = MathF.Max(speed * (HeartbeatIntervalMs / 1000f), 2f);
         Vector3 probe = Walk(route, current, route.NextPoint, probeStep,
             HeadingTo(current, route.Points[route.NextPoint]), out int probed, out _, out _, out _);
         bool noStretch = Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f;
@@ -288,9 +299,13 @@ internal static class PlayerbotMotion
             noStretch = false;
         }
 
+        bool hadBudget = session.ManagedBudget is not { Remaining: <= 0 };
+        if (!moving && !hadBudget) return false;
+
         if (noStretch || validStart is null)
         {
-            if (!noStretch)
+            bool driftedOffNavigatedLeg = route.LegsNavigated(route.NextPoint, route.NextPoint) && !OnLeg(route, route.NextPoint, current);
+            if (!noStretch && !driftedOffNavigatedLeg)
             {
                 string mode = MoveModeOf(route, route.NextPoint, probed);
                 TrySnapPlayerToFloor(map, player, ref current);
@@ -299,6 +314,7 @@ internal static class PlayerbotMotion
                 PlayerbotMotionAnomalies.ReportStartBlocked(session, player, route, current, now, consecutive, rejectReason ?? "NoGroundSupport", mode);
             }
 
+            route.NextPoint = route.Points.Count;
             if (!keepMotion) Stop(session, player);
             return false;
         }
@@ -306,7 +322,6 @@ internal static class PlayerbotMotion
         float heading = HeadingTo(current, route.Points[route.NextPoint]);
         // A deliberate start spends the caller's action budget; a running bot changing its route does not.
         WorldOpcode opcode = moving ? WorldOpcode.MsgMoveHeartbeat : WorldOpcode.MsgMoveStartForward;
-        bool hadBudget = session.ManagedBudget is not { Remaining: <= 0 };
         if (!Send(session, player, opcode, current, heading, walk, moving: true, now, budgeted: !moving))
         {
             // A start the caller's action budget refused is its own back-off, not the server refusing the move.
@@ -317,14 +332,18 @@ internal static class PlayerbotMotion
                 AdvancePastRejectedWaypoint(route, current);
                 int consecutive = NoteStepRejected(session, player, state, route, now);
                 PlayerbotMotionAnomalies.ReportMoveRejected(session, player, opcode.ToString(), current, now, consecutive, "NoGroundSupport", mode);
+                route.NextPoint = route.Points.Count;
             }
 
             if (!moving) state.Clear();
             return false;
         }
 
-        state.ConsecutiveRejections = 0;
-        state.LastRejectedDestination = default;
+        if (state.ConsecutiveRejections == 0 || Vector2.DistanceSquared(Flat(state.Anchor), Flat(current)) >= 1f)
+        {
+            state.ConsecutiveRejections = 0;
+            state.LastRejectedDestination = default;
+        }
         state.Route = route;
         state.Map = map;
         state.Anchor = current;
@@ -411,11 +430,11 @@ internal static class PlayerbotMotion
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
             string mode = MoveModeOf(route, route.NextPoint, nextPoint);
-            int rejectedFrom = route.NextPoint;
             AdvancePastRejectedWaypoint(route, state.Anchor);
             int consecutive = NoteStepRejected(session, player, state, route, now);
             PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now, consecutive, rejectReason ?? "NoGroundSupport", mode);
-            StopAt(session, player, state, state.Anchor, state.Heading, Math.Max(rejectedFrom, route.NextPoint), now);
+            route.NextPoint = route.Points.Count;
+            StopAt(session, player, state, state.Anchor, state.Heading, route.Points.Count, now);
             return;
         }
 
@@ -425,6 +444,7 @@ internal static class PlayerbotMotion
             AdvancePastRejectedWaypoint(route, state.Anchor);
             int consecutive = NoteStepRejected(session, player, state, route, now);
             PlayerbotMotionAnomalies.ReportMoveRejected(session, player, "a heartbeat", valid, now, consecutive, "NoGroundSupport", mode);
+            route.NextPoint = route.Points.Count;
             state.Clear();
             return;
         }
