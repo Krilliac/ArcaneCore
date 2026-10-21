@@ -101,6 +101,12 @@ internal sealed class PlayerbotPartyAI
     private PlayerbotPartyMode _mode;
     private bool _comeRequested;
     private ObjectGuid _ordered;
+
+    /// <summary>How long a fight target with no path is skipped when the bot chooses a target itself, as the brain's refused chase (<c>UnreachableTargetMs</c>).</summary>
+    internal const uint UnreachableTargetMs = 30_000;
+
+    /// <summary>The targets this bot found no path to, skipped for <see cref="UnreachableTargetMs"/> in <see cref="SelectTarget"/>; the leader's explicit choices are exempt. One thread (the bot's think).</summary>
+    private readonly PlayerbotUnreachableTargets _unreachable = new();
     private PlayerbotRoute? _route;
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
@@ -1532,9 +1538,13 @@ internal sealed class PlayerbotPartyAI
             && (player.Combat.IsInCombat || (master is not null && master.Combat.Victim is not null)))
             selected = PlayerbotParty.MarkedTarget(group.TargetIcons, FocusIcons, guid => map.FindObject(guid) as Unit,
                 unit => Distance(player, unit) <= PlayerbotParty.MarkRangeYards && IsValidTarget(player, unit));
-        selected ??= PlayerbotParty.SelectAttackTarget(null, masterVictim, own, members, unit => IsValidTarget(player, unit));
+        // A target the bot found no path to is skipped when the bot picks it itself (attackers of its own or of a member); the leader's explicit
+        // choices (an 'attack'/assist order, a raid mark, the leader's own victim) are honoured whatever the memory says.
+        uint now = unchecked((uint)Now);
+        bool Pickable(Unit unit) => IsValidTarget(player, unit) && (ReferenceEquals(unit, masterVictim) || !_unreachable.Has(unit.Guid, now));
+        selected ??= PlayerbotParty.SelectAttackTarget(null, masterVictim, own, members, Pickable);
         // FightThrough: what blocks the way to the master is fought, not run past (World:Playerbots:Follow:CatchUpMode).
-        if (selected is null && !stay && _follower.Blocker(player) is { } blocker && IsValidTarget(player, blocker)) selected = blocker;
+        if (selected is null && !stay && _follower.Blocker(player) is { } blocker && Pickable(blocker)) selected = blocker;
         return selected;
     }
 
@@ -1616,7 +1626,12 @@ internal sealed class PlayerbotPartyAI
                     return;
                 }
 
-                if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval) && target is Creature unreachable) _follower.NoteUnreachable(unreachable);
+                if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval) && target is Creature unreachable)
+                {
+                    _follower.NoteUnreachable(unreachable);
+                    NoteUnreachableTarget(unreachable);
+                }
+
                 return;
         }
 
@@ -1632,6 +1647,9 @@ internal sealed class PlayerbotPartyAI
         if (!_attacking || !ReferenceEquals(player.Combat.Victim, target))
             _attacking = Act(WorldOpcode.CmsgAttackswing, PlayerbotNavigation.GuidPayload(target.Guid.Value));
     }
+
+    /// <summary>The bot found no path to <paramref name="target"/>: it is skipped by <see cref="SelectTarget"/> for <see cref="UnreachableTargetMs"/> (a target the leader chose is still honoured).</summary>
+    internal void NoteUnreachableTarget(Creature target) => _unreachable.Mark(target.Guid, unchecked((uint)Now), UnreachableTargetMs);
 
     private void FaceTargetIfNeeded(Player player, Unit target)
     {
