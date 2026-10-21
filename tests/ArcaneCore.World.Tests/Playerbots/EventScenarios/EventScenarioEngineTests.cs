@@ -605,11 +605,10 @@ public sealed class EventScenarioEngineTests
         FakeBot held = rig.Host.Find("Siegebotd");
         rig.Engine.EventChanged(Event, active: true);
         rig.Tick();
-        uint until = rig.Host.Stays[held.Id]!.UntilMs;
         held.HeldBy = "is queued for a battleground";
         rig.Ticks(3);
 
-        Assert.Equal(until, rig.Host.Stays[held.Id]!.UntilMs); // not renewed
+        Assert.Null(rig.Host.Stays[held.Id]); // no stay for a bot held elsewhere (cleared, not left to the lease)
         Assert.Contains("siege waiting: 3/4 ready", rig.Status());
         Assert.Contains("held 1", rig.Status());
     }
