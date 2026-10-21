@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
@@ -1367,6 +1368,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (flat.Length() < yards) return from;
         return goal.Meeting + (Vector3.Normalize(flat) * yards);
     }
+
+    /// <summary>Scaffold: the approach point on the navigation mesh.</summary>
+    internal static Vector3 SnapToMesh(IPathfinder? pathfinder, uint mapId, Vector3 from, Vector3 point) => point;
 
     /// <summary>How far short of an instance entrance the group gathers before it goes in (<see cref="ApproachPoint"/>).</summary>
     internal const float ApproachYards = 15f;

@@ -122,6 +122,12 @@ internal sealed class PlayerbotGroupAI
 
     internal uint TargetEntry { get; private set; }
 
+    /// <summary>Scaffold: the last unit the bot fought.</summary>
+    internal ObjectGuid LastTargetGuid { get; private set; }
+
+    /// <summary>Scaffold: the entry of the last creature the bot fought.</summary>
+    internal uint LastTargetEntry { get; private set; }
+
     /// <summary>The creature the bot fights (inspection and tests); null while it fights a player.</summary>
     internal Creature? Target => _target as Creature;
 
@@ -864,6 +870,17 @@ internal sealed class PlayerbotGroupAI
 
         return _runRoute?.Points ?? [];
     }
+
+    /// <summary>Scaffold: how long a leader gives up a target it can plan no way to.</summary>
+    internal const uint NoPathShunMs = 60_000;
+
+    /// <summary>Scaffold: whether <paramref name="threat"/> is an obstacle on the leader's way to <paramref name="goal"/>.</summary>
+    internal static bool CountsAsObstacle(in PlayerbotThreat threat, bool civilian, Vector3 leader, Vector3 goal)
+        => Vector3.Distance(threat.Position, leader) <= ClearYards;
+
+    /// <summary>Scaffold: whether a candidate beats the best so far.</summary>
+    internal static bool Better(bool candidateOtherLevel, float candidateYards, bool haveBest, bool bestOtherLevel, float bestYards)
+        => !haveBest || candidateYards < bestYards;
 
     /// <summary>The nearest hostile creature within <see cref="ClearYards"/> of the leader that would attack the group (the way is cleared).</summary>
     private Creature? FindObstacle(Player player, PlayerbotGroupCoordinator.BotGroup group)
