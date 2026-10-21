@@ -53,6 +53,7 @@ public sealed partial class SpellSystem
 
         if (ReferenceEquals(useless, holder))
         {
+            holder.IsSlotLimited = true;
             return false;
         }
 

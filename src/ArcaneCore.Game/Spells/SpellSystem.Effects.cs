@@ -226,6 +226,10 @@ public sealed partial class SpellSystem
             {
                 holder.IsReflected = reflected;
                 AddAuraHolder(holder);
+                if (holder.IsRemoved && holder.IsSlotLimited)
+                {
+                    outcome.SlotLimited = true;
+                }
             }
 
             // The hit's procs when no direct damage fired them (heals, auras, utility; vmangos Spell.cpp:1349-1532).

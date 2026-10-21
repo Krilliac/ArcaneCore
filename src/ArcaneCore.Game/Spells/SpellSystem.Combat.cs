@@ -104,7 +104,7 @@ public sealed partial class SpellSystem
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target), critical: crit,
             durabilityLoss: true, reflected: reflected);
         OnDamageTaken(target, caster, dealt, periodic: false, absorbed, spell.Id);
-        RecordDamage(caster, target, spell, dealt, crit);
+        RecordDamage(caster, target, spell, dealt, crit, absorbed, resisted);
         uint spellHitInfo = crit ? SpellHitTypeCrit : 0;
         if (packetCast is not null && _outcome is { } outcome && outcome.MeleeSpellPacketEligible
             && ReferenceEquals(outcome.Cast, packetCast) && ReferenceEquals(outcome.Target, target)

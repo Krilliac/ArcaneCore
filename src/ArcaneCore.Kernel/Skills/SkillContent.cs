@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Talents;
 
 namespace ArcaneCore.Kernel.Skills;
 
@@ -92,7 +93,12 @@ public sealed class SpellRankChains
     private readonly FrozenDictionary<uint, byte> _rank;
     private readonly FrozenDictionary<uint, uint> _next;
 
-    public SpellRankChains(IEnumerable<SkillLineAbilityRecord> abilities, Func<uint, bool>? spellExists = null)
+    public SpellRankChains(IEnumerable<SkillLineAbilityRecord> abilities, IEnumerable<TalentRecord>? talents)
+        : this(abilities, null, talents)
+    {
+    }
+
+    public SpellRankChains(IEnumerable<SkillLineAbilityRecord> abilities, Func<uint, bool>? spellExists = null, IEnumerable<TalentRecord>? talents = null)
     {
         ArgumentNullException.ThrowIfNull(abilities);
         spellExists ??= static _ => true;
@@ -100,7 +106,35 @@ public sealed class SpellRankChains
         HashSet<uint> withAbilities = all.Select(a => a.SpellId).ToHashSet();
 
         // The reference iterates mSkillLineAbilityMapBySpellId (a multimap ordered by spell id).
+        // vmangos SpellMgr::LoadSpellChains (Spells/SpellMgr.cpp:1510-1541): link consecutive ranks of multi-rank talents first.
         var previous = new SortedDictionary<uint, uint>();
+        bool hasTalents = false;
+        if (talents is not null)
+        {
+            foreach (TalentRecord talent in talents.OrderBy(t => t.Id))
+            {
+                hasTalents = true;
+                if (talent?.RankSpells is not { Count: > 1 } ranks)
+                {
+                    continue;
+                }
+
+                for (int r = 0; r < ranks.Count - 1; r++)
+                {
+                    uint prevSpell = ranks[r];
+                    uint nextSpell = ranks[r + 1];
+                    if (prevSpell == 0 || nextSpell == 0 || prevSpell == nextSpell
+                        || !spellExists(prevSpell) || !spellExists(nextSpell))
+                    {
+                        continue;
+                    }
+
+                    previous.TryAdd(nextSpell, prevSpell);
+                }
+            }
+        }
+
+        HasTalents = hasTalents;
         foreach (SkillLineAbilityRecord ability in all.OrderBy(a => a.SpellId))
         {
             uint spell = ability.SpellId;
@@ -169,6 +203,8 @@ public sealed class SpellRankChains
 
     public static SpellRankChains Empty { get; } = new([]);
 
+    public bool HasTalents { get; }
+
     public int Count => _rank.Count;
 
     /// <summary>The rank (1 = first) of a ranked spell, 0 when it is in no chain (vmangos GetSpellRank, SpellMgr.h:534-540).</summary>
@@ -230,7 +266,8 @@ public sealed class SkillCatalog
         IEnumerable<SkillTierRecord> tiers,
         IEnumerable<SkillLineAbilityRecord> abilities,
         SpellLearnSkillTable? learnSkills = null,
-        Func<uint, bool>? spellExists = null)
+        Func<uint, bool>? spellExists = null,
+        IEnumerable<TalentRecord>? talents = null)
     {
         ArgumentNullException.ThrowIfNull(lines);
         ArgumentNullException.ThrowIfNull(raceClassInfos);
@@ -241,10 +278,11 @@ public sealed class SkillCatalog
         _tiers = ToUniqueDictionary(tiers, t => t.Id, "SkillTiers");
         _raceClassBySkill = raceClassInfos.GroupBy(r => r.SkillId).ToFrozenDictionary(g => g.Key, g => g.ToArray());
         SkillLineAbilityRecord[] abilityRows = abilities.ToArray();
+        Abilities = abilityRows;
         _abilitiesBySkill = abilityRows.GroupBy(a => a.SkillId).ToFrozenDictionary(g => g.Key, g => g.ToArray());
         _abilitiesBySpell = abilityRows.GroupBy(a => a.SpellId).ToFrozenDictionary(g => g.Key, g => g.ToArray());
         LearnSkills = learnSkills ?? SpellLearnSkillTable.Empty;
-        Ranks = new SpellRankChains(abilityRows, spellExists);
+        Ranks = new SpellRankChains(abilityRows, spellExists, talents);
     }
 
     public static SkillCatalog Empty { get; } = new([], [], [], []);
@@ -254,6 +292,8 @@ public sealed class SkillCatalog
 
     /// <summary>Spell ranks derived from the ability forward links.</summary>
     public SpellRankChains Ranks { get; }
+
+    public IReadOnlyList<SkillLineAbilityRecord> Abilities { get; }
 
     public int LineCount => _lines.Count;
 

@@ -142,7 +142,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
         int selected = outcome.EffectMask & facts.MeasurableMask;
         if (outcome.EffectMask != 0 && selected == 0) return; // nothing measurable aimed at this target (a self part of a mixed spell)
         var key = (cast.Caster.Guid.Value, cast.Spell.Id);
-        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || FullyDiminished(cast, outcome, facts, selected)))
+        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || FullyDiminished(cast, outcome, facts, selected) || outcome.SlotLimited))
         {
             if (_noEffect.ContainsKey(key)) _noEffect[key] = 0;
             return;
@@ -197,6 +197,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
     private bool Unmeasurable(SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {
         if ((selected & facts.DamageMask & ~facts.InstakillMask) == 0) return false;
+        if (outcome.Absorbed > 0 || outcome.Resisted > 0) return true;
         IReadOnlyList<SpellAuraHolder> holders = _gaps.System.GetAuras(outcome.Target);
         for (int i = 0; i < holders.Count; i++)
         {

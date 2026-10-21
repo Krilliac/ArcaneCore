@@ -1,9 +1,15 @@
+using ArcaneCore.Data.Talents;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells.Procs;
+using ArcaneCore.Game.Talents;
+using ArcaneCore.Kernel.Skills;
+using ArcaneCore.Kernel.Talents;
 using ArcaneCore.Kernel.WorldData.Procs;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Skills;
+using ArcaneCore.World.Talents;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -27,7 +33,7 @@ public sealed class SpellProcFeature : IWorldFeature
         _services = services;
         _logger = logger;
         Table = new SpellProcEventTable(
-            ranks: () => _services.GetService<SkillsFeature>()?.Catalog.Ranks,
+            ranks: ResolveRanks,
             spellExists: SpellExists,
             report: message => _logger.LogWarning("{Message}", message));
     }
@@ -71,4 +77,29 @@ public sealed class SpellProcFeature : IWorldFeature
     // With no spell content loaded every listed spell is assumed to exist (vmangos would drop the unknown ones).
     private bool SpellExists(uint spellId)
         => _services.GetService<SpellFeature>()?.System.Store is not { Count: > 0 } store || store.Get(spellId) is not null;
+
+    private SpellRankChains? ResolveRanks()
+    {
+        SkillCatalog? catalog = _services.GetService<SkillCatalog>() ?? _services.GetService<SkillsFeature>()?.Catalog;
+        if (catalog is { Ranks: { Count: > 0, HasTalents: true } ranks })
+        {
+            return ranks;
+        }
+
+        IEnumerable<TalentRecord>? talents = _services.GetService<TalentCatalog>()?.Talents
+            ?? _services.GetService<TalentFeature>()?.Catalog?.Talents;
+        if (talents is null
+            && _services.GetService<IConfiguration>()?[$"{TalentOptions.Section}:{nameof(TalentOptions.TalentDbcPath)}"] is { Length: > 0 } talentPath
+            && File.Exists(talentPath))
+        {
+            talents = TalentDbcReaders.LoadTalents(talentPath);
+        }
+
+        if (talents is null)
+        {
+            return catalog?.Ranks;
+        }
+
+        return new SpellRankChains(catalog?.Abilities ?? [], SpellExists, talents);
+    }
 }
