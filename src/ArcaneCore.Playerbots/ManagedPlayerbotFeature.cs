@@ -2526,13 +2526,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     // Rows this tick republishes are replaced. Every other row stays, including a bot that became active after
                     // `bots` was captured: its previous (stopped) row remains until the next tick publishes the running one.
+                    // Membership is re-checked here, under the gate, not taken from `sameActiveSet`: a drop off the world thread
+                    // (checkpoint conflict, delete, stop) removes the bot from _active and then, under this gate, its row. When that
+                    // drop lands between the version read above and this lock, `sameActiveSet` is stale and the dropped bot's
+                    // StatusOf (Faulted, session-closed: the drop kicked it) was re-appended after the drop had filtered it out,
+                    // a ghost row nothing removed again (CI run 39573816775). A bot still in _active here is either kept, or its
+                    // drop takes this gate after us and filters the row itself.
                     _republishedScratch.Clear();
                     _republishedScratch.EnsureCapacity(running);
                     _freshSnapshotScratch.Clear();
                     _freshSnapshotScratch.EnsureCapacity(running);
                     foreach (ActiveBot b in bots)
                     {
-                        if ((!sameActiveSet && !_active.ContainsKey(b.Record.BotId)) || b.Status is null) continue;
+                        if (b.Status is null || !_active.TryGetValue(b.Record.BotId, out ActiveBot? live) || !ReferenceEquals(live, b)) continue;
                         _republishedScratch.Add(b.Record.BotId);
                         _freshSnapshotScratch.Add(b.Status);
                     }

@@ -159,6 +159,11 @@ public sealed class PacketReaderTests
         Assert.False(new PacketReader([0xFF, 0xFF, 0xFF, 0xFF]).TryReadCount(int.MaxValue, out _)); // never negative as an int
     }
 
+    /// <remarks>
+    /// Measured through <see cref="ArcaneCore.Game.Tests.AllocationProbe"/>: a bare before/after window read one allocation quantum
+    /// (7952 bytes) under the full World suite while the reader allocated nothing, the GC-correlated noise the probe documents and
+    /// retries past (slot log spd-1-10, 2026-10-21; passed alone). A real allocation in the Try surface still fails every window.
+    /// </remarks>
     [Fact]
     public void TrySurface_DoesNotAllocate()
     {
@@ -166,9 +171,8 @@ public sealed class PacketReaderTests
         new Random(3).NextBytes(data);
         data[40] = 0;
         long total = 0;
-        for (int round = 0; round < 2; round++)
+        Action window = () =>
         {
-            long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 20_000; i++)
             {
                 var reader = new PacketReader(data);
@@ -183,13 +187,9 @@ public sealed class PacketReaderTests
                 MovementInfo.TryRead(ref reader, out _);
                 total += reader.Position;
             }
+        };
 
-            if (round == 1)
-            {
-                Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-            }
-        }
-
+        ArcaneCore.Game.Tests.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "PacketReader Try surface x20000");
         Assert.True(total > 0);
     }
 
