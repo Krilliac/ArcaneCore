@@ -25,10 +25,10 @@ internal sealed partial class PlayerbotBrain
     /// </summary>
     private bool TryFightPlayer(Player player, uint interval)
     {
-        Player? opponent = PlayerbotHostility.FirstProvokingPlayer(player);
         // A player the walk found no path to is set aside for PlayerbotPvpFight.UnreachableMs (a caster on a cliff: the bot would plan a chase it cannot walk at every think).
-        if (opponent is not null && Pvp.IsSkipped(opponent)) opponent = null;
+        Player? opponent = PlayerbotHostility.FirstProvokingPlayer(player, _pvpFight);
         if (opponent is null && _pvpFight is { Target: Player current } && PlayerbotHostility.IsHostilePlayer(player, current)
+            && !_pvpFight.IsSkipped(current)
             && Vector3.Distance(PlayerbotMotion.CurrentPosition(player), PlayerbotMotion.CurrentPosition(current)) <= PvpPursuitYards)
             opponent = current;
 

@@ -280,6 +280,33 @@ public sealed class PlayerbotDefendTests
     }));
 
     [Fact]
+    public Task DefenderFindsThreatenedByCreature_WhenACloserOneInThreatenedByIsSkipped() => Run(60f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        Map map = bot.Map!;
+        Creature closerSkipped = Spawn(rig.Host, bot, RaiderEntry, 1f, 0f, "skipped-threat", civilian: true);
+        Creature fartherValid = Spawn(rig.Host, bot, RaiderEntry + 1, 3f, 0f, "valid-threat", civilian: false);
+        foreach (Creature c in new[] { closerSkipped, fartherValid })
+        {
+            Assert.True(map.Combat.Attack(c, bot));
+            map.Combat.DealDamage(c, bot, 1);
+            Assert.True(map.Combat.AttackStop(c));
+            c.Combat.Threat.AddThreat(bot, 10f);
+        }
+
+        Assert.Empty(bot.Combat.Attackers);
+        Assert.Contains(closerSkipped, bot.Combat.ThreatenedBy);
+        Assert.Contains(fartherValid, bot.Combat.ThreatenedBy);
+        Assert.Same(closerSkipped, rig.Brain.FindDefensiveAttacker(bot, defend: false));
+        Assert.Same(fartherValid, rig.Brain.FindDefensiveAttacker(bot, defend: true));
+
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Same(fartherValid, rig.Brain.InspectionPvpTarget);
+        Assert.Same(fartherValid, bot.Combat.Victim);
+    }));
+
+    [Fact]
     public Task DefenderReturnsToPostAfterFight() => Run(4f, async rig =>
     {
         await PartyTestHost.InstallFlatGroundAsync(rig.Host, await rig.Host.OnWorldAsync(() => rig.BotPlayer.Z));

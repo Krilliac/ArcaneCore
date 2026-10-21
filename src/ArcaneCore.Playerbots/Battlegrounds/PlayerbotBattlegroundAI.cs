@@ -316,7 +316,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             EndRest(player);
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
-            Fight(player, enemy, interval, mustPursue: IsFlagCarrier(match, team, enemy));
+            Fight(player, enemy, interval, mustPursue: MustPursue(match, team, enemy));
             ObserveStill(player, match, enemy, interval);
             return;
         }
@@ -369,6 +369,10 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// <summary>The enemy carries the bot's own flag (Warsong Gulch): the one target a bot never gives up on, whatever the path.</summary>
     private static bool IsFlagCarrier(Battleground match, Team team, Unit unit)
         => match is WarsongGulch wsg && unit is Player enemy && wsg.FlagState(team) == WsgFlagState.OnPlayer && wsg.FlagPicker(team) == enemy.Guid;
+
+    /// <summary>The target is the carrier of the own flag (Warsong Gulch) or an Alterac Valley captain or general: a refused path never sets it aside.</summary>
+    private bool MustPursue(Battleground match, Team team, Unit unit)
+        => IsFlagCarrier(match, team, unit) || (unit is Game.Creatures.Creature creature && IsAlteracBoss(match, creature));
 
     /// <summary>
     /// The idle check of one think (<see cref="PlayerbotWarsongTactics.IsIdle"/>): a living bot out of combat that stood still for
@@ -594,13 +598,13 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             if (unit is Player attacker && IsEnemy(player, attacker, match, enemyTeam) && !_pvp.IsSkipped(attacker)) return attacker;
             if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker, requireHostile: false)
-                && !_pvp.IsSkipped(npcAttacker)) return npcAttacker;
+                && (IsAlteracBoss(match, npcAttacker) || !_pvp.IsSkipped(npcAttacker))) return npcAttacker;
         }
 
         if (_pvp.Target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f
             && !_pvp.IsSkipped(current)) return current;
-        if (match is AlteracValley && _pvp.Target is Game.Creatures.Creature currentNpc && IsEnemyCreature(player, currentNpc)
-            && Distance(player, currentNpc) <= EngageYards * 1.5f && !_pvp.IsSkipped(currentNpc)) return currentNpc;
+        if (match is AlteracValley && _pvp.Target is Game.Creatures.Creature currentNpc && IsAlteracBoss(match, currentNpc) is var currentBoss && IsEnemyCreature(player, currentNpc, deliberate: currentBoss)
+            && Distance(player, currentNpc) <= EngageYards * 1.5f && (currentBoss || !_pvp.IsSkipped(currentNpc))) return currentNpc;
 
         // The nearest within reach; of those, one on the bot's own level first (walls, cliffs, the floors of an AV base).
         Unit? nearest = null;
@@ -613,18 +617,18 @@ internal sealed partial class PlayerbotBattlegroundAI
             {
                 float distance = Distance(player, other);
                 bool otherLevel = PlayerbotPvpFight.OnOtherLevel(player, other);
-                if (nearest is null ? distance <= EngageYards : PlayerbotPvpFight.IsBetterTarget(otherLevel, distance, bestOtherLevel, best))
+                if (distance <= EngageYards && (nearest is not Player || PlayerbotPvpFight.IsBetterTarget(otherLevel, distance, bestOtherLevel, best)))
                 {
                     best = distance;
                     bestOtherLevel = otherLevel;
                     nearest = other;
                 }
             }
-            else if (match is AlteracValley && nearest is not Player && obj is Game.Creatures.Creature npc && IsEnemyCreature(player, npc) && !_pvp.IsSkipped(npc))
+            else if (match is AlteracValley && nearest is not Player && obj is Game.Creatures.Creature npc && IsAlteracBoss(match, npc) is var boss && IsEnemyCreature(player, npc, deliberate: boss) && (boss || !_pvp.IsSkipped(npc)))
             {
                 float distance = Distance(player, npc);
                 bool otherLevel = PlayerbotPvpFight.OnOtherLevel(player, npc);
-                if (nearest is null ? distance <= EngageYards : PlayerbotPvpFight.IsBetterTarget(otherLevel, distance, bestOtherLevel, best))
+                if (distance <= EngageYards && (nearest is null || PlayerbotPvpFight.IsBetterTarget(otherLevel, distance, bestOtherLevel, best)))
                 {
                     best = distance;
                     bestOtherLevel = otherLevel;

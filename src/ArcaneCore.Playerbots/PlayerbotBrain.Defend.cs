@@ -171,7 +171,7 @@ internal sealed partial class PlayerbotBrain
         if (player.MapId != post.MapId) return null;
         if (_pvpFight is { Target: { } current } && DefendTargetValid(player, map, post, current)) return current;
         // An attacker of the defender is always fought; a creature that only holds it on its threat list is skipped like a scanned one.
-        if (FindDefensiveAttacker(player) is { } creature && !DefendSkips(player, creature)) return creature;
+        if (FindDefensiveAttacker(player, defend: true) is { } creature) return creature;
 
         uint now = _session.World.NowMs;
         if (!_defendScanned || unchecked((int)(now - _defendScanAtMs)) >= DefendScanMs)
@@ -194,7 +194,7 @@ internal sealed partial class PlayerbotBrain
     {
         if (ReferenceEquals(unit.Combat.Victim, player) || player.Combat.Attackers.Contains(unit)) return false;
         if (unit is Creature creature && PlayerbotTargetFilter.IsCivilian(creature)) return true;
-        return Pvp.IsSkipped(unit) || PlayerbotPvpFight.OnOtherLevel(player, unit);
+        return _pvpFight?.IsSkipped(unit) == true || PlayerbotPvpFight.OnOtherLevel(player, unit);
     }
 
     /// <summary>Whether the defender may fight <paramref name="unit"/> now: attackable, inside the post (a little beyond it while chasing).</summary>
