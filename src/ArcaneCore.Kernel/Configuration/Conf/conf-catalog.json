@@ -7599,6 +7599,22 @@
       "isCollection": false
     },
     {
+      "path": "PerformanceLog:DetailLinesPerMapPerInterval",
+      "section": "PerformanceLog",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "1",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With a summary interval: the most detail lines written per map instance (and for the world) in one interval; the rest are counted in the summary (0: none).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#performancelog",
+      "isCollection": false
+    },
+    {
       "path": "PerformanceLog:SlowMapUpdate",
       "section": "PerformanceLog",
       "type": "int",
@@ -7610,6 +7626,22 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "Log one map's update longer than this many ms.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#performancelog",
+      "isCollection": false
+    },
+    {
+      "path": "PerformanceLog:SlowMapUpdateDetail",
+      "section": "PerformanceLog",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "200",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With a summary interval: one map's update longer than this many ms also gets its own detail line (0: never).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#performancelog",
       "isCollection": false
@@ -7647,6 +7679,22 @@
       "isCollection": false
     },
     {
+      "path": "PerformanceLog:SlowWorldUpdateDetail",
+      "section": "PerformanceLog",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "250",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With a summary interval: a world frame (or tick) longer than this many ms also gets its own detail line (0: never).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#performancelog",
+      "isCollection": false
+    },
+    {
       "path": "PerformanceLog:SlowWorldUpdateMeasure",
       "section": "PerformanceLog",
       "type": "SlowWorldUpdateMeasure",
@@ -7662,6 +7710,22 @@
       "reload": "start",
       "meaning": "What SlowWorldUpdate is compared with. Defaults to the retail frame interval. Values: `FrameInterval`, `TickDuration`.",
       "allowed": "FrameInterval | TickDuration",
+      "docs": "docs/reference/configuration.md#performancelog",
+      "isCollection": false
+    },
+    {
+      "path": "PerformanceLog:SummaryIntervalSeconds",
+      "section": "PerformanceLog",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "60",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Seconds between the slow-update summary lines. Slow world frames and slow map updates are counted over the interval and written as one summary (counts, p50/p95/max, top contributors per map, host verdicts) instead of one line each; only the updates over SlowWorldUpdateDetail / SlowMapUpdateDetail still get their own line, a few per map per interval. 0 writes every slow update as its own line (the vmangos behaviour) and ignores the Slow*Detail keys and DetailLinesPerMapPerInterval.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#performancelog",
       "isCollection": false
     },
