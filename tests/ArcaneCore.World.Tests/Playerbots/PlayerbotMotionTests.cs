@@ -84,19 +84,22 @@ public sealed class PlayerbotMotionTests
         try
         {
             using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
-            (bool started, bool complete) = await host.OnWorldAsync(() =>
+            (bool started, bool complete, int consecutive) = await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
-                WorldCollision.Of(host.World).Install(lineOfSight: new CliffAtX(Floor, -1000f));
-                player.Relocate(15f, 10f, 0f, 0f, host.World.NowMs);
-                var route = new PlayerbotRoute([new Vector3(0f, 0f, 0f), new Vector3(0f, 50f, 0f)], 50f, navigated: true);
+                // Off-leg at (15, 10, Floor) while route runs along X=0 from (0, 0, Floor) to (0, 50, Floor).
+                // Step toward (0, 50, Floor) crosses into X <= 14.5 where a 30-yard cliff drop rejects the un-navigated DirectStep.
+                WorldCollision.Of(host.World).Install(lineOfSight: new CliffBelowX(Floor, 14.5f));
+                player.Relocate(15f, 10f, Floor, 0f, host.World.NowMs);
+                var route = new PlayerbotRoute([new Vector3(0f, 0f, Floor), new Vector3(0f, 50f, Floor)], 50f, navigated: true);
                 session.ManagedBudget = new ManagedActionBudget(4);
                 bool follow = PlayerbotMotion.Follow(session, player, route, new PlayerbotOptions { Enabled = true, MoveSpeed = 7.0f }, host.World.NowMs);
-                return (follow, route.Complete);
+                return (follow, route.Complete, PlayerbotMotion.ConsecutiveRejections(player));
             });
 
             Assert.False(started);
             Assert.True(complete);
+            Assert.Equal(0, consecutive);
             Assert.Equal(0, capture.Count(Key(Code.StartBlocked)));
         }
         finally { session.Kick(); await session.ManagedClosed; }
@@ -113,6 +116,22 @@ public sealed class PlayerbotMotionTests
 
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
             => x >= dropStartX ? floor - 30f : floor;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        { info = default; return false; }
+    }
+
+    private sealed class CliffBelowX(float floor, float dropBelowX) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        { hit = to; return false; }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+            => x <= dropBelowX ? floor - 30f : floor;
 
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
         { info = default; return false; }

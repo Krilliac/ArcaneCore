@@ -286,13 +286,6 @@ internal static class PlayerbotMotion
                     break;
                 }
             }
-
-            if (!OnLeg(route, route.NextPoint, current))
-            {
-                route.NextPoint = route.Points.Count;
-                if (!keepMotion && (state.Active || moving)) Stop(session, player);
-                return false;
-            }
         }
         // The first stretch must be walkable before anything is announced.
         float probeStep = MathF.Max(speed * (HeartbeatIntervalMs / 1000f), 2f);
@@ -311,7 +304,8 @@ internal static class PlayerbotMotion
 
         if (noStretch || validStart is null)
         {
-            if (!noStretch)
+            bool driftedOffNavigatedLeg = route.LegsNavigated(route.NextPoint, route.NextPoint) && !OnLeg(route, route.NextPoint, current);
+            if (!noStretch && !driftedOffNavigatedLeg)
             {
                 string mode = MoveModeOf(route, route.NextPoint, probed);
                 TrySnapPlayerToFloor(map, player, ref current);
