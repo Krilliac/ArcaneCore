@@ -2159,6 +2159,86 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.Contains(world.Coordinator.Events, e => e.Contains("pushing on from waypoint 1", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task AWaivedLag_IsSpentByTheStepItMoves_EvenWhenTheNextWaypointLiesInTheSameDisk()
+    {
+        await using GroupTestWorld world = await StartEmptyWay();
+        world.Options.Party.TeleportToLeader = false;
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 24f, 28f, 32f); // 4 yards apart: the leader stands in the next disk too
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        var held = raid.Group!.Members.First(m => !m.Real && m.BotId != raid.Group.LeaderBotId);
+        void Hold()
+        {
+            Player far = world.World.Host.World.FindOnlinePlayer(held.Guid)!;
+            far.Relocate(Origin.X, Origin.Y + 120f, far.Z, 0, Now(world));
+        }
+
+        await world.OnWorldAsync(() => { KeepInCombat(world, raid); Hold(); return true; });
+        var changes = new List<(int Step, uint At)>();
+        int last = siege.Step;
+        bool two = await world.RunUntilAsync(PlayerbotSiegeCommander.PushThroughQuietMs + (2 * PlayerbotGroupCoordinator.LagHoldMs) + 60_000, () =>
+        {
+            KeepInCombat(world, raid);
+            Hold();
+            if (siege.Step != last)
+            {
+                last = siege.Step;
+                changes.Add((last, Now(world)));
+            }
+
+            return changes.Count >= 2;
+        });
+
+        string story = string.Join(", ", changes.Select(c => $"step {c.Step} at {c.At}")) + $": {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync();
+        Assert.True(two, "the step moved fewer than twice: " + story);
+        // The first bump is the waived one (after LagHoldMs at the waypoint); the second costs a fresh LagHoldMs, not 400 ms and not the 5 s of a retry.
+        Assert.Equal(changes[0].Step + 1, changes[1].Step);
+        uint gap = unchecked(changes[1].At - changes[0].At);
+        Assert.True(gap >= PlayerbotGroupCoordinator.LagHoldMs - 2_000, $"the second bump came {gap} ms after the first (a waiver is spent by the step it moves; the hold is {PlayerbotGroupCoordinator.LagHoldMs} ms): " + story);
+    }
+
+    [Fact]
+    public async Task APeerAwayAfterReachingTheWaypoint_WithAStragglerBeyondLagYards_GetsNeitherAWaiverNorACredit()
+    {
+        await using GroupTestWorld world = await StartEmptyWay();
+        world.Options.Party.TeleportToLeader = false;
+        (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 2);
+        PlayerbotSiegeRaid raid = siege.Raids[0], peer = siege.Raids[1];
+        var held = raid.Group!.Members.First(m => !m.Real && m.BotId != raid.Group.LeaderBotId);
+        void Hold()
+        {
+            Player far = world.World.Host.World.FindOnlinePlayer(held.Guid)!;
+            far.Relocate(Origin.X, Origin.Y + 120f, far.Z, 0, Now(world));
+        }
+
+        await world.OnWorldAsync(() => { KeepInCombat(world, raid); Hold(); return true; });
+        // Both raids stand at the waypoint; then the peer is kept away from it, as a defender post that keeps pulling it off would.
+        Assert.True(await world.RunUntilAsync(60_000, () =>
+        {
+            KeepInCombat(world, raid);
+            Hold();
+            return peer.FurthestWaypoint >= 0 && raid.FurthestWaypoint >= 0 && siege.Step == 0 && raid.AtWaypoint && raid.PushingThrough;
+        }), "the raids never stood at the first waypoint: " + await world.TraceAsync());
+        int step = siege.Step;
+        bool waived = false;
+        await world.RunUntilAsync(PlayerbotGroupCoordinator.LagHoldMs + 40_000, () =>
+        {
+            KeepInCombat(world, raid);
+            Hold();
+            foreach (var member in peer.Group!.Members.Where(m => !m.Real && m.Joined))
+                world.World.Host.World.FindOnlinePlayer(member.Guid)?.Relocate(Origin.X - 60f, Origin.Y, Origin.Z, 0, Now(world));
+            waived |= raid.LastFacts.LagWaived;
+            return siege.Step != step;
+        });
+
+        // The siege blocks a push while a peer is away from the waypoint, so no lag waiver runs for the straggler, and the credit has to wait for the lag.
+        Assert.Equal(step, siege.Step);
+        Assert.False(waived, "the lag was waived with the peer away: " + raid.LastFacts);
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("every raid has reached waypoint", StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// The old answer fixture: waypoint 2 lies 12 yards past waypoint 1, so a leader answering an attacker 29 yards past waypoint 1 walks through waypoint 2's disk, and back. The step moves by one at a time, and not while the leader is out answering.
     /// </summary>

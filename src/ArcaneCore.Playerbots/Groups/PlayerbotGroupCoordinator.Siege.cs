@@ -439,7 +439,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
         // Furthest-waypoint credit (CreditedStep): a lockstep that does not need the leaders at the waypoint at the same moment. Every raid's leader has stood at the waypoint the siege heads for
         // (or beyond it) at some time, so the step goes on by one, which keeps a defender post that drags the leaders off the waypoint from holding the siege at that step for good. It keeps the
-        // lockstep's lag rule (no member more than LagYards behind its leader unless waived, and a waiver is spent by the one step it moves) and is refused while a leader answers an attacker.
+        // lockstep's lag rule (no member more than LagYards behind its leader unless waived, and a waiver is spent by the one step it moves: SetStep restarts the lag clock) and is refused while a leader answers an attacker.
         // Lockstep: otherwise the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it. A raid
         // that pushes through its fight (PlayerbotSiegeCommander.PushOf) does not wait for the fight, but no raid moves the step while a living member
         // is more than LagYards behind its leader (the members of a pushing raid disengage and catch up).
@@ -479,6 +479,7 @@ public sealed partial class PlayerbotGroupCoordinator
             view.Raid.AtWaypoint = false;
             view.Raid.AtWaypointReal = false;
             view.Raid.EndAnswer();
+            view.Raid.LagSinceMs = 0; // a lag waiver is spent by the step it moves: the next one waits LagHoldMs afresh, even where the next waypoint lies in the same disk
             view.Facts = view.Facts with
             {
                 AtWaypoint = false, AtWaypointReal = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, MsQuietInCombat = 0, ObjectiveLeg = OnFinalLeg(siege), PushBlocked = false, LagWaived = false,
@@ -506,7 +507,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
     /// <summary>
     /// A raid blocks the furthest-waypoint credit while its leader answers an attacker (<see cref="PlayerbotSiegeRaid.AnsweringStep"/>) or a living member is more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind
-    /// it and the lag is not waived (<see cref="PlayerbotSiegeFacts.LagWaived"/>: the lockstep's rule, a waiver being spent by the one step it moves).
+    /// it and the lag is not waived (<see cref="PlayerbotSiegeFacts.LagWaived"/>: the lockstep's rule, a waiver being spent by the step it moves, which restarts the lag clock).
     /// </summary>
     internal static bool BlocksCredit(in PlayerbotSiegeFacts facts, PlayerbotSiegeRaid raid)
         => raid.AnsweringStep >= 0 || (facts.MaxLagYards > PlayerbotSiegeCommander.LagYards && !facts.LagWaived);
