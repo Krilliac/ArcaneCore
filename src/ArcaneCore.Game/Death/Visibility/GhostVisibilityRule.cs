@@ -165,7 +165,7 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
             {
                 if (repFc.Factions.Find(target.FactionTemplate) is not null && repFc.Factions.Find(viewer.FactionTemplate) is not null)
                 {
-                    return hooks.IsFriendly(target, viewer) && !hooks.IsHostileTo(target, viewer);
+                    return repFc.IsFriendly(target, viewer) && !hooks.IsHostileTo(target, viewer);
                 }
             }
             else

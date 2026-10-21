@@ -319,7 +319,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (_stage == Stage.AcceptConfirmation)
         {
             if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
+            {
+                uint acceptedQuest = _stageQuest;
                 ClearStage();
+                if (ReturnQuest == 0 || ReturnQuest == acceptedQuest)
+                    return false;
+            }
         }
         else if (_stage == Stage.RewardConfirmation)
         {
@@ -591,6 +596,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         bool returning = ReturnQuest != 0 && _stage == Stage.None;
         _roomWanted = false;
         QuestTarget? fallbackTurnIn = null;
+        QuestTarget? withinReachStarter = null;
+        QuestTarget? distantReturnTurnIn = null;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (services.Deps.Creatures?.Find(player, guid, NpcFlags.QuestGiver) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
@@ -599,13 +606,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (_stage != Stage.None && npc.Guid != _stageNpc)
                 continue;
 
+            bool withinReach = WithinReach(player, npc);
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
                 if (!services.IsRewardable(id) || IsRefused(id) || IsGiverWait(id)) continue;
                 EndGiverWait(id, npc.Guid);
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
-                if (returning && id != ReturnQuest && !WithinReach(player, npc))
+                if (returning && id != ReturnQuest && !withinReach)
                     continue;
                 if (services.Quests.Get(id) is not { } quest || state.Quests.Get(id) is not { } status)
                     continue;
@@ -617,26 +625,18 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         Stage.RewardChoice => QuestAction.RewardChoice,
                         _ => QuestAction.Complete,
                     };
-                    if (!returning || id == ReturnQuest)
-                        return new QuestTarget(npc, quest, action);
-                    fallbackTurnIn ??= new QuestTarget(npc, quest, action);
+                    var candidate = new QuestTarget(npc, quest, action);
+                    if (!returning || (id == ReturnQuest && withinReach))
+                        return candidate;
+                    if (id == ReturnQuest)
+                        distantReturnTurnIn ??= candidate;
+                    else
+                        fallbackTurnIn ??= candidate;
                 }
             }
 
-        }
-
-        if (fallbackTurnIn is not null)
-            return fallbackTurnIn;
-
-        foreach (ObjectGuid guid in player.VisibleObjects)
-        {
-            if (services.Deps.Creatures?.Find(player, guid, NpcFlags.QuestGiver) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
-                || (npc.NpcFlags & NpcFlags.QuestGiver) == 0)
-                continue;
-            if (_stage != Stage.None && npc.Guid != _stageNpc)
-                continue;
             bool entrySuspended = Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true;
-            if (entrySuspended || (returning && !WithinReach(player, npc)))
+            if (entrySuspended || (returning && !withinReach))
                 continue;
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))
@@ -670,12 +670,15 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 else if (_stage != Stage.Accept && (services.CanTakeQuest(player, id) != true
                     || state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }))
                     continue;
-                return new QuestTarget(npc, quest,
+                var starterCandidate = new QuestTarget(npc, quest,
                     _stage == Stage.Accept ? QuestAction.Accept : QuestAction.AcceptQuery);
+                if (!returning)
+                    return starterCandidate;
+                withinReachStarter ??= starterCandidate;
             }
         }
 
-        return null;
+        return fallbackTurnIn ?? withinReachStarter ?? distantReturnTurnIn;
     }
 
     /// <summary>
