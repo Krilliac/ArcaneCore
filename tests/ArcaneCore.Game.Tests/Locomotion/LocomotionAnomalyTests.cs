@@ -477,6 +477,18 @@ public sealed class LocomotionAnomalyTests
     }
 
     [Fact]
+    public void UnderMap_Report_CarriesTheWorldItWasMadeIn()
+    {
+        (WorldRuntime world, Player player) = VoidSetup(4_109_001);
+        using AnomalyCapture capture = CaptureFor(4_109_001);
+
+        FallTo(world, player, -501f);
+
+        AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == UnderMapKey);
+        Assert.Same(world.Identity, notice.Origin);
+    }
+
+    [Fact]
     public void UnderMap_AtAndAboveTheVoidHeight_AndForAGameMaster_IsSilent()
     {
         (WorldRuntime world, Player player) = VoidSetup(4_105_002);

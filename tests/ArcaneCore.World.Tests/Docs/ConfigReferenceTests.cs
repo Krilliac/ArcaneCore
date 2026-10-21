@@ -149,6 +149,41 @@ public sealed class ConfigReferenceTests
         Assert.Null(summaries.Find(typeof(Outer), "Missing"));
     }
 
+    [Fact]
+    public void SourceSummaries_FindARecordStruct_TwoTypesOnOneLine_AndNothingForAGenericType()
+    {
+        const string source = """
+            public record struct RecStruct
+            {
+                /// <summary>Rec size.</summary>
+                public int Size { get; set; }
+            }
+            public sealed class First { } public sealed class Second
+            {
+                /// <summary>Second size.</summary>
+                public int Size { get; set; }
+            }
+            public sealed class Gen<T>
+            {
+                /// <summary>Gen size.</summary>
+                public int Size { get; set; }
+            }
+            """;
+        var summaries = new ConfigSourceSummaries([source]);
+        Assert.Equal("Rec size.", summaries.Find(typeof(RecStruct), "Size"));
+        Assert.Null(summaries.Find(typeof(First), "Size")); // declared first on the line, with an empty body
+        Assert.Equal("Second size.", summaries.Find(typeof(Second), "Size"));
+        Assert.Null(summaries.Find(typeof(Gen<int>), "Size")); // type.Name is "Gen`1": never a declared name
+    }
+
+    private record struct RecStruct;
+
+    private sealed class Gen<T>;
+
+    private sealed class First;
+
+    private sealed class Second;
+
     // Names only: the summaries reader matches by type name.
     private sealed class Outer;
 

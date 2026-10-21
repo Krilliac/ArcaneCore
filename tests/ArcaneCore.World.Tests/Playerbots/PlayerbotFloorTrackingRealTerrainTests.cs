@@ -41,9 +41,10 @@ public sealed class PlayerbotFloorTrackingRealTerrainTests : RealTerrainNavigati
         PathResult direct = await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.FindPath(start, goal));
         output.WriteLine($"start {start} goal {goal} at {terrain.Player.X},{terrain.Player.Y},{terrain.Player.Z}; mesh path {direct.Type} {direct.Points.Count} points");
         Assert.NotNull(route);
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n =>
-            n.Key is "bot-motion/under-map" or "bot-motion/airwalk" or "move/under-map"
-            && n.Subject.Contains(terrain.Player.Name, StringComparison.Ordinal));
+        // This world's reports only: every real-terrain bot has the same name, and other classes' walks run at the same time. Both
+        // sources stamp their reports with the world (PlayerbotAnomalies.Report, UndermapObserver).
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(terrain.Host.World, n =>
+            n.Key is "bot-motion/under-map" or "bot-motion/airwalk" or "move/under-map");
         float worstUnder = 0f, worstAbove = 0f;
         int samples = 0;
         for (int think = 0; think < 120; think++)

@@ -23,8 +23,8 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>
 /// Base of the real-terrain bot test classes: the world on the real terrain (<see cref="Terrain"/>) and the clocks they share. The
 /// classes were once one partial class; xUnit runs the tests of a class one after another and the classes in parallel, so they are
-/// separate classes now (the long walks would otherwise be the floor of the whole run). Nothing here is static state: every test starts
-/// its own world.
+/// separate classes now (the long walks would otherwise be the floor of the whole run). Every test starts its own world; the only static
+/// members are immutable (read-only coordinates; <see cref="LiveOptions"/> builds a fresh options object per use).
 /// </summary>
 public abstract class RealTerrainNavigationTestBase
 {
@@ -224,7 +224,7 @@ public abstract class RealTerrainNavigationTestBase
         public void Attach(WorldRuntime world) => world.UseManualClock();
     }
 
-    protected static readonly PlayerbotOptions LiveOptions = new() { MaxPathPoints = 128, MaxRouteYards = 2000 };
+    protected static PlayerbotOptions LiveOptions => new() { MaxPathPoints = 128, MaxRouteYards = 2000 };
 
     // Innkeeper Kauth (creature 6747), Bloodhoof Village; Innkeeper Keldamyr (6736), Dolanaar.
     protected static readonly Vector3 InnkeeperKauth = new(-2365.4f, -347.3f, -8.9f);
@@ -272,7 +272,6 @@ public abstract class RealTerrainNavigationTestBase
     protected static readonly Vector3 CryptStart = new(1676.35f, 1677.45f, 121.67f);
     protected static readonly Vector3 ColdridgeAfterRevive = new(-6222.2f, 236.17f, 388.48f);
     protected static readonly Vector3 InnBesidePestle = new(-9465.6f, 35.2f, 57.0f);
-
 
     /// <summary>The map's region graph for the bots' filter, waiting for its build.</summary>
     internal static async Task<NavRegionGraph> RegionGraphAsync(Terrain terrain, uint map)
