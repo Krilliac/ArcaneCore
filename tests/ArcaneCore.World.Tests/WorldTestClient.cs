@@ -222,6 +222,20 @@ internal sealed class WorldTestClient : IAsyncDisposable
     public async Task<ChatMessage> ReadChatAsync(TimeSpan? timeout = null)
         => ChatMessage.Parse(await ReadUntilAsync(WorldOpcode.SmsgMessagechat, timeout));
 
+    /// <summary>
+    /// Read until the next <see cref="ChatType.System"/> chat line, the type every command reply uses, and decode it. Unlike
+    /// <see cref="ReadChatAsync"/> it skips /say, emote and whisper lines from other players: a managed bot near the client greets
+    /// a newly arrived player on its own schedule, and that greeting can land between two lines of a command's reply.
+    /// </summary>
+    public async Task<ChatMessage> ReadSystemChatAsync(TimeSpan? timeout = null)
+    {
+        while (true)
+        {
+            ChatMessage message = await ReadChatAsync(timeout);
+            if (message.Type == ChatType.System) return message;
+        }
+    }
+
     /// <summary>Read packets until one with <paramref name="opcode"/> arrives; fails on timeout.</summary>
     public async Task<byte[]> ReadUntilAsync(WorldOpcode opcode, TimeSpan? timeout = null)
     {
