@@ -42,6 +42,7 @@ internal sealed class PlayerbotMount
     private uint _backoffUntil;
     private int _failures;
     private bool _casting;
+    private uint _activeSpellId;
     private uint _scanAt;
     private bool _scanned;
     private PlayerbotMountChoice _choice;
@@ -65,16 +66,27 @@ internal sealed class PlayerbotMount
     private bool Step(WorldSession session, Player player, PlayerbotRoute route, PlayerbotOptions options)
     {
         uint now = session.World.NowMs;
+        if ((player.UnitFlags & UnitFlags.Looting) != 0)
+        {
+            player.UnitFlags &= ~UnitFlags.Looting;
+        }
+
         // Nothing to ride on, scanned a moment ago: no lookup, no route walk, nothing, until the next scan is due.
         if (!_casting && _scanned && _choice.Kind == PlayerbotMountKind.None && unchecked((int)(now - _scanAt)) < 0) return false;
         SpellFeature? spells = session.Services.GetService<SpellFeature>();
         if (spells is null) return false;
         if (_casting)
         {
-            if (MountService.IsMounted(player)) { _casting = false; _failures = 0; return false; }
-            if (IsCasting(spells, player)) return true;
+            if (MountService.IsMounted(player)) { _casting = false; _activeSpellId = 0; _failures = 0; return false; }
+            if (IsCasting(spells, player, _activeSpellId)) return true;
             _casting = false;
-            Fail(session, player, now, "mount cast ended without applying mount aura");
+            _activeSpellId = 0;
+            if (CanMountHere(player) && player.StandState == StandState.Stand
+                && !PlayerbotMotion.ControlLost(player) && !player.Movement.HasFlag(MovementFlags.MaskMoving)
+                && !RefusedForNow(session))
+            {
+                Fail(session, player, now, "mount cast ended without applying mount aura");
+            }
             return false;
         }
 
@@ -93,6 +105,12 @@ internal sealed class PlayerbotMount
         if (player.Map is not { } map || !map.Collision.IsOutdoors(player.X, player.Y, player.Z))
         {
             _backoffUntil = Math.Max(1u, unchecked(now + IndoorsRetryMs));
+            return false;
+        }
+
+        if (_choice.Kind == PlayerbotMountKind.Spell && !CanCastMountSpell(spells.System, player, _choice.SpellId))
+        {
+            _backoffUntil = Math.Max(1u, unchecked(now + TransientRetryMs));
             return false;
         }
 
@@ -124,7 +142,13 @@ internal sealed class PlayerbotMount
 
         if (!sent) return true; // no budget left this think: ask again at the next
         if (MountService.IsMounted(player)) { _failures = 0; return false; }
-        if (IsCasting(spells, player)) { _casting = true; return true; }
+        uint expectedSpell = attempted.Kind == PlayerbotMountKind.Spell ? attempted.SpellId : 0;
+        if (IsCasting(spells, player, expectedSpell))
+        {
+            _casting = true;
+            _activeSpellId = spells.System.GetState(player.Guid)?.CurrentCast?.Spell.Id ?? attempted.SpellId;
+            return true;
+        }
         if (RefusedForNow(session))
         {
             // The global cooldown, a cast still ending, a step not yet stopped: ask again in a moment; the bot has not failed to ride.
@@ -136,6 +160,35 @@ internal sealed class PlayerbotMount
             ? $"mount spell {attempted.SpellId} cast was refused"
             : $"mount item {attempted.ItemEntry} (spell {attempted.SpellId}) use was refused");
         return false;
+    }
+
+    private static bool CanCastMountSpell(SpellSystem system, Player player, uint spellId)
+    {
+        if (system.Store.Get(spellId) is not { } spell) return false;
+        if (system.CheckCasterState(player, spell) != SpellCastResult.CastOk) return false;
+        if (spell.StartRecoveryTime > 0 && !system.IsGlobalCooldownReady(player, spell.StartRecoveryCategory)) return false;
+        foreach (InitialSpellCooldown cooldown in system.GetActiveCooldowns(player))
+        {
+            if (cooldown.SpellId == spell.Id || (spell.Category != 0 && cooldown.Category == spell.Category)) return false;
+        }
+        return HasPower(player, spell);
+    }
+
+    private static bool HasPower(Player player, SpellInfo spell)
+    {
+        if (spell.PowerType == SpellMath.PowerHealth)
+        {
+            int healthCost = spell.CalculatePowerCost(player.Level, player.Health, player.MaxHealth,
+                player.GetUInt32(UpdateFields.UnitFieldBaseHealth), player.GetUInt32(UpdateFields.UnitFieldBaseMana), player.Health);
+            return player.Health > (uint)healthCost;
+        }
+
+        if (spell.PowerType is < 0 or > (int)PowerType.Happiness) return true;
+        var power = (PowerType)spell.PowerType;
+        uint current = SpellSystem.GetPower(player, power);
+        int cost = spell.CalculatePowerCost(player.Level, current, player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power),
+            player.GetUInt32(UpdateFields.UnitFieldBaseHealth), player.GetUInt32(UpdateFields.UnitFieldBaseMana), player.Health);
+        return current >= (uint)cost;
     }
 
     /// <summary>The server's cast result for the attempt just sent names a reason that passes by itself (see <see cref="IsTransientRefusal"/>).</summary>
@@ -150,9 +203,11 @@ internal sealed class PlayerbotMount
         return false;
     }
 
-    /// <summary>A cast refusal that is only about timing: the global cooldown or the spell not ready, a cast in progress, the bot still moving.</summary>
+    /// <summary>A cast refusal that is only about timing or temporary caster state: the global cooldown or the spell not ready, a cast in progress, the bot still moving, mana/silence, or water.</summary>
     internal static bool IsTransientRefusal(SpellCastResult result)
-        => result is SpellCastResult.NotReady or SpellCastResult.SpellInProgress or SpellCastResult.ItemNotReady or SpellCastResult.Moving;
+        => result is SpellCastResult.NotReady or SpellCastResult.SpellInProgress or SpellCastResult.ItemNotReady or SpellCastResult.Moving
+            or SpellCastResult.NoPower or SpellCastResult.Silenced or SpellCastResult.Pacified
+            or SpellCastResult.TryAgain or SpellCastResult.OnlyAbovewater;
 
     private void Fail(WorldSession session, Player player, uint now, string detail)
     {
@@ -168,12 +223,16 @@ internal sealed class PlayerbotMount
     /// <summary>True while the bot's mount-up cast is running: walking stuck clocks do not run then (the bot stands still to cast).</summary>
     internal static bool IsBusy(WorldSession session) => States.TryGetValue(session, out PlayerbotMount? state) && state._casting;
 
-    /// <summary>Out of combat, alive, in no instance or battleground, not swimming, not in a form that cannot ride (a warrior's stance can), not on a taxi.</summary>
+    /// <summary>Out of combat, alive, not looting, in no instance or battleground where mounts are forbidden, not swimming or in deep water, not in a form that cannot ride (a warrior's stance can), not on a taxi.</summary>
     internal static bool CanMountHere(Player player)
         => player.IsAlive && !player.Combat.IsInCombat && (player.Flags & PlayerFlags.Ghost) == 0
-            && player.Map is { Template: not ({ IsDungeon: true } or { IsBattleground: true }) }
+            && (player.UnitFlags & (UnitFlags.TaxiFlight | UnitFlags.Looting)) == 0
+            && player.Map is { Template: { IsBattleground: false } template } map
+            && !template.IsDungeon && MountCastCheck.IsMountAllowed(template)
+            && map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId != 35
             && !player.Movement.HasFlag(MovementFlags.Swimming)
-            && (player.UnitFlags & UnitFlags.TaxiFlight) == 0
+            && (player.Locomotion.Environment & (EnvironmentFlags.InWater | EnvironmentFlags.HighLiquid))
+                != (EnvironmentFlags.InWater | EnvironmentFlags.HighLiquid)
             && !FormInterlocks.IsInDisallowedMountForm(player);
 
     private static float RemainingYards(Player player, PlayerbotRoute route)
@@ -189,8 +248,11 @@ internal sealed class PlayerbotMount
         return total;
     }
 
-    private static bool IsCasting(SpellFeature spells, Player player)
-        => spells.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting };
+    private static bool IsCasting(SpellFeature spells, Player player, uint expectedSpellId = 0)
+        => spells.System.GetState(player.Guid)?.CurrentCast is
+            { State: SpellCastState.Preparing or SpellCastState.Casting } pending
+            && ReferenceEquals(pending.Caster, player)
+            && (expectedSpellId == 0 || pending.Spell.Id == expectedSpellId);
 
     /// <summary>The managed packets that talk to an NPC, loot, or attack: a mounted bot gets off before them.</summary>
     internal static bool NeedsDismount(WorldOpcode opcode) => opcode is WorldOpcode.CmsgGossipHello or WorldOpcode.CmsgGossipSelectOption
@@ -203,22 +265,30 @@ internal sealed class PlayerbotMount
         or WorldOpcode.CmsgSpiritHealerActivate or WorldOpcode.CmsgActivatetaxi
         or WorldOpcode.CmsgActivatetaxiexpress;
 
-    /// <summary>Takes the bot's mount off when <paramref name="opcode"/> is one a rider cannot send. Called on the world thread by <c>TryManagedAction</c>.</summary>
+    /// <summary>Takes the bot's mount off and clears any pending mount-up cast state.</summary>
+    internal static void Dismount(WorldSession session, Player player)
+    {
+        if (States.TryGetValue(session, out PlayerbotMount? state))
+        {
+            state._casting = false;
+            state._activeSpellId = 0;
+        }
+        if (!MountService.IsMounted(player) || session.Services.GetService<SpellFeature>() is not { } spells) return;
+        spells.System.RemoveSpellsCausingAura(player, AuraType.Mounted);
+        if (MountService.IsMounted(player)) MountService.Unmount(spells.System, player);
+    }
+
+    /// <summary>Takes the bot's mount off (and cancels any taxi-blocking shapeshift form before a flight request) when <paramref name="opcode"/> is one a rider cannot send. Called on the world thread by <c>TryManagedAction</c>.</summary>
     internal static void DismountForAction(WorldSession session, Player player, WorldOpcode opcode)
     {
         if (!NeedsDismount(opcode)) return;
-        bool mounted = MountService.IsMounted(player);
-        bool taxiShapeshifted = opcode is WorldOpcode.CmsgActivatetaxi or WorldOpcode.CmsgActivatetaxiexpress
-            && FormInterlocks.BlocksTaxi(player);
-        if ((!mounted && !taxiShapeshifted) || session.Services.GetService<SpellFeature>() is not { } spells) return;
-        if (taxiShapeshifted)
+        if (opcode is WorldOpcode.CmsgActivatetaxi or WorldOpcode.CmsgActivatetaxiexpress
+            && FormInterlocks.BlocksTaxi(player)
+            && session.Services.GetService<SpellFeature>() is { } taxiSpells)
         {
-            spells.System.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
+            taxiSpells.System.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
             if (FormInterlocks.BlocksTaxi(player)) player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
         }
-        if (!mounted) return;
-        spells.System.RemoveSpellsCausingAura(player, AuraType.Mounted);
-        if (MountService.IsMounted(player)) MountService.Unmount(spells.System, player);
-        For(session)._casting = false;
+        Dismount(session, player);
     }
 }
