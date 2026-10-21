@@ -23,6 +23,12 @@ internal sealed class PlayerbotPvpFight(WorldSession session, PlayerbotCombatSpe
     /// <summary>The unit the bot fights (inspection and tests); null between fights.</summary>
     internal Unit? Target { get; set; }
 
+    /// <summary>How long a target the bot found no path to is skipped when it chooses again (the brain's <c>UnreachableTargetMs</c>).</summary>
+    internal const uint UnreachableMs = 30_000;
+
+    /// <summary>The targets the walk refused, each skipped for <see cref="UnreachableMs"/> (<see cref="IsSkipped"/>). Cleared by <see cref="Forget"/>.</summary>
+    internal PlayerbotUnreachableTargets Unreachable { get; } = new();
+
     /// <summary>The attack swing was submitted for <see cref="Target"/>.</summary>
     internal bool Attacking { get; set; }
 
@@ -32,9 +38,11 @@ internal sealed class PlayerbotPvpFight(WorldSession session, PlayerbotCombatSpe
     /// <summary>
     /// One think of the fight against <paramref name="target"/>: cast, else keep the fighting distance, else face and swing. A new target resets the
     /// fight state and the route (<paramref name="dropRoute"/>). <paramref name="walkTo"/> walks to a point (the goal, the think interval, whether
-    /// it is a chase) and answers false when the walk is refused, which drops the target.
+    /// it is a chase) and answers false when the walk is refused, which drops the target and remembers it as unreachable for
+    /// <see cref="UnreachableMs"/> (<see cref="Unreachable"/>), unless <paramref name="mustPursue"/>: the named flag carrier and the objectives
+    /// of a battleground script are never set aside, so a refusal only drops the target for this think.
     /// </summary>
-    internal void Fight(Player player, Unit target, uint interval, Func<Vector3, uint, bool, bool> walkTo, Action dropRoute)
+    internal void Fight(Player player, Unit target, uint interval, Func<Vector3, uint, bool, bool> walkTo, Action dropRoute, bool mustPursue = false)
     {
         if (!ReferenceEquals(Target, target))
         {
@@ -67,7 +75,12 @@ internal sealed class PlayerbotPvpFight(WorldSession session, PlayerbotCombatSpe
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(session, player);
                 return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
-                if (!walkTo(Position(target), interval, true)) Target = null;
+                if (!walkTo(Position(target), interval, true))
+                {
+                    if (!mustPursue) Unreachable.Mark(target.Guid, session.World.NowMs, UnreachableMs);
+                    Target = null;
+                }
+
                 return;
         }
 
@@ -89,6 +102,22 @@ internal sealed class PlayerbotPvpFight(WorldSession session, PlayerbotCombatSpe
         if (!Attacking || !ReferenceEquals(player.Combat.Victim, target))
             Attacking = Groups.PlayerbotGroupCoordinator.Act(session, WorldOpcode.CmsgAttackswing, PlayerbotNavigation.GuidPayload(target.Guid.Value), budgeted: true);
     }
+
+    /// <summary>The bot found no path to <paramref name="unit"/> within the last <see cref="UnreachableMs"/>: a choice skips it.</summary>
+    internal bool IsSkipped(Unit unit) => Unreachable.Has(unit.Guid, session.World.NowMs);
+
+    /// <summary>Forgets the unreachable targets (the bot leaves the match or the post).</summary>
+    internal void Forget() => Unreachable.Clear();
+
+    /// <summary>
+    /// Whether a candidate beats the best so far when picking among targets: one on the bot's level (<see cref="PlayerbotTargetFilter.OnOtherLevel"/>
+    /// false) before one on another level (a wall, a cliff, another floor of a base), then the nearer. Of equals the first met wins.
+    /// </summary>
+    internal static bool IsBetterTarget(bool candidateOtherLevel, float candidateYards, bool bestOtherLevel, float bestYards)
+        => candidateOtherLevel != bestOtherLevel ? !candidateOtherLevel : candidateYards < bestYards;
+
+    /// <summary><paramref name="unit"/> stands on another level than <paramref name="player"/> (heights more than <see cref="Groups.PlayerbotSiegeCommander.WaypointLevelYards"/> apart).</summary>
+    internal static bool OnOtherLevel(Player player, Unit unit) => PlayerbotTargetFilter.OnOtherLevel(Position(player), Position(unit));
 
     /// <summary>Stop swinging (CMSG_ATTACKSTOP when the bot has a victim) and forget the target.</summary>
     internal void Stop(Player player)

@@ -79,7 +79,7 @@ internal sealed partial class PlayerbotBattlegroundAI
                 Activity = objective.Kind == AvObjectiveKind.KillCaptain ? "av-captain" : "av-general";
                 TargetEntry = boss.Entry;
                 // Within reach the fight picks it (or its guards first, the nearest enemy); until then the bot closes in.
-                if (Distance(player, boss) <= EngageYards && IsEnemyCreature(player, boss)) Fight(player, boss, interval);
+                if (Distance(player, boss) <= EngageYards && IsEnemyCreature(player, boss, deliberate: true)) Fight(player, boss, interval, mustPursue: true);
                 else WalkTo(player, Position(boss), interval, toward: true);
                 return;
             case AvObjectiveKind.Advance:
@@ -119,6 +119,21 @@ internal sealed partial class PlayerbotBattlegroundAI
 
     private static Creature? Living(Creature? creature, Map map)
         => creature is { IsInWorld: true, IsAlive: true } && ReferenceEquals(creature.Map, map) ? creature : null;
+
+    /// <summary>An Alterac Valley captain or general (<see cref="AvObjectiveKind.KillCaptain"/>, <see cref="AvObjectiveKind.KillGeneral"/>): never skipped or filtered as a civilian.</summary>
+    private bool IsAlteracBoss(Battleground match, Creature creature)
+    {
+        if (match is not AlteracValley av) return false;
+        PlayerbotAlteracValleyState state = PlayerbotAlteracValleyState.For(av);
+        if (ReferenceEquals(creature, state.Captains[0]) || ReferenceEquals(creature, state.Captains[1])
+            || ReferenceEquals(creature, state.Generals[0]) || ReferenceEquals(creature, state.Generals[1]))
+            return true;
+        if (creature.Spawn is not { } spawn || _session.Services.GetService<BattlegroundFeature>() is not { } feature) return false;
+        foreach ((byte e1, byte _) in feature.Events.CreatureEvents(spawn.Guid))
+            if (e1 is AlteracValley.EventCaptainAlliance or AlteracValley.EventCaptainHorde or AlteracValley.EventBossAlliance or AlteracValley.EventBossHorde)
+                return true;
+        return false;
+    }
 
     /// <summary>The node signature: each node's owner and state, three bits apiece (a change makes the banners due for a rescan).</summary>
     private static long Signature(AlteracValley av)

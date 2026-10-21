@@ -20,6 +20,7 @@ server's LFG queue): the matching is ArcaneCore's own.
 | `PlayerbotGroupContent.cs` | The pure rules: which content needs a group and how big, who can tank or heal, the matching (`Match`). Unit tested. |
 | `PlayerbotGroupCoordinator.cs` | The world feature: needs, matching, formation through real packets, the group's state machine, the GM report. |
 | `PlayerbotGroupAI.cs` | One per member: what a bot does while it is in a bot-led group, instead of the brain. |
+| `PlayerbotFightWatch.cs` | The no-progress watch of one bot's group fight (health drop or distance closed within 20 s). |
 | `PlayerbotRun*.cs`, `PlayerbotGroupCoordinator.Runs.cs` | Dungeon and raid runs: catalogue, options, state machine, route, matching and the entry waiver (below, "Dungeon and raid runs"). |
 
 Changes outside the folder, all additive: `PlayerbotRiskModel.NeededGroupSize` and `PlayerbotEngagementFacts.GroupSize`;
@@ -94,10 +95,10 @@ The group's state (`PlayerbotGroupState`, in `.playerbot groups`):
 | State | Leader | Members |
 |---|---|---|
 | `forming` | holds | follow the leader; their intake accepts |
-| `gathering` | holds until every living member is within 20 yards | walk to it |
-| `travelling` | walks to the approach point (30 yards short of an open-world objective's spawn, 15 short of an entrance), keeping out of known hazards, waiting while a member lags more than 30 yards or rests | follow at 2-5 yards (vmangos `MoveFollow`) |
+| `gathering` | holds until every living member is within 20 yards (after `GatherCatchUpMs`, 60 s, missing members are brought to the leader by the follow catch-up teleport, or the gathering moves on without those that cannot be) | walk to it |
+| `travelling` | walks to the approach point (30 yards short of an open-world objective's spawn, 15 short of an entrance, snapped to the navigation mesh by `SnapToMesh` if a mesh ray hits a boundary; counts as reached after `ApproachNoProgressMs`, 45 s, without closing by more than 2 yards), keeping out of known hazards, waiting while a member lags more than 30 yards (after `LagCatchUpMs`, 30 s, laggards are teleported to the leader or the wait is waived) or rests | follow at 2-5 yards (vmangos `MoveFollow`) |
 | `entering` | walks into the entrance trigger (`PlayerbotAreaTriggers` reports it like a client; the coordinator gave every member the trigger consent) | when the leader is inside, walk into the same trigger: the group's instance (the group is bound to it) |
-| `engaging` | pulls the objective when it is in sight within 60 yards, else the nearest creature within 20 yards that would attack the group (cleared first), else walks towards the objective's spawn; waits for laggards, resting members and its own recovery | fight by role (below) |
+| `engaging` | pulls the objective when it is in sight within 60 yards (preferring one on the leader's own level before a nearer one on another level, `Better`), else the nearest creature within 20 yards that would attack the group (not a civilian, on the leader's level, and its aggro reach touches the leader's route segment to the goal: `CountsAsObstacle`), else walks towards the objective's spawn; waits for laggards, resting members and its own recovery | fight by role (below) |
 | `wiped` | everyone alive in combat retreats (the solo retreat: back along the trail, past the creatures' leash) | same |
 | `regrouping` | the dead are resurrected or run back; everyone rests | same |
 | `leaving` | walks to the instance's exit trigger, then waits outside | follow; outside, wait |
@@ -117,7 +118,7 @@ with it (replays 2026-10-11 on the real terrain, quest 9 "The Killing Fields": 2
 skull by default), then the skull (`PlayerbotParty.MarkedTarget`, the one the party AI uses, within `PlayerbotParty.MarkRangeYards`,
 100 yards), before it assists the leader's victim. A target may be a player: a player who attacked a member (or the bot) and a leader's
 victim pass the one hostility rule (`PlayerbotHostility.MayEngage`, flagged or dueling enemies only), so the group fights back and
-assists against players the way a party bot does; `Target` stays the creature view, `TargetUnit` is the unit either way.
+assists against players the way a party bot does; `Target` stays the creature view, `TargetUnit` is the unit either way. A non-siege leader that can plan no way to its target shuns it for the group for `NoPathShunMs` (60 s; a run's boss counts toward `RunStuckMs` instead), and a member remembers a target it could not reach for `UnreachableMemoryMs` (30 s, `PlayerbotUnreachableTargets`) and does not assist or follow a mark onto a shunned or unreachable unit. A non-siege fight against a creature that neither drops its health nor closes in by more than `ProgressYards` (1 yard) for `PlayerbotFightWatch.StallMs` (20 s) is given up and the target shunned for `FightStallShunMs` (300 s). When a fight is dropped for no path, `LastTargetGuid` and `LastTargetEntry` are kept until another target or non-fight think so the group stall watch still names and shuns that target.
 
 **Lifts.** Every think first lets `PlayerbotElevator.Drive` run: a member whose way leads over a lift (`WalkTo` asks
 `PlayerbotElevator.TryBegin` before it plans a far walk, the mesh route it found is used when the lift is not the way) rides it to the
@@ -158,9 +159,9 @@ credit with members in reward range), or, without a quest, when the objective cr
 group then walks out, then disbands. The brains turn the quests in.
 
 **Failure**: two wipes, 30 minutes on one goal, a step (gather, travel, enter, leave, regroup) taking more than 5 minutes, two minutes at
-the objective's spawn without it in sight, too few members left, or the leader gone. The goal is then set aside for every member for
+the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point or objective (`no-path-to-approach`, `no-path-to-objective`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left, or the leader gone. The goal is then set aside for every member for
 10 minutes (its quest and objective in the brain's suspensions, so the brain does not walk into it alone either), and the group walks
-out of an instance before it disbands. A group that cannot walk out in time is brought to the entrance by the teleport service.
+out of an instance before it disbands. A group that cannot walk out in time is brought to the entrance by the teleport service (at most `MaxBringOuts`, 2 times, before it disbands).
 
 **Stalls.** The brains' stall watch does not run while a group drives the bots, so a group has its own (`PlayerbotGroupStallWatch`,
 checked by the coordinator every tick): when no bot member moved 10 yards or changed map, was in combat, ate, drank or looted, or took a
@@ -570,7 +571,7 @@ objective no path reaches re-targets after one stall bound, dissolves after the 
 stall line `PlayerbotQaSignalParser` reads as goal `Group`; the watch's bounds, a healthy group never stalling, and a target dropped and
 taken again counting as no progress; a finished run leaving with a member stuck inside brought out, not dissolved; several unreachable
 targets still dissolving on the second strike, while a new target long after the re-target or movement starts over; a group with a real
-player never touched; and target 0 outside engaging, in the shape bot QA parses.
+player never touched; and target 0 outside engaging, in the shape bot QA parses. `PlayerbotGroupTargetingTests` checks `CountsAsObstacle`, `Better`, `PlayerbotFightWatch`, the leader's 60 s no-path shun, `LastTargetGuid`/`LastTargetEntry` retention, and the member's 30 s unreachable memory. `PlayerbotGroupBoundedWaitTests` checks the 30 s lag catch-up and waiver, the 60 s gathering catch-up and drop, the 45 s approach no-progress bound, `SnapToMesh`, the 30 s quest group `no-path-to-approach` / `no-path-to-objective` faults, and the two bring-out cap in `Leaving`.
 
 Runs: `PlayerbotRunFixesTests` (the stuck clock counting only continuous failure, bosses never pulled as trash, early-kill credit, the
 patrolling boss, a quest group's objective still judged by sight, and `.reload instance_encounter` replacing the encounters and the

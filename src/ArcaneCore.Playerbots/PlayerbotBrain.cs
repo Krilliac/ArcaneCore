@@ -2450,13 +2450,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         => other.Guid != player.Guid && groups?.AreInSameGroup(player.Guid, other.Guid) != true;
 
     /// <summary>The creature a bot in combat without a victim of its own fights back (internal for the allocation test).</summary>
-    internal Creature? FindDefensiveAttacker(Player player)
+    internal Creature? FindDefensiveAttacker(Player player, bool defend = false)
     {
         if (player.Map is not { } map) return null;
         // A creature swinging at the bot comes first; if none is, any living creature that still holds the bot on its
         // threat list (fighting a pet, a party/camp fellow, or held at range) is the fight keeping Combat.IsInCombat on.
-        return FirstDefensiveCandidate(player, map, player.Combat.Attackers)
-            ?? FirstDefensiveCandidate(player, map, player.Combat.ThreatenedBy);
+        return FirstDefensiveCandidate(player, map, player.Combat.Attackers, defend)
+            ?? FirstDefensiveCandidate(player, map, player.Combat.ThreatenedBy, defend);
     }
 
     /// <summary>
@@ -2465,28 +2465,28 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// fighting bot, and the LINQ chain it replaced (OfType, Where, OrderBy, two ThenBy) allocated about 140 MB in 40 s at 400 bots
     /// (perf-tick 2026-10-20). The live sets are hash sets, walked with their own enumerator.
     /// </summary>
-    private Creature? FirstDefensiveCandidate(Player player, Map map, IReadOnlySet<Unit> units)
+    private Creature? FirstDefensiveCandidate(Player player, Map map, IReadOnlySet<Unit> units, bool defend)
     {
         DefensiveCandidate best = default;
         if (units is HashSet<Unit> set)
         {
             foreach (Unit unit in set)
-                best = BetterDefensiveCandidate(player, map, unit, best);
+                best = BetterDefensiveCandidate(player, map, unit, best, defend);
         }
         else
         {
             foreach (Unit unit in units)
-                best = BetterDefensiveCandidate(player, map, unit, best);
+                best = BetterDefensiveCandidate(player, map, unit, best, defend);
         }
 
         return best.Creature;
     }
 
-    private DefensiveCandidate BetterDefensiveCandidate(Player player, Map map, Unit unit, DefensiveCandidate best)
+    private DefensiveCandidate BetterDefensiveCandidate(Player player, Map map, Unit unit, DefensiveCandidate best, bool defend)
     {
         if (unit is not Creature creature || !creature.IsInWorld || !creature.IsAlive || creature.IsInEvadeMode || IsFruitless(creature)
             || !ReferenceEquals(creature.Map, map)
-            || !map.Combat.Hooks.CanAttack(player, creature)) return best;
+            || !map.Combat.Hooks.CanAttack(player, creature) || (defend && DefendSkips(player, creature))) return best;
         var candidate = new DefensiveCandidate(creature, IsUnreachable(creature), ReferenceEquals(creature, _target) ? 0 : 1, Distance(player, creature));
         if (best.Creature is null) return candidate;
         int order = candidate.Unreachable.CompareTo(best.Unreachable);

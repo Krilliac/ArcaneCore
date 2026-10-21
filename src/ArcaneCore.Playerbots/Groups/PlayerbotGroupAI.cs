@@ -93,6 +93,22 @@ internal sealed class PlayerbotGroupAI
     private long _runRouteAtMs;
     private long _stuckSinceMs, _stuckLastMs;
 
+    /// <summary>The targets this bot could plan no way to, each for <see cref="UnreachableMemoryMs"/>: it does not choose them again meanwhile.</summary>
+    private readonly PlayerbotUnreachableTargets _unreachable = new();
+
+    /// <summary>This bot's group fight and whether it goes anywhere (<see cref="FightStallShunMs"/>).</summary>
+    private readonly PlayerbotFightWatch _fightWatch = new();
+
+    /// <summary>When a leader began to wait for a lagging member without a break (world ms; 0: it does not), and whether that wait was waived.</summary>
+    private uint _lagSinceMs;
+
+    private bool _lagWaived;
+
+    /// <summary>The leader's walk to the approach point: the nearest it has been (yards), when it last got nearer, and when it last tried (world ms).</summary>
+    private float _approachNearestYards;
+
+    private uint _approachProgressMs, _approachTriedMs;
+
     /// <summary>The leader has started the loop watch afresh for the retreat it is walking (once per retreat, see <see cref="LeadSiege"/>).</summary>
     private bool _retreatFresh;
 
@@ -121,6 +137,16 @@ internal sealed class PlayerbotGroupAI
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Group;
 
     internal uint TargetEntry { get; private set; }
+
+    /// <summary>
+    /// The last unit the bot fought, kept when a fight is dropped because no way to the target could be planned (<see cref="Fight"/> clears
+    /// <see cref="TargetUnit"/> then), so the group's stall watch can still give that target up. Empty once the bot has no target for any other
+    /// reason (the target died or was given up), or was released or re-targeted.
+    /// </summary>
+    internal ObjectGuid LastTargetGuid { get; private set; }
+
+    /// <summary>The entry of the creature <see cref="LastTargetGuid"/> names (0: a player, or none).</summary>
+    internal uint LastTargetEntry { get; private set; }
 
     /// <summary>The creature the bot fights (inspection and tests); null while it fights a player.</summary>
     internal Creature? Target => _target as Creature;
@@ -187,6 +213,11 @@ internal sealed class PlayerbotGroupAI
         _spells.GroupRole = null;
         _spells.Reset();
         _recovery.Reset();
+        ForgetFight();
+        _unreachable.Clear();
+        _lagSinceMs = 0;
+        _lagWaived = false;
+        _approachTriedMs = 0;
         if (_risk.Retreat.Active) _risk.Retreat.Stop("released");
     }
 
@@ -204,6 +235,7 @@ internal sealed class PlayerbotGroupAI
         _runRoute = null;
         _rangedIdleMs = 0;
         _stuckSinceMs = _stuckLastMs = 0;
+        ForgetFight();
     }
 
     /// <summary>
@@ -223,6 +255,7 @@ internal sealed class PlayerbotGroupAI
 
         _spells.GroupRole = PlayerbotGroupContent.CombatRole(me.Role, me.TalentRole);
         bool dead = !player.IsAlive;
+        if (dead) _fightWatch.Reset();
         if (dead && !_deathRetired)
         {
             _risk.OnDeath(player);
@@ -232,6 +265,7 @@ internal sealed class PlayerbotGroupAI
             _restUntilMs = 0;
             _lootActions.Clear();
             _spells.Reset();
+            ForgetFight();
             _deathRetired = true;
         }
 
@@ -310,6 +344,8 @@ internal sealed class PlayerbotGroupAI
         if (_restUntilMs != 0 && ContinueRest(player, pushWalks)) { Step = "rest"; return; }
 
         if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
+        if (isLeader && group.Siege is null) TrackLag(player, group);
+        else ClearLag();
         Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
@@ -324,10 +360,8 @@ internal sealed class PlayerbotGroupAI
                 if (PlayerbotMotion.IsBlacklisted(player, waiting.MoveTo)) PlayerbotMotion.Unblacklist(player, waiting.MoveTo);
             }
             Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
-            // A siege leader that can plan no way to its target gives it up for a minute (siege raids have no stall watch of their own), and the coordinator names the next hostile skull.
-            // The objective is never given up: it is what the siege is after.
-            if (_noPathToTarget && isLeader && group.Siege is { } shunSiege && !(target is Creature objectiveCandidate && objectiveCandidate.Entry == shunSiege.Siege.ObjectiveEntry) && target is Creature or Player)
-                group.Shun(target.Guid, unchecked(_session.World.NowMs + SiegeShunMs));
+            if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader);
+            else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
         }
 
@@ -337,8 +371,11 @@ internal sealed class PlayerbotGroupAI
             _target = null;
             _attacking = false;
             _route = null;
+            LastTargetGuid = ObjectGuid.Empty;
+            LastTargetEntry = 0;
         }
 
+        _fightWatch.Reset();
         TargetEntry = 0;
         if (!player.Combat.IsInCombat && !pushWalks)
         {
@@ -371,21 +408,26 @@ internal sealed class PlayerbotGroupAI
                 Hold(player);
                 return;
             case PlayerbotGroupState.Travelling:
-                if (player.MapId != group.Goal.MeetingMap) { HoldRun(player); return; }
-                if (MembersBehind(player, group) || group.AnyResting(_session.World)) { HoldRun(player); return; }
+                if (player.MapId != group.Goal.MeetingMap) { Step = "lead:hold-map"; HoldRun(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
+                if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
                 PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? _risk : null); // the leader keeps out of known hazards
-                NoteRunProgress(group, WalkTo(player, TravelPoint(group), interval, toward: true));
+                Vector3 approach = TravelPoint(group);
+                bool approaching = WalkTo(player, approach, interval, toward: true);
+                Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
+                NoteRunProgress(group, approaching);
+                NoteApproachProgress(player, group, approach);
                 return;
             case PlayerbotGroupState.Entering:
-                if (player.MapId == group.Goal.MapId) { Hold(player); return; }
-                if (MembersBehind(player, group)) { Hold(player); return; }
-                WalkTo(player, group.Goal.Meeting, interval, toward: true);
+                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; Hold(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; Hold(player); return; }
+                Step = WalkTo(player, group.Goal.Meeting, interval, toward: true) ? "lead:walk-entrance" : "lead:no-path-entrance";
                 return;
             case PlayerbotGroupState.Engaging:
                 if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
                 if (group.Goal.InInstance && player.MapId == group.Goal.MeetingMap)
                 {
-                    WalkTo(player, group.Goal.Meeting, interval, toward: true);
+                    Step = WalkTo(player, group.Goal.Meeting, interval, toward: true) ? "lead:walk-entrance" : "lead:no-path-entrance";
                     return;
                 }
                 if (group.Run is { CurrentBoss: null }) { Step = "lead:hold-loot"; HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
@@ -401,8 +443,13 @@ internal sealed class PlayerbotGroupAI
                 // Out of the instance already: wait outside for the others (on the continent the entrance would take it back in).
                 if (WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
                     && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } exit)
-                    WalkTo(player, new Vector3(exit.X, exit.Y, exit.Z), interval, toward: true);
-                else Hold(player);
+                    Step = WalkTo(player, new Vector3(exit.X, exit.Y, exit.Z), interval, toward: true) ? "lead:walk-exit" : "lead:no-path-exit";
+                else
+                {
+                    Step = "lead:hold-outside";
+                    Hold(player);
+                }
+
                 return;
         }
     }
@@ -503,13 +550,55 @@ internal sealed class PlayerbotGroupAI
     /// <summary>How long the leader may fail to plan a way before the run gives up (no path to the entrance or the boss).</summary>
     internal const long RunStuckMs = 30_000;
 
-    /// <summary>A run's leader reports that it could (or could not) plan a way; a way that stays unplanned for <see cref="RunStuckMs"/> ends the run.</summary>
+    /// <summary>
+    /// A leader reports that it could (or could not) plan a way; a way that stays unplanned for <see cref="RunStuckMs"/> ends the group: a run
+    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c> or <c>no-path-to-approach</c>
+    /// (<see cref="PlayerbotGroupCoordinator.BotGroup.RunFault"/>, read by the coordinator). A handed-over player's group (no run) has rules of its own.
+    /// </summary>
     private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
     {
-        if (group.Run is null) return;
-        if (NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now))
-            group.RunFault ??= group.State == PlayerbotGroupState.Engaging ? "no-path-to-boss" : "no-path-to-entrance";
+        if (group.Run is null && (group.Handoff is not null || group.Members.Any(m => m.Real))) return;
+        if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now)) return;
+        bool engaging = group.State == PlayerbotGroupState.Engaging;
+        group.RunFault ??= group.Run is null
+            ? (engaging ? "no-path-to-objective" : "no-path-to-approach")
+            : (engaging ? "no-path-to-boss" : "no-path-to-entrance");
     }
+
+    /// <summary>
+    /// The leader's walk to the approach point: the point counts as reached (<see cref="PlayerbotGroupCoordinator.BotGroup.ApproachReached"/>) when
+    /// the leader plans a way and walks it but gets no nearer than <see cref="ApproachProgressYards"/> beyond its nearest for
+    /// <see cref="ApproachNoProgressMs"/> (a root, a wall the mesh does not show, a route that circles): the group goes on to the content instead of
+    /// waiting at a point nobody reaches. A way that cannot be planned is <see cref="NoteRunProgress"/>'s. A pause of more than
+    /// <see cref="RunStuckGapMs"/> between two attempts (a hold, a rest, a fight) starts a new stretch.
+    /// </summary>
+    private void NoteApproachProgress(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 approach)
+    {
+        uint now = _session.World.NowMs;
+        float yards = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), approach);
+        if (_approachTriedMs == 0 || unchecked(now - _approachTriedMs) > RunStuckGapMs)
+        {
+            _approachNearestYards = yards;
+            _approachProgressMs = now;
+        }
+
+        _approachTriedMs = Math.Max(1u, now);
+        if (yards < _approachNearestYards - ApproachProgressYards)
+        {
+            _approachNearestYards = yards;
+            _approachProgressMs = now;
+            return;
+        }
+
+        uint idle = unchecked(now - _approachProgressMs);
+        if (idle > ApproachNoProgressMs && idle <= int.MaxValue) group.ApproachReached = true;
+    }
+
+    /// <summary>How long a leader walks to the approach point without getting nearer before the point counts as reached.</summary>
+    internal const uint ApproachNoProgressMs = 45_000;
+
+    /// <summary>The distance the leader must close, beyond the nearest it has been, to count as progress toward the approach point (yards).</summary>
+    internal const float ApproachProgressYards = 2f;
 
     /// <summary>
     /// A planning failure that comes after a pause longer than this (a rest, a fight, a wait for the group: the leader did not try to walk
@@ -540,30 +629,91 @@ internal sealed class PlayerbotGroupAI
     {
         if (player.Map is not { } map || group.ObjectiveEntry == 0) return null;
         Creature? best = null;
+        bool bestOtherLevel = false;
         float nearest = float.MaxValue;
+        var here = new Vector3(player.X, player.Y, player.Z);
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature { IsAlive: true } creature || creature.Entry != group.ObjectiveEntry) continue;
             if (!map.Combat.Hooks.CanAttack(player, creature) || group.IsShunned(creature.Guid, _session.World.NowMs)) continue;
             float distance = Distance(player, creature);
-            if (distance < nearest) { nearest = distance; best = creature; }
+            // The objective on the leader's own level first (a unit on the floor below is near in 3D and unreachable from here), then the nearest.
+            bool otherLevel = PlayerbotTargetFilter.OnOtherLevel(new Vector3(creature.X, creature.Y, creature.Z), here);
+            if (Better(otherLevel, distance, best is not null, bestOtherLevel, nearest)) { nearest = distance; bestOtherLevel = otherLevel; best = creature; }
         }
 
         return best;
     }
 
+    /// <summary>
+    /// Whether a candidate objective beats the best so far: one on the leader's level beats one on another level, whatever the distances;
+    /// between two on the same side of that, the nearer wins. With no best yet (<paramref name="haveBest"/> false) any candidate does.
+    /// </summary>
+    internal static bool Better(bool candidateOtherLevel, float candidateYards, bool haveBest, bool bestOtherLevel, float bestYards)
+    {
+        if (!haveBest) return true;
+        if (candidateOtherLevel != bestOtherLevel) return !candidateOtherLevel;
+        return candidateYards < bestYards;
+    }
+
+    /// <summary>The leader waits for a living member on its map more than <see cref="WaitForMembersYards"/> behind, unless that wait was waived (<see cref="TrackLag"/>).</summary>
+    private bool MembersBehind(Player leader, PlayerbotGroupCoordinator.BotGroup group) => !_lagWaived && AnyMemberBehind(leader, group);
+
     /// <summary>A living member on the leader's map lags more than <see cref="WaitForMembersYards"/> behind.</summary>
-    private bool MembersBehind(Player leader, PlayerbotGroupCoordinator.BotGroup group)
+    private bool AnyMemberBehind(Player leader, PlayerbotGroupCoordinator.BotGroup group)
     {
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
+            if (IsBehind(leader, group, member, out _)) return true;
+        return false;
+    }
+
+    private bool IsBehind(Player leader, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member member, out Player? other)
+    {
+        other = null;
+        if (member.Guid == leader.Guid || !member.Joined || _session.World.FindOnlinePlayer(member.Guid) is not { IsAlive: true } found) return false;
+        if (member.Real && group.Handoff is not null) return false; // the player who handed the lead over is never waited for
+        if (!ReferenceEquals(found.Map, leader.Map)) return false; // between maps or still outside: the state machine waits for them
+        if (Distance(leader, found) <= WaitForMembersYards) return false;
+        other = found;
+        return true;
+    }
+
+    /// <summary>How long a leader waits for a lagging member before it catches the member up (or waives the wait).</summary>
+    internal const uint LagCatchUpMs = 30_000;
+
+    /// <summary>
+    /// The bound of the leader's wait for a lagging member. While a member is more than <see cref="WaitForMembersYards"/> behind, in a state where the
+    /// leader holds for it (travelling, entering or engaging, out of a fight), the clock runs; past <see cref="LagCatchUpMs"/> each laggard is
+    /// brought to the leader with the catch-up teleport the follow already has (<see cref="CatchUpNow"/>, retried while the teleport is pending),
+    /// and when one cannot be (a run that only walks, teleports off, a real player, a refusing service) the wait is waived until the lag clears.
+    /// </summary>
+    private void TrackLag(Player leader, PlayerbotGroupCoordinator.BotGroup group)
+    {
+        uint now = _session.World.NowMs;
+        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging)
+            || leader.Combat.IsInCombat || group.InFight(now) || !AnyMemberBehind(leader, group))
         {
-            if (member.Guid == leader.Guid || !member.Joined || _session.World.FindOnlinePlayer(member.Guid) is not { IsAlive: true } other) continue;
-            if (member.Real && group.Handoff is not null) continue; // the player who handed the lead over is never waited for
-            if (!ReferenceEquals(other.Map, leader.Map)) continue; // between maps or still outside: the state machine waits for them
-            if (Distance(leader, other) > WaitForMembersYards) return true;
+            ClearLag();
+            return;
         }
 
-        return false;
+        if (_lagSinceMs == 0) _lagSinceMs = Math.Max(1u, now);
+        uint waited = unchecked(now - _lagSinceMs);
+        if (_lagWaived || waited <= LagCatchUpMs || waited > int.MaxValue) return;
+        bool unable = false;
+        foreach (PlayerbotGroupCoordinator.Member member in group.Members)
+        {
+            if (!IsBehind(leader, group, member, out Player? laggard) || laggard is null) continue;
+            if ((member.AI?.CatchUpNow(laggard, leader, group) ?? PlayerbotCatchUpResult.Unable) == PlayerbotCatchUpResult.Unable) unable = true;
+        }
+
+        if (unable) _lagWaived = true;
+    }
+
+    private void ClearLag()
+    {
+        _lagSinceMs = 0;
+        _lagWaived = false;
     }
 
     /// <summary>The leader is fit to pull: health and mana at <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> or more (it rests otherwise).</summary>
@@ -588,7 +738,24 @@ internal sealed class PlayerbotGroupAI
     }
 
     /// <summary>Land on the leader (the party follower's catch-up teleport). False when the teleport service refuses: the member walks.</summary>
-    private bool TryCatchUp(Player player, Player leader)
+    private bool TryCatchUp(Player player, Player leader) => Land(player, leader) == PlayerbotCatchUpResult.Done;
+
+    /// <summary>
+    /// Whether this bot may be teleported to its group's leader to end a wait for it: teleports to the leader are on and the bot is managed, and
+    /// the group is not a dungeon run that fights through (which only walks, <see cref="ShouldCatchUp"/>).
+    /// </summary>
+    internal bool CanCatchUp(PlayerbotGroupCoordinator.BotGroup group)
+        => _options.Party.TeleportToLeader && _session.IsManaged && !(group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance);
+
+    /// <summary>
+    /// Bring this bot (<paramref name="player"/>) to the group's leader now, to end the wait for it (<see cref="TrackLag"/>, the gathering's bound):
+    /// <see cref="PlayerbotCatchUpResult.Unable"/> when the group may not or the service refuses (the caller waives the wait),
+    /// <see cref="PlayerbotCatchUpResult.Pending"/> when it is being teleported or the leader is in the air (try again next think).
+    /// </summary>
+    internal PlayerbotCatchUpResult CatchUpNow(Player player, Player leader, PlayerbotGroupCoordinator.BotGroup group)
+        => CanCatchUp(group) ? Land(player, leader) : PlayerbotCatchUpResult.Unable;
+
+    private PlayerbotCatchUpResult Land(Player player, Player leader)
     {
         TeleportService? teleports;
         try
@@ -597,16 +764,16 @@ internal sealed class PlayerbotGroupAI
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return PlayerbotCatchUpResult.Unable;
         }
 
-        if (teleports is null || !_session.IsManaged || teleports.IsBeingTeleported(player) || teleports.IsBeingTeleported(leader)) return false;
-        if ((leader.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return false;
-        if (player.Duel is not null) return false;
+        if (teleports is null || !_session.IsManaged || player.Duel is not null) return PlayerbotCatchUpResult.Unable;
+        if (teleports.IsBeingTeleported(player) || teleports.IsBeingTeleported(leader)
+            || (leader.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return PlayerbotCatchUpResult.Pending;
         PlayerbotMovementControl.Stop(_session, player);
-        if (!teleports.TeleportTo(player, leader.MapId, leader.X, leader.Y, leader.Z, leader.Orientation)) return false;
+        if (!teleports.TeleportTo(player, leader.MapId, leader.X, leader.Y, leader.Z, leader.Orientation)) return PlayerbotCatchUpResult.Unable;
         _route = null;
-        return true;
+        return PlayerbotCatchUpResult.Done;
     }
 
     private void Follow(Player player, PlayerbotGroupCoordinator.BotGroup group, Player? leader, uint interval)
@@ -620,7 +787,7 @@ internal sealed class PlayerbotGroupAI
                 || (group.State == PlayerbotGroupState.Gathering && leader is not null && leader.MapId == group.Goal.MapId && group.Run is not { Step: PlayerbotRunStep.Retry })))
         {
             Goal = PlayerbotGoalKind.Group;
-            WalkTo(player, group.Goal.Meeting, interval, toward: true);
+            Step = WalkTo(player, group.Goal.Meeting, interval, toward: true) ? "follow:walk-entrance" : "follow:no-path-entrance";
             return;
         }
 
@@ -632,13 +799,14 @@ internal sealed class PlayerbotGroupAI
             && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } exit)
         {
             Goal = PlayerbotGoalKind.Group;
-            WalkTo(player, new Vector3(exit.X, exit.Y, exit.Z), interval, toward: true);
+            Step = WalkTo(player, new Vector3(exit.X, exit.Y, exit.Z), interval, toward: true) ? "follow:walk-exit" : "follow:no-path-exit";
             return;
         }
 
         // A dead leader is waited for where the group is (its ghost walks to the graveyard and back; nobody follows it there).
         if (leader is null || !leader.IsInWorld || !leader.IsAlive || !ReferenceEquals(leader.Map, player.Map))
         {
+            Step = "follow:hold-leader";
             Hold(player);
             return;
         }
@@ -646,6 +814,7 @@ internal sealed class PlayerbotGroupAI
         float distance = Distance(player, leader);
         if (distance <= 5f)
         {
+            Step = "follow:hold-near";
             Hold(player);
             return;
         }
@@ -663,7 +832,8 @@ internal sealed class PlayerbotGroupAI
         }
 
         Vector3 point = Party.PlayerbotParty.FollowPoint(new Vector3(leader.X, leader.Y, leader.Z), leader.Orientation, _followAngle, _followDistance);
-        if (!WalkTo(player, point, interval, toward: distance > 60f)) WalkTo(player, new Vector3(leader.X, leader.Y, leader.Z), interval, toward: true);
+        bool walked = WalkTo(player, point, interval, toward: distance > 60f) || WalkTo(player, new Vector3(leader.X, leader.Y, leader.Z), interval, toward: true);
+        Step = walked ? "follow:walk" : "follow:no-path";
     }
 
     // --- fighting -------------------------------------------------------------------------------------------------------
@@ -686,7 +856,7 @@ internal sealed class PlayerbotGroupAI
         if (siegeOrder == PlayerbotSiegeOrder.Retreat) return null;
         GroupManager? groups = Groups();
         // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
-        Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
+        Unit? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) && !Unreachable(_target) ? _target : null;
         var loose = new List<(Unit Unit, float Distance, bool OnSelf)>();
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
@@ -697,7 +867,7 @@ internal sealed class PlayerbotGroupAI
                 // A player attacker is fought only when it provoked the bot or a member (the one hostility rule).
                 bool fightable = unit is Creature creature ? IsValidTarget(player, creature)
                     : unit is Player attacker && PlayerbotHostility.MayEngage(player, attacker, PlayerbotEngageReason.GroupProvoked, groups);
-                if (fightable && Distance(player, unit) <= AssistYards)
+                if (fightable && !Unreachable(unit) && Distance(player, unit) <= AssistYards)
                     loose.Add((unit, Distance(player, unit), ReferenceEquals(other, player)));
             }
         }
@@ -730,7 +900,7 @@ internal sealed class PlayerbotGroupAI
 
         Unit? marked = null;
         if (player.Combat.IsInCombat || group.InFight(_session.World.NowMs) || leader is not null && leader.Combat.Victim is not null)
-            marked = MarkedTarget(player, me, map, groups);
+            marked = MarkedTarget(player, group, me, map, groups);
 
         if (me.Role == PlayerbotGroupRole.Tank)
         {
@@ -748,7 +918,7 @@ internal sealed class PlayerbotGroupAI
             if (current is not null && player.Combat.IsInCombat && (!isLeader || current.Combat.IsInCombat)) return current;
             if (!isLeader && leader is not null && ReferenceEquals(leader.Map, map) && leader.Combat.Victim is { } victim
                 && (victim is Creature || victim is Player victimPlayer && PlayerbotHostility.MayEngage(player, victimPlayer, PlayerbotEngageReason.GroupProvoked, groups))
-                && IsValidTarget(player, victim) && Distance(player, victim) <= AssistYards)
+                && IsValidTarget(player, victim) && !Unreachable(victim) && !ShunnedOutsideSiege(group, victim) && Distance(player, victim) <= AssistYards)
                 return victim;
             if (loose.Count > 0) return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).First().Unit;
         }
@@ -768,7 +938,7 @@ internal sealed class PlayerbotGroupAI
             && !MembersBehind(player, group) && !group.AnyResting(_session.World) && Ready(player))
         {
             // A run fights its way to the entrance: what stands in the way is cleared by the group, never run past or teleported over.
-            return current ?? FindObstacle(player, group);
+            return current ?? FindObstacle(player, group, TravelPoint(group));
         }
 
         if (isLeader && group.State == PlayerbotGroupState.Engaging && !MembersBehind(player, group) && !group.AnyResting(_session.World)
@@ -779,10 +949,11 @@ internal sealed class PlayerbotGroupAI
             if (group.Handoff?.Sweep is not null)
             {
                 // A handed-over group's clear list: the next creature once it is in reach (the leader walks to it meanwhile), else what is in the way.
-                if (PlayerbotGroupCoordinator.SweepTarget(group, player, _session.World.NowMs, creature => PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) is { } next
-                    && IsValidTarget(player, next) && Distance(player, next) <= PlayerbotLeaderHandoff.PullYards)
+                if (PlayerbotGroupCoordinator.SweepTarget(group, player, _session.World.NowMs, creature => PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) is not { } next)
+                    return null;
+                if (IsValidTarget(player, next) && Distance(player, next) <= PlayerbotLeaderHandoff.PullYards)
                     return next;
-                return FindObstacle(player, group);
+                return FindObstacle(player, group, new Vector3(next.X, next.Y, next.Z));
             }
 
             if (FindObjectiveCreature(player, group) is { } objective && Distance(player, objective) <= 60f)
@@ -791,7 +962,7 @@ internal sealed class PlayerbotGroupAI
                 return objective;
             }
 
-            return FindObstacle(player, group);
+            return FindObstacle(player, group, ObjectivePoint(player, group));
         }
 
         return null;
@@ -801,15 +972,21 @@ internal sealed class PlayerbotGroupAI
     /// The unit of the group's raid marks this member sticks to: its focus icon first, then the skull (<see cref="PlayerbotParty.MarkedTarget{T}"/>),
     /// within <see cref="PlayerbotParty.MarkRangeYards"/> and valid for it.
     /// </summary>
-    private Unit? MarkedTarget(Player player, PlayerbotGroupCoordinator.Member me, Map map, GroupManager? groups)
+    private Unit? MarkedTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me, Map map, GroupManager? groups)
     {
         if (groups?.GetGroup(player.Guid) is not { } server) return null;
         byte[] order = me.FocusIcon == PlayerbotParty.SkullIcon ? SkullOnly : [me.FocusIcon, PlayerbotParty.SkullIcon];
         return PlayerbotParty.MarkedTarget(server.TargetIcons, order, guid => map.FindObject(guid) as Unit,
-            unit => Distance(player, unit) <= PlayerbotParty.MarkRangeYards && IsValidTarget(player, unit));
+            unit => Distance(player, unit) <= PlayerbotParty.MarkRangeYards && IsValidTarget(player, unit) && !Unreachable(unit) && !ShunnedOutsideSiege(group, unit));
     }
 
     private static readonly byte[] SkullOnly = [PlayerbotParty.SkullIcon];
+
+    /// <summary>The bot gave up <paramref name="unit"/> as unreachable (<see cref="PlayerbotUnreachableTargets"/>, <see cref="UnreachableMemoryMs"/>): it does not choose it again meanwhile.</summary>
+    private bool Unreachable(Unit unit) => _unreachable.Has(unit.Guid, _session.World.NowMs);
+
+    /// <summary>The group gave <paramref name="unit"/> up (a stall, no way to it, a fight that went nowhere): a member does not assist or follow a mark onto it. A siege raid keeps its own rules (the commander names its skull).</summary>
+    private bool ShunnedOutsideSiege(PlayerbotGroupCoordinator.BotGroup group, Unit unit) => group.Siege is null && group.IsShunned(unit.Guid, _session.World.NowMs);
 
     /// <summary>
     /// The leader fights a boss of the wing that is not the objective noted (one met on the way to an earlier boss, or one that came with
@@ -865,16 +1042,30 @@ internal sealed class PlayerbotGroupAI
         return _runRoute?.Points ?? [];
     }
 
+    /// <summary>
+    /// Whether <paramref name="threat"/> is an obstacle on the leader's way from <paramref name="leader"/> to <paramref name="goal"/> (<see cref="FindObstacle"/>): a creature that is
+    /// not a civilian (a city is full of them and they are left alone), stands on the leader's level (<see cref="PlayerbotTargetFilter.OnOtherLevel"/>), is within <see cref="ClearYards"/>
+    /// of the leader, and whose aggro reach touches the route (the plane distance of the creature to the segment, <see cref="PlayerbotGroupCoordinator.RouteYards"/>, is within its
+    /// reach): one that would attack the walk. Before, any hostile creature within 20 yards was cleared, a civilian or a unit on the floor below included.
+    /// </summary>
+    internal static bool CountsAsObstacle(in PlayerbotThreat threat, bool civilian, Vector3 leader, Vector3 goal)
+    {
+        if (civilian || PlayerbotTargetFilter.OnOtherLevel(threat.Position, leader) || Vector3.Distance(threat.Position, leader) > ClearYards) return false;
+        return PlayerbotGroupCoordinator.RouteYards(threat.Position, leader, goal) <= threat.Radius;
+    }
+
     /// <summary>The nearest hostile creature within <see cref="ClearYards"/> of the leader that would attack the group (the way is cleared).</summary>
-    private Creature? FindObstacle(Player player, PlayerbotGroupCoordinator.BotGroup group)
+    private Creature? FindObstacle(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 goal)
     {
         if (player.Map is not { } map) return null;
         Creature? best = null;
         float nearest = ClearYards;
+        var leaderAt = new Vector3(player.X, player.Y, player.Z);
         foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
         {
             if (threat.Source is not { IsAlive: true } creature || !IsValidTarget(player, creature)) continue;
             if (PlayerbotBrain.IsSomeoneElses(player, creature, Groups()) || group.IsShunned(creature.Guid, _session.World.NowMs)) continue;
+            if (!CountsAsObstacle(threat, PlayerbotTargetFilter.IsCivilian(creature), leaderAt, goal)) continue;
             float distance = Distance(player, creature);
             if (distance <= nearest)
             {
@@ -886,8 +1077,17 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
+    /// <summary>How long a leader gives up a target it can plan no way to.</summary>
+    internal const uint NoPathShunMs = 60_000;
+
     /// <summary>How long a siege leader gives up a target it can plan no way to.</summary>
-    internal const uint SiegeShunMs = 60_000;
+    internal const uint SiegeShunMs = NoPathShunMs;
+
+    /// <summary>How long a member remembers a target it could plan no way to (<see cref="PlayerbotUnreachableTargets"/>).</summary>
+    internal const uint UnreachableMemoryMs = 30_000;
+
+    /// <summary>How long a group gives up a creature whose fight went nowhere (<see cref="PlayerbotFightWatch"/>).</summary>
+    internal const uint FightStallShunMs = 300_000;
 
     /// <summary>The last <see cref="Fight"/> could plan no way to its target.</summary>
     private bool _noPathToTarget;
@@ -909,6 +1109,8 @@ internal sealed class PlayerbotGroupAI
         uint targetEntry = target is Creature creatureTarget ? creatureTarget.Entry : 0;
         string targetLabel = target is Creature ? targetEntry.ToString(CultureInfo.InvariantCulture) : "player";
         TargetEntry = targetEntry;
+        LastTargetGuid = target.Guid;
+        LastTargetEntry = targetEntry;
         if (_restUntilMs != 0) { _restUntilMs = 0; Act(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u), budgeted: false); }
         if (_spells.Update(player, target, interval))
         {
@@ -976,6 +1178,51 @@ internal sealed class PlayerbotGroupAI
         _target = null;
         _route = null;
         TargetEntry = 0;
+    }
+
+    private void ForgetFight()
+    {
+        LastTargetGuid = ObjectGuid.Empty;
+        LastTargetEntry = 0;
+        _fightWatch.Reset();
+    }
+
+    /// <summary>
+    /// <see cref="Fight"/> could plan no way to <paramref name="target"/>: a member remembers it for <see cref="UnreachableMemoryMs"/> so it
+    /// does not choose it again at every think; a leader shuns it for the group for <see cref="NoPathShunMs"/> (never the siege objective, and
+    /// never a run's boss, which counts toward <see cref="RunStuckMs"/> instead).
+    /// </summary>
+    private void GiveUpUnreachable(PlayerbotGroupCoordinator.BotGroup group, Unit target, bool isLeader)
+    {
+        _fightWatch.Reset();
+        if (!isLeader)
+        {
+            _unreachable.Mark(target.Guid, _session.World.NowMs, UnreachableMemoryMs);
+            return;
+        }
+
+        if (group.Siege is { } siegeRaid && target is Creature siegeCreature && siegeCreature.Entry == siegeRaid.Siege.ObjectiveEntry)
+            return;
+        if (group.Run is { } run && target is Creature boss && (run.CurrentBoss?.Entry == boss.Entry || run.Plan.IsBoss(boss.Entry)))
+        {
+            NoteRunProgress(group, planned: false);
+            return;
+        }
+
+        group.Shun(target.Guid, unchecked(_session.World.NowMs + NoPathShunMs));
+    }
+
+    /// <summary>
+    /// A non-siege fight against <paramref name="fought"/> that neither drops its health nor closes on it for <see cref="PlayerbotFightWatch.StallMs"/>
+    /// is given up for the group for <see cref="FightStallShunMs"/>.
+    /// </summary>
+    private void WatchFight(Player player, PlayerbotGroupCoordinator.BotGroup group, Creature fought)
+    {
+        if (!_fightWatch.Observe(fought.Guid, fought.Health, Distance(player, fought), _session.World.NowMs)) return;
+        group.Shun(fought.Guid, unchecked(_session.World.NowMs + FightStallShunMs));
+        StopAttacking(player);
+        PlayerbotMovementControl.Stop(_session, player);
+        ForgetFight();
     }
 
     private static List<Creature> Enemies(Player player)
@@ -1298,3 +1545,16 @@ internal readonly record struct PlayerbotGroupCatchUpFacts(
     PlayerbotGroupState State, float Distance, bool InCombat, bool LeaderInCombat, bool TeleportToLeader,
     PlayerbotCatchUpMode Mode = PlayerbotCatchUpMode.Teleport, float TeleportDistance = Party.PlayerbotParty.TeleportDistance,
     float LeaderCombatRange = Party.PlayerbotParty.PartyAssistRange, bool FightThroughRun = false);
+
+/// <summary>The answer of <see cref="PlayerbotGroupAI.CatchUpNow"/>.</summary>
+internal enum PlayerbotCatchUpResult : byte
+{
+    /// <summary>The bot was teleported to the leader.</summary>
+    Done,
+
+    /// <summary>It cannot be now (it or the leader is being teleported, the leader is in the air): try again next think.</summary>
+    Pending,
+
+    /// <summary>It cannot be: the group only walks, teleports to the leader are off, the bot is not driven by the server, or the service refused.</summary>
+    Unable,
+}

@@ -70,7 +70,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         // The enemy at its node (a defender fights whoever comes to its node; an assaulter clears the banner before the cast a hit would
         // cancel), else the usual pick (an attacker of the bot, the one it fights, the nearest within 30 yards).
         Unit? enemy = null;
-        if (!order.Target.IsEmpty && map.FindObject(order.Target) is Player named && IsEnemy(player, named, ab, enemyTeam)
+        if (!order.Target.IsEmpty && map.FindObject(order.Target) is Player named && IsEnemy(player, named, ab, enemyTeam) && !_pvp.IsSkipped(named)
             && (order.Duty == PlayerbotAbDuty.Defend || Distance(player, named) <= EngageYards * 1.5f))
             enemy = named;
         enemy ??= SelectEnemy(player, ab, team);

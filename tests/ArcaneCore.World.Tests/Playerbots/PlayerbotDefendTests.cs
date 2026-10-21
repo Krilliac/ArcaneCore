@@ -152,6 +152,160 @@ public sealed class PlayerbotDefendTests
         });
     });
 
+    /// <summary>The friendly guard fights <paramref name="enemy"/> inside the post (the guard is in combat, the bot is not); the bot has no post yet.</summary>
+    private static void GuardFights(Rig rig, Creature guard, Creature enemy)
+    {
+        Map map = rig.BotPlayer.Map!;
+        Assert.True(map.Combat.Attack(enemy, guard));
+        map.Combat.DealDamage(enemy, guard, 1);
+        Assert.True(guard.Combat.IsInCombat);
+        Assert.False(rig.BotPlayer.Combat.IsInCombat);
+    }
+
+    private static async Task<(Creature Guard, Creature Enemy)> SpawnFightersAsync(Rig rig, bool civilianEnemy, float enemyDz)
+    {
+        Creature guard = null!, enemy = null!;
+        await rig.Host.OnWorldAsync(() =>
+        {
+            Player bot = rig.BotPlayer;
+            bot.Map!.Combat.Hooks = new GuardHooks();
+            guard = Spawn(rig.Host, bot, GuardEntry, 3f, 2f, "guard");
+            enemy = Spawn(rig.Host, bot, RaiderEntry, 2f, 0f, "raider", civilianEnemy, enemyDz);
+            return true;
+        });
+        await rig.Host.WaitForWorldAsync(() => rig.BotPlayer.VisibleObjects.Contains(guard.Guid) && rig.BotPlayer.VisibleObjects.Contains(enemy.Guid),
+            "the guard and its enemy are in sight");
+        return (guard, enemy);
+    }
+
+    [Fact]
+    public Task DefenderDoesNotEngageACivilianTheGuardFights() => Run(60f, async rig =>
+    {
+        (Creature guard, Creature civilian) = await SpawnFightersAsync(rig, civilianEnemy: true, enemyDz: 0f);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            GuardFights(rig, guard, civilian);
+            rig.Brain.Defend = rig.Post(40f);
+            rig.Think();
+            Assert.Null(rig.Brain.InspectionPvpTarget);
+            Assert.Null(rig.BotPlayer.Combat.Victim);
+        });
+    });
+
+    [Fact]
+    public Task DefenderDoesNotEngageAHelpTargetOnAnotherLevel() => Run(60f, async rig =>
+    {
+        (Creature guard, Creature raider) = await SpawnFightersAsync(rig, civilianEnemy: false, enemyDz: 25f);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            GuardFights(rig, guard, raider);
+            rig.Brain.Defend = rig.Post(40f);
+            rig.Think();
+            // 25 yards up is a chase the bot could not walk anyway, so the target alone proves nothing: the think must not be spent on it.
+            Assert.NotEqual(PlayerbotGoalKind.Combat, rig.Brain.Goal);
+            Assert.Null(rig.Brain.InspectionPvpTarget);
+            Assert.Null(rig.BotPlayer.Combat.Victim);
+        });
+    });
+
+    [Fact]
+    public Task DefenderEngagesAHelpTargetOnItsOwnLevel_ControlForTheLevelAndCivilianSkips() => Run(60f, async rig =>
+    {
+        (Creature guard, Creature raider) = await SpawnFightersAsync(rig, civilianEnemy: false, enemyDz: 0f);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            GuardFights(rig, guard, raider);
+            rig.Brain.Defend = rig.Post(40f);
+            rig.Think();
+            Assert.Same(raider, rig.Brain.InspectionPvpTarget);
+        });
+    });
+
+    [Fact]
+    public Task DefenderStillFightsACreatureOnAnotherLevelThatAttacksIt() => Run(60f, async rig =>
+    {
+        (Creature _, Creature raider) = await SpawnFightersAsync(rig, civilianEnemy: false, enemyDz: 25f);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            Player bot = rig.BotPlayer;
+            Assert.True(bot.Map!.Combat.Attack(raider, bot));
+            bot.Map!.Combat.DealDamage(raider, bot, 1);
+            Assert.Contains(raider, bot.Combat.Attackers);
+            rig.Brain.Defend = rig.Post(40f);
+            rig.Think();
+            // The think is spent on the attacker (the goal is Combat, aimed at the raider's entry), though 25 yards of height make it a chase the
+            // bot cannot walk without ground (its target is dropped at once, as a refused walk does).
+            Assert.Equal(PlayerbotGoalKind.Combat, rig.Brain.Goal);
+            Assert.Equal(RaiderEntry, rig.Brain.TargetEntry);
+        });
+    });
+
+    [Fact]
+    public Task DefenderIgnoresAFlaggedEnemyPlayerOnAnotherLevel() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        Player bot = rig.BotPlayer;
+        rig.EnemyPlayer.Relocate(bot.X + 4f, bot.Y, bot.Z + 25f, 0, rig.Host.World.NowMs);
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        // 25 yards up is a chase the bot could not walk anyway, so the target alone proves nothing: the think must not be spent on it.
+        Assert.NotEqual(PlayerbotGoalKind.Combat, rig.Brain.Goal);
+        Assert.Null(rig.Brain.InspectionPvpTarget);
+        Assert.Null(bot.Combat.Victim);
+    }));
+
+    [Fact]
+    public Task DefenderEngagesAFlaggedEnemyPlayerOnItsOwnLevel_ControlForTheLevelSkip() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        Player bot = rig.BotPlayer;
+        rig.EnemyPlayer.Relocate(bot.X + 4f, bot.Y, bot.Z + 5f, 0, rig.Host.World.NowMs);
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Brain.InspectionPvpTarget);
+    }));
+
+    [Fact]
+    public Task DefenderPassesOverAHostilePlayerItFoundNoPathTo_AtTheNextThink() => Run(25f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        // 25 yards away and no ground loaded: the chase is refused. The first think tries it; the next ones do not choose it again.
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Equal(PlayerbotGoalKind.Combat, rig.Brain.Goal);
+        Assert.Null(rig.Brain.InspectionPvpTarget);
+
+        rig.Think();
+        Assert.NotEqual(PlayerbotGoalKind.Combat, rig.Brain.Goal);
+    }));
+
+    [Fact]
+    public Task DefenderFindsThreatenedByCreature_WhenACloserOneInThreatenedByIsSkipped() => Run(60f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        Map map = bot.Map!;
+        Creature closerSkipped = Spawn(rig.Host, bot, RaiderEntry, 1f, 0f, "skipped-threat", civilian: true);
+        Creature fartherValid = Spawn(rig.Host, bot, RaiderEntry + 1, 3f, 0f, "valid-threat", civilian: false);
+        foreach (Creature c in new[] { closerSkipped, fartherValid })
+        {
+            Assert.True(map.Combat.Attack(c, bot));
+            map.Combat.DealDamage(c, bot, 1);
+            Assert.True(map.Combat.AttackStop(c));
+            c.Combat.Threat.AddThreat(bot, 10f);
+        }
+
+        Assert.Empty(bot.Combat.Attackers);
+        Assert.Contains(closerSkipped, bot.Combat.ThreatenedBy);
+        Assert.Contains(fartherValid, bot.Combat.ThreatenedBy);
+        Assert.Same(closerSkipped, rig.Brain.FindDefensiveAttacker(bot, defend: false));
+        Assert.Same(fartherValid, rig.Brain.FindDefensiveAttacker(bot, defend: true));
+
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Same(fartherValid, rig.Brain.InspectionPvpTarget);
+        Assert.Same(fartherValid, bot.Combat.Victim);
+    }));
+
     [Fact]
     public Task DefenderReturnsToPostAfterFight() => Run(4f, async rig =>
     {
@@ -427,13 +581,13 @@ public sealed class PlayerbotDefendTests
         Assert.False(Desired(player));
     }
 
-    private static Creature Spawn(WorldTestHost host, Player near, uint entry, float dx, float dy, string name)
+    private static Creature Spawn(WorldTestHost host, Player near, uint entry, float dx, float dy, string name, bool civilian = false, float dz = 0f)
     {
         var creature = new Creature(entry, new CreatureTemplate
         {
-            Entry = entry, Name = name, CreatureType = 1, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 500, MaxLevelHealth = 500,
+            Entry = entry, Name = name, CreatureType = 1, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 500, MaxLevelHealth = 500, Civilian = civilian,
         }, null, CreatureContent.Empty, new Random((int)entry));
-        creature.Relocate(near.X + dx, near.Y + dy, near.Z, 0, host.World.NowMs);
+        creature.Relocate(near.X + dx, near.Y + dy, near.Z + dz, 0, host.World.NowMs);
         near.Map!.AddObject(creature);
         return creature;
     }

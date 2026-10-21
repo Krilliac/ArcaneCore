@@ -60,12 +60,12 @@ internal static class PlayerbotHostility
     }
 
     /// <summary>The first player (alive, in the world, on the bot's map) among the bot's attackers; the caller still asks <see cref="MayEngage"/>.</summary>
-    internal static Player? FirstProvokingPlayer(Player self)
+    internal static Player? FirstProvokingPlayer(Player self, PlayerbotPvpFight? pvp = null)
     {
         if (self.Combat.Attackers.Count == 0) return null;
         foreach (Unit unit in self.Combat.Attackers)
         {
-            if (unit is Player attacker && IsHostilePlayer(self, attacker)) return attacker;
+            if (unit is Player attacker && IsHostilePlayer(self, attacker) && (pvp is null || !pvp.IsSkipped(attacker))) return attacker;
         }
 
         return null;

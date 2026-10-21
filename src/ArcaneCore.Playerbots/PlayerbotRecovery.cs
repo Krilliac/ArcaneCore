@@ -17,6 +17,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.Game.Teleport;
@@ -1795,10 +1796,22 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     internal const float StealthedHazardYards = 50f;
 
+    /// <summary>The creature is attacking <paramref name="player"/> or holds it on its threat list: in combat with it, not merely near it.</summary>
+    private static bool IsEngagedWith(Creature creature, Player player)
+        => ReferenceEquals(creature.Combat.Victim, player)
+            || player.Combat.Attackers.Contains(creature)
+            || player.Combat.ThreatenedBy.Contains(creature);
+
     private static void AddThreat(Player player, Map map, CreatureMapSystem? system, Creature creature, List<PlayerbotThreat> found)
     {
         if (!creature.IsInWorld || !creature.IsAlive
             || !ReferenceEquals(creature.Map, map) || !map.Combat.Hooks.IsHostileTo(creature, player))
+            return;
+
+        // A civilian, or a creature that does not attack on sight, is no camp of a body or a hold on the bot's rest: it counts only once it
+        // is actually attacking the bot or fighting it (a passive creature that was struck, a Reactor that fights back).
+        bool engaged = IsEngagedWith(creature, player);
+        if (!engaged && (PlayerbotTargetFilter.IsCivilian(creature) || !PlayerbotTargetFilter.AggroesOnSight(creature)))
             return;
         var at = new Vector3(creature.X, creature.Y, creature.Z);
         if (system is null)
@@ -1807,7 +1820,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             return;
         }
 
-        if (!system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player)) return;
+        if (engaged
+            ? (creature.UnitFlags & (UnitFlags.Spawning | UnitFlags.NotSelectable)) != 0
+            : !system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player))
+            return;
         float radii = creature.BoundingRadius + player.BoundingRadius;
         float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
         if (radius <= 0) return;

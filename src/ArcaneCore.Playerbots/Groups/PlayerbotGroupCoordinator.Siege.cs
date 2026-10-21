@@ -1078,8 +1078,8 @@ public sealed partial class PlayerbotGroupCoordinator
             if (!objective)
             {
                 // Left alone unless they fight the raid: civilians (a city is full of them), units on another level of the leader (3D distance picks up the floor below), and what stands off the route.
-                bool civilian = unit is Creature npc && (npc.Template.Civilian || (npc.Template.Behaviour & Kernel.WorldData.Creatures.CreatureBehaviourFlags.Civilian) != 0);
-                bool otherLevel = MathF.Abs(unit.Z - leader.Z) > PlayerbotSiegeCommander.WaypointLevelYards;
+                bool civilian = unit is Creature npc && PlayerbotTargetFilter.IsCivilian(npc);
+                bool otherLevel = PlayerbotTargetFilter.OnOtherLevel(new Vector3(unit.X, unit.Y, unit.Z), new Vector3(leader.X, leader.Y, leader.Z));
                 if ((civilian || otherLevel || RouteYards(new Vector3(unit.X, unit.Y, unit.Z), routeFrom, goal) > PlayerbotSiegeCommander.RouteTetherYards)
                     && !FightsRaid(unit, members ??= MemberGuids(group))) continue;
             }

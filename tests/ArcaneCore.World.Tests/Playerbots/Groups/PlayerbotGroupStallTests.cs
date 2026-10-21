@@ -384,14 +384,14 @@ public sealed class PlayerbotGroupStallTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options =>
         {
             options.Risk.Tolerance = 0.25f;
-            options.StallSeconds = 30;
+            options.StallSeconds = 20;
         }, services: logs.Register);
         var leaderBot = await world.AddBotAsync("Gatherwar", Human, Warrior, 1, []);
         var farBot = await world.AddBotAsync("Gathermage", Human, Mage, 1, [Fireball]);
         Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
 
-        // Keep the group in Gathering with a member far away and no path, so the leader holds at the meeting point past two StallSeconds bounds.
+        // Keep the group in Gathering with a member far away and no path, so the leader holds at the meeting point past two StallSeconds bounds (within GatherCatchUpMs).
         await world.OnWorldAsync(() =>
         {
             WorldCollision.Of(world.World.Host.World).Install(pathfinder: new NoPath());
@@ -401,7 +401,7 @@ public sealed class PlayerbotGroupStallTests
             return true;
         });
 
-        await world.RunAsync(2 * 30_000 + 20_000);
+        await world.RunAsync(2 * 20_000 + 10_000);
         Assert.Equal(PlayerbotGroupState.Gathering, group.State);
         Assert.Equal(0, world.Coordinator.StallCount);
         Assert.DoesNotContain(logs.Lines, line => line.Contains("goal=Group", StringComparison.Ordinal));

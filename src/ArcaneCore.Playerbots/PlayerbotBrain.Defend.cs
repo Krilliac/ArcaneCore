@@ -60,6 +60,7 @@ internal sealed partial class PlayerbotBrain
             _defendHealScanned = false;
             _defendHealTarget = null;
             _defendWaitsSickness = false;
+            _pvpFight?.Forget();
             if (_session.Player is not { } player) return;
             if (value is null) PlayerbotDefend.Unregister(player);
             else PlayerbotDefend.Register(player, value);
@@ -169,7 +170,8 @@ internal sealed partial class PlayerbotBrain
         if (PlayerbotHostility.FirstProvokingPlayer(player) is { } provoker) return provoker;
         if (player.MapId != post.MapId) return null;
         if (_pvpFight is { Target: { } current } && DefendTargetValid(player, map, post, current)) return current;
-        if (FindDefensiveAttacker(player) is { } creature) return creature;
+        // An attacker of the defender is always fought; a creature that only holds it on its threat list is skipped like a scanned one.
+        if (FindDefensiveAttacker(player, defend: true) is { } creature) return creature;
 
         uint now = _session.World.NowMs;
         if (!_defendScanned || unchecked((int)(now - _defendScanAtMs)) >= DefendScanMs)
@@ -180,7 +182,19 @@ internal sealed partial class PlayerbotBrain
             return _defendScanTarget;
         }
 
-        return _defendScanTarget is { } cached && DefendTargetValid(player, map, post, cached) ? cached : null;
+        return _defendScanTarget is { } cached && DefendTargetValid(player, map, post, cached) && !DefendSkips(player, cached) ? cached : null;
+    }
+
+    /// <summary>
+    /// The defender passes over <paramref name="unit"/> when it picks a target: a civilian (<see cref="PlayerbotTargetFilter.IsCivilian"/>), one it found
+    /// no path to in the last 30 s (<see cref="PlayerbotPvpFight.Unreachable"/>) or one on another level (a wall, a rampart, another floor). Never one
+    /// that attacks the defender: that fight is not a choice.
+    /// </summary>
+    private bool DefendSkips(Player player, Unit unit)
+    {
+        if (ReferenceEquals(unit.Combat.Victim, player) || player.Combat.Attackers.Contains(unit)) return false;
+        if (unit is Creature creature && PlayerbotTargetFilter.IsCivilian(creature)) return true;
+        return _pvpFight?.IsSkipped(unit) == true || PlayerbotPvpFight.OnOtherLevel(player, unit);
     }
 
     /// <summary>Whether the defender may fight <paramref name="unit"/> now: attackable, inside the post (a little beyond it while chasing).</summary>
@@ -211,7 +225,7 @@ internal sealed partial class PlayerbotBrain
             WorldObject? obj = map.FindObject(guid);
             if (obj is Player other)
             {
-                if (!InsidePost(other, post) || !PlayerbotHostility.MayEngage(player, other, PlayerbotEngageReason.Defend, null)) continue;
+                if (!InsidePost(other, post) || !PlayerbotHostility.MayEngage(player, other, PlayerbotEngageReason.Defend, null) || DefendSkips(player, other)) continue;
                 float distance = Distance(player, other);
                 if (distance < bestPlayerDistance) (bestPlayer, bestPlayerDistance) = (other, distance);
             }
@@ -227,7 +241,8 @@ internal sealed partial class PlayerbotBrain
 
     private void ConsiderHelp(Player player, Map map, PlayerbotDefendPost post, Unit? enemy, ref Unit? best, ref float bestDistance)
     {
-        if (enemy is null || ReferenceEquals(enemy, player) || map.Combat.Hooks.IsFriendly(player, enemy) || !DefendTargetValid(player, map, post, enemy)) return;
+        if (enemy is null || ReferenceEquals(enemy, player) || map.Combat.Hooks.IsFriendly(player, enemy) || !DefendTargetValid(player, map, post, enemy)
+            || DefendSkips(player, enemy)) return;
         float distance = Distance(player, enemy);
         if (distance >= bestDistance) return;
         best = enemy;
