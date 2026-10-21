@@ -93,7 +93,7 @@ public static class HostileRefs
             return [];
         }
 
-        Unit[] holders = [.. target.Combat.ThreatenedBy];
+        Unit[] holders = [.. target.Combat.ThreatenedBy.Where(holder => CanReceiveAssistThreat(holder, target, assister))];
         if (holders.Length == 0)
         {
             return [];
@@ -108,6 +108,29 @@ public static class HostileRefs
         }
 
         return holders;
+    }
+
+    private static bool CanReceiveAssistThreat(Unit holder, Unit target, Unit assister)
+    {
+        if (!holder.IsAlive)
+        {
+            return false;
+        }
+
+        if ((holder.Map is not null || assister.Map is not null)
+            && (!holder.IsInWorld || !assister.IsInWorld || !ReferenceEquals(holder.Map, assister.Map)))
+        {
+            return false;
+        }
+
+        if (holder is Creatures.Creature creature
+            && (creature.IsFrozenOutsideActiveCells || (creature.System is { } system && system.IsOutOfThreatArea(creature, assister))))
+        {
+            return false;
+        }
+
+        return MapCombat.WithinEngagementRange(assister, holder)
+            && MapCombat.WithinEngagementRange(target, holder);
     }
 
     // The lists mutate ThreatenedBy while they are walked.

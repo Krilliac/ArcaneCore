@@ -1085,6 +1085,8 @@ public sealed partial class MapCombat
             if (unit is Player player)
             {
                 Death.Resurrection.ResurrectionRequests.Clear(player); // Player::SetDeathState(JUST_DIED): ClearResurrectRequestData (Player.cpp:1522)
+                player.LastReleasedGraveyard = null;
+                player.RepopDestinationResolved = false;
                 player.SetRooted(true);
             }
 
@@ -1202,9 +1204,13 @@ public sealed partial class MapCombat
         {
             uint interval = CombatConstants.CombatCheckIntervalMs;
             c.CombatTimer = interval - Math.Min(diff - c.CombatTimer, interval);
-            if (c.IsInCombat && c.ThreatenedByInternal.Count == 0 && UsesPvpCombatTimer(unit) && !IsOwnPetThreatened(unit))
+            if (c.IsInCombat && UsesPvpCombatTimer(unit))
             {
-                LeaveCombatOnTimer(unit);
+                PruneStaleThreatHolders(unit);
+                if (c.ThreatenedByInternal.Count == 0 && !IsOwnPetThreatened(unit))
+                {
+                    LeaveCombatOnTimer(unit);
+                }
             }
         }
         else
@@ -1236,10 +1242,54 @@ public sealed partial class MapCombat
 
     /// <summary>vmangos Unit::Update "Pet in combat ?" (Unit.cpp:264-266): the unit's own pet is still held on a creature's threat list.</summary>
     private bool IsOwnPetThreatened(Unit unit)
-        => unit.PetGuid is { IsEmpty: false } petGuid
-            && _map.FindObject(petGuid) is Unit { IsInWorld: true } pet
-            && ReferenceEquals(pet.Map, _map)
-            && pet.Combat.ThreatenedByInternal.Count > 0;
+    {
+        if (unit.PetGuid is not { IsEmpty: false } petGuid
+            || FindUnit(petGuid) is not { IsInWorld: true } pet
+            || !ReferenceEquals(pet.Map, _map))
+        {
+            return false;
+        }
+
+        PruneStaleThreatHolders(pet);
+        return pet.Combat.ThreatenedByInternal.Count > 0;
+    }
+
+    private void PruneStaleThreatHolders(Unit target)
+    {
+        HashSet<Unit> holders = target.Combat.ThreatenedByInternal;
+        if (holders.Count == 0)
+        {
+            return;
+        }
+
+        Unit[]? toRemove = null;
+        int removeCount = 0;
+        foreach (Unit holder in holders)
+        {
+            if (!holder.IsAlive
+                || !holder.IsInWorld
+                || !ReferenceEquals(holder.Map, _map)
+                || holder is Creatures.Creature { IsFrozenOutsideActiveCells: true })
+            {
+                toRemove ??= new Unit[holders.Count];
+                toRemove[removeCount++] = holder;
+            }
+        }
+
+        for (int i = 0; i < removeCount; i++)
+        {
+            Unit holder = toRemove![i];
+            holder.Combat.Threat.Remove(target);
+            holders.Remove(holder);
+        }
+    }
+
+    internal static bool WithinEngagementRange(WorldObject a, WorldObject b)
+    {
+        float dx = a.X - b.X;
+        float dy = a.Y - b.Y;
+        return (dx * dx) + (dy * dy) <= EngagementRange * EngagementRange;
+    }
 
     /// <summary>
     /// The combat timer ran out (vmangos Unit.cpp:268-283): a NO_THREAT_LIST creature that no player charms or owns evades through its AI

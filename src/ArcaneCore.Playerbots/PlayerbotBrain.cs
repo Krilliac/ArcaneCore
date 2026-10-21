@@ -2823,8 +2823,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _recentDeathSources.Add((now, player.MapId, _lastQaDeathPosition, _lastQaDeathSource));
         player.LastEnvironmentalDeath = null;
         player.LastMissingCasterPeriodicDeath = false;
-        player.LastReleasedGraveyard = null;
-        player.RepopDestinationResolved = false;
+        if ((player.Flags & PlayerFlags.Ghost) == 0
+            && player.Combat.DeathState != DeathState.Dead)
+        {
+            player.LastReleasedGraveyard = null;
+            player.RepopDestinationResolved = false;
+        }
         _killingBlowSource = "Unobserved";
         (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
             new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);

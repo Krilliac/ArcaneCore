@@ -6,7 +6,9 @@ using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
@@ -483,5 +485,60 @@ public sealed class PlayerbotDeathLoopTests
     private sealed class GameTimeDeathClock(ArcaneCore.Game.Maps.WorldRuntime world) : DeathClock
     {
         public override long UnixSeconds => 1_800_000_000L + (long)world.Uptime.TotalSeconds;
+    }
+
+    [Fact]
+    public async Task RecordDeath_AfterSpiritReleaseAndScheduledRepop_DoesNotClobberRepopDestinationResolved()
+    {
+        const uint Entry = 993905;
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            Creature killer = await SpawnAsync(host, session, Entry, 601);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                MapCombat combat = player.Map!.Combat;
+                using var watcher = new DeathOutcomeWatcher(host.World);
+                using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Subsystem == "death");
+
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                player.Health = 1;
+                combat.DealDamage(killer, player, 2);
+                Assert.False(player.IsAlive);
+                Assert.False(player.RepopDestinationResolved);
+
+                Assert.True(combat.RepopPlayer(player));
+                Assert.True(player.Flags.HasFlag(PlayerFlags.Ghost));
+                Assert.True(player.Combat.RepopPending);
+                session.ManagedBudget = new ManagedActionBudget(8);
+                while (player.Locomotion.Pending.HasPending && PlayerbotMovementControl.Update(session, player)) { }
+                Assert.False(player.Locomotion.Pending.HasPending);
+                combat.Update(50);
+                Assert.False(player.Combat.RepopPending);
+                Assert.True(player.RepopDestinationResolved);
+
+                uint t0 = host.World.NowMs;
+                watcher.Sweep(t0);
+
+                session.ManagedBudget = new ManagedActionBudget(0);
+                brain.Update(500);
+                Assert.True(player.RepopDestinationResolved);
+
+                watcher.Sweep(t0 + DeathOutcomeWatcher.RepopBudgetMs + 1_000);
+                Assert.Equal(0, cap.Count("death/repop-stuck"));
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
     }
 }
