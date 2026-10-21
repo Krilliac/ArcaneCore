@@ -848,13 +848,19 @@ public sealed class TownProgressionTests
 
     // ---- bots that cannot leave Teldrassil, the water, the sweep order ----
 
+    /// <summary>
+    /// The bot's facts say Teldrassil (inside the island: x above 8000, y above -200 on map 1, the way off is a boat); it stays in its map
+    /// 0 instance, so a home it has on map 0 does not take it away. The position goes through <see cref="Unit.Relocate(float, float, float, float, uint)"/>,
+    /// which moves the movement block with it: writing <c>X</c> and <c>Y</c> alone left the movement at the race start, and the next
+    /// teleport (the return to a map 1 home) re-applies the movement when it starts, so a pass that captured the bot in that window
+    /// saw it on map 1 off the island and reported a second town-unreachable reason.
+    /// </summary>
     private static Task PlaceOnTeldrassilAsync(PopulationTestHost world, Guid botId)
         => world.Host.World.InvokeAsync(() =>
         {
             Player player = world.Bots.FindSession(botId)!.Player!;
-            player.MapId = 1; // inside the island (x above 8000, y above -200 on map 1): the way off is a boat
-            player.X = 9802f;
-            player.Y = 983f;
+            player.MapId = 1;
+            player.Relocate(9802f, 983f, player.Z, player.Orientation, world.Host.World.NowMs);
             return true;
         });
 

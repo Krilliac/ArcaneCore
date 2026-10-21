@@ -27,6 +27,8 @@ public sealed partial class WorldRuntime : IDisposable
     private readonly ConcurrentDictionary<ObjectGuid, Player> _online = new();
     private readonly ConcurrentDictionary<string, Player> _onlineByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private PerfLogAggregator? _perfLog; // world thread: the slow-update summary (null: per-event lines, see PerfLog)
+    private bool _perfLogResolved;
     private readonly ManualResetEventSlim _stopSignal = new(false);
     private Thread? _thread;
     private int _worldThreadId = -1;
@@ -774,6 +776,7 @@ public sealed partial class WorldRuntime : IDisposable
             CommandsRun = _commandsRun,
         };
         SetPosition(TickPhase.Idle, null, 0);
+        _perfLog?.FlushIfDue();
     }
 
     /// <summary>
@@ -834,7 +837,7 @@ public sealed partial class WorldRuntime : IDisposable
         LogIfSlowMicros(thresholdMs, (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency, what, map, diagnostics, gcBefore);
     }
 
-    private void LogIfSlowMicros(int thresholdMs, long micros, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)
+    private void LogIfSlowMicros(int thresholdMs, long micros, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore, GcSnapshot? gcAfter = null)
     {
         if (thresholdMs <= 0)
         {
@@ -843,6 +846,16 @@ public sealed partial class WorldRuntime : IDisposable
 
         if (micros > thresholdMs * 1000L)
         {
+            // With a summary interval the update is counted there and only an outlier (within the per-map cap) gets its own line.
+            if (PerfLog is { } perf)
+            {
+                GcDelta gc = diagnostics is { Completed: true } ? (gcAfter ?? GcSource()).Since(gcBefore) : default;
+                if (!perf.RecordMapUpdate(map.MapId, map.InstanceId, micros, diagnostics, gc))
+                {
+                    return;
+                }
+            }
+
             string host = HostLoadText(micros) + ParallelText(map);
             if (diagnostics is { Completed: true } timing)
             {
@@ -851,7 +864,7 @@ public sealed partial class WorldRuntime : IDisposable
                     what, map.MapId, map.InstanceId, micros / 1000, timing.SimulationMicros / 1000,
                     timing.VisibilityMicros / 1000, timing.ValuesMicros / 1000, timing.FlushMicros / 1000,
                     timing.CleanupMicros / 1000, timing.Players, timing.MovedObjects, timing.ChangedObjects,
-                    timing.NewObjects, timing.VisibilityCandidates, timing.FormatTop(3), timing.Describe(), GcSource().Since(gcBefore).Format(), host);
+                    timing.NewObjects, timing.VisibilityCandidates, timing.FormatTop(3), timing.Describe(), (gcAfter ?? GcSource()).Since(gcBefore).Format(), host);
             }
             else
             {
@@ -866,6 +879,30 @@ public sealed partial class WorldRuntime : IDisposable
     /// null: the lines carry no host text). Read on the world thread only when a line is about to be written.
     /// </summary>
     public ArcaneCore.Kernel.Ops.Watchdog.HostLoadSampler? HostLoad { get; set; }
+
+    /// <summary>The slow-update aggregator, or null when <see cref="PerformanceLogOptions.SummaryIntervalSeconds"/> is 0 (world thread; created on first use).</summary>
+    private PerfLogAggregator? PerfLog
+    {
+        get
+        {
+            if (!_perfLogResolved)
+            {
+                _perfLogResolved = true;
+                if (Options.Perf.SummaryIntervalSeconds > 0)
+                {
+                    _perfLog = new PerfLogAggregator(Options.Perf, _logger, PerfClockMicros, HostVerdictOf, () => IsMainWorldThread);
+                }
+            }
+
+            return _perfLog;
+        }
+    }
+
+    /// <summary>The clock the summary interval runs on: the manual game clock under <see cref="UseManualClock"/>, else the world's stopwatch.</summary>
+    private long PerfClockMicros() => _manualClock ? Interlocked.Read(ref _manualNowMs) * 1000 : _clock.Elapsed.Ticks / 10;
+
+    private ArcaneCore.Kernel.Ops.Watchdog.HostLoadVerdict HostVerdictOf(long windowMicros)
+        => HostLoad?.Report(windowMicros)?.Verdict ?? ArcaneCore.Kernel.Ops.Watchdog.HostLoadVerdict.Unknown;
 
     private string HostLoadText(long windowMicros)
     {
@@ -1248,9 +1285,13 @@ public sealed partial class WorldRuntime : IDisposable
                 frameMicros = diff * 1000L;
             }
 
+            PerfLogAggregator? perfLog = PerfLog;
+            perfLog?.CountFrame();
+
             // vmangos WorldRunnable.cpp:73-74: the frame interval (sleep included), checked before the update.
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.FrameInterval
-                && Options.Perf.SlowWorldUpdate > 0 && diff > (uint)Options.Perf.SlowWorldUpdate)
+                && Options.Perf.SlowWorldUpdate > 0 && diff > (uint)Options.Perf.SlowWorldUpdate
+                && (perfLog is null || perfLog.RecordWorldFrame(diff * 1000L)))
             {
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs}ms", diff);
             }
@@ -1295,11 +1336,14 @@ public sealed partial class WorldRuntime : IDisposable
                 }
             }
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
-                && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
+                && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L
+                && (perfLog is null || perfLog.RecordWorldFrame(durationMicros)))
             {
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs} ms (interval {IntervalMs} ms): {Phases}",
                     durationMicros / 1000, interval, LastTickPhases.Format());
             }
+
+            perfLog?.FlushIfDue();
 
             if (_manualClock)
             {
@@ -1318,6 +1362,7 @@ public sealed partial class WorldRuntime : IDisposable
         }
 
         DisposeMapScheduler();
+        _perfLog?.FlushNow(); // the slow updates of the interval in progress are not lost with the process
         _logger.LogInformation("World thread stopped");
     }
 }

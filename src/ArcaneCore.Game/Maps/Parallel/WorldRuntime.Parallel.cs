@@ -175,6 +175,7 @@ public sealed partial class WorldRuntime
         public bool OnCaller;
         public MapUpdateDiagnostics? Diagnostics;
         public GcSnapshot GcBefore;
+        public GcSnapshot GcAfter;
     }
 
     /// <summary>
@@ -236,6 +237,7 @@ public sealed partial class WorldRuntime
                 finally
                 {
                     run.Micros = Micros(Stopwatch.GetTimestamp() - run.Start);
+                    run.GcAfter = run.Diagnostics is not null ? GcSource() : default; // at the end of this map's own update, not after the other maps
                     run.GateWaitMicros = Math.Min(run.Micros, t_gateWaitMicros - waitBefore);
                     run.Bytes = GC.GetAllocatedBytesForCurrentThread() - bytesBefore;
                     run.OnCaller = Environment.CurrentManagedThreadId == callerThread;
@@ -281,7 +283,7 @@ public sealed partial class WorldRuntime
 
             // Judged on the map's own work: with every unaudited stage in the serial gate, an empty map that waited 50 ms for the gate
             // behind map 0 is not slow (live, redeploy #5: slow-map lines went from ~5 to ~100 a minute, most of them gate waits).
-            LogIfSlowMicros(Options.Perf.SlowMapUpdate, run.Micros - run.GateWaitMicros, "Slow map update", map, run.Diagnostics, run.GcBefore);
+            LogIfSlowMicros(Options.Perf.SlowMapUpdate, run.Micros - run.GateWaitMicros, "Slow map update", map, run.Diagnostics, run.GcBefore, run.GcAfter);
             if (run.Diagnostics is { } diagnostics && observeMap is not null)
             {
                 try

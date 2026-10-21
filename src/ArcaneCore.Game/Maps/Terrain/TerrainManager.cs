@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -52,6 +53,18 @@ public sealed class TerrainManager
 
     /// <summary>Area/zone lookup table (replaced when the world database is loaded).</summary>
     public AreaTable Areas { get; set; } = AreaTable.Empty;
+
+    /// <summary>
+    /// The area of each WMO group (replaced when the world database is loaded). While it is empty, a position inside a WMO reads the
+    /// terrain's area, as before the table existed.
+    /// </summary>
+    public WmoAreaTable WmoAreas { get; set; } = WmoAreaTable.Empty;
+
+    /// <summary>
+    /// The world's collision services, whose model query names the WMO group a position is in (<see cref="TerrainInfo.GetAreaFlag"/>); read
+    /// at each lookup, so a model service installed after startup is used. Null: no WMO areas (a terrain built on its own).
+    /// </summary>
+    public WorldCollision? Collision { get; set; }
 
     /// <summary>Number of tile files read so far (diagnostics and tests).</summary>
     public int FilesLoaded { get; private set; }
@@ -168,7 +181,8 @@ public sealed class TerrainManager
 
     /// <summary>
     /// The zone and area at a position, read straight from the tile's <c>.map</c> file without the tile cache (vmangos
-    /// <c>TerrainInfo::GetZoneAndAreaId</c> without WMO areas): (0, 0) without terrain data, outside the map or for a missing or
+    /// <c>TerrainInfo::GetZoneAndAreaId</c> from the tile's cell alone: the WMO group's area (<see cref="TerrainInfo.GetAreaFlag"/>) needs the
+    /// model service, which belongs to the world thread, so inside a WMO it can differ from the cached lookup): (0, 0) without terrain data, outside the map or for a missing or
     /// unreadable file. Thread affinity: any thread. It reads only the data directory (fixed at construction) and the given
     /// <paramref name="areas"/> (immutable), never the world-thread tile cache. It reads one file per call, so it is for background work.
     /// </summary>

@@ -53,7 +53,7 @@ public sealed class PlayerbotSiegeStatusTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([]);
         (WorldTestClient gm, PlayerbotSiege siege) = await StartedSiege(world);
         await using WorldTestClient _ = gm;
-        Assert.True(await world.RunUntilAsync(30_000, () => siege.Raids.All(r => r.Group is { State: PlayerbotGroupState.Engaging } && r.Detail.Length > 0)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => siege.Raids.All(r => r.Group is { State: PlayerbotGroupState.Engaging } && r.Detail.Length > 0)), await world.TraceAsync());
 
         List<string> all = await FleetWorld.SayAsync(gm, ".playerbot siege status", lines: 3);
 

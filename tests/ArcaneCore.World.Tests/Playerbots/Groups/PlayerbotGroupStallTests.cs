@@ -38,15 +38,15 @@ public sealed class PlayerbotGroupStallTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options => options.Risk.Tolerance = 0.25f, services: logs.Register);
         var healer = await world.AddBotAsync("Stallprie", Human, Priest, 1, [LesserHeal, PowerWordFortitude]);
         // The priest waits first, so it leads the pair (no tank: the bot that waited longest leads).
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == healer.Id)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == healer.Id)), await world.TraceAsync());
         await world.AddBotAsync("Stallmage", Human, Mage, 1, [Fireball]);
 
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Engaging)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Engaging)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(healer.Id, group.LeaderBotId);
         Assert.Equal(PlayerbotGroupRole.Healer, group.Find(healer.Id)!.Role);
 
-        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal(1, world.Coordinator.Totals.Completed);
         // A healthy group is never reported stalled.
         Assert.DoesNotContain(logs.Lines, line => line.Contains("goal=Group", StringComparison.Ordinal));
@@ -63,7 +63,7 @@ public sealed class PlayerbotGroupStallTests
         }, services: logs.Register);
         var warrior = await world.AddBotAsync("Stuckwar", Human, Warrior, 1, []);
         var mage = await world.AddBotAsync("Stuckmage", Human, Mage, 1, [Fireball]);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Engaging)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Engaging)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal("risk", group.Goal.Source);
 
@@ -76,7 +76,7 @@ public sealed class PlayerbotGroupStallTests
         });
 
         // Two stall bounds (30 s each) and a little: the group gives the brute up as a target first, then gives up and dissolves.
-        Assert.True(await world.RunUntilAsync(150_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(150_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal("stalled", group.Reason);
         Assert.Contains(world.Coordinator.Events, line => line.Contains($"group {group.Id} stalled", StringComparison.Ordinal)
             && line.Contains("re-targets", StringComparison.Ordinal));
@@ -109,7 +109,7 @@ public sealed class PlayerbotGroupStallTests
     /// </summary>
     private static async Task<PlayerbotGroupCoordinator.BotGroup> FormThenMoveToTheFarSideAsync(GroupTestWorld world, (Guid Id, string Name)[] bots, float flatYards, float rise)
     {
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         await world.OnWorldAsync(() =>
         {
@@ -134,14 +134,14 @@ public sealed class PlayerbotGroupStallTests
         // 33 yards flat from the brute on its far side: outside the 30-yard approach, inside the ring (30 + the slack of 5).
         PlayerbotGroupCoordinator.BotGroup group = await FormThenMoveToTheFarSideAsync(world, [warrior, mage], 33f, 0f);
 
-        Assert.True(await world.RunUntilAsync(5_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         Assert.Equal(PlayerbotGroupState.Engaging, group.State);
         await world.OnWorldAsync(() =>
         {
             Player leader = world.Player(group.LeaderBotId);
             float flat = Flat(leader, group.Goal.Meeting);
             Assert.InRange(flat, 28f, 34f);
-            Assert.False(leader.Combat.IsInCombat, world.Trace());
+            Assert.False(leader.Combat.IsInCombat, world.Trace()); // on the world thread
             return true;
         });
     }
@@ -175,7 +175,7 @@ public sealed class PlayerbotGroupStallTests
         // 18 yards flat from the entrance on its far side: outside the 15-yard approach, inside the ring (15 + 5).
         PlayerbotGroupCoordinator.BotGroup group = await FormThenMoveToTheFarSideAsync(world, [tank, healer, mage], 18f, 0f);
 
-        Assert.True(await world.RunUntilAsync(5_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         Assert.Equal(PlayerbotGroupState.Entering, group.State);
         await world.OnWorldAsync(() =>
         {
@@ -280,7 +280,7 @@ public sealed class PlayerbotGroupStallTests
         }, services: logs.Register);
         await world.AddBotAsync("Realwar", Human, Warrior, 1, []);
         await world.AddBotAsync("Realmage", Human, Mage, 1, [Fireball]);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Engaging)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Engaging)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         await world.OnWorldAsync(() =>
         {
@@ -315,7 +315,7 @@ public sealed class PlayerbotGroupStallTests
         await world.AddBotAsync("Zerowar", Human, Warrior, 1, []);
         await world.AddBotAsync("Zeromage", Human, Mage, 1, [Fireball]);
 
-        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.StallCount > 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.StallCount > 0), await world.TraceAsync());
         Assert.NotEqual(PlayerbotGroupState.Engaging, world.Coordinator.Groups.Single().State);
         QaSignal[] stalls = [.. logs.Lines
             .Where(line => line.StartsWith("Warning " + typeof(ManagedPlayerbotFeature).FullName + ": ", StringComparison.Ordinal))
@@ -340,9 +340,9 @@ public sealed class PlayerbotGroupStallTests
         var healer = await world.AddBotAsync("Leaveprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
         var mage = await world.AddBotAsync("Leavemage", Human, Mage, 12, [Fireball], EntranceArea);
         (Guid Id, string Name)[] bots = [tank, healer, mage];
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == 36)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == 36)), await world.TraceAsync());
 
         // The run is over and nobody can walk out: no way leads anywhere, so every member stands inside.
         await world.OnWorldAsync(() =>
@@ -364,7 +364,7 @@ public sealed class PlayerbotGroupStallTests
         Assert.Equal(0, world.Coordinator.StallCount);
 
         // The leaving state's bound brings the stragglers out and the run is recorded as done.
-        Assert.True(await world.RunUntilAsync(PlayerbotGroupCoordinator.StepTimeoutMs, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(PlayerbotGroupCoordinator.StepTimeoutMs, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, line => line.Contains("could not walk out: brought to the entrance", StringComparison.Ordinal));
         Assert.True(group.Succeeded);
         Assert.Equal("completed", group.Reason);
@@ -388,7 +388,7 @@ public sealed class PlayerbotGroupStallTests
         }, services: logs.Register);
         var leaderBot = await world.AddBotAsync("Gatherwar", Human, Warrior, 1, []);
         var farBot = await world.AddBotAsync("Gathermage", Human, Mage, 1, [Fireball]);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
 
         // Keep the group in Gathering with a member far away and no path, so the leader holds at the meeting point past two StallSeconds bounds.

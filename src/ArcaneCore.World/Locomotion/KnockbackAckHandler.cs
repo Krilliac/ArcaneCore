@@ -30,6 +30,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         KnockbackAck ack = KnockbackPackets.ReadAck(payload);
         if (ack.Guid != player.Guid.Value)
         {
+            session.NoteOrphanAck(WorldOpcode.CmsgMoveKnockBackAck, "acknowledgement names another mover");
             return;
         }
 
@@ -39,6 +40,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         }
         if (KnockbackService.Acknowledge(player, ack.Counter, ack.Movement) is null)
         {
+            session.NoteOrphanAck(WorldOpcode.CmsgMoveKnockBackAck, "no pending knockback matches the counter");
             return;
         }
 

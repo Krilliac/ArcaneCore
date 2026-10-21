@@ -60,6 +60,12 @@ public sealed class WorldConfigChecks : IConfigCheck
             Range(issues, configuration, $"PerformanceLog:{key}", 0, 0, int.MaxValue, "0 to disable, or a threshold in milliseconds");
         }
 
+        Range(issues, configuration, "PerformanceLog:SummaryIntervalSeconds", 60, 0, 86400, "0 to log every slow update on its own line, or 1-86400 seconds between summary lines");
+        const string DetailExpected = "0 for no detail lines, or the threshold in milliseconds above which an update also gets its own line";
+        Range(issues, configuration, "PerformanceLog:SlowWorldUpdateDetail", 250, 0, int.MaxValue, DetailExpected);
+        Range(issues, configuration, "PerformanceLog:SlowMapUpdateDetail", 200, 0, int.MaxValue, DetailExpected);
+        Range(issues, configuration, "PerformanceLog:DetailLinesPerMapPerInterval", 1, 0, 16, "0 for no detail lines, or 1-16 lines per map instance per summary interval");
+
         string? measure = configuration["PerformanceLog:SlowWorldUpdateMeasure"];
         if (!string.IsNullOrWhiteSpace(measure) && !Enum.TryParse<ArcaneCore.Game.Maps.SlowWorldUpdateMeasure>(measure, ignoreCase: true, out _))
         {

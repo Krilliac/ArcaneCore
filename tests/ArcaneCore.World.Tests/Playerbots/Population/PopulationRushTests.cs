@@ -334,7 +334,7 @@ public sealed class PopulationRushTests
         await using WorldTestClient player = await world.Host.EnterWorldAsync("RUSHPLAYER", "Rushplayer");
         await player.CollectAsync();
         await player.SendChatAsync(ChatType.Say, Language.Common, ".playerbot population rush 5");
-        await player.ReadChatAsync();
+        await player.ReadSystemChatAsync();
         Assert.Equal("done", world.Feature.RushStatus.State);
         Assert.Equal(3, world.Feature.RushStatus.Requested);
     }

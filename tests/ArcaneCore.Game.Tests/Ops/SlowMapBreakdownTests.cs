@@ -52,6 +52,7 @@ public sealed class SlowMapBreakdownTests
     {
         var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0 };
         options.Perf.SlowMapUpdate = slowMs;
+        options.Perf.SummaryIntervalSeconds = 0; // these tests pin the per-event line
         return new WorldRuntime(options, new RecordingSaveQueue(), log);
     }
 

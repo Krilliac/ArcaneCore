@@ -33,7 +33,21 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
     private static void HandleMoveTeleportAck(WorldSession session, Player player, byte[] payload)
     {
         (ulong guid, _, _) = TeleportPackets.ReadMoveTeleportAck(payload);
-        Feature(session).Teleports.HandleTeleportAck(player, guid);
+        TeleportService teleports = Feature(session).Teleports;
+        bool heuristics = session.PacketHeuristics is { Active: true };
+        TeleportStage? stage = heuristics ? teleports.StageOf(player) : null;
+        if (!teleports.HandleTeleportAck(player, guid) && heuristics)
+        {
+            // Report only (docs/areas/packet-heuristics.md): an ack with no near teleport pending, or for another mover, is one the server never asked for.
+            if (stage != TeleportStage.Near)
+            {
+                session.NoteOrphanAck(WorldOpcode.MsgMoveTeleportAck, "no near teleport is pending");
+            }
+            else if (guid != player.Guid.Value)
+            {
+                session.NoteOrphanAck(WorldOpcode.MsgMoveTeleportAck, "acknowledgement names another mover");
+            }
+        }
     }
 
     // vmangos WorldSession::HandleMoveWorldportAckOpcode (empty packet).

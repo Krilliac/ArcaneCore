@@ -38,7 +38,7 @@ public sealed class PlayerbotScenarioCommandTests
         await using WorldTestClient admin = await host.EnterWorldAsync("SCNOFF", "Scnoff", AccountSecurity.Administrator);
         await admin.CollectAsync();
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario run smoke");
-        Assert.Equal("Playerbot scenarios are disabled (World:Playerbots:Scenarios:Enabled).", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("Playerbot scenarios are disabled (World:Playerbots:Scenarios:Enabled).", (await admin.ReadSystemChatAsync()).Text);
     }
 
     [Fact]
@@ -51,16 +51,16 @@ public sealed class PlayerbotScenarioCommandTests
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario list");
         var listed = new List<string>();
         IReadOnlyList<IPlayerbotScenario> catalog = PlayerbotScenarioCatalog.All(world.Services);
-        for (int i = 0; i < catalog.Count; i++) listed.Add((await admin.ReadChatAsync()).Text);
+        for (int i = 0; i < catalog.Count; i++) listed.Add((await admin.ReadSystemChatAsync()).Text);
         Assert.Equal(catalog.Select(s => $"{s.Name}: {s.Description}"), listed);
         Assert.Contains("wsg: " + new WarsongGulchScenario().Description, listed);
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario run nosuch");
-        Assert.Equal("Unknown scenario 'nosuch'. Use .playerbot scenario list.", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("Unknown scenario 'nosuch'. Use .playerbot scenario list.", (await admin.ReadSystemChatAsync()).Text);
 
         // The live command runs on the real clock; "smoke" needs no game time, so it completes on this manual-clock world.
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario run smoke");
-        Assert.Equal("Playerbot scenario smoke started.", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("Playerbot scenario smoke started.", (await admin.ReadSystemChatAsync()).Text);
         // The runner has a 120 s wall-clock limit; its report can arrive well after a normal 10 s packet read on a loaded host.
         TimeSpan reportTimeout = TimeSpan.FromSeconds(150);
         string headline = (await admin.ReadChatAsync(reportTimeout)).Text;
@@ -70,7 +70,7 @@ public sealed class PlayerbotScenarioCommandTests
         }
 
         Assert.StartsWith("SCENARIO smoke PASS steps=2", headline);
-        Assert.Contains("login Scnalpha", (await admin.ReadChatAsync()).Text);
-        Assert.Contains("say and hear it", (await admin.ReadChatAsync()).Text);
+        Assert.Contains("login Scnalpha", (await admin.ReadSystemChatAsync()).Text);
+        Assert.Contains("say and hear it", (await admin.ReadSystemChatAsync()).Text);
     }
 }

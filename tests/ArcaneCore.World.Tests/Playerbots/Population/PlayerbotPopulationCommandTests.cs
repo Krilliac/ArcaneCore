@@ -78,8 +78,8 @@ public sealed class PlayerbotPopulationCommandTests
         await player.SendChatAsync(ChatType.Say, Language.Common, ".playerbot population target 99");
         await player.SendChatAsync(ChatType.Say, Language.Common, ".playerbot population disable");
         // Each refused command answers; both have been handled once both answers are in.
-        await player.ReadChatAsync();
-        await player.ReadChatAsync();
+        await player.ReadSystemChatAsync();
+        await player.ReadSystemChatAsync();
 
         Assert.Equal(target, world.Population.TargetOnline);
         Assert.True(world.Population.Enabled);

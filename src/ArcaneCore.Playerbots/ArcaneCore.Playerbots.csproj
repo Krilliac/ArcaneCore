@@ -12,6 +12,7 @@
        next to the world executable (CopyPackBesideWorldHost below) and Program.cs loads it from there. Rule: this project adds
        no package the world host does not already have, because the host's deps.json is what the default context resolves. -->
   <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
     <RootNamespace>ArcaneCore.World.Playerbots</RootNamespace>
     <AssemblyName>ArcaneCore.Playerbots</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

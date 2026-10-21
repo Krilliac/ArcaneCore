@@ -174,7 +174,13 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
 
         public HazardPathfinder Path { get; }
 
-        public static async Task<RepairHazardWorld> StartAsync(bool hazard)
+        /// <param name="hazard">Whether a hazard lies on the way to every repair NPC.</param>
+        /// <param name="queryTicksLimit">
+        /// The query time a think may spend on repair plans (<see cref="PlayerbotTownGoals.RepairQueryTicksLimit"/>). Unbounded by default,
+        /// so a test of the query-count budget does not depend on how fast this machine answers (a loaded one once stopped a think after
+        /// 13 queries on the 5 ms budget).
+        /// </param>
+        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long queryTicksLimit = long.MaxValue)
         {
             var items = new ItemTestContent();
             items.Templates.Templates.Add(new ItemTemplate
@@ -193,6 +199,7 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
             });
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             var world = new RepairHazardWorld(host, session, path);
+            world._goals.RepairQueryTicksLimit = queryTicksLimit;
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -278,6 +285,24 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         output.WriteLine($"think 1: {queries} queries, {plans} plans");
         Assert.Equal(2, plans); // 13 queries after the first plan, 26 (over 16) after the second: no third
         Assert.InRange(queries, PlayerbotTownGoals.MaxRepairQueriesPerThink, PlayerbotTownGoals.MaxRepairQueriesPerThink + RefusedPlanQueries);
+        (int next, int nextPlans) = await world.ThinkAsync(withProbe: true);
+        Assert.True(nextPlans >= 1 && next > 0, "the next think planned nothing");
+    }
+
+    /// <summary>
+    /// The other budget of the same think: the query TIME. With no time to spend (a limit of 0 ticks, what a loaded machine reaches
+    /// after the first plan), the think stops after one plan although it made far fewer queries than the count budget allows
+    /// (<see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>), and the next think goes on. This is the outcome that made the
+    /// count test above fail once under load; it is now pinned on purpose.
+    /// </summary>
+    [Fact]
+    public async Task RepairTrip_StopsPlanningInAThink_OnceTheQueryTimeBudgetIsSpent_EvenUnderTheCountBudget()
+    {
+        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true, queryTicksLimit: 0);
+        (int queries, int plans) = await world.ThinkAsync(withProbe: true);
+        Assert.Equal(1, plans);
+        Assert.Equal(RefusedPlanQueries, queries);
+        Assert.True(queries < PlayerbotTownGoals.MaxRepairQueriesPerThink, "the count budget must not be what stopped it");
         (int next, int nextPlans) = await world.ThinkAsync(withProbe: true);
         Assert.True(nextPlans >= 1 && next > 0, "the next think planned nothing");
     }

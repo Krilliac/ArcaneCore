@@ -68,32 +68,32 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync(withLifecycleTrash: true);
         (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Rerun");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup first = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
 
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), await world.TraceAsync());
         uint firstInstance = world.Player(bots[0].Id).Map!.InstanceId;
         Assert.NotEqual(0u, firstInstance);
         Creature firstTrash = await VisibleCreatureAsync(world, bots[0].Id, LifecycleTrash);
         Assert.True(firstTrash.IsAlive);
-        Assert.True(await world.RunUntilAsync(360_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
-        Assert.True(first.Run!.Complete, world.Trace());
+        Assert.True(await world.RunUntilAsync(360_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(first.Run!.Complete, await world.TraceAsync());
         Assert.False(firstTrash.IsAlive);
         Assert.Equal(1, world.Coordinator.RunTotals.Completed);
         int resetEvent = world.Coordinator.Events.FindIndex(e => e.EndsWith("reset instance 36", StringComparison.Ordinal));
         int disbandEvent = world.Coordinator.Events.FindIndex(e => e.Contains("disbanded (completed)", StringComparison.Ordinal));
         // This change: the leader made the request through the handler and noted the outcome before the disband.
-        Assert.True(resetEvent >= 0 && disbandEvent > resetEvent, world.Trace());
+        Assert.True(resetEvent >= 0 && disbandEvent > resetEvent, await world.TraceAsync());
         // The fresh instance below is not from that request: the disband itself resets the group's instances (InstanceManager.OnGroupDisbanding).
         Assert.All(bots, b => Assert.Null(world.Instances().GetPlayerBind(world.Player(b.Id).Guid, DungeonEntry.Deadmines)));
 
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup second = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
         Assert.Equal(bots.Select(b => b.Id).Order(), second.Members.Select(m => m.BotId).Order());
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), await world.TraceAsync());
         uint secondInstance = world.Player(bots[0].Id).Map!.InstanceId;
         Assert.NotEqual(firstInstance, secondInstance);
         Assert.Equal(BossEntry, second.Run!.CurrentBoss!.Entry);
@@ -107,10 +107,10 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync();
         (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Human");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), await world.TraceAsync());
 
         // ResetSave unbinds every player on the save, so a bot must never reset while a human is in the group.
         await world.OnWorldAsync(() =>
@@ -125,7 +125,7 @@ public sealed class PlayerbotRunWorldTests
             group.State = PlayerbotGroupState.Disbanding;
             return true;
         });
-        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.EndsWith("reset request skipped: a member is not a managed bot", StringComparison.Ordinal));
         Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("reset instance", StringComparison.Ordinal));
     }
@@ -136,10 +136,10 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync();
         (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Offline");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), await world.TraceAsync());
 
         // A character the coordinator never tracked (offline, so possibly human) sits in the server group; no coordinator member is Real.
         await world.OnWorldAsync(() =>
@@ -156,7 +156,7 @@ public sealed class PlayerbotRunWorldTests
             group.State = PlayerbotGroupState.Disbanding;
             return true;
         });
-        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.EndsWith("reset request skipped: a member is not a managed bot", StringComparison.Ordinal));
         Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("reset instance", StringComparison.Ordinal));
     }
@@ -167,10 +167,10 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync();
         (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Refuse");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), await world.TraceAsync());
 
         // Force the precise refusal interleaving: the run has completed, but a member is still inside when the leader resets.
         await world.OnWorldAsync(() =>
@@ -184,7 +184,7 @@ public sealed class PlayerbotRunWorldTests
             group.State = PlayerbotGroupState.Disbanding;
             return true;
         });
-        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.EndsWith("reset instance 36 failed: General", StringComparison.Ordinal));
         Assert.All(bots, b => Assert.Null(world.GroupManager.GetGroup(world.Player(b.Id).Guid)));
     }
@@ -205,7 +205,7 @@ public sealed class PlayerbotRunWorldTests
         Assert.Empty(world.Coordinator.Groups);
 
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
 
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(PlayerbotGroupGoalKind.Dungeon, group.Goal.Kind);
@@ -242,7 +242,7 @@ public sealed class PlayerbotRunWorldTests
         Assert.Equal(0, world.Coordinator.Totals.Formed);
 
         await world.AddBotAsync("Nhheal", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         Assert.Equal(PlayerbotGroupRole.Healer, world.Coordinator.Groups.Single().Members.Single(m => m.Name == "Nhheal").Role);
     }
 
@@ -253,7 +253,7 @@ public sealed class PlayerbotRunWorldTests
         var members = await AddPartyAsync(world, "Tp");
         var outsider = await world.AddBotAsync("Tpout", Human, Mage, 40, [Fireball], EntranceArea);
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
 
         Assert.All(members, m => Assert.Equal(PlayerbotGroupTravelPolicy.FightThrough, world.Coordinator.TravelPolicyFor(m.Id)));
         Assert.Null(world.Coordinator.TravelPolicyFor(outsider.Id));
@@ -270,7 +270,7 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync();
         var members = await AddPartyAsync(world, "Fg");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         PlayerbotRunMachine run = group.Run!;
         (Guid Id, string Name) follower = members.First(m => m.Id != group.LeaderBotId);
@@ -311,7 +311,7 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync(options => options.Groups.DungeonRuns.Raids.SkipPrerequisites = true);
         var members = await AddPartyAsync(world, "Dw");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
 
         await world.OnWorldAsync(() =>
         {
@@ -334,18 +334,18 @@ public sealed class PlayerbotRunWorldTests
         // No bot has the amulet, the attunement quest or the condition: each raid is left out for the first requirement that refuses.
         await world.RunAsync(20_000);
         Assert.Empty(world.Coordinator.Groups);
-        AssertNoted(world, "run Onyxia's Lair: 10 bots in the level band lack the item requirement");
-        AssertNoted(world, "run Molten Core: 10 bots in the level band lack the quest requirement");
-        AssertNoted(world, "run Naxxramas: 10 bots in the level band lack the condition requirement");
+        await AssertNoted(world, "run Onyxia's Lair: 10 bots in the level band lack the item requirement");
+        await AssertNoted(world, "run Molten Core: 10 bots in the level band lack the quest requirement");
+        await AssertNoted(world, "run Naxxramas: 10 bots in the level band lack the condition requirement");
 
         // Nine of ten with the amulet is not enough: the whole raid must meet the requirement.
         await GiveAmuletAsync(world, raid.Take(9));
         await world.RunAsync(20_000);
         Assert.Empty(world.Coordinator.Groups);
-        AssertNoted(world, "run Onyxia's Lair: 1 bots in the level band lack the item requirement");
+        await AssertNoted(world, "run Onyxia's Lair: 1 bots in the level band lack the item requirement");
 
         await GiveAmuletAsync(world, raid.Skip(9));
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
 
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.True(group.Run!.Plan.Raid);
@@ -364,7 +364,7 @@ public sealed class PlayerbotRunWorldTests
         await GiveAmuletAsync(world, raid);
         world.Coordinator.RunRoll = () => 0d;
 
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
 
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(10, group.Members.Count);
@@ -403,12 +403,12 @@ public sealed class PlayerbotRunWorldTests
         await Bind(world, saved.Id, instance: 5000, permanent: true);
         await world.RunAsync(20_000);
         Assert.Empty(world.Coordinator.Groups);
-        AssertNoted(world, "run Onyxia's Lair: 1 bots are locked to the raid");
+        await AssertNoted(world, "run Onyxia's Lair: 1 bots are locked to the raid");
 
         // Unbound and bound temporarily (a raid never saves a temporary bind that way; it is the case of a group bind): not locked.
         Assert.True(await world.OnWorldAsync(() => world.Instances().UnbindPlayer(world.Player(saved.Id).Guid, OnyxiasLair)));
         await Bind(world, saved.Id, instance: 5001, permanent: false);
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         Assert.NotNull(world.Coordinator.Groups.Single().Find(saved.Id));
     }
 
@@ -423,7 +423,7 @@ public sealed class PlayerbotRunWorldTests
         var raid = await AddRaidAsync(world, "Sk", warriors: 1, priests: 3, mages: 7);
         world.Coordinator.RunRoll = () => 0d;
 
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(OnyxiasLair, group.Run!.Plan.MapId); // the lowest map of the three raids all ten bots fit
         Assert.Equal(10, group.Members.Count);
@@ -475,7 +475,7 @@ public sealed class PlayerbotRunWorldTests
         var raid = await AddRaidAsync(world, "Ns", warriors: 1, priests: 3, mages: 6);
         await GiveAmuletAsync(world, raid);
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
 
         await world.OnWorldAsync(() =>
         {
@@ -520,7 +520,7 @@ public sealed class PlayerbotRunWorldTests
 
         Assert.Empty(world.Coordinator.Groups);
         Assert.Equal(0, world.Coordinator.Totals.Formed);
-        AssertNoted(world, "run Onyxia's Lair: 10 bots in the level band lack the level requirement");
+        await AssertNoted(world, "run Onyxia's Lair: 10 bots in the level band lack the level requirement");
     }
 
     [Fact]
@@ -533,9 +533,9 @@ public sealed class PlayerbotRunWorldTests
         });
         var raid = await AddRaidAsync(world, "Sd", warriors: 1, priests: 3, mages: 7);
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
-        Assert.True(await world.RunUntilAsync(30_000, () => group.Members.All(m => m.Joined)), world.Trace()); // the waiver is for joined members
+        Assert.True(await world.RunUntilAsync(30_000, () => group.Members.All(m => m.Joined)), await world.TraceAsync()); // the waiver is for joined members
         (Guid Id, string Name)[] members = [.. raid.Where(r => group.Find(r.Id) is not null)];
         Assert.Equal(10, members.Length);
         PlayerbotRunMachine run = group.Run!;
@@ -601,7 +601,7 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartWithQaAsync(bus);
         await AddPartyAsync(world, "Qaz");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
 
@@ -631,7 +631,7 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartWithQaAsync(bus);
         (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qat");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
         // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the fault the group AI raises is injected the way its own are
@@ -642,11 +642,11 @@ public sealed class PlayerbotRunWorldTests
             return true;
         });
 
-        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
 
         var signals = new List<QaSignal>();
         bus.Drain(signals, 16);
-        Assert.True(signals.Count == 1, world.Trace());
+        Assert.True(signals.Count == 1, await world.TraceAsync());
         QaSignal signal = signals[0];
         Assert.Equal(QaSignalKind.RunFailed, signal.Kind);
         Assert.Equal(reason, signal.Reason);
@@ -702,7 +702,7 @@ public sealed class PlayerbotRunWorldTests
         await using GroupTestWorld world = await StartAsync();
         await AddPartyAsync(world, "Qao");
         world.Coordinator.RunRoll = () => 0d;
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
 
@@ -718,8 +718,8 @@ public sealed class PlayerbotRunWorldTests
 
     // --- the world ---------------------------------------------------------------------------------------------------
 
-    private static void AssertNoted(GroupTestWorld world, string text)
-        => Assert.True(world.Coordinator.Events.Any(e => e.EndsWith(text, StringComparison.Ordinal)), $"not noted: {text}{Environment.NewLine}{world.Trace()}");
+    private static async Task AssertNoted(GroupTestWorld world, string text)
+        => Assert.True(await world.OnWorldAsync(() => world.Coordinator.Events.Any(e => e.EndsWith(text, StringComparison.Ordinal))), $"not noted: {text}{Environment.NewLine}{await world.TraceAsync()}");
 
     /// <summary>
     /// Quest groups never take the last group slot: with MaxGroups 2 and four bots waiting on an elite quest for two (two pairs, one goal),
@@ -734,20 +734,20 @@ public sealed class PlayerbotRunWorldTests
         world.Coordinator.RunRoll = () => 1d; // no run until the quest bots hold the slots
         var pairs = new List<(Guid Id, string Name)>();
         foreach (string name in new[] { "Slota", "Slotb", "Slotc", "Slotd" }) pairs.Add(await world.AddBotAsync(name, Human, Mage, 13, [Fireball], EntranceArea));
-        Assert.True(await world.RunUntilAsync(60_000, () => pairs.All(b => world.HasQuest(b.Id, EntranceEliteQuest))), world.Trace());
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count >= 1), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => pairs.All(b => world.HasQuest(b.Id, EntranceEliteQuest))), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count >= 1), await world.TraceAsync());
         await world.RunAsync(10_000); // the second pair would have formed by now without the reserve
 
         var party = await AddPartyAsync(world, "Slotrun");
         world.Coordinator.RunRoll = () => 0d;
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)),
-            "no dungeon run started while quest groups held the slots" + Environment.NewLine + world.Trace());
+            "no dungeon run started while quest groups held the slots" + Environment.NewLine + await world.TraceAsync());
         // No quest group ended to free the slot: the run took the one that was kept for it.
         Assert.Equal((0, 0), (world.Coordinator.Totals.Completed, world.Coordinator.Totals.Failed));
-        Assert.True(world.Coordinator.Groups.Count(g => g.Run is null) <= 1, world.Trace());
-        Assert.True(world.Coordinator.Groups.Count <= 2, world.Trace());
+        Assert.True(world.Coordinator.Groups.Count(g => g.Run is null) <= 1, await world.TraceAsync());
+        Assert.True(world.Coordinator.Groups.Count <= 2, await world.TraceAsync());
         Assert.Equal(1, world.Coordinator.QuestGroupLimit);
-        Assert.All(party, m => Assert.True(world.Coordinator.GroupOf(m.Id)?.Run is not null, world.Trace()));
+        foreach (var m in party) Assert.True(world.Coordinator.GroupOf(m.Id)?.Run is not null, await world.TraceAsync());
     }
 
     private static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool withLifecycleTrash = false, uint[]? quests = null)

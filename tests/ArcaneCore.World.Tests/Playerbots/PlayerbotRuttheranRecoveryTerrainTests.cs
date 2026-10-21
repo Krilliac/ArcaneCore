@@ -10,6 +10,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -26,8 +27,10 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// is the shorter way to one, and never throws. Spawns and triggers below are classic-db z2815's; terrain and navigation are the real
 /// 1.12 extraction.
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotRuttheranRecoveryTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotRuttheranRecoveryTerrainTests(ITestOutputHelper output) : base(output) { }
+
     private const uint SpiritHealerEntry = 6491;
 
     // classic-db z2815 creature 6491 spawns on Teldrassil (guid, x, y, z): Dolanaar, Darnassus, Aldrassil.

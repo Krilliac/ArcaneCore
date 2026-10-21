@@ -187,7 +187,7 @@ public sealed partial class PlayerbotGroupCoordinator
         var candidates = new List<PlayerbotGroupCandidate>(botIds.Count);
         foreach (Guid id in botIds)
         {
-            if (!_bots.TryGetValue(id, out PlayerbotGroupBot bot) || !bot.Free || _memberOf.ContainsKey(id) || _waiting.ContainsKey(id)
+            if (!_bots.TryGetValue(id, out PlayerbotGroupBot bot) || !bot.Free || bot.Brain.Stay is not null || _memberOf.ContainsKey(id) || _waiting.ContainsKey(id)
                 || bot.Session.Player is not { IsInWorld: true, IsAlive: true } player || (player.Flags & PlayerFlags.Ghost) != 0
                 || player.Combat.IsInCombat || player.MapId != plan.EntranceMap || player.Level < min || player.Level > max
                 || IsRunSetAside(id, plan) || groupManager.GetGroup(player.Guid) is not null || groupManager.GetInvite(player.Guid) is not null
@@ -238,7 +238,7 @@ public sealed partial class PlayerbotGroupCoordinator
         var free = new List<RunCandidate>();
         foreach (PlayerbotGroupBot bot in _orderedBots)
         {
-            if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || _waiting.ContainsKey(bot.BotId)
+            if (!bot.Free || bot.Brain.Stay is not null || _memberOf.ContainsKey(bot.BotId) || _waiting.ContainsKey(bot.BotId)
                 || bot.Session.Player is not { IsInWorld: true, IsAlive: true } player
                 || (player.Flags & PlayerFlags.Ghost) != 0 || player.Combat.IsInCombat) continue;
             if (maps.Registry.Find(player.MapId) is not { IsContinent: true }) continue;

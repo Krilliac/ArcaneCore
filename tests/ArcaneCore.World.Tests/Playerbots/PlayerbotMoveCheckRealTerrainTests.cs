@@ -2,11 +2,14 @@ using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotMoveCheckRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotMoveCheckRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     // Dun Morogh, just west of Kharanos: a doodad (M2) wall across x about -5639 at y -502, found by scanning the real vmaps for
     // segments that the default line of sight (doodads ignored) calls clear and the doodad-aware one blocks.
     private static readonly Vector3 FenceWest = new(-5646f, -502f, 396.7f), FenceEast = new(-5630f, -502f, 396.7f);

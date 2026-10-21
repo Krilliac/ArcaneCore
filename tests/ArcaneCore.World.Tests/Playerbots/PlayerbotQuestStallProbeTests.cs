@@ -2,11 +2,14 @@ using System.Numerics;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotQuestStallProbeTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotQuestStallProbeTests(ITestOutputHelper output) : base(output) { }
+
     // ClassicDB creature_spawn enders: 6929, 12736, 3453, 6577 respectively. These points came from the
     // Bot-QA stalls and the predecessor's route probe. A planned final position proves a path hint, not a live turn-in.
     public static TheoryData<string, uint, float, float, float, float, float, float, float> QuestStallPoints => new()

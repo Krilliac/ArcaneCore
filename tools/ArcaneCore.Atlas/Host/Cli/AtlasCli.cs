@@ -30,21 +30,26 @@ public static class AtlasCli
     public const string Usage = """
         usage: arcane-atlas <verb> [options]
 
-          serve   [--data DIR] [--client DIR] [--port N] [--open]
+          serve   [--data DIR] [--client DIR] [--port N] [--open] [--log-level LEVEL] [--log-file PATH]
                   Start the loopback web app on 127.0.0.1 (a random port unless --port) and print its address as one JSON line.
                   --open starts Microsoft Edge (else Google Chrome) as an app window; Ctrl+C stops the server.
           ctl     [--pid N] [--compact] <command> [key=value ...] [--json OBJECT|-]
                   Send one command to a running serve instance (found through its discovery file).
-          run     [--data DIR] [--client DIR] [--compact] <command> [key=value ...] [--json OBJECT|-]
+          run     [--data DIR] [--client DIR] [--compact] [--log-level LEVEL] [--log-file PATH] <command> [key=value ...] [--json OBJECT|-]
                   Run one command headless: no UI and no server; captures use the CPU renderer.
-          script  [--attach [--pid N]] [--keep-going] [--data DIR] [--client DIR] <file.jsonl|->
+          script  [--attach [--pid N]] [--keep-going] [--data DIR] [--client DIR] [--log-level LEVEL] [--log-file PATH] <file.jsonl|->
                   Run a command list, one {"command":"...","args":{...}} per line. Headless unless --attach.
                   Stops at the first failed command unless --keep-going. Prints one JSON line per command.
-          mcp     [--attach | --headless] [--pid N] [--data DIR] [--client DIR]
+          mcp     [--attach | --headless] [--pid N] [--data DIR] [--client DIR] [--log-level LEVEL] [--log-file PATH]
                   MCP server on stdio (JSON-RPC 2.0): every command is a tool. Attaches to a running instance when there
                   is one, else runs headless; --attach requires an instance, --headless never attaches.
           layers  List the layer catalog.
           help    Show this text. 'ctl help' / 'run help' list the commands.
+
+        --log-level is trace, debug, information (info), warning (warn), error, critical or none: the lowest level written to standard error
+        (default information for serve, warning for the other verbs). Per-request ASP.NET Core lines (Microsoft.AspNetCore) are written from
+        warning up whatever the level; the 'Now listening' lines of the host stay at information. --log-file PATH also writes the log, UTF-8,
+        to PATH (rolls at 10 MB and daily, keeps five segments).
 
         key=value: numbers, booleans and JSON values are parsed as JSON, anything else is a string
         (for example at=-9462.66,16.19,57.05). --json takes an object; '-' reads it from standard input.
@@ -123,7 +128,7 @@ public static class AtlasCli
 
     private static async Task<int> ServeAsync(IReadOnlyList<string> args, CliEnvironment environment, CancellationToken cancellationToken)
     {
-        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--data"] = true, ["--client"] = true, ["--port"] = true, ["--open"] = false });
+        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--data"] = true, ["--client"] = true, ["--port"] = true, ["--open"] = false, ["--log-level"] = true, ["--log-file"] = true });
         RejectPositionals(parsed, "serve");
         int port = 0;
         if (parsed.Value("--port") is { } portText
@@ -133,7 +138,7 @@ public static class AtlasCli
         }
 
         AtlasPaths paths = ResolvePaths(parsed, environment);
-        ILoggerFactory? owned = environment.Loggers is null ? CreateConsoleLoggers(LogLevel.Information) : null;
+        ILoggerFactory? owned = OwnedLoggers(parsed, environment, LogLevel.Information);
         try
         {
             using AtlasContext context = HostComposer.Compose(paths, environment.Loggers ?? owned!, headless: false, Modules(environment));
@@ -198,10 +203,10 @@ public static class AtlasCli
 
     private static async Task<int> RunVerbAsync(IReadOnlyList<string> args, CliEnvironment environment, CancellationToken cancellationToken)
     {
-        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--data"] = true, ["--client"] = true, ["--json"] = true, ["--compact"] = false });
+        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--data"] = true, ["--client"] = true, ["--json"] = true, ["--compact"] = false, ["--log-level"] = true, ["--log-file"] = true });
         (string command, JsonObject commandArgs) = await CommandLineAsync(parsed, "run", environment, cancellationToken).ConfigureAwait(false);
         AtlasPaths paths = ResolvePaths(parsed, environment);
-        ILoggerFactory? owned = environment.Loggers is null ? CreateConsoleLoggers(LogLevel.Warning) : null;
+        ILoggerFactory? owned = OwnedLoggers(parsed, environment, LogLevel.Warning);
         try
         {
             using AtlasContext context = HostComposer.Compose(paths, environment.Loggers ?? owned!, headless: true, Modules(environment));
@@ -218,7 +223,7 @@ public static class AtlasCli
     {
         ParsedArguments parsed = ParsedArguments.Parse(
             args,
-            new Dictionary<string, bool> { ["--attach"] = false, ["--keep-going"] = false, ["--pid"] = true, ["--data"] = true, ["--client"] = true });
+            new Dictionary<string, bool> { ["--attach"] = false, ["--keep-going"] = false, ["--pid"] = true, ["--data"] = true, ["--client"] = true, ["--log-level"] = true, ["--log-file"] = true });
         if (parsed.Positionals.Count != 1)
         {
             throw new UsageException("script takes exactly one file (or '-' for standard input)");
@@ -257,7 +262,7 @@ public static class AtlasCli
         }
 
         AtlasPaths paths = ResolvePaths(parsed, environment);
-        ILoggerFactory? owned = environment.Loggers is null ? CreateConsoleLoggers(LogLevel.Warning) : null;
+        ILoggerFactory? owned = OwnedLoggers(parsed, environment, LogLevel.Warning);
         try
         {
             using AtlasContext context = HostComposer.Compose(paths, environment.Loggers ?? owned!, headless: true, Modules(environment));
@@ -294,7 +299,7 @@ public static class AtlasCli
     {
         ParsedArguments parsed = ParsedArguments.Parse(
             args,
-            new Dictionary<string, bool> { ["--attach"] = false, ["--headless"] = false, ["--pid"] = true, ["--data"] = true, ["--client"] = true });
+            new Dictionary<string, bool> { ["--attach"] = false, ["--headless"] = false, ["--pid"] = true, ["--data"] = true, ["--client"] = true, ["--log-level"] = true, ["--log-file"] = true });
         RejectPositionals(parsed, "mcp");
         if (parsed.Has("--attach") && parsed.Has("--headless"))
         {
@@ -321,7 +326,7 @@ public static class AtlasCli
         }
 
         AtlasPaths paths = ResolvePaths(parsed, environment);
-        ILoggerFactory? owned = environment.Loggers is null ? CreateConsoleLoggers(LogLevel.Warning) : null;
+        ILoggerFactory? owned = OwnedLoggers(parsed, environment, LogLevel.Warning);
         try
         {
             using AtlasContext context = HostComposer.Compose(paths, environment.Loggers ?? owned!, headless: true, Modules(environment));
@@ -409,10 +414,53 @@ public static class AtlasCli
         => environment.Modules
             ?? [.. AtlasModules.Discover(typeof(AtlasModules).Assembly).Select(m => m is HostModule ? new HostModule(environment.State) : m)];
 
-    private static ILoggerFactory CreateConsoleLoggers(LogLevel minimum)
+    /// <summary>
+    /// The logger factory a verb owns when the environment brings none: validates <c>--log-level</c> and <c>--log-file</c> first (a usage error
+    /// even when the environment's own factory is used), then builds it.
+    /// </summary>
+    private static ILoggerFactory? OwnedLoggers(ParsedArguments parsed, CliEnvironment environment, LogLevel defaultLevel)
+    {
+        LogLevel level = ParseLogLevel(parsed.Value("--log-level"), defaultLevel);
+        string? file = parsed.Value("--log-file");
+        if (parsed.Has("--log-file") && string.IsNullOrWhiteSpace(file))
+        {
+            throw new UsageException("--log-file needs a path");
+        }
+
+        return environment.Loggers is null ? CreateLoggers(level, file) : null;
+    }
+
+    /// <summary>The level named by <c>--log-level</c> (trace, debug, information or info, warning or warn, error, critical, none; any case), or <paramref name="fallback"/> when absent.</summary>
+    internal static LogLevel ParseLogLevel(string? text, LogLevel fallback)
+    {
+        if (text is null)
+        {
+            return fallback;
+        }
+
+        string name = text.Trim().ToLowerInvariant();
+        return name switch
+        {
+            "info" => LogLevel.Information,
+            "warn" => LogLevel.Warning,
+            "trace" or "debug" or "information" or "warning" or "error" or "critical" or "none" => Enum.Parse<LogLevel>(name, ignoreCase: true),
+            _ => throw new UsageException($"--log-level must be trace, debug, information, warning, error, critical or none, not '{text}'"),
+        };
+    }
+
+    /// <summary>
+    /// The CLI's logger factory: single-line console output on standard error (standard output carries command results and MCP messages only),
+    /// optionally also <paramref name="logFile"/>. <c>Microsoft.AspNetCore</c> (the per-request "Request starting / finished" lines) is held to
+    /// Warning, so a polling web UI does not write a line per request while real faults still show; <c>Microsoft.Hosting.Lifetime</c> (the
+    /// "Now listening on" lines) stays at Information, or at <paramref name="minimum"/> when that is lower.
+    /// </summary>
+    /// <param name="configure">Adds more providers (tests capture the entries here); the filters above apply to them too.</param>
+    internal static ILoggerFactory CreateLoggers(LogLevel minimum, string? logFile = null, Action<ILoggingBuilder>? configure = null)
         => LoggerFactory.Create(builder =>
         {
             builder.SetMinimumLevel(minimum);
+            builder.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+            builder.AddFilter("Microsoft.Hosting.Lifetime", minimum < LogLevel.Information ? minimum : LogLevel.Information);
             builder.AddSimpleConsole(options =>
             {
                 options.SingleLine = true;
@@ -421,5 +469,12 @@ public static class AtlasCli
 
             // Standard output carries command results and MCP messages only: every log line goes to standard error.
             builder.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+            if (!string.IsNullOrWhiteSpace(logFile))
+            {
+                // A factory registration, so the container owns the provider and disposing the factory drains and closes the file.
+                builder.Services.AddSingleton<ILoggerProvider>(_ => new AtlasFileLoggerProvider(logFile));
+            }
+
+            configure?.Invoke(builder);
         });
 }
