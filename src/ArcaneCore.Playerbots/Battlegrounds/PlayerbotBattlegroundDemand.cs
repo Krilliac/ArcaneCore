@@ -23,6 +23,7 @@ internal sealed class PlayerbotBattlegroundDemand
     private readonly Dictionary<(BattlegroundType Type, int Bracket, int Team), int> _real = [];
     private readonly Dictionary<(BattlegroundType Type, int Bracket, int Team), int> _bots = [];
     private readonly HashSet<(BattlegroundType Type, int Bracket)> _blocked = [];
+    private readonly Dictionary<(BattlegroundType Type, int Bracket), int> _matches = [];
 
     /// <summary>Forget the snapshot (the coordinator rebuilds it).</summary>
     internal void Clear()
@@ -30,6 +31,7 @@ internal sealed class PlayerbotBattlegroundDemand
         _real.Clear();
         _bots.Clear();
         _blocked.Clear();
+        _matches.Clear();
     }
 
     /// <summary>Add a real player waiting in a queue (not yet invited).</summary>
@@ -41,6 +43,10 @@ internal sealed class PlayerbotBattlegroundDemand
     /// <summary>A running match of this (type, bracket) already holds the cap in bots and still has room: a new queuer would be put into it.</summary>
     internal void BlockBracket(BattlegroundType type, int bracket) => _blocked.Add((type, bracket));
 
+    internal void AddMatchInBracket(BattlegroundType type, int bracket) => _matches[(type, bracket)] = _matches.GetValueOrDefault((type, bracket)) + 1;
+
+    internal int MatchesInBracket(BattlegroundType type, int bracket) => _matches.GetValueOrDefault((type, bracket));
+
     internal int RealWaiting(BattlegroundType type, int bracket, Team team) => _real.GetValueOrDefault((type, bracket, Slot(team)));
 
     internal int RealWaiting(BattlegroundType type, int bracket) => RealWaiting(type, bracket, Team.Alliance) + RealWaiting(type, bracket, Team.Horde);
@@ -51,6 +57,8 @@ internal sealed class PlayerbotBattlegroundDemand
 
     /// <summary>Whether any real player waits in any queue.</summary>
     internal bool AnyRealWaiting => _real.Count > 0;
+
+    internal bool AnyBotWaiting => _bots.Count > 0;
 
     private static int Slot(Team team) => BattlegroundConstants.TeamIndex(team);
 
@@ -85,7 +93,10 @@ internal sealed class PlayerbotBattlegroundDemand
     internal int RealNeed(bool preferFilling, BattlegroundType type, int bracket, Team team, BattlegroundTemplate template)
     {
         ArgumentNullException.ThrowIfNull(template);
-        if (!preferFilling || RealWaiting(type, bracket) == 0) return 0;
+        if (!preferFilling) return 0;
+        bool realWaiting = RealWaiting(type, bracket) > 0;
+        bool botWaitingWithoutMatch = BotsCommitted(type, bracket) > 0 && MatchesInBracket(type, bracket) == 0;
+        if (!realWaiting && !botWaitingWithoutMatch) return 0;
         return Math.Max(0, (int)template.MinPlayersPerTeam - RealWaiting(type, bracket, team) - BotsCommitted(type, bracket, team));
     }
 
@@ -119,7 +130,9 @@ internal sealed class PlayerbotBattlegroundDemand
         foreach (PlayerbotBattlegroundChoice choice in eligible)
         {
             if (templates(choice.Type) is not { } template || !CanQueue(choice.Type, choice.Bracket, team, template, options.MaxBotsPerBattleground)) continue;
-            if (RealNeed(options.PreferFillingRealPlayerQueues, choice.Type, choice.Bracket, team, template) > 0) return choice;
+            if (RealNeed(options.PreferFillingRealPlayerQueues, choice.Type, choice.Bracket, team, template) > 0
+                && (RealWaiting(choice.Type, choice.Bracket) > 0 || options.QueueChancePerMinute > 0f))
+                return choice;
             open.Add(choice);
         }
 
