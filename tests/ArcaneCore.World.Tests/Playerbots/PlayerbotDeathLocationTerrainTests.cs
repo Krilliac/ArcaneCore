@@ -32,8 +32,10 @@ public sealed class PlayerbotDeathLocationTerrainTests(ITestOutputHelper output)
     }
 }
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotDeathLocationRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotDeathLocationRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     [RealTerrainBotFact]
     public async Task AlteracExit_UsesTheModelFloorBelowTheRawMapSurface()
     {

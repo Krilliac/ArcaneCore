@@ -1,11 +1,14 @@
 using System.Numerics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotEnderPocketRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotEnderPocketRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     /// <summary>Bot QA #251/#261: prove Gaerolas's mesh is joined to the repeated Starbreeze stall point.</summary>
     [RealTerrainBotFact]
     public async Task FromStarbreezeStall_TheMeshRoutesToGaerolas()

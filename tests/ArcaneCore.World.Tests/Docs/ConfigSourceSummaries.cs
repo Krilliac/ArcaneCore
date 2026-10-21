@@ -13,31 +13,72 @@ internal sealed partial class ConfigSourceSummaries
 {
     private readonly IReadOnlyList<string[]> _files;
 
-    public ConfigSourceSummaries(IEnumerable<string> sourceTexts) => _files = [.. sourceTexts.Select(t => t.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))];
+    /// <summary>
+    /// Every non-comment line that declares a type, by the type's name, in file then line order: the lines the per-type declaration
+    /// pattern (<c>class|record|struct</c>, the name, no opening parenthesis) matches, found in one pass over the source instead of
+    /// one pass per looked-up property (the catalog asks for several hundred properties of a few thousand files).
+    /// </summary>
+    private readonly Dictionary<string, List<(int File, int Line)>> _declarations = new(StringComparer.Ordinal);
 
-    public string? Find(Type type, string property)
+    public ConfigSourceSummaries(IEnumerable<string> sourceTexts)
     {
-        var declaration = new Regex(@"\b(class|record|struct)\s+" + Regex.Escape(type.Name) + @"\b(?!\s*\()", RegexOptions.CultureInvariant);
-        var member = new Regex(@"^\s*public\s+[^=(;{]*\b" + Regex.Escape(property) + @"\s*(\{|=>|=|;)", RegexOptions.CultureInvariant);
-        foreach (string[] lines in _files)
+        _files = [.. sourceTexts.Select(t => t.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))];
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int file = 0; file < _files.Count; file++)
         {
+            string[] lines = _files[file];
             for (int i = 0; i < lines.Length; i++)
             {
-                if (lines[i].TrimStart().StartsWith("//", StringComparison.Ordinal) || !declaration.IsMatch(lines[i]))
+                string line = lines[i];
+                if (!(line.Contains("class", StringComparison.Ordinal) || line.Contains("record", StringComparison.Ordinal) || line.Contains("struct", StringComparison.Ordinal))
+                    || line.TrimStart().StartsWith("//", StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                string? found = SearchBody(lines, i, member);
-                if (found is not null)
+                seen.Clear();
+                foreach (Match m in DeclaredTypeRegex().Matches(line))
                 {
-                    return found;
+                    string name = m.Groups[1].Value;
+                    if (!seen.Add(name))
+                    {
+                        continue;
+                    }
+
+                    if (!_declarations.TryGetValue(name, out List<(int File, int Line)>? at))
+                    {
+                        _declarations[name] = at = [];
+                    }
+
+                    at.Add((file, i));
                 }
+            }
+        }
+    }
+
+    public string? Find(Type type, string property)
+    {
+        if (!_declarations.TryGetValue(type.Name, out List<(int File, int Line)>? declared))
+        {
+            return null;
+        }
+
+        var member = new Regex(@"^\s*public\s+[^=(;{]*\b" + Regex.Escape(property) + @"\s*(\{|=>|=|;)", RegexOptions.CultureInvariant);
+        foreach ((int file, int line) in declared)
+        {
+            string? found = SearchBody(_files[file], line, member);
+            if (found is not null)
+            {
+                return found;
             }
         }
 
         return null;
     }
+
+    /// <summary>Zero-width, one match per type declared on the line (a lookahead, so <c>record struct X</c> still yields X); group 1 is the name.</summary>
+    [GeneratedRegex(@"(?=\b(?:class|record|struct)\s+(\w+)\b(?!\s*\())", RegexOptions.CultureInvariant)]
+    private static partial Regex DeclaredTypeRegex();
 
     private static string? SearchBody(string[] lines, int declarationLine, Regex member)
     {

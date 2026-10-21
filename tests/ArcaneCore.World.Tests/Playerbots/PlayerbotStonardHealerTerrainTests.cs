@@ -6,11 +6,14 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Playerbots.Dungeon;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotStonardHealerTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotStonardHealerTerrainTests(ITestOutputHelper output) : base(output) { }
+
     // The Stonard spirit healer (creature 6491, spawn 40523) and the live ghost of Deeleibreind under it (w25, 2026-10-11 13:37-13:40).
     private static readonly Vector3 StonardHealer = new(-10575.0f, -3377.0f, 22.344f);
     private static readonly Vector3 UnderTheStonardBluff = new(-10576.8f, -3370.7f, 4.5f);

@@ -89,7 +89,8 @@ public sealed class UndermapObserver : IClientMovementObserver
                                 "under-map",
                                 $"player {player.Name} (guid {player.Guid.Low})",
                                 $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={player.Movement.Z + verdict.DepthYards:F2}",
-                                AnomalySeverity.Error);
+                                AnomalySeverity.Error,
+                                map.WorldIdentity);
                         }
                     }
                     else
@@ -114,7 +115,8 @@ public sealed class UndermapObserver : IClientMovementObserver
                 "under-map",
                 $"player {player.Name} (guid {player.Guid.Low})",
                 $"reason=below-void-height map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) voidHeight={VoidHeight}",
-                AnomalySeverity.Error);
+                AnomalySeverity.Error,
+                map.WorldIdentity);
         }
 
         bool repopped = false;

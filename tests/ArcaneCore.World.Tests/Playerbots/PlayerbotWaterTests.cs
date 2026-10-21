@@ -14,6 +14,7 @@ using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using System.Numerics;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -471,8 +472,10 @@ public sealed class PlayerbotWaterTests
     }
 }
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotWaterRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotWaterRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     [RealTerrainBotFact]
     public async Task DurotarCoast_RevivedBotEscapesBeforeResting()
     {
