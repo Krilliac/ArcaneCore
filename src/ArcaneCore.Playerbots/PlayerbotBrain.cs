@@ -812,10 +812,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 return;
             }
 
-            if (taxi is TaxiStep.Arrived or TaxiStep.Failed)
+            if (taxi is TaxiStep.Arrived or TaxiStep.Failed or TaxiStep.MasterDead)
             {
                 _stall.Reset();
-                if (taxi == TaxiStep.Failed)
+                if (taxi is TaxiStep.Failed or TaxiStep.MasterDead)
                     _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>()
                         .LogInformation("Playerbot taxi trip given up, the goal walks: {Why}", taxiFailure);
             }
