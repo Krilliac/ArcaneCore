@@ -174,6 +174,11 @@ function Complete-MutateAllBatch($b, [int]$rc) {
         if (Test-Path $mutateOut) { $lastMessage = Select-String -Path $mutateOut -Pattern '^mutate\.ps1:' | Select-Object -Last 1 }
         $failure = if ($lastMessage) { "mutate.ps1 exit ${rc}: $($lastMessage.Line.Substring(12).Trim())" } else { "mutate.ps1 / slot runner exit $rc (see $outDir)" }
     }
+    if ($failure -and $strykerLog) {
+        $why = Select-String -Path $strykerLog.FullName -Pattern '\[\d\d:\d\d:\d\d (ERR|FTL)\]|No test result reported|did not report any test|Number of tests found: 0' | Select-Object -First 1
+        if ($why) { $failure += "; stryker.log: $($why.Line.Trim().Substring(0, [math]::Min(220, $why.Line.Trim().Length)))" }
+    }
+    if ($failure) { }
     elseif (-not $reportFile) { $failure = 'no mutation-report.json was written' }
     elseif ($strykerLog -and (Select-String -Path $strykerLog.FullName -Pattern 'Number of tests found:\s*0\b' -Quiet)) { $failure = 'Stryker found 0 tests ("Number of tests found: 0")' }
 

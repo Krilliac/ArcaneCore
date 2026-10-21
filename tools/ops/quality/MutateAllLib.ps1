@@ -260,7 +260,7 @@ function Get-MutateAllBatchSummary {
                     Mutated = Format-QualitySnippet $replacement
                 })
         }
-        $files.Add([pscustomobject]$own)
+        if ($own.Killed + $own.Survived + $own.NoCoverage + $own.Timeout + $own.CompileError + $own.Ignored + $own.Other -gt 0) { $files.Add([pscustomobject]$own) }
     }
     $counts['Tested'] = $counts.Killed + $counts.Timeout + $counts.Survived + $counts.NoCoverage
     [pscustomobject]@{ Counts = [pscustomobject]$counts; Files = $files.ToArray(); Survivors = $survivors.ToArray() }
