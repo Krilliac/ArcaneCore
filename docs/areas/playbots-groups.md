@@ -406,6 +406,17 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   yards of that segment in the plane, and on its levels (no more than `WaypointLevelYards` above or below the segment's heights, so a hostile on another Undercity floor does not count),
   besides the objective entry, which always counts, and any hostile that fights the raid (its melee victim is, or its threat list holds, a member): the raid does not ignore what hits it.
   A leader more than 40 yards off the route (`OffRoute`) that is out of combat advances back to it before it pulls or marks a tank (after Regroup and Hold); in combat nothing changes.
+* **Per-step deadline (`StepDeadlineMs`, 600 s; `PlayerbotSiege.StepSinceMs`).** No fight, lag or loop at a waypoint holds the siege for good: when the step has lasted `StepDeadlineMs` (counted from `StartSiege`
+  or the last `SetStep`), a waypoint is still ahead, every raid is led and none is in a retreat latch, the step moves on by **one** (an event note, a log warning "waypoint N not taken in 600s, moving on to waypoint N+1"
+  and a raid warning), and the clock starts afresh, so it is never more than one step per deadline. An unled raid or a retreat latch holds it.
+* **The lag is bounded everywhere.** The lag clock (`LagSinceMs`) runs whenever a living member is more than `LagYards` behind its leader, pushing or not and at the waypoint or on the way, and resets when the lag
+  clears or the step changes. After `LagHoldMs` (90 s) `LagWaived` holds: the regroup ends (`Decide` regroups for lag only while `MaxLagYards > LagYards && !LagWaived`; resting and hurt members still hold it), and the
+  lockstep and the credit go on without the straggler. So the waiver and the credit can meet: a credit after a waived lag is allowed and says so in its event.
+* **What the scan counts, and the marching leader.** Besides the tether, the scan skips civilians (`Civilian` template or behaviour) and units more than `WaypointLevelYards` (10) above or below the leader, unless they are the
+  objective or fight the raid (`FightsRaid`). A siege-raid leader whose `Fight` finds no path to a Creature or Player target shuns it for 60 s (`BotGroup.Shun`); the scan and the pull target honour the shun for players too,
+  so the skull moves to the next hostile. A leader under a non-push **Advance** fights only what attacks it itself (it does not turn to peel for a member or follow a mark; the members answer their attackers as ever), and
+  `raid.MoveTo` is the step's goal for every order but Retreat and Rally.
+* **Status detail.** `raid.Detail` ends with `furthest=<waypoint index>`, ` offroute` when the leader is more than 40 yards off the route, and `deadline=<seconds left>` for the step.
 * **The commander** (`PlayerbotSiegeCommander.Decide`, a pure function; the coordinator re-reads the raids every 400 ms) picks an order for each
   raid in this order: **Retreat** (in combat: the tank dead, the average health under 35 % or a third of the raid dead *in this engagement*, i.e.
   since the raid last entered combat after at least 5 s out of it; one latch in two phases, see below; a raid retreats at most **twice** and at most
