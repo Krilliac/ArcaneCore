@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
     <OutputType>Exe</OutputType>
     <RootNamespace>ArcaneCore.World</RootNamespace>
     <AssemblyName>ArcaneCore.World</AssemblyName>
