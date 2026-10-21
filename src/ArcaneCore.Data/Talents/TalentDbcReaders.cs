@@ -20,6 +20,29 @@ public static class TalentDbcReaders
     public static TalentCatalog Load(string talentPath, string talentTabPath)
         => ReadCatalog(DbcFile.Load(talentPath), DbcFile.Load(talentTabPath));
 
+    public static IReadOnlyList<TalentRecord> LoadTalents(string talentPath)
+        => ReadTalents(DbcFile.Load(talentPath));
+
+    public static IReadOnlyList<TalentRecord> ReadTalents(DbcFile talents)
+    {
+        Require(talents, TalentFields, "Talent.dbc");
+        var talentRows = new List<TalentRecord>(talents.RecordCount);
+        for (int row = 0; row < talents.RecordCount; row++)
+        {
+            uint[] ranks = new uint[TalentRecord.MaxRanks];
+            for (int i = 0; i < ranks.Length; i++)
+            {
+                ranks[i] = talents.GetUInt32(row, 4 + i);
+            }
+
+            talentRows.Add(new TalentRecord(
+                talents.GetUInt32(row, 0), talents.GetUInt32(row, 1), talents.GetUInt32(row, 2), talents.GetUInt32(row, 3),
+                ranks, talents.GetUInt32(row, 13), talents.GetUInt32(row, 16), talents.GetUInt32(row, 20)));
+        }
+
+        return talentRows;
+    }
+
     public static TalentCatalog ReadCatalog(DbcFile talents, DbcFile tabs)
     {
         Require(talents, TalentFields, "Talent.dbc");

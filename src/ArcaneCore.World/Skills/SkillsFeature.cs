@@ -1,6 +1,10 @@
 using System.Collections.Frozen;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Skills;
+using ArcaneCore.Data.Talents;
+using ArcaneCore.Game.Talents;
+using ArcaneCore.Kernel.Talents;
+using ArcaneCore.World.Talents;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
@@ -305,7 +309,29 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         return SkillDbcReaders.Load(
             paths[0]!, paths[1]!, paths[2]!, paths[3]!,
             SpellLearnSkillTable.Build(SkillEffects(spellRows)),
-            spellIds.Count == 0 ? null : spellIds.Contains);
+            spellIds.Count == 0 ? null : spellIds.Contains,
+            ReadTalentRows());
+    }
+
+    private IEnumerable<TalentRecord>? ReadTalentRows()
+    {
+        if (_services.GetService<TalentCatalog>()?.Talents is { } catalogTalents)
+        {
+            return catalogTalents;
+        }
+
+        if (_services.GetService<TalentFeature>()?.Catalog?.Talents is { } featureTalents)
+        {
+            return featureTalents;
+        }
+
+        if (_services.GetService<IConfiguration>()?[$"{TalentOptions.Section}:{nameof(TalentOptions.TalentDbcPath)}"] is { Length: > 0 } talentPath
+            && File.Exists(talentPath))
+        {
+            return TalentDbcReaders.LoadTalents(talentPath);
+        }
+
+        return null;
     }
 
     /// <summary>Every SPELL_EFFECT_SKILL (118) effect of every spell (vmangos LoadSpellLearnSkills, SpellMgr.cpp:1850-1887).</summary>

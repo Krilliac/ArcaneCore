@@ -1,7 +1,9 @@
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Npc;
+using ArcaneCore.Data.Talents;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
+using ArcaneCore.Kernel.Talents;
 
 namespace ArcaneCore.Data.Skills;
 
@@ -29,14 +31,27 @@ public static class SkillDbcReaders
         string skillTiersPath,
         string skillLineAbilityPath,
         SpellLearnSkillTable? learnSkills = null,
-        Func<uint, bool>? spellExists = null)
-        => Build(
+        Func<uint, bool>? spellExists = null,
+        IEnumerable<TalentRecord>? talents = null)
+    {
+        if (talents is null && Path.GetDirectoryName(skillLineAbilityPath) is { Length: > 0 } dir)
+        {
+            string talentPath = Path.Combine(dir, "Talent.dbc");
+            if (File.Exists(talentPath))
+            {
+                talents = TalentDbcReaders.LoadTalents(talentPath);
+            }
+        }
+
+        return Build(
             DbcFile.Load(skillLinePath),
             DbcFile.Load(skillRaceClassInfoPath),
             DbcFile.Load(skillTiersPath),
             DbcFile.Load(skillLineAbilityPath),
             learnSkills,
-            spellExists);
+            spellExists,
+            talents);
+    }
 
     public static SkillCatalog Build(
         DbcFile skillLine,
@@ -44,14 +59,16 @@ public static class SkillDbcReaders
         DbcFile skillTiers,
         DbcFile skillLineAbility,
         SpellLearnSkillTable? learnSkills = null,
-        Func<uint, bool>? spellExists = null)
+        Func<uint, bool>? spellExists = null,
+        IEnumerable<TalentRecord>? talents = null)
         => new(
             ReadSkillLines(skillLine),
             ReadSkillRaceClassInfos(skillRaceClassInfo),
             ReadSkillTiers(skillTiers),
             NpcServiceDbcReaders.ReadSkillLineAbilityRecords(skillLineAbility),
             learnSkills,
-            spellExists);
+            spellExists,
+            talents);
 
     public static IReadOnlyList<SkillLineRecord> ReadSkillLines(DbcFile file)
     {

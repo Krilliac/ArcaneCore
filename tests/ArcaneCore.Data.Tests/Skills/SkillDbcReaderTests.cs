@@ -4,6 +4,7 @@ using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Skills;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
+using ArcaneCore.Kernel.Talents;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -312,6 +313,18 @@ public sealed class SkillDbcReaderTests
             Ability(2, 26, 11, forward: 10),
         ]);
         Assert.Equal(0, cycle.Count);
+    }
+
+    [Fact]
+    public void RankChains_LinkMultiRankTalentsFromTalentRecords()
+    {
+        SpellRankChains chains = new(
+            [Ability(1, 26, 12834), Ability(2, 26, 12849), Ability(3, 26, 12867)],
+            [new TalentRecord(121, 161, 2, 1, [12834, 12849, 12867, 0, 0], 0, 0, 0)]);
+        Assert.Equal(12834u, chains.First(12867));
+        Assert.Equal((byte)3, chains.Rank(12867));
+        Assert.Equal(12849u, chains.Previous(12867));
+        Assert.Equal(12849u, chains.Next(12834));
     }
 
     [Fact]
