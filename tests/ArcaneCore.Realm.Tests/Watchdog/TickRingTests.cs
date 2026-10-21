@@ -84,15 +84,22 @@ public sealed class TickRingTests
         long[] buffer = new long[64];
         int snapshots = 0;
         int nonEmpty = 0;
+        int overlapped = 0; // snapshots during which the writer recorded: the ones that can tear
         string? problem = null;
         try
         {
             Assert.True(SpinWait.SpinUntil(() => ring.Count >= ring.Capacity, TimeSpan.FromSeconds(30)), "the writer thread never filled the ring");
             var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (nonEmpty < WantedNonEmpty && DateTime.UtcNow < deadline && problem is null)
+            while ((nonEmpty < WantedNonEmpty || overlapped == 0) && DateTime.UtcNow < deadline && problem is null)
             {
+                long before = ring.Count;
                 int count = ring.Snapshot(buffer);
                 snapshots++;
+                if (ring.Count != before)
+                {
+                    overlapped++;
+                }
+
                 if (count == 0)
                 {
                     continue;
@@ -117,6 +124,7 @@ public sealed class TickRingTests
 
         Assert.Null(problem);
         Assert.True(nonEmpty >= WantedNonEmpty, $"only {nonEmpty} non-empty snapshots of {snapshots} were taken in 30 s");
+        Assert.True(overlapped > 0, $"none of {snapshots} snapshots overlapped a Record, so none could have torn");
     }
 
     [Fact]

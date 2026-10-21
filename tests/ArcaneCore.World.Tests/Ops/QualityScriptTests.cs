@@ -277,6 +277,84 @@ public sealed class QualityScriptTests
     }
 
     [PwshFact]
+    public void StopTracked_KillsOnlyTheProcessThatWasRecorded_NotAReusedOrUnknownId()
+    {
+        // A tracked id whose process ended can be reused by an unrelated process by the time the run ends. The kill must check, right
+        // before it, that the id still runs with the recorded start (and, on Linux, still carries the run's tag). Simulated with live
+        // sleepers: one recorded with a start an hour off (as a reused id would be), one with no recorded start, one tracked under a tag
+        // it does not carry, and the control, recorded as it is, which must be killed.
+        JsonElement r = Eval("""
+            function Sleeper([string]$tagValue) {
+                if ($tagValue) { $env:ARCANECORE_QUALITY_RUN = $tagValue }
+                try { Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 60' -PassThru } finally { Remove-Item env:ARCANECORE_QUALITY_RUN -ErrorAction SilentlyContinue }
+            }
+            $reused = Sleeper 'tagA'; $unknown = Sleeper 'tagA'; $untagged = Sleeper ''; $control = Sleeper 'tagA'
+            Start-Sleep -Milliseconds 1500 # let /proc/<id>/environ show the exec'd image's environment
+            function Alive($p) { [bool](Get-Process -Id $p.Id -ErrorAction SilentlyContinue) }
+            $wrongStart = Stop-QualityTracked -Tracked @{ $reused.Id = $reused.StartTime.AddHours(-1) } -Tag 'ARCANECORE_QUALITY_RUN=tagA'
+            $noStart = Stop-QualityTracked -Tracked @{ $unknown.Id = [datetime]::MinValue } -Tag 'ARCANECORE_QUALITY_RUN=tagA'
+            $noTag = Stop-QualityTracked -Tracked @{ $untagged.Id = $untagged.StartTime } -Tag 'ARCANECORE_QUALITY_RUN=tagA'
+            $recorded = Stop-QualityTracked -Tracked @{ $control.Id = $control.StartTime } -Tag 'ARCANECORE_QUALITY_RUN=tagA'
+            Start-Sleep -Milliseconds 500
+            $result = [ordered]@{
+                linux = [bool]$IsLinux
+                wrongStart = $wrongStart; reusedAlive = Alive $reused
+                noStart = $noStart; unknownAlive = Alive $unknown
+                noTag = $noTag; untaggedAlive = Alive $untagged
+                recorded = $recorded; controlAlive = Alive $control
+            }
+            foreach ($p in $reused, $unknown, $untagged, $control) { try { $p.Kill($true) } catch { } }
+            $result
+            """);
+        Assert.Equal(0, r.GetProperty("wrongStart").GetInt32());
+        Assert.True(r.GetProperty("reusedAlive").GetBoolean(), "a process under a reused id (other start) was killed");
+        Assert.Equal(0, r.GetProperty("noStart").GetInt32());
+        Assert.True(r.GetProperty("unknownAlive").GetBoolean(), "a process whose start was never recorded was killed");
+        if (r.GetProperty("linux").GetBoolean())
+        {
+            Assert.Equal(0, r.GetProperty("noTag").GetInt32());
+            Assert.True(r.GetProperty("untaggedAlive").GetBoolean(), "a process without the run's tag was killed");
+        }
+
+        Assert.Equal(1, r.GetProperty("recorded").GetInt32());
+        Assert.False(r.GetProperty("controlAlive").GetBoolean(), "the recorded process was not killed, so the checks above prove nothing");
+    }
+
+    [PwshFact]
+    public void InvokeProcess_PassesTheExitCodeAndBothStreamsToTheFiles()
+    {
+        using var temp = new TempDirectory();
+        JsonElement r = Eval($$"""
+            $log = Join-Path '{{temp.Path.Replace("'", "''")}}' 'run.log'
+            $run = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', 'Write-Output "out line"; [Console]::Error.WriteLine("err line"); exit 7') -LogFile $log -TimeoutSec 60
+            [ordered]@{ exit = $run.ExitCode; timedOut = $run.TimedOut; out = (Get-Content -Raw $log); err = (Get-Content -Raw "$log.err") }
+            """);
+        Assert.Equal(7, r.GetProperty("exit").GetInt32());
+        Assert.False(r.GetProperty("timedOut").GetBoolean());
+        Assert.Contains("out line", r.GetProperty("out").GetString());
+        Assert.Contains("err line", r.GetProperty("err").GetString());
+        Assert.DoesNotContain("out line", r.GetProperty("err").GetString());
+    }
+
+    [PwshFact]
+    public void Elapsed_FromPs_IsParsedInEveryForm_AndAnythingElseIsUnknown()
+    {
+        JsonElement r = Eval("""
+            $now = [datetime]'2026-01-02T00:00:00'
+            [ordered]@{
+                mmss = (ConvertFrom-QualityElapsed -Elapsed '01:05' -Now $now).ToString('s')
+                hhmmss = (ConvertFrom-QualityElapsed -Elapsed '02:00:01' -Now $now).ToString('s')
+                days = (ConvertFrom-QualityElapsed -Elapsed '1-00:00:00' -Now $now).ToString('s')
+                bad = (ConvertFrom-QualityElapsed -Elapsed 'x' -Now $now) -eq [datetime]::MinValue
+            }
+            """);
+        Assert.Equal("2026-01-01T23:58:55", r.GetProperty("mmss").GetString());
+        Assert.Equal("2026-01-01T21:59:59", r.GetProperty("hhmmss").GetString());
+        Assert.Equal("2026-01-01T00:00:00", r.GetProperty("days").GetString());
+        Assert.True(r.GetProperty("bad").GetBoolean());
+    }
+
+    [PwshFact]
     public void SharedBuildServers_AreRecognised_AndNeverKilledAsLeftovers()
     {
         JsonElement r = Eval("""
