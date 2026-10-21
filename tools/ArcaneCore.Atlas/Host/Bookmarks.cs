@@ -105,14 +105,14 @@ public static class BuiltInBookmarks
         // ref: tests/ArcaneCore.Game.Tests/Collision/UnderMapRealTerrainTests.cs:36 (an Undercity floor point that is not under the map; map 0u)
         At("undercity", EasternKingdoms, 1475.6, 376.3, -59.4, 120, "A walkable Undercity floor point, far below the terrain surface.", "tests/ArcaneCore.Game.Tests/Collision/UnderMapRealTerrainTests.cs:36"),
 
-        // ref: tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:156 (ElevatorCar low stop; map 0 is ElevatorCar.MapId, src/ArcaneCore.Playerbots/PlayerbotElevator.cs:34)
-        At("undercity-lift", EasternKingdoms, 1596.22, 291.798, -40.76, 60, "Bottom stop of the Undercity lift; the car travels to z 55.65.", "tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:156"),
+        // ref: tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:158 (ElevatorCar low stop; map 0 is ElevatorCar.MapId, src/ArcaneCore.Playerbots/PlayerbotElevator.cs:34)
+        At("undercity-lift", EasternKingdoms, 1596.22, 291.798, -40.76, 60, "Bottom stop of the Undercity lift; the car travels to z 55.65.", "tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:158"),
 
         // ref: src/ArcaneCore.Game/Holidays/FireworksShow.cs:140 (Booty Bay launch point; the same area is queried as map 0 at tests/ArcaneCore.Game.Tests/Collision/VMapNativeOracleTests.cs:27)
         At("booty-bay", EasternKingdoms, -14358.03, 515.058, 34.2664, 140, "Booty Bay harbour, from the fireworks show launch points.", "src/ArcaneCore.Game/Holidays/FireworksShow.cs:140"),
 
-        // ref: tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:49 (top of the Thunder Bluff lift; Kalimdor = 1 at tests/ArcaneCore.World.Tests/Playerbots/Elevator/ElevatorTestData.cs:15)
-        At("thunder-bluff-mesa", Kalimdor, -1280, 120, 131, 140, "Thunder Bluff mesa, the top of the lifts.", "tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:49"),
+        // ref: tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:51 (top of the Thunder Bluff lift; Kalimdor = 1 at tests/ArcaneCore.World.Tests/Playerbots/Elevator/ElevatorTestData.cs:15)
+        At("thunder-bluff-mesa", Kalimdor, -1280, 120, 131, 140, "Thunder Bluff mesa, the top of the lifts.", "tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:51"),
 
         // ref: tests/ArcaneCore.World.Tests/Playerbots/PlayerbotRuttheranRecoveryTerrainTests.cs:42 (WorldSafeLocs.dbc row 129, map 1)
         At("ruttheran-village", Kalimdor, 8706.0, 965.0, 13.27, 120, "Rut'theran Village, at the foot of the Teldrassil portal.", "tests/ArcaneCore.World.Tests/Playerbots/PlayerbotRuttheranRecoveryTerrainTests.cs:42"),
