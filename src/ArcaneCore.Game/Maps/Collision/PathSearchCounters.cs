@@ -99,7 +99,7 @@ public static class PathSearchCounters
     }
 
     /// <summary>Whether the latest pending answer on this thread was for a background read in flight (see <see cref="RecordTilePendingOnRealRead"/>).</summary>
-    internal static bool LastPendingWasRealRead => t_lastPendingWasRealRead;
+    public static bool LastPendingWasRealRead => t_lastPendingWasRealRead;
 
     /// <summary>One A* search ended: <paramref name="nodes"/> created, <paramref name="expansions"/> expanded, whether the node cap was hit.</summary>
     internal static void RecordSearch(int nodes, int expansions, bool capped)
