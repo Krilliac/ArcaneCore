@@ -188,6 +188,7 @@ internal static class CharacterBoost
 
         EquipKit(target, level, env, report);
         FillAmmo(target, level, env, report);
+        FillTotemTools(target, env);
         FillActionBars(target, env, report);
 
         uint wanted = MoneyPerLevelSquared * level * level;
@@ -344,6 +345,26 @@ internal static class CharacterBoost
 
     private static float AverageDamage(ItemTemplate template)
         => template.Damages.Count == 0 ? 0f : (template.Damages[0].Min + template.Damages[0].Max) / 2f;
+
+    private static void FillTotemTools(Player target, BoostEnvironment env)
+    {
+        PlayerInventory inventory = target.Inventory;
+        foreach (uint spellId in env.Spells.Spellbook.GetSpells(target))
+        {
+            if (env.Spells.System.Store.Get(spellId) is not { Totems.Count: > 0 } spell)
+            {
+                continue;
+            }
+
+            foreach (uint tool in spell.Totems)
+            {
+                if (tool != 0 && env.Items.Find(tool) is not null && inventory.GetItemCount(tool) < 1)
+                {
+                    inventory.AddItem(tool, 1, out _, received: true);
+                }
+            }
+        }
+    }
 
     private static void FillActionBars(Player target, BoostEnvironment env, BoostReport report)
     {
