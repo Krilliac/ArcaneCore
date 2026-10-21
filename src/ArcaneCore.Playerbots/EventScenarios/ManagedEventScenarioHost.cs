@@ -41,11 +41,24 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
     public ScenarioBotProbe? Probe(Guid botId)
     {
         if (bots.FindSession(botId) is not { } session || session.Player is not { IsInWorld: true } player) return null;
-        string? held = bots.HeldFromBrain(botId);
+        string? held = bots.HeldFromBrain(botId) ?? bots.HeldFromCoordinators(botId);
         if (held is null && InGroup(player)) held = "in a group";
+        if (held is null && HasInvite(player)) held = "has a group invitation";
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
         return new ScenarioBotProbe(player.IsAlive && !ghost, player.Combat.IsInCombat, player.Level, player.Team == Team.Horde ? (byte)1 : (byte)0,
-            player.MapId, new Vector3(player.X, player.Y, player.Z), held, PlayerbotDefend.PostOf(player)?.PostId);
+            player.MapId, new Vector3(player.X, player.Y, player.Z), held, PlayerbotDefend.PostOf(player)?.PostId, bots.StayIdOf(botId));
+    }
+
+    private bool HasInvite(Player player)
+    {
+        try
+        {
+            return services.GetService<SocialFeature>()?.Context.Groups.GetInvite(player.Guid) is not null;
+        }
+        catch (InvalidOperationException)
+        {
+            return false; // the social feature is not attached: no invitation can hold the bot
+        }
     }
 
     private bool InGroup(Player player)
@@ -186,6 +199,12 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
     public string? SetDefend(Guid botId, PlayerbotDefendPost? post)
     {
         IReadOnlyList<PlayerbotOperationResult> results = bots.SetDefend([botId], post);
+        return results.Count > 0 && results[0].Success ? null : results.Count > 0 ? results[0].Code : "bot-not-running";
+    }
+
+    public string? SetStay(Guid botId, PlayerbotStay? stay)
+    {
+        IReadOnlyList<PlayerbotOperationResult> results = bots.SetStay([botId], stay);
         return results.Count > 0 && results[0].Success ? null : results.Count > 0 ? results[0].Code : "bot-not-running";
     }
 

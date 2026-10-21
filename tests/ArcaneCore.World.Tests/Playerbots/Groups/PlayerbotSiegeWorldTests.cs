@@ -88,6 +88,61 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
     private static Player Leader(GroupTestWorld world, PlayerbotSiegeRaid raid) => world.World.Host.World.FindOnlinePlayer(raid.Group!.LeaderGuid)!;
 
+    private static PlayerbotStay StayAt(GroupTestWorld world, Vector3 at)
+        => new(0, at, 30f, 1, unchecked(world.World.Host.World.NowMs + 600_000));
+
+    [Fact]
+    public async Task StartSiege_EnlistsBotsHoldingAScenarioStay_AndClearsTheirStays()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (Guid Id, string Name)[] bots = await Enlist(world, 10f, 20f);
+        await world.OnWorldAsync(() =>
+        {
+            foreach ((Guid id, _) in bots) world.Bots.FindBrain(id)!.Stay = StayAt(world, Origin);
+            return true;
+        });
+        await world.RunAsync(2_000);
+
+        (PlayerbotSiege? siege, string skipped) = await world.OnWorldAsync(() =>
+        {
+            var skippedBots = new List<(Guid, string)>();
+            PlayerbotSiege? started = world.Coordinator.StartSiege([.. bots.Select(b => b.Id)], Objective, 2, skippedBots, out string? why);
+            return (started, why ?? string.Join(',', skippedBots.Select(s => s.Item2)));
+        });
+
+        Assert.NotNull(siege);
+        Assert.True(string.IsNullOrEmpty(skipped), skipped); // a stay is not a hold: every stayed bot was free and was enlisted
+        Assert.Equal([3, 3], siege.Raids.Select(r => r.Group!.Members.Count).ToArray());
+        await world.OnWorldAsync(() =>
+        {
+            foreach ((Guid id, _) in bots) Assert.Null(world.Bots.FindBrain(id)!.Stay);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task StartSiege_StillSkipsABotHoldingADefendPost_AsBusy()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (Guid Id, string Name)[] bots = await Enlist(world, 10f, 20f);
+        await world.OnWorldAsync(() =>
+        {
+            Player p = world.Player(bots[5].Id);
+            world.Bots.FindBrain(bots[5].Id)!.Defend = new PlayerbotDefendPost(p.MapId, new Vector3(p.X, p.Y, p.Z), 30f, 2);
+            return true;
+        });
+        await world.RunAsync(2_000);
+
+        List<(Guid BotId, string Reason)> skipped = await world.OnWorldAsync(() =>
+        {
+            var skippedBots = new List<(Guid BotId, string Reason)>();
+            world.Coordinator.StartSiege([.. bots.Select(b => b.Id)], Objective, 1, skippedBots, out _);
+            return skippedBots;
+        });
+
+        Assert.Equal([(bots[5].Id, "busy")], skipped);
+    }
+
     [Fact]
     public async Task TwoRaids_FormUnderOneSiege_AsRaids_LedByATank_OutsideTheGroupSlots()
     {

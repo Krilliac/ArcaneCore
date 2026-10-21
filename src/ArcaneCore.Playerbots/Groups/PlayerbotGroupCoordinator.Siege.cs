@@ -193,7 +193,11 @@ public sealed partial class PlayerbotGroupCoordinator
         for (int i = 0; i < plans.Count; i++)
         {
             PlayerbotGroupPlan plan = plans[i];
-            foreach (var member in plan.Members) Unhold(member.Bot.BotId, null);
+            foreach (var member in plan.Members)
+            {
+                Unhold(member.Bot.BotId, null);
+                if (_bots.TryGetValue(member.Bot.BotId, out PlayerbotGroupBot raided)) raided.Brain.Stay = null; // the raid owns the bot now
+            }
             var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Siege, 0, objectiveEntry, mapId, mapId, rally, 0, last, plan.Members.Count, 0, "siege");
             BotGroup group = Form(goal, plan);
             var raid = new PlayerbotSiegeRaid(siege, i + 1) { Group = group };

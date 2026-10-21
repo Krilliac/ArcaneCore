@@ -12,7 +12,8 @@ namespace ArcaneCore.World.Playerbots.EventScenarios;
 /// <param name="Position">Where it stands.</param>
 /// <param name="HeldBy">Why another system owns it (scripted, in a battleground, in a group or party), or null when it is free to claim.</param>
 /// <param name="DefendPostId">The id of the defend post its brain holds now (a restart gives it a new brain without one), or null when it has none.</param>
-internal readonly record struct ScenarioBotProbe(bool Alive, bool InCombat, int Level, byte Team, uint MapId, Vector3 Position, string? HeldBy, int? DefendPostId = null);
+/// <param name="StayId">The id of the scenario stay its brain holds now (a restart gives it a new brain without one; a lapsed lease may still show), or null.</param>
+internal readonly record struct ScenarioBotProbe(bool Alive, bool InCombat, int Level, byte Team, uint MapId, Vector3 Position, string? HeldBy, int? DefendPostId = null, int? StayId = null);
 
 /// <summary>What starting a siege came to.</summary>
 /// <param name="Started">The siege runs.</param>
@@ -58,6 +59,9 @@ internal interface IEventScenarioHost
 
     /// <summary>Give a running bot a defend post, or take its post away (null); null on success, otherwise the refusal code.</summary>
     string? SetDefend(Guid botId, PlayerbotDefendPost? post);
+
+    /// <summary>Give a running bot a scenario stay (or renew it), or take its stay away (null); null on success, otherwise the refusal code.</summary>
+    string? SetStay(Guid botId, PlayerbotStay? stay);
 
     /// <summary>The bots in the raids of the siege under way (empty when none runs).</summary>
     IReadOnlyCollection<Guid> SiegeMembers();
