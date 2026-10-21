@@ -318,20 +318,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             _awaitingBagSpace.Clear();
         if (_stage == Stage.AcceptConfirmation)
         {
-            if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) ClearStage(); if (_stage == Stage.None && _stageQuest != 0)
-            {
+            if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
                 ClearStage();
-                return false;
-            }
         }
         else if (_stage == Stage.RewardConfirmation)
         {
-            if (state.Quests.Get(_stageQuest)?.Rewarded == true) { Suspensions?.QuestSucceeded(_stageQuest); NeedsBagSpaceForTurnIn = false; ClearStage(); } if (_stage == Stage.None && _stageQuest != 0)
+            if (state.Quests.Get(_stageQuest)?.Rewarded == true)
             {
                 Suspensions?.QuestSucceeded(_stageQuest);
                 NeedsBagSpaceForTurnIn = false;
                 ClearStage();
-                return false;
             }
         }
 
@@ -602,7 +598,6 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 continue;
             if (_stage != Stage.None && npc.Guid != _stageNpc)
                 continue;
-            bool entrySuspended = Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true;
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
@@ -717,20 +712,6 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 && distanceSquared <= objectReach * objectReach;
         }
         float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + playerRadius;
-        return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
-    }
-
-    private static bool UnusedWithinReach(Player player, NpcInfo npc)
-    {
-        float dx = npc.X - player.X, dy = npc.Y - player.Y, dz = npc.Z - player.Z;
-        float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
-        if (npc.IsGameObject)
-        {
-            float objectReach = npc.GameObjectInteractionDistance;
-            return float.IsFinite(distanceSquared) && float.IsFinite(objectReach) && objectReach >= 0
-                && distanceSquared <= objectReach * objectReach;
-        }
-        float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
         return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
     }
 
