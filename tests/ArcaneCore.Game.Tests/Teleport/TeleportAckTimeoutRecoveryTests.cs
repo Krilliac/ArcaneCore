@@ -62,6 +62,9 @@ public sealed class TeleportAckTimeoutRecoveryTests
         public Fixture()
         {
             World = TestWorld.CreateRuntime();
+            // Game time advances only through RunTick: every sweep deadline below is NowMs plus a budget, and on the wall
+            // clock the milliseconds spent between TeleportTo and that read shifted the deadline (an early bot fallback).
+            World.UseManualClock();
             WorldMaps.Of(World).Load(Content);
             Teleports = new TeleportService(World, _ => { }, _ => { });
             World.PlayerLoggingOut += Teleports.Forget;
