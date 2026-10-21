@@ -1269,9 +1269,7 @@ public sealed partial class MapCombat
             if (!holder.IsAlive
                 || !holder.IsInWorld
                 || !ReferenceEquals(holder.Map, _map)
-                || holder is Creatures.Creature { IsFrozenOutsideActiveCells: true }
-                || !holder.Combat.IsInCombat
-                || (!ReferenceEquals(holder.Combat.Victim, target) && !WithinEngagementRange(target, holder)))
+                || holder is Creatures.Creature { IsFrozenOutsideActiveCells: true })
             {
                 toRemove ??= new Unit[holders.Count];
                 toRemove[removeCount++] = holder;
