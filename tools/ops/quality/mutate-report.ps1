@@ -19,7 +19,9 @@ if (-not $RunDir) {
     $RunDir = Join-Path $root $RunId
 }
 $state = Read-MutateAllState $RunDir
-$batches = @($state.batches)
+$allBatches = @($state.batches)
+$splitCount = @($allBatches | Where-Object { $_.status -eq 'split' }).Count
+$batches = @($allBatches | Where-Object { $_.status -ne 'split' })   # a batch that timed out and was split is replaced by its two halves
 
 # ---- merge the summaries of the done batches ----
 $fileRows = @{}
@@ -80,7 +82,7 @@ $md.Add("Git HEAD at start: ``$($state.head)``. Generated $([DateTime]::UtcNow.T
 $md.Add('')
 $md.Add('## Progress')
 $md.Add('')
-$md.Add("- Batches: **$($done.Count) done** / $($batches.Count) total ($($errors.Count) error, $($running.Count) running, $($pending.Count) pending)")
+$md.Add("- Batches: **$($done.Count) done** / $($batches.Count) total ($($errors.Count) error, $($running.Count) running, $($pending.Count) pending; $splitCount timed out and were split)")
 $md.Add("- Mutants judged so far (killed + survived + no-coverage + timeout): **$judged** ($($total.CompileError) compile-error mutants not counted)")
 $md.Add("- Elapsed: $(Format-MutateAllDuration $wallSec) since the run was created; $(Format-MutateAllDuration $activeSec) of batch run time")
 if ($pending.Count + $running.Count -eq 0) { $md.Add('- Remaining: nothing pending.') }

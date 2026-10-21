@@ -181,7 +181,7 @@ function New-MutateAllPlan {
       Unmapped and get no batch.
     #>
     param(
-        [Parameter(Mandatory)] [string]$Root, [int]$MaxFiles = 40, [int]$MaxLines = 6000,
+        [Parameter(Mandatory)] [string]$Root, [int]$MaxFiles = 40, [int]$MaxLines = 0, [hashtable]$MaxLinesByProject,
         [string[]]$Projects, [hashtable]$TestOverride
     )
     $map = Get-MutateAllTestMap -Root $Root
@@ -199,8 +199,9 @@ function New-MutateAllPlan {
         $eligible = @($files | Where-Object Eligible)
         $ineligible = @($files | Where-Object { -not $_.Eligible })
         foreach ($f in $ineligible) { $skippedFiles.Add("src/$project/$($f.Rel) ($($f.Reason))") }
-        $units = @(Get-MutateAllDirUnits -Dir '' -Eligible $eligible -Ineligible $ineligible -MaxFiles $MaxFiles -MaxLines $MaxLines)
-        $units = @(Merge-MutateAllUnits -Units $units -MaxFiles $MaxFiles -MaxLines $MaxLines)
+        $cap = if ($MaxLines -gt 0) { $MaxLines } elseif ($MaxLinesByProject -and $MaxLinesByProject.ContainsKey($short)) { [int]$MaxLinesByProject[$short] } else { 3000 }
+        $units = @(Get-MutateAllDirUnits -Dir "" -Eligible $eligible -Ineligible $ineligible -MaxFiles $MaxFiles -MaxLines $cap)
+        $units = @(Merge-MutateAllUnits -Units $units -MaxFiles $MaxFiles -MaxLines $cap)
         $n = 0
         foreach ($u in $units) {
             $n++
@@ -316,4 +317,53 @@ function Format-MutateAllDuration {
     elseif ($span.TotalHours -ge 1) { '{0}h {1:D2}m' -f [int][math]::Floor($span.TotalHours), $span.Minutes }
     elseif ($span.TotalMinutes -ge 1) { '{0}m {1:D2}s' -f [int][math]::Floor($span.TotalMinutes), $span.Seconds }
     else { '{0}s' -f [int]$span.TotalSeconds }
+}
+
+function Get-MutateAllDefaultMaxLines {
+    <# .SYNOPSIS Default -MaxLines (non-blank source lines per batch) per source project, from the measured mutation rate of its test project so that a batch takes about 50 minutes at most. #>
+    @{ Cryptography = 3000; Protocol = 3000; Gateway = 3000; Realm = 3000; Kernel = 3000; Data = 3000; Game = 3000; Playerbots = 3000; 'World.Contracts' = 3000; World = 3000 }
+}
+
+function Split-MutateAllBatch {
+    <#
+    .SYNOPSIS
+      Splits a batch that timed out into two batches of explicit files (halves by non-blank lines, in file order). Returns the two
+      new batch records (status pending, ids <id>a and <id>b, splitDepth one deeper), or $null when the batch has fewer than 2 files.
+    #>
+    param([Parameter(Mandatory)] $Batch, [Parameter(Mandatory)] [string]$Root)
+    $directory = Join-Path $Root "src/$($Batch['project'])"
+    $excluded = [System.Collections.Generic.HashSet[string]]::new([string[]]@($Batch['exclude']), [StringComparer]::Ordinal)
+    $members = @(Get-MutateAllSourceFiles -ProjectDirectory $directory | Where-Object {
+            $rel = $_.Rel
+            if (-not $_.Eligible -or $excluded.Contains($rel)) { return $false }
+            foreach ($inc in @($Batch['include'])) {
+                if ($inc -ceq '**/*.cs') { return $true }
+                if ($inc.EndsWith('/**/*.cs', [StringComparison]::Ordinal)) { if ($rel.StartsWith($inc.Substring(0, $inc.Length - 7), [StringComparison]::Ordinal)) { return $true } }
+                elseif ($inc -ceq $rel) { return $true }
+            }
+            $false
+        } | Sort-Object Rel)
+    if ($members.Count -lt 2) { return $null }
+    $total = [int](($members | Measure-Object Lines -Sum).Sum)
+    $cut = 1; $running = 0
+    for ($i = 0; $i -lt $members.Count - 1; $i++) {
+        $running += $members[$i].Lines; $cut = $i + 1
+        if ($running * 2 -ge $total) { break }
+    }
+    $depth = if ($Batch.Contains('splitDepth') -and $null -ne $Batch['splitDepth']) { [int]$Batch['splitDepth'] + 1 } else { 1 }
+    $result = @()
+    $halves = @(@($members[0..($cut - 1)]), @($members[$cut..($members.Count - 1)]))
+    for ($h = 0; $h -lt 2; $h++) {
+        $set = @($halves[$h])
+        $suffix = @('a', 'b')[$h]
+        $result += , ([ordered]@{
+                id = "$($Batch['id'])$suffix"; project = $Batch['project']; name = "$($Batch['name']) [half $($h + 1)/2]"
+                testProject = $Batch['testProject']; parts = @($Batch['parts']); include = @($set | ForEach-Object { $_.Rel }); exclude = @()
+                files = $set.Count; lines = [int](($set | Measure-Object Lines -Sum).Sum)
+                status = 'pending'; attempts = 0; head = $null; dirty = $null; startedUtc = $null; endedUtc = $null; durationSec = $null
+                outDir = $null; report = $null; summary = $null; counts = $null; reason = $null; exitCode = $null
+                splitDepth = $depth; splitFrom = $Batch['id']
+            })
+    }
+    $result
 }

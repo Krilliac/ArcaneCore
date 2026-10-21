@@ -21,14 +21,16 @@ param(
     [string[]]$BatchFilter,
     [ValidateRange(1, 64)] [int]$Concurrency = 2,
     [ValidateRange(1, 500)] [int]$MaxFiles = 40,
-    [ValidateRange(100, 200000)] [int]$MaxLines = 6000,
+    [ValidateRange(0, 200000)] [int]$MaxLines = 0,
+    [hashtable]$MaxLinesByProject,
     [string]$TestFilter,
     [hashtable]$TestOverride,
     [string]$PauseFile,
     [switch]$NoSlot,
     [string]$Lane = 'mutate-all',
     [string]$SlotRunner = 'D:\ArcaneCore-lanes\tools\run-in-slot.ps1',
-    [ValidateRange(1, 1440)] [int]$BatchTimeoutMin = 180,
+    [ValidateRange(1, 72)] [int]$BatchTimeoutMin = 70,
+    [ValidateRange(0, 8)] [int]$MaxSplitDepth = 4,
     [switch]$RetryErrors,
     [switch]$AllowHeadChange,
     [switch]$PlanOnly,
@@ -51,6 +53,8 @@ function Stop-MutateAll([string]$Message, [int]$Code = 2) {
 trap { Stop-MutateAll "unexpected error: $($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)" }
 function Write-Log([string]$Message) { "[{0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $Message }
 
+$lineCaps = Get-MutateAllDefaultMaxLines
+if ($MaxLinesByProject) { foreach ($k in $MaxLinesByProject.Keys) { $lineCaps[($k -replace "^ArcaneCore.", "")] = [int]$MaxLinesByProject[$k] } }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
 $mutateScript = Join-Path $PSScriptRoot 'mutate.ps1'
 $reportScript = Join-Path $PSScriptRoot 'mutate-report.ps1'
@@ -83,12 +87,12 @@ if ($Resume) {
     }
 }
 else {
-    $plan = New-MutateAllPlan -Root $repo -MaxFiles $MaxFiles -MaxLines $MaxLines -Projects $Projects -TestOverride $TestOverride
+    $plan = New-MutateAllPlan -Root $repo -MaxFiles $MaxFiles -MaxLines $MaxLines -MaxLinesByProject $lineCaps -Projects $Projects -TestOverride $TestOverride
     $batches = @($plan.Batches)
     if ($BatchFilter) { $batches = @($batches | Where-Object { $b = $_; @($BatchFilter | Where-Object { $b["id"] -like $_ -or $b["name"] -like $_ }).Count -gt 0 }) }
     if ($batches.Count -eq 0) { Stop-MutateAll 'the plan has no batch (check -Projects / -BatchFilter).' }
     if ($PlanOnly) {
-        "Batch plan: $($batches.Count) batches, $(($batches | ForEach-Object { $_['lines'] } | Measure-Object -Sum).Sum) non-blank lines, caps $MaxFiles files / $MaxLines lines"
+        "Batch plan: $($batches.Count) batches, $(($batches | ForEach-Object { $_['lines'] } | Measure-Object -Sum).Sum) non-blank lines, caps $MaxFiles files / $(if ($MaxLines -gt 0) { "$MaxLines lines" } else { "per-project lines: " + (($lineCaps.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join " ") })"
         foreach ($g in ($batches | Group-Object { $_['project'] })) {
             "  {0,-30} {1,4} batches  {2,7} lines  tests: {3}" -f $g.Name, $g.Count, (($g.Group | ForEach-Object { $_['lines'] } | Measure-Object -Sum).Sum), $g.Group[0]['testProject']
         }
@@ -103,7 +107,7 @@ else {
     New-Item -ItemType Directory -Force $runDir | Out-Null
     $state = [ordered]@{
         runId = $RunId; createdUtc = [DateTime]::UtcNow.ToString('s') + 'Z'; head = $head; headHistory = @(); repo = $repo
-        settings = [ordered]@{ concurrency = $Concurrency; maxFiles = $MaxFiles; maxLines = $MaxLines; testFilter = $TestFilter; batchTimeoutMin = $BatchTimeoutMin; slot = (-not $NoSlot); lane = $Lane }
+        settings = [ordered]@{ concurrency = $Concurrency; maxFiles = $MaxFiles; maxLines = $MaxLines; maxLinesByProject = $lineCaps; testFilter = $TestFilter; batchTimeoutMin = $BatchTimeoutMin; slot = (-not $NoSlot); lane = $Lane }
         unmapped = @($plan.Unmapped); skippedFiles = @($plan.SkippedFiles)
         batches = $batches
     }
@@ -123,7 +127,9 @@ Set-Content -LiteralPath $lockPath -Value "$PID"
 $settings = $state.settings
 $settings['lastStartUtc'] = [DateTime]::UtcNow.ToString('s') + 'Z'
 if ($Resume -and $TestFilter) { $settings['testFilter'] = $TestFilter }
-$batchList = $state.batches
+$batchList = [System.Collections.Generic.List[object]]::new()
+foreach ($existing in @($state.batches)) { $batchList.Add($existing) }
+$state.batches = $batchList
 $startedHere = 0; $consecutiveErrors = 0; $exitCode = 0; $sinceReport = 0
 
 # A batch left 'running' by a crash is run again; -RetryErrors puts the error batches back too.
@@ -149,13 +155,13 @@ function Invoke-MutateAllBatch($b) {
     $command = "pwsh -NoProfile -File $(& $quote $mutateScript) $($mutateArgs -join ' ') 2>&1 | Tee-Object -FilePath $(& $quote $mutateOut)"
     $slotOut = Join-Path $outDir 'slot.out'
     if ($settings.slot) {
-        & pwsh -NoProfile -File $SlotRunner -Lane $Lane -WorkDir $repo -Command $command -TimeoutMin ($settings.batchTimeoutMin + 20) *> $slotOut
+        & pwsh -NoProfile -File $SlotRunner -Lane $Lane -WorkDir $repo -Command $command -TimeoutMin ($settings.batchTimeoutMin + 3) *> $slotOut
         return $LASTEXITCODE
     }
     $script = "Set-Location -LiteralPath '$repo'`n$command`nexit `$LASTEXITCODE"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $slotOut -RedirectStandardError "$slotOut.err"
-    if (-not $p.WaitForExit(($settings.batchTimeoutMin + 20) * 60 * 1000)) { & taskkill.exe /T /F /PID $p.Id | Out-Null; return 124 }
+    if (-not $p.WaitForExit(($settings.batchTimeoutMin + 3) * 60 * 1000)) { & taskkill.exe /T /F /PID $p.Id | Out-Null; return 124 }
     $p.WaitForExit()
     return $p.ExitCode
 }
@@ -168,6 +174,8 @@ function Complete-MutateAllBatch($b, [int]$rc) {
     $reportFile = Get-ChildItem $outDir -Recurse -Filter 'mutation-report.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
     $strykerLog = Get-ChildItem $outDir -Recurse -Filter 'stryker.log' -File -ErrorAction SilentlyContinue | Select-Object -Last 1
     $failure = $null
+    $timedOut = ($rc -eq 124) -or ((Test-Path $mutateOut) -and (Select-String -Path $mutateOut -Pattern 'did not finish within' -Quiet))
+    $b['timedOut'] = $timedOut
     if ($rc -eq 124) { $failure = "timed out (batch limit $($settings.batchTimeoutMin) min); the Stryker tree was killed" }
     elseif ($rc -ne 0) {
         $lastMessage = $null
@@ -205,7 +213,8 @@ function Complete-MutateAllBatch($b, [int]$rc) {
 
 # ---- the loop -------------------------------------------------------------------------------------------------------------------------
 try {
-    foreach ($b in $batchList) {
+    for ($index = 0; $index -lt $batchList.Count; $index++) {
+        $b = $batchList[$index]
         if ($b.status -ne 'pending') { continue }
         if ($MaxBatches -gt 0 -and $startedHere -ge $MaxBatches) { break }
         if ($PauseFile) {
@@ -239,8 +248,19 @@ try {
             Write-Log "  done in $(Format-MutateAllDuration $b.durationSec): killed $($b.counts.Killed) survived $($b.counts.Survived) no-coverage $($b.counts.NoCoverage) timeout $($b.counts.Timeout) compile-error $($b.counts.CompileError)"
         }
         else {
-            $consecutiveErrors++
-            Write-Log "  ERROR after $(Format-MutateAllDuration $b.durationSec): $($b.reason)"
+            $depth = if ($b.Contains('splitDepth') -and $null -ne $b['splitDepth']) { [int]$b['splitDepth'] } else { 0 }
+            $kids = @()
+            if ($b['timedOut'] -and $depth -lt $MaxSplitDepth) { $kids = @(Split-MutateAllBatch -Batch $b -Root $repo) }
+            if ($kids.Count -eq 2) {
+                $b.status = 'split'
+                $b.reason = "timed out after $(Format-MutateAllDuration $b.durationSec); split into $($kids[0].id) ($($kids[0].files) files, $($kids[0].lines) lines) and $($kids[1].id) ($($kids[1].files) files, $($kids[1].lines) lines)"
+                $batchList.InsertRange($index + 1, [object[]]$kids)
+                Write-Log "  TIMEOUT: $($b.reason)"
+            }
+            else {
+                $consecutiveErrors++
+                Write-Log "  ERROR after $(Format-MutateAllDuration $b.durationSec): $($b.reason)"
+            }
         }
         $sinceReport++
         if (-not $NoReport -and $sinceReport -ge 5) { $sinceReport = 0; & pwsh -NoProfile -File $reportScript -RunDir $runDir -Quiet }
@@ -257,7 +277,7 @@ finally {
 }
 
 $count = { param($s) @($batchList | Where-Object { $_.status -eq $s }).Count }
-Write-Log "run $($state.runId): done $(& $count 'done'), error $(& $count 'error'), pending $(& $count 'pending') of $($batchList.Count). Report: $(Join-Path $runDir 'SUMMARY.md')"
+Write-Log "run $($state.runId): done $(& $count 'done'), error $(& $count 'error'), pending $(& $count 'pending') of $(@($batchList | Where-Object { $_.status -ne 'split' }).Count) ($(& $count 'split') split after a timeout). Report: $(Join-Path $runDir 'SUMMARY.md')"
 if ($exitCode -ne 0) { exit $exitCode }
 if ((& $count 'error') -gt 0 -or (& $count 'pending') -gt 0) { exit 1 }
 exit 0
