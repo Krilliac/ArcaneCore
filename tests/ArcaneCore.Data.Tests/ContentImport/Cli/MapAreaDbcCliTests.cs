@@ -57,6 +57,73 @@ public sealed class MapAreaDbcCliTests : IDisposable
         Assert.Equal(0L, await ScalarAsync(connection, "SELECT GhostEntranceMap FROM map_template WHERE Entry=33"));
     }
 
+    /// <summary>
+    /// A third path (WMOAreaTable.dbc) also fills wmo_area_template. Over an existing world the import is refused without --replace, whichever
+    /// of the three tables already has rows, and with --replace it rewrites map_template and area_template as well.
+    /// </summary>
+    [Fact]
+    public async Task CliTakesAWmoAreaTable_RefusesAWorldThatHasOne_AndReplacesAllThreeTablesWithReplace()
+    {
+        string map = Input("Map.dbc", 42, Map(0), Map(1));
+        string area = Input("AreaTable.dbc", 25, Area(12, 0, 0, 12), Area(125, 0, 12, 125));
+        string wmo = Input("WMOAreaTable.dbc", 20, Wmo(100, 1500, 3, 77, 125), Wmo(101, 1500, 3, -1, 0));
+        string database = Path.Combine(_root, "world.db");
+        var output = new StringWriter();
+        Assert.Equal(0, await ContentImporterCli.RunAsync(["import-map-dbc", map, area, wmo, "--database", database], output, new StringWriter(), default));
+        Assert.Contains("Imported 2 WMO group area rows (wmo_area_template).", output.ToString(), StringComparison.Ordinal);
+        await using var connection = new SqliteConnection("Data Source=" + database);
+        await connection.OpenAsync();
+        Assert.Equal(2L, await ScalarAsync(connection, "SELECT COUNT(*) FROM wmo_area_template"));
+        Assert.Equal(125L, await ScalarAsync(connection, "SELECT AreaId FROM wmo_area_template WHERE Id=100"));
+
+        // The three-path import over a world that has rows is refused, and nothing changes.
+        Assert.Equal(4, await ContentImporterCli.RunAsync(["import-map-dbc", map, area, wmo, "--database", database], new StringWriter(), new StringWriter(), default));
+
+        // A world whose map and area tables were emptied but whose wmo_area_template has rows is refused too.
+        await ExecuteAsync(connection, "DELETE FROM map_template; DELETE FROM area_template;");
+        Assert.Equal(4, await ContentImporterCli.RunAsync(["import-map-dbc", map, area, wmo, "--database", database], new StringWriter(), new StringWriter(), default));
+        Assert.Equal(0L, await ScalarAsync(connection, "SELECT COUNT(*) FROM map_template"));
+
+        // --replace rewrites all three.
+        string smallWmo = Input("Small.dbc", 20, Wmo(7, 1, 1, 1, 12));
+        Assert.Equal(0, await ContentImporterCli.RunAsync(["import-map-dbc", map, area, smallWmo, "--database", database, "--replace"], new StringWriter(), new StringWriter(), default));
+        Assert.Equal(2L, await ScalarAsync(connection, "SELECT COUNT(*) FROM map_template"));
+        Assert.Equal(2L, await ScalarAsync(connection, "SELECT COUNT(*) FROM area_template"));
+        Assert.Equal(1L, await ScalarAsync(connection, "SELECT COUNT(*) FROM wmo_area_template"));
+        Assert.Equal(7L, await ScalarAsync(connection, "SELECT Id FROM wmo_area_template"));
+    }
+
+    /// <summary>Two paths leave wmo_area_template alone.</summary>
+    [Fact]
+    public async Task CliWithTwoPaths_LeavesWmoAreaTemplateAlone()
+    {
+        string map = Input("Map.dbc", 42, Map(0));
+        string area = Input("AreaTable.dbc", 25, Area(12, 0, 0, 12));
+        string wmo = Input("WMOAreaTable.dbc", 20, Wmo(100, 1500, 3, 77, 12));
+        string database = Path.Combine(_root, "world.db");
+        Assert.Equal(0, await ContentImporterCli.RunAsync(["import-map-dbc", map, area, wmo, "--database", database], new StringWriter(), new StringWriter(), default));
+        await using var connection = new SqliteConnection("Data Source=" + database);
+        await connection.OpenAsync();
+
+        Assert.Equal(0, await ContentImporterCli.RunAsync(["import-map-dbc", map, area, "--database", database, "--replace"], new StringWriter(), new StringWriter(), default));
+
+        Assert.Equal(1L, await ScalarAsync(connection, "SELECT COUNT(*) FROM wmo_area_template"));
+    }
+
+    private static async Task ExecuteAsync(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static uint[] Wmo(int id, int root, int adt, int group, uint area)
+    {
+        uint[] row = new uint[20];
+        row[0] = (uint)id; row[1] = (uint)root; row[2] = (uint)adt; row[3] = unchecked((uint)group); row[10] = area;
+        return row;
+    }
+
     private static async Task<object?> ScalarAsync(SqliteConnection connection, string sql)
     {
         using var command = connection.CreateCommand();

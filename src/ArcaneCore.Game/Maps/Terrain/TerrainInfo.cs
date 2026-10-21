@@ -173,7 +173,7 @@ public sealed class TerrainInfo
     }
 
     /// <summary>
-    /// The area flag at a position (vmangos <c>TerrainInfo::GetAreaFlag</c>, GridMap.cpp:913-945): the explore flag of the area of the WMO
+    /// The area flag at a position (vmangos <c>TerrainInfo::GetAreaFlag</c>, GridMap.cpp:914-950): the explore flag of the area of the WMO
     /// group the position is inside (<see cref="WmoAreaTable"/>), else the tile's cell value. The group is the one the world's model
     /// service finds (<see cref="TryGetWmoGroup"/>); without model data, without <c>wmo_area_template</c> rows, in a group with no row or
     /// no area, or whose area is not in the area table, the cell value is the answer, as it was before WMO areas were read.
@@ -194,7 +194,7 @@ public sealed class TerrainInfo
     }
 
     /// <summary>
-    /// vmangos <c>TerrainInfo::GetAreaInfo</c> (GridMap.cpp:889-907): the WMO group a point is inside, found from 1 yard above it. A group
+    /// vmangos <c>TerrainInfo::GetAreaInfo</c> (GridMap.cpp:892-912): the WMO group a point is inside, found from 1 yard above it. A group
     /// under terrain that rises to the point (the terrain above the group's floor and no more than 2 yards over the raised point) does not
     /// count: the position is on the ground over a building, not in it. False outside every WMO, without model data, and where the model
     /// tile is not loaded (vmangos loads it with the grid).

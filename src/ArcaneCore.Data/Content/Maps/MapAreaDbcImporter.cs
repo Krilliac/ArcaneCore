@@ -107,7 +107,7 @@ public static class MapAreaDbcImporter
         return new MapAreaDbcSnapshot(mapRows, areaRows, merged, warnings, wmoRows);
     }
 
-    /// <summary>Write a snapshot in its own transaction: refused when either table has rows, unless <paramref name="replace"/>.</summary>
+    /// <summary>Write a snapshot in its own transaction: refused when any table it writes has rows, unless <paramref name="replace"/>.</summary>
     public static async Task<MapAreaDbcImportReport> ImportSnapshotAsync(WorldDbContext db, MapAreaDbcSnapshot snapshot, bool replace,
         CancellationToken cancellationToken)
     {
@@ -117,9 +117,10 @@ public static class MapAreaDbcImporter
         {
             if (!replace
                 && (await db.Set<MapTemplateRow>().AnyAsync(token).ConfigureAwait(false)
-                    || await db.Set<AreaTemplateRow>().AnyAsync(token).ConfigureAwait(false)))
+                    || await db.Set<AreaTemplateRow>().AnyAsync(token).ConfigureAwait(false)
+                    || (snapshot.WmoAreas is not null && await db.Set<WmoAreaTemplateRow>().AnyAsync(token).ConfigureAwait(false))))
             {
-                throw new InvalidOperationException("Map/area import refuses a world that already has map_template or area_template rows without replace=true.");
+                throw new InvalidOperationException("Map/area import refuses a world that already has map_template, area_template or (with a WMOAreaTable.dbc) wmo_area_template rows without replace=true.");
             }
 
             await ReplaceAsync(db, snapshot, token).ConfigureAwait(false);

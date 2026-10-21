@@ -115,7 +115,7 @@ near the terrain, `GridMap.cpp:840-850`), model floors directly in `Map.GetHeigh
 terrain, `TerrainInfo.GetHeight`, while creature movement and summon/point heights via
 `MapCreatureHeightProvider.GetHeight` / `MapCreatureHeightProvider.Floor` and `CorpseQuery` ghost-entrance ground heights
 now use `MapCollision.GetHeight`, terrain and static model floors falling back to `Map.GetHeight` when no floor lies below
-`z + 2`), WMO liquids, the terrain test of the indoor check (`GetAreaInfo`, `GridMap.cpp:894-907`), dynamic gameobject LOS,
+`z + 2`), WMO liquids, the terrain test of the indoor check (`GetAreaInfo`, `GridMap.cpp:892-912`), dynamic gameobject LOS,
 the data-directory inspector. (WMO areas are done: `TerrainInfo.GetAreaFlag` reads `wmo_area_template`, docs/areas/world-state.md.) Paths
 on transports and boats (`PathFinder.cpp:77-84`) and cMaNGOS mmaps (version 8) remain unsupported.
 

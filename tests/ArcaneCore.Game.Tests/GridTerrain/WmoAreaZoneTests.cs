@@ -13,7 +13,7 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.GridTerrain;
 
 /// <summary>
-/// A position inside a WMO group takes the area of that group (vmangos <c>TerrainInfo::GetAreaFlag</c>, GridMap.cpp:913-945, over
+/// A position inside a WMO group takes the area of that group (vmangos <c>TerrainInfo::GetAreaFlag</c>, GridMap.cpp:914-950, over
 /// <c>WMOAreaTable.dbc</c>), not the terrain cell above it: Undercity lies under Tirisfal Glades, so its Trade Quarter read zone 85
 /// and PvP enforcement, the capital rest type and the weather were Tirisfal's. Synthetic terrain and a scripted model service; the
 /// real extraction is in <see cref="Collision.WmoAreaRealTerrainTests"/>. The ids are the 1.12.1 ones: Tirisfal Glades 85 (flag 179),
@@ -43,6 +43,8 @@ public sealed class WmoAreaZoneTests : IDisposable
 
         public int Queries { get; private set; }
 
+        public float LastQueryZ { get; private set; }
+
         public bool Enabled => true;
 
         public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
@@ -58,6 +60,7 @@ public sealed class WmoAreaZoneTests : IDisposable
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
         {
             Queries++;
+            LastQueryZ = z;
             ModelAreaInfo? found = GroupAt(new Vector3(x, y, z));
             info = found.GetValueOrDefault();
             return found is not null;
@@ -164,7 +167,7 @@ public sealed class WmoAreaZoneTests : IDisposable
     [Fact]
     public void AGroupWithNoRow_ReadsTheTerrainCell_EvenWhenTheRootHasADefaultRow()
     {
-        // vmangos looks the exact (root, name set, group) up and has no (root, name set, -1) fallback (DBCStores.cpp:479-485).
+        // vmangos looks the exact (root, name set, group) up and has no (root, name set, -1) fallback (DBCStores.cpp:479-486; the table is filled with `insert` at :415).
         using WorldRuntime world = World(UndercityModels(), [new WmoAreaTemplate(1, UndercityRoot, UndercityNameSet, -1, Undercity, 0)]);
 
         Assert.Equal((Tirisfal, Tirisfal), world.GetMap(0).GetZoneAndAreaId(TradeQuarterX, TradeQuarterY, TradeQuarterZ));
@@ -187,13 +190,29 @@ public sealed class WmoAreaZoneTests : IDisposable
     public void GroundOverABuilding_IsNotInsideIt()
     {
         // The terrain is at z = 100, the group floor far below: a point within 2 yards under the raised point is on the ground over the
-        // building (vmangos TerrainInfo::GetAreaInfo, GridMap.cpp:897-906); one deeper down is inside it.
+        // building (vmangos TerrainInfo::GetAreaInfo, GridMap.cpp:902-907); one deeper down is inside it.
         ScriptedModels models = new() { GroupAt = _ => new ModelAreaInfo(0x2000, UndercityNameSet, UndercityRoot, TradeQuarterGroup, GroupFloor) };
         using WorldRuntime world = World(models, [TradeQuarterRow()], gridHeight: 100f);
         var map = world.GetMap(0);
 
         Assert.Equal((Tirisfal, Tirisfal), map.GetZoneAndAreaId(TradeQuarterX, TradeQuarterY, 98.5f));
         Assert.Equal((Undercity, Undercity), map.GetZoneAndAreaId(TradeQuarterX, TradeQuarterY, 20f));
+    }
+
+    [Fact]
+    public void TheModelLookupStartsOneYardAboveThePoint_AsVmangosGetAreaInfoDoes()
+    {
+        // vmangos TerrainInfo::GetAreaInfo (GridMap.cpp:892-912) raises z by 1 before the model query and then tests z + 2 against the
+        // terrain: with the terrain at 100, a point is the ground over the building above z = 97 and inside it at or below. Without the
+        // +1 the threshold would be 98, and 97.5 would be read as inside.
+        ScriptedModels models = new() { GroupAt = _ => new ModelAreaInfo(0x2000, UndercityNameSet, UndercityRoot, TradeQuarterGroup, GroupFloor) };
+        using WorldRuntime world = World(models, [TradeQuarterRow()], gridHeight: 100f);
+        var map = world.GetMap(0);
+
+        Assert.Equal((Tirisfal, Tirisfal), map.GetZoneAndAreaId(TradeQuarterX, TradeQuarterY, 97.5f));
+        Assert.Equal(98.5f, models.LastQueryZ);
+        Assert.Equal((Undercity, Undercity), map.GetZoneAndAreaId(TradeQuarterX, TradeQuarterY, 96.5f));
+        Assert.Equal(97.5f, models.LastQueryZ);
     }
 
     [Fact]

@@ -177,6 +177,44 @@ public sealed class WmoAreaRealTerrainTests(ITestOutputHelper output)
         Assert.True(inside < 100_000, $"a lookup inside a WMO took {inside:F0} ns");
     }
 
+    /// <summary>
+    /// What a playerbot think pays for the zone clip of its home: <c>PlayerbotHomeArea.InZone</c> asks the zone of every candidate creature
+    /// (PlayerbotBrain grind filter, PlayerbotHome.cs). A hundred distinct candidates standing inside the Trade Quarter, one pass each.
+    /// </summary>
+    [RealWmoAreaFact]
+    public void AThinkWithAHundredCandidatesInsideAWmo_Cost_IsReported()
+    {
+        using WorldRuntime world = Load(true, (TradeX, TradeY));
+        TerrainInfo terrain = world.GetMap(0).Terrain;
+        var candidates = new (float X, float Y)[100];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            candidates[i] = (TradeX + ((i % 10) - 5) * 3f, TradeY + ((i / 10) - 5) * 3f);
+        }
+
+        uint sink = 0;
+        int inside = 0;
+        for (int warm = 0; warm < 20; warm++)
+        {
+            foreach ((float x, float y) in candidates) sink += terrain.GetZoneAndAreaId(x, y, TradeZ).ZoneId;
+        }
+
+        var passes = new double[200];
+        for (int pass = 0; pass < passes.Length; pass++)
+        {
+            long started = Stopwatch.GetTimestamp();
+            foreach ((float x, float y) in candidates) sink += terrain.GetZoneAndAreaId(x, y, TradeZ).ZoneId;
+            passes[pass] = (Stopwatch.GetTimestamp() - started) * 1e3 / Stopwatch.Frequency;
+        }
+
+        foreach ((float x, float y) in candidates) if (terrain.GetZoneAndAreaId(x, y, TradeZ).ZoneId == Undercity) inside++;
+        Array.Sort(passes);
+        output.WriteLine($"BENCH think with 100 candidates: {inside} of 100 resolve to Undercity; one pass of 100 zone lookups: median {passes[100]:F3} ms, worst {passes[^1]:F3} ms");
+        GC.KeepAlive(sink);
+        Assert.True(inside >= 50, $"only {inside} of the 100 candidates are inside the city: the benchmark would not measure the WMO path");
+        Assert.True(passes[100] < 5.0, $"a hundred lookups inside a WMO took {passes[100]:F3} ms");
+    }
+
     private static double Measure(TerrainInfo terrain, float x, float y, float z)
     {
         const int warm = 2_000, runs = 50_000;
