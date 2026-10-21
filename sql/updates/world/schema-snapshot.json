@@ -1,6 +1,6 @@
 {
   "component": "world",
-  "version": 54,
+  "version": 55,
   "providers": {
     "mariadb": {
       "tables": [
@@ -131,6 +131,7 @@
         {"name":"totem_spell","columns":[["CreatureEntry","int unsigned",false],["SpellId","int unsigned",false]],"primaryKey":["CreatureEntry"],"indexes":[]},
         {"name":"transports","columns":[["entry","int unsigned",false],["build","smallint unsigned",false],["name","varchar(255)",false],["period","int unsigned",false]],"primaryKey":["entry","build"],"indexes":[]},
         {"name":"warden_checks","columns":[["Id","int unsigned",false],["Type","int",false],["Str","varchar(255)",true],["Data","varchar(512)",true],["Address","int unsigned",false],["Length","int",false],["Result","varchar(512)",false],["Flags","int unsigned",false],["Penalty","int",false],["BuildMin","int",false],["BuildMax","int",false],["Comment","varchar(255)",false]],"primaryKey":["Id"],"indexes":[]},
+        {"name":"wmo_area_template","columns":[["Id","int unsigned",false],["RootId","int",false],["AdtId","int",false],["GroupId","int",false],["AreaId","int unsigned",false],["Flags","int unsigned",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"world_safe_locs","columns":[["id","int unsigned",false],["map","int unsigned",false],["x","float",false],["y","float",false],["z","float",false],["o","float",false],["name","varchar(50)",false]],"primaryKey":["id"],"indexes":[]},
         {"name":"world_schema","columns":[["Id","int",false],["Version","int",false]],"primaryKey":["Id"],"indexes":[]}
       ],
@@ -182,6 +183,10 @@
         {"name":"game_event_creature_data","columns":[["guid","int unsigned",false],["event","int",false],["entry_id","int unsigned",false],["modelid","int unsigned",false],["equipment_id","int unsigned",false],["spell_start","int unsigned",false],["spell_end","int unsigned",false]],"primaryKey":["guid","event"],"indexes":[]},
         {"name":"game_event_gameobject","columns":[["guid","int unsigned",false],["event","int",false]],"primaryKey":["guid","event"],"indexes":[]},
         {"name":"game_event_mail","columns":[["event","int",false],["race_mask","int unsigned",false],["quest","int unsigned",false],["mail_template_id","int unsigned",false],["sender_entry","int unsigned",false]],"primaryKey":["event","race_mask","quest"],"indexes":[]},
+        {"name":"game_event_playerbot_group","columns":[["event","int unsigned",false],["group_id","int unsigned",false],["name_prefix","varchar(32)",false],["count","int",false],["team","tinyint unsigned",false],["class_spec","varchar(255)",false],["level","tinyint unsigned",false],["provision","tinyint(1)",false],["start_map","int unsigned",false],["start_x","float",false],["start_y","float",false],["start_z","float",false],["start_o","float",false],["role","tinyint unsigned",false],["comment","varchar(255)",true]],"primaryKey":["event","group_id"],"indexes":[]},
+        {"name":"game_event_playerbot_post","columns":[["event","int unsigned",false],["group_id","int unsigned",false],["post_id","int unsigned",false],["map","int unsigned",false],["x","float",false],["y","float",false],["z","float",false],["radius","float",false],["comment","varchar(255)",true]],"primaryKey":["event","group_id","post_id"],"indexes":[]},
+        {"name":"game_event_playerbot_siege","columns":[["event","int unsigned",false],["group_id","int unsigned",false],["objective_entry","int unsigned",false],["raids","tinyint unsigned",false],["min_ready_pct","tinyint unsigned",false],["comment","varchar(255)",true]],"primaryKey":["event","group_id"],"indexes":[]},
+        {"name":"game_event_playerbot_waypoint","columns":[["event","int unsigned",false],["group_id","int unsigned",false],["seq","int unsigned",false],["map","int unsigned",false],["x","float",false],["y","float",false],["z","float",false],["comment","varchar(255)",true]],"primaryKey":["event","group_id","seq"],"indexes":[]},
         {"name":"game_event_quest","columns":[["quest","int unsigned",false],["event","int",false]],"primaryKey":["quest","event"],"indexes":[]},
         {"name":"game_event_time","columns":[["entry","int unsigned",false],["start_time","varchar(32)",false],["end_time","varchar(32)",false]],"primaryKey":["entry"],"indexes":[]},
         {"name":"game_graveyard_zone","columns":[["id","int unsigned",false],["ghost_zone","int unsigned",false],["faction","int unsigned",false]],"primaryKey":["id","ghost_zone"],"indexes":[]},
@@ -391,6 +396,7 @@
         {"name":"totem_spell","columns":[["CreatureEntry","bigint",false],["SpellId","bigint",false]],"primaryKey":["CreatureEntry"],"indexes":[]},
         {"name":"transports","columns":[["entry","bigint",false],["build","integer",false],["name","character varying(255)",false],["period","bigint",false]],"primaryKey":["entry","build"],"indexes":[]},
         {"name":"warden_checks","columns":[["Id","bigint",false],["Type","integer",false],["Str","character varying(255)",true],["Data","character varying(512)",true],["Address","bigint",false],["Length","integer",false],["Result","character varying(512)",false],["Flags","bigint",false],["Penalty","integer",false],["BuildMin","integer",false],["BuildMax","integer",false],["Comment","character varying(255)",false]],"primaryKey":["Id"],"indexes":[]},
+        {"name":"wmo_area_template","columns":[["Id","bigint",false],["RootId","integer",false],["AdtId","integer",false],["GroupId","integer",false],["AreaId","bigint",false],["Flags","bigint",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"world_safe_locs","columns":[["id","bigint",false],["map","bigint",false],["x","real",false],["y","real",false],["z","real",false],["o","real",false],["name","character varying(50)",false]],"primaryKey":["id"],"indexes":[]},
         {"name":"world_schema","columns":[["Id","integer",false],["Version","integer",false]],"primaryKey":["Id"],"indexes":[]}
       ],
@@ -442,6 +448,10 @@
         {"name":"game_event_creature_data","columns":[["guid","bigint",false],["event","integer",false],["entry_id","bigint",false],["modelid","bigint",false],["equipment_id","bigint",false],["spell_start","bigint",false],["spell_end","bigint",false]],"primaryKey":["guid","event"],"indexes":[]},
         {"name":"game_event_gameobject","columns":[["guid","bigint",false],["event","integer",false]],"primaryKey":["guid","event"],"indexes":[]},
         {"name":"game_event_mail","columns":[["event","integer",false],["race_mask","bigint",false],["quest","bigint",false],["mail_template_id","bigint",false],["sender_entry","bigint",false]],"primaryKey":["event","race_mask","quest"],"indexes":[]},
+        {"name":"game_event_playerbot_group","columns":[["event","bigint",false],["group_id","bigint",false],["name_prefix","character varying(32)",false],["count","integer",false],["team","smallint",false],["class_spec","character varying(255)",false],["level","smallint",false],["provision","boolean",false],["start_map","bigint",false],["start_x","real",false],["start_y","real",false],["start_z","real",false],["start_o","real",false],["role","smallint",false],["comment","character varying(255)",true]],"primaryKey":["event","group_id"],"indexes":[]},
+        {"name":"game_event_playerbot_post","columns":[["event","bigint",false],["group_id","bigint",false],["post_id","bigint",false],["map","bigint",false],["x","real",false],["y","real",false],["z","real",false],["radius","real",false],["comment","character varying(255)",true]],"primaryKey":["event","group_id","post_id"],"indexes":[]},
+        {"name":"game_event_playerbot_siege","columns":[["event","bigint",false],["group_id","bigint",false],["objective_entry","bigint",false],["raids","smallint",false],["min_ready_pct","smallint",false],["comment","character varying(255)",true]],"primaryKey":["event","group_id"],"indexes":[]},
+        {"name":"game_event_playerbot_waypoint","columns":[["event","bigint",false],["group_id","bigint",false],["seq","bigint",false],["map","bigint",false],["x","real",false],["y","real",false],["z","real",false],["comment","character varying(255)",true]],"primaryKey":["event","group_id","seq"],"indexes":[]},
         {"name":"game_event_quest","columns":[["quest","bigint",false],["event","integer",false]],"primaryKey":["quest","event"],"indexes":[]},
         {"name":"game_event_time","columns":[["entry","bigint",false],["start_time","character varying(32)",false],["end_time","character varying(32)",false]],"primaryKey":["entry"],"indexes":[]},
         {"name":"game_graveyard_zone","columns":[["id","bigint",false],["ghost_zone","bigint",false],["faction","bigint",false]],"primaryKey":["id","ghost_zone"],"indexes":[]},
@@ -651,6 +661,7 @@
         {"name":"totem_spell","columns":[["CreatureEntry","INTEGER",false],["SpellId","INTEGER",false]],"primaryKey":["CreatureEntry"],"indexes":[]},
         {"name":"transports","columns":[["entry","INTEGER",false],["build","INTEGER",false],["name","TEXT",false],["period","INTEGER",false]],"primaryKey":["entry","build"],"indexes":[]},
         {"name":"warden_checks","columns":[["Id","INTEGER",false],["Type","INTEGER",false],["Str","TEXT",true],["Data","TEXT",true],["Address","INTEGER",false],["Length","INTEGER",false],["Result","TEXT",false],["Flags","INTEGER",false],["Penalty","INTEGER",false],["BuildMin","INTEGER",false],["BuildMax","INTEGER",false],["Comment","TEXT",false]],"primaryKey":["Id"],"indexes":[]},
+        {"name":"wmo_area_template","columns":[["Id","INTEGER",false],["RootId","INTEGER",false],["AdtId","INTEGER",false],["GroupId","INTEGER",false],["AreaId","INTEGER",false],["Flags","INTEGER",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"world_safe_locs","columns":[["id","INTEGER",false],["map","INTEGER",false],["x","REAL",false],["y","REAL",false],["z","REAL",false],["o","REAL",false],["name","TEXT",false]],"primaryKey":["id"],"indexes":[]},
         {"name":"world_schema","columns":[["Id","INTEGER",false],["Version","INTEGER",false]],"primaryKey":["Id"],"indexes":[]}
       ],
@@ -702,6 +713,10 @@
         {"name":"game_event_creature_data","columns":[["guid","INTEGER",false],["event","INTEGER",false],["entry_id","INTEGER",false],["modelid","INTEGER",false],["equipment_id","INTEGER",false],["spell_start","INTEGER",false],["spell_end","INTEGER",false]],"primaryKey":["guid","event"],"indexes":[]},
         {"name":"game_event_gameobject","columns":[["guid","INTEGER",false],["event","INTEGER",false]],"primaryKey":["guid","event"],"indexes":[]},
         {"name":"game_event_mail","columns":[["event","INTEGER",false],["race_mask","INTEGER",false],["quest","INTEGER",false],["mail_template_id","INTEGER",false],["sender_entry","INTEGER",false]],"primaryKey":["event","race_mask","quest"],"indexes":[]},
+        {"name":"game_event_playerbot_group","columns":[["event","INTEGER",false],["group_id","INTEGER",false],["name_prefix","TEXT",false],["count","INTEGER",false],["team","INTEGER",false],["class_spec","TEXT",false],["level","INTEGER",false],["provision","INTEGER",false],["start_map","INTEGER",false],["start_x","REAL",false],["start_y","REAL",false],["start_z","REAL",false],["start_o","REAL",false],["role","INTEGER",false],["comment","TEXT",true]],"primaryKey":["event","group_id"],"indexes":[]},
+        {"name":"game_event_playerbot_post","columns":[["event","INTEGER",false],["group_id","INTEGER",false],["post_id","INTEGER",false],["map","INTEGER",false],["x","REAL",false],["y","REAL",false],["z","REAL",false],["radius","REAL",false],["comment","TEXT",true]],"primaryKey":["event","group_id","post_id"],"indexes":[]},
+        {"name":"game_event_playerbot_siege","columns":[["event","INTEGER",false],["group_id","INTEGER",false],["objective_entry","INTEGER",false],["raids","INTEGER",false],["min_ready_pct","INTEGER",false],["comment","TEXT",true]],"primaryKey":["event","group_id"],"indexes":[]},
+        {"name":"game_event_playerbot_waypoint","columns":[["event","INTEGER",false],["group_id","INTEGER",false],["seq","INTEGER",false],["map","INTEGER",false],["x","REAL",false],["y","REAL",false],["z","REAL",false],["comment","TEXT",true]],"primaryKey":["event","group_id","seq"],"indexes":[]},
         {"name":"game_event_quest","columns":[["quest","INTEGER",false],["event","INTEGER",false]],"primaryKey":["quest","event"],"indexes":[]},
         {"name":"game_event_time","columns":[["entry","INTEGER",false],["start_time","TEXT",false],["end_time","TEXT",false]],"primaryKey":["entry"],"indexes":[]},
         {"name":"game_graveyard_zone","columns":[["id","INTEGER",false],["ghost_zone","INTEGER",false],["faction","INTEGER",false]],"primaryKey":["id","ghost_zone"],"indexes":[]},
@@ -786,10 +801,13 @@
   "seeds": [],
   "files": {
     "mariadb/0054_GameEventPlayerbotDataModule.sql": "7d259582be70bde109ef59bf0bbb5e4f5441b6e64508dbf1acd4d588320b3154",
+    "mariadb/0055_WmoAreaDataModule.sql": "9c63c18518c5acfd63600a6469a13b1a25e84e094f0ced9dd9933b52658728bb",
     "mariadb/base_v0053.sql": "ef623e1ff269900749e87b0750bab5076541565e541e4215d6291fc288a75b74",
     "postgresql/0054_GameEventPlayerbotDataModule.sql": "58f32a35a43aa5bee822385fd4285a0aca095c802965289b82a0e31a4d401aff",
+    "postgresql/0055_WmoAreaDataModule.sql": "09c0f88e180c11a60d4aaa4ec5f4708bc216b4071014e514f7c367e38c4b38f6",
     "postgresql/base_v0053.sql": "f73dd6d2f76295623ac74a43a9edfc59b99d22f39ca93b7a43501c6946690306",
     "sqlite/0054_GameEventPlayerbotDataModule.sql": "84fbaac3bc0dd9e16e7ab9e89bd0c2cdec759d4861ffead3f9e8786b6e5e0e03",
+    "sqlite/0055_WmoAreaDataModule.sql": "b933e00189f66f130d91d0141b1d74f84d50af8fa37b9c4d98aedd5b7919dc40",
     "sqlite/base_v0053.sql": "0628d3eb41a09f0e1296cef874034fcb3741f51aa4ad1ef1d3dcf107ef45c5eb"
   }
 }
