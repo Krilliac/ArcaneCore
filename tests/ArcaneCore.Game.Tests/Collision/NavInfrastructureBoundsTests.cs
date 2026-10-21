@@ -14,6 +14,9 @@ public sealed class NavInfrastructureBoundsTests : IDisposable
 {
     private static readonly NavTerrain Include = PathMover.Player.IncludeFlags;
     private static readonly NavTerrain Exclude = NavTerrain.SteepSlopes;
+
+    // Guards against a hang, not behaviour: pool work can wait many seconds behind other tests' blocked threads in a busy full-suite run.
+    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(120);
     private readonly NavMeshFixture _fixture = new();
 
     public void Dispose() => _fixture.Dispose();
@@ -88,7 +91,7 @@ public sealed class NavInfrastructureBoundsTests : IDisposable
         Task<NavRegionGraph?>[] tasks = Enumerable.Range(0, maps).Select(m => nav.RegionGraphTask((uint)m, Include, Exclude)!).ToArray();
 
         // The cap's worth start and block; the rest must wait for a slot, not start.
-        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref started) >= 2, TimeSpan.FromSeconds(10)));
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref started) >= 2, HangGuard));
         await Task.Delay(300);
         Assert.Equal(2, Volatile.Read(ref started));
 
