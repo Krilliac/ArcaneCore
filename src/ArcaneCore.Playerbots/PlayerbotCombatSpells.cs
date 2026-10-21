@@ -28,6 +28,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     /// <summary>How long a rotation spell the server refused is left out before it is tried again.</summary>
     internal const uint RefusalBackoffMs = 4000;
+    private const uint LowManaConserveMs = 10_000;
 
     private uint _failureBackoffMs;
     private uint _lastRefusedSpell;
@@ -36,6 +37,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     private PlayerbotAbilities? _abilities;
     private PlayerbotRole _role;
     private readonly PlayerbotCombatWatch _watch = new();
+    private uint _combatLowManaSinceMs;
+    private bool _wasInCombat;
 
     /// <summary>
     /// The outcome check of the bot's item uses (<see cref="PlayerbotConsumableWatch"/>). A caller that sends CMSG_USE_ITEM itself takes
@@ -66,6 +69,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         _abilities = null;
         PullTarget = null;
         _watch.Reset();
+        _combatLowManaSinceMs = 0;
+        _wasInCombat = false;
         Consumables.Reset();
     }
 
@@ -102,7 +107,30 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
         uint nowMs = session.World.NowMs;
         Consumables.Poll(player, feature.System, nowMs);
-        _watch.Fight(player, nowMs);
+        if (player.Combat.IsInCombat)
+        {
+            _wasInCombat = true;
+            _watch.Fight(player, nowMs);
+            uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+            if (player.PowerType == PowerType.Mana && maxMana > 0
+                && (ulong)SpellSystem.GetPower(player, PowerType.Mana) * 100UL < (ulong)maxMana * 10UL)
+            {
+                if (_combatLowManaSinceMs == 0) _combatLowManaSinceMs = Math.Max(1u, nowMs);
+            }
+            else
+            {
+                _combatLowManaSinceMs = 0;
+            }
+        }
+        else
+        {
+            _combatLowManaSinceMs = 0;
+            if (_wasInCombat)
+            {
+                _wasInCombat = false;
+                _watch.Reset();
+            }
+        }
         UnitSpellState? state = feature.System.GetState(player.Guid);
         if (state?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting } running)
         {
@@ -195,6 +223,12 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             || session.Services.GetService<SpellFeature>() is not { } feature)
             return false;
 
+        if (!player.Combat.IsInCombat)
+        {
+            _combatLowManaSinceMs = 0;
+            _wasInCombat = false;
+            _watch.Reset();
+        }
         Consumables.Poll(player, feature.System, session.World.NowMs);
         if (feature.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting })
         {
@@ -382,7 +416,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     internal bool CanCastNow(Player player, SpellInfo spell, Unit target)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (session.Services.GetService<SpellFeature>() is not { } feature || IsRefused(spell)) return false;
+        if (session.Services.GetService<SpellFeature>() is not { } feature || IsRefused(spell) || IsWithheldForManaRecovery(player, spell)) return false;
         Unit? victim = ReferenceEquals(target, player) ? null : target;
         RotationState view = View(player, feature, victim);
         RotationUnit? unit = victim is null ? view.Self : view.Victim;
@@ -403,7 +437,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         RotationUnit? unit = ReferenceEquals(target, player) ? view.Self : view.Victim;
         if (unit is null) return null;
         for (int index = 0; index < spells.Count; index++)
-            if ((accept is null || accept(spells[index])) && !IsRefused(spells[index]) && view.CanCast(spells[index], unit)) return spells[index];
+            if ((accept is null || accept(spells[index])) && !IsRefused(spells[index]) && !IsWithheldForManaRecovery(player, spells[index]) && view.CanCast(spells[index], unit)) return spells[index];
         return null;
     }
 
@@ -448,7 +482,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         => PlayerbotRotations.For(player.Class) is { } rotation && Refresh(player, feature).Count > 0 ? rotation : null;
 
     private RotationState View(Player player, SpellFeature feature, Unit? victim)
-        => PlayerbotCombatView.Build(session, feature, player, victim, Refresh(player, feature), GroupRole ?? _role, IsRefused);
+        => PlayerbotCombatView.Build(session, feature, player, victim, Refresh(player, feature), GroupRole ?? _role, spell => IsRefused(spell) || IsWithheldForManaRecovery(player, spell));
 
     /// <summary>
     /// vmangos PartyBotAI::OnPacketReceived (PartyBotAI.cpp:544-553): a learned, superseded or removed spell marks the spell
@@ -470,6 +504,19 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     private bool IsRefused(SpellInfo spell)
         => _refusedUntil.TryGetValue(spell.Id, out uint until) && unchecked((int)(until - session.World.NowMs)) > 0;
+
+    private bool IsWithheldForManaRecovery(Player player, SpellInfo spell)
+    {
+        if (_combatLowManaSinceMs == 0 || !player.Combat.IsInCombat || spell.IsPositive) return false;
+        if (spell.PowerType != (int)PowerType.Mana || (spell.ManaCost == 0 && spell.ManaCostPercentage == 0)) return false;
+        if ((ulong)player.Health * 100UL <= (ulong)player.MaxHealth * 40UL) return false;
+        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        if (player.PowerType != PowerType.Mana || maxMana == 0
+            || (ulong)SpellSystem.GetPower(player, PowerType.Mana) * 100UL >= (ulong)maxMana * 10UL)
+            return false;
+        uint elapsed = unchecked(session.World.NowMs - _combatLowManaSinceMs);
+        return elapsed >= LowManaConserveMs && elapsed <= int.MaxValue;
+    }
 
     private bool Execute(Player player, SpellFeature feature, RotationAction action)
     {
@@ -643,7 +690,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             .Concat(known.Where(id => id <= _lastRefusedSpell)))
         {
             SpellInfo? spell = feature.System.Store.Get(spellId);
-            if (spell is null || spell.IsPassive || spell.IsPositive || spell.CanTargetDead)
+            if (spell is null || spell.IsPassive || spell.IsPositive || spell.CanTargetDead || IsWithheldForManaRecovery(player, spell))
             {
                 continue;
             }

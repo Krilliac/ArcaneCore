@@ -268,6 +268,8 @@ internal sealed partial class PlayerbotBattlegroundAI
             Activity = "off-map";
             Order = null;
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            IdleNow = false;
             Hold(player);
             return;
         }
@@ -278,6 +280,8 @@ internal sealed partial class PlayerbotBattlegroundAI
             if (_pvp.Target is not null) ClearTarget(player);
             Activity = match.Status == BattlegroundStatus.WaitLeave ? "match-over" : "waiting-start";
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            IdleNow = false;
             Hold(player);
             return;
         }
@@ -286,6 +290,8 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             Activity = "casting";
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            IdleNow = false;
             return;
         }
 
@@ -306,6 +312,8 @@ internal sealed partial class PlayerbotBattlegroundAI
             EndRest(player);
             Activity = "taking-buff";
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            IdleNow = false;
             TargetEntry = buff.Entry;
             if (!WalkTo(player, buff.Position, interval, toward: false)) _buffs.GiveUp(player.Guid, Now);
             return;
@@ -327,12 +335,16 @@ internal sealed partial class PlayerbotBattlegroundAI
         if (RestBetweenFights(player, carrier))
         {
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            IdleNow = false;
             return;
         }
 
         if (!player.Combat.IsInCombat && _spells.UpdateOutOfCombat(player, interval))
         {
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            IdleNow = false;
             return;
         }
 
@@ -388,7 +400,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         // the room and took the defence) stood at its old goal, not at its new one; it is idle only if it stays put under the new duty.
         bool sameDuty = Order?.Duty == _stillDuty;
         _stillDuty = Order?.Duty;
-        StillMs = still && sameDuty ? unchecked(StillMs + Math.Max(1u, interval)) : 0;
+        if (Order is null) StillMs = 0;
         if (Order is not { } order)
         {
             IdleNow = false;
@@ -413,6 +425,8 @@ internal sealed partial class PlayerbotBattlegroundAI
         float enemyYards = fighting is not null ? Distance(player, fighting)
             : named is not null && order.Duty is PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom or PlayerbotWsgDuty.Midfield
                 ? Distance(player, named) : float.MaxValue;
+        bool idleStep = PlayerbotWarsongTactics.IsIdle(player.IsAlive, engaged, PlayerbotWarsongTactics.IdleLimitMs, goal, arrived, enemyYards);
+        StillMs = still && sameDuty && idleStep ? unchecked(StillMs + Math.Max(1u, interval)) : 0;
         IdleNow = PlayerbotWarsongTactics.IsIdle(player.IsAlive, engaged, StillMs, goal, arrived, enemyYards);
         if (!IdleNow) return;
         IdleThinks++;
@@ -509,7 +523,10 @@ internal sealed partial class PlayerbotBattlegroundAI
             {
                 bool ready = wsg.FlagState(enemy) == WsgFlagState.OnBase
                     && wsg.IsActiveEvent(enemy == Team.Alliance ? WarsongGulch.EventFlagAlliance : WarsongGulch.EventFlagHorde, 0);
-                GameObject? stand = ready && !o.Target.IsEmpty && map.FindObject(o.Target) is GameObject { IsSpawned: true } found ? found : null;
+                uint enemyStandEntry = enemy == Team.Alliance ? WarsongGulch.AllianceFlagBaseEntry : WarsongGulch.HordeFlagBaseEntry;
+                GameObject? stand = !ready ? null
+                    : !o.Target.IsEmpty && map.FindObject(o.Target) is GameObject { IsSpawned: true } found ? found
+                    : map.FindUpdater<GameObjectMapSystem>()?.GameObjects.FirstOrDefault(go => go.Entry == enemyStandEntry && go.IsSpawned);
                 // The stand object exists only once its grid is loaded, so a flag the match calls ready often has nothing to click
                 // until the bot gets there. Going there is waiting-flag. no-flag (idle) is only once the bot has arrived and the
                 // stand is still missing: content that failed to load, not the walk across the field (bot QA #819).

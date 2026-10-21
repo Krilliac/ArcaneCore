@@ -535,25 +535,30 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     private bool HasOpposingQueueActivity(Tracked t, Player player, BattlegroundManager manager)
     {
-        Team enemy = BattlegroundConstants.OtherTeam(t.Team);
-        foreach (Tracked other in _tracked.Values)
+        if (t.Bracket < 0 || manager.TemplateOf(t.Type) is not { } template) return false;
+        foreach (Battleground match in manager.RunningBattlegrounds)
         {
-            if (other.BotId != t.BotId && other.Type == t.Type && other.Bracket == t.Bracket && other.Team == enemy
-                && other.Phase is PlayerbotBattlegroundPhase.Queued or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering or PlayerbotBattlegroundPhase.InMatch)
+            if (match.Type == t.Type && match.Bracket == t.Bracket
+                && match.Status is BattlegroundStatus.WaitJoin or BattlegroundStatus.InProgress
+                && match.FreeSlotsForTeam(t.Team) > 0)
                 return true;
         }
 
+        int minPerTeam = (int)Math.Max(1u, template.MinPlayersPerTeam);
+        int allianceOnline = 0;
+        int hordeOnline = 0;
         if (_world is not null)
         {
             foreach (Player online in _world.OnlinePlayers)
             {
-                if (online.Guid == player.Guid || online.Team != enemy) continue;
-                if (manager.QueuedGroupOf(online.Guid, t.Type) is { } group && group.Team == enemy)
-                    return true;
+                if (BattlegroundConstants.BracketOfLevel(online.Level, template.MinLevel) != t.Bracket) continue;
+                if (manager.QueuedGroupOf(online.Guid, t.Type) is not { InvitedToInstanceId: 0 } group) continue;
+                if (group.Team == Team.Horde) hordeOnline++;
+                else allianceOnline++;
             }
         }
 
-        return false;
+        return allianceOnline >= minPerTeam && hordeOnline >= minPerTeam;
     }
 
     private void Leave(Tracked t, PlayerbotBattlegroundBot bot, Player player)
@@ -608,7 +613,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         PlayerbotBattlegroundOptions options = _options.Battlegrounds;
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
-        bool anyRealWaiting = _demand.AnyRealWaiting;
+        bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting);
         bool checkedRefusalsThisScan = false;
         foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
@@ -725,7 +730,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         int cap = _options.Battlegrounds.MaxBotsPerBattleground;
         foreach (Battleground match in manager.RunningBattlegrounds)
         {
-            if (!PlayerbotBattlegroundBrackets.Supported(match.Type) || match.Status == BattlegroundStatus.WaitLeave || !match.HasFreeSlots) continue;
+            if (!PlayerbotBattlegroundBrackets.Supported(match.Type) || match.Status == BattlegroundStatus.WaitLeave) continue;
+            _demand.AddMatchInBracket(match.Type, match.Bracket);
+            if (!match.HasFreeSlots) continue;
             int bots = 0;
             foreach ((ObjectGuid guid, Team team) in match.Participants())
             {

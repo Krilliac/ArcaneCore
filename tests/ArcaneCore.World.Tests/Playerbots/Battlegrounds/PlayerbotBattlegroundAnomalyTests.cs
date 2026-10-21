@@ -165,7 +165,7 @@ public sealed class PlayerbotBattlegroundAnomalyTests
     // --- queue-stuck ----------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task QueueStuck_Fires_WhenTheQueueTimesOutWhileAnOpponentIsQueuedInAnotherBracket()
+    public async Task QueueStuck_StaysSilent_WhenTheQueueTimesOutWhileAnOpponentIsQueuedInAnotherBracket()
     {
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(o => o.Battlegrounds.MaxQueueWaitMinutes = 1);
         await RunAsync(world, "bg-anomaly-queue-stuck", async context =>
@@ -180,10 +180,7 @@ public sealed class PlayerbotBattlegroundAnomalyTests
             ScenarioContext.Expect(await context.ReadAsync(() => Manager(context).StateOf(horde.Guid).InAnyQueue), "the opponent is queued");
 
             await context.WaitUntilAsync("the queue is left", () => coordinator.Totals.QueueTimeouts == 1, TimeSpan.FromSeconds(120));
-            ScenarioContext.ExpectEqual(1, capture.Count(QueueStuck), Dump(capture, QueueStuck));
-            AnomalyNotice notice = capture.Notices.Single(n => n.Key == QueueStuck);
-            ScenarioContext.ExpectEqual(AnomalySeverity.Warning, notice.Severity, "severity");
-            ScenarioContext.Expect(notice.Detail.Contains("timed out after 1m", StringComparison.Ordinal), notice.Detail);
+            ScenarioContext.ExpectEqual(0, capture.Count(QueueStuck), Dump(capture, QueueStuck));
         });
     }
 
@@ -283,8 +280,104 @@ public sealed class PlayerbotBattlegroundAnomalyTests
             var wsg = (WarsongGulch)(await context.BattlegroundOfAsync(ally))!;
             await context.WaitUntilAsync("in progress", () => wsg.Status == BattlegroundStatus.InProgress, StartWait);
             await context.WaitUntilAsync("captured", () => wsg.TeamScore(Team.Alliance) == 1, TimeSpan.FromSeconds(90));
-
             ScenarioContext.ExpectEqual(0, capture.OfSubsystem(PlayerbotAnomalies.Subsystem("bg")).Count, capture.Describe());
+        });
+    }
+
+    [Fact]
+    public async Task QueueStuck_Fires_WhenBothTeamsHaveMinPlayersInTheSameBracketYetTheQueueTimesOut()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(o => o.Battlegrounds.MaxQueueWaitMinutes = 1);
+        await RunAsync(world, "bg-anomaly-queue-stuck-same-bracket", async context =>
+        {
+            ScenarioBot ally = await AutonomousAsync(context, "Bganomstksb", race: 1);
+            using AnomalyCapture capture = await CaptureAsync(ally);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await context.WaitUntilAsync("queued", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.Queued && Manager(context).StateOf(ally.Guid).InAnyQueue, TimeSpan.FromSeconds(60));
+
+            ScenarioBot horde = await context.LoginAsync("Bganomstksbh", race: 2, characterClass: 1);
+            await context.ReadAsync(() =>
+            {
+                Manager(context).QueueOf(BattlegroundQueueType.WarsongGulch).AddGroup(
+                    horde.Guid, Team.Horde, [horde.Guid], 1, BattlegroundType.WarsongGulch, bracket: 0, isPremade: false, instanceId: 0, nowMs: Manager(context).NowMs, isGroup: false);
+                return true;
+            });
+
+            await context.WaitUntilAsync("the queue is left", () => coordinator.Totals.QueueTimeouts == 1, TimeSpan.FromSeconds(120));
+            ScenarioContext.ExpectEqual(1, capture.Count(QueueStuck), Dump(capture, QueueStuck));
+            AnomalyNotice notice = capture.Notices.Single(n => n.Key == QueueStuck);
+            ScenarioContext.ExpectEqual(AnomalySeverity.Warning, notice.Severity, "severity");
+            ScenarioContext.Expect(notice.Detail.Contains("timed out after 1m", StringComparison.Ordinal), notice.Detail);
+        });
+    }
+
+    [Fact]
+    public async Task StationedMidfieldAndEngagedBot_DoNotAccumulateStillMs_OrReportIdleInMatch_WhenAnEnemyArrivesOrCombatEnds()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-anomaly-still-clock", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bganomstill", race: 1, characterClass: 1);
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bganomstilh", BattlegroundType.WarsongGulch, Content.HordeWsgMaster);
+            ObjectGuid allyMaster = ObjectGuid.WithEntry(HighGuid.Unit, Content.AllianceWsgMaster, Content.AllianceWsgMaster);
+            System.Numerics.Vector3 masterAt = Content.MasterAt(Content.AllianceWsgMaster);
+            await context.PlaceAsync(ally, 0, masterAt.X - 1.5f, masterAt.Y, masterAt.Z, 0f);
+            long mark = ally.Mark();
+            ScenarioContext.Expect(await ally.BattlemasterHelloAsync(allyMaster), "ally hello refused");
+            await ally.WaitForPacketAsync(ArcaneCore.Protocol.WorldOpcode.SmsgBattlefieldList, p => p, since: mark);
+            ScenarioContext.Expect(await ally.JoinBattlegroundAsync(allyMaster, BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch)), "ally join refused");
+            await PortScriptedAsync(context, ally, 489, (Content.AllianceFlag.X, Content.AllianceFlag.Y, Content.WsgFloor));
+            await PortScriptedAsync(context, horde, 489, (Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z));
+            var wsg = (WarsongGulch)(await context.BattlegroundOfAsync(ally))!;
+            await context.WaitUntilAsync("in progress", () => wsg.Status == BattlegroundStatus.InProgress, StartWait);
+
+            using AnomalyCapture capture = await CaptureAsync(ally);
+            await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                Player enemy = horde.RequirePlayer();
+                player.VisibleObjects.Remove(enemy.Guid);
+                var ai = new PlayerbotBattlegroundAI(ally.Session!, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+                var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+
+                // 1) Stationed at Midfield (goal == 0 <= arrived) with no enemy within 30 yd for 20 s: StillMs must stay 0.
+                var holdMidfield = new PlayerbotWsgOrder(PlayerbotWsgDuty.Midfield, ObjectGuid.Empty, here);
+                for (int i = 0; i < 20; i++)
+                    ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, holdMidfield);
+                ScenarioContext.ExpectEqual(0u, ai.StillMs, "StillMs while lawfully stationed at Midfield");
+
+                // Next tick: an enemy enters 20 yd (named on the Midfield order, before entering VisibleObjects). That first tick is only
+                // 1 s of standing still with an enemy nearby — not 21 s — so idle-in-match must not fire.
+                enemy.Relocate(here.X + 20f, here.Y, here.Z, 0f, context.World.NowMs);
+                var midfieldWithEnemy = new PlayerbotWsgOrder(PlayerbotWsgDuty.Midfield, enemy.Guid, here);
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(1_000u, ai.StillMs, "StillMs starts fresh at 1 s when an enemy enters 20 yd");
+                ScenarioContext.Expect(!ai.IdleNow, "not idle on the first tick an enemy enters 20 yd");
+                ScenarioContext.ExpectEqual(0, capture.Count(IdleInMatch), Dump(capture, IdleInMatch));
+
+                // 2) Fighting in place (engaged == true) for 20 s while an enemy is within 20 yd: StillMs must stay 0.
+                player.UnitFlags |= UnitFlags.InCombat;
+                for (int i = 0; i < 20; i++)
+                    ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(0u, ai.StillMs, "StillMs while engaged in combat");
+
+                // Combat ends on the next tick: only 1 s out of combat has elapsed, so idle-in-match must not fire immediately.
+                player.UnitFlags &= ~UnitFlags.InCombat;
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(1_000u, ai.StillMs, "StillMs starts fresh at 1 s on the first tick after combat ends");
+                ScenarioContext.Expect(!ai.IdleNow, "not idle on the first tick after combat ends");
+                ScenarioContext.ExpectEqual(0, capture.Count(IdleInMatch), Dump(capture, IdleInMatch));
+
+                // 3) Remaining still and unengaged for another 14 s (15 s total >= IdleLimitMs) must accumulate StillMs and fire idle-in-match.
+                for (int i = 0; i < 14; i++)
+                    ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(15_000u, ai.StillMs, "StillMs accumulates to 15 s when genuinely idle in match");
+                ScenarioContext.Expect(ai.IdleNow, "idle after 15 s of standing still out of combat with an enemy within 20 yd");
+                ScenarioContext.ExpectEqual(1, capture.Count(IdleInMatch), Dump(capture, IdleInMatch));
+                return true;
+            });
+
+            ScenarioContext.ExpectEqual(1, capture.OfSubsystem(PlayerbotAnomalies.Subsystem("bg")).Count, capture.Describe());
         });
     }
 }

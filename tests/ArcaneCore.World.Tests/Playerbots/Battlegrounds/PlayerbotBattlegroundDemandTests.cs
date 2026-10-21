@@ -209,4 +209,31 @@ public sealed class PlayerbotBattlegroundDemandTests
         Assert.Equal(0f, PlayerbotBattlegroundDemand.ChancePerThink(float.NaN, 60_000));
         Assert.Equal(0f, PlayerbotBattlegroundDemand.ChancePerThink(-0.1f, 60_000));
     }
+
+    [Fact]
+    public void BotWaitingWithNoRunningMatch_FillsBothSidesUpToMinPlayersPerTeam_SoTheMatchPops()
+    {
+        var demand = new PlayerbotBattlegroundDemand();
+        BattlegroundType type = BattlegroundType.WarsongGulch;
+        PlayerbotBattlegroundOptions options = Options(20);
+
+        // One Alliance bot initiates a queue in bracket 2 where no match is running yet.
+        demand.AddBotCommitted(type, 2, Team.Alliance);
+        Assert.Equal(4, demand.RealNeed(true, type, 2, Team.Alliance, Wsg));
+        Assert.Equal(5, demand.RealNeed(true, type, 2, Team.Horde, Wsg));
+
+        // Pick without a random chance hit recruits bots on both sides up to MinPlayersPerTeam (5 each, 10 total).
+        for (int i = 0; i < 9; i++)
+        {
+            Team team = demand.BotsCommitted(type, 2, Team.Alliance) < (int)Wsg.MinPlayersPerTeam ? Team.Alliance : Team.Horde;
+            PlayerbotBattlegroundChoice? picked = demand.Pick(OneChoice, team, Templates, options, chanceHit: false, pick: 0);
+            Assert.NotNull(picked);
+            demand.AddBotCommitted(picked!.Value.Type, picked.Value.Bracket, team);
+        }
+
+        Assert.Equal((int)Wsg.MinPlayersPerTeam, demand.BotsCommitted(type, 2, Team.Alliance));
+        Assert.Equal((int)Wsg.MinPlayersPerTeam, demand.BotsCommitted(type, 2, Team.Horde));
+        Assert.Null(demand.Pick(OneChoice, Team.Alliance, Templates, options, chanceHit: false, pick: 0));
+        Assert.Null(demand.Pick(OneChoice, Team.Horde, Templates, options, chanceHit: false, pick: 0));
+    }
 }
