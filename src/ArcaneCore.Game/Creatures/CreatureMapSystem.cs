@@ -67,6 +67,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly List<Creature> _scratchCreatures = [];
     private readonly List<Creature> _randomMotionScratch = [];
+    private int _creaturesVersion = 1;
+    private int _scratchCreaturesVersion;
 
     private long _clockMs;
     private uint _splineCounter;
@@ -959,7 +961,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// A formation member also counts from the moment it enters, before its queued activation applies.
     /// </summary>
     private bool IsAlwaysUpdated(Creature creature)
-        => Map.Grids.IsActive(creature) || UnitControl.ViewerOf(creature) is not null || FormationOfMember(creature) is not null;
+        => creature.IsFormationMember || Map.Grids.IsActive(creature) || UnitControl.ViewerOf(creature) is not null;
 
     private readonly List<Creature> _pendingActivation = [];
 
@@ -976,7 +978,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// </summary>
     private void QueueActivationIfFlagged(Creature creature)
     {
-        if (creature.ScriptActiveObject || (creature.Template.Behaviour & ActiveOnSpawn) != 0 || FormationOfMember(creature) is not null)
+        if (creature.ScriptActiveObject || (creature.Template.Behaviour & ActiveOnSpawn) != 0 || creature.IsFormationMember)
         {
             _pendingActivation.Add(creature);
         }
@@ -1009,6 +1011,36 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
     private SplinePassMark[] _splineMarks = [];
+    private int[] _activeScratchIndices = [];
+
+    private int PrepareScratchCreaturesAndConsumeStart()
+    {
+        if (_scratchCreaturesVersion != _creaturesVersion)
+        {
+            _scratchCreatures.Clear();
+            foreach (Creature creature in _creatures.Values)
+            {
+                creature.ScratchIndex = _scratchCreatures.Count;
+                _scratchCreatures.Add(creature);
+            }
+
+            _scratchCreaturesVersion = _creaturesVersion;
+        }
+
+        int start = 0;
+        if (_pathFirstDeferred is { } resume)
+        {
+            int idx = resume.ScratchIndex;
+            if ((uint)idx < (uint)_scratchCreatures.Count && ReferenceEquals(_scratchCreatures[idx], resume))
+            {
+                start = idx;
+            }
+
+            _pathFirstDeferred = null;
+        }
+
+        return start;
+    }
 
     /// <summary>
     /// <see cref="UpdateCreatures"/> in two passes (World:Parallel:CreatureSplinePass): first every creature of the walk is judged
@@ -1019,16 +1051,20 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     private void UpdateCreaturesInPasses(uint diffMs, ref long t)
     {
         uint now = _serverTime();
-        _scratchCreatures.Clear();
-        _scratchCreatures.AddRange(_creatures.Values);
+        int start = PrepareScratchCreaturesAndConsumeStart();
         int count = _scratchCreatures.Count;
         if (_splineMarks.Length < count)
         {
             _splineMarks = new SplinePassMark[Math.Max(count, _splineMarks.Length * 2)];
         }
 
+        if (_activeScratchIndices.Length < count)
+        {
+            _activeScratchIndices = new int[Math.Max(count, _activeScratchIndices.Length * 2)];
+        }
+
         bool activeCellsOnly = Map.UpdatesActiveCellsOnly;
-        int start = _pathFirstDeferred is { } resume ? Math.Max(0, _scratchCreatures.IndexOf(resume)) : 0;
+        int activeCount = 0;
         long splineStart = Stopwatch.GetTimestamp();
         for (int walked = 0; walked < count; walked++)
         {
@@ -1037,6 +1073,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
             {
                 _splineMarks[index] = SplinePassMark.Inactive;
+                creature.Spline?.Pause(_clockMs, diffMs);
+                creature.IsFrozenOutsideActiveCells = true;
+                SkippedInactiveCreatures++;
                 continue;
             }
 
@@ -1058,12 +1097,14 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             {
                 _splineMarks[index] = SplinePassMark.Active;
             }
+
+            _activeScratchIndices[activeCount++] = index;
         }
 
         _timing.SplinePass = Stopwatch.GetTimestamp() - splineStart;
         using (Serial())
         {
-            UpdateCreatures(diffMs, _splineMarks, splitRandomMotion: true);
+            UpdateCreatures(diffMs, _splineMarks, _activeScratchIndices, activeCount, splitRandomMotion: true);
             PrepareUngatedMotion();
             if (_ungatedRandom.Count == 0)
             {
@@ -1173,7 +1214,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return;
         }
 
-        long motionStart = Stopwatch.GetTimestamp();
+        bool timePerCreature = Map.IsCollectingDiagnostics;
+        long motionStart = timePerCreature ? Stopwatch.GetTimestamp() : 0;
         try
         {
             creature.Motion.Update(diffMs);
@@ -1193,35 +1235,39 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 creature.Z);
         }
 
-        long motionTicks = Stopwatch.GetTimestamp() - motionStart;
-        _timing.Motion += motionTicks;
-        if (motionTicks > _timing.SlowestCreatureTicks)
+        if (timePerCreature)
         {
-            _timing.SlowestCreatureTicks = motionTicks;
-            _timing.SlowestEntry = creature.Entry;
-            _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+            long motionTicks = Math.Max(1L, Stopwatch.GetTimestamp() - motionStart);
+            _timing.Motion += motionTicks;
+            if (motionTicks > _timing.SlowestCreatureTicks)
+            {
+                _timing.SlowestCreatureTicks = motionTicks;
+                _timing.SlowestEntry = creature.Entry;
+                _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+            }
         }
     }
 
-    private void UpdateCreatures(uint diffMs) => UpdateCreatures(diffMs, null, splitRandomMotion: false);
+    private void UpdateCreatures(uint diffMs) => UpdateCreatures(diffMs, null, null, 0, splitRandomMotion: false);
 
     /// <summary>
     /// The creature walk. With <paramref name="marks"/> (the spline pass ran), the scratch list is the pass's, each creature's active
     /// verdict is the pass's and a creature the pass advanced is not advanced again.
     /// </summary>
-    private void UpdateCreatures(uint diffMs, SplinePassMark[]? marks, bool splitRandomMotion)
+    private void UpdateCreatures(uint diffMs, SplinePassMark[]? marks, int[]? activeIndices, int activeCount, bool splitRandomMotion)
     {
         uint now = _serverTime();
+        int start = 0;
         if (marks is null)
         {
             // Live position may be outside the spawn's original grid. Snapshot ownership rather
             // than spawn buckets so a moved creature is updated once and survives home-grid unload.
             ApplyPendingActivations();
-            _scratchCreatures.Clear();
-            _scratchCreatures.AddRange(_creatures.Values);
+            start = PrepareScratchCreaturesAndConsumeStart();
         }
 
         bool activeCellsOnly = Map.UpdatesActiveCellsOnly;
+        bool timePerCreature = Map.IsCollectingDiagnostics;
 
         // Fair deferral: the walk starts at the creature whose path search was deferred first last update, so deferred chasers are
         // served before the ones that were served (a fixed order starves the late creatures while demand stays above the budget).
@@ -1229,16 +1275,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         // never starve combat or evade path searches; Random movement runs in pass 2 with the remaining budget.
         _randomMotionScratch.Clear();
         int count = _scratchCreatures.Count;
-        int start = _pathFirstDeferred is { } resume ? Math.Max(0, _scratchCreatures.IndexOf(resume)) : 0;
-        _pathFirstDeferred = null; // deferrals from here on (this walk, or a pull before the next update) choose the next start
-        for (int walked = 0; walked < count; walked++)
+        _timing.Walked = count;
+        int loopCount = activeIndices is not null ? activeCount : count;
+        long lastTimestamp = timePerCreature ? Stopwatch.GetTimestamp() : 0;
+        bool skippedSinceLastTimestamp = false;
+        for (int walked = 0; walked < loopCount; walked++)
         {
-            int index = (start + walked) % count;
+            int index = activeIndices is not null ? activeIndices[walked] : (start + walked) % count;
             Creature creature = _scratchCreatures[index];
-            _timing.Walked++;
             // vmangos Map::UpdateActiveCellsSynch: only the cells around players and active objects are visited.
-            if (marks is not null ? marks[index] == SplinePassMark.Inactive
-                : activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
+            if (activeIndices is null && activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
             {
                 // vmangos Unit::Update -> UpdateSplineMovement(p_time), Unit.cpp:322,10632:
                 // splines advance only by an active update's delta, never by time spent in an inactive cell.
@@ -1246,12 +1292,19 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 creature.Spline?.Pause(_clockMs, diffMs);
                 creature.IsFrozenOutsideActiveCells = true;
                 SkippedInactiveCreatures++;
+                skippedSinceLastTimestamp = true;
                 continue;
             }
 
             creature.IsFrozenOutsideActiveCells = false;
             _timing.Updated++;
-            long creatureStart = Stopwatch.GetTimestamp();
+            if (timePerCreature && skippedSinceLastTimestamp)
+            {
+                lastTimestamp = Stopwatch.GetTimestamp();
+                skippedSinceLastTimestamp = false;
+            }
+
+            long creatureStart = lastTimestamp;
             // WorldObject::UpdateHelper::UpdateRealTime: the update after a pause gets the time since the last one (update_diff),
             // which the corpse timers count down (Creature::Update CORPSE, Creature.cpp:901-914); motion and AI get the tick.
             uint sinceLast = creature.LastUpdateClockMs < 0 ? diffMs : (uint)Math.Min(_clockMs - creature.LastUpdateClockMs, uint.MaxValue);
@@ -1277,7 +1330,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                         // UNIT_STATE_CAN_NOT_MOVE) and the client gets the control back when it ends (UpdateControl).
                         if ((creature.UnitFlags & UnitFlags.Possessed) != 0)
                         {
-                            TimedUpdateAi(creature, diffMs);
+                            TimedUpdateAi(creature, diffMs, timePerCreature, ref lastTimestamp);
                             if (creature.DeathState == CreatureDeathState.Alive && _creatures.ContainsKey(creature.Guid))
                             {
                                 UpdatePossessedCrowdControl(creature, diffMs);
@@ -1290,7 +1343,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                         // that has not reached its victim for 3 s does not run its AI.
                         if (!CheckHardLeash(creature, diffMs) && !UpdateUnreachableTarget(creature, diffMs))
                         {
-                            TimedUpdateAi(creature, diffMs);
+                            TimedUpdateAi(creature, diffMs, timePerCreature, ref lastTimestamp);
                         }
 
                         if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
@@ -1308,11 +1361,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                             {
                                 _randomMotionScratch.Add(creature);
                             }
+                            else if (timePerCreature)
+                            {
+                                long motionStart = lastTimestamp;
+                                creature.Motion.Update(diffMs);
+                                lastTimestamp = Stopwatch.GetTimestamp();
+                                _timing.Motion += lastTimestamp - motionStart;
+                            }
                             else
                             {
-                                long motionStart = Stopwatch.GetTimestamp();
                                 creature.Motion.Update(diffMs);
-                                _timing.Motion += Stopwatch.GetTimestamp() - motionStart;
                             }
                         }
 
@@ -1365,12 +1423,20 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                     creature.Z);
             }
 
-            long creatureTicks = Stopwatch.GetTimestamp() - creatureStart;
-            if (creatureTicks > _timing.SlowestCreatureTicks)
+            if (timePerCreature)
             {
-                _timing.SlowestCreatureTicks = creatureTicks;
-                _timing.SlowestEntry = creature.Entry;
-                _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                if (lastTimestamp == creatureStart)
+                {
+                    lastTimestamp = Stopwatch.GetTimestamp();
+                }
+
+                long creatureTicks = Math.Max(1L, lastTimestamp - creatureStart);
+                if (creatureTicks > _timing.SlowestCreatureTicks)
+                {
+                    _timing.SlowestCreatureTicks = creatureTicks;
+                    _timing.SlowestEntry = creature.Entry;
+                    _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                }
             }
         }
 
@@ -1407,39 +1473,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         {
             foreach (Creature creature in _randomMotionScratch)
             {
-                if (creature.DeathState == CreatureDeathState.Alive
-                    && _creatures.ContainsKey(creature.Guid)
-                    && (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default)))
-                {
-                    long motionStart = Stopwatch.GetTimestamp();
-                    try
-                    {
-                        creature.Motion.Update(diffMs);
-                    }
-                    catch (Exception ex) when (ex is not OutOfMemoryException)
-                    {
-                        _logger.LogFault(
-                            "CreatureMapSystem.UpdateCreatureMotion",
-                            ex,
-                            "Creature random motion update fault for {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}))",
-                            creature.Guid,
-                            creature.Entry,
-                            creature.Template.Name,
-                            Map.MapId,
-                            creature.X,
-                            creature.Y,
-                            creature.Z);
-                    }
-
-                    long motionTicks = Stopwatch.GetTimestamp() - motionStart;
-                    _timing.Motion += motionTicks;
-                    if (motionTicks > _timing.SlowestCreatureTicks)
-                    {
-                        _timing.SlowestCreatureTicks = motionTicks;
-                        _timing.SlowestEntry = creature.Entry;
-                        _timing.SlowestGenerator = creature.Motion.Top?.GetType();
-                    }
-                }
+                UpdateRandomMotion(creature, diffMs);
             }
         }
         finally
@@ -1450,11 +1484,18 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
     /// <summary><see cref="UpdateAi"/>, its time added to the update's AI stage.</summary>
-    private void TimedUpdateAi(Creature creature, uint diffMs)
+    private void TimedUpdateAi(Creature creature, uint diffMs, bool timePerCreature, ref long lastTimestamp)
     {
+        if (!timePerCreature)
+        {
+            UpdateAi(creature, diffMs);
+            return;
+        }
+
         long started = Stopwatch.GetTimestamp();
         UpdateAi(creature, diffMs);
-        _timing.Ai += Stopwatch.GetTimestamp() - started;
+        lastTimestamp = Stopwatch.GetTimestamp();
+        _timing.Ai += lastTimestamp - started;
     }
 
     /// <summary>

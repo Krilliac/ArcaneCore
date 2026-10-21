@@ -189,6 +189,12 @@ public abstract class WorldObject
     /// <summary>Order in which the object joined its map; visibility passes visit objects in this order.</summary>
     internal long MapSequence { get; set; }
 
+    /// <summary>Cached cell index (<c>cell.Y * TotalNumberOfCellsPerMap + cell.X</c>) while indexed in <see cref="Maps.Grid.GridContainer"/>; -1 when not indexed.</summary>
+    internal int GridCellId { get; set; } = -1;
+
+    /// <summary>Whether this object is currently in <see cref="Maps.Grid.GridContainer"/>'s active object set.</summary>
+    internal bool IsGridActiveObject { get; set; }
+
     /// <summary>
     /// Move the object in one step, so its map re-files it once (setting <see cref="X"/> and
     /// <see cref="Y"/> separately re-files it after each).
