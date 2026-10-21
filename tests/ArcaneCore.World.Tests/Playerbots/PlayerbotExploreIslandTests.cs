@@ -3,11 +3,14 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotExploreIslandTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotExploreIslandTests(ITestOutputHelper output) : base(output) { }
+
     [RealTerrainBotFact]
     public async Task LowerStormwindLedge_IsAnIsolatedMeshPatch()
     {

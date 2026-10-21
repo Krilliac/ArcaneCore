@@ -116,7 +116,7 @@ public sealed class PlayerbotSiegeCommandTests
         Assert.Equal(["Playerbot siege: siege 1 stopped."], await FleetWorld.SayAsync(gm, ".playerbot siege stop"));
         Assert.Null(world.Coordinator.Siege);
         Assert.Equal("stopped: gm", world.Coordinator.SiegeOutcome);
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Count(g => g.Siege is not null) == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Count(g => g.Siege is not null) == 0), await world.TraceAsync());
         Assert.Equal(["Playerbot siege: none is running."], await FleetWorld.SayAsync(gm, ".playerbot siege stop"));
     }
 }

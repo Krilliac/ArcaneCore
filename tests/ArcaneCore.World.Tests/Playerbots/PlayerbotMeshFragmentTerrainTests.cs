@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -15,8 +16,10 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// Still open, NOT covered here: the Explore stalls at -1.0,-4188.3 (map 1), Coldridge -6494.1,324.9 (map 0) and the Barrens
 /// -1173,-3285 (map 1), which the probes (<c>PlayerbotDeadEndPinProbeTests</c>) found on large connected regions where plans and walks work.
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotMeshFragmentTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotMeshFragmentTerrainTests(ITestOutputHelper output) : base(output) { }
+
     private static readonly Vector3 RidgePocket = new(-137.6f, -4265.7f, 105.3f), IronforgeSliver = new(-4715.7f, -871.2f, 504.7f);
     private static readonly Vector3 DurotarRidge = new(-1.0f, -4188.3f, 79.4f), ColdridgePin = new(-6494.1f, 324.9f, 406.0f), BarrensPin = new(-1173.6f, -3285.5f, 91.7f);
     private static readonly Vector3 ChiefHawkwind = new(-2881.9f, -229.1f, 55.2f), RazorHillInn = new(340.4f, -4686.3f, 16.5f);

@@ -168,6 +168,94 @@ public sealed class PlayerbotDefendTests
         });
     });
 
+    private static bool Moving(Player player) => (player.Movement.Flags & MovementFlags.MaskMoving) != 0;
+
+    [Fact]
+    public Task ADefenderWithResurrectionSickness_StaysWhereItWasRevived_UntilTheAuraEnds_ThenWalksBackToThePost() => Run(4f, async rig =>
+    {
+        await PartyTestHost.InstallFlatGroundAsync(rig.Host, await rig.Host.OnWorldAsync(() => rig.BotPlayer.Z));
+        Vector3 graveyard = await rig.Host.OnWorldAsync(() =>
+        {
+            Player bot = rig.BotPlayer;
+            rig.Brain.Defend = rig.Post(40f);
+            // The spirit healer revived the bot 60 yards from its post (beyond 0.75 x the radius), sick.
+            bot.Relocate(bot.X - 60f, bot.Y, bot.Z, 0, rig.Host.World.NowMs);
+            PlayerbotSicknessTestKit.Apply(rig.Host.WorldServices, bot);
+            Assert.True(PlayerbotSickness.IsSick(rig.Bot, bot));
+            return new Vector3(bot.X, bot.Y, bot.Z);
+        });
+
+        // While the aura lasts: no walk back, however many thinks, and the status says why.
+        for (int think = 0; think < 6; think++)
+        {
+            await rig.Host.OnWorldAsync(() =>
+            {
+                rig.Think();
+                Player bot = rig.BotPlayer;
+                Assert.False(Moving(bot), $"the sick defender walks at think {think}");
+                Assert.Equal(graveyard.X, bot.X);
+                Assert.Equal(graveyard.Y, bot.Y);
+                // The wait is shown with the real risk decision, not instead of it.
+                Assert.Equal("decision=defend-wait-sickness; decision=off", rig.Brain.RiskReport);
+                Assert.True(rig.Brain.DefendWaitsSickness);
+                Assert.Equal(PlayerbotGoalKind.Home, rig.Brain.Goal);
+            });
+        }
+
+        // The aura ends: the defender walks back at once, and the status no longer says it waits.
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Host.WorldServices.GetRequiredService<SpellFeature>().System.RemoveAuras(rig.BotPlayer, PlayerbotSicknessTestKit.Sickness.Id);
+            Assert.False(PlayerbotSickness.IsSick(rig.Bot, rig.BotPlayer));
+            rig.Think();
+            Assert.True(Moving(rig.BotPlayer), "the defender does not walk back once the aura is gone");
+            Assert.False(rig.Brain.DefendWaitsSickness);
+            Assert.DoesNotContain("defend-wait-sickness", rig.Brain.RiskReport, StringComparison.Ordinal);
+        });
+    });
+
+    [Fact]
+    public Task ADefenderWithResurrectionSickness_StillFightsAPlayerWhoAttacksIt() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        PlayerbotPvpTestKit.Flag(bot);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        PlayerbotSicknessTestKit.Apply(rig.Host.WorldServices, bot);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Brain.InspectionPvpTarget);
+        Assert.Same(rig.EnemyPlayer, bot.Combat.Victim);
+    }));
+
+    [Fact]
+    public Task ASickDefenderWhoDies_NoLongerReportsTheWait_ButTheRealDecision() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        rig.Brain.Defend = rig.Post(40f);
+        PlayerbotSicknessTestKit.Apply(rig.Host.WorldServices, bot);
+        rig.Think();
+        Assert.True(rig.Brain.DefendWaitsSickness);
+        Assert.StartsWith("decision=defend-wait-sickness", rig.Brain.RiskReport, StringComparison.Ordinal);
+
+        bot.Health = 0;
+        bot.Map!.Combat.KillPlayer(bot);
+        Assert.False(bot.IsAlive);
+        rig.Think();
+        Assert.False(rig.Brain.DefendWaitsSickness);
+        Assert.Equal("decision=off", rig.Brain.RiskReport);
+    }));
+
+    [Fact]
+    public Task ADefenderWithoutTheAura_ReportsNoWait() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
+    {
+        rig.Brain.Defend = rig.Post(40f);
+        rig.Think();
+        Assert.False(rig.Brain.DefendWaitsSickness);
+        Assert.DoesNotContain("defend-wait-sickness", rig.Brain.RiskReport, StringComparison.Ordinal);
+    }));
+
     [Fact]
     public async Task DefenderHealsWoundedDefenderOfSamePost()
     {

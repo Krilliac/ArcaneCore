@@ -46,7 +46,7 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   a length of 0 or an occurence below the length makes it unusable, a `game_event_time` row on a non-date schedule is
   ignored, and a date event without a time row keeps the default start 1 / end 0 and never runs (classic-db event 85).
   `BuildVMangos` is the vmangos loader (:183-259): length 0 is invalid, an invalid patch range resets to 0..10, an event
-  outside patch 10 is disabled. `ResolveLinks` clears a `linkedTo` that names a missing or invalid event (:184-191).
+  outside patch 10 is disabled. `ResolveLinks` clears a `linkedTo` that names a missing or invalid event (:184-191). A NULL `start_time` or `end_time` is read as 0, as vmangos reads it (`Field::GetUInt64` of a NULL is 0): the event is valid, the schedule never makes it active, and `.event start` / `.event stop` run it by hand (a manual start sets its end to now plus the length in seconds, `ManualStartLengthUnit`, only when the row's end is not after the new start, as it is when `end_time` is NULL; a NULL `start_time` with an `end_time` set starts at 1 here and 0 in vmangos, a one second shift of the occurence window).
   Every rejected row adds an issue line and never throws.
 - `GameEventCalendar.Compute` does schedule types 11, 12 and 13 (mangos-classic `ComputeEventStartAndEndTime`,
   GameEventMgr.cpp:1210-1324), and `GaussEaster` is the `gaussEaster` port with its float arithmetic and corner cases
@@ -162,7 +162,10 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   change or the shutdown flush, and never reaches the world thread. `Announce` sends mangos_string 4
   (`|cffff0000[Event Message]: <description>|r`) to every player when the option is on.
 - `RestoreServersideEvents` (default false): with it, serverside events recorded in `game_event_status` are re-applied with
-  resume at start-up and kept out of the first pass that would stop them. Retail restores nothing.
+  resume at start-up and kept out of the first pass that would stop them. Retail restores nothing. A bot scenario on a serverside event
+  needs it to come back after a restart ([playbots-scenarios-events.md](playbots-scenarios-events.md)).
+- `GameEventFeature.AddListener` returns an `IDisposable` that removes the listener again (disposed with the owner's subscription bag on a
+  detach); the bot scenarios ([playbots-scenarios-events.md](playbots-scenarios-events.md)) are such a listener.
 - Event mails (`SendEventMails`) are not delivered (see limits).
 
 ### Event spawns (`game-event-spawn-gate`)

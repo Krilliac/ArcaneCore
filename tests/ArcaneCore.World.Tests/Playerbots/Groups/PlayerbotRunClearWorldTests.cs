@@ -27,7 +27,7 @@ public sealed class PlayerbotRunClearWorldTests
         PlayerbotGroupCoordinator.BotGroup group = await StartRun(world, bots);
         PlayerbotRunMachine run = group.Run!;
 
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map)), await world.TraceAsync());
         Creature[] initialPack = Pack(world, bots[0].Id);
         Assert.Equal(3, initialPack.Length);
         Assert.Equal(2, initialPack.Count(c => c.Entry == GroupRfcContent.Trogg));
@@ -56,8 +56,8 @@ public sealed class PlayerbotRunClearWorldTests
             sawPack |= run.PullsLeft > 0;
             bossEarly |= trash.Any(c => c.IsAlive) && Bosses(world, bots[0].Id).Any(c => c.Combat.IsInCombat);
             return sawPack && trash.Length == 3 && trash.All(c => !c.IsAlive) && run.PullsLeft == 0;
-        }), world.Trace());
-        Assert.False(bossEarly, world.Trace());
+        }), await world.TraceAsync());
+        Assert.False(bossEarly, await world.TraceAsync());
         Assert.Equal(0, run.Killed);
         Assert.Equal(11517u, run.CurrentBoss!.Entry);
     }
@@ -71,14 +71,14 @@ public sealed class PlayerbotRunClearWorldTests
         (Guid Id, string Name)[] bots = await AddParty(world, resurrection);
         PlayerbotGroupCoordinator.BotGroup group = await StartRun(world, bots);
         PlayerbotRunMachine run = group.Run!;
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map)), await world.TraceAsync());
 
         // Wait for one real trash kill with the rest of its pack still alive, then force a majority wipe.
         Assert.True(await world.RunUntilAsync(120_000, () =>
         {
             Creature[] trash = Pack(world, bots[0].Id);
             return trash.Length == 3 && trash.Count(c => !c.IsAlive) >= 1 && trash.Any(c => c.IsAlive);
-        }), world.Trace());
+        }), await world.TraceAsync());
         ulong[] killed = await world.OnWorldAsync(() =>
         {
             Creature[] trash = Pack(world, bots[0].Id);
@@ -93,7 +93,7 @@ public sealed class PlayerbotRunClearWorldTests
             return dead;
         });
         Assert.NotEmpty(killed);
-        Assert.True(await world.RunUntilAsync(5_000, () => run.Step == PlayerbotRunStep.Wiped), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => run.Step == PlayerbotRunStep.Wiped), await world.TraceAsync());
         Assert.Equal(1, run.Wipes);
         bool sawGhostEntrance = false, sawGhostOutside = false, sawRevivedInside = false;
         Assert.True(await world.RunUntilAsync(180_000, () =>
@@ -103,18 +103,18 @@ public sealed class PlayerbotRunClearWorldTests
             sawRevivedInside |= bots.Take(3).Any(b => world.Player(b.Id).MapId == GroupRfcContent.Map && world.Player(b.Id).IsAlive
                 && MathF.Abs(world.Player(b.Id).X - 0.797643f) < 8f && MathF.Abs(world.Player(b.Id).Y + 8.23429f) < 8f);
             return run.Step == PlayerbotRunStep.Retry;
-        }), world.Trace());
-        Assert.True(await world.RunUntilAsync(180_000, () => run.Step == PlayerbotRunStep.Enter), world.Trace());
+        }), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(180_000, () => run.Step == PlayerbotRunStep.Enter), await world.TraceAsync());
         Assert.True(await world.RunUntilAsync(180_000, () => run.Step == PlayerbotRunStep.Clear
-            && bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map && world.Player(b.Id).IsAlive)), world.Trace());
+            && bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map && world.Player(b.Id).IsAlive)), await world.TraceAsync());
         Assert.Equal(1, run.Wipes);
         Assert.Equal(11517u, run.CurrentBoss!.Entry);
         Assert.All(killed, guid => Assert.Contains(Pack(world, bots[0].Id), c => c.Guid.Value == guid && !c.IsAlive));
         if (!resurrection)
         {
-            Assert.True(sawGhostEntrance, world.Trace());
-            Assert.True(sawGhostOutside, world.Trace());
-            Assert.True(sawRevivedInside, world.Trace());
+            Assert.True(sawGhostEntrance, await world.TraceAsync());
+            Assert.True(sawGhostOutside, await world.TraceAsync());
+            Assert.True(sawRevivedInside, await world.TraceAsync());
             Assert.All(bots, b => Assert.Null(world.Coordinator.FindAI(b.Id)!.LastResurrection));
         }
     }
@@ -134,7 +134,7 @@ public sealed class PlayerbotRunClearWorldTests
             await world.AddBotAsync("Rfcheal", Undead, Priest, 16, resurrection ? [LesserHeal, Smite, Resurrection] : [LesserHeal, Smite], GroupTestWorld.RfcEntranceArea, mapId: 1),
         };
         foreach (char suffix in "abc") bots.Add(await world.AddBotAsync("Rfcmage" + suffix, Undead, Mage, 16, [Fireball], GroupTestWorld.RfcEntranceArea, mapId: 1));
-        Assert.True(await world.RunUntilAsync(30_000, () => bots.All(b => world.Player(b.Id).MapId == 1)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => bots.All(b => world.Player(b.Id).MapId == 1)), await world.TraceAsync());
         await world.RunAsync(1_000); // coordinator receives the managed sessions before StartRun
         return [.. bots];
     }
@@ -146,7 +146,7 @@ public sealed class PlayerbotRunClearWorldTests
             PlayerbotRunPlan plan = world.Coordinator.Catalogue().Plans.Single(p => p.MapId == GroupRfcContent.Map);
             return world.Coordinator.StartRun(plan, [.. bots.Select(b => b.Id)]);
         });
-        Assert.True(group is not null, world.Trace());
+        Assert.True(group is not null, await world.TraceAsync());
         Assert.Equal(5, group!.Members.Count);
         Assert.Equal(GroupRfcContent.Entrance, group.Goal.EntranceTrigger);
         Assert.Equal(4, group.Run!.BossCount);

@@ -17,6 +17,10 @@ public sealed class NavTileNonBlockingTests : IDisposable
     private static readonly Vector3 To = new(18, 3, 0);
     private const int TileRow = 30;
 
+    // Guards against a hang, not behaviour: the gated reads never finish on their own, so a call that blocked would wait forever. Background
+    // work runs on the thread pool, which a busy full-suite run (other tests blocking pool threads) can starve for many seconds.
+    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(120);
+
     private readonly NavMeshFixture _fixture = new();
     private readonly ManualResetEventSlim _gate = new();
     private int _reads;
@@ -75,7 +79,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
     private static async Task<T> Prompt<T>(Func<T> call)
     {
         Task<T> task = Task.Run(call);
-        Assert.Same(task, await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10))));
+        Assert.Same(task, await Task.WhenAny(task, Task.Delay(HangGuard)));
         return await task;
     }
 
@@ -95,7 +99,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
             try { answer.SetResult(nav.FindPath(0, From, To, NonBlocking)); }
             catch (Exception ex) { answer.SetException(ex); }
         });
-        Assert.Same(answer.Task, await Task.WhenAny(answer.Task, Task.Delay(TimeSpan.FromSeconds(10))));
+        Assert.Same(answer.Task, await Task.WhenAny(answer.Task, Task.Delay(HangGuard)));
         PathResult pending = await answer.Task;
         Assert.Equal(PathType.TilesPending, pending.Type);
         Assert.False(pending.HasPath);
@@ -171,7 +175,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         }
 
         Assert.Equal(tiles, nav.TileReadsStarted);
-        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref _running) == nav.MaxConcurrentTileReads, TimeSpan.FromSeconds(10)));
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref _running) == nav.MaxConcurrentTileReads, HangGuard));
         Assert.Equal(0, nav.FreeTileReadSlots);
 
         _gate.Set();

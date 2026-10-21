@@ -78,7 +78,7 @@ public sealed class PlayerbotDefendCommandTests
 
         foreach (string bad in new[] { "Defsynaa", "Defsynaa here", "Defsynaa here abc", "Defsynaa there 40", "Defsynaa here 40 to Defsyngm" })
         {
-            List<string> reply = await FleetWorld.SayAsync(gm, ".playerbot defend " + bad, lines: 3);
+            List<string> reply = await FleetWorld.SayAsync(gm, ".playerbot defend " + bad, lines: 4);
             Assert.StartsWith("Syntax: .playerbot defend", reply[0], StringComparison.Ordinal);
             Assert.StartsWith(".playerbot defend", reply[1], StringComparison.Ordinal);
         }

@@ -166,8 +166,10 @@ public sealed class GameEventValidationTests
         // a stored disabled flag survives
         Assert.True(GameEventValidation.BuildVMangos(Source(start: Utc(2020, 1, 1), end: Utc(2030, 1, 1), disabled: true), issues).Disabled);
 
-        // no times at all: invalid
-        Assert.False(GameEventValidation.BuildVMangos(Source(), []).IsValid);
+        // no times at all: vmangos reads a NULL as 0, so the event is valid and the schedule never makes it active
+        GameEventDefinition manual = GameEventValidation.BuildVMangos(Source(), []);
+        Assert.True(manual.IsValid);
+        Assert.False(GameEventSchedule.IsActive(manual, Utc(2026, 10, 20)));
     }
 
     [Fact]

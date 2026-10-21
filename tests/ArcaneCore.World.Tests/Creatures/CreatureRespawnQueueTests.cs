@@ -168,33 +168,73 @@ public sealed class CreatureRespawnQueueTests
         await queue.StopAsync();
     }
 
+    // Waits that guard against a hang (not behaviour) are generous: a loaded machine can stall a thread for many seconds.
+    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(120);
+
     [Fact]
-    public async Task ALockedDatabase_IsNotRetriedInline_AndTheRetainedWriteLandsOnTheRetryTimer()
+    public async Task ALockedDatabase_IsNotRetriedInline_AndTheRetainedWriteLandsOnTheNextSweep()
     {
         var store = new FakeStore { Locked = true };
         await using ServiceProvider sp = Build(store);
+        // No timer: a periodic retry firing between the flush and the assertions (a stalled test thread on a loaded machine) would add an
+        // attempt and make the exact count below a race. The sweep the timer would queue is posted by hand instead; the timer itself is
+        // covered by ARetainedWrite_IsRetriedByTheRealTimer_WithoutAnyHandPostedSweep.
         var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
         {
-            RetainedRetryInterval = TimeSpan.FromSeconds(1),
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
         };
         queue.Start();
 
         queue.Save(0, 0, 1, Now + 100);
         queue.Save(0, 0, 2, Now + 100);
-        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        await queue.FlushAsync().WaitAsync(HangGuard);
         // An inline retry would have been 3 attempts each, with 600 ms of back-off.
         Assert.Equal(2, store.Attempts); // one attempt per write: the lock wait was not repeated inline
         Assert.Equal(2, queue.RetainedCount);
 
         store.Locked = false;
-        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        Assert.True(queue.PostRetainedSweepForTest());
+        DateTime deadline = DateTime.UtcNow + HangGuard;
         while (queue.RetainedCount > 0)
         {
             Assert.True(DateTime.UtcNow < deadline, "the retained writes were never retried");
             await Task.Delay(20);
         }
 
-        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        await queue.FlushAsync().WaitAsync(HangGuard);
+        Assert.Equal(2, store.Rows.Count);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ARetainedWrite_IsRetriedByTheRealTimer_WithoutAnyHandPostedSweep()
+    {
+        var store = new FakeStore { Locked = true };
+        await using ServiceProvider sp = Build(store);
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        {
+            RetainedRetryInterval = TimeSpan.FromMilliseconds(50),
+        };
+        queue.Start();
+
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 100);
+        DateTime deadline = DateTime.UtcNow + HangGuard;
+        while (queue.RetainedCount < 2) // both failed against the lock and are retained (the timer keeps trying, and keeps failing)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the locked writes were never retained");
+            await Task.Delay(20);
+        }
+
+        Assert.Empty(store.Rows);
+        store.Locked = false;
+        while (queue.RetainedCount > 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained writes were never retried by the timer");
+            await Task.Delay(20);
+        }
+
+        await queue.FlushAsync().WaitAsync(HangGuard);
         Assert.Equal(2, store.Rows.Count);
         await queue.StopAsync();
     }

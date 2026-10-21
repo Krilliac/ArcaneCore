@@ -17,7 +17,8 @@ namespace ArcaneCore.World.Playerbots;
 /// the transit legs, before any quest, grind or explore step. In this order: keep the PvP flag on (CMSG_TOGGLE_PVP; clearing the post sends
 /// it off again and vmangos' five-minute linger then runs out); fight a player attacking it, then the nearest hostile player inside the post;
 /// else help a friendly creature in combat inside the post by fighting what it fights; else heal a wounded defender of the same post; else
-/// walk back to the post when it is outside the radius (and on to within 0.75 x the radius); else hold, rest and buff. Everything is memory only.
+/// walk back to the post when it is outside the radius (and on to within 0.75 x the radius), unless it carries resurrection sickness (it then
+/// stays where it is until the aura ends: <c>decision=defend-wait-sickness</c>); else hold, rest and buff. Everything is memory only.
 /// </summary>
 internal sealed partial class PlayerbotBrain
 {
@@ -39,6 +40,10 @@ internal sealed partial class PlayerbotBrain
     private Player? _defendHealTarget;
     private PlayerbotDefendPost? _defendAreaPost;
     private PlayerbotHomeArea? _defendArea;
+    private bool _defendWaitsSickness;
+
+    /// <summary>The defender holds where it stands until its resurrection sickness ends (<c>decision=defend-wait-sickness</c> in the risk line).</summary>
+    internal bool DefendWaitsSickness => _defendWaitsSickness;
 
     /// <summary>
     /// The post the bot defends, or null (<c>.playerbot defend</c>; <see cref="PlayerbotDefendPost"/>). Memory only: never saved, so a restart
@@ -54,6 +59,7 @@ internal sealed partial class PlayerbotBrain
             _defendScanTarget = null;
             _defendHealScanned = false;
             _defendHealTarget = null;
+            _defendWaitsSickness = false;
             if (_session.Player is not { } player) return;
             if (value is null) PlayerbotDefend.Unregister(player);
             else PlayerbotDefend.Register(player, value);
@@ -72,6 +78,7 @@ internal sealed partial class PlayerbotBrain
     {
         if (_defend is not { } post)
         {
+            _defendWaitsSickness = false;
             ReleaseDefendFlag();
             return false;
         }
@@ -80,6 +87,7 @@ internal sealed partial class PlayerbotBrain
         _stall.Reset();
         if (!ReferenceEquals(PlayerbotDefend.PostOf(player), post)) PlayerbotDefend.Register(player, post);
         PlayerbotThinkProbe.Phase("defend");
+        _defendWaitsSickness = WaitsOutSickness(player);
 
         // 1. The PvP flag: a defender is a fair target of the players it fights (and flags itself by fighting them anyway), asked for again every
         // think until the server shows it.
@@ -106,10 +114,12 @@ internal sealed partial class PlayerbotBrain
             return true;
         }
 
-        // 5. Back to the post: lift-aware like the home walk (PlayerbotBrain.TryReturnHome), and no errand holds a defender off its post.
-        if (!player.Combat.IsInCombat && TryReturnHome(player, DefendAreaOf(post), interval, errandsFirst: false)) return true;
+        // 5. Back to the post: lift-aware like the home walk (PlayerbotBrain.TryReturnHome), and no errand holds a defender off its post. Not while
+        // the bot carries resurrection sickness: a defender the spirit healer revived stays at the graveyard until the aura ends (rests, buffs,
+        // fights back what attacks it, as above) instead of walking back under the raid that killed it and dying again.
+        if (!_defendWaitsSickness && !player.Combat.IsInCombat && TryReturnHome(player, DefendAreaOf(post), interval, errandsFirst: false)) return true;
 
-        // Hold the post: rest, buff, and otherwise stand.
+        // Hold the post (or the graveyard, while sick): rest, buff, and otherwise stand.
         _goal = PlayerbotGoalKind.Home;
         TargetEntry = 0;
         if (player.Combat.IsInCombat) return true;
@@ -124,6 +134,12 @@ internal sealed partial class PlayerbotBrain
         if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
         return true;
     }
+
+    /// <summary>
+    /// The defender carries a temporary resurrection sickness (<see cref="PlayerbotSickness"/>, spell
+    /// <see cref="PlayerbotSickness.Spell"/>) and so does not walk back to its post yet. A permanent aura (one that never ends) does not hold it.
+    /// </summary>
+    private bool WaitsOutSickness(Player player) => PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 };
 
     /// <summary>A defender that no longer has a post lets go of the PvP flag it turned on (the server's linger timer then runs).</summary>
     private void ReleaseDefendFlag()

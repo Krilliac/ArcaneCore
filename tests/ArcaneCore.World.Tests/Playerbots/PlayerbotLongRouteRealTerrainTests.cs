@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -25,8 +26,10 @@ internal sealed class RealTerrainBotTheoryAttribute : TheoryAttribute
 /// one <see cref="PlayerbotNavigation.TryPlanToward"/> as the brain makes it; the bot is then placed at the route's end (walking each
 /// leg is the motion's business, covered by the other real-terrain tests), so the whole way of up to 9,400 yards is checked in seconds.
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotLongRouteRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotLongRouteRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     // Grish Longrunner (creature 12576, spawn 21295) and Neeka Bloodscar (creature 5394, spawn 6874).
     private static readonly Vector3 GrishLongrunner = new(-4602.11f, -1835.37f, 86.1941f);
     private static readonly Vector3 NeekaBloodscar = new(-6672.25f, -2240.52f, 278.577f);
@@ -140,13 +143,5 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         NavRegionGraph graph = await RegionGraphAsync(terrain, 1);
         output.WriteLine($"built in about {stopwatch.ElapsedMilliseconds} ms: {graph.TileCount} tiles, {graph.RegionCount} regions, {graph.LinkCount} links");
         Assert.True(graph.TileCount > 600, $"only {graph.TileCount} Kalimdor tiles read");
-    }
-
-    /// <summary>The map's region graph for the bots' filter, waiting for its build.</summary>
-    private static async Task<NavRegionGraph> RegionGraphAsync(Terrain terrain, uint map)
-    {
-        Task<NavRegionGraph?> build = await terrain.Host.OnWorldAsync(() =>
-            ((NavMeshPathfinder)terrain.Player.Map!.Collision.Pathfinder).RegionGraphTask(map, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
-        return await build ?? throw new InvalidOperationException($"no region graph for map {map}");
     }
 }

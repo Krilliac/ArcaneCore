@@ -26,14 +26,14 @@ public sealed class PlayerbotGroupPlayerTests
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options => options.Party.Allowlist = ["Realmaster"]);
         var bot = await world.AddBotAsync("Partyone", Human, Mage, 10, [Fireball]);
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), await world.TraceAsync());
         await using WorldTestClient master = await world.World.EnterWorldAsync("REALMASTER", "Realmaster", AccountSecurity.Player);
 
         PlayerbotOperationResult invited = await world.OnWorldAsync(() => world.Bots.InviteToGroup(world.World.Host.World.FindOnlinePlayer("Realmaster")!, bot.Name));
         Assert.True(invited.Success, invited.Code);
 
         // The party AI drives it (follows its master); the coordinator stops waiting for it and never takes it into a bot group.
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Bots.IsPartyDriven(bot.Id)), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.Bots.IsPartyDriven(bot.Id)), await world.TraceAsync());
         await world.RunAsync(10_000);
         Assert.True(world.Bots.IsPartyDriven(bot.Id));
         Assert.False(world.Coordinator.Drives(bot.Id));
@@ -50,7 +50,7 @@ public sealed class PlayerbotGroupPlayerTests
         await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPHELPER", "Grouphelper", AccountSecurity.Player);
         var bot = await world.AddBotAsync("Askerone", Human, Warrior, 1, []);
 
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Invited))), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Invited))), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(bot.Id, group.LeaderBotId); // a real player never leads a bot group
         byte[] invite = await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
@@ -58,7 +58,7 @@ public sealed class PlayerbotGroupPlayerTests
 
         // The player declines: the group is given up and that player is not asked again for a while.
         await player.SendAsync(WorldOpcode.CmsgGroupDecline, []);
-        Assert.True(await world.RunUntilAsync(10_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("Grouphelper did not join", StringComparison.Ordinal));
         await world.RunAsync(10_000);
         Assert.Empty(world.Coordinator.Groups);
@@ -71,13 +71,13 @@ public sealed class PlayerbotGroupPlayerTests
         await world.AddBotAsync("Cmdtank", Human, Warrior, 10, [Taunt]);
         await world.AddBotAsync("Cmdprie", Human, Priest, 10, [LesserHeal, Smite]);
         await world.AddBotAsync("Cmdmage", Human, Mage, 10, [Fireball]);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         await using WorldTestClient gm = await world.World.EnterWorldAsync("GROUPGM", "Groupgm", AccountSecurity.GameMaster);
         await gm.CollectAsync();
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".playerbot groups");
-        Assert.StartsWith("Bot groups: enabled, 1 running", (await gm.ReadChatAsync()).Text);
-        string line = (await gm.ReadChatAsync()).Text;
+        Assert.StartsWith("Bot groups: enabled, 1 running", (await gm.ReadSystemChatAsync()).Text);
+        string line = (await gm.ReadSystemChatAsync()).Text;
         Assert.StartsWith("group 1 quest:" + OgreEntry, line);
         Assert.Contains("Cmdtank(tank,leader)", line);
         Assert.Contains("Cmdprie(healer)", line);
@@ -99,7 +99,7 @@ public sealed class PlayerbotGroupPlayerTests
         var healer = await world.AddBotAsync("Chatprie", Human, Priest, 10, [LesserHeal, Smite]);
         var mage = await world.AddBotAsync("Chatmage", Human, Mage, 10, [Fireball]);
         Assert.True(world.Options.Chat.Enabled);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         Assert.Equal(3, await world.OnWorldAsync(() => world.GroupManager.GetGroup(world.Player(tank.Id).Guid)?.MemberCount ?? 0));
 
         await using WorldTestClient player = await world.World.EnterWorldAsync("CHATGROUPP", "Chatgroupp", AccountSecurity.Player);
@@ -109,7 +109,7 @@ public sealed class PlayerbotGroupPlayerTests
         await player.SendChatAsync(ChatType.Whisper, Language.Common, "what level are you?", healer.Name);
 
         ArcaneCore.World.Playerbots.Chat.PlayerbotChat chat = world.Bots.Chat!;
-        Assert.True(await world.RunUntilAsync(10_000, () => chat.Status().Answered >= 1), world.Trace());
+        Assert.True(await world.RunUntilAsync(10_000, () => chat.Status().Answered >= 1), await world.TraceAsync());
         await world.RunAsync(500); // the reply is said on the world thread at the next tick
         ChatMessage reply;
         do reply = await player.ReadChatAsync(); while (reply.Type != ChatType.Whisper || reply.Sender != bot);
@@ -137,7 +137,7 @@ public sealed class PlayerbotGroupPlayerTests
         });
 
         Assert.True(await world.RunUntilAsync(10_000, () => world.GroupManager.GetGroup(world.Player(first.Id).Guid) is null
-            && world.GroupManager.GetGroup(world.Player(second.Id).Guid) is null), world.Trace());
+            && world.GroupManager.GetGroup(world.Player(second.Id).Guid) is null), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("left a group of bots nobody leads", StringComparison.Ordinal));
     }
 
@@ -148,17 +148,17 @@ public sealed class PlayerbotGroupPlayerTests
         var bot = await world.AddBotAsync("Strandone", Human, Warrior, 12, [], EntranceArea);
         Assert.True(await world.OnWorldAsync(() => world.World.Services.GetRequiredService<TeleportFeature>().Teleports
             .TeleportTo(world.Player(bot.Id), 36, -16.4f, -383.07f, 61.78f, 0f)));
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 36 }), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 36 }), await world.TraceAsync());
 
         // Saved inside and logged in again: the login gate lets it into the dungeon it is in (PlayerbotMapPolicy.MayStayOnMap; the
         // default AllowedMaps [0, 1] refused it before, and three such faults disabled the bot).
         Assert.True((await world.Bots.StopAsync(bot.Name)).Success);
         PlayerbotOperationResult started = await world.Bots.StartAsync(bot.Name);
         Assert.True(started.Success, started.Code);
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 36 }), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 36 }), await world.TraceAsync());
 
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 0 }), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 0 }), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("Strandone is inside map 36 without a group", StringComparison.Ordinal));
-        Assert.True(await world.RunUntilAsync(10_000, () => !world.Coordinator.Drives(bot.Id)), world.Trace());
+        Assert.True(await world.RunUntilAsync(10_000, () => !world.Coordinator.Drives(bot.Id)), await world.TraceAsync());
     }
 }

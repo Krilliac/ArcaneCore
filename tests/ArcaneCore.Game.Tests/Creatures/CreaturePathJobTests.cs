@@ -77,8 +77,16 @@ public sealed class CreaturePathJobTests
         return new Scene(world, system, player, Assert.Single(system.Creatures), paths, pool);
     }
 
-    private static void WaitForPool(NavJobSystem jobs, long completed)
-        => Assert.True(SpinWait.SpinUntil(() => jobs.Totals.Completed + jobs.Totals.Skipped >= completed, TimeSpan.FromSeconds(10)), "path job did not finish");
+    /// <summary>
+    /// Waits for the pool to finish <paramref name="completed"/> jobs and for every job the map holds to have published its answer: the
+    /// pool counts a job a moment before the job turns done, and a worker preempted in between left the next update finding it still
+    /// running (CI run 39573816775: the wander leg re-queued and was not claimed within the test's three updates).
+    /// </summary>
+    private static void WaitForPool(Scene s, long completed)
+    {
+        Assert.True(SpinWait.SpinUntil(() => s.Jobs!.Totals.Completed + s.Jobs.Totals.Skipped >= completed, TimeSpan.FromSeconds(10)), "path job did not finish");
+        Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+    }
 
     [Fact]
     public void AWanderingCreature_SearchesOnAWorker_AndWalksTheWorkersPath()
@@ -112,7 +120,7 @@ public sealed class CreaturePathJobTests
         Assert.Equal(1, s.System.PathJobsSubmitted);
         Assert.Equal(1, s.System.PathJobsPending);
         s.Paths.Gate.Set();
-        WaitForPool(s.Jobs!, 1);
+        WaitForPool(s, 1);
 
         // RandomMovementGenerator.PathJobRetryMs (100 ms), not NoPathRetryMinMs (1 s): three 50 ms updates are enough.
         for (int i = 0; i < 3 && !s.Wolf.IsMoving; i++)
@@ -141,7 +149,7 @@ public sealed class CreaturePathJobTests
         Assert.True(s.System.PathJobWaits >= 1);
 
         s.Paths.Gate.Set();
-        WaitForPool(s.Jobs!, 1);
+        WaitForPool(s, 1);
         s.World.RunTick(50);
 
         Assert.True(s.Wolf.IsMoving);
@@ -164,7 +172,7 @@ public sealed class CreaturePathJobTests
         Assert.Equal(1, s.System.PathJobsInFlight);
 
         s.Paths.Gate.Set();
-        WaitForPool(s.Jobs!, 2);
+        WaitForPool(s, 2);
         s.World.RunTick(50);
         Assert.True(s.Wolf.IsMoving);
         Run(s.World, 8000);

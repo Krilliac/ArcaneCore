@@ -30,6 +30,20 @@ public sealed class AreaTemplateRow
     public uint LiquidTypeId { get; set; }
 }
 
+/// <summary>
+/// <c>wmo_area_template</c> row (WMOAreaTable.dbc columns; vmangos <c>WMOAreaTableEntry</c>). Keyed by <see cref="Id"/>. A model query names a
+/// WMO group by (<see cref="RootId"/>, <see cref="AdtId"/>, <see cref="GroupId"/>); <see cref="AreaId"/> is its <c>area_template.Entry</c>, 0 for none.
+/// </summary>
+public sealed class WmoAreaTemplateRow
+{
+    public uint Id { get; set; }
+    public int RootId { get; set; }
+    public int AdtId { get; set; }
+    public int GroupId { get; set; }
+    public uint AreaId { get; set; }
+    public uint Flags { get; set; }
+}
+
 /// <summary><c>areatrigger_template</c> row (vmangos world DB, AreaTrigger.dbc columns). Keyed by <see cref="Id"/>.</summary>
 public sealed class AreaTriggerTemplateRow
 {

@@ -407,7 +407,7 @@ feature reads:
   importer's unless `--migrate` is given (it never migrates on its own: an importer built with another lane's world step would otherwise
   upgrade the live world before the server that needs it is deployed). `tools/content/refresh-world-content.ps1` wraps it for an
   operator: it refuses a database another process holds open, writes a SHA-256-checked backup (the database and any leftover `-wal`),
-  checks the seven DBCs (`AreaTrigger`, `WorldSafeLocs`, `Map`, `AreaTable`, `TaxiNodes`, `TaxiPath`, `TaxiPathNode`; all are required)
+  checks the eight DBCs (`AreaTrigger`, `WorldSafeLocs`, `Map`, `AreaTable`, `WMOAreaTable`, `TaxiNodes`, `TaxiPath`, `TaxiPathNode`; all are required)
   against a `SHA256SUMS` file in `-DbcDirectory` when there is one or extracts them from the client's MPQs with `mpqcli` (patch-2 over
   patch over dbc), and passes `-Migrate` on as `--migrate`. With `-AppSettings <appsettings.json>` (needs `-DbcDirectory`) it then runs
   `tools/content/set-optional-data.ps1`, which points the world at its optional client data (item sets, random suffixes, enchantments,
@@ -453,8 +453,20 @@ and printed (`instance data: map 229 reset_delay 3 -> 0 (...)`): Blackrock Spire
 inside home every three days). Both tables are replaced as a whole; every parent area must exist and
 none may cycle. A dungeon or raid without an instance row keeps player limit 0 (no cap), no reset and no ghost entrance, with a warning
 (classic-db z2815: 29 CashTest, 44 the unused Monastery, 269 Caverns of Time). `refresh --dbc-dir` writes them (the live path);
-`import-map-dbc <Map.dbc> <AreaTable.dbc> [--dump <file>] [--replace]` writes only these two tables (refused over existing rows without
-`--replace`).
+`import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>] [--dump <file>] [--replace]` writes only these two tables, and
+`wmo_area_template` when it is given the third file (refused over existing rows without `--replace`).
+
+`wmo_area_template` (world schema 55, `Content/Maps/WmoAreaTableDbcReader.cs`, `WmoAreaDataModule.cs`) holds the client `WMOAreaTable.dbc`
+(20 fields; id, WMOID = root id, NameSetID = ADT id, WMOGroupID, flags, AreaTableID): the area of each WMO group, which the world reads to
+tell that a position is in Undercity and not in the Tirisfal Glades above it (docs/areas/world-state.md, "WMO areas"). It takes the route
+`area_template` takes, not shipped rows: the client file is read by the importer (`refresh --dbc-dir` takes `WMOAreaTable.dbc` from the same
+directory as `AreaTable.dbc`; without it the table is left as it is, with a warning), because client data never belongs in the repository.
+A world upgraded to this step has an empty `wmo_area_template` and positions inside a WMO keep reading the terrain's area until it is
+filled: run `refresh --dbc-dir` with `WMOAreaTable.dbc` present (the refresh reads it beside `AreaTable.dbc`, and only when Map.dbc and
+AreaTable.dbc are there too). `import-map-dbc` with three paths is the other route, and it refuses a world that already has map_template,
+area_template or wmo_area_template rows unless `--replace` is given; with `--replace` it rewrites map_template and area_template too.
+Rows naming an area `AreaTable.dbc` lacks are kept and counted in a warning. On the 5875 client: 21,115 rows, 1,304 of them with group -1
+(the root default, unused by the world), 16,000 with no area.
 
 On the live world copy (2026-10-08, `docs/integration/instance-maps-20261008.md`): 44 maps (33 with classic-db instance rows) and 1081
 areas instead of 2 and 970; the world's 47 "unknown target map" and 56 "not existing zone id" warnings are gone, and the `dungeon`

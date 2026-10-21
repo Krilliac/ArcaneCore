@@ -57,34 +57,49 @@ public sealed class TickRingTests
     }
 
     [Fact]
-    public async Task Snapshot_ConcurrentWithTheWriter_NeverContainsAMixedGenerationOrTornSample()
+    public void Snapshot_ConcurrentWithTheWriter_NeverContainsAMixedGenerationOrTornSample()
     {
         // The writer records the sequence 1, 2, 3, ...; any snapshot must be a run of consecutive values.
+        //
+        // The writer is a dedicated thread, not a thread-pool task: with the test assemblies running in parallel the pool can be starved
+        // for longer than any fixed window (CI once saw "only 0 non-empty snapshots" in 500 ms: the writer had not run at all). The
+        // measurement starts only once the writer has filled the ring, and it ends on a number of non-empty snapshots, with a generous
+        // deadline for a host that is merely slow.
+        const int WantedNonEmpty = 20_000;
         var ring = new TickRing(64);
-        using var stop = new CancellationTokenSource();
-        Task writer = Task.Run(() =>
+        using var stop = new ManualResetEventSlim();
+        var writer = new Thread(() =>
         {
             long next = 1;
-            while (!stop.IsCancellationRequested)
+            while (!stop.IsSet)
             {
                 ring.Record(next++);
-                // A tight writer laps the whole ring during one copy, so every snapshot is empty on a fast
-                // runner and the test reports "only 0 non-empty snapshots". Yield a moment between samples.
+                // A tight writer laps the whole ring during one copy, so every snapshot would be empty. Yield a moment between samples.
                 Thread.SpinWait(64);
             }
-        });
+        })
+        { IsBackground = true, Name = "TickRing test writer" };
+        writer.Start();
 
         long[] buffer = new long[64];
         int snapshots = 0;
         int nonEmpty = 0;
+        int overlapped = 0; // snapshots during which the writer recorded: the ones that can tear
         string? problem = null;
         try
         {
-            var deadline = DateTime.UtcNow.AddMilliseconds(500);
-            while (DateTime.UtcNow < deadline && problem is null)
+            Assert.True(SpinWait.SpinUntil(() => ring.Count >= ring.Capacity, TimeSpan.FromSeconds(30)), "the writer thread never filled the ring");
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while ((nonEmpty < WantedNonEmpty || overlapped == 0) && DateTime.UtcNow < deadline && problem is null)
             {
+                long before = ring.Count;
                 int count = ring.Snapshot(buffer);
                 snapshots++;
+                if (ring.Count != before)
+                {
+                    overlapped++;
+                }
+
                 if (count == 0)
                 {
                     continue;
@@ -103,12 +118,13 @@ public sealed class TickRingTests
         }
         finally
         {
-            await stop.CancelAsync(); // never leave the writer spinning on a pool thread
-            await writer;
+            stop.Set(); // never leave the writer spinning
+            writer.Join();
         }
 
         Assert.Null(problem);
-        Assert.True(nonEmpty > 100, $"only {nonEmpty} non-empty snapshots were taken");
+        Assert.True(nonEmpty >= WantedNonEmpty, $"only {nonEmpty} non-empty snapshots of {snapshots} were taken in 30 s");
+        Assert.True(overlapped > 0, $"none of {snapshots} snapshots overlapped a Record, so none could have torn");
     }
 
     [Fact]

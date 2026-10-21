@@ -126,9 +126,9 @@ public sealed class ManagedPlayerbotHomeTests
         await admin.CollectAsync();
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmprefix* Stormwind 300");
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
         Assert.Equal("Playerbot home: 2 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 300, zone 12), 0 skipped (not running).",
-            (await admin.ReadChatAsync()).Text);
+            (await admin.ReadSystemChatAsync()).Text);
 
         IReadOnlyList<PlayerbotHome> stored = await homes.LoadAllAsync();
         Assert.Equal(new[] { a, b }.Order(), stored.Select(h => h.BotId).Order());
@@ -142,9 +142,9 @@ public sealed class ManagedPlayerbotHomeTests
 
         // No radius given: the default (600).
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Otherbot Stormwind");
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
         Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 600, zone 12), 0 skipped (not running).",
-            (await admin.ReadChatAsync()).Text);
+            (await admin.ReadSystemChatAsync()).Text);
         Assert.Equal(PlayerbotHomeBounds.DefaultRadius, feature.HomeOf(other)!.Radius);
         await feature.ShutdownBeforeWorldStopAsync();
     }
@@ -163,7 +163,7 @@ public sealed class ManagedPlayerbotHomeTests
         async Task<string> One(string command)
         {
             await admin.SendChatAsync(ChatType.Say, Language.Common, command);
-            return (await admin.ReadChatAsync()).Text;
+            return (await admin.ReadSystemChatAsync()).Text;
         }
 
         // One letter would anchor the whole fleet; so would a bare wildcard.
@@ -186,8 +186,8 @@ public sealed class ManagedPlayerbotHomeTests
         foreach (string radius in new[] { "50", "5000" })
         {
             await admin.SendChatAsync(ChatType.Say, Language.Common, $".playerbot home Hmrefuse Stormwind {radius}");
-            Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-            Assert.StartsWith("Playerbot home: 1 set (", (await admin.ReadChatAsync()).Text);
+            Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+            Assert.StartsWith("Playerbot home: 1 set (", (await admin.ReadSystemChatAsync()).Text);
             Assert.Equal(float.Parse(radius), feature.HomeOf(bot)!.Radius);
         }
 
@@ -234,8 +234,8 @@ public sealed class ManagedPlayerbotHomeTests
         await admin.CollectAsync();
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmhere* here 200");
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home: 2 set (here, radius 200, zone clipped), 1 skipped (not running).", (await admin.ReadChatAsync()).Text);
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+        Assert.Equal("Playerbot home: 2 set (here, radius 200, zone clipped), 1 skipped (not running).", (await admin.ReadSystemChatAsync()).Text);
 
         PlayerbotHome homeWest = feature.HomeOf(west)!, homeEast = feature.HomeOf(east)!;
         Assert.Null(feature.HomeOf(stopped));
@@ -252,7 +252,7 @@ public sealed class ManagedPlayerbotHomeTests
 
         // Nobody running matches: nothing is stored and nothing is claimed.
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmherethree here");
-        Assert.Equal("Playerbot home: 0 set, 1 skipped (not running).", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("Playerbot home: 0 set, 1 skipped (not running).", (await admin.ReadSystemChatAsync()).Text);
         Assert.Equal(2, (await homes.LoadAllAsync()).Count);
         await feature.ShutdownBeforeWorldStopAsync();
     }
@@ -268,18 +268,18 @@ public sealed class ManagedPlayerbotHomeTests
         await using WorldTestClient admin = await host.EnterWorldAsync("HOMEADMIN4", "Hmadminfour", AccountSecurity.Administrator);
         await admin.CollectAsync();
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmclearone Stormwind");
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        await admin.ReadChatAsync();
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+        await admin.ReadSystemChatAsync();
         await host.WaitForWorldAsync(() => feature.Snapshot().Single(s => s.BotId == with).Home is not null, "home line");
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmcleartwo clear"); // nothing to clear
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home: 0 cleared.", (await admin.ReadChatAsync()).Text);
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+        Assert.Equal("Playerbot home: 0 cleared.", (await admin.ReadSystemChatAsync()).Text);
         Assert.Single(await homes.LoadAllAsync());
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmclear* clear");
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home: 1 cleared.", (await admin.ReadChatAsync()).Text);
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+        Assert.Equal("Playerbot home: 1 cleared.", (await admin.ReadSystemChatAsync()).Text);
         Assert.Empty(await homes.LoadAllAsync());
         Assert.Null(feature.HomeOf(with));
         await host.WaitForWorldAsync(() => feature.Snapshot().Where(s => s.BotId == with || s.BotId == without).All(s => s.Home is null),
@@ -302,8 +302,8 @@ public sealed class ManagedPlayerbotHomeTests
         homes.AfterClear = () => feature.ForceSplitBrainForTests().GetAwaiter().GetResult(); // the other world's takeover is seen after the first clear
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmlatch* clear");
-        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home refused: split brain is latched (see .playerbot splitbrain); 1 cleared before it.", (await admin.ReadChatAsync()).Text);
+        Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+        Assert.Equal("Playerbot home refused: split brain is latched (see .playerbot splitbrain); 1 cleared before it.", (await admin.ReadSystemChatAsync()).Text);
         Assert.Single(await homes.LoadAllAsync()); // the second bot's home was not touched
         await feature.ShutdownBeforeWorldStopAsync();
     }
@@ -384,27 +384,27 @@ public sealed class ManagedPlayerbotHomeTests
 
         // status: the home is a trailing home=<line>; a bot without a home has none.
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot status Hmshowone");
-        string status = (await admin.ReadChatAsync()).Text;
+        string status = (await admin.ReadSystemChatAsync()).Text;
         Assert.Contains(" home=inside", status);
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot status Hmshowtwo");
-        Assert.DoesNotContain(" home=", (await admin.ReadChatAsync()).Text);
+        Assert.DoesNotContain(" home=", (await admin.ReadSystemChatAsync()).Text);
 
         // the full status ends with the terminator line the ops runner waits for (a missing bot cannot hide it).
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot status");
         string last;
-        do last = (await admin.ReadChatAsync()).Text;
+        do last = (await admin.ReadSystemChatAsync()).Text;
         while (!last.StartsWith("Playerbot status end: ", StringComparison.Ordinal));
         Assert.Equal("Playerbot status end: 2", last);
 
         // inspect: the long form, place, map, centre, radius, distance and state.
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot inspect Hmshowone");
         string line;
-        do line = (await admin.ReadChatAsync()).Text;
+        do line = (await admin.ReadSystemChatAsync()).Text;
         while (!line.StartsWith("BOTINSPECT home=", StringComparison.Ordinal));
         Assert.StartsWith("BOTINSPECT home=place=Northshire map=0 centre=-8950.0,-132.5,83.5 radius=250 zone=12 distance=", line);
         Assert.EndsWith(" state=inside mode=auto teleports=0", line); // the return mode (World:Playerbots:Home:ReturnMode) and the return teleports so far
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot inspect Hmshowtwo");
-        do line = (await admin.ReadChatAsync()).Text;
+        do line = (await admin.ReadSystemChatAsync()).Text;
         while (!line.StartsWith("BOTINSPECT home=", StringComparison.Ordinal));
         Assert.Equal("BOTINSPECT home=none", line);
         await feature.ShutdownBeforeWorldStopAsync();
@@ -430,8 +430,8 @@ public sealed class ManagedPlayerbotHomeTests
         async Task<string> Set(string command)
         {
             await admin.SendChatAsync(ChatType.Say, Language.Common, command);
-            Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-            return (await admin.ReadChatAsync()).Text;
+            Assert.Equal(Accepted, (await admin.ReadSystemChatAsync()).Text);
+            return (await admin.ReadSystemChatAsync()).Text;
         }
 
         Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 300, no zone clip), 0 skipped (not running).",
@@ -455,11 +455,11 @@ public sealed class ManagedPlayerbotHomeTests
         zoneEverywhere = 0;
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmzoneone Stormwind 300");
         Assert.Equal("Playerbot home: the terrain knows no zone at Stormwind; a zone-clipped home there would contain nothing (add nozone).",
-            (await admin.ReadChatAsync()).Text);
+            (await admin.ReadSystemChatAsync()).Text);
         // Nothing left to store: refused at once, without the accepted line.
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmzoneone here 300");
         Assert.Equal("Playerbot home: 0 set, 0 skipped (not running), 1 refused (no zone known at the bot's position; add nozone).",
-            (await admin.ReadChatAsync()).Text);
+            (await admin.ReadSystemChatAsync()).Text);
         PlayerbotHome kept = Assert.Single(await homes.LoadAllAsync());
         Assert.Equal((500f, false), (kept.Radius, kept.ZoneClipped));
         // Without the clip it is accepted.

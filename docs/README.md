@@ -37,6 +37,7 @@ unfinished parts documented as limits).
 | [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
 | [Anticheat](areas/anticheat.md) | The server-side movement checks, the score and escalation (log, GM alert, rubberband, kick, autoban), the `AntiCheat` options and the `.anticheat` commands. |
+| [Packet heuristics](areas/packet-heuristics.md) | Report-only analysis of client and bot packets (shape, cadence, replay, wrong state, orphan acknowledgements, incapacitated actions), off by default; `World:PacketHeuristics` and `.packetcheck`. |
 | [Client error codes](areas/client-errors.md) | Which packet and code makes the 1.12.1 client show "Internal error" (and the other generic failures), verified against the client binary, and the `ClientError` API that sends them. |
 | [Operations and performance](areas/ops-perf.md) | `check-config`, exit codes, the performance log and shutdown commands. |
 | [Server console](areas/server-console.md) | Typed commands at the World and Realm console windows and the `World:Console:Enabled` and `Realm:Console:Enabled` options. |

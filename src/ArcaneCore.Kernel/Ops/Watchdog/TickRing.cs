@@ -37,7 +37,10 @@ public sealed class TickRing
     public void Record(long value)
     {
         long count = _count;
-        _slots[count & _mask] = value;
+        // A release store, not a plain one: it keeps the previous Record's publish of count (== this index) ahead of this slot store. A
+        // plain store may become visible first on a weakly ordered CPU (Arm64), and a reader that saw it could still read the old count
+        // and keep an overwritten sample. On x64 both compile to a plain mov.
+        Volatile.Write(ref _slots[count & _mask], value);
         Volatile.Write(ref _count, count + 1);
     }
 

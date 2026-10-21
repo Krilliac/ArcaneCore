@@ -76,6 +76,9 @@ public sealed class GameEventService : IGameEventState
 
     public IReadOnlyCollection<ushort> ActiveEvents => [.. _active];
 
+    /// <summary>The number of registered listeners (a listener added twice counts twice).</summary>
+    public int ListenerCount => _listeners.Count;
+
     /// <summary>Whether the first update has run (<c>m_IsGameEventsInit</c>).</summary>
     public bool IsInitialised => _initialised;
 
@@ -133,6 +136,16 @@ public sealed class GameEventService : IGameEventState
     {
         ArgumentNullException.ThrowIfNull(listener);
         _listeners.Add(listener);
+    }
+
+    /// <summary>
+    /// Take one registration of <paramref name="listener"/> off again (a listener added twice needs two calls). False when it was not
+    /// registered. Safe during a notification: the notification walks a copy.
+    /// </summary>
+    public bool RemoveListener(IGameEventListener listener)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        return _listeners.Remove(listener);
     }
 
     /// <summary>Register the handler of a hardcoded event (vmangos <c>mGameEventHardcodedList</c>); one handler per event.</summary>

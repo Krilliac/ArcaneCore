@@ -34,6 +34,7 @@ public sealed class FlagAckHandlers : IOpcodeHandlerGroup
         MovementChangeAck ack = MovementChangePackets.ReadFlagAck(payload);
         if (ack.Guid != player.Guid.Value)
         {
+            session.NoteOrphanAck(opcode, "acknowledgement names another mover");
             return;
         }
 
@@ -43,6 +44,7 @@ public sealed class FlagAckHandlers : IOpcodeHandlerGroup
         }
         if (!MovementControl.Acknowledge(player, type, ack.Counter, ack.Apply))
         {
+            session.NoteOrphanAck(opcode, "no pending change of this type matches the counter");
             return;
         }
 

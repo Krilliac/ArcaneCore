@@ -56,7 +56,7 @@ public sealed partial class DeployScriptSafetyTests
         }
 
         string dbc = box.Dir("dbc");
-        string[] needed = ["AreaTrigger.dbc", "WorldSafeLocs.dbc", "Map.dbc", "AreaTable.dbc", "TaxiNodes.dbc", "TaxiPath.dbc", "TaxiPathNode.dbc"];
+        string[] needed = ["AreaTrigger.dbc", "WorldSafeLocs.dbc", "Map.dbc", "AreaTable.dbc", "WMOAreaTable.dbc", "TaxiNodes.dbc", "TaxiPath.dbc", "TaxiPathNode.dbc"];
         foreach (string n in needed)
         {
             box.File(Path.Combine(dbc, n), "not the listed bytes");

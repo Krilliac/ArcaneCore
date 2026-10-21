@@ -1400,11 +1400,25 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
     }
 
-    /// <summary>Whether a bot is still in its start country: on the start map and either in the start zone or within the graduated home's radius of the start position.</summary>
-    private static bool InStartCountry(PopulationBotFacts bot, StartPosition start, PlayerbotPopulationOptions pop)
+    /// <summary>
+    /// The start zone a capital that lies inside a WMO stands for. Undercity (1497) is under the Tirisfal Glades (85) and Ironforge (1537) is
+    /// in Dun Morogh (1): the terrain cell there reads the overland zone, so before the WMO area was read a bot in either city counted as
+    /// in the start zone; with it, the city is its own zone. For the start-country test the city is still part of the country around it
+    /// (a graduate who walks to its race's capital for a trainer has not left home). Every other capital is a terrain zone of its own and
+    /// is not mapped; the relocation pass leaves a bot in a capital where it is (the atlas has no such zone).
+    /// </summary>
+    internal static uint StartCountryZone(uint zoneId) => zoneId switch
+    {
+        1497 => 85,
+        1537 => 1,
+        _ => zoneId,
+    };
+
+    /// <summary>Whether a bot is still in its start country: on the start map and either in the start zone (a WMO capital counting as the zone around it, <see cref="StartCountryZone"/>) or within the graduated home's radius of the start position.</summary>
+    internal static bool InStartCountry(PopulationBotFacts bot, StartPosition start, PlayerbotPopulationOptions pop)
     {
         if (bot.MapId != start.MapId) return false;
-        if (bot.ZoneId == start.ZoneId) return true;
+        if (StartCountryZone(bot.ZoneId) == start.ZoneId) return true;
         float dx = bot.X - start.X, dy = bot.Y - start.Y;
         return (dx * dx) + (dy * dy) <= (float)pop.FreshZoneHomeRadius * pop.FreshZoneHomeRadius;
     }

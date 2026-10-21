@@ -37,6 +37,7 @@ public sealed class SpeedAckHandlers : IOpcodeHandlerGroup
         SpeedAck ack = SpeedPackets.ReadAck(payload);
         if (ack.Guid != player.Guid.Value)
         {
+            session.NoteOrphanAck(SpeedPackets.AckOpcode(type), "acknowledgement names another mover");
             return;
         }
 
@@ -46,6 +47,7 @@ public sealed class SpeedAckHandlers : IOpcodeHandlerGroup
         }
         if (!MovementControl.AcknowledgeSpeed(player, type, ack.Counter, ack.Speed))
         {
+            session.NoteOrphanAck(SpeedPackets.AckOpcode(type), "no pending speed change matches the counter and speed");
             return;
         }
 

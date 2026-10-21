@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -16,8 +17,10 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// capped. Goal positions are the spawns of existing real-terrain tests and the stall reports; each is labelled with where it is from.
 /// The assertions only guard that the probe ran (the pin is on the mesh).
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotDeadEndPinProbeTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotDeadEndPinProbeTests(ITestOutputHelper output) : base(output) { }
+
     private static readonly (string Label, Vector3 At)[] DurotarGoals =
     [
         ("Chief Hawkwind platform, Camp Narache (stall test)", new(-2881.9f, -229.1f, 55.2f)),
@@ -132,45 +135,38 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         });
         Assert.True(onMesh, $"the pin {pin} is not on the navigation mesh");
     }
+}
+
+public sealed class PlayerbotDeadEndPinWalkHawkwindTests : RealTerrainNavigationTestBase
+{
+    public PlayerbotDeadEndPinWalkHawkwindTests(ITestOutputHelper output) : base(output) { }
 
     // The movement side of the pins: the bot walks (PlanToward legs, followed by the motion) to a goal the region graph and a full Detour
     // path say is reachable, for up to 120 s of game time (600 s towards Chief Hawkwind); the probe writes where it ends. A bot that moves is not stuck at the pin by
     // planning; one that does not is stuck by the motion (a rim the mesh joins but the bot cannot follow).
+    // Quest 752/745 targets (Chief Hawkwind, Mulgore): the goal region is not joined to the Durotar ridge's (region route Unreachable).
     [RealTerrainBotFact]
-    public Task Walk_C3_ValleyOfTrialsRidge_ToRazorHill() => WalkProbeAsync(1, new(-1.0f, -4188.3f, 79.4f), new(340.4f, -4686.3f, 16.5f));
+    public Task Walk_C3_ValleyOfTrialsRidge_ToChiefHawkwind() => WalkProbeAsync(1, new(-1.0f, -4188.3f, 79.4f), new(-2881.9f, -229.1f, 55.2f), 600_000);
+}
+
+public sealed class PlayerbotDeadEndPinWalkDurotarTests : RealTerrainNavigationTestBase
+{
+    public PlayerbotDeadEndPinWalkDurotarTests(ITestOutputHelper output) : base(output) { }
 
     [RealTerrainBotFact]
     public Task Walk_C3_Pin137_ToJenshan() => WalkProbeAsync(1, new(-137.6f, -4265.7f, 105.3f), new(-629f, -4228f, 38.4f));
 
     [RealTerrainBotFact]
-    public Task Walk_C3_Coldridge_ToKharanosRoad() => WalkProbeAsync(0, new(-6494.1f, 324.9f, 406.0f), new(-5497.0f, -385.7f, 404.1f));
+    public Task Walk_C3_ValleyOfTrialsRidge_ToRazorHill() => WalkProbeAsync(1, new(-1.0f, -4188.3f, 79.4f), new(340.4f, -4686.3f, 16.5f));
+}
+
+public sealed class PlayerbotDeadEndPinWalkOtherTests : RealTerrainNavigationTestBase
+{
+    public PlayerbotDeadEndPinWalkOtherTests(ITestOutputHelper output) : base(output) { }
 
     [RealTerrainBotFact]
     public Task Walk_C3_Barrens_ToUkor() => WalkProbeAsync(1, new(-1173.6f, -3285.5f, 91.7f), new(-599.4f, -4715.3f, 35.2f));
 
-    // Quest 752/745 targets (Chief Hawkwind, Mulgore): the goal region is not joined to the Durotar ridge's (region route Unreachable).
     [RealTerrainBotFact]
-    public Task Walk_C3_ValleyOfTrialsRidge_ToChiefHawkwind() => WalkProbeAsync(1, new(-1.0f, -4188.3f, 79.4f), new(-2881.9f, -229.1f, 55.2f), 600_000);
-
-    private async Task WalkProbeAsync(uint map, Vector3 pin, Vector3 goal, uint maxMs = 120_000)
-    {
-        await using Terrain terrain = await Terrain.StartAsync();
-        await terrain.PlaceAsync(pin, map);
-        Task<NavRegionGraph?> build = await terrain.Host.OnWorldAsync(() =>
-            ((NavMeshPathfinder)terrain.Player.Map!.Collision.Pathfinder).RegionGraphTask(map, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
-        Assert.NotNull(await build);
-        output.WriteLine($"=== walk map {map} from {pin} to {goal}");
-        string result;
-        try
-        {
-            float left = await terrain.WalkTowardAsync(goal, 5f, maxMs, output, new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 });
-            result = $"walk ended {left:F1} yards from the goal";
-        }
-        catch (Xunit.Sdk.XunitException problem)
-        {
-            result = "walk failed: " + problem.Message.Split('\n')[0];
-        }
-
-        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
-        output.WriteLine($"(walk) {result}; the bot ends at {end}, {Vector3.Distance(end, pin):F0} yards from the pin, {Vector3.Distance(end, goal):F0} from the goal");
-    }}
+    public Task Walk_C3_Coldridge_ToKharanosRoad() => WalkProbeAsync(0, new(-6494.1f, 324.9f, 406.0f), new(-5497.0f, -385.7f, 404.1f));
+}
