@@ -245,6 +245,7 @@ public sealed class QualityScriptTests
         using var temp = new TempDirectory();
         JsonElement r = Eval($$"""
             . '{{Path.Combine(Quality, "QualityLib.ps1").Replace("'", "''")}}'
+            . '{{Path.Combine(Quality, "MutateAllLib.ps1").Replace("'", "''")}}'
             $dir = '{{temp.Path.Replace("'", "''")}}'
             $child = 'Start-Sleep 120'
             $parentSleeps = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$dir\child1.pid' `$p.Id; Start-Sleep 120"
@@ -351,6 +352,177 @@ public sealed class QualityScriptTests
         Assert.Contains("does not exist", output);
     }
 
+    [PwshFact]
+    public void MutateAllBatchSummary_ExcludesZeroJudgedFiles_FromFilesAndCompileErrorTotals()
+    {
+        const string report = """
+            {"files":{
+              "Sub\\Mutated.cs":{"language":"cs","source":"int M(int a, int b)\n{\n    if (a > b) return a;\n    return b;\n}",
+                "mutants":[
+                  {"id":"1","mutatorName":"Equality","replacement":">=","location":{"start":{"line":3,"column":11},"end":{"line":3,"column":16}},"status":"Killed"},
+                  {"id":"2","mutatorName":"Conditional","replacement":"true","location":{"start":{"line":3,"column":9},"end":{"line":3,"column":14}},"status":"Survived"},
+                  {"id":"3","mutatorName":"String","replacement":"x","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":4}},"status":"CompileError"},
+                  {"id":"4","mutatorName":"String","replacement":"y","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":4}},"status":"Ignored"}]},
+              "RealmService.cs":{"language":"cs","source":"class RealmService {}",
+                "mutants":[
+                  {"id":"5","mutatorName":"String","replacement":"z","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":5}},"status":"CompileError"},
+                  {"id":"6","mutatorName":"String","replacement":"w","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":5}},"status":"CompileError"},
+                  {"id":"7","mutatorName":"String","replacement":"q","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":5}},"status":"Ignored"}]},
+              "Empty.cs":{"language":"cs","source":"class Empty {}","mutants":[]}}}
+            """;
+        JsonElement r = Eval($$"""
+            $report = @'
+            {{report}}
+            '@ | ConvertFrom-Json
+            $s = Get-MutateAllBatchSummary -Report $report -Root 'D:/repo' -ProjectRelativeDirectory 'src/ArcaneCore.Realm'
+            $jDone = Get-MutateAllJudgement -Counts $s.Counts
+            $jZero = Get-MutateAllJudgement -Counts ([pscustomobject]@{ Tested = 0; Killed = 0; Timeout = 0; Survived = 0; NoCoverage = 0 })
+            $jNoCov = Get-MutateAllJudgement -Counts ([pscustomobject]@{ Tested = 3; Killed = 0; Timeout = 0; Survived = 0; NoCoverage = 3 })
+            [ordered]@{
+                killed = $s.Counts.Killed; survived = $s.Counts.Survived; tested = $s.Counts.Tested
+                compileError = $s.Counts.CompileError; ignored = $s.Counts.Ignored
+                files = @($s.Files | ForEach-Object { $_.File })
+                survivors = @($s.Survivors | ForEach-Object { $_.File })
+                doneStatus = $jDone.Status; zeroStatus = $jZero.Status; noCovStatus = $jNoCov.Status
+            }
+            """);
+        Assert.Equal(1, r.GetProperty("killed").GetInt32());
+        Assert.Equal(1, r.GetProperty("survived").GetInt32());
+        Assert.Equal(2, r.GetProperty("tested").GetInt32());
+        Assert.Equal(1, r.GetProperty("compileError").GetInt32());
+        Assert.Equal(1, r.GetProperty("ignored").GetInt32());
+        Assert.Equal(["src/ArcaneCore.Realm/Sub/Mutated.cs"], r.GetProperty("files").EnumerateArray().Select(e => e.GetString()!));
+        Assert.Equal(["src/ArcaneCore.Realm/Sub/Mutated.cs"], r.GetProperty("survivors").EnumerateArray().Select(e => e.GetString()!));
+        Assert.Equal("done", r.GetProperty("doneStatus").GetString());
+        Assert.Equal("error", r.GetProperty("zeroStatus").GetString());
+        Assert.Equal("error", r.GetProperty("noCovStatus").GetString());
+    }
+
+    [PwshFact]
+    public void MutateAllPlan_SplitsBatches_ExcludesGeneratedFiles_AndScopesTestFilters()
+    {
+        using var temp = new TempDirectory();
+        JsonElement r = Eval($$"""
+            $root = '{{temp.Path.Replace("'", "''")}}'
+            New-Item -ItemType Directory -Force "$root/src/ArcaneCore.World/Handlers", "$root/tests/ArcaneCore.World.Tests/Handlers" | Out-Null
+            Set-Content "$root/src/ArcaneCore.World/ArcaneCore.World.csproj" '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>'
+            Set-Content "$root/tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj" '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /><ProjectReference Include="..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" /></ItemGroup></Project>'
+            Set-Content "$root/src/ArcaneCore.World/WorldHost.cs" ("class WorldHost {`n" + (@(1..10 | ForEach-Object { "    int f$_ = $_;" }) -join "`n") + "`n}")
+            Set-Content "$root/src/ArcaneCore.World/A.cs" "class A {}"
+            Set-Content "$root/src/ArcaneCore.World/Handlers/ChatHandlers.cs" ("class ChatHandlers {`n" + (@(1..15 | ForEach-Object { "    int c$_ = $_;" }) -join "`n") + "`n}")
+            Set-Content "$root/src/ArcaneCore.World/Handlers/MovementHandlers.cs" ("class MovementHandlers {`n" + (@(1..15 | ForEach-Object { "    int m$_ = $_;" }) -join "`n") + "`n}")
+            Set-Content "$root/src/ArcaneCore.World/Handlers/Generated.g.cs" "class Generated {}"
+            $plan = New-MutateAllPlan -Root $root -MaxFiles 1 -MaxLines 20 -Projects @('World')
+            $batches = @($plan.Batches)
+            $handlersBatch = [ordered]@{ project = 'ArcaneCore.World'; testProject = 'ArcaneCore.World.Tests'; id = 'World-099'; name = 'Handlers'; parts = @('Handlers'); include = @('Handlers/**/*.cs'); exclude = @('Handlers/Generated.g.cs') }
+            $rootOnlyBatch = [ordered]@{ project = 'ArcaneCore.World'; testProject = 'ArcaneCore.World.Tests'; id = 'World-001'; name = '(project root files)'; parts = @('(project root files)'); include = @('WorldHost.cs'); exclude = @() }
+            $shortRootBatch = [ordered]@{ project = 'ArcaneCore.World'; testProject = 'ArcaneCore.World.Tests'; id = 'World-002'; name = '(project root files)'; parts = @('(project root files)'); include = @('A.cs'); exclude = @() }
+            $splitKids = @(Split-MutateAllBatch -Batch $handlersBatch -Root $root)
+            $singleKid = Split-MutateAllBatch -Batch $rootOnlyBatch -Root $root
+            [ordered]@{
+                skipped = @($plan.SkippedFiles)
+                batchNames = @($batches | ForEach-Object { $_.name })
+                handlersFilter = Get-MutateAllScopedTestFilter -Batch $handlersBatch -Root $root
+                rootFilter = Get-MutateAllScopedTestFilter -Batch $rootOnlyBatch -Root $root
+                shortRootFilter = Get-MutateAllScopedTestFilter -Batch $shortRootBatch -Root $root
+                splitIds = @($splitKids | ForEach-Object { $_.id })
+                splitDepth = $splitKids[0].splitDepth
+                splitFrom = $splitKids[0].splitFrom
+                splitFilterA = Get-MutateAllScopedTestFilter -Batch $splitKids[0] -Root $root
+                singleSplitIsNull = ($null -eq $singleKid)
+            }
+            """);
+        Assert.Equal(["src/ArcaneCore.World/Handlers/Generated.g.cs (generated file name)"], r.GetProperty("skipped").EnumerateArray().Select(e => e.GetString()!));
+        Assert.Contains("(project root files #1)", r.GetProperty("batchNames").EnumerateArray().Select(e => e.GetString()!));
+        Assert.Equal(
+            "FullyQualifiedName~ArcaneCore.World.Tests.Handlers.|FullyQualifiedName~ChatHandlers|FullyQualifiedName~MovementHandlers",
+            r.GetProperty("handlersFilter").GetString());
+        Assert.Equal("FullyQualifiedName~WorldHost", r.GetProperty("rootFilter").GetString());
+        Assert.Equal(JsonValueKind.Null, r.GetProperty("shortRootFilter").ValueKind);
+        Assert.Equal(["World-099a", "World-099b"], r.GetProperty("splitIds").EnumerateArray().Select(e => e.GetString()!));
+        Assert.Equal(1, r.GetProperty("splitDepth").GetInt32());
+        Assert.Equal("World-099", r.GetProperty("splitFrom").GetString());
+        Assert.Equal("FullyQualifiedName~ArcaneCore.World.Tests.Handlers.|FullyQualifiedName~ChatHandlers", r.GetProperty("splitFilterA").GetString());
+        Assert.True(r.GetProperty("singleSplitIsNull").GetBoolean());
+    }
+
+    [PwshFact]
+    public void MutateReport_PreservesJudgedRootRows_WhenSubdirectoryBatchVisitsRootWithZeroJudged()
+    {
+        using var temp = new TempDirectory();
+        JsonElement r = Eval($$"""
+            $runDir = '{{temp.Path.Replace("'", "''")}}'
+            $b1Sum = Join-Path $runDir 'b1-summary.json'
+            $b2Sum = Join-Path $runDir 'b2-summary.json'
+            Write-MutateAllJson -Path $b1Sum -Object ([ordered]@{
+                Counts = [ordered]@{ Killed = 8; Survived = 2; NoCoverage = 0; Timeout = 0; CompileError = 1; Ignored = 0; Other = 0; Tested = 10 }
+                Files = @(
+                    [ordered]@{ File = 'src/ArcaneCore.Realm/RealmService.cs'; Dir = 'src/ArcaneCore.Realm'; Killed = 8; Survived = 2; NoCoverage = 0; Timeout = 0; CompileError = 1; Ignored = 0; Other = 0 }
+                )
+                Survivors = @(
+                    [ordered]@{ File = 'src/ArcaneCore.Realm/RealmService.cs'; Line = 12; Column = 5; Status = 'Survived'; Mutator = 'Equality'; Original = 'a == b'; Mutated = 'a != b' }
+                )
+            })
+            Write-MutateAllJson -Path $b2Sum -Object ([ordered]@{
+                Counts = [ordered]@{ Killed = 6; Survived = 0; NoCoverage = 0; Timeout = 0; CompileError = 0; Ignored = 0; Other = 0; Tested = 6 }
+                Files = @(
+                    [ordered]@{ File = 'src/ArcaneCore.Realm/RealmService.cs'; Dir = 'src/ArcaneCore.Realm'; Killed = 0; Survived = 0; NoCoverage = 0; Timeout = 0; CompileError = 4; Ignored = 1; Other = 0 },
+                    [ordered]@{ File = 'src/ArcaneCore.Realm/UnmutatedRoot.cs'; Dir = 'src/ArcaneCore.Realm'; Killed = 0; Survived = 0; NoCoverage = 0; Timeout = 0; CompileError = 2; Ignored = 0; Other = 0 },
+                    [ordered]@{ File = 'src/ArcaneCore.Realm/Auth/AuthSession.cs'; Dir = 'src/ArcaneCore.Realm/Auth'; Killed = 6; Survived = 0; NoCoverage = 0; Timeout = 0; CompileError = 0; Ignored = 0; Other = 0 }
+                )
+                Survivors = @()
+            })
+            $state = [ordered]@{
+                runId = 'unit-run'; createdUtc = '2026-10-21T00:00:00Z'; head = 'deadbeef'; unmapped = @()
+                batches = @(
+                    [ordered]@{ id = 'Realm-000'; project = 'ArcaneCore.Realm'; name = 'Auth'; lines = 500; status = 'split'; durationSec = 4200; queueSec = 0; summary = $null },
+                    [ordered]@{ id = 'Realm-001'; project = 'ArcaneCore.Realm'; name = '(project root)'; lines = 200; status = 'done'; durationSec = 120; queueSec = 20; summary = $b1Sum },
+                    [ordered]@{ id = 'Realm-002'; project = 'ArcaneCore.Realm'; name = 'Auth [half 1/2]'; lines = 250; status = 'done'; durationSec = 150; queueSec = 30; summary = $b2Sum }
+                )
+            }
+            Save-MutateAllState -State $state -RunDirectory $runDir
+            & pwsh -NoProfile -File '{{Path.Combine(Quality, "mutate-report.ps1").Replace("'", "''")}}' -RunDir $runDir -Quiet
+            $rc = $LASTEXITCODE
+            [ordered]@{
+                exit = $rc
+                md = (Get-Content -LiteralPath (Join-Path $runDir 'SUMMARY.md') -Raw)
+                dirs = @(Import-Csv -LiteralPath (Join-Path $runDir 'directories.csv') | ForEach-Object { "$($_.directory):$($_.Killed)/$($_.Survived)/$($_.CompileError)/$($_.score)" })
+            }
+            """);
+        Assert.Equal(0, r.GetProperty("exit").GetInt32());
+        string md = r.GetProperty("md").GetString()!;
+        Assert.Contains("| ArcaneCore.Realm/(root) | 8 | 2 | 0 | 0 | 1 | 80% |", md);
+        Assert.Contains("| ArcaneCore.Realm/Auth | 6 | 0 | 0 | 0 | 0 | 100% |", md);
+        Assert.Contains("| ArcaneCore.Realm | 14 | 2 | 0 | 0 | 1 | 87.5% |", md);
+        Assert.Contains("1 timed out and were split", md);
+        Assert.Equal(
+        [
+            "src/ArcaneCore.Realm:8/2/1/80",
+            "src/ArcaneCore.Realm/Auth:6/0/0/100",
+        ], r.GetProperty("dirs").EnumerateArray().Select(e => e.GetString()!));
+    }
+
+    [PwshFact]
+    public void MutateAll_UsesPortableDefaults_AndRefusesMissingRunOnResume()
+    {
+        foreach (string file in new[] { "mutate-all.ps1", "mutate-report.ps1", "MutateAllLib.ps1" })
+        {
+            string text = File.ReadAllText(Path.Combine(Quality, file));
+            Assert.DoesNotContain(@"D:\", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("D:/", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ArcaneCore-lanes", text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using var temp = new TempDirectory();
+        (int codeAll, string outAll) = RunScript("mutate-all.ps1", "-Resume", "-OutputRoot", temp.Path);
+        Assert.Equal(2, codeAll);
+        Assert.Contains("no run with a state.json", outAll);
+
+        (int codeRep, string outRep) = RunScript("mutate-report.ps1", "-OutputRoot", temp.Path);
+        Assert.Equal(2, codeRep);
+        Assert.Contains("no run with a state.json", outRep);
+    }
+
     private static JsonElement Eval(string body)
     {
         using var temp = new TempDirectory();
@@ -358,6 +530,7 @@ public sealed class QualityScriptTests
         File.WriteAllText(script, $$"""
             $ErrorActionPreference = 'Stop'
             . '{{Path.Combine(Quality, "QualityLib.ps1").Replace("'", "''")}}'
+            . '{{Path.Combine(Quality, "MutateAllLib.ps1").Replace("'", "''")}}'
             $value = & { {{body}} }
             $value | ConvertTo-Json -Depth 8 -Compress
             """, new UTF8Encoding(false));

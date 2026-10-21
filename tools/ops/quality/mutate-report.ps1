@@ -29,7 +29,7 @@ $survivors = [System.Collections.Generic.List[object]]::new()
 foreach ($b in $batches) {
     if ($b.status -ne 'done' -or -not $b.summary -or -not (Test-Path -LiteralPath $b.summary)) { continue }
     $s = Get-Content -LiteralPath $b.summary -Raw | ConvertFrom-Json
-    foreach ($f in $s.Files) { if ($f.Killed + $f.Survived + $f.NoCoverage + $f.Timeout + $f.CompileError -gt 0) { $fileRows[$f.File] = $f } }
+    foreach ($f in $s.Files) { $fJudged = $f.Killed + $f.Survived + $f.NoCoverage + $f.Timeout; if ($fileRows.ContainsKey($f.File)) { $prev = $fileRows[$f.File]; if (($prev.Killed + $prev.Survived + $prev.NoCoverage + $prev.Timeout) -gt 0 -and $fJudged -eq 0) { continue } }; if ($fJudged -le 0) { continue }; $fileRows[$f.File] = $f }
     foreach ($v in $s.Survivors) { $survivors.Add([pscustomobject]@{ File = $v.File; Line = $v.Line; Column = $v.Column; Status = $v.Status; Mutator = $v.Mutator; Original = $v.Original; Mutated = $v.Mutated; Batch = $b.id }) }
 }
 

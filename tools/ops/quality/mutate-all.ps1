@@ -1,5 +1,5 @@
 # Whole-repo mutation testing: Stryker.NET over every source project in batches, resumable, one batch at a time through the build-slot runner.
-#   New run:   pwsh -NoProfile -File tools/ops/quality/mutate-all.ps1 [-Projects Cryptography,Kernel] [-Concurrency 2] [-PauseFile D:\mutate.pause]
+#   New run:   pwsh -NoProfile -File tools/ops/quality/mutate-all.ps1 [-Projects Cryptography,Kernel] [-Concurrency 2] [-PauseFile artifacts/mutation/mutate.pause]
 #   Plan only: pwsh -NoProfile -File tools/ops/quality/mutate-all.ps1 -PlanOnly
 #   Resume:    pwsh -NoProfile -File tools/ops/quality/mutate-all.ps1 -Resume [-RunId <id>] [-RetryErrors] [-AllowHeadChange]
 #   Report:    pwsh -NoProfile -File tools/ops/quality/mutate-report.ps1 [-RunId <id>]      (also written by this script every few batches and at the end)
@@ -26,10 +26,10 @@ param(
     [string]$TestFilter,
     [ValidateSet('Auto', 'On', 'Off')] [string]$ScopeTests = 'Auto',
     [hashtable]$TestOverride,
-    [string]$PauseFile,
+    [string]$PauseFile = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path 'artifacts\mutation\mutate.pause'),
     [switch]$NoSlot,
     [string]$Lane = 'mutate-all',
-    [string]$SlotRunner = 'D:\ArcaneCore-lanes\tools\run-in-slot.ps1',
+    [string]$SlotRunner = (Join-Path (Split-Path -Parent $PSScriptRoot) 'ci\run-in-slot.ps1'),
     [ValidateRange(1, 72)] [int]$BatchTimeoutMin = 70,
     [ValidateRange(0, 8)] [int]$MaxSplitDepth = 4,
     [switch]$RetryErrors,

@@ -230,7 +230,7 @@ function Get-MutateAllBatchSummary {
       Reads a parsed Stryker mutation-report.json and returns { Counts, Files, Survivors }.
       Counts = Killed, Survived, NoCoverage, Timeout, CompileError, Ignored, Other (RuntimeError and anything unknown), Tested
       (Killed + Timeout + Survived + NoCoverage). Files = one { File, Dir, Killed, Survived, NoCoverage, Timeout, CompileError, Ignored,
-      Other } per file. Survivors = { File, Line, Column, Status, Mutator, Original, Mutated } of every Survived and NoCoverage mutant.
+      Other } per file with a judged mutant (files with 0 judged mutants are omitted so unmutated project files with only CompileError/Ignored do not leak in). Survivors = { File, Line, Column, Status, Mutator, Original, Mutated } of every Survived and NoCoverage mutant.
       File names are made relative to -Root (forward slashes). The Stryker report names files relative to the project directory when
       -ProjectRelativeDirectory is given, the batch's src/<Project> folder is prefixed, so a File is always repo-relative.
     #>
@@ -250,7 +250,7 @@ function Get-MutateAllBatchSummary {
         foreach ($mutant in $file.mutants) {
             $status = [string]$mutant.status
             $key = if ($names -contains $status) { $status } else { 'Other' }
-            $counts[$key]++; $own[$key]++
+            $own[$key]++
             if ($status -ne 'Survived' -and $status -ne 'NoCoverage') { continue }
             if ($null -eq $sourceLines) { $sourceLines = ([string]$file.source) -split "`r?`n" }
             $replacement = if ($mutant.PSObject.Properties['replacement']) { [string]$mutant.replacement } else { '' }
@@ -261,7 +261,10 @@ function Get-MutateAllBatchSummary {
                     Mutated = Format-QualitySnippet $replacement
                 })
         }
-        if ($own.Killed + $own.Survived + $own.NoCoverage + $own.Timeout + $own.CompileError + $own.Ignored + $own.Other -gt 0) { $files.Add([pscustomobject]$own) }
+        $judged = $own.Killed + $own.Survived + $own.NoCoverage + $own.Timeout
+        if ($judged -eq 0) { continue }
+        foreach ($k in @($counts.Keys)) { $counts[$k] += $own[$k] }
+        $files.Add([pscustomobject]$own)
     }
     $counts['Tested'] = $counts.Killed + $counts.Timeout + $counts.Survived + $counts.NoCoverage
     [pscustomobject]@{ Counts = [pscustomobject]$counts; Files = $files.ToArray(); Survivors = $survivors.ToArray() }
