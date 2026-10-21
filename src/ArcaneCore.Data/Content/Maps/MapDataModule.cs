@@ -120,6 +120,11 @@ public sealed class EfMapDataStore(WorldDbContext db) : IMapDataStore
             .Select(r => new GameTele(r.Id, r.PositionX, r.PositionY, r.PositionZ, r.Orientation, r.Map, r.Name))
             .ToList();
 
-        return new MapContent(maps, areas, triggers, teleports, teles);
+        List<WmoAreaTemplate> wmoAreas = (await db.Set<WmoAreaTemplateRow>().AsNoTracking().OrderBy(r => r.Id)
+                .ToListAsync(cancellationToken).ConfigureAwait(false))
+            .Select(r => new WmoAreaTemplate(r.Id, r.RootId, r.AdtId, r.GroupId, r.AreaId, r.Flags))
+            .ToList();
+
+        return new MapContent(maps, areas, triggers, teleports, teles) { WmoAreas = wmoAreas };
     }
 }

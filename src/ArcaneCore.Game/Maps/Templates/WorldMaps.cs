@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.Game.Maps.Templates;
 
@@ -21,9 +23,12 @@ public sealed class WorldMaps
     private Dictionary<uint, AreaTriggerTeleport> _areaTriggerTeleports = [];
     private IReadOnlyList<GameTele> _gameTeles = [];
 
+    private readonly ILogger _logger;
+
     private WorldMaps(WorldRuntime world, ILogger? logger)
     {
-        Terrain = new TerrainManager(world.Options.Maps.DataDirectory, logger);
+        _logger = logger ?? NullLogger.Instance;
+        Terrain = new TerrainManager(world.Options.Maps.DataDirectory, logger) { Collision = WorldCollision.Of(world) };
     }
 
     public MapRegistry Registry { get; private set; } = MapRegistry.Default;
@@ -54,6 +59,12 @@ public sealed class WorldMaps
     {
         Registry = new MapRegistry(content.Maps);
         Terrain.Areas = new AreaTable(content.Areas, Registry);
+        Terrain.WmoAreas = new WmoAreaTable(content.WmoAreas);
+        if (content.Areas.Count > 0 && content.WmoAreas.Count == 0)
+        {
+            _logger.LogWarning("Areas: the world has no wmo_area_template rows; a position inside a WMO (Undercity, Ironforge, ...) reads the area of the "
+                + "terrain above it. Import WMOAreaTable.dbc (arcane-content-importer refresh --dbc-dir, or import-map-dbc with a third path)");
+        }
 
         AreaTriggerTables tables = BuildAreaTriggerTables(content);
         _areaTriggers = tables.Triggers;

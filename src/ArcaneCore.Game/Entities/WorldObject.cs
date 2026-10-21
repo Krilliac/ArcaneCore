@@ -70,7 +70,10 @@ public abstract class WorldObject
 
     public uint MapId { get; set; }
 
-    /// <summary>World X. Changing it re-files the object in its map's grid (docs/areas/grid-terrain.md).</summary>
+    /// <summary>
+    /// World X. Changing it re-files the object in its map's grid (docs/areas/grid-terrain.md). A unit's movement block follows
+    /// (<see cref="OnPositionWritten"/>).
+    /// </summary>
     public float X
     {
         get;
@@ -84,10 +87,12 @@ public abstract class WorldObject
                     Map?.OnObjectMoved(this);
                 }
             }
+
+            OnPositionWritten();
         }
     }
 
-    /// <summary>World Y. Changing it re-files the object in its map's grid.</summary>
+    /// <summary>World Y. Changing it re-files the object in its map's grid. A unit's movement block follows.</summary>
     public float Y
     {
         get;
@@ -101,12 +106,41 @@ public abstract class WorldObject
                     Map?.OnObjectMoved(this);
                 }
             }
+
+            OnPositionWritten();
         }
     }
 
-    public float Z { get; set; }
+    /// <summary>World Z. A unit's movement block follows.</summary>
+    public float Z
+    {
+        get;
+        set
+        {
+            field = value;
+            OnPositionWritten();
+        }
+    }
 
-    public float Orientation { get; set; }
+    /// <summary>Facing. A unit's movement block follows (vmangos <c>WorldObject::SetOrientation</c>, Object.cpp:1592-1598).</summary>
+    public float Orientation
+    {
+        get;
+        set
+        {
+            field = value;
+            OnPositionWritten();
+        }
+    }
+
+    /// <summary>
+    /// Called after every write of <see cref="X"/>, <see cref="Y"/>, <see cref="Z"/> or <see cref="Orientation"/>. A unit copies
+    /// the position into its movement block, so the two never disagree (vmangos <c>WorldObject::Relocate</c> always calls
+    /// <c>m_movementInfo.ChangePosition</c>, Object.cpp:1567-1576).
+    /// </summary>
+    private protected virtual void OnPositionWritten()
+    {
+    }
 
     /// <summary>The map this object is in, or null when not in the world.</summary>
     public Map? Map

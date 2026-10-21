@@ -69,9 +69,9 @@ internal static class PlayerbotHomeRules
 /// <see cref="AreaTable.GetByAreaFlagAndMap"/> answers for the tile's area flag (the lookup <see cref="PlayerbotZoneLookup"/> uses), cached
 /// per flag. 0 where the terrain knows no area or the area carries no level (most zone rows: the levels sit on the sub-areas).
 /// <para>
-/// Indoors the answer is the outdoor one: <see cref="TerrainInfo.GetAreaFlag"/> reads the ADT cell's area flag only (vmangos
-/// <c>TerrainInfo::GetAreaFlag</c> without the WMO area info), so a cave, building or WMO sub-area with its own, higher level reports
-/// the level of the outdoor area above it, and the danger of a way through such a place can be under-reported.
+/// Inside a WMO group that <c>wmo_area_template</c> gives an area, the answer is that area's (<see cref="TerrainInfo.GetAreaFlag"/>,
+/// vmangos <c>TerrainInfo::GetAreaFlag</c>); where the world has no such rows, no model data or no loaded model tile for the place (a cave
+/// that is not a WMO never has one), it is the outdoor area above, and the danger of a way through such a place can be under-reported.
 /// </para>
 /// <para>Thread affinity: world thread (the terrain loads tiles on demand; the cache is a plain dictionary).</para>
 /// </summary>
@@ -106,7 +106,7 @@ internal sealed class PlayerbotAreaLevelLookup
 
     /// <summary>
     /// The highest area level on the straight line from <paramref name="from"/> to <paramref name="to"/>, sampled every
-    /// <see cref="PlayerbotHomeRules.DangerSampleYards"/> (both ends included; the height is interpolated, the area flag ignores it),
+    /// <see cref="PlayerbotHomeRules.DangerSampleYards"/> (both ends included; the height is interpolated),
     /// leaving out the points <paramref name="skip"/> names (the home area itself, <see cref="PlayerbotHomeReturn.Judge"/>).
     /// </summary>
     internal int HighestOnLine(System.Numerics.Vector3 from, System.Numerics.Vector3 to, Func<System.Numerics.Vector3, bool>? skip = null)
