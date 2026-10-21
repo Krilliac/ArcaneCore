@@ -152,6 +152,12 @@ internal sealed class PlayerbotGroupAI
     /// <summary>Resting (eating or drinking) now.</summary>
     internal bool Resting => _restUntilMs != 0;
 
+    /// <summary>Loot packets queued and not yet sent (a pushing siege leader off its waypoint sends none).</summary>
+    internal int QueuedLootActions => _lootActions.Count;
+
+    /// <summary>Test seam: queues a loot packet as a looted corpse would (the world update thread).</summary>
+    internal void QueueLootAction(WorldOpcode opcode, byte[] payload) => _lootActions.Enqueue((opcode, payload));
+
     /// <summary>Walking to a corpse, or opening and emptying its loot (a run waits for it after the last boss).</summary>
     internal bool Looting => _lootActions.Count > 0 || !_lootOpened.IsEmpty || Goal == PlayerbotGoalKind.Loot;
 
@@ -200,6 +206,12 @@ internal sealed class PlayerbotGroupAI
         _stuckSinceMs = _stuckLastMs = 0;
     }
 
+    /// <summary>
+    /// Whether a fight ends the lift ride of a member walking to the stop (<see cref="ElevatorStage.ToStop"/>). It does, except for the members of a
+    /// siege raid that pushes through its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>): they ride on.
+    /// </summary>
+    internal static bool CombatEndsRide(PlayerbotSiegeRaid? raid) => raid is not { PushingThrough: true };
+
     /// <summary>One tick of a member (world thread, inside the shared action budget like the brain).</summary>
     internal void Update(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me, uint elapsedMs)
     {
@@ -243,7 +255,10 @@ internal sealed class PlayerbotGroupAI
 
         // A lift ride (PlayerbotElevator) owns the bot until it stands on the other level, as it owns a brain's: a fight on the way to the
         // landing ends it. A failed ride is not fatal: the walk below plans again, and the lift's backoff keeps it off that lift for a while.
-        if (player.Combat.IsInCombat && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop }) PlayerbotElevator.Cancel(player);
+        // A raid pushing through its fight (PlayerbotSiegeRaid.PushingThrough) rides all the same: its leader walks on in combat, and the cancel
+        // would end the ride at the landing every think, the next walk beginning it again, for as long as the raid is in combat.
+        if (player.Combat.IsInCombat && CombatEndsRide(group.Siege) && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop })
+            PlayerbotElevator.Cancel(player);
         ElevatorStep lift = PlayerbotElevator.Drive(_session, player, _options, interval, out string? liftFailure);
         if (lift == ElevatorStep.Traveling)
         {
@@ -280,7 +295,11 @@ internal sealed class PlayerbotGroupAI
         }
         else _retreatStarted = false;
 
-        if (_lootActions.TryPeek(out var next))
+        Player? leader = group.LeaderPlayer(_session.World);
+        bool isLeader = leader is not null && leader.Guid == player.Guid;
+        // A pushing leader away from its waypoint walks: it does not rest, eat, loot or buff on the way (the push has its own no-progress bound, and a rest that is not ended stands the leader still until the push is withdrawn).
+        bool pushWalks = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: false };
+        if (!pushWalks && _lootActions.TryPeek(out var next))
         {
             Step = "loot";
             if (!PlayerbotMovementControl.Stop(_session, player)) return;
@@ -288,17 +307,27 @@ internal sealed class PlayerbotGroupAI
             return;
         }
 
-        if (_restUntilMs != 0 && ContinueRest(player)) { Step = "rest"; return; }
+        if (_restUntilMs != 0 && ContinueRest(player, pushWalks)) { Step = "rest"; return; }
 
-        Player? leader = group.LeaderPlayer(_session.World);
-        bool isLeader = leader is not null && leader.Guid == player.Guid;
         if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
         Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
         {
             if (isLeader && group.Run is { } run && target is Creature boss) NoteBossFight(group, run, boss);
-            Fight(player, target, interval);
+            PlayerbotSiegeRaid? waiting = isLeader && group.Siege is { PushingThrough: true, AtWaypoint: true } w ? w : null;
+            if (waiting is not null)
+            {
+                waiting.AnswerRequestedMs = Math.Max(1u, _session.World.NowMs);
+                waiting.AnswerRequestedLeader = player.Guid;
+                // The chase out and the walk back are an A, B, A pattern to the loop watch; the waypoint's own refusal is lifted as LeadSiege does (only that place).
+                if (PlayerbotMotion.IsBlacklisted(player, waiting.MoveTo)) PlayerbotMotion.Unblacklist(player, waiting.MoveTo);
+            }
+            Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
+            // A siege leader that can plan no way to its target gives it up for a minute (siege raids have no stall watch of their own), and the coordinator names the next hostile skull.
+            // The objective is never given up: it is what the siege is after.
+            if (_noPathToTarget && isLeader && group.Siege is { } shunSiege && !(target is Creature objectiveCandidate && objectiveCandidate.Entry == shunSiege.Siege.ObjectiveEntry) && target is Creature or Player)
+                group.Shun(target.Guid, unchecked(_session.World.NowMs + SiegeShunMs));
             return;
         }
 
@@ -311,7 +340,7 @@ internal sealed class PlayerbotGroupAI
         }
 
         TargetEntry = 0;
-        if (!player.Combat.IsInCombat)
+        if (!player.Combat.IsInCombat && !pushWalks)
         {
             if (FinishLoot(player)) { Step = "loot"; return; }
             if (Resurrect(player, group)) { Step = "resurrect"; return; }
@@ -414,9 +443,14 @@ internal sealed class PlayerbotGroupAI
 
         if (raid.Order is PlayerbotSiegeOrder.Advance or PlayerbotSiegeOrder.Retreat)
         {
+            // A pushing leader that was drawn off its waypoint and walked back has made the loop watch refuse the waypoint (an A, B, A pattern), and the walk would report no path until the blacklist ends. The push has its
+            // own no-progress bound (PushStallMs), so the waypoint's own entry is lifted. Only that one: the other refused places, the loop pattern and the rejection count stay, so the guard against a walk that is
+            // refused again and again still trips (ForgetLoops on every think would reset it each time).
+            if (raid.PushingThrough && PlayerbotMotion.IsBlacklisted(player, raid.MoveTo)) PlayerbotMotion.Unblacklist(player, raid.MoveTo);
             bool walked = WalkTo(player, raid.MoveTo, interval, toward: true);
             raid.RetreatNoPath = !walked && raid.Order == PlayerbotSiegeOrder.Retreat;
-            Step = string.Create(CultureInfo.InvariantCulture, $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(walked ? string.Empty : ":no-path")}");
+            Step = string.Create(CultureInfo.InvariantCulture,
+                $"lead:siege-{raid.Order.ToString().ToLowerInvariant()}{(raid.PushingThrough ? ":push" : string.Empty)}{(walked ? string.Empty : ":no-path")}");
             return;
         }
 
@@ -640,7 +674,7 @@ internal sealed class PlayerbotGroupAI
     /// <see cref="PlayerbotGroupCoordinator.Member.FocusIcon"/>, then the skull; vmangos PartyBotAI.cpp:366-377), then it assists the leader's
     /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
     /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
-    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it.
+    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The raid that pushes through its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) follows no marks and picks no new targets: its leader fights nothing away from its waypoint (it walks, its attackers in tow) and fights back at it; every member answers any attacker of any raid member within <see cref="AssistYards"/>, its own attacker first, then the nearest, and with none follows the leader.
     /// </summary>
     private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
@@ -668,13 +702,31 @@ internal sealed class PlayerbotGroupAI
             }
         }
 
-        // At the retreat point (Rally) the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for
-        // a healer, the raid member it heals), the member itself first, then the nearest.
+        // At the retreat point (Rally) the raid picks no new targets and follows no marks: it only fights back what attacks the member (or, for a healer, the raid member it heals), the member itself first, then the nearest.
         if (siegeOrder == PlayerbotSiegeOrder.Rally)
         {
             bool heals = me.Role == PlayerbotGroupRole.Healer;
             return loose.Where(l => l.OnSelf || heals).OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
+
+        // While the raid pushes through its fight there are no marks and no new targets. The leader walks: away from its waypoint it fights nothing (Update never reaches Lead while it has a target), with its attackers in
+        // tow; at the waypoint, waiting, it fights back. Every member answers any attacker of any raid member within AssistYards (loose), its own attacker first, then the nearest, and with none follows.
+        if (group.Siege is { PushingThrough: true } pushing)
+        {
+            if (isLeader && !pushing.AtWaypoint) return null;
+            // The leader waiting at its waypoint picks no fights: it takes what is at the waypoint (within WaypointYards, 3D, so a unit on the other level of a lift top is not) and an attacker that is on it, as long as that attacker
+            // is within SiegeAnswerLeashYards of the waypoint (a caster, a flagged player, a long-reach melee unit). Beyond the leash (a kiting attacker) it is not followed: the leader walks back to its waypoint. Fight closes on
+            // an attacker the leader cannot hit from where it stands, within that leash only.
+            if (isLeader)
+                return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= (l.OnSelf && !pushing.AnswerSpent ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : PlayerbotSiegeCommander.WaypointYards))
+                    .OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
+            return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
+        }
+
+        // A siege leader that marches (an Advance that is no push) fights only what attacks it: the generic tank and non-tank rules below (peel a member's attacker, follow a mark, finish the target) would turn it
+        // back from its goal for any fight of the raid. The members answer attackers as ever.
+        if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Advance })
+            return loose.Where(l => l.OnSelf).OrderBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
 
         Unit? marked = null;
         if (player.Combat.IsInCombat || group.InFight(_session.World.NowMs) || leader is not null && leader.Combat.Victim is not null)
@@ -705,7 +757,8 @@ internal sealed class PlayerbotGroupAI
         if (isLeader && group.Siege is { } siegeRaid)
         {
             if (siegeRaid.Order is PlayerbotSiegeOrder.Pull or PlayerbotSiegeOrder.AssignTank or PlayerbotSiegeOrder.Assault
-                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled))
+                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled)
+                && (pulled is Creature pulledCreature && pulledCreature.Entry == siegeRaid.Siege.ObjectiveEntry || !group.IsShunned(pulled.Guid, _session.World.NowMs)))
                 return pulled;
             return null;
         }
@@ -833,8 +886,17 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
-    private void Fight(Player player, Unit target, uint interval)
+    /// <summary>How long a siege leader gives up a target it can plan no way to.</summary>
+    internal const uint SiegeShunMs = 60_000;
+
+    /// <summary>The last <see cref="Fight"/> could plan no way to its target.</summary>
+    private bool _noPathToTarget;
+
+    /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
+    /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent.</param>
+    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
     {
+        _noPathToTarget = false;
         if (!ReferenceEquals(_target, target))
         {
             _target = target;
@@ -872,11 +934,17 @@ internal sealed class PlayerbotGroupAI
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
+            case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee when leashCentre is { } centre
+                && Vector3.Distance(new Vector3(target.X, target.Y, target.Z), centre) > leashYards:
+                _route = null;
+                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+                return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
                 if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false))
                 {
                     Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:no-path");
                     _target = null;
+                    _noPathToTarget = true;
                 }
 
                 return;
@@ -1092,12 +1160,13 @@ internal sealed class PlayerbotGroupAI
         return true;
     }
 
-    private bool ContinueRest(Player player)
+    /// <summary>Keeps a rest going while it works. <paramref name="endNow"/> (a pushing siege leader off its waypoint) stands the bot up at once.</summary>
+    private bool ContinueRest(Player player, bool endNow)
     {
         if (!PlayerbotMovementControl.Stop(_session, player)) return true;
         SpellFeature? spells = _session.Services.GetService<SpellFeature>();
         bool eating = spells is not null && PlayerbotConsumables.HasActiveFoodDrink(player, spells.System);
-        if (!player.Combat.IsInCombat && eating && PlayerbotConsumables.NeedsRecovery(player, _restKind)
+        if (!endNow && !player.Combat.IsInCombat && eating && PlayerbotConsumables.NeedsRecovery(player, _restKind)
             && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
         {
             Goal = PlayerbotGoalKind.Rest;

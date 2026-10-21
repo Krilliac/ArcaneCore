@@ -190,7 +190,10 @@ internal sealed class GroupTestWorld : IAsyncDisposable
 
     public Game.Groups.GroupManager GroupManager => World.Services.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
 
-    /// <summary>Everything the coordinator noted, for failure messages.</summary>
+    /// <summary>Everything the coordinator noted, for failure messages, built on the world thread (the test thread must not enumerate state the world keeps changing).</summary>
+    public Task<string> TraceAsync() => OnWorldAsync(Trace);
+
+    /// <summary>The trace itself: <b>world thread only</b> (inside <see cref="OnWorldAsync{T}"/> or a run condition); everything else uses <see cref="TraceAsync"/>.</summary>
     public string Trace() => string.Join(Environment.NewLine, Coordinator.Events) + Environment.NewLine
         + string.Join(Environment.NewLine, Coordinator.Report()) + Environment.NewLine
         + string.Join(Environment.NewLine, Bots.Snapshot().Select(s => $"{s.Name} goal={s.Goal} target={s.TargetEntry} health={s.Health} map={s.MapId} {s.Risk} {s.Group} {Facts(s.BotId)}"));

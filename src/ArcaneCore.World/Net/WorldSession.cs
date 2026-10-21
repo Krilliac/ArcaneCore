@@ -173,6 +173,7 @@ public sealed partial class WorldSession : IPlayerSession
         _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
         _dispatchGate = CreateDispatchGate(services);
         InitObservability(services);
+        InitPacketHeuristics(services);
     }
 
     /// <summary>
@@ -367,18 +368,32 @@ public sealed partial class WorldSession : IPlayerSession
     /// <summary>Handle queued in-world packets (world thread, from the player's map update).</summary>
     public void ProcessWorldPackets(Player player)
     {
+        try
+        {
+            ProcessWorldPacketsCore(player);
+        }
+        finally
+        {
+            _injectWorld = false; // report only: the heuristics' "this packet came from a packet tool" flag never outlives the batch
+        }
+    }
+
+    private void ProcessWorldPacketsCore(Player player)
+    {
         // Player and map state are owned by the world thread; this is the only consumer of _worldQueue.
         Invariant.Assert(World.IsWorldThread, "in-world packets are handled on the world thread");
         CheckLogoutOverdue(player);
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
             Release(packet);
+            _injectWorld = packet.Injected;
             if (_kick.IsCancellationRequested || !IsCurrentSession)
             {
                 return;
             }
             if (_state != SessionState.InWorld || !ReferenceEquals(Player, player))
             {
+                HeuristicsWrongState(packet.Handler.Opcode, "world packet dequeued after the session left the world", WrongStateGrace.LeftWorld);
                 continue;
             }
 
@@ -409,9 +424,11 @@ public sealed partial class WorldSession : IPlayerSession
                         RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode), player.Name, player.Guid.Low, player.MapId, suppressed);
                 }
 
+                HeuristicsWrongState(packet.Handler.Opcode, "world packet while player.Map is null (awaiting MSG_MOVE_WORLDPORT_ACK)", WrongStateGrace.Transfer);
                 continue;
             }
 
+            HeuristicsWorldPacket(player, packet.Handler.Opcode);
             long handlerStart = Stopwatch.GetTimestamp();
             _currentPacketReceivedMs = packet.ReceivedMs;
             try
@@ -429,6 +446,7 @@ public sealed partial class WorldSession : IPlayerSession
                 _logger.LogWarning(
                     "[{Endpoint}] malformed {Opcode} ({PayloadBytes} bytes, {Reason}) for '{Player}' (guid={Guid}, map={MapId}); disconnecting",
                     RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode), packet.Payload.Length, ex.Message, player.Name, player.Guid.Low, player.MapId);
+                HeuristicsMalformed(packet.Handler.Opcode, packet.Payload.Length, ex.Message);
                 Kick("malformed packet");
                 return;
             }
@@ -558,6 +576,7 @@ public sealed partial class WorldSession : IPlayerSession
             Player = null;
             DiscardQueuedPackets();
             _state = SessionState.CharacterSelect;
+            Volatile.Write(ref _leftWorldTick, Environment.TickCount64);
         }
 
         Send(WorldOpcode.SmsgLogoutComplete, []);
@@ -639,6 +658,7 @@ public sealed partial class WorldSession : IPlayerSession
                 {
                     _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
                         RemoteEndpoint, size, rawOpcode);
+                    HeuristicsBadHeader(size, rawOpcode);
                     return;
                 }
 
@@ -689,11 +709,13 @@ public sealed partial class WorldSession : IPlayerSession
     {
         try
         {
+            HeuristicsClientPacket(opcode, payload);
             if (opcode == WorldOpcode.CmsgPing)
             {
                 if (!TryHandlePing(payload)) // vmangos answers pings in WorldSocket, in any state
                 {
                     _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                    HeuristicsMalformed(opcode, payload.Length, "CMSG_PING without its sequence number");
                     return false;
                 }
 
@@ -751,6 +773,7 @@ public sealed partial class WorldSession : IPlayerSession
 
             if (!_opcodes.TryGet(opcode, out OpcodeHandler handler))
             {
+                HeuristicsUnhandled(opcode, payload.Length);
                 ReportUnhandled(opcode, payload.Length);
                 return true;
             }
@@ -776,8 +799,12 @@ public sealed partial class WorldSession : IPlayerSession
 
                     Interlocked.Increment(ref _queuedPackets);
                     Interlocked.Add(ref _queuedBytes, payload.Length);
-                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds()));
+                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds(), _injectDispatch));
                     World.WakeIfManual();
+                }
+                else
+                {
+                    HeuristicsWrongState(opcode, "world opcode before the player is logging in or in the world", WrongStateGrace.LeftWorld);
                 }
 
                 return true;
@@ -787,6 +814,7 @@ public sealed partial class WorldSession : IPlayerSession
             {
                 _logger.LogDebug("[{Endpoint}] {Opcode} ignored in state {State}",
                     RemoteEndpoint, WorldOpcodeNames.GetName(opcode), _state);
+                HeuristicsWrongState(opcode, "session opcode not allowed in this state", WrongStateGrace.None);
                 return true;
             }
 
@@ -798,6 +826,7 @@ public sealed partial class WorldSession : IPlayerSession
             _logger.LogWarning(
                 "[{Endpoint}] malformed {Opcode} ({PayloadBytes} bytes, {Reason}, state={State}, account={Account}); disconnecting",
                 RemoteEndpoint, WorldOpcodeNames.GetName(opcode), payload.Length, ex.Message, _state, AccountName);
+            HeuristicsMalformed(opcode, payload.Length, ex.Message);
             return false;
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException) && IsContainedSessionFault(opcode))
@@ -1150,5 +1179,5 @@ public sealed partial class WorldSession : IPlayerSession
         return bytes;
     }
 
-    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload, uint ReceivedMs);
+    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload, uint ReceivedMs, bool Injected = false);
 }

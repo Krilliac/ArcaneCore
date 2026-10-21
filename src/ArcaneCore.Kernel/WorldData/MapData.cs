@@ -116,6 +116,14 @@ public sealed record AreaTriggerTeleport(
 /// <summary>A named teleport location for <c>.tele</c> (vmangos/cmangos world DB <c>game_tele</c>).</summary>
 public sealed record GameTele(uint Id, float X, float Y, float Z, float Orientation, uint MapId, string Name);
 
+/// <summary>
+/// One row of the client's WMOAreaTable.dbc (world DB <c>wmo_area_template</c>, vmangos <c>WMOAreaTableEntry</c>): the area a WMO group
+/// lies in. A model query names the group by <see cref="RootId"/> (m_WMOID), <see cref="AdtId"/> (m_NameSetID) and
+/// <see cref="GroupId"/> (m_WMOGroupID); <see cref="AreaId"/> (m_AreaTableID) is an <see cref="AreaTemplate.Entry"/>, 0 when the group
+/// has none. <see cref="Flags"/> is m_flags.
+/// </summary>
+public sealed record WmoAreaTemplate(uint Id, int RootId, int AdtId, int GroupId, uint AreaId, uint Flags);
+
 /// <summary>Everything the map layer reads from the world database at startup.</summary>
 public sealed record MapContent(
     IReadOnlyList<MapTemplate> Maps,
@@ -125,6 +133,9 @@ public sealed record MapContent(
     IReadOnlyList<GameTele> GameTeles)
 {
     public static MapContent Empty { get; } = new([], [], [], [], []);
+
+    /// <summary>The WMO group areas (<c>wmo_area_template</c>); empty when the world has none (positions inside a WMO then read the terrain's area).</summary>
+    public IReadOnlyList<WmoAreaTemplate> WmoAreas { get; init; } = [];
 }
 
 /// <summary>Read access to the world database's map tables (docs/areas/grid-terrain.md).</summary>

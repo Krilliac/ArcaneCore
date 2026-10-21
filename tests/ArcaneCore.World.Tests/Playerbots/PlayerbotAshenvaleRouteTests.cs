@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -12,8 +13,10 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// ones to the north and east end at once or find no polygon), so the bot is free to walk off the ridge toward other goals once the
 /// unreachable quest is set aside (PlayerbotQuestReturnTests cover that decision through the brain).
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotAshenvaleRouteTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotAshenvaleRouteTests(ITestOutputHelper output) : base(output) { }
+
     private static readonly Vector3 AshenvaleStall = new(2770.4f, 1275.2f, 319.1f);
     private static readonly Vector3 JeneuSancrea = new(3355.07f, 1033.14f, 6.03463f);
 

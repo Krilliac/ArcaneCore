@@ -415,6 +415,9 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public uint NextDestStopAtMs { get; set; }
     public int PassedDestinations { get; set; }
     public ElevatorLevel? StepOffLevel { get; set; }
+
+    /// <summary>Where the bot was sent when it stepped off (the landing ground); <see cref="PlayerbotElevator.Relocated"/> measures from it.</summary>
+    public Vector3? StepOffPoint { get; set; }
     public bool PitFallReported { get; set; }
     public bool RescueRefusedReported { get; set; }
     public bool TripFailedReported { get; set; }
@@ -746,6 +749,7 @@ internal static class PlayerbotElevator
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
+        if (trip.PendingStep is not null) return; // completed: the step-off is sent, the next Drive reports it (no second step-off)
 
         switch (trip.Stage)
         {
@@ -805,7 +809,6 @@ internal static class PlayerbotElevator
             }
             case ElevatorStage.Aboard:
             {
-                if (trip.PendingStep is not null) return;
                 if (trip.Car is not { } car || trip.CarObject is not { IsInWorld: true } live || !ReferenceEquals(live.Map, map)
                     || map.FindUpdater<GameObjectMapSystem>() is not { } system || system.ElevatorPosition(live) is not { } position)
                 {
@@ -846,6 +849,7 @@ internal static class PlayerbotElevator
                     trip.DestStopActive = false;
                     trip.DestSkipReason = null;
                     trip.StepOffLevel = level;
+                    trip.StepOffPoint = ground;
                     trip.PendingStep = trip.Failure is null ? ElevatorStep.Arrived : ElevatorStep.Failed;
                     return;
                 }
@@ -1110,6 +1114,9 @@ internal static class PlayerbotElevator
 
         switch (step)
         {
+            case ElevatorStep.Arrived when Relocated(trip, player):
+                AbandonRelocated(session, player, trip);
+                return ElevatorStep.Idle;
             case ElevatorStep.Arrived:
                 trip.Stage = ElevatorStage.Done;
                 trip.StageMs = now; // when it arrived (inspection)
@@ -1465,6 +1472,7 @@ internal static class PlayerbotElevator
             trip.DestStopActive = false;
             trip.DestSkipReason = null;
             trip.StepOffLevel = level;
+            trip.StepOffPoint = ground;
             return trip.Failure is null ? ElevatorStep.Arrived : ElevatorStep.Failed;
         }
 
@@ -1639,6 +1647,7 @@ internal static class PlayerbotElevator
         }
 
         trip.StepOffLevel = trip.To;
+        trip.StepOffPoint = ground;
         trip.Failure = null;
         return true;
     }
@@ -1998,12 +2007,49 @@ internal static class PlayerbotElevator
             AnomalySeverity.Warning);
     }
 
+    /// <summary>
+    /// A completed trip's bot stands within this (flat) of the point it was sent to when it stepped off (<see cref="ElevatorTrip.StepOffPoint"/>);
+    /// the server may nudge the position a little. Farther, the bot was relocated between the pump's step-off and the <see cref="Drive"/> that
+    /// reports it (a GM <c>.playerbot send</c>, a teleport, a resurrection at a spirit healer, a catch-up teleport).
+    /// </summary>
+    internal const float StepOffToleranceYards = 8f;
+
+    /// <summary>The vertical counterpart of <see cref="StepOffToleranceYards"/>: a bot this far above or below its step-off point was moved to another level.</summary>
+    internal const float StepOffZToleranceYards = 5f;
+
+    /// <summary>
+    /// Whether the bot of a trip that is to be reported arrived was relocated since it stepped off: measured from the stored step-off point
+    /// (the car it stepped off beside is not always <see cref="ElevatorTrip.Car"/>: <c>TryCompleteAtDestinationFloor</c> uses the closest car).
+    /// Every path that completes a trip stores the point; a trip without one has nothing to judge an arrival by, so it counts as relocated
+    /// (<see cref="Drive"/> drops it, <see cref="CheckArrivedAnomalies"/> skips its checks).
+    /// </summary>
+    private static bool Relocated(ElevatorTrip trip, Player player)
+    {
+        if (trip.StepOffPoint is not { } point) return true;
+        return Vector2.Distance(new Vector2(player.X, player.Y), new Vector2(point.X, point.Y)) > StepOffToleranceYards
+            || MathF.Abs(player.Z - point.Z) > StepOffZToleranceYards;
+    }
+
+    /// <summary>
+    /// A trip reported as arrived whose bot is no longer near its stop was relocated, so it neither arrived nor failed: the trip is dropped
+    /// (no backoff, no anomaly) and the bot is idle for the brain. Logged at Debug.
+    /// </summary>
+    private static void AbandonRelocated(WorldSession session, Player player, ElevatorTrip trip)
+    {
+        Trips.Remove(player);
+        if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? state)) state.ElevatorTrip = null;
+        session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogDebug(
+            "Playerbot {Bot}: the trip on {Lift} was abandoned, the bot was relocated to {X:F1},{Y:F1},{Z:F1} before it was reported arrived",
+            player.Name, trip.Lift.Name, player.X, player.Y, player.Z);
+    }
+
     internal static void CheckArrivedAnomalies(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint now)
     {
-        if (trip.Car is { } car)
+        if (Relocated(trip, player)) return; // not at its stop: nothing about the arrival (or its duration) can be judged
+        if (trip.Car is not null)
         {
             ElevatorLevel targetLevel = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
-            Vector3 stop = car.At(targetLevel);
+            Vector3 stop = ClosestCar(trip.Lift, targetLevel, new Vector3(player.X, player.Y, player.Z)).At(targetLevel); // the car it stepped off beside
             if (MathF.Abs(player.Z - stop.Z) > LandingFloorYards + 1f)
             {
                 ReportAnomaly(session, player, "arrived-wrong-level",

@@ -105,6 +105,25 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     public int PathJobsPending => _pathJobsPending;
 
+    /// <summary>
+    /// Outstanding jobs (<see cref="PathJobsInFlight"/>) whose answer is published (<see cref="NavJob.IsDone"/>). Map thread (or a
+    /// test driving the ticks). A pool counter (<see cref="NavJobSystem.Totals"/>) moves just before its job publishes, so a wait on
+    /// the counter alone can still find the job pending on the next update.
+    /// </summary>
+    internal int PathJobsFinished
+    {
+        get
+        {
+            int finished = 0;
+            foreach (NavJob job in _creaturePathJobs.Values)
+            {
+                if (job.IsDone) finished++;
+            }
+
+            return finished;
+        }
+    }
+
     bool ICreaturePathQuery.CanQueuePathJob => PathJobs is not null && _pathJobsPending < PathJobsMaxInFlightPerMap;
 
     bool ICreaturePathQuery.LastPlanQueued => _lastPlanQueued;

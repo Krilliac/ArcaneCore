@@ -614,6 +614,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         {
             if (_tracked.ContainsKey(bot.BotId) || !bot.Free || !bot.Session.IsManaged || bot.Session.Player is not { IsInWorld: true } player) continue;
             if (Adopt(bot, player, feature)) continue;
+            if (bot.Brain.Stay is not null) continue; // waiting for an event scenario: not queued
             if (!options.Enabled || !MayQueue(player, feature)) continue;
             bool roll = chance > 0f && _random.NextDouble() < chance;
             if (!roll && !anyRealWaiting && checkedRefusalsThisScan) continue;

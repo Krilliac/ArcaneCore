@@ -72,7 +72,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
         (Guid Id, string Name)[] bots = [tank, healer, mage];
 
         // The bots have the quest and stand at the entrance, exactly as in the twin test that forms the group (the boss is the only dropper).
-        Assert.True(await world.RunUntilAsync(60_000, () => bots.All(b => world.HasQuest(b.Id, DungeonItemQuest))), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => bots.All(b => world.HasQuest(b.Id, DungeonItemQuest))), await world.TraceAsync());
         await world.RunAsync(90_000);
 
         Assert.Empty(world.Coordinator.Groups);
@@ -155,7 +155,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
         Assert.True(world.Coordinator.IsSetAside(tank.Id, key));
 
         // Ten minutes later the bots look for a group again (back at the entrance, in case their brains wandered off) and fail again.
-        Assert.True(await world.RunUntilAsync(700_000, () => !world.Coordinator.IsSetAside(tank.Id, key)), world.Trace());
+        Assert.True(await world.RunUntilAsync(700_000, () => !world.Coordinator.IsSetAside(tank.Id, key)), await world.TraceAsync());
         await world.OnWorldAsync(() =>
         {
             foreach ((Guid id, string _) in bots) world.Player(id).Relocate(EntranceArea.X, EntranceArea.Y, EntranceArea.Z, 0, world.World.Host.World.NowMs);
@@ -169,7 +169,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
     /// <summary>Wait for the bots' group, make its travel step overdue (a clock jump), wait for it to give up; the leader's set-aside left, in ms.</summary>
     private static async Task<uint> FailTheGroupAsync(GroupTestWorld world, (Guid Id, string Name)[] bots, uint waitMs)
     {
-        Assert.True(await world.RunUntilAsync(waitMs, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.True(await world.RunUntilAsync(waitMs, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         await world.OnWorldAsync(() =>
         {
@@ -177,7 +177,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
             group.StateSinceMs = unchecked(world.World.Host.World.NowMs - 7_200_000u);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal("travel-timeout", group.Reason);
         return await world.OnWorldAsync(() => world.Coordinator.SetAsideLeftMs(group.LeaderBotId, group.Goal.Key));
     }
@@ -214,7 +214,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
         (Guid Id, string Name)[] bots = [tank, healer, mage];
 
         // The quest giver stands at the entrance, so the bots take the quest there and then are 1200 yards away when they gather.
-        Assert.True(await world.RunUntilAsync(60_000, () => bots.All(b => world.HasQuest(b.Id, DungeonQuest))), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => bots.All(b => world.HasQuest(b.Id, DungeonQuest))), await world.TraceAsync());
         await world.OnWorldAsync(() =>
         {
             Vector3 far = EntranceArea - new Vector3(1200f, 0f, 0f);
@@ -222,7 +222,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
             return true;
         });
 
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.True(group.Goal.InInstance);
         Assert.InRange(world.Coordinator.StepLimitOf(group), 600_000u, PlayerbotGroupCoordinator.TravelBudgetMs(10_000f, 7f, 30 * 60_000));
@@ -233,7 +233,7 @@ public sealed class PlayerbotDungeonGroupGoalTests
             group.StateSinceMs = unchecked(world.World.Host.World.NowMs - 7_200_000u);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
 
         string line = Assert.Single(world.Coordinator.Events, e => e.Contains("travel-timeout after", StringComparison.Ordinal));
         Assert.Contains("of 6", line, StringComparison.Ordinal); // the budget in seconds: six hundred and something

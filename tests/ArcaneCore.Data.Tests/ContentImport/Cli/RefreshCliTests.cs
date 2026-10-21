@@ -560,6 +560,62 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Equal(1, await after.Set<AreaTemplateRow>().CountAsync());
     }
 
+    /// <summary>WMOAreaTable.dbc (20 fields: id, WMOID, NameSetID, WMOGroupID, ..., flags at 9, AreaTableID at 10) beside the map DBCs fills wmo_area_template.</summary>
+    [Fact]
+    public async Task Refresh_WithAWmoAreaTable_FillsWmoAreaTemplate_AndReportsTheRows()
+    {
+        string world = await OldWorldAsync();
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump);
+        string dbc = Dbcs();
+        Dbc("WMOAreaTable.dbc", 20, WmoRow(100, 1500, 3, 77, 12), WmoRow(101, 1500, 3, -1, 0));
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("WMOAreaTable.dbc: 2 row(s)", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("no WMOAreaTable.dbc", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        WmoAreaTemplateRow[] rows = await db.Set<WmoAreaTemplateRow>().OrderBy(r => r.Id).ToArrayAsync();
+        Assert.Equal([(100u, 1500, 3, 77, 12u), (101u, 1500, 3, -1, 0u)], rows.Select(r => (r.Id, r.RootId, r.AdtId, r.GroupId, r.AreaId)));
+    }
+
+    /// <summary>Without WMOAreaTable.dbc the table is left as it is, and the refresh says positions inside a WMO keep reading the terrain.</summary>
+    [Fact]
+    public async Task Refresh_WithoutAWmoAreaTable_LeavesTheTable_AndWarns()
+    {
+        string world = await OldWorldAsync();
+        await using (WorldDbContext db = Open(world))
+        {
+            db.Set<WmoAreaTemplateRow>().Add(new WmoAreaTemplateRow { Id = 9, RootId = 9, AreaId = 12 });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump);
+        string dbc = Dbcs();
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("no WMOAreaTable.dbc in", output, StringComparison.Ordinal);
+        Assert.Contains("wmo_area_template is left as it is", output, StringComparison.Ordinal);
+        await using WorldDbContext after = Open(world);
+        uint[] kept = await after.Set<WmoAreaTemplateRow>().Select(r => r.Id).ToArrayAsync();
+        Assert.Equal([9u], kept);
+    }
+
+    private static object[] WmoRow(int id, int root, int adt, int group, int area)
+    {
+        object[] row = Enumerable.Repeat<object>(0, 20).ToArray();
+        row[0] = id;
+        row[1] = root;
+        row[2] = adt;
+        row[3] = group;
+        row[10] = area;
+        return row;
+    }
+
     /// <summary>The same world refreshed with Map.dbc and AreaTable.dbc: both tables are replaced and both checks pass.</summary>
     [Fact]
     public async Task Refresh_WithTheMapDbcs_ReplacesTheContinentOnlyTables_AndEveryPortalAndGraveyardZoneResolves()

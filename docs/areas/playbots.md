@@ -506,7 +506,7 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   onto the landing there nearest its destination, and the destination plans again from there. Nothing teleports the bot.
 * **Fails closed** with a stall reason (`elevator: ...`, the bot's own set-aside as for the tram, never every bot's): no way to the lift or
   its landing (no progress for 60 s), no car in the world, no floor beside a car, no car standing at the landing within two cycles and 30 s
-  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at.
+  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at, and a car that never stands anywhere drops the bot after two cycles and 30 s.
 * **Never off a car where it stands.** Under a car the static collision data has no floor but the bottom of the shaft (a car is a dynamic
   object, in no vmap; measured on the real Great Lift: 5.3 to 5.5 yards down into the pit at the foot, 134.8 yards at the top), so the bot
   is never stepped off or dropped where it stands. A car that leaves the world under the bot (or a bot knocked off it in the shaft) lets
@@ -869,6 +869,14 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
   quest and its giver are not set aside and no dead-end pin is counted; while the point is backed off the destination waits without a
   set-aside. A completed quest across the tram for a bot below `TramMinLevel` is held (never abandoned or marked unreachable) and taken up
   again at the level. A fight on the way to the master cancels the trip without a backoff. Death cancels it.
+- **A killed flight master is not a failure.** A bot that stands at its master's spawn (within 6 yards, `AtSpawnYards`) and finds nobody to
+  talk to looks at the spawn's creature in the map's creature system. If it is dead or a corpse, or is gone from the map with its respawn
+  timer still running, the trip ends as `TaxiStep.MasterDead`: nothing is reported (no `bot-taxi/master-missing`, so bot QA files no issue),
+  no failure is counted (no `repeated-failure`, the node's failure count and its doubling wait stay as they were), and the departure node is
+  held off until about the respawn (at least 5 s, at most `BackoffMinutes`; a master that never respawns holds for the cap). The goal
+  walks meanwhile, and the node flies again once the hold ends. A master that is alive but not where the node says, has no creature
+  and no respawn pending at the spawn, or whose respawn is already due yet has not happened (a link or pool holds it, or the timer is
+  stuck), still ends the trip as a failure and reports `bot-taxi/master-missing` (Warning).
 - **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
   `BackoffMinutes` (10, 1..1440; the per-node cap of the Travel schedule).
 
@@ -1051,9 +1059,10 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   teleports, a level-20 one walks; an area with no known level is never dangerous), or when its walk was set aside as blocked (failed plans, no
   progress, a stall); otherwise it walks. The rules are `PlayerbotHomeRules.Decide`; the level check is made once per return. The points of the line
   inside the home area itself are left out, and a level no higher than the area at the home's centre never counts (`PlayerbotHomeReturn.DangerLevelOnLine`):
-  the operator homed the bot there, so a bot homed above its level does not teleport at every return. Indoors the level is the outdoor one: the
-  terrain's area flag is the ADT cell's only (`TerrainInfo.GetAreaFlag`, vmangos `TerrainInfo::GetAreaFlag` without the WMO area info), so a cave or
-  building sub-area with a higher level of its own reports the outdoor area's level and its danger can be under-reported. The teleport is the one
+  the operator homed the bot there, so a bot homed above its level does not teleport at every return. Inside a WMO group that has an area in
+  `wmo_area_template` the level is that area (`TerrainInfo.GetAreaFlag`, vmangos `TerrainInfo::GetAreaFlag`); a cave that is not a WMO, a
+  world without the table, or a place with no loaded model tile reads the ADT cell area, so a sub-area with a higher level of its own
+  reports the outdoor area level and its danger can be under-reported. The teleport is the one
   the follower's catch-up (`PlayerbotFollower`, `World:Playerbots:Follow:CatchUpMode`) and `.playerbot send` use: the ordinary
   `TeleportService.TeleportTo` (vmangos `Player::TeleportTo`), its near or far acknowledgement answered by `PlayerbotMovementControl` as a client's,
   to the home's centre. **Never** in combat, in a duel, dead or as a ghost, in a group, on a battleground, to a home map `PlayerbotMapPolicy.Allows`
@@ -1228,7 +1237,9 @@ where the master goes.
   to attack.`. Without an order a bot fights back a player who attacks it, assists the master against a player the master attacks
   and defends a member a player attacks, the same rule real players are held to. A managed bot outside a group does the same for itself:
   the brain (`PlayerbotBrain.Pvp.cs`) fights back a player attacker through `PlayerbotPvpFight`, before the quest return, the creature
-  threat choice and the combat linger, and lets go past 45 yards or when the player is no longer hostile.
+  threat choice and the combat linger, and lets go past 45 yards or when the player is no longer hostile. Just after it, a bot with an
+  event-scenario stay (`PlayerbotBrain.Stay.cs`, think phase `stay`) owns the think: it defends itself, walks back to the stay or stands, and
+  chooses no destination, until the owner's lease runs out (the stay is not a defend post: no PvP flag, no post scan, retreat runs first).
 - **Raid marks** (vmangos `PartyBotAI::SelectAttackTarget`, PartyBotAI.cpp:366-377). While the bot or its master is in combat, the
   skull of the group (`MSG_RAID_TARGET_UPDATE`, set by the leader or an assistant) is attacked before the master's victim; an explicit
   `attack` order still comes first. A mark on a unit that is gone or not attackable is skipped.
@@ -1275,14 +1286,15 @@ bots in the service snapshot only, never on a real player.
 | Command | Level | Effect |
 |---|---|---|
 | `.playerbot summon <sel> [#count] [force] [to $player]` | Administrator | Teleport running bots to you (or the named online player), in rings around the spot. With a count, the nearest bots on that player's map go first. |
-| `.playerbot send <sel> <$tele\|here> [force] [to $player]` | Administrator | Teleport running bots to a `game_tele` place, or to your position (`here`, or the named player's), in rings. |
+| `.playerbot send <sel> <$tele\|here> [force] [to $player]`, `.playerbot send <sel> at $map $x $y $z [force]` | Administrator | Teleport running bots to a `game_tele` place, to your position (`here`, or the named player's), or to the given map and coordinates (`at`: no player needed, so RA and the console can use it; the map must exist, the numbers must be finite and inside the map, each bot stands at the collision ground (terrain and models) found from the given z on the loaded continent map, as with `here`, so a spot inside a building or a city keeps its floor, and at the given z where that map is not loaded or knows no ground; no `to`, not a battleground map; a `game_tele` that the place lookup matches for `at` and the four words (an exact name, else a name containing them) still wins over the position form), in rings. |
 | `.playerbot follow <sel> [to $player]` | Administrator | The bots follow you (or the named player) without a party and fight back. |
 | `.playerbot stay <sel> [to $player]` | Administrator | The bots hold position (they fight only what attacks them) and obey the player's whispered orders. |
 | `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
 | `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
 | `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
-| `.playerbot defend <sel> here #radius [force]`, `.playerbot defend <sel> clear` | Administrator | The running bots hold a defend post at your position ([Defend posts](#defend-posts)); radius 10 to 200 yards (clamped). More bots than the bulk cap need `force`. `clear` ends it. |
-| `.playerbot siege waypoint add\|list\|clear`, `siege start <sel> #entry [raids 1\|2] [force]`, `siege stop`, `siege status [$leader]`, `siege watch [on\|off]` | Administrator | Bot-led raids march the stored waypoints in step and kill the creature with the entry ([Siege](playbots-groups.md#siege-playerbot-siege)). Memory only. |
+| `.playerbot defend <sel> here #radius [force]`, `.playerbot defend <sel> at $map $x $y $z #radius [force]`, `.playerbot defend <sel> clear` | Administrator | The running bots hold a defend post at your position (`here`) or at the given map and coordinates (`at`: no player needed, same map, number and battleground checks as `send ... at`; the post keeps the height you give) ([Defend posts](#defend-posts)); radius 10 to 200 yards (clamped). More bots than the bulk cap need `force`. `clear` ends it. |
+| `.playerbot siege waypoint add [at $map $x $y $z]\|list\|clear`, `siege start <sel> #entry [raids 1\|2] [force]`, `siege stop`, `siege status [$leader]`, `siege watch [on\|off]` | Administrator | Bot-led raids march the stored waypoints in step and kill the creature with the entry ([Siege](playbots-groups.md#siege-playerbot-siege)). Memory only. |
+| `.playerbot eventscenario list\|status [#event]` | Administrator | Bot scenarios that start and stop with a game event, from the `game_event_playerbot_*` tables ([scenarios on events](playbots-scenarios-events.md)). Read only. |
 | `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the refusal (a controller, the party AI, a bot-led group or a battleground holds the bot; or the planner's: travel off, no route, a leg of another journey under way). |
 | `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
 
@@ -1334,7 +1346,8 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 #### Defend posts
 
 `.playerbot defend <sel> here #radius [force]` gives the running autonomous bots a post: the GM's map and position and a radius (10 to 200
-yards, clamped). Bots in a real player's group, scripted, or driven by the party AI, a bot-led group or a battleground are skipped
+yards, clamped). `.playerbot defend <sel> at $map $x $y $z #radius [force]` gives the same post at an explicit map and position and needs no
+player (RA, the console); the map must exist and the numbers be finite and inside the map, and the height is kept as given. Bots in a real player's group, scripted, or driven by the party AI, a bot-led group or a battleground are skipped
 (`in-player-group`, `bot-busy`, `bot-scripted`). Every bot of one command shares a post id. A post is **memory only** (`PlayerbotDefendPost`
 on the brain): it is not saved: a restart, a bot stop, a playerbots hot reload or `.playerbot defend <sel> clear` ends it. A brain replacement (a bot leaving a
 real player's party, a controller detaching) keeps it. The PvP flag the post turned on is tracked per player (`PlayerbotDefend.OwnFlag`), so
@@ -1354,6 +1367,11 @@ A bot with a post owns its think right after death and recovery and the transit 
    the heal is safe (`IsSafeHealTarget`, as for a tagger).
 4. **Return.** Outside the full radius, the bot walks back with the home walk (`TryReturnHome`: lift-aware, the Auto return mode's teleport
    rules apply) and stops once it is within 0.75 times the radius of the centre (`PlayerbotHome`); no errand holds a defender off its post.
+   **Not while it carries resurrection sickness** (spell 15007, `SpiritHealerResurrection.ResurrectionSicknessSpell`, read through
+   `PlayerbotSickness.Holder`; a permanent aura does not count): a defender the spirit healer revived stays at the graveyard where it stands,
+   rests, sits and buffs (steps 1 to 3 still apply, so it fights back what attacks it) and walks back the think after the aura ends. Without this the
+   walk-back took it under the raid that had killed it, where it died again (live 2026-10-20: 3 deaths in 253 s near the Undercity lift top). The
+   risk line of `.playerbot status` and `inspect` reads `decision=defend-wait-sickness; <the real risk line>` meanwhile (both are shown); a dead or ghost defender shows the real line only. A defender without the aura is unchanged.
 5. Otherwise it holds, rests and buffs. The goal shows as `Home`; `.playerbot inspect` prints `defend=r=40 post=3 map=0 centre=x,y,z`.
 
 An unflagged enemy player is never attacked, and a hostile player outside the radius only if it attacks the bot.

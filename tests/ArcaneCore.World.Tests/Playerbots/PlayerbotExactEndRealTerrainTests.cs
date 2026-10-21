@@ -1,11 +1,14 @@
 using System.Numerics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotExactEndRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotExactEndRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     /// <summary>
     /// Bot QA #784 (live 2026-10-17 05:01, bots Tupizeir, Mokou and Dreirndreido, each several times): the destination below the road west
     /// of Goldshire has no walkable polygon near it, and the mesh's exact answer ended on the road 12.4 yards away and 9 yards up. The exact

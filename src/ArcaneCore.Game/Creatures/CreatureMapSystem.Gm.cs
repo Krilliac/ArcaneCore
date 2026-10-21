@@ -6,6 +6,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>The number of respawn times kept for spawns whose creature left the map while dead (<see cref="PendingRespawnAt"/>).</summary>
     public int DormantRespawnCount => _respawnAt.Count;
 
+    /// <summary>Test seam: keep a respawn time (on <see cref="ClockMs"/>) for a spawn whose creature is not in the map, as an unloaded grid does.</summary>
+    internal void SetDormantRespawn(uint spawnGuid, long atClockMs) => _respawnAt[spawnGuid] = atClockMs;
+
     /// <summary>
     /// Milliseconds until a dead database spawn respawns (0 once due); null while it is alive, and null for a temporary creature
     /// (<see cref="SpawnTemporary"/>, <c>.npc add</c>, summons): the update loop respawns only creatures with a <see cref="Creature.Spawn"/>,

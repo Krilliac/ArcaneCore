@@ -141,13 +141,27 @@ public sealed partial class WorldSession
             || payload.Length > MaxClientPacketSize - 4
             || !_opcodes.TryGet(opcode, out OpcodeHandler? handler) || handler.World is null
             || !handler.AllowsState(_state)
-            || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
+            || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck))
+        {
+            NoteManagedRejected(opcode, payload.Length); // report only: the refusal is unchanged
+            return false;
+        }
+
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
+        HeuristicsManagedPacket(player, opcode, payload);
         BotPolicy?.BeforeAction(this, player, opcode);
         CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
         _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
-        handler.World(this, player, payload);
+        try
+        {
+            handler.World(this, player, payload);
+        }
+        catch (Exception ex) when (NoteManagedFault(opcode, payload.Length, ex))
+        {
+            throw; // never reached: the filter only reports and returns false, so the exception propagates exactly as before
+        }
+
         return _state == SessionState.InWorld && IsCurrentSession;
     }
 

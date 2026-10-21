@@ -131,7 +131,7 @@ def main() -> int:
                 f"{terrain_arg} lacks maps, vmaps or mmaps; nothing was stopped")
     require(dump_path.is_file(), f"{dump_path} is missing; nothing was stopped")
 
-    REFRESH_DBCS = ["AreaTrigger.dbc", "WorldSafeLocs.dbc", "Map.dbc", "AreaTable.dbc", "TaxiNodes.dbc", "TaxiPath.dbc", "TaxiPathNode.dbc"]
+    REFRESH_DBCS = ["AreaTrigger.dbc", "WorldSafeLocs.dbc", "Map.dbc", "AreaTable.dbc", "WMOAreaTable.dbc", "TaxiNodes.dbc", "TaxiPath.dbc", "TaxiPathNode.dbc"]
     OPTIONAL_DBCS = ["ItemSet.dbc", "ItemRandomProperties.dbc", "SpellItemEnchantment.dbc", "CharSections.dbc", "CharacterFacialHairStyles.dbc"]
     needed = REFRESH_DBCS + ([] if args.no_elevators else ["TransportAnimation.dbc"]) + ([] if args.no_optional_data else OPTIONAL_DBCS)
     sums_path = dbc_dir / "SHA256SUMS"

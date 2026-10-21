@@ -92,7 +92,7 @@ public sealed class PlayerbotGroupResurrectionTests
         uint[] heals = healerClass == Priest ? [LesserHeal, Smite, spell] : [HolyLight, spell];
         var healer = await world.AddBotAsync("Realheal", Human, healerClass, 20, heals);
         Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering
-            or PlayerbotGroupState.Travelling)), world.Trace());
+            or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         PlayerbotGroupAI healerAi = world.Coordinator.FindAI(healer.Id)!;
         Assert.Equal(spell, await world.OnWorldAsync(() => healerAi.ResurrectionSpell(world.Player(healer.Id))?.Id));
 
@@ -102,7 +102,7 @@ public sealed class PlayerbotGroupResurrectionTests
             dead.Map!.Combat.KillPlayer(dead);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(tank.Id).IsAlive), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(tank.Id).IsAlive), await world.TraceAsync());
         Assert.Equal(tank.Name, healerAi.LastResurrection);
         Assert.False(healerAi.LastResurrectionAtCorpse); // an unreleased body is the dead unit itself
         Assert.Equal(0u, await world.OnWorldAsync(() => (uint)(world.Player(tank.Id).Flags & PlayerFlags.Ghost)));
@@ -120,7 +120,7 @@ public sealed class PlayerbotGroupResurrectionTests
         var tank = await world.AddBotAsync("Ghosttank", Human, Warrior, 20, [Taunt]);
         var healer = await world.AddBotAsync("Ghostprie", Human, Priest, 20, [LesserHeal, Smite, RealResurrection]);
         Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering
-            or PlayerbotGroupState.Travelling)), world.Trace());
+            or PlayerbotGroupState.Travelling)), await world.TraceAsync());
         PlayerbotGroupAI healerAi = world.Coordinator.FindAI(healer.Id)!;
         world.Coordinator.FindAI(tank.Id)!.DeadWaitMs = 0;
 
@@ -132,9 +132,9 @@ public sealed class PlayerbotGroupResurrectionTests
             dead.Map!.Combat.KillPlayer(dead);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(30_000, () => (world.Player(tank.Id).Flags & PlayerFlags.Ghost) != 0), world.Trace());
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(tank.Id).IsAlive), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => (world.Player(tank.Id).Flags & PlayerFlags.Ghost) != 0), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(tank.Id).IsAlive), await world.TraceAsync());
         Assert.Equal(tank.Name, healerAi.LastResurrection);
-        Assert.True(healerAi.LastResurrectionAtCorpse, world.Trace());
+        Assert.True(healerAi.LastResurrectionAtCorpse, await world.TraceAsync());
     }
 }

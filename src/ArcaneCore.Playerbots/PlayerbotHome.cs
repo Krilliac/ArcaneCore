@@ -363,7 +363,7 @@ internal sealed class PlayerbotHomeArea
 
 /// <summary>
 /// The AreaTable zone at a position of one map, for the zone clip of <see cref="PlayerbotHomeArea"/>. Over the terrain it is exactly
-/// what <c>Map.GetZoneAndAreaId</c> answers (vmangos <c>TerrainInfo::GetZoneAndAreaId</c>: the tile's area flag, then
+/// what <c>Map.GetZoneAndAreaId</c> answers (vmangos <c>TerrainInfo::GetZoneAndAreaId</c>: the area flag, the WMO group's area where the position is inside one and the tile's cell otherwise, then
 /// <see cref="AreaTable.GetZoneAndAreaId"/>, i.e. <c>TerrainManager::GetZoneAndAreaIdByAreaFlag</c>: the entry itself when it is a
 /// zone, else its parent zone), with the flag-to-zone answer cached: the AreaTable search is linear and the brains ask for every
 /// candidate creature near a home. 0 where the terrain does not know the area.

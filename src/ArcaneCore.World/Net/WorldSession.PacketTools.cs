@@ -164,6 +164,7 @@ public sealed partial class WorldSession
 
             bool dispatched;
             _budgetDropped = false;
+            _injectDispatch = true; // report only: the packet heuristics attribute findings from this dispatch to the tool, not the target's account
             try
             {
                 dispatched = await DispatchAsync(opcode, payload).ConfigureAwait(false);
@@ -191,6 +192,10 @@ public sealed partial class WorldSession
                 _logger.LogFault("session", ex, "[{Endpoint}] an injected {Opcode} faulted its handler; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
                 Kick("an injected packet faulted its session handler");
                 return InjectVerdict.Disconnected;
+            }
+            finally
+            {
+                _injectDispatch = false;
             }
 
             if (!dispatched)

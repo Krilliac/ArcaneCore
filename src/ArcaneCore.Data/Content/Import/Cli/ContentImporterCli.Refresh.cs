@@ -222,10 +222,21 @@ public static partial class ContentImporterCli
 
             if (haveMaps)
             {
-                mapTables = ReadDbc("Map.dbc and AreaTable.dbc",
-                    () => MapAreaDbcImporter.ReadSnapshot(mapPath, areaPath, instances.SawTable ? instances.Maps : null));
+                // WMOAreaTable.dbc rides along with the area table: the area of each WMO group (the world reads it with area_template).
+                string wmoAreaPath = Path.Combine(dbcDirectory, "WMOAreaTable.dbc");
+                bool haveWmoAreas = File.Exists(wmoAreaPath);
+                mapTables = ReadDbc("Map.dbc, AreaTable.dbc and WMOAreaTable.dbc",
+                    () => MapAreaDbcImporter.ReadSnapshot(mapPath, areaPath, instances.SawTable ? instances.Maps : null, haveWmoAreas ? wmoAreaPath : null));
                 o.WriteLine($"  Map.dbc: {mapTables.Maps.Count} map(s), AreaTable.dbc: {mapTables.Areas.Count} area(s); " +
                     $"{mapTables.InstanceRows} map(s) with instance data from the dump");
+                if (mapTables.WmoAreas is { } wmoRows)
+                {
+                    o.WriteLine($"  WMOAreaTable.dbc: {wmoRows.Count} row(s)");
+                }
+                else
+                {
+                    warnings.Add($"no WMOAreaTable.dbc in '{dbcDirectory}': {WmoAreaDataModule.WmoAreaTemplateTable} is left as it is (positions inside a WMO read the terrain's area until it is filled)");
+                }
                 foreach (string correction in instances.Corrections)
                 {
                     o.WriteLine($"  instance data: {correction}");
@@ -354,6 +365,7 @@ public static partial class ContentImporterCli
         Count(MapDataModule.AreaTriggerTemplateTable, triggers?.Count ?? 0, triggers is not null);
         Count(MapDataModule.MapTemplateTable, mapTables?.Maps.Count ?? 0, mapTables is not null);
         Count(MapDataModule.AreaTemplateTable, mapTables?.Areas.Count ?? 0, mapTables is not null);
+        Count(WmoAreaDataModule.WmoAreaTemplateTable, mapTables?.WmoAreas?.Count ?? 0, mapTables?.WmoAreas is not null);
         Count("taxi_nodes", taxiNodes?.Count ?? 0, taxiNodes is not null);
         Count("taxi_path", taxiPaths?.Count ?? 0, taxiPaths is not null);
         GameEventImportReport eventReport = gameEvents.BuildReport();

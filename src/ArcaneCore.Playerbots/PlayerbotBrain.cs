@@ -233,8 +233,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return risk;
     }
 
-    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>).</summary>
-    internal string RiskReport => _options.Risk.Enabled ? Risk.Report : "decision=off";
+    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>); while a defender waits out its resurrection sickness it is prefixed with <c>decision=defend-wait-sickness; </c>, the real risk line follows.</summary>
+    internal string RiskReport => _defendWaitsSickness ? DefendWaitSicknessReport + "; " + (_options.Risk.Enabled ? Risk.Report : "decision=off") : _options.Risk.Enabled ? Risk.Report : "decision=off";
+
+    /// <summary>The risk line of a defender that holds where it stands until its resurrection sickness ends (<see cref="DefendWaitsSickness"/>).</summary>
+    internal const string DefendWaitSicknessReport = "decision=defend-wait-sickness";
 
     /// <summary>What the bot saves for (<see cref="PlayerbotBudget"/>; inspection and tests).</summary>
     internal PlayerbotBudget Budget => _budget;
@@ -634,6 +637,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
+            _defendWaitsSickness = false;
         }
         else
         {
@@ -808,10 +812,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 return;
             }
 
-            if (taxi is TaxiStep.Arrived or TaxiStep.Failed)
+            if (taxi is TaxiStep.Arrived or TaxiStep.Failed or TaxiStep.MasterDead)
             {
                 _stall.Reset();
-                if (taxi == TaxiStep.Failed)
+                if (taxi is TaxiStep.Failed or TaxiStep.MasterDead)
                     _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>()
                         .LogInformation("Playerbot taxi trip given up, the goal walks: {Why}", taxiFailure);
             }
@@ -902,6 +906,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
+            _defendWaitsSickness = false; // dead or a ghost: the sickness wait is not the decision any more
             PlayerbotThinkProbe.Phase("recovery update");
             _recovery.Update(player, interval);
             return;
@@ -971,6 +976,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         PlayerbotThinkProbe.Phase("pvp");
         if (TryFightPlayer(player, interval)) return;
+
+        // A scenario stay (PlayerbotStay) owns the bot while its lease lives: no quest, grind or explore step chooses a destination.
+        if (TryStay(player, interval)) return;
 
         PlayerbotThinkProbe.Phase("quest return");
         if (_quests.AbandonDistantCompletedQuest(player))

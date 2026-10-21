@@ -4,11 +4,14 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotFloorTrackingRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotFloorTrackingRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     // The Dun Morogh - Loch Modan tunnel (Smalltunnel.wmo), where the live server reported bots 2-5 yards under the tunnel floor
     // (move/under-map at -5590.54,-2475.30,394.35; the floor there is 396.97): both mouths on the navigation mesh.
     // Points of Piltrus's live walk (bot-motion lease/under-map reports, 18:36-18:38): the west mouth, then on through the tunnel.
@@ -38,9 +41,10 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         PathResult direct = await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.FindPath(start, goal));
         output.WriteLine($"start {start} goal {goal} at {terrain.Player.X},{terrain.Player.Y},{terrain.Player.Z}; mesh path {direct.Type} {direct.Points.Count} points");
         Assert.NotNull(route);
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n =>
-            n.Key is "bot-motion/under-map" or "bot-motion/airwalk" or "move/under-map"
-            && n.Subject.Contains(terrain.Player.Name, StringComparison.Ordinal));
+        // This world's reports only: every real-terrain bot has the same name, and other classes' walks run at the same time. Both
+        // sources stamp their reports with the world (PlayerbotAnomalies.Report, UndermapObserver).
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(terrain.Host.World, n =>
+            n.Key is "bot-motion/under-map" or "bot-motion/airwalk" or "move/under-map");
         float worstUnder = 0f, worstAbove = 0f;
         int samples = 0;
         for (int think = 0; think < 120; think++)

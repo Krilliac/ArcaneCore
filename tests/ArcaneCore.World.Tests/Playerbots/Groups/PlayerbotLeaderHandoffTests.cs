@@ -155,12 +155,12 @@ public sealed class PlayerbotLeaderHandoffWorldTests
         Assert.Equal(1, world.Coordinator.HandoffTotals.Started);
 
         // The take-over line reaches the player in party chat.
-        Assert.True(await ChatSaid(world, master, "I'll lead the clear of Ragefire Chasm."), world.Trace());
+        Assert.True(await ChatSaid(world, master, "I'll lead the clear of Ragefire Chasm."), await world.TraceAsync());
 
         // The run progresses: the first pack dies.
-        Assert.True(await world.RunUntilAsync(180_000, () => Pack(world, bots[0].Id) is { Length: 3 } pack && pack.All(c => !c.IsAlive)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => Pack(world, bots[0].Id) is { Length: 3 } pack && pack.All(c => !c.IsAlive)), await world.TraceAsync());
         // PullsLeft is recounted when the leader next picks a target, one think after the last of the pack dies.
-        Assert.True(await world.RunUntilAsync(30_000, () => group.Run.PullsLeft == 0 || group.Run.Killed > 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => group.Run.PullsLeft == 0 || group.Run.Killed > 0), await world.TraceAsync());
         Assert.Same(group, world.Coordinator.HandoffOf(await ServerGroupId(world, bots[0])));
     }
 
@@ -171,7 +171,7 @@ public sealed class PlayerbotLeaderHandoffWorldTests
         await using WorldTestClient master = await world.World.EnterWorldAsync("HANDMASTER", Master, AccountSecurity.Player);
         (Guid Id, string Name)[] bots = await AddBots(world, 3, level: 10);
         await FormGroup(world, bots, raid: false);
-        Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id))), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id))), await world.TraceAsync());
 
         await PassLead(world, bots[0]);
         await world.RunAsync(5_000);
@@ -194,10 +194,10 @@ public sealed class PlayerbotLeaderHandoffWorldTests
         await master.CollectAsync();
 
         await master.SendChatAsync(ChatType.Party, Language.Common, "follow");
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         ObjectGuid masterGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(Master)!.Guid);
-        Assert.True(await world.RunUntilAsync(5_000, () => world.GroupManager.GetGroup(masterGuid)?.LeaderGuid == masterGuid), world.Trace());
-        Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id) && !world.Coordinator.Drives(b.Id))), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.GroupManager.GetGroup(masterGuid)?.LeaderGuid == masterGuid), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id) && !world.Coordinator.Drives(b.Id))), await world.TraceAsync());
         Assert.False(group.Succeeded);
         Assert.Equal("called-back", group.Reason);
         Assert.Equal(1, world.Coordinator.HandoffTotals.Ended);
@@ -225,15 +225,15 @@ public sealed class PlayerbotLeaderHandoffWorldTests
 
         await master.CollectAsync();
         ObjectGuid masterGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(Master)!.Guid);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
-        Assert.True(group.Succeeded, world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(group.Succeeded, await world.TraceAsync());
         Assert.Equal("completed", group.Reason);
         Assert.Equal(1, world.Coordinator.HandoffTotals.Completed);
         Assert.False(await world.OnWorldAsync(() => world.Player(bots[0].Id).Map!.FindUpdater<CreatureMapSystem>()!.Creatures
             .Any(c => c.Entry == GroupTestWorld.BossEntry && c.IsAlive)));
-        Assert.True(await ChatSaid(world, master, PlayerbotLeaderHandoff.ClearedLine("The Deadmines")), world.Trace());
-        Assert.True(await world.RunUntilAsync(5_000, () => world.GroupManager.GetGroup(masterGuid)?.LeaderGuid == masterGuid), world.Trace());
-        Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id))), world.Trace());
+        Assert.True(await ChatSaid(world, master, PlayerbotLeaderHandoff.ClearedLine("The Deadmines")), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.GroupManager.GetGroup(masterGuid)?.LeaderGuid == masterGuid), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id))), await world.TraceAsync());
     }
 
     [Fact]
@@ -305,7 +305,7 @@ public sealed class PlayerbotLeaderHandoffWorldTests
             foreach ((Guid id, string _) in bots) Assert.True(teleports.Teleports.TeleportTo(world.Player(id), map, at.X, at.Y, at.Z, 0f));
             return true;
         });
-        Assert.True(await world.RunUntilAsync(30_000, () => bots.All(b => world.Player(b.Id) is { IsInWorld: true } p && p.MapId == map)), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => bots.All(b => world.Player(b.Id) is { IsInWorld: true } p && p.MapId == map)), await world.TraceAsync());
         Assert.Single(await world.OnWorldAsync(() => bots.Select(b => world.Player(b.Id).Map!.InstanceId).Distinct().ToArray()));
     }
 
@@ -319,7 +319,7 @@ public sealed class PlayerbotLeaderHandoffWorldTests
 
     private static async Task<PlayerbotGroupCoordinator.BotGroup> Adopted(GroupTestWorld world)
     {
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Any(g => g.Handoff is not null)), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Any(g => g.Handoff is not null)), await world.TraceAsync());
         return world.Coordinator.Groups.Single(g => g.Handoff is not null);
     }
 

@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
@@ -16,14 +17,14 @@ namespace ArcaneCore.World.Playerbots;
 public sealed partial class PlayerbotFleetCommands
 {
     private static ChatCommand SiegeCommand() => new("siege", AccountSecurity.Administrator,
-        "Syntax: .playerbot siege waypoint add|list|clear\n.playerbot siege start $name|$prefix*|all #entry [raids 1|2] [force]\n.playerbot siege stop\n.playerbot siege status [$leader]\n.playerbot siege watch [on|off]\nBot-led raids march the stored waypoints in step and kill the creature with the entry. Memory only: a restart ends it.",
+        "Syntax: .playerbot siege waypoint add [at $map $x $y $z]|list|clear\n.playerbot siege start $name|$prefix*|all #entry [raids 1|2] [force]\n.playerbot siege stop\n.playerbot siege status [$leader]\n.playerbot siege watch [on|off]\nBot-led raids march the stored waypoints in step and kill the creature with the entry. Memory only: a restart ends it.",
         Children:
         [
             new ChatCommand("waypoint", AccountSecurity.Administrator,
-                "Syntax: .playerbot siege waypoint add|list|clear\nadd stores your position as the next waypoint (all on one map, at most 64); list prints them; clear forgets them. Refused while a siege runs.",
+                "Syntax: .playerbot siege waypoint add [at $map $x $y $z]|list|clear\nadd stores your position, or the given map and coordinates, as the next waypoint (all on one map, at most 64); list prints them; clear forgets them. Refused while a siege runs.",
                 Children:
                 [
-                    new ChatCommand("add", AccountSecurity.Administrator, "Syntax: .playerbot siege waypoint add\nStore your position as the next waypoint of the siege.", SiegeWaypointAdd),
+                    new ChatCommand("add", AccountSecurity.Administrator, "Syntax: .playerbot siege waypoint add\n.playerbot siege waypoint add at $map $x $y $z\nStore your position, or the given map and coordinates (no player needed, so the server console and RA can use it; the height is taken as given), as the next waypoint of the siege.", SiegeWaypointAdd),
                     new ChatCommand("list", AccountSecurity.Administrator, "Syntax: .playerbot siege waypoint list\nList the stored waypoints in order.", SiegeWaypointList),
                     new ChatCommand("clear", AccountSecurity.Administrator, "Syntax: .playerbot siege waypoint clear\nForget the stored waypoints (refused while a siege runs).", SiegeWaypointClear),
                 ]),
@@ -52,17 +53,38 @@ public sealed partial class PlayerbotFleetCommands
 
     private static bool SiegeWaypointAdd(CommandContext context, string text)
     {
-        if (text.Trim().Length != 0) return false;
-        if (SiegeCoordinator(context) is not { } coordinator || Anchor(context, null) is not { } me) return true;
-        var at = new Vector3(me.X, me.Y, me.Z);
-        if (coordinator.AddSiegeWaypoint(me.MapId, at) is { } refusal)
+        string[] words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        bool explicitSpot = words.Length == 5 && PlayerbotFleetSelection.IsAtWord(words[0]);
+        if (words.Length != 0 && !explicitSpot) return false;
+        if (SiegeCoordinator(context) is not { } coordinator) return true;
+        uint mapId;
+        Vector3 at;
+        if (explicitSpot)
+        {
+            // "at $map $x $y $z": no player involved; the same one-map rule as the position form applies below.
+            if (context.Session.Services.GetService<TeleportFeature>() is not { } tele)
+            {
+                context.Reply("Playerbot service is unavailable.");
+                return true;
+            }
+
+            if (ResolveSpot(context, tele, "siege", words[1..]) is not { } spot) return true;
+            (mapId, at) = (spot.MapId, spot.Position);
+        }
+        else
+        {
+            if (Anchor(context, null) is not { } me) return true;
+            (mapId, at) = (me.MapId, new Vector3(me.X, me.Y, me.Z));
+        }
+
+        if (coordinator.AddSiegeWaypoint(mapId, at) is { } refusal)
         {
             context.Reply($"Playerbot siege: waypoint refused ({refusal}).");
             return true;
         }
 
         context.Reply(string.Create(CultureInfo.InvariantCulture,
-            $"Playerbot siege: waypoint {coordinator.SiegeWaypoints.Count} added on map {me.MapId} at {Spot(at)}."));
+            $"Playerbot siege: waypoint {coordinator.SiegeWaypoints.Count} added on map {mapId} at {Spot(at)}."));
         return true;
     }
 

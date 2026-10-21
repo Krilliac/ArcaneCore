@@ -59,6 +59,7 @@ public static class WorldServiceCollectionExtensions
         services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
         services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
         services.Configure<Game.AntiCheat.AntiCheatOptions>(configuration.GetSection(Game.AntiCheat.AntiCheatOptions.SectionName));
+        services.Configure<AntiCheat.PacketHeuristics.PacketHeuristicsOptions>(configuration.GetSection(AntiCheat.PacketHeuristics.PacketHeuristicsOptions.SectionName));
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
         // Subsystem modules (the playerbot pack's options and services, bot QA): discovered, so the core names none of their types.
         foreach (IWorldServiceModule module in ServiceModules)
