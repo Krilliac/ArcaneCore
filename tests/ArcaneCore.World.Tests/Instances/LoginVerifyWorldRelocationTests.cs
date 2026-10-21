@@ -37,13 +37,16 @@ public sealed class LoginVerifyWorldRelocationTests
         await client.LoginAsync((ulong)record.Id);
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Lvwrel") is not null, "Lvwrel enters the world");
 
-        (uint map, float x, float y, float z) actual = await host.PlayerStateAsync("Lvwrel", p => (p.MapId, p.X, p.Y, p.Z));
+        // The test map data has no area trigger leading out of map 36, so this is the bind-point branch.
+        (uint map, float x, float y, float z, float o) actual = await host.PlayerStateAsync("Lvwrel", p => (p.MapId, p.X, p.Y, p.Z, p.Orientation));
         Assert.NotEqual(Deadmines, actual.map);
+        Assert.NotEqual(record.X, actual.x);
 
         byte[] verify = client.LastLoginPackets.Single(p => p.Opcode == WorldOpcode.SmsgLoginVerifyWorld).Payload;
         Assert.Equal(actual.map, BinaryPrimitives.ReadUInt32LittleEndian(verify.AsSpan(0, 4)));
         Assert.Equal(actual.x, BinaryPrimitives.ReadSingleLittleEndian(verify.AsSpan(4, 4)));
         Assert.Equal(actual.y, BinaryPrimitives.ReadSingleLittleEndian(verify.AsSpan(8, 4)));
         Assert.Equal(actual.z, BinaryPrimitives.ReadSingleLittleEndian(verify.AsSpan(12, 4)));
+        Assert.Equal(actual.o, BinaryPrimitives.ReadSingleLittleEndian(verify.AsSpan(16, 4)));
     }
 }
