@@ -381,6 +381,38 @@ public sealed class PlayerbotGroupWorldTests
     }
 
     [Fact]
+    public async Task ABotWithAScenarioStay_IsNeverMatchedIntoAQuestGroup_AndWaitsForNone()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);
+        var tank = await world.AddBotAsync("Stytank", Human, Warrior, 10, [Taunt]);
+        var healer = await world.AddBotAsync("Styheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
+        var mage = await world.AddBotAsync("Stymage", Human, Mage, 10, [Fireball]);
+        Guid[] ids = [tank.Id, healer.Id, mage.Id];
+
+        bool staying = false;
+        Assert.True(await world.RunUntilAsync(60_000, () =>
+        {
+            if (!staying && world.HasQuest(healer.Id, EliteQuest))
+            {
+                Player p = world.Player(healer.Id);
+                world.Bots.FindBrain(healer.Id)!.Stay = new PlayerbotStay(p.MapId, new System.Numerics.Vector3(p.X, p.Y, p.Z), 30f, 1, unchecked(world.World.Host.World.NowMs + 600_000));
+                staying = true;
+            }
+
+            return ids.All(id => world.HasQuest(id, EliteQuest));
+        }), await world.TraceAsync());
+
+        await world.RunAsync(40_000);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.False(world.Coordinator.Drives(healer.Id), world.Trace());
+            Assert.DoesNotContain(world.Coordinator.Groups, g => g.Members.Any(m => m.BotId == healer.Id));
+            Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == healer.Id);
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task ABotWithADefendPost_IsNeverMatchedIntoAQuestGroup()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);

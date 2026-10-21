@@ -527,6 +527,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 continue;
             }
 
+            // A scenario stay keeps the bot out of quest-group matching (it may not walk to a dungeon): any wait it had ends.
+            if (bot.Brain.Stay is not null)
+            {
+                Unhold(bot.BotId, null);
+                continue;
+            }
+
             if (_waiting.TryGetValue(bot.BotId, out Waiting? waiting))
             {
                 // Still wanted? A finished objective, or one the bot no longer has, ends the wait.

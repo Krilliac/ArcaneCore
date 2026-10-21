@@ -33,6 +33,14 @@ internal sealed class FakeBot(string name, byte team = 1)
 
     public string? HeldBy { get; set; }
 
+    /// <summary>Passes since the bot was last teleported or last wandered off (the wander model of <see cref="FakeScenarioHost.WanderAfterPasses"/>).</summary>
+    public int PassesSinceTeleport { get; set; }
+
+    public bool WanderedSinceTeleport { get; set; }
+
+    /// <summary>A siege raid drives the bot (it is not wandering on its own).</summary>
+    public bool Driven { get; set; }
+
     /// <summary>A bot logged in and standing somewhere.</summary>
     public FakeBot OnlineAt(uint map, Vector3 position, int level)
     {
@@ -88,6 +96,38 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
 
     public int DefendAttempts { get; private set; }
 
+    public Dictionary<Guid, PlayerbotStay?> Stays { get; } = [];
+
+    public string? StayRefusal { get; set; }
+
+    public int StayCalls { get; private set; }
+
+    /// <summary>
+    /// The wander model: a bot that has gone this many passes since its last teleport walks 1,000 yards away, once, unless it holds a live stay
+    /// and <see cref="HonourStays"/> is on (the brain's autonomous goals stand in for the walk). 0 turns the model off.
+    /// </summary>
+    public int WanderAfterPasses { get; set; }
+
+    /// <summary>Whether a live stay keeps a bot from wandering (false is the control: the brain ignores the stay).</summary>
+    public bool HonourStays { get; set; } = true;
+
+    private bool StayLive(Guid botId) => Stays.GetValueOrDefault(botId) is { } stay && unchecked((int)(stay.UntilMs - Now)) > 0;
+
+    /// <summary>One pass of the wander model; the rig calls it after each engine tick.</summary>
+    public void Wander()
+    {
+        if (WanderAfterPasses <= 0) return;
+        foreach (FakeBot bot in Bots)
+        {
+            if (!bot.Online || bot.Driven) continue;
+            bot.PassesSinceTeleport++;
+            if (bot.WanderedSinceTeleport || bot.PassesSinceTeleport < WanderAfterPasses) continue;
+            if (HonourStays && StayLive(bot.Id)) continue;
+            bot.Position += new Vector3(1000f, 0f, 0f);
+            bot.WanderedSinceTeleport = true;
+        }
+    }
+
     public int? RunningSiegeId { get; set; }
 
     public List<Guid> SiegeBots { get; } = [];
@@ -117,7 +157,7 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
     public ScenarioBotProbe? Probe(Guid botId)
     {
         FakeBot? bot = Bots.FirstOrDefault(b => b.Id == botId);
-        return bot is { Online: true } ? new ScenarioBotProbe(bot.Alive, bot.InCombat, bot.Level, bot.Team, bot.Map, bot.Position, bot.HeldBy, Posts.GetValueOrDefault(bot.Id)?.PostId) : null;
+        return bot is { Online: true } ? new ScenarioBotProbe(bot.Alive, bot.InCombat, bot.Level, bot.Team, bot.Map, bot.Position, bot.HeldBy, Posts.GetValueOrDefault(bot.Id)?.PostId, StayLive(bot.Id) ? Stays[bot.Id]!.StayId : null) : null;
     }
 
     public int CreateRoom() => Room - PendingCreates.Count;
@@ -183,6 +223,8 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
         if (TeleportRefusal is { } refusal) return refusal;
         bot.Map = map;
         bot.Position = position;
+        bot.PassesSinceTeleport = 0;
+        bot.WanderedSinceTeleport = false;
         return null;
     }
 
@@ -195,16 +237,33 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
         return null;
     }
 
+    public string? SetStay(Guid botId, PlayerbotStay? stay)
+    {
+        if (stay is not null && StayRefusal is { } refusal) return refusal;
+        if (stay is not null) StayCalls++;
+        Stays[botId] = stay;
+        return null;
+    }
+
     public ScenarioSiegeResult StartSiege(IReadOnlyList<Guid> botIds, EventScenarioSiege siege)
     {
         if (SiegeRefusal is { } refusal) return new ScenarioSiegeResult(false, 0, refusal, 0, 0);
         if (RunningSiegeId is not null) return new ScenarioSiegeResult(false, 0, "siege-running", 0, 0);
-        SiegeStarts.Add(([.. botIds], siege));
+        // Like the real coordinator (PlayerbotGroupCoordinator.Siege): a bot that holds a defend post is not Free and is turned away as busy.
+        Guid[] free = [.. botIds.Where(id => Posts.GetValueOrDefault(id) is null)];
+        if (free.Length < siege.Raids * 2) return new ScenarioSiegeResult(false, 0, "too-few-bots", 0, botIds.Count - free.Length);
+        foreach (Guid id in free)
+        {
+            Stays[id] = null; // the raid owns the enlisted bots (the real coordinator clears their stays)
+            Bots.Single(b => b.Id == id).Driven = true;
+        }
+
+        SiegeStarts.Add(([.. free], siege));
         SiegeBots.Clear();
-        SiegeBots.AddRange(botIds);
+        SiegeBots.AddRange(free);
         RunningSiegeId = _nextSiege++;
         SiegeOutcome = null;
-        return new ScenarioSiegeResult(true, RunningSiegeId.Value, null, botIds.Count, 0);
+        return new ScenarioSiegeResult(true, RunningSiegeId.Value, null, free.Length, botIds.Count - free.Length);
     }
 
     public bool StopSiege(string reason)

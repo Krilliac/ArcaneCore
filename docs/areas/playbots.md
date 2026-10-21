@@ -1237,7 +1237,9 @@ where the master goes.
   to attack.`. Without an order a bot fights back a player who attacks it, assists the master against a player the master attacks
   and defends a member a player attacks, the same rule real players are held to. A managed bot outside a group does the same for itself:
   the brain (`PlayerbotBrain.Pvp.cs`) fights back a player attacker through `PlayerbotPvpFight`, before the quest return, the creature
-  threat choice and the combat linger, and lets go past 45 yards or when the player is no longer hostile.
+  threat choice and the combat linger, and lets go past 45 yards or when the player is no longer hostile. Just after it, a bot with an
+  event-scenario stay (`PlayerbotBrain.Stay.cs`, think phase `stay`) owns the think: it defends itself, walks back to the stay or stands, and
+  chooses no destination, until the owner's lease runs out (the stay is not a defend post: no PvP flag, no post scan, retreat runs first).
 - **Raid marks** (vmangos `PartyBotAI::SelectAttackTarget`, PartyBotAI.cpp:366-377). While the bot or its master is in combat, the
   skull of the group (`MSG_RAID_TARGET_UPDATE`, set by the leader or an assistant) is attacked before the master's victim; an explicit
   `attack` order still comes first. A mark on a unit that is gone or not attackable is skipped.
