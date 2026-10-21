@@ -322,7 +322,7 @@ public sealed class CreaturePathJobTests
 
         Assert.Equal(1, s.System.PathJobsSubmitted);
         s.Paths.Gate.Set();
-        WaitForPool(s.Jobs!, 1);
+        WaitForPool(s, 1);
 
         // An update whose path time is already spent (the searches and drapes before it) applies no result: the job stays with its creature.
         s.System.PathBudget = new CreaturePathBudget(MaxSearches: 64, MaxNodes: 16384, MaxMilliseconds: 0);
