@@ -81,4 +81,39 @@ public sealed class PlayerbotClimbIndoorsTests : IDisposable
         })];
         Assert.Null(await PlanAsync(wall, Indoors, new Vector3(5, 5, 0), new Vector3(60, 5, 0)));
     }
+
+    [Fact]
+    public async Task AnIndoorSteepStart_ToAnOutdoorDestination_IsReached()
+    {
+        (int, int, CellTile)[] towerExit =
+        [(10, 10, new CellTile(0, 0, 0, 0, 16, 16, Size: 5)
+        {
+            Flags = (i, _) => i == 2 ? NavTerrain.Ground | NavTerrain.SteepSlopes : NavTerrain.Ground,
+        })];
+        var startIndoorsOnly = new IndoorsWhere(p => p.X < 25f);
+        Vector3 destination = new(60, 40, 0);
+        PlayerbotRoute? route = await PlanAsync(towerExit, startIndoorsOnly, Start, destination);
+
+        Assert.NotNull(route);
+        Assert.True(Vector3.Distance(route!.Points[^1], destination) < 1f, $"the route ends at {route.Points[^1]}");
+    }
+
+    [Fact]
+    public async Task AnUpstairsIndoorDestination_NearWalkableGroundBelow_ClimbsStairsOnTryPlanToward()
+    {
+        (int, int, CellTile)[] upstairs =
+        [(10, 10, new CellTile(0, 0, 0, 0, 16, 16, Size: 5)
+        {
+            Height = (x, _) => x <= 50f ? 0f : MathF.Min(10f, (x - 50f) * 2f),
+            Flags = (i, _) => i == 10 ? NavTerrain.Ground | NavTerrain.SteepSlopes : NavTerrain.Ground,
+        })];
+        Vector3 destination = new(56, 40, 10);
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, upstairs, Indoors);
+        await world.PlaceAsync(Start);
+        PlayerbotRoute? route = await world.Host.OnWorldAsync(() =>
+            PlayerbotNavigation.TryPlanToward(world.Player, destination, new PlayerbotOptions(), out PlayerbotRoute? r) ? r : null);
+
+        Assert.NotNull(route);
+        Assert.True(Vector3.Distance(route!.Points[^1], destination) < 1.5f, $"the route stopped at {route.Points[^1]} instead of climbing to {destination}");
+    }
 }
