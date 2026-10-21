@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Tests.GridTerrain;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
@@ -52,9 +53,29 @@ public sealed class GroundSnapGatesTests : IDisposable
         }
     }
 
-    private (WorldRuntime World, CreatureMapSystem System, Creature Creature) Scene(uint inhabit)
+    /// <summary>A pathfinder whose mesh surface is one height everywhere; no paths.</summary>
+    private sealed class FlatMesh(float height) : IPathfinder, IMeshFloorQuery
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, [start, end]);
+
+        public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float h)
+        {
+            h = height;
+            return h >= z - below && h <= z + above;
+        }
+    }
+
+    private (WorldRuntime World, CreatureMapSystem System, Creature Creature) Scene(uint inhabit, float? meshHeight = null)
     {
         WorldRuntime world = TestWorld.CreateRuntime();
+        if (meshHeight is { } mesh)
+        {
+            WorldCollision.Of(world).Install(pathfinder: new FlatMesh(mesh));
+        }
+
         world.Options.Maps.DataDirectory = _directory;
         Map map = world.GetMap(0);
         CreatureTemplate template = Template() with { InhabitType = (byte)inhabit };
@@ -67,11 +88,12 @@ public sealed class GroundSnapGatesTests : IDisposable
         return (world, system, Assert.Single(system.Creatures));
     }
 
-    private float DrapedZ(uint inhabit, float cornerZ, float? window = null)
+    private float DrapedZ(uint inhabit, float cornerZ, float? window = null, float? meshHeight = null, Action<Creature>? prepare = null)
     {
-        (WorldRuntime world, CreatureMapSystem system, Creature creature) = Scene(inhabit);
+        (WorldRuntime world, CreatureMapSystem system, Creature creature) = Scene(inhabit, meshHeight);
         using (world)
         {
+            prepare?.Invoke(creature);
             var start = new Vector3(X, Y, cornerZ);
             List<Vector3> draped = system.DrapeOnGround(creature, start, [new Vector3(X + 8f, Y, cornerZ)], window: window);
             return draped[^1].Z;
@@ -107,6 +129,31 @@ public sealed class GroundSnapGatesTests : IDisposable
         Assert.Equal(Ground + GroundHeight.StandOffset, DrapedZ(inhabit: 1, cornerZ: Ground + 0.4f, window: CreatureMapSystem.AtHomeSnapYards), 0.001f);
         Assert.Equal(Ground + 1.0f, DrapedZ(inhabit: 1, cornerZ: Ground + 1.0f, window: CreatureMapSystem.AtHomeSnapYards), 0.001f);
         Assert.Equal(Ground + GroundHeight.StandOffset, DrapedZ(inhabit: 1, cornerZ: Ground + 1.0f), 0.001f); // the plain window of 2 yd takes it
+    }
+
+    [Fact]
+    public void ASpawnHalfAYardOffTheGround_IsNotLiftedOntoADeckByTheMeshFallback()
+    {
+        // The terrain is 0.7 yd under the spawn (outside the 0.5 yd window) and a mesh polygon is 3 yd over it: the fallback searches up to
+        // 4 yd above and would put the spawn on that deck. Inside the window there is no floor, so the height is kept.
+        Assert.Equal(Ground + 0.7f, DrapedZ(inhabit: 1, cornerZ: Ground + 0.7f, window: CreatureMapSystem.AtHomeSnapYards, meshHeight: Ground + 3.7f), 0.001f);
+        // With nothing above either: kept, not moved 0.65 yd to the mesh surface.
+        Assert.Equal(Ground + 0.7f, DrapedZ(inhabit: 1, cornerZ: Ground + 0.7f, window: CreatureMapSystem.AtHomeSnapYards, meshHeight: Ground + 0.3f), 0.001f);
+    }
+
+    [Fact]
+    public void ACreatureOnATransport_KeepsItsHeights()
+    {
+        float z = DrapedZ(inhabit: 1, cornerZ: 21.2f, prepare: c => c.SetTransportData(new ObjectGuid(0x1000UL), 1f, 0f, 1f, 0f));
+        Assert.Equal(21.2f, z);
+    }
+
+    [Theory]
+    [InlineData(MovementFlags.Flying)]
+    [InlineData(MovementFlags.Hover)]
+    public void AWalkerAScriptSetFlyingOrHovering_KeepsItsHeights(MovementFlags flag)
+    {
+        Assert.Equal(21.2f, DrapedZ(inhabit: 1, cornerZ: 21.2f, prepare: c => c.AddMovementFlags(flag)));
     }
 
     [Fact]

@@ -470,4 +470,23 @@ public sealed class GroundHeightTests
             }
         }
     }
+
+    [Fact]
+    public void ALegSteppingOntoAModelFloor_TakesTheFloor_OnceItIsNearerTheFloorEnd()
+    {
+        // Terrain at 20, a model floor at 21 from 5 yd on, a leg from 20.05 to 21.05. The samples in its second half are next to the corner,
+        // which stands on the floor, so the floor over the terrain is a floor stepped onto and not a prop; judged by the chord's height
+        // (20.25 at 6 yd, 20.3 at 7) the terrain would be nearer than the floor and the samples would stay under it until the last one.
+        using var kit = Kit(liquid: null);
+        WorldCollision.Of(kit.Kit.World).Install(lineOfSight: new ModelFloors((x, _) => x > X + 5f ? 21f : null));
+        MapCollision collision = kit.Map.Collision;
+        var start = new Vector3(X, Y, Ground + GroundHeight.StandOffset);
+        Vector3[] corners = [new(X + 10f, Y, 21f + GroundHeight.StandOffset)];
+
+        List<Vector3> draped = GroundHeight.DrapePath(collision, start, corners, step: 1f, tolerance: 0.05f);
+
+        Assert.Contains(draped, p => MathF.Abs(p.X - (X + 6f)) < 0.01f && MathF.Abs(p.Z - (21f + GroundHeight.StandOffset)) < 0.01f);
+        Assert.All(draped.Where(p => p.X > X + 5.5f), p => Assert.Equal(21f + GroundHeight.StandOffset, p.Z, 0.01f));
+        Assert.All(draped.Where(p => p.X < X + 4.5f), p => Assert.Equal(Ground + GroundHeight.StandOffset, p.Z, 0.01f));
+    }
 }

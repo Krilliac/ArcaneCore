@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -38,13 +39,19 @@ public sealed partial class CreatureMapSystem
     /// The time it takes is part of the update's path-time budget (<see cref="PathTicksThisTick"/>, <see cref="HasPathBudget"/>), and a
     /// finished path job's result is only applied while that budget has room (<see cref="HasDrapeBudget"/>).
     /// </summary>
-    /// <param name="cornersOnMesh">The corners are navigation-mesh heights (a mesh or partial path): a floor more than a yard above one is
-    /// a roof or an upper storey, never the walkable floor (<see cref="GroundHeight.DrapePath"/> <c>cornersOnMesh</c>).</param>
-    /// <param name="window">A narrower floor window (yards up and down) for a height that is already a floor: a spawn's database z.</param>
+    /// <param name="cornersOnMesh">The corners are navigation-mesh heights (a mesh or partial path): a floor is looked for from at most
+    /// <see cref="GroundHeight.MeshCeilingYards"/> (1 yd) above one, so a roof or an upper storey higher than that is not taken for the walkable
+    /// floor (<see cref="GroundHeight.DrapePath"/> <c>cornersOnMesh</c>).</param>
+    /// <param name="window">A narrower floor window (yards up and down) for a height that is already a floor: a spawn's database z. Terrain and
+    /// model floors only: with no floor inside it the height is kept (the mesh fallback would search up to 4 yd above).</param>
     internal List<Vector3> DrapeOnGround(Creature creature, Vector3 start, IReadOnlyList<Vector3> corners, bool cornersOnMesh = false, float? window = null)
     {
         uint inhabit = creature.Template.InhabitType;
-        if (!GroundSnapEnabled || corners.Count == 0 || (inhabit & 4) != 0 || inhabit == 2)
+        // The same exemptions as CreatureAnomalies' under-map check: fliers, water-only creatures, a creature on a transport (its heights are
+        // the transport's) and one a script set flying or hovering.
+        if (!GroundSnapEnabled || corners.Count == 0 || (inhabit & 4) != 0 || inhabit == 2
+            || creature.Movement.TransportGuid != 0
+            || (creature.Movement.Flags & (MovementFlags.Flying | MovementFlags.Hover)) != 0)
         {
             return corners as List<Vector3> ?? [.. corners];
         }
@@ -52,7 +59,8 @@ public sealed partial class CreatureMapSystem
         GroundQuery query = GroundHeight.Walker with { Liquid = (inhabit & 2) != 0 ? LiquidMode.Surface : LiquidMode.Bottom };
         if (window is { } w)
         {
-            query = query with { Up = w, Down = w };
+            // No mesh fallback: it searches up to MeshFallbackUpYards above, which would lift a spawn onto a deck 3 yd over it.
+            query = query with { Up = w, Down = w, AllowMeshFallback = false };
         }
 
         long started = Stopwatch.GetTimestamp();
