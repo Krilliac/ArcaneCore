@@ -80,6 +80,173 @@ public sealed class QualityScriptTests
     }
 
     [PwshFact]
+    public void JitOutput_NeedsAListing_NotJustANonEmptyFile()
+    {
+        // With DOTNET_JitDisasmSummary=1 the file fills with "JIT compiled" lines whether or not the requested method matched or was
+        // inlined; only "; Assembly listing for method" is a disassembly.
+        JsonElement r = Eval("""
+            $listing = "; Assembly listing for method Ns.Type:PackXYZ(float):int (FullOpts)`n; Emitting BLENDED_CODE for X64`nG_M1_IG01:`n        ret"
+            $summary = "JIT compiled Ns.Other:Run():void [Tier0, IL size=5, code size=12]`nJIT compiled Ns.Other:Stop():void [Tier0, IL size=3, code size=7]`n"
+            function Row($text) { $c = Test-QualityJitOutput -Text $text -Method 'Ns.Type:PackXYZ'; [ordered]@{ ok = $c.Ok; listings = $c.Listings; summary = $c.SummaryLines; names = @($c.Names); reason = $c.Reason } }
+            [ordered]@{ listing = Row $listing; both = Row ($summary + $listing); summaryOnly = Row $summary; empty = Row ''; blank = Row "`n   `n"; nothing = Row $null }
+            """);
+        Assert.True(r.GetProperty("listing").GetProperty("ok").GetBoolean());
+        Assert.Equal(1, r.GetProperty("listing").GetProperty("listings").GetInt32());
+        Assert.Equal("Ns.Type:PackXYZ", r.GetProperty("listing").GetProperty("names")[0].GetString());
+        Assert.True(r.GetProperty("both").GetProperty("ok").GetBoolean());
+        Assert.Equal(2, r.GetProperty("both").GetProperty("summary").GetInt32());
+        foreach (string name in new[] { "summaryOnly", "empty", "blank", "nothing" })
+        {
+            Assert.False(r.GetProperty(name).GetProperty("ok").GetBoolean(), name);
+            Assert.Contains("matched no compiled method", r.GetProperty(name).GetProperty("reason").GetString());
+        }
+
+        Assert.Contains("compiled 2 method(s)", r.GetProperty("summaryOnly").GetProperty("reason").GetString());
+        Assert.Contains("inlined", r.GetProperty("summaryOnly").GetProperty("reason").GetString());
+    }
+
+    [PwshFact]
+    public void MutationRun_IsNotAResult_WhenNoTestRan_OrEveryMutantIsNoCoverage()
+    {
+        JsonElement r = Eval("""
+            function Run($killed, $timeout, $survived, $noCoverage, $log) {
+                $s = [pscustomobject]@{ Killed = $killed; Timeout = $timeout; Survived = $survived; NoCoverage = $noCoverage; Tested = $killed + $timeout + $survived + $noCoverage }
+                $v = Test-QualityMutationRun -Summary $s -LogText $log
+                [ordered]@{ ok = $v.Ok; reason = $v.Reason }
+            }
+            [ordered]@{
+                killed = Run 2 0 1 3 'Number of tests found: 12'
+                timeoutOnly = Run 0 1 0 0 ''
+                survivedOnly = Run 0 0 1 0 $null
+                allNoCoverage = Run 0 0 0 4 'Number of tests found: 12'
+                noTests = Run 0 0 0 4 "Initial testrun`nNumber of tests found: 0`n"
+                noTestsEvenWithKills = Run 3 0 0 0 'Number of tests found: 0'
+                tenTests = Run 1 0 0 0 'Number of tests found: 10'
+                nothingJudged = Run 0 0 0 0 ''
+            }
+            """);
+        foreach (string name in new[] { "killed", "timeoutOnly", "survivedOnly", "tenTests" })
+        {
+            Assert.True(r.GetProperty(name).GetProperty("ok").GetBoolean(), name);
+        }
+
+        Assert.False(r.GetProperty("allNoCoverage").GetProperty("ok").GetBoolean());
+        Assert.Contains("NoCoverage", r.GetProperty("allNoCoverage").GetProperty("reason").GetString());
+        Assert.False(r.GetProperty("noTests").GetProperty("ok").GetBoolean());
+        Assert.Contains("Number of tests found: 0", r.GetProperty("noTests").GetProperty("reason").GetString());
+        Assert.False(r.GetProperty("noTestsEvenWithKills").GetProperty("ok").GetBoolean());
+        Assert.False(r.GetProperty("nothingJudged").GetProperty("ok").GetBoolean());
+        Assert.Contains("no mutant was judged", r.GetProperty("nothingJudged").GetProperty("reason").GetString());
+    }
+
+    [PwshFact]
+    public void IlBlock_MatchesANestedTypeByItsWholeName_NotByItsShortName()
+    {
+        // ILSpy writes a nested type inside its outer type's block under its own name; two types can both have an "Inner".
+        JsonElement r = Eval("""
+            $il = @(
+              '.class public auto ansi beforefieldinit Ns.Outer',
+              '    extends [System.Runtime]System.Object',
+              '{',
+              '    .class nested private auto ansi sealed beforefieldinit Inner',
+              '        extends [System.Runtime]System.Object',
+              '    {',
+              '        .method public hidebysig instance void Go () cil managed',
+              '        {',
+              '            IL_0000: ret',
+              '        } // end of method Inner::Go',
+              '    } // end of class Inner',
+              '    .method public hidebysig instance void Go () cil managed',
+              '    {',
+              '        IL_0000: nop',
+              '    } // end of method Outer::Go',
+              '} // end of class Outer',
+              '.class public auto ansi beforefieldinit Ns.Other',
+              '{',
+              '    .class nested private auto ansi Inner',
+              '    {',
+              '        .method public static void Go () cil managed',
+              '        {',
+              '            IL_0000: ldnull',
+              '        } // end of method Inner::Go',
+              '    } // end of class Inner',
+              '} // end of class Other',
+              ".class private auto ansi sealed beforefieldinit '<>c__DisplayClass0_0'",
+              '{',
+              '    .method public hidebysig instance void Lambda () cil managed',
+              '    {',
+              '        IL_0000: ldc.i4.1',
+              '    } // end of method <>c__DisplayClass0_0::Lambda',
+              '} // end of class <>c__DisplayClass0_0'
+            )
+            function Cut($type, $method) { $c = Get-QualityIlBlock -Lines $il -Type $type -Method $method; [ordered]@{ typeSeen = $c.TypeSeen; methodSeen = $c.MethodSeen; text = (@($c.Block) -join "`n") } }
+            [ordered]@{
+                nestedMethod = Cut 'Ns.Outer+Inner' 'Go'
+                otherNestedMethod = Cut 'Ns.Other+Inner' 'Go'
+                outerMethod = Cut 'Ns.Outer' 'Go'
+                nestedWhole = Cut 'Ns.Outer+Inner' $null
+                outerWhole = Cut 'Ns.Outer' $null
+                shortNameOnly = Cut 'Inner' $null
+                noSuchMethod = Cut 'Ns.Outer+Inner' 'Stop'
+                generated = Cut '<>c__DisplayClass0_0' 'Lambda'
+            }
+            """);
+        string Text(string name) => r.GetProperty(name).GetProperty("text").GetString()!;
+        Assert.Contains("IL_0000: ret", Text("nestedMethod"));
+        Assert.DoesNotContain("nop", Text("nestedMethod"));
+        Assert.DoesNotContain("ldnull", Text("nestedMethod"));
+        Assert.Contains("IL_0000: ldnull", Text("otherNestedMethod"));
+        Assert.DoesNotContain("IL_0000: ret", Text("otherNestedMethod"));
+        Assert.Contains("IL_0000: nop", Text("outerMethod"));
+        Assert.DoesNotContain("IL_0000: ret", Text("outerMethod"));
+        Assert.StartsWith(".class nested private", Text("nestedWhole").TrimStart());
+        Assert.EndsWith("} // end of class Inner", Text("nestedWhole").TrimEnd());
+        Assert.DoesNotContain("nop", Text("nestedWhole"));
+        Assert.Contains("IL_0000: ret", Text("outerWhole"));
+        Assert.Contains("end of class Inner", Text("outerWhole"));
+        Assert.EndsWith("} // end of class Outer", Text("outerWhole").TrimEnd());
+        Assert.False(r.GetProperty("shortNameOnly").GetProperty("typeSeen").GetBoolean());
+        Assert.True(r.GetProperty("noSuchMethod").GetProperty("typeSeen").GetBoolean());
+        Assert.False(r.GetProperty("noSuchMethod").GetProperty("methodSeen").GetBoolean());
+        Assert.True(r.GetProperty("generated").GetProperty("methodSeen").GetBoolean());
+        Assert.Contains("ldc.i4.1", Text("generated"));
+    }
+
+    [PwshFact]
+    public void DescendantIds_FollowOrphanedChildren_ButNotARecycledParentId()
+    {
+        // 100 (the root, gone) started at 10:00:00. 101 and 102 descend from it; 103 has parent id 100 but started an hour earlier (the id was
+        // recycled); 104 hangs from an unrelated process.
+        JsonElement r = Eval("""
+            $t0 = [datetime]'2026-01-01T10:00:00'
+            $table = @(
+                [pscustomobject]@{ ProcessId = 102; ParentProcessId = 101; Start = $t0.AddSeconds(5) },
+                [pscustomobject]@{ ProcessId = 101; ParentProcessId = 100; Start = $t0.AddSeconds(2) },
+                [pscustomobject]@{ ProcessId = 103; ParentProcessId = 100; Start = $t0.AddHours(-1) },
+                [pscustomobject]@{ ProcessId = 104; ParentProcessId = 999; Start = $t0.AddSeconds(3) },
+                [pscustomobject]@{ ProcessId = 100; ParentProcessId = 1; Start = $t0.AddHours(-3) }
+            )
+            [ordered]@{
+                ids = @(Get-QualityDescendantIds -Table $table -RootId 100 -RootStart $t0 | ForEach-Object { $_.ProcessId } | Sort-Object)
+                none = @(Get-QualityDescendantIds -Table $table -RootId 555 -RootStart $t0).Count
+                empty = @(Get-QualityDescendantIds -Table @() -RootId 100).Count
+            }
+            """);
+        Assert.Equal([101, 102], r.GetProperty("ids").EnumerateArray().Select(e => e.GetInt32()));
+        Assert.Equal(0, r.GetProperty("none").GetInt32());
+        Assert.Equal(0, r.GetProperty("empty").GetInt32());
+    }
+
+    [PwshFact]
+    public void ArgumentString_QuotesWhatNeedsIt()
+    {
+        JsonElement r = Eval("""
+            ConvertTo-QualityArgumentString -Arguments @('test', 'a b', 'x"y', '', 'C:\dir with\', 'FullyQualifiedName~A|FullyQualifiedName~B')
+            """);
+        Assert.Equal("""test "a b" "x\"y" "" "C:\dir with\\" FullyQualifiedName~A|FullyQualifiedName~B""", r.GetString());
+    }
+
+    [PwshFact]
     public void Mutate_RefusesAMissingProject_WithExitCode2()
     {
         (int code, string output) = RunScript("mutate.ps1", "-Project", "src/NoSuch/NoSuch.csproj", "-TestProject", "tests/NoSuch.Tests/NoSuch.Tests.csproj", "-Files", "**/X.cs");
@@ -96,6 +263,23 @@ public sealed class QualityScriptTests
         (int code, string output) = RunScript("mutate.ps1", "-Project", csproj, "-TestProject", csproj, "-Files", "**/X.cs");
         Assert.Equal(2, code);
         Assert.Contains("has no <TargetFramework> of its own", output);
+    }
+
+    [PwshFact]
+    public void Mutate_RefusesACommentedOutTargetFramework_AndOneThatDiffersFromTheCentralValue()
+    {
+        using var temp = new TempDirectory();
+        string commented = Path.Combine(temp.Path, "Commented.csproj");
+        File.WriteAllText(commented, "<Project Sdk=\"Microsoft.NET.Sdk\"><!-- <TargetFramework>net11.0</TargetFramework> --></Project>");
+        (int code, string output) = RunScript("mutate.ps1", "-Project", commented, "-TestProject", commented, "-Files", "**/X.cs");
+        Assert.Equal(2, code);
+        Assert.Contains("has no <TargetFramework> of its own", output);
+
+        string different = Path.Combine(temp.Path, "Different.csproj");
+        File.WriteAllText(different, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+        (code, output) = RunScript("mutate.ps1", "-Project", different, "-TestProject", different, "-Files", "**/X.cs");
+        Assert.Equal(2, code);
+        Assert.Contains("<TargetFramework>net8.0</TargetFramework> but Directory.Build.props states", output);
     }
 
     [PwshFact]

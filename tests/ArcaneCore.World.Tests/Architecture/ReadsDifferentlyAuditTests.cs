@@ -5,7 +5,7 @@ namespace ArcaneCore.World.Tests.Architecture;
 
 /// <summary>
 /// The "reads differently than it does" audit (docs/ops/tooling.md, tools/ops/quality). <see cref="ReadsDifferentlyScanner"/> lists
-/// four constructs in src/: RB001 <c>is not A or B</c>, RB002 a float to integer cast in packet code, RB003 <c>??</c> mixed with
+/// four constructs in src/: RB001 <c>is not A or B</c> / <c>is not A or not B</c>, RB002 a float to integer cast in packet code, RB003 <c>??</c> mixed with
 /// another operator without parentheses, RB004 <c>async void</c> that is not an event handler. Every hit that exists today is in
 /// ReadsDifferentlyBaseline.txt with a one-line reason; a new hit fails <see cref="EveryHit_IsInTheReviewedBaseline"/> until it is
 /// fixed or added there with its reason, and a baseline line whose construct is gone fails it too (delete the line).
@@ -23,20 +23,27 @@ public sealed class ReadsDifferentlyAuditTests(ITestOutputHelper output)
         var scanner = new ReadsDifferentlyScanner(root, AssemblyName);
         scanner.Load();
         List<ReadsDifferentlyHit> hits = scanner.Scan();
-        output.WriteLine($"files {scanner.FilesScanned}, packet-scope files {scanner.PacketScopeFiles}, integer casts classified {scanner.CastsClassified}, unresolved {scanner.Unresolved}, hits {hits.Count}");
-
-        // A scan that read nothing, or could not tell what the casts are, proves nothing.
-        Assert.True(scanner.FilesScanned > 1000, $"only {scanner.FilesScanned} source files were found under src/");
-        Assert.True(scanner.PacketScopeFiles >= 20, $"only {scanner.PacketScopeFiles} files are in the packet scope");
-        Assert.True(scanner.CastsClassified >= 100, $"only {scanner.CastsClassified} integer casts in the packet scope were classified");
-        Assert.True(scanner.Unresolved * 4 <= scanner.CastsClassified + scanner.Unresolved,
-            $"{scanner.Unresolved} of {scanner.CastsClassified + scanner.Unresolved} integer casts in the packet scope could not be typed (references missing?)");
+        output.WriteLine($"files {scanner.FilesScanned}, packet-scope files {scanner.PacketScopeFiles}, integer casts classified {scanner.CastsClassified}, unresolved {scanner.Unresolved} (casts {scanner.UnresolvedCasts}, async lambdas {scanner.UnresolvedLambdas} of {scanner.AsyncLambdas}), syntax errors {scanner.SyntaxErrors.Count}, hits {hits.Count}");
 
         string? dump = Environment.GetEnvironmentVariable("ARCANECORE_READS_DIFFERENTLY_DUMP");
         if (!string.IsNullOrEmpty(dump))
         {
             File.WriteAllLines(dump, hits.Select(h => $"{h.BaseKey} | <reason>  (line {h.Line})"));
         }
+
+        // C# the pinned Roslyn cannot read leaves holes in the tree and silently hides constructs: fail loudly instead.
+        Assert.True(scanner.SyntaxErrors.Count == 0,
+            $"{scanner.SyntaxErrors.Count} syntax error(s) in src/ (syntax newer than the Roslyn package of this test project?):\n  " + string.Join("\n  ", scanner.SyntaxErrors.Take(20)));
+
+        // A scan that read nothing, or could not tell what the casts are, proves nothing.
+        Assert.True(scanner.FilesScanned > 1000, $"only {scanner.FilesScanned} source files were found under src/");
+        Assert.True(scanner.PacketScopeFiles >= 20, $"only {scanner.PacketScopeFiles} files are in the packet scope");
+        Assert.True(scanner.CastsClassified >= 100, $"only {scanner.CastsClassified} integer casts in the packet scope were classified");
+        Assert.True(scanner.UnresolvedCasts * 4 <= scanner.CastsClassified + scanner.UnresolvedCasts,
+            $"{scanner.UnresolvedCasts} of {scanner.CastsClassified + scanner.UnresolvedCasts} integer casts in the packet scope could not be typed (references missing?)");
+        Assert.True(scanner.AsyncLambdas >= 10, $"only {scanner.AsyncLambdas} async lambdas were looked at");
+        Assert.True(scanner.UnresolvedLambdas * 4 <= scanner.AsyncLambdas,
+            $"{scanner.UnresolvedLambdas} of {scanner.AsyncLambdas} async lambdas had no resolved delegate type (references missing?); first sites:\n  " + string.Join("\n  ", scanner.UnresolvedLambdaSites.Take(15)));
 
         Dictionary<string, int> baseline = ParseBaseline(File.ReadAllLines(Path.Combine(root, BaselinePath)));
         Dictionary<string, int> found = hits.GroupBy(h => h.BaseKey, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
@@ -92,6 +99,12 @@ public sealed class ReadsDifferentlyAuditTests(ITestOutputHelper output)
                     public async void OnTick(object sender, EventArgs e) { await Task.Yield(); }
                     public async Task Proper() { await Task.Yield(); }
                     public void Run() { Action a = async () => await Task.Yield(); Func<Task> f = async () => await Task.Yield(); a(); _ = f; }
+                    public bool NotOrNot(object o) => o is not string or not int;
+                    public bool CoalesceIs(bool? a, object? b) => a ?? b is null;
+                    public bool CoalesceNotNull(bool? a, object? b) => a ?? b is not null;
+                    public bool CoalesceBrace(bool? a, object? b) => a ?? b is { };
+                    public bool CoalesceParen(object? a, object? b) => (a ?? b) is null;
+                    public void Unknown() { Mystery m = async () => await Task.Yield(); _ = m; }
                 }
                 """);
             var scanner = new ReadsDifferentlyScanner(root, AssemblyName);
@@ -106,8 +119,35 @@ public sealed class ReadsDifferentlyAuditTests(ITestOutputHelper output)
                 "RB002 Sample.Truncates",
                 "RB004 Sample.FireAndForget",
                 "RB004 Sample.Run",
+                "RB001 Sample.NotOrNot",
+                "RB003 Sample.CoalesceIs",
+                "RB003 Sample.CoalesceNotNull",
+                "RB003 Sample.CoalesceBrace",
             ],
             found);
+            Assert.Empty(scanner.SyntaxErrors);
+            Assert.Equal(1, scanner.UnresolvedLambdas); // 'Mystery' does not exist: the lambda's delegate type is unknown, which must show
+            Assert.Equal(3, scanner.AsyncLambdas);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Scanner_ListsSyntaxErrors_SoUnreadableCodeFailsLoudly()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "arcane-reads-" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(root, "src", "ArcaneCore.Fake");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Broken.cs"), "namespace Fake; public sealed class Broken { public int M( => ; }");
+            var scanner = new ReadsDifferentlyScanner(root, AssemblyName);
+            scanner.Load();
+            Assert.NotEmpty(scanner.SyntaxErrors);
+            Assert.Contains("src/ArcaneCore.Fake/Broken.cs(1)", scanner.SyntaxErrors[0]);
         }
         finally
         {

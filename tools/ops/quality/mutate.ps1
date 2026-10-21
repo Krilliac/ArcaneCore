@@ -4,9 +4,12 @@
 # -Files is required: there is no whole-project default (a mutation run rebuilds and re-runs the tests once per mutant).
 # Each -Files entry is a Stryker glob relative to the project directory ('**/Foo.cs', 'AntiCheat/*.cs', '!Gen/**'); a path written from the
 # repository root (src/<Project>/AntiCheat/X.cs) is accepted too.
-# Output: artifacts/mutation/<yyyyMMdd-HHmmss>/ (gitignored): the Stryker reports/ folder (mutation-report.html and .json), stryker.log, summary.txt.
+# Output: artifacts/mutation/<yyyyMMdd-HHmmss>-<pid>/ (gitignored): the Stryker reports/ folder (mutation-report.html and .json), stryker.log, summary.txt.
+# The summary is read from this run's own report (the folder is new for every run), never from an older one.
 # Prints killed / survived / no-coverage / timeout counts, the mutation score and every survivor as file:line mutator  original -> mutated.
-# Exit codes: 0 = the run finished and judged at least one mutant; 2 = error (bad argument, tool failure, no mutants, no tests matched).
+# Exit codes: 0 = the run finished and killed, timed out or let survive at least one mutant; 2 = error (bad argument, tool failure, no
+# mutants, no tests found ("Number of tests found: 0" in stryker.log), or every judged mutant NoCoverage: no test reached the code).
+# When Stryker ends (or the -TimeoutMin limit is hit) the vstest / testhost / build processes it started are stopped too.
 # Survivors do not change the exit code: they are the findings, not a failure of the tool.
 param(
     [Parameter(Mandatory)] [string]$Project,
@@ -42,11 +45,18 @@ if ($testProjectPath -notmatch '\.csproj$') { Stop-Mutate "-TestProject must be 
 $Files = @($Files | ForEach-Object { $_ -split ',' } | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
 if ($Files.Count -eq 0) { Stop-Mutate '-Files is empty: name the files to mutate (a glob relative to the project directory).' }
 
-# Stryker's project analysis reads <TargetFramework> from each csproj itself: one that only inherits it from Directory.Build.props
-# is "No project found" (Stryker 4.16.0 on .NET 11, checked). Say so up front instead of letting Stryker fail with that message.
+# Stryker's project analysis reads <TargetFramework> from each csproj itself: one that only inherits it from Directory.Build.props is
+# "No project found" (Stryker 4.16.0 on .NET 11, checked; its target-framework setting does not help: same message). So the csproj must
+# state it, and the same value as Directory.Build.props: a project that differs would be analysed for another framework than it builds for.
+$central = Get-QualityTargetFramework (Get-Content -LiteralPath (Join-Path $repo 'Directory.Build.props') -Raw)
+if (-not $central) { Stop-Mutate 'Directory.Build.props states no <TargetFramework>.' }
 foreach ($csproj in $projectPath, $testProjectPath) {
-    if ((Get-Content -LiteralPath $csproj -Raw) -notmatch '<TargetFrameworks?>') {
-        Stop-Mutate "$csproj has no <TargetFramework> of its own; Stryker's analysis needs one in the csproj (add <TargetFramework>net11.0</TargetFramework> beside the Directory.Build.props value). See docs/ops/tooling.md."
+    $local = Get-QualityTargetFramework (Get-Content -LiteralPath $csproj -Raw)
+    if (-not $local) {
+        Stop-Mutate "$csproj has no <TargetFramework> of its own; Stryker's analysis needs one in the csproj (add <TargetFramework>$central</TargetFramework>, the Directory.Build.props value). See docs/ops/tooling.md."
+    }
+    if ($local -ne $central) {
+        Stop-Mutate "$csproj states <TargetFramework>$local</TargetFramework> but Directory.Build.props states $central; they must be equal. See docs/ops/tooling.md."
     }
 }
 
@@ -54,10 +64,11 @@ $projectDirectory = Split-Path $projectPath -Parent
 $projectRelative = [IO.Path]::GetRelativePath($repo, $projectDirectory)
 $globs = @($Files | ForEach-Object { ConvertTo-QualityMutateGlob -Glob $_ -ProjectRelativeDirectory $projectRelative })
 
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stamp = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
 $root = if ($OutputRoot) { $OutputRoot } else { Join-Path $repo 'artifacts/mutation' }
 $out = Join-Path $root $stamp
-New-Item -ItemType Directory -Force $out | Out-Null
+if (Test-Path -LiteralPath $out) { Stop-Mutate "the output folder $out exists already; run again." }
+New-Item -ItemType Directory $out | Out-Null
 
 $arguments = [System.Collections.Generic.List[string]]::new()
 $arguments.AddRange([string[]]@('tool', 'run', 'dotnet-stryker', '--',
@@ -80,10 +91,14 @@ $log = Join-Path $out 'stryker.log'
 if ($LASTEXITCODE -ne 0) { Stop-Mutate "dotnet restore --locked-mode of $TestProject failed (log: $(Join-Path $out 'restore.log'))." }
 # Stryker's output goes to a file, not a pipe: the vstest.console processes it starts can outlive it holding the pipe open, and a pipe
 # reader would then wait for them forever. The wait is on the Stryker process itself, with a limit.
-$quoted = $arguments | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
-$stryker = Start-Process dotnet -ArgumentList $quoted -WorkingDirectory (Split-Path $testProjectPath -Parent) -NoNewWindow -PassThru `
+$stryker = Start-Process dotnet -ArgumentList (ConvertTo-QualityArgumentString $arguments) -WorkingDirectory (Split-Path $testProjectPath -Parent) -NoNewWindow -PassThru `
     -RedirectStandardOutput $log -RedirectStandardError (Join-Path $out 'stryker.err')
+# Stryker leaves vstest.console / testhost processes behind (after a timeout, a crash and sometimes a normal end). They are found while
+# Stryker runs (once it has exited they are orphans) and stopped when it is done; only processes that descend from this Stryker are touched.
+$strykerStart = try { $stryker.StartTime } catch { [datetime]::MinValue }
+$descendants = @{}
 $printed = 0L
+$runStartedUtc = [DateTime]::UtcNow
 $deadline = [DateTime]::UtcNow.AddMinutes($TimeoutMin)
 function Write-NewLog {
     $stream = [IO.File]::Open($log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
@@ -97,16 +112,27 @@ function Write-NewLog {
 }
 while (-not $stryker.WaitForExit(5000)) {
     Write-NewLog
+    Add-QualityDescendants -Tracked $descendants -RootId $stryker.Id -RootStart $strykerStart
     if ([DateTime]::UtcNow -gt $deadline) {
-        $stryker.Kill($true)
-        Stop-Mutate "Stryker did not finish within $TimeoutMin minutes and was stopped (log: $log). Name fewer files, or give -TestFilter."
+        try { $stryker.Kill($true) } catch { }
+        [void](Stop-QualityTracked -Tracked $descendants)
+        Stop-Mutate "Stryker did not finish within $TimeoutMin minutes and was stopped with its child processes (log: $log). Name fewer files, or give -TestFilter."
     }
 }
 Write-NewLog
 $strykerExit = $stryker.ExitCode
+Add-QualityDescendants -Tracked $descendants -RootId $stryker.Id -RootStart $strykerStart
+$leftover = Stop-QualityTracked -Tracked $descendants
+if ($leftover -gt 0) { "mutate.ps1: stopped $leftover process(es) Stryker left running (vstest.console, testhost or a build node)." }
 
+# Stryker itself exits 1 when the filter leaves no test ("Number of tests found: 0", then "No test result reported"); say why.
+if ((Get-Content -LiteralPath $log -Raw) -match 'Number of tests found:\s*0(?!\d)') {
+    Stop-Mutate "Stryker found no tests (log: 'Number of tests found: 0'; Stryker exit code $strykerExit): the -TestFilter matched no test, or the test project has none. Log: $log"
+}
 if ($strykerExit -ne 0) { Stop-Mutate "Stryker exited $strykerExit (log: $log)." }
-$reportFile = Get-ChildItem $out -Recurse -Filter 'mutation-report.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+# $out is new for this run, and the report must have been written since the run began: an older report is never this run's result.
+$reportFile = Get-ChildItem $out -Recurse -Filter 'mutation-report.json' -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTimeUtc -ge $runStartedUtc.AddSeconds(-2) } | Sort-Object LastWriteTime | Select-Object -Last 1
 if (-not $reportFile) { Stop-Mutate "Stryker wrote no mutation-report.json (no file matched the globs, or nothing changed since '$Since'). Log: $log" }
 
 $summary = Get-QualityMutationSummary -Root $repo -Report (Get-Content -LiteralPath $reportFile.FullName -Raw | ConvertFrom-Json)
@@ -121,5 +147,6 @@ $lines.Add("  report: $(Join-Path $reportFile.DirectoryName 'mutation-report.htm
 $lines | Set-Content -LiteralPath (Join-Path $out 'summary.txt') -Encoding utf8
 $lines | ForEach-Object { $_ }
 
-if ($summary.Tested -eq 0) { Stop-Mutate "no mutant was judged (Stryker found no mutants in the files, or no test ran). Log: $log" }
+$verdict = Test-QualityMutationRun -Summary $summary -LogText (Get-Content -LiteralPath $log -Raw)
+if (-not $verdict.Ok) { Stop-Mutate "$($verdict.Reason) Log: $log" }
 exit 0

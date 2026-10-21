@@ -18,6 +18,7 @@ param(
     [ValidateRange(10, 7200)] [int]$IlTimeoutSec = 900
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'QualityLib.ps1')
 
 function Stop-Decompile([string]$Message) {
     [Console]::Error.WriteLine("decompile.ps1: $Message")
@@ -71,8 +72,9 @@ function Get-MethodTokens([string]$DllPath, [string]$TypeName, [string]$MethodNa
 
 if ($Il) {
     if ($Member) { Stop-Decompile '-Il cannot take -Member (ilspycmd ignores it in IL mode); name the method with -Method.' }
-    $outDir = Join-Path $repo "artifacts/decompile/$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-    New-Item -ItemType Directory -Force $outDir | Out-Null
+    $outDir = Join-Path $repo "artifacts/decompile/$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
+    if (Test-Path -LiteralPath $outDir) { Stop-Decompile "the output folder $outDir exists already; run again." }
+    New-Item -ItemType Directory $outDir | Out-Null
     $ilFile = Join-Path $outDir 'assembly.il'
     $process = Start-Process dotnet -ArgumentList @('tool', 'run', 'ilspycmd', '--', "`"$dll`"", '--ilcode') -WorkingDirectory $repo -NoNewWindow -PassThru `
         -RedirectStandardOutput $ilFile -RedirectStandardError (Join-Path $outDir 'ilspycmd.err')
@@ -81,30 +83,13 @@ if ($Il) {
         Stop-Decompile "ilspycmd did not finish the IL of $dll within $IlTimeoutSec s (raise -IlTimeoutSec, or use C# mode, which selects a member)."
     }
     if ($process.ExitCode -ne 0) { Stop-Decompile "ilspycmd exited $($process.ExitCode) (see $(Join-Path $outDir 'ilspycmd.err'))." }
-    $short = $Type.Substring($Type.LastIndexOf('+') + 1)
-    $startPattern = '^\s*\.class\b.* ' + [regex]::Escape($short) + '\s*$'
-    $endPattern = '^\s*\} // end of class ' + [regex]::Escape($short) + '\s*$'
-    $block = [System.Collections.Generic.List[string]]::new()
-    $methodLines = [System.Collections.Generic.List[string]]::new()
-    $inType = $false; $inMethod = $false; $typeSeen = $false; $methodSeen = $false
-    foreach ($line in [IO.File]::ReadLines($ilFile)) {
-        if (-not $inType) {
-            if ($line -match $startPattern) { $inType = $true; $typeSeen = $true; if (-not $Method) { $block.Add($line) } }
-            continue
-        }
-        if ($line -match $endPattern) { if (-not $Method) { $block.Add($line) }; break }
-        if (-not $Method) { $block.Add($line); continue }
-        if ($line -match '^\s*\.method\b') { $inMethod = $true; $methodLines.Clear() }
-        if ($inMethod) {
-            $methodLines.Add($line)
-            if ($line -match ('^\s*\} // end of method .*::' + [regex]::Escape($Method) + '\s*$')) { $block.AddRange($methodLines); $block.Add(''); $methodSeen = $true; $inMethod = $false }
-            elseif ($line -match '^\s*\} // end of method ') { $inMethod = $false }
-        }
-    }
-    if (-not $typeSeen) { Stop-Decompile "type '$Type' has no class block in the IL of $dll (see $ilFile)." }
-    if ($Method -and -not $methodSeen) { Stop-Decompile "type '$Type' has no method named '$Method' in the IL (see $ilFile)." }
+    # The type is matched by its whole path (namespace.Outer+Inner): a nested type is found inside its outer type's block, and a
+    # type of the same short name elsewhere is not taken for it.
+    $cut = Get-QualityIlBlock -Lines ([IO.File]::ReadLines($ilFile)) -Type $Type -Method $Method
+    if (-not $cut.TypeSeen) { Stop-Decompile "type '$Type' has no class block in the IL of $dll (see $ilFile; a nested type is written Outer+Inner)." }
+    if ($Method -and -not $cut.MethodSeen) { Stop-Decompile "type '$Type' has no method named '$Method' in the IL (see $ilFile)." }
     "// $dll (IL)"
-    $block
+    $cut.Block
     exit 0
 }
 # ilspycmd takes --type or --member, not both: -Type alone decompiles the whole type, a member id names its own type.
@@ -129,8 +114,10 @@ try {
 }
 finally { Pop-Location }
 
+# ilspycmd reports a failure through its exit code (checked above: 65 for a type or member it cannot find, 1 for a missing file), so
+# the text is not searched for "Error": valid C# can start a line with that word. Only an empty answer is refused here.
 $joined = ($text | ForEach-Object { "$_" }) -join [Environment]::NewLine
-if ($joined -notmatch '\S' -or $joined -match '(?m)^\s*(Error|Could not find type)') { Stop-Decompile "ilspycmd printed no code for '$Type' in $dll`: $joined" }
+if ($joined -notmatch '\S') { Stop-Decompile "ilspycmd printed no code for '$Type' in $dll." }
 "// $dll"
 $joined
 exit 0

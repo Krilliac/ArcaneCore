@@ -25,20 +25,24 @@ internal sealed record ReadsDifferentlyHit(string Rule, string File, string Memb
 /// depends on a type (a float operand, a void-returning delegate) a semantic model of the file's project answers it.
 /// <list type="bullet">
 /// <item><b>RB001</b> a pattern <c>is not A or B</c> / <c>is not A and B</c>: <c>not</c> binds only to the first operand, so it is
-/// <c>(not A) or B</c>, not <c>not (A or B)</c>. A right operand that is itself a <c>not</c> pattern (<c>is not A and not B</c>) is
-/// consistent and not reported.</item>
+/// <c>(not A) or B</c>, not <c>not (A or B)</c>. <c>is not A or not B</c> is reported as well: it is false only for a value that is both
+/// an A and a B (usually none), where a reader applying De Morgan expects <c>not (A or B)</c>. The one form spared is
+/// <c>is not A and not B</c>, which means what it says.</item>
 /// <item><b>RB002</b> an explicit float, double, Half or decimal to integer cast in packet and serialization code (the scope is
 /// <see cref="InPacketScope"/>): the cast truncates toward zero, where rounding is often intended. A cast whose operand is a direct
 /// <c>Round</c>/<c>Floor</c>/<c>Ceiling</c>/<c>Truncate</c> call states its rounding and is not reported.</item>
 /// <item><b>RB003</b> <c>??</c> directly beside an unparenthesized arithmetic, shift, relational, equality, bitwise or conditional
-/// logical operator, or beside <c>is</c>/<c>as</c> (<c>a ?? b &lt; c</c> is <c>a ?? (b &lt; c)</c>; <c>a + b ?? c</c> is <c>(a + b) ?? c</c>;
-/// <c>a ?? b as T</c> casts only <c>b</c>). <c>x as T ?? y</c> and <c>x as T ?? y as U</c> read as they parse and are not reported.</item>
+/// logical operator, or beside <c>is</c>/<c>as</c> including the pattern forms <c>is null</c>, <c>is not null</c>, <c>is { }</c>
+/// (<c>a ?? b &lt; c</c> is <c>a ?? (b &lt; c)</c>; <c>a + b ?? c</c> is <c>(a + b) ?? c</c>; <c>a ?? b is null</c> is
+/// <c>a ?? (b is null)</c>; <c>a ?? b as T</c> casts only <c>b</c>). <c>x as T ?? y</c> and <c>x as T ?? y as U</c> read as they parse and are not reported.</item>
 /// <item><b>RB004</b> <c>async void</c> (a method, local function or lambda converted to a void-returning delegate) that is not an event
 /// handler. An event handler has two parameters, the second an EventArgs type.</item>
 /// </list>
 /// Limits: conditional-compilation branches whose symbols are not defined by default are not parsed; generated files under obj and
 /// source-generator output are not seen; a type that cannot be resolved (an internal of a project that grants no
-/// InternalsVisibleTo to the test assembly) leaves an RB002 cast unclassified, counted in <see cref="Unresolved"/>.
+/// InternalsVisibleTo to the test assembly) leaves an RB002 cast, or the delegate type of an RB004 async lambda, unclassified, counted in
+/// <see cref="Unresolved"/>. A source file the parser cannot read (syntax newer than the pinned Roslyn) is listed in
+/// <see cref="SyntaxErrors"/>, which the audit test requires to be empty.
 /// </summary>
 internal sealed class ReadsDifferentlyScanner
 {
@@ -53,7 +57,7 @@ internal sealed class ReadsDifferentlyScanner
         SyntaxKind.LessThanExpression, SyntaxKind.LessThanOrEqualExpression, SyntaxKind.GreaterThanExpression,
         SyntaxKind.GreaterThanOrEqualExpression, SyntaxKind.EqualsExpression, SyntaxKind.NotEqualsExpression,
         SyntaxKind.BitwiseAndExpression, SyntaxKind.BitwiseOrExpression, SyntaxKind.ExclusiveOrExpression,
-        SyntaxKind.LogicalAndExpression, SyntaxKind.LogicalOrExpression, SyntaxKind.IsExpression, SyntaxKind.AsExpression,
+        SyntaxKind.LogicalAndExpression, SyntaxKind.LogicalOrExpression, SyntaxKind.IsExpression, SyntaxKind.IsPatternExpression, SyntaxKind.AsExpression,
     ];
 
     private readonly string _root;
@@ -61,6 +65,11 @@ internal sealed class ReadsDifferentlyScanner
     private readonly Lazy<MetadataReference[]> _references;
     private readonly ConcurrentDictionary<string, Lazy<CSharpCompilation>> _compilations = new(StringComparer.Ordinal);
     private readonly List<(string Project, string RelativePath, SyntaxTree Tree)> _trees = [];
+    private readonly Dictionary<string, SyntaxTree> _globalUsings = new(StringComparer.Ordinal);
+
+    /// <summary>The usings the SDK's ImplicitUsings gives a Microsoft.NET.Sdk project, for a project that has no generated file in obj.</summary>
+    private const string DefaultGlobalUsings = "global using global::System; global using global::System.Collections.Generic; global using global::System.IO; "
+        + "global using global::System.Linq; global using global::System.Net.Http; global using global::System.Threading; global using global::System.Threading.Tasks;";
 
     /// <summary>Scan the src/ tree of the checkout at <paramref name="repositoryRoot"/>.</summary>
     /// <param name="repositoryRoot">The checkout (the directory holding ArcaneCore.slnx).</param>
@@ -82,7 +91,22 @@ internal sealed class ReadsDifferentlyScanner
     public int CastsClassified { get; private set; }
 
     /// <summary>Integral-target casts in the RB002 scope whose operand type could not be resolved.</summary>
-    public int Unresolved { get; private set; }
+    public int UnresolvedCasts { get; private set; }
+
+    /// <summary>Async lambdas (RB004) that were looked at.</summary>
+    public int AsyncLambdas { get; private set; }
+
+    /// <summary>Async lambdas whose delegate type could not be resolved, so whether they return void is unknown.</summary>
+    public int UnresolvedLambdas { get; private set; }
+
+    /// <summary>"file:line" of the async lambdas counted in <see cref="UnresolvedLambdas"/>.</summary>
+    public List<string> UnresolvedLambdaSites { get; } = [];
+
+    /// <summary>Everything the semantic model could not answer: <see cref="UnresolvedCasts"/> plus <see cref="UnresolvedLambdas"/>.</summary>
+    public int Unresolved => UnresolvedCasts + UnresolvedLambdas;
+
+    /// <summary>"file(line): message" for every syntax error the parser found in a source file; empty when all of src/ parsed cleanly.</summary>
+    public List<string> SyntaxErrors { get; } = [];
 
     /// <summary>Whether a source file belongs to the packet and serialization code RB002 looks at.</summary>
     public static bool InPacketScope(string relativePath, SyntaxNode root)
@@ -125,6 +149,24 @@ internal sealed class ReadsDifferentlyScanner
         });
         _trees.AddRange(parsed.OrderBy(t => t.RelativePath, StringComparer.Ordinal));
         FilesScanned = _trees.Count;
+        foreach (string project in _trees.Select(t => t.Project).Distinct(StringComparer.Ordinal))
+        {
+            // The implicit global usings are generated into obj by the build; without them Task, Func and the rest do not resolve and
+            // every lambda looks unresolved. Take the newest generated file of the project, else the SDK default set.
+            string? generated = Directory.Exists(Path.Combine(src, project, "obj"))
+                ? Directory.EnumerateFiles(Path.Combine(src, project, "obj"), "*.GlobalUsings.g.cs", SearchOption.AllDirectories)
+                    .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                : null;
+            _globalUsings[project] = CSharpSyntaxTree.ParseText(generated is null ? DefaultGlobalUsings : File.ReadAllText(generated), options);
+        }
+
+        foreach ((string _, string relative, SyntaxTree tree) in _trees)
+        {
+            foreach (Diagnostic diagnostic in tree.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error))
+            {
+                SyntaxErrors.Add($"{relative}({diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1}): {diagnostic.Id} {diagnostic.GetMessage()}");
+            }
+        }
     }
 
     /// <summary>All hits of all four rules, ordered by file, then position.</summary>
@@ -176,9 +218,9 @@ internal sealed class ReadsDifferentlyScanner
             return;
         }
 
-        if (pattern.Right is UnaryPatternSyntax { OperatorToken.RawKind: (int)SyntaxKind.NotKeyword })
+        if (pattern.IsKind(SyntaxKind.AndPattern) && pattern.Right is UnaryPatternSyntax { OperatorToken.RawKind: (int)SyntaxKind.NotKeyword })
         {
-            return; // "is not A and not B": both operands negated, reads as it does
+            return; // "is not A and not B": both operands negated, reads as it does ("is not A or not B" does not: De Morgan reads it as not (A or B))
         }
 
         SyntaxNode top = pattern;
@@ -224,7 +266,17 @@ internal sealed class ReadsDifferentlyScanner
     private void CheckAsyncLambda(AnonymousFunctionExpressionSyntax lambda, string project, SyntaxTree tree, string file, List<ReadsDifferentlyHit> hits)
     {
         SemanticModel model = Model(project, tree);
-        if (model.GetSymbolInfo(lambda).Symbol is not IMethodSymbol { ReturnsVoid: true } symbol)
+        AsyncLambdas++;
+        ISymbol? resolved = model.GetSymbolInfo(lambda).Symbol;
+        ITypeSymbol? delegateType = model.GetTypeInfo(lambda).ConvertedType;
+        if (resolved is null || delegateType is null || delegateType.TypeKind == TypeKind.Error)
+        {
+            UnresolvedLambdas++;
+            UnresolvedLambdaSites.Add($"{file}:{lambda.GetLocation().GetLineSpan().StartLinePosition.Line + 1}");
+            return;
+        }
+
+        if (resolved is not IMethodSymbol { ReturnsVoid: true } symbol)
         {
             return;
         }
@@ -249,7 +301,7 @@ internal sealed class ReadsDifferentlyScanner
         ITypeSymbol? source = model.GetTypeInfo(cast.Expression).Type;
         if (source is null || source.TypeKind == TypeKind.Error)
         {
-            Unresolved++;
+            UnresolvedCasts++;
             return;
         }
 
@@ -341,7 +393,11 @@ internal sealed class ReadsDifferentlyScanner
 
     private CSharpCompilation CreateCompilation(string project)
     {
-        SyntaxTree[] trees = [.. _trees.Where(t => t.Project == project).Select(t => t.Tree)];
+        List<SyntaxTree> trees = [.. _trees.Where(t => t.Project == project).Select(t => t.Tree)];
+        if (_globalUsings.TryGetValue(project, out SyntaxTree? usings))
+        {
+            trees.Add(usings);
+        }
         MetadataReference[] references = [.. _references.Value.Where(r => !string.Equals(Path.GetFileNameWithoutExtension(r.Display), project, StringComparison.OrdinalIgnoreCase))];
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable)
             .WithMetadataImportOptions(MetadataImportOptions.All);
