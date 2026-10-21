@@ -114,8 +114,8 @@ public static class BuiltInBookmarks
         // ref: tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:51 (top of the Thunder Bluff lift; Kalimdor = 1 at tests/ArcaneCore.World.Tests/Playerbots/Elevator/ElevatorTestData.cs:15)
         At("thunder-bluff-mesa", Kalimdor, -1280, 120, 131, 140, "Thunder Bluff mesa, the top of the lifts.", "tests/ArcaneCore.World.Tests/Playerbots/Elevator/PlayerbotElevatorRealTerrainTests.cs:51"),
 
-        // ref: tests/ArcaneCore.World.Tests/Playerbots/PlayerbotRuttheranRecoveryTerrainTests.cs:42 (WorldSafeLocs.dbc row 129, map 1)
-        At("ruttheran-village", Kalimdor, 8706.0, 965.0, 13.27, 120, "Rut'theran Village, at the foot of the Teldrassil portal.", "tests/ArcaneCore.World.Tests/Playerbots/PlayerbotRuttheranRecoveryTerrainTests.cs:42"),
+        // ref: tests/ArcaneCore.World.Tests/Playerbots/PlayerbotRuttheranRecoveryTerrainTests.cs:45 (WorldSafeLocs.dbc row 129, map 1)
+        At("ruttheran-village", Kalimdor, 8706.0, 965.0, 13.27, 120, "Rut'theran Village, at the foot of the Teldrassil portal.", "tests/ArcaneCore.World.Tests/Playerbots/PlayerbotRuttheranRecoveryTerrainTests.cs:45"),
     ];
 
     private static Bookmark At(string name, uint map, double x, double y, double z, double distance, string note, string source)
