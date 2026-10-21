@@ -359,6 +359,9 @@ internal sealed class PlayerbotSiege(int id, uint mapId, uint objectiveEntry, IR
     /// <summary>The waypoint every raid is heading for; equal to the waypoint count once all reached the last one (the approach to the objective).</summary>
     public int Step { get; set; }
 
+    /// <summary>When the siege came to <see cref="Step"/> (its start for the first): the per-step deadline counts from here (<see cref="PlayerbotGroupCoordinator.StepDeadlineMs"/>).</summary>
+    public uint StepSinceMs { get; set; } = startedMs;
+
     public List<PlayerbotSiegeRaid> Raids { get; } = [];
 
     /// <summary>The objective was seen alive (its death then ends the siege).</summary>

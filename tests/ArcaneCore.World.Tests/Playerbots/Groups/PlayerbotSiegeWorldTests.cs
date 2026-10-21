@@ -2239,6 +2239,91 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("every raid has reached waypoint", StringComparison.Ordinal));
     }
 
+    // --- the per-step deadline ------------------------------------------------------------------------------------------------
+
+    /// <summary>Keeps every raid 60 yards behind the start (where no waypoint is) until the step has lasted <see cref="PlayerbotGroupCoordinator.StepDeadlineMs"/> minus <paramref name="beforeMs"/>.</summary>
+    private static Task<bool> HoldAwayUntilDeadline(GroupTestWorld world, PlayerbotSiege siege, uint beforeMs)
+        => world.RunUntilAsync(PlayerbotGroupCoordinator.StepDeadlineMs + 60_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            return unchecked(Now(world) - siege.StepSinceMs) >= PlayerbotGroupCoordinator.StepDeadlineMs - beforeMs;
+        });
+
+    [Fact]
+    public async Task TwoRaidsHeldInAFightNearAWaypoint_ForStepDeadlineMs_MoveOnOneStep_AndSaySo()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 2);
+        await using GroupTestWorld _ = world;
+        int step = siege.Step;
+        Assert.True(await HoldAwayUntilDeadline(world, siege, 20_000), "the run ended before the deadline: " + await world.TraceAsync());
+        Assert.Equal(step, siege.Step); // 20 s short of the deadline: the step stays put
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("not taken", StringComparison.Ordinal));
+
+        Assert.True(await world.RunUntilAsync(40_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            return siege.Step != step;
+        }), "the step never moved at the deadline: " + await world.TraceAsync());
+        Assert.Equal(step + 1, siege.Step);
+        Assert.Contains(world.Coordinator.Events, e => e.Contains($"waypoint {step + 1} not taken in {PlayerbotGroupCoordinator.StepDeadlineMs / 1000}s, moving on to waypoint {step + 2}", StringComparison.Ordinal));
+        Assert.Contains(siege.Raids, r => r.Announcer.Sent.Any(line => line.Contains("not taken", StringComparison.Ordinal)));
+        await world.RunAsync(1_000);
+        Assert.Contains(siege.Raids, r => r.Detail.Contains("furthest=", StringComparison.Ordinal) && r.Detail.Contains("deadline=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TheDeadline_IsPerStep_AndMovesByOne()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 2);
+        await using GroupTestWorld _ = world;
+        int step = siege.Step;
+        Assert.True(await HoldAwayUntilDeadline(world, siege, 2_000), "the run ended before the deadline: " + await world.TraceAsync());
+        await world.RunUntilAsync(10_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            return siege.Step != step;
+        });
+        Assert.Equal(step + 1, siege.Step);
+
+        // The clock started afresh with the new step: nothing moves it again for a whole deadline, and then it moves by one.
+        Assert.True(await HoldAwayUntilDeadline(world, siege, 20_000), "the run ended before the second deadline: " + await world.TraceAsync());
+        Assert.Equal(step + 1, siege.Step);
+        await world.RunUntilAsync(40_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            return siege.Step != step + 1;
+        });
+        Assert.Equal(step + 2, siege.Step);
+    }
+
+    [Fact]
+    public void TheDeadline_WaitsForARetreatLatch_AndForAnUnledRaid()
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new Vector3(10f, 0f, 0f), new Vector3(20f, 0f, 0f)], default, 1_000);
+        uint due = 1_000 + PlayerbotGroupCoordinator.StepDeadlineMs;
+        Assert.False(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, false, due - 1));
+        Assert.True(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, false, due));
+        Assert.False(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 1, false, due)); // a raid without a leader
+        Assert.False(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, true, due)); // a retreat latch
+        siege.Step = 2; // past the last waypoint: nothing to move on to
+        Assert.False(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, false, due + 1_000_000));
+    }
+
+    [Fact]
+    public async Task TheDeadline_DoesNotMoveTheStep_WhileARaidIsWithoutALeader()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (PlayerbotSiege siege, PlayerbotSiegeRaid fallen) = await LeaderlessRaid(world);
+        bool moved = false;
+        await world.RunUntilAsync(PlayerbotGroupCoordinator.StepDeadlineMs + 40_000, () =>
+        {
+            fallen.PromoteTriedMs = Math.Max(1u, Now(world));
+            moved |= siege.Step != 0;
+            return moved;
+        });
+        Assert.False(moved, "the step moved with a raid without a leader");
+    }
+
     /// <summary>
     /// The old answer fixture: waypoint 2 lies 12 yards past waypoint 1, so a leader answering an attacker 29 yards past waypoint 1 walks through waypoint 2's disk, and back. The step moves by one at a time, and not while the leader is out answering.
     /// </summary>

@@ -49,6 +49,12 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>A pushing leader waiting at its waypoint for a member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind waits this long; then the lag is waived for that step change.</summary>
     internal const uint LagHoldMs = 90_000;
 
+    /// <summary>
+    /// The longest a step lasts: a siege that has been heading for the same waypoint this long with every raid led and none in a retreat latch moves on by one step, whatever the leaders are doing
+    /// (a permanent fight at a waypoint must not hold the siege for good). Counted from the step's start (<see cref="PlayerbotSiege.StepSinceMs"/>); one step per deadline.
+    /// </summary>
+    internal const uint StepDeadlineMs = 600_000;
+
     /// <summary>A living member below this health percentage is hurt.</summary>
     internal const float HurtPercent = 60f;
 
@@ -465,15 +471,35 @@ public sealed partial class PlayerbotGroupCoordinator
             SetStep(siege, siege.Step + 1);
         }
 
+        // The per-step deadline: no fight, lag or loop at a waypoint holds the siege for good. One step, then the clock starts afresh.
+        if (StepDeadlineDue(siege, _siegeUnled, _siegeViews.Any(v => v.Raid.RetreatLatched), now))
+        {
+            int from = siege.Step;
+            SetStep(siege, from + 1);
+            Note($"siege {siege.Id}: waypoint {from + 1} not taken in {StepDeadlineMs / 1000}s, moving on to waypoint {from + 2}");
+            logger.LogWarning("Playerbot siege {Siege}: waypoint {Waypoint} not taken in {Seconds}s, moving on to waypoint {Next}", siege.Id, from + 1, StepDeadlineMs / 1000, from + 2);
+            string deadline = string.Create(CultureInfo.InvariantCulture, $"Waypoint {from + 1} not taken in {StepDeadlineMs / 1000}s, moving on");
+            foreach (SiegeView view in _siegeViews)
+                if (view.Raid.Announcer.Offer(deadline, now)) RaidWarning(view.Group, view.Leader, deadline);
+        }
+
         WatchProgress(siege, now);
         foreach (SiegeView view in _siegeViews) Command(siege, view, now);
         NotifyWatchers(siege, now);
     }
 
+    /// <summary>
+    /// Whether the step has lasted <see cref="StepDeadlineMs"/> and the siege moves on: a waypoint still ahead, every raid led (<paramref name="unled"/> raids without a leader hold it), none in a retreat latch
+    /// (<paramref name="retreatLatched"/>: a lost fight is not a reason to go on).
+    /// </summary>
+    internal static bool StepDeadlineDue(PlayerbotSiege siege, int unled, bool retreatLatched, uint now)
+        => siege.Step < siege.Waypoints.Count && unled == 0 && !retreatLatched && unchecked(now - siege.StepSinceMs) >= StepDeadlineMs;
+
     /// <summary>The step moves to <paramref name="step"/>: every raid starts it afresh (no answer, no waypoint reading, clocks of the step).</summary>
     private void SetStep(PlayerbotSiege siege, int step)
     {
         siege.Step = step;
+        siege.StepSinceMs = Math.Max(1u, Now);
         foreach (SiegeView view in _siegeViews)
         {
             view.Raid.AtWaypoint = false;
@@ -1176,7 +1202,7 @@ public sealed partial class PlayerbotGroupCoordinator
             _ => "Retreating",
         };
         raid.Detail = string.Create(CultureInfo.InvariantCulture,
-            $"{decision.Order.ToString().ToLowerInvariant()} step={siege.Step}/{siege.Waypoints.Count} hostiles={facts.Hostiles} alive={facts.Alive}/{facts.Total} hp={facts.AverageHealthPct:F0}%{(decision.Push != PlayerbotSiegePush.None ? $" push={decision.Push.ToString().ToLowerInvariant()}" : string.Empty)}{(raid.PushDeniedStep == siege.Step ? " push=denied" : string.Empty)}{(facts.LagWaived ? " lag=waived" : string.Empty)}");
+            $"{decision.Order.ToString().ToLowerInvariant()} step={siege.Step}/{siege.Waypoints.Count} hostiles={facts.Hostiles} alive={facts.Alive}/{facts.Total} hp={facts.AverageHealthPct:F0}%{(decision.Push != PlayerbotSiegePush.None ? $" push={decision.Push.ToString().ToLowerInvariant()}" : string.Empty)}{(raid.PushDeniedStep == siege.Step ? " push=denied" : string.Empty)}{(facts.LagWaived ? " lag=waived" : string.Empty)} furthest={raid.FurthestWaypoint}{(facts.OffRoute ? " offroute" : string.Empty)} deadline={(siege.Step < siege.Waypoints.Count ? (StepDeadlineMs - Math.Min(StepDeadlineMs, unchecked(now - siege.StepSinceMs))) / 1000 : 0)}");
         raid.WatchLine = string.Create(CultureInfo.InvariantCulture,
             $"{decision.Order.ToString().ToLowerInvariant()} step {siege.Step}/{siege.Waypoints.Count}, alive {facts.Alive}/{facts.Total}");
         // A raid that has used up its retreats says so once, in place of the plan line of that decision.
