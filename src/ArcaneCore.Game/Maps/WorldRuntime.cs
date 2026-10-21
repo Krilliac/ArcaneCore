@@ -566,8 +566,18 @@ public sealed partial class WorldRuntime : IDisposable
         }
     }
 
-    /// <summary>Put a loaded player into its map and the online registry (world thread).</summary>
-    public void AddPlayer(Player player)
+    /// <summary>
+    /// The map a logging-in player enters (world thread). A dungeon login without its instance moves
+    /// the player to the entrance here (vmangos Player::LoadFromDB), so call this before anything
+    /// that reads the player's map or position, then hand the result to <see cref="AddPlayer"/>.
+    /// </summary>
+    public Map ResolveLoginMap(Player player) => MapResolver?.ResolveLoginMap(player) ?? GetMap(player.MapId);
+
+    /// <summary>
+    /// Put a loaded player into its map and the online registry (world thread).
+    /// <paramref name="resolvedMap"/> is the result of <see cref="ResolveLoginMap"/> when the caller already resolved it.
+    /// </summary>
+    public void AddPlayer(Player player, Map? resolvedMap = null)
     {
         if (player.CharacterOwnership is null && CharacterOwnership is { } ownership)
             player.CharacterOwnership = ownership;
@@ -579,7 +589,7 @@ public sealed partial class WorldRuntime : IDisposable
         _onlineByName[player.Name] = player;
         _autosaveRescan = true; // its autosave timer starts at the next autosave scan
         player.StartPlayedTime(NowMs);
-        Map map = MapResolver?.ResolveLoginMap(player) ?? GetMap(player.MapId);
+        Map map = resolvedMap ?? ResolveLoginMap(player);
         player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
         map.AddPlayer(player);
     }

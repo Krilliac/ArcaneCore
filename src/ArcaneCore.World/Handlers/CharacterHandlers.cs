@@ -419,16 +419,29 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return; // the client disconnected while the character loaded
         }
 
-        // Login order per vmangos WorldSession::HandlePlayerLogin (LoginSequence): login
-        // packets, SendInitialPacketsBeforeAddToMap, the map add (which sends the self
-        // create), SendInitialPacketsAfterAddToMap; then the world features hear of the login.
+        // Login order per vmangos WorldSession::HandlePlayerLogin (LoginSequence): the login
+        // relocation (Player::LoadFromDB: a dungeon without its instance sends the player to the
+        // entrance), login packets, SendInitialPacketsBeforeAddToMap, the map add (which sends the
+        // self create), SendInitialPacketsAfterAddToMap; then the world features hear of the login.
         player.Relocate(character.X, character.Y, character.Z, character.Orientation, world.NowMs);
-        LoginSequence.SendLoginPackets(session, world, character, account.DataMd5);
+        Map map;
+        try
+        {
+            map = world.ResolveLoginMap(player);
+        }
+        catch (Exception ex)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] could not resolve the login map of '{Name}'", session.RemoteEndpoint, player.Name);
+            session.Kick();
+            return;
+        }
+
+        LoginSequence.SendLoginPackets(session, world, player, account.DataMd5);
         LoginSequence.SendInitialPacketsBeforeAddToMap(session, player, account.TutorialFlags);
 
         try
         {
-            world.AddPlayer(player);
+            world.AddPlayer(player, map);
         }
         catch (Exception ex)
         {

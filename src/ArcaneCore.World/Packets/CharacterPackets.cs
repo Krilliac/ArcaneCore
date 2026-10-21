@@ -71,14 +71,14 @@ public static class CharacterPackets
     }
 
     /// <summary>SMSG_LOGIN_VERIFY_WORLD: the map and position the client should load.</summary>
-    public static byte[] BuildLoginVerifyWorld(CharacterRecord c)
+    public static byte[] BuildLoginVerifyWorld(uint mapId, float x, float y, float z, float orientation)
     {
         var writer = new PacketWriter(20);
-        writer.WriteUInt32(c.MapId);
-        writer.WriteSingle(c.X);
-        writer.WriteSingle(c.Y);
-        writer.WriteSingle(c.Z);
-        writer.WriteSingle(c.Orientation);
+        writer.WriteUInt32(mapId);
+        writer.WriteSingle(x);
+        writer.WriteSingle(y);
+        writer.WriteSingle(z);
+        writer.WriteSingle(orientation);
         return writer.ToArray();
     }
 
