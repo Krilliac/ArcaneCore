@@ -215,6 +215,85 @@ public sealed class SqliteWriteGateTests : IDisposable
         Assert.Same(SqliteWriteGate.For(ConnectionString("same.db")), SqliteWriteGate.For(ConnectionString("same.db") + ";Cache=Shared"));
     }
 
+    [Fact]
+    public async Task DefaultConfigurationWithWriteGate_PreservesFiveSecondBusyTimeout_AndManagedPlayerbotUpdateUsesOneGatedStatement()
+    {
+        string connection = ConnectionString("playerbot-gate.db");
+        SqliteWriteGateInterceptor gate = Gate(new SqliteSingleWriterOptions { Enabled = true, StatsIntervalMs = 0 });
+        var builder = new DbContextOptionsBuilder<ArcaneCore.Data.Characters.CharacterDbContext>();
+        DataServiceCollectionExtensions.ConfigureProvider(builder,
+            new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = connection },
+            sqliteWriteTimeoutMs: SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs, writeGate: gate);
+
+        await using var db = new ArcaneCore.Data.Characters.CharacterDbContext(builder.Options);
+        await ArcaneCore.Data.Schema.SchemaBootstrapper.EnsureAsync(db, ArcaneCore.Data.Characters.CharacterDbContext.Schema);
+        await db.Database.OpenConnectionAsync();
+        await using (var pragmaCmd = db.Database.GetDbConnection().CreateCommand())
+        {
+            pragmaCmd.CommandText = "PRAGMA busy_timeout;";
+            long busyTimeout = Convert.ToInt64(await pragmaCmd.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(busyTimeout >= 5000, $"expected busy_timeout >= 5000, got {busyTimeout}");
+        }
+
+        var character = await new ArcaneCore.Data.Stores.EfCharacterStore(db).CreateAsync(
+            new ArcaneCore.Kernel.Characters.CharacterRecord { AccountId = 7, Name = "Gatebot", Race = 1, Class = 1, Level = 1 });
+        var store = new ArcaneCore.Data.Characters.Playerbots.EfManagedPlayerbotStore(db);
+        var bot = new ArcaneCore.Kernel.Characters.ManagedPlayerbot(Guid.NewGuid(), character.AccountId, character.Id, "account7", false,
+            ArcaneCore.Kernel.Characters.ManagedPlayerbotState.Stopped, ArcaneCore.Kernel.Characters.PlayerbotGoalKind.Explore, 0, 0, 0, 100, 100);
+        await store.CreateAsync(bot);
+
+        var counter = new CommandCounterInterceptor();
+        var countedBuilder = new DbContextOptionsBuilder<ArcaneCore.Data.Characters.CharacterDbContext>();
+        DataServiceCollectionExtensions.ConfigureProvider(countedBuilder,
+            new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = connection },
+            sqliteWriteTimeoutMs: SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs, writeGate: gate);
+        countedBuilder.AddInterceptors(counter);
+
+        await using var countedDb = new ArcaneCore.Data.Characters.CharacterDbContext(countedBuilder.Options);
+        var countedStore = new ArcaneCore.Data.Characters.Playerbots.EfManagedPlayerbotStore(countedDb);
+        Assert.True(await countedStore.UpdateAsync(bot with { State = ArcaneCore.Kernel.Characters.ManagedPlayerbotState.Running, Revision = 1, UpdatedUnix = 101 }, expectedRevision: 0));
+        Assert.Equal(0, counter.SelectCommands);
+        Assert.Equal(1, counter.UpdateCommands);
+    }
+
+    private sealed class CommandCounterInterceptor : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        public int SelectCommands;
+        public int UpdateCommands;
+
+        public override System.Data.Common.DbDataReader ReaderExecuted(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData, System.Data.Common.DbDataReader result)
+        {
+            Record(command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<System.Data.Common.DbDataReader> ReaderExecutedAsync(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData, System.Data.Common.DbDataReader result, CancellationToken cancellationToken = default)
+        {
+            Record(command.CommandText);
+            return new ValueTask<System.Data.Common.DbDataReader>(result);
+        }
+
+        public override int NonQueryExecuted(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData, int result)
+        {
+            Record(command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<int> NonQueryExecutedAsync(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData, int result, CancellationToken cancellationToken = default)
+        {
+            Record(command.CommandText);
+            return new ValueTask<int>(result);
+        }
+
+        private void Record(string? sql)
+        {
+            if (string.IsNullOrWhiteSpace(sql)) return;
+            string trimmed = sql.TrimStart();
+            if (trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)) Interlocked.Increment(ref SelectCommands);
+            else if (trimmed.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)) Interlocked.Increment(ref UpdateCommands);
+        }
+    }
+
     private string ConnectionString(string file)
         => new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, file), Pooling = false }.ToString();
 

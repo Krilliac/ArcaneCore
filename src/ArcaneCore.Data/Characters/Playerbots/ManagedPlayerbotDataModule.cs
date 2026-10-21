@@ -111,14 +111,9 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
         if (expectedRevision < 0 || bot.Revision != expectedRevision + 1)
             return false;
 
-        ManagedPlayerbotRow? current = await db.Set<ManagedPlayerbotRow>().AsNoTracking()
-            .SingleOrDefaultAsync(row => row.BotId == bot.BotId, cancellationToken).ConfigureAwait(false);
-        if (current is null || current.AccountId != bot.AccountId || current.CharacterId != bot.CharacterId
-            || current.AccountName != bot.AccountName || current.CreatedUnix != bot.CreatedUnix)
-            return false;
-
         int changed = await CharacterWrites.InTransactionAsync(db, () => db.Set<ManagedPlayerbotRow>()
-            .Where(row => row.BotId == bot.BotId && row.Revision == expectedRevision)
+            .Where(row => row.BotId == bot.BotId && row.Revision == expectedRevision && row.AccountId == bot.AccountId
+                && row.CharacterId == bot.CharacterId && row.AccountName == bot.AccountName && row.CreatedUnix == bot.CreatedUnix)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(row => row.DesiredEnabled, bot.DesiredEnabled)
                 .SetProperty(row => row.State, bot.State)

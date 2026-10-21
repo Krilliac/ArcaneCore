@@ -485,7 +485,11 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 failure = ex;
-                FaultLedger.Shared.Record("writequeue-rest-attempt", ex);
+                if (!(attempt < attempts && ArcaneCore.Data.Resilience.DatabaseTransience.IsBusy(ex)))
+                {
+                    FaultLedger.Shared.Record("writequeue-rest-attempt", ex);
+                }
+
                 if (!sweep)
                 {
                     logger.LogWarning(ex, "rested-state write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
