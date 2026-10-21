@@ -1565,6 +1565,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         uint sentAt = 0, lastLine = 0;
         bool readAtNext = false, sawDiskAtNext = false, skipped = false, advanced = false;
         float closestToNext = float.MaxValue;
+        string nextInfo = string.Empty;
         var trail = new List<string>();
         uint began = Now(world);
         bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 500_000, () =>
@@ -1586,8 +1587,9 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (unchecked(Now(world) - lastLine) >= 1_000) { lastLine = Now(world); trail.Add(AnswerLine(world, raid, leaderBot, leader, siege.Waypoints[stepAtPush], attacker, began) + $" step={siege.Step}"); }
             if (siege.Step == stepAtPush + 1)
             {
-                advanced = true;
                 float toNext = YardsFrom(leader, siege.Waypoints[stepAtPush + 1]);
+                if (!advanced) nextInfo = $"first tick at the next step: +{unchecked(Now(world) - began)}ms toNext={toNext:F1} toOld={YardsFrom(leader, siege.Waypoints[stepAtPush]):F1} atWp={raid.AtWaypoint} answerStep={raid.AnsweringStep} lagSince={raid.LagSinceMs}";
+                advanced = true;
                 closestToNext = Math.Min(closestToNext, toNext);
                 // At the next waypoint while the leader is still out where it fought: it is not at it.
                 if (toNext > PlayerbotSiegeCommander.WaypointYards + 2f) readAtNext |= raid.AtWaypoint;
@@ -1600,7 +1602,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
         string Story() => $"done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        output.WriteLine($"STEP-ADVANCE-PROBE done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} answerStep={raid.AnsweringStep}");
+        output.WriteLine($"STEP-ADVANCE-PROBE done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} answerStep={raid.AnsweringStep} [{nextInfo}]");
         foreach (string line in trail.Skip(Math.Max(0, trail.Count - 140)).Where((_, i) => i % 3 == 0)) output.WriteLine("  " + line);
         if (attacker is null) Assert.Fail("the probe never fired: " + Story());
         if (!advanced) Assert.Fail("the step never moved on while the leader answered: " + Story());
