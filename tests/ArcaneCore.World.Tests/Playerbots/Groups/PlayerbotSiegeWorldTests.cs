@@ -1336,6 +1336,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 && system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive).OrderByDescending(g => MathF.Abs(g.X - leader.X)).FirstOrDefault() is { } guard
                 && MathF.Abs(guard.X - leader.X) > 20f)
             {
+                ResetOtherGuardsToStraggler(system, raid, leader, guard, Now(world));
                 guard.Combat.Threat.AddThreat(leader, 100_000f);
                 sent = true;
             }
@@ -1376,6 +1377,29 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<PlayerbotSiegeRaid, WaitingSince> Waiting = new();
 
     /// <summary>
+    /// Any other guard that already followed the raid to the waypoint would be answered first (the leader fights the nearest attacker) and TopUpGuards keeps it at full health, while sending it into evade from the waypoint
+    /// leaves it running home out of combat for 14 s (so killing the probe drops the raid out of combat and ends the push). Reset every other live guard to its spawn point in combat with the held straggler.
+    /// </summary>
+    private static void ResetOtherGuardsToStraggler(CreatureMapSystem system, PlayerbotSiegeRaid raid, Player leader, Creature probe, uint now)
+    {
+        Player? straggler = raid.Group?.Members.FirstOrDefault(m => !m.Real && m.BotId != raid.Group.LeaderBotId) is { } held ? leader.Map?.FindPlayer(held.Guid) : null;
+        foreach (Creature other in system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive && !ReferenceEquals(g, probe)))
+        {
+            system.ResetAurasOnEvade(other);
+            system.StopCombatInPlace(other);
+            other.Motion.Clear();
+            system.StopMoving(other);
+            other.Relocate(other.Home.X, other.Home.Y, other.Home.Z, other.Home.Orientation, now);
+            if (straggler is not null)
+            {
+                other.CalledAssistance = true;
+                system.AttackStart(other, straggler);
+                other.Combat.Threat.AddThreat(straggler, 100_000f);
+            }
+        }
+    }
+
+    /// <summary>
     /// A ranged attacker on the waiting leader, as the tests make one: a guard 25 yards from the waypoint that cannot move (rooted, so it neither walks to the leader nor is pushed about by the test) and has the leader on its threat
     /// list. Returns it once the waiting leader's lag hold has run for 5 s, or null before.
     /// </summary>
@@ -1392,12 +1416,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         if (box.Since == 0 || raid.LagSinceMs == 0 || unchecked(now - box.Since) <= 5_000
             || leader.Map?.FindUpdater<CreatureMapSystem>() is not { } system || NextAttacker(leader) is not { } guard)
             return null;
-        // Any other guard that already followed the leader into melee would be answered first (the leader fights the nearest attacker) and TopUpGuards keeps it at full health, so whether the probe was ever answered would
-        // depend on how soon that guard evades. Only the rooted probe is to attack the leader.
-        foreach (Creature other in system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive && !ReferenceEquals(g, guard) && ReferenceEquals(g.Combat.Victim, leader))) system.EnterEvadeMode(other);
+        ResetOtherGuardsToStraggler(system, raid, leader, guard, now);
         Vector3 waypoint = siege.Waypoints[stepAtPush];
-        guard.Relocate(waypoint.X + yards, waypoint.Y, guard.Z, 0, now);
         system.SetAiImmobilized(guard, true, combatOnly: false);
+        guard.Relocate(waypoint.X + yards, waypoint.Y, guard.Z, 0, now);
         guard.Combat.Threat.AddThreat(leader, 100_000f);
         return guard;
     }
