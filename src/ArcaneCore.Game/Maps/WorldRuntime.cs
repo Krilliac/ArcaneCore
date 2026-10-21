@@ -837,7 +837,7 @@ public sealed partial class WorldRuntime : IDisposable
         LogIfSlowMicros(thresholdMs, (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency, what, map, diagnostics, gcBefore);
     }
 
-    private void LogIfSlowMicros(int thresholdMs, long micros, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)
+    private void LogIfSlowMicros(int thresholdMs, long micros, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore, GcSnapshot? gcAfter = null)
     {
         if (thresholdMs <= 0)
         {
@@ -849,7 +849,7 @@ public sealed partial class WorldRuntime : IDisposable
             // With a summary interval the update is counted there and only an outlier (within the per-map cap) gets its own line.
             if (PerfLog is { } perf)
             {
-                GcDelta gc = diagnostics is { Completed: true } ? GcSource().Since(gcBefore) : default;
+                GcDelta gc = diagnostics is { Completed: true } ? (gcAfter ?? GcSource()).Since(gcBefore) : default;
                 if (!perf.RecordMapUpdate(map.MapId, map.InstanceId, micros, diagnostics, gc))
                 {
                     return;
@@ -864,7 +864,7 @@ public sealed partial class WorldRuntime : IDisposable
                     what, map.MapId, map.InstanceId, micros / 1000, timing.SimulationMicros / 1000,
                     timing.VisibilityMicros / 1000, timing.ValuesMicros / 1000, timing.FlushMicros / 1000,
                     timing.CleanupMicros / 1000, timing.Players, timing.MovedObjects, timing.ChangedObjects,
-                    timing.NewObjects, timing.VisibilityCandidates, timing.FormatTop(3), timing.Describe(), GcSource().Since(gcBefore).Format(), host);
+                    timing.NewObjects, timing.VisibilityCandidates, timing.FormatTop(3), timing.Describe(), (gcAfter ?? GcSource()).Since(gcBefore).Format(), host);
             }
             else
             {
@@ -890,7 +890,7 @@ public sealed partial class WorldRuntime : IDisposable
                 _perfLogResolved = true;
                 if (Options.Perf.SummaryIntervalSeconds > 0)
                 {
-                    _perfLog = new PerfLogAggregator(Options.Perf, _logger, PerfClockMicros, HostVerdictOf);
+                    _perfLog = new PerfLogAggregator(Options.Perf, _logger, PerfClockMicros, HostVerdictOf, () => IsMainWorldThread);
                 }
             }
 

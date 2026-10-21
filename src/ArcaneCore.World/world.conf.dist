@@ -6283,7 +6283,8 @@ PerformanceLog.SlowWorldUpdateMeasure = FrameInterval
 #                     p50/p95/max, top contributors per map, host verdicts) instead of one line
 #                     each; only the updates over SlowWorldUpdateDetail / SlowMapUpdateDetail still
 #                     get their own line, a few per map per interval. 0 writes every slow update as
-#                     its own line (the vmangos behaviour) and ignores the three keys below.
+#                     its own line (the vmangos behaviour) and ignores the Slow*Detail keys and
+#                     DetailLinesPerMapPerInterval.
 #        Type: int
 #        Default: 60
 #        Allowed: a whole number, -2147483648 to 2147483647

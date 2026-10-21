@@ -764,7 +764,7 @@ How to read the tables:
 | `PerformanceLog:SlowWorldUpdate` | `int` | `100` | - | Log a world frame (or tick, see SlowWorldUpdateMeasure) longer than this many ms. |
 | `PerformanceLog:SlowWorldUpdateDetail` | `int` | `250` | - | With a summary interval: a world frame (or tick) longer than this many ms also gets its own detail line (0: never). |
 | `PerformanceLog:SlowWorldUpdateMeasure` | `SlowWorldUpdateMeasure` | `FrameInterval` | - | What SlowWorldUpdate is compared with. Defaults to the retail frame interval. Values: `FrameInterval`, `TickDuration`. |
-| `PerformanceLog:SummaryIntervalSeconds` | `int` | `60` | - | Seconds between the slow-update summary lines. Slow world frames and slow map updates are counted over the interval and written as one summary (counts, p50/p95/max, top contributors per map, host verdicts) instead of one line each; only the updates over SlowWorldUpdateDetail / SlowMapUpdateDetail still get their own line, a few per map per interval. 0 writes every slow update as its own line (the vmangos behaviour) and ignores the three keys below. |
+| `PerformanceLog:SummaryIntervalSeconds` | `int` | `60` | - | Seconds between the slow-update summary lines. Slow world frames and slow map updates are counted over the interval and written as one summary (counts, p50/p95/max, top contributors per map, host verdicts) instead of one line each; only the updates over SlowWorldUpdateDetail / SlowMapUpdateDetail still get their own line, a few per map per interval. 0 writes every slow update as its own line (the vmangos behaviour) and ignores the Slow*Detail keys and DetailLinesPerMapPerInterval. |
 
 ## `Pets`
 

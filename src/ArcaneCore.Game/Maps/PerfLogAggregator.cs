@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using Microsoft.Extensions.Logging;
@@ -15,7 +16,7 @@ namespace ArcaneCore.Game.Maps;
 /// </summary>
 internal sealed class PerfLogAggregator
 {
-    private const int MaxContributorSlots = 32;
+    private const int MaxContributorSlots = 64;
     private const int MaxMapsListed = 20;
     private const int MaxDetailLines = 16;
     private const int TopContributorCount = 3;
@@ -25,6 +26,8 @@ internal sealed class PerfLogAggregator
     private readonly ILogger _logger;
     private readonly Func<long> _nowMicros;
     private readonly Func<long, HostLoadVerdict>? _verdictProbe;
+    private readonly Func<bool>? _onOwnerThread;
+    private int _ownerThreadId = -1;
     private readonly long _intervalMicros;
     private readonly int _detailCap;
     private readonly Dictionary<long, MapSlot> _maps = [];
@@ -35,6 +38,7 @@ internal sealed class PerfLogAggregator
     private readonly LogRateLimiter[] _worldDetail;
 
     private long _nextFlush;
+    private long _windowStart;
     private long _frames;
     private long _worldSuppressed;
     private long _verdictAt = long.MinValue;
@@ -43,6 +47,8 @@ internal sealed class PerfLogAggregator
     private long _quiet;
     private long _gc;
     private long _other;
+    private long _busy;
+    private long _stalled;
 
     /// <param name="options">The thresholds and the interval; read once (restart to change).</param>
     /// <param name="logger">Receives the summary line.</param>
@@ -51,8 +57,13 @@ internal sealed class PerfLogAggregator
     /// The host verdict for a slow window of the given length (the host-load sampler's); null: the verdicts count as unknown. It does a
     /// fresh host probe, so a result is reused for one second instead of being asked per sample.
     /// </param>
-    public PerfLogAggregator(PerformanceLogOptions options, ILogger logger, Func<long> nowMicros, Func<long, HostLoadVerdict>? verdictProbe = null)
+    /// <param name="onOwnerThread">
+    /// True on the thread that owns the aggregator (the world runtime passes its world-thread test). Checked with <see cref="Debug.Assert(bool)"/> in
+    /// every record and flush method; null: the first thread to call is the owner.
+    /// </param>
+    public PerfLogAggregator(PerformanceLogOptions options, ILogger logger, Func<long> nowMicros, Func<long, HostLoadVerdict>? verdictProbe = null, Func<bool>? onOwnerThread = null)
     {
+        _onOwnerThread = onOwnerThread;
         _options = options;
         _logger = logger;
         _nowMicros = nowMicros;
@@ -60,11 +71,30 @@ internal sealed class PerfLogAggregator
         _intervalMicros = Math.Max(0, options.SummaryIntervalSeconds) * 1_000_000L;
         _detailCap = Math.Clamp(options.DetailLinesPerMapPerInterval, 0, MaxDetailLines);
         _worldDetail = NewLimiters(_intervalMicros, _detailCap);
-        _nextFlush = _intervalMicros > 0 ? nowMicros() + _intervalMicros : long.MaxValue;
+        _windowStart = nowMicros();
+        _nextFlush = _intervalMicros > 0 ? _windowStart + _intervalMicros : long.MaxValue;
     }
 
     /// <summary>True when the summary replaces the per-event lines.</summary>
     public bool Enabled => _intervalMicros > 0;
+
+    [Conditional("DEBUG")]
+    private void AssertOwner()
+    {
+        if (_onOwnerThread is not null)
+        {
+            Debug.Assert(_onOwnerThread(), "PerfLogAggregator is not thread-safe: use it on the world thread only");
+            return;
+        }
+
+        int current = Environment.CurrentManagedThreadId;
+        if (_ownerThreadId == -1)
+        {
+            _ownerThreadId = current;
+        }
+
+        Debug.Assert(_ownerThreadId == current, "PerfLogAggregator is not thread-safe: use it on one thread only");
+    }
 
     private static LogRateLimiter[] NewLimiters(long intervalMicros, int count)
     {
@@ -78,7 +108,11 @@ internal sealed class PerfLogAggregator
     }
 
     /// <summary>One world frame passed (slow or not): the M of "N of M".</summary>
-    public void CountFrame() => _frames++;
+    public void CountFrame()
+    {
+        AssertOwner();
+        _frames++;
+    }
 
     /// <summary>
     /// Record a slow world frame of <paramref name="micros"/>. True: write its own line (over the detail threshold and within the
@@ -86,6 +120,7 @@ internal sealed class PerfLogAggregator
     /// </summary>
     public bool RecordWorldFrame(long micros)
     {
+        AssertOwner();
         long now = _nowMicros();
         _world.Add(micros);
         NoteVerdict(now, micros, default);
@@ -110,6 +145,7 @@ internal sealed class PerfLogAggregator
     /// </summary>
     public bool RecordMapUpdate(uint mapId, uint instanceId, long ownMicros, MapUpdateDiagnostics? diagnostics, in GcDelta gc)
     {
+        AssertOwner();
         long now = _nowMicros();
         MapSlot slot = SlotFor(mapId, instanceId);
         slot.LastActive = now;
@@ -242,6 +278,12 @@ internal sealed class PerfLogAggregator
             case HostLoadVerdict.GcPauses:
                 _gc++;
                 break;
+            case HostLoadVerdict.ProcessBusy:
+                _busy++;
+                break;
+            case HostLoadVerdict.ProcessStalled:
+                _stalled++;
+                break;
             default:
                 _other++;
                 break;
@@ -251,6 +293,7 @@ internal sealed class PerfLogAggregator
     /// <summary>Write the summary when the interval has elapsed (and something was slow). Returns true when the interval ended.</summary>
     public bool FlushIfDue()
     {
+        AssertOwner();
         if (_intervalMicros <= 0)
         {
             return false;
@@ -269,6 +312,7 @@ internal sealed class PerfLogAggregator
     /// <summary>End the interval now (the world thread is stopping): writes the summary of what has been recorded since the last one.</summary>
     public void FlushNow()
     {
+        AssertOwner();
         if (_intervalMicros > 0)
         {
             WriteSummary(_nowMicros());
@@ -277,7 +321,22 @@ internal sealed class PerfLogAggregator
 
     private void WriteSummary(long now)
     {
-        _nextFlush = now + _intervalMicros;
+        long elapsed = Math.Max(0, now - _windowStart);
+        _windowStart = now;
+        if (now >= _nextFlush)
+        {
+            // Anchored to the schedule, not to when the check happened (no drift); a hitch that skipped whole intervals skips their boundaries.
+            _nextFlush += _intervalMicros;
+            if (_nextFlush <= now)
+            {
+                _nextFlush += ((now - _nextFlush) / _intervalMicros + 1) * _intervalMicros;
+            }
+        }
+        else
+        {
+            _nextFlush = now + _intervalMicros; // ended early (the world is stopping): a fresh window
+        }
+
         long suppressed = _worldSuppressed;
         _active.Clear();
         foreach (MapSlot slot in _maps.Values)
@@ -291,16 +350,16 @@ internal sealed class PerfLogAggregator
 
         if (_world.Count > 0 || _active.Count > 0)
         {
-            _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow update summary: {Summary}", Format(suppressed));
+            _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow update summary: {Summary}", Format(suppressed, elapsed));
         }
 
         ResetInterval(now);
     }
 
-    private string Format(long suppressed)
+    private string Format(long suppressed, long elapsedMicros)
     {
         var sb = new StringBuilder(512);
-        sb.Append("last ").Append(_options.SummaryIntervalSeconds).Append(" s");
+        sb.Append("last ").Append((elapsedMicros + 500_000) / 1_000_000).Append(" s");
         if (_world.Count > 0)
         {
             sb.Append("; world frames over ").Append(_options.SlowWorldUpdate).Append(" ms: ").Append(_world.Count).Append(" of ").Append(Math.Max(_frames, _world.Count));
@@ -331,9 +390,19 @@ internal sealed class PerfLogAggregator
         }
 
         sb.Append("; verdicts: host-starved ").Append(_starved).Append(", quiet ").Append(_quiet).Append(", gc ").Append(_gc);
+        if (_busy > 0)
+        {
+            sb.Append(", process-busy ").Append(_busy);
+        }
+
+        if (_stalled > 0)
+        {
+            sb.Append(", process-stalled ").Append(_stalled);
+        }
+
         if (_other > 0)
         {
-            sb.Append(", other ").Append(_other);
+            sb.Append(", unknown (no host sampler or no verdict) ").Append(_other);
         }
 
         sb.Append("; detail lines suppressed: ").Append(suppressed);
@@ -356,7 +425,12 @@ internal sealed class PerfLogAggregator
         _world.Reset();
         _frames = 0;
         _worldSuppressed = 0;
-        _starved = _quiet = _gc = _other = 0;
+        _starved = _quiet = _gc = _other = _busy = _stalled = 0;
+        for (int i = 0; i < _worldDetail.Length; i++)
+        {
+            _worldDetail[i].Reset(); // the cap is per interval, not per rolling window
+        }
+
         _verdictAt = long.MinValue;
 
         // A map idle for two intervals goes back to the pool (its limiters would have admitted again anyway); the others start afresh.
@@ -365,6 +439,11 @@ internal sealed class PerfLogAggregator
         foreach (MapSlot slot in _maps.Values)
         {
             slot.Reset();
+            for (int i = 0; i < slot.Detail.Length; i++)
+            {
+                slot.Detail[i].Reset();
+            }
+
             if (now - slot.LastActive >= 2 * _intervalMicros)
             {
                 idle.Add(slot);
@@ -393,6 +472,7 @@ internal sealed class PerfLogAggregator
         public long SumMicros;
         public long Suppressed;
         public long LastActive;
+        public long UnattributedMicros;
 
         public long Key => ((long)MapId << 32) | InstanceId;
 
@@ -418,10 +498,19 @@ internal sealed class PerfLogAggregator
                 _names[_count] = name;
                 _micros[_count++] = micros;
             }
+            else
+            {
+                UnattributedMicros += micros; // a full table: counted, not lost without trace
+            }
         }
 
         public void AppendTop(StringBuilder sb, int top)
         {
+            if (UnattributedMicros > 0)
+            {
+                sb.Append("; (+").Append(UnattributedMicros / 1000).Append(" ms unattributed)");
+            }
+
             if (_count == 0)
             {
                 return;
@@ -466,6 +555,7 @@ internal sealed class PerfLogAggregator
             Histogram.Reset();
             SumMicros = 0;
             Suppressed = 0;
+            UnattributedMicros = 0;
             Array.Clear(_micros, 0, _count);
             Array.Clear(_names, 0, _count);
             _count = 0;

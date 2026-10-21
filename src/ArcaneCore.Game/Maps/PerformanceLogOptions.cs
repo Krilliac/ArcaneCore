@@ -34,7 +34,7 @@ public sealed class PerformanceLogOptions
     /// Seconds between the slow-update summary lines. Slow world frames and slow map updates are counted over the interval and written as
     /// one summary (counts, p50/p95/max, top contributors per map, host verdicts) instead of one line each; only the updates over
     /// SlowWorldUpdateDetail / SlowMapUpdateDetail still get their own line, a few per map per interval. 0 writes every slow update as
-    /// its own line (the vmangos behaviour) and ignores the three keys below.
+    /// its own line (the vmangos behaviour) and ignores the Slow*Detail keys and DetailLinesPerMapPerInterval.
     /// </summary>
     public int SummaryIntervalSeconds { get; set; } = 60;
 

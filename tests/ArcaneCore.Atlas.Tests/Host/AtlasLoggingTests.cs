@@ -81,7 +81,7 @@ public sealed class AtlasLoggingTests
     }
 
     [Fact]
-    public async Task ARequestThatEndsIn500_StillLogsAtWarningOrAbove()
+    public async Task ARequestThatEndsIn500_IsStillLoggedAtWarningOrAbove_ByTheHost()
     {
         var capture = new CapturingProvider();
         using ILoggerFactory loggers = AtlasCli.CreateLoggers(LogLevel.Information, configure: b => b.AddProvider(capture));
@@ -91,7 +91,8 @@ public sealed class AtlasLoggingTests
         using HttpResponseMessage response = await rig.Http.PostAsync("api/command", body);
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.Contains(capture.Entries, e => e.Level >= LogLevel.Warning && e.Message.Contains("/api/command", StringComparison.Ordinal));
+        // The host catches the exception itself, so ASP.NET Core logs nothing here: the entry is the host's own, and the filter must not hide it.
+        Assert.Contains(capture.Entries, e => e.Category == "ArcaneCore.Atlas.Host" && e.Level >= LogLevel.Warning && e.Message.Contains("/api/command", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reflection;
+using System.Reflection.Emit;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Ops.Watchdog;
@@ -465,5 +467,168 @@ public sealed class PerfLogAggregatorTests
         string[] lines = [.. log.Messages.Where(m => m.StartsWith("Slow map update", StringComparison.Ordinal))];
         Assert.Equal(3, lines.Length);
         Assert.All(lines, l => Assert.Matches(@"^Slow map update: map 1 instance 3 took \d+ ms \(simulation ", l));
+    }
+
+    [Fact]
+    public void ProcessBusyAndProcessStalled_AreCountedOnTheirOwn_AndUnknownIsLabelled()
+    {
+        var log = new CapturingLog();
+        var clock = new ManualClock();
+        HostLoadVerdict next = HostLoadVerdict.ProcessBusy;
+        var aggregator = new PerfLogAggregator(Options(), log, clock.Now, _ => next);
+
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(2);
+        next = HostLoadVerdict.ProcessStalled;
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(4);
+        next = HostLoadVerdict.Unknown;
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(60);
+        aggregator.FlushIfDue();
+
+        string line = Assert.Single(log.Messages);
+        Assert.Contains("verdicts: host-starved 0, quiet 0, gc 0, process-busy 1, process-stalled 1, unknown (no host sampler or no verdict) 1", line);
+    }
+
+    private static IMapUpdater[] DistinctUpdaters(int count)
+    {
+        AssemblyBuilder assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("PerfLogTestUpdaters" + Guid.NewGuid().ToString("N")), AssemblyBuilderAccess.Run);
+        ModuleBuilder module = assembly.DefineDynamicModule("m");
+        var result = new IMapUpdater[count];
+        for (int i = 0; i < count; i++)
+        {
+            TypeBuilder type = module.DefineType("Updater" + i, TypeAttributes.Public | TypeAttributes.Sealed, typeof(object), [typeof(IMapUpdater)]);
+            type.DefineDefaultConstructor(MethodAttributes.Public);
+            foreach ((string name, Type[] parameters) in new[] { ("Update", new[] { typeof(Map), typeof(uint) }), ("OnPlayerRemoved", new[] { typeof(Map), typeof(Player) }) })
+            {
+                MethodBuilder method = type.DefineMethod(name, MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot, typeof(void), parameters);
+                method.GetILGenerator().Emit(OpCodes.Ret);
+                type.DefineMethodOverride(method, typeof(IMapUpdater).GetMethod(name)!);
+            }
+
+            result[i] = (IMapUpdater)Activator.CreateInstance(type.CreateType())!;
+        }
+
+        return result;
+    }
+
+    [Fact]
+    public void MoreContributorsThanTheTableHolds_AreCountedAsUnattributed()
+    {
+        var log = new CapturingLog();
+        var clock = new ManualClock();
+        var aggregator = new PerfLogAggregator(Options(), log, clock.Now);
+        IMapUpdater[] updaters = DistinctUpdaters(70);
+
+        aggregator.RecordMapUpdate(1, 0, 400_000, Diagnostics([.. updaters.Select(u => (u, 2_000L))]), default);
+        clock.Seconds(60);
+        aggregator.FlushIfDue();
+
+        // 64 names fit; the 6 that came after them are 12 ms.
+        Assert.Contains("(+12 ms unattributed)", Assert.Single(log.Messages));
+
+        var quiet = new CapturingLog();
+        var small = new PerfLogAggregator(Options(), quiet, clock.Now);
+        small.RecordMapUpdate(1, 0, 400_000, Diagnostics([.. updaters.Take(40).Select(u => (u, 2_000L))]), default);
+        clock.Seconds(120);
+        small.FlushIfDue();
+        Assert.DoesNotContain("unattributed", Assert.Single(quiet.Messages), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheFinalFlushAtStop_NamesTheRealElapsedTime_AndTheScheduleRestartsFromIt()
+    {
+        var log = new CapturingLog();
+        var clock = new ManualClock();
+        var aggregator = new PerfLogAggregator(Options(), log, clock.Now);
+
+        clock.Seconds(10);
+        aggregator.RecordMapUpdate(1, 0, 150_000, null, default);
+        clock.Seconds(25);
+        aggregator.FlushNow();
+
+        Assert.Contains("Slow update summary: last 25 s;", Assert.Single(log.Messages));
+
+        aggregator.RecordMapUpdate(1, 0, 150_000, null, default);
+        clock.Seconds(84);
+        Assert.False(aggregator.FlushIfDue());
+        clock.Seconds(85);
+        Assert.True(aggregator.FlushIfDue());
+        Assert.Contains("last 60 s;", log.Messages.Last());
+    }
+
+    [Fact]
+    public void AnOverlongInterval_IsLabelledWithItsRealLength_AndTheNextBoundaryStaysOnTheSchedule()
+    {
+        var log = new CapturingLog();
+        var clock = new ManualClock();
+        var aggregator = new PerfLogAggregator(Options(), log, clock.Now);
+
+        aggregator.RecordMapUpdate(1, 0, 150_000, null, default);
+        clock.Seconds(200); // a hitch skipped the boundaries at 60, 120 and 180
+        Assert.True(aggregator.FlushIfDue());
+        Assert.Contains("last 200 s;", Assert.Single(log.Messages));
+
+        aggregator.RecordMapUpdate(1, 0, 150_000, null, default);
+        clock.Seconds(239);
+        Assert.False(aggregator.FlushIfDue());
+        clock.Seconds(240);
+        Assert.True(aggregator.FlushIfDue());
+        Assert.Contains("last 40 s;", log.Messages.Last());
+    }
+
+    [Fact]
+    public void TheDetailCap_StartsAfreshAtEachIntervalBoundary()
+    {
+        var clock = new ManualClock();
+        var aggregator = new PerfLogAggregator(Options(), new CapturingLog(), clock.Now);
+
+        clock.Seconds(59);
+        Assert.True(aggregator.RecordMapUpdate(1, 0, 300_000, null, default));
+        Assert.True(aggregator.RecordWorldFrame(900_000));
+        clock.Seconds(60);
+        aggregator.FlushIfDue();
+        clock.Seconds(61);
+
+        Assert.True(aggregator.RecordMapUpdate(1, 0, 300_000, null, default));
+        Assert.True(aggregator.RecordWorldFrame(900_000));
+        Assert.False(aggregator.RecordMapUpdate(1, 0, 300_000, null, default));
+    }
+
+    [ThreadStatic]
+    private static int t_gcReads;
+
+    [Fact]
+    public void World_ParallelMapThreads_CountEverySlowMap_AndTheGcShareIsTheMapsOwn()
+    {
+        var log = new CapturingLog();
+        var options = new WorldRuntimeOptions
+        {
+            TickIntervalMs = 5,
+            UpdateCompressionThreshold = 0,
+            AutosaveIntervalMs = 0,
+            Parallel = new ParallelMapOptions { MapUpdateThreads = 2 },
+        };
+        options.Perf.SlowMapUpdate = 1;
+        options.Perf.SlowMapUpdateDetail = 10_000;
+        using var world = new WorldRuntime(options, new RecordingSaveQueue(), log);
+        // Each read on a thread moves that thread's collector clock 5 s on: the delta of a map is its after-read minus its before-read only
+        // when both happen on the thread that ran it (a world-thread after-read would subtract another thread's counter).
+        world.GcSource = () => new GcSnapshot(++t_gcReads * 50_000_000L, 0, 0, 0);
+        world.UseManualClock(50);
+        foreach (uint id in new uint[] { 1, 2, 3 })
+        {
+            world.GetMap(id, 0).AddUpdater(new Sleeper(8));
+        }
+
+        world.RunTick(50);
+        world.RunTick(50);
+        world.RunTick(61_000);
+
+        string line = Assert.Single(log.Messages, m => m.StartsWith(Summary, StringComparison.Ordinal));
+        Assert.Contains("map updates over 1 ms: 9 in 3 maps", line);
+        Assert.Contains(", gc 9", line);
+        Assert.DoesNotContain(log.Messages, m => m.StartsWith("Slow map update", StringComparison.Ordinal));
     }
 }
