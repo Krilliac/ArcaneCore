@@ -379,6 +379,8 @@ raid and commands it alone; nobody has to be in a group (the GM may watch invisi
 still be fought, or lead a group of his own. All state is in memory (`PlayerbotGroupCoordinator.Siege.cs`); there is no configuration key.
 
 * **Commands (Administrator).** `.playerbot siege waypoint add` stores the invoker's position as the next waypoint (all on one map, at most 64);
+  `waypoint add at $map $x $y $z` stores that map and position instead and needs no player, so RA and the console can use it (the map must
+  exist, the numbers must be finite and inside the map, the height is kept as given; the one-map rule is the same, refused as `waypoint-other-map`);
   `waypoint list` prints them, `waypoint clear` forgets them (both refused as `siege-running` while a siege runs); `siege start $name|$prefix*|all
   #entry [raids 1|2] [force]` enlists the running bots; `siege stop` ends it (outcome `stopped: gm`).
 * **Forming.** Free, living, ungrouped bots of one team on the waypoints' map are split over the raids: tanks, then healers, then damage dealers,
