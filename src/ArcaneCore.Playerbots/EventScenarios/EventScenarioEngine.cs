@@ -29,8 +29,11 @@ internal sealed class ScenarioClaim(Guid botId, string name, int slot)
     /// </summary>
     public bool Placed { get; set; }
 
-    /// <summary>The bot holds the scenario's waiting post at the start (siege groups, until the siege starts).</summary>
-    public bool Holding { get; set; }
+    /// <summary>Milliseconds on the engine clock since the claim was first seen held by another system or by a GM's defend post, -1 while free.</summary>
+    public long BusySinceMs { get; set; } = -1;
+
+    /// <summary>The claim is given up (busy too long): removed at the end of the group's pass so a replacement can be claimed or created.</summary>
+    public bool Released { get; set; }
 
     public bool DefendSet { get; set; }
 
@@ -136,8 +139,8 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     /// <summary>A bot this close to the group's start counts as placed.</summary>
     internal const float PlacedYards = 60f;
 
-    /// <summary>Radius of the post a placed siege bot holds at the start while it waits for the siege (inside <see cref="PlacedYards"/>).</summary>
-    internal const float HoldYards = 40f;
+    /// <summary>A waiting siege claim another system (a group, a script) or a GM's defend post has held this long is given up and replaced.</summary>
+    internal const long BusyReleaseMs = 120_000;
 
     /// <summary>A teleport that has not brought the bot to its start after this long is tried again.</summary>
     internal const long TeleportRetryMs = 15_000;
@@ -234,7 +237,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             {
                 _claimed.Remove(claim.BotId);
                 // Only a post this scenario made, and only while the bot still holds it: a GM's own post stays.
-                if (g.Group.Role != EventScenarioRole.None && host.Probe(claim.BotId) is { DefendPostId: { } held } && EventScenarioPostIds.IsScenario(held)
+                if (g.Group.Role == EventScenarioRole.Defend && host.Probe(claim.BotId) is { DefendPostId: { } held } && EventScenarioPostIds.IsScenario(held)
                     && host.SetDefend(claim.BotId, null) is null)
                     cleared++;
             }
@@ -287,6 +290,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         CreateBots(g, now);
         g.ReadyCount = 0;
         for (int i = 0; i < g.Claims.Count; i++) Advance(g, g.Claims[i], now);
+        ReleaseBusy(g);
         if (g.Group.Role == EventScenarioRole.Siege) RunSiege(g, now);
     }
 
@@ -397,6 +401,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             if (host.Probe(status.BotId) is { } probe)
             {
                 string? why = probe.HeldBy ?? (probe.Team != def.Team ? "is on the other team" : null);
+                if (why is null && def.Role == EventScenarioRole.Siege && probe.DefendPostId is { } gmPost && !EventScenarioPostIds.IsScenario(gmPost)) why = "holds a GM's defend post";
                 if (why is not null)
                 {
                     unavailable++;
@@ -496,47 +501,44 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         }
 
         bool waiting = def.Role == EventScenarioRole.Siege && g.SiegeId == 0 && g.SiegeOutcome is null;
-        if (waiting && claim.Placed && !AtStart(def, probe))
+        bool busy = IsBusy(probe);
+        if (waiting)
         {
-            // Placed bots wait for the rest of the group (starts are throttled, so that can take long) and may have been carried off: place again.
+            if (!busy) claim.BusySinceMs = -1;
+            else if (claim.BusySinceMs < 0) claim.BusySinceMs = now;
+            else if (now - claim.BusySinceMs >= BusyReleaseMs) claim.Released = true;
+        }
+
+        // Placed bots wait for the rest of the group (starts are throttled, so that can take long) and may be carried off by their own play:
+        // placed again, every pass until the siege starts. A bot with a GM's defend post is not moved from under it (it would walk back).
+        if (waiting && claim.Placed && !AtStart(def, probe) && !(probe.DefendPostId is { } held && !EventScenarioPostIds.IsScenario(held)))
+        {
             claim.Placed = false;
             claim.TeleportAtMs = -1;
             claim.TeleportAttempts = 0;
         }
 
         if (claim.AtLevel && !claim.Placed) Place(g, claim, probe, now);
-        if (claim.Placed && claim.Alive && claim.AtLevel) g.ReadyCount++;
+        if (claim.Placed && claim.Alive && claim.AtLevel && !busy) g.ReadyCount++;
         if (def.Role == EventScenarioRole.Defend && claim.Placed) Defend(g, claim, probe, now);
-        if (waiting && claim.Placed) Hold(g, claim, probe, now);
     }
 
     private static bool AtStart(EventScenarioGroup def, ScenarioBotProbe probe)
         => probe.MapId == def.StartMap && Vector3.Distance(probe.Position, def.Start) <= PlacedYards;
 
-    /// <summary>
-    /// A placed siege bot waits at the start on a defend post of the scenario (the brain's existing pin: it walks back inside the post and runs
-    /// no quest, grind or explore step), until <see cref="RunSiege"/> enlists it. A bot that holds a GM's post is left alone; a refusal
-    /// (the bot is busy) is tried again at the usual retry cadence.
-    /// </summary>
-    private void Hold(ScenarioGroupRun g, ScenarioClaim claim, ScenarioBotProbe probe, long now)
-    {
-        EventScenarioGroup def = g.Group;
-        int wanted = EventScenarioPostIds.For(def.EventId, def.GroupId, 0);
-        if (probe.DefendPostId == wanted) { claim.Holding = true; return; }
-        claim.Holding = false;
-        if (probe.DefendPostId is not null || now < claim.NextDefendMs) return;
-        claim.Holding = host.SetDefend(claim.BotId, new PlayerbotDefendPost(def.StartMap, def.Start, HoldYards, wanted)) is null;
-        if (!claim.Holding) claim.NextDefendMs = now + RetryMs;
-    }
+    /// <summary>A claim another system holds is not ready; neither is one with a GM's defend post (the coordinator turns both away as busy).</summary>
+    private static bool IsBusy(ScenarioBotProbe probe)
+        => probe.HeldBy is not null || (probe.DefendPostId is { } post && !EventScenarioPostIds.IsScenario(post));
 
-    /// <summary>The siege started: the waiting posts are taken away (the coordinator drives the enlisted bots; the others are free again).</summary>
-    private void ReleaseHolds(ScenarioGroupRun g)
+    private void ReleaseBusy(ScenarioGroupRun g)
     {
-        foreach (ScenarioClaim claim in g.Claims)
+        for (int i = g.Claims.Count - 1; i >= 0; i--)
         {
-            if (!claim.Holding) continue;
-            claim.Holding = false;
-            host.SetDefend(claim.BotId, null);
+            ScenarioClaim claim = g.Claims[i];
+            if (!claim.Released) continue;
+            g.Claims.RemoveAt(i);
+            _claimed.Remove(claim.BotId);
+            logger.LogInformation("Bot event scenario {Event} group {Group}: {Bot} stayed busy elsewhere and is given up; a replacement is claimed or created", g.Group.EventId, g.Group.GroupId, claim.Name);
         }
     }
 
@@ -571,6 +573,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
         // A bot another system took since it was claimed is not moved from under it.
         if (probe.HeldBy is { } held) { claim.Refusal = "place: " + held; return; }
+        if (def.Role == EventScenarioRole.Siege && probe.DefendPostId is { } post && !EventScenarioPostIds.IsScenario(post)) { claim.Refusal = "place: post-set-by-gm"; return; }
         if (!probe.Alive) { claim.Refusal = "place: bot-dead"; return; }
         if (claim.TeleportAtMs >= 0 && now - claim.TeleportAtMs < TeleportRetryMs) return;
         if (_teleportBudget <= 0) return;
@@ -649,8 +652,16 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         if (now < g.NextSiegeAttemptMs) return;
         g.NextSiegeAttemptMs = now + SiegeRetryMs;
         _readyIds.Clear();
+        // A last look at every bot at the moment of the enlist: nobody far from the start, held elsewhere or on a GM's post is sent in.
         foreach (ScenarioClaim claim in g.Claims)
-            if (claim.Online && claim.Alive && claim.AtLevel && claim.Placed) _readyIds.Add(claim.BotId);
+        {
+            if (!claim.Online || !claim.Alive || !claim.AtLevel || !claim.Placed) continue;
+            if (host.Probe(claim.BotId) is not { } enlistProbe || IsBusy(enlistProbe)) continue;
+            if (!AtStart(def, enlistProbe)) { claim.Placed = false; claim.TeleportAtMs = -1; claim.TeleportAttempts = 0; continue; }
+            _readyIds.Add(claim.BotId);
+        }
+
+        if (_readyIds.Count * 100 / def.Count < siege.MinReadyPct || _readyIds.Count < siege.Raids * 2) return; // the look found it short: the next pass places again
         ScenarioSiegeResult result = host.StartSiege(_readyIds, siege);
         if (!result.Started)
         {
@@ -660,7 +671,6 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
         g.SiegeId = result.SiegeId;
         g.SiegeRefusal = null;
-        ReleaseHolds(g);
         g.SiegeEnlisted = result.Enlisted;
         logger.LogInformation("Bot event scenario {Event} group {Group}: siege {Siege} started with {Enlisted} bots ({Skipped} turned away)",
             def.EventId, def.GroupId, result.SiegeId, result.Enlisted, result.Skipped);

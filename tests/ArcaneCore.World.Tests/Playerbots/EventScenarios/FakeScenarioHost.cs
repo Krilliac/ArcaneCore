@@ -199,12 +199,15 @@ internal sealed class FakeScenarioHost : IEventScenarioHost
     {
         if (SiegeRefusal is { } refusal) return new ScenarioSiegeResult(false, 0, refusal, 0, 0);
         if (RunningSiegeId is not null) return new ScenarioSiegeResult(false, 0, "siege-running", 0, 0);
-        SiegeStarts.Add(([.. botIds], siege));
+        // Like the real coordinator (PlayerbotGroupCoordinator.Siege): a bot that holds a defend post is not Free and is turned away as busy.
+        Guid[] free = [.. botIds.Where(id => Posts.GetValueOrDefault(id) is null)];
+        if (free.Length < siege.Raids * 2) return new ScenarioSiegeResult(false, 0, "too-few-bots", 0, botIds.Count - free.Length);
+        SiegeStarts.Add(([.. free], siege));
         SiegeBots.Clear();
-        SiegeBots.AddRange(botIds);
+        SiegeBots.AddRange(free);
         RunningSiegeId = _nextSiege++;
         SiegeOutcome = null;
-        return new ScenarioSiegeResult(true, RunningSiegeId.Value, null, botIds.Count, 0);
+        return new ScenarioSiegeResult(true, RunningSiegeId.Value, null, free.Length, botIds.Count - free.Length);
     }
 
     public bool StopSiege(string reason)

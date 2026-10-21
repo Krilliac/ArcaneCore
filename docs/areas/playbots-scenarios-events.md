@@ -67,7 +67,13 @@ for it) it ticks `EventScenarioEngine`, which holds the desired state (the runni
    really held. A bot that holds a post set by a GM (`.playerbot defend`) keeps it: the scenario does not overwrite it, reports
    `defend: post-set-by-gm`, and does not clear it when the event stops.
 4. A siege group starts one siege when `min_ready_pct` percent of its bots are online, at level and placed (and at least two per
-   raid). A siege that has ended (won or stopped) is not started again while the event runs. To start it, the stored siege waypoints
+   raid). Placement is re-checked every pass until the siege starts: a placed bot found more than 60 yards from the group's start
+   (or on another map) loses its placed state, is teleported back (same budget and retry as the first placement), and is neither
+   counted ready nor enlisted until it is back, so bots that wander off while the rest of a throttled fill catches up are
+   returned instead of marching to the first waypoint from far away. The positions are looked at once more at the moment of the
+   enlist. A waiting bot is not pinned with a defend post (the coordinator treats a bot with a post as busy). A bot that another
+   system holds (a party, a dungeon group, a script) or that carries a GM's defend post is not ready and is not teleported from under
+   its post; after 2 minutes of that the claim is given up and a replacement is claimed or, with `provision`, created. A siege that has ended (won or stopped) is not started again while the event runs. To start it, the stored siege waypoints
    (which a GM may have staged with `.playerbot siege waypoint`) are replaced by the group's; that happens only when the siege is
    about to start, never while another siege runs. A siege that is already under way whose raids consist of bots of the group's prefix (at least 90 percent of the raid members), as
    after a hot reload of the playerbot pack, is taken over (status `siege N running`): those bots become the group's claims although the

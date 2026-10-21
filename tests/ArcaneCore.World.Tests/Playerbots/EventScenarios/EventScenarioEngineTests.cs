@@ -442,21 +442,22 @@ public sealed class EventScenarioEngineTests
         Assert.Contains("siege 1 running (8 bots)", rig.Status());
     }
 
-    [Fact]
-    public void APlacedSiegeBotCarriedOffBeforeTheSiegeStarts_IsPlacedAgain_AndNeitherReadyNorEnlistedUntilBack()
+    /// <summary>Five wanted, four online and placed, the fifth not online yet, so a 100 percent siege keeps waiting.</summary>
+    private static (Rig Rig, FakeBot Drifter, FakeBot Late) WaitingRaiders(bool provision = false)
     {
-        var rig = new Rig(Raiders(count: 5, minReady: 100));
+        var rig = new Rig(Raiders(count: 5, minReady: 100, provision: provision));
         for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
-        FakeBot late = rig.Host.Add("Siegebote", team: 0); // the fifth is not online yet, so the group keeps waiting
+        FakeBot late = rig.Host.Add("Siegebote", team: 0); // not online yet
         late.Desired = true;
         rig.Engine.EventChanged(Event, active: true);
         rig.Ticks(3);
         Assert.Equal(4, rig.Host.Teleports.Count);
         Assert.Contains("placed 4", rig.Status());
+        return (rig, rig.Host.Find("Siegebota"), late);
+    }
 
-        FakeBot drifter = rig.Host.Find("Siegebota");
-        drifter.Position = new Vector3(-1000f, 100f, 40f); // 1,000 yards away: autonomous play walked it off
-        drifter.Map = 1;
+    private static void AssertDriftedBotIsPlacedAgainAndEnlistedOnlyWhenBack(Rig rig, FakeBot drifter, FakeBot late)
+    {
         rig.Host.TeleportRefusal = "teleport-refused";
         rig.Ticks(2);
 
@@ -476,31 +477,88 @@ public sealed class EventScenarioEngineTests
     }
 
     [Fact]
-    public void PlacedSiegeBots_HoldTheStartWhileTheyWait_AndAreReleasedWhenTheSiegeStarts()
+    public void APlacedSiegeBotCarriedOffByDistance_IsPlacedAgain_AndNeitherReadyNorEnlistedUntilBack()
     {
-        var rig = new Rig(Raiders(count: 5, minReady: 100));
-        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
-        FakeBot late = rig.Host.Add("Siegebote", team: 0);
-        late.Desired = true;
-        rig.Engine.EventChanged(Event, active: true);
-        rig.Ticks(4);
+        (Rig rig, FakeBot drifter, FakeBot late) = WaitingRaiders();
+        drifter.Position = Start + new Vector3(1000f, 0f, 0f); // same map, 1,000 yards off: autonomous play walked it away
+        AssertDriftedBotIsPlacedAgainAndEnlistedOnlyWhenBack(rig, drifter, late);
+    }
 
-        Assert.Empty(rig.Host.SiegeStarts);
-        FakeBot[] placed = [.. rig.Host.Bots.Where(b => b.Online)];
-        Assert.Equal(4, placed.Length);
-        foreach (FakeBot bot in placed)
-        {
-            PlayerbotDefendPost post = Assert.IsType<PlayerbotDefendPost>(rig.Host.Posts[bot.Id]);
-            Assert.True(EventScenarioPostIds.IsScenario(post.PostId));
-            Assert.Equal(Start, post.Centre);
-            Assert.True(post.Radius < EventScenarioEngine.PlacedYards);
-        }
+    [Fact]
+    public void APlacedSiegeBotOnAnotherMap_IsPlacedAgain_AndNeitherReadyNorEnlistedUntilBack()
+    {
+        (Rig rig, FakeBot drifter, FakeBot late) = WaitingRaiders();
+        drifter.Map = 1; // same coordinates, another map (a dungeon portal)
+        AssertDriftedBotIsPlacedAgainAndEnlistedOnlyWhenBack(rig, drifter, late);
+    }
+
+    [Fact]
+    public void WaitingSiegeBots_GetNoDefendPost_SoTheCoordinatorStillFindsThemFree()
+    {
+        (Rig rig, _, FakeBot late) = WaitingRaiders();
+        Assert.All(rig.Host.Posts.Values, post => Assert.Null(post));
 
         late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
-        rig.Ticks(4);
+        rig.Ticks(6);
 
         Assert.Single(rig.Host.SiegeStarts);
-        foreach (FakeBot bot in rig.Host.Bots) Assert.Null(rig.Host.Posts.GetValueOrDefault(bot.Id));
+        Assert.Equal(5, rig.Host.SiegeStarts[0].Bots.Count);
+    }
+
+    [Fact]
+    public void AWaitingClaimHeldElsewhereForTooLong_IsGivenUp_AndAReplacementIsCreated()
+    {
+        (Rig rig, _, FakeBot late) = WaitingRaiders(provision: true);
+        late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        FakeBot held = rig.Host.Find("Siegebotb");
+        held.HeldBy = "is in a group";
+        rig.Tick();
+        Assert.Empty(rig.Host.SiegeStarts);
+        Assert.NotNull(rig.Engine.ClaimOf(held.Id));
+
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs + 1_000);
+        Assert.Null(rig.Engine.ClaimOf(held.Id));
+        rig.Ticks(12);
+
+        Assert.Single(rig.Host.Created);
+        Assert.Single(rig.Host.SiegeStarts);
+        Assert.Equal(5, rig.Host.SiegeStarts[0].Bots.Count);
+        Assert.DoesNotContain(held.Id, rig.Host.SiegeStarts[0].Bots);
+    }
+
+    [Fact]
+    public void AWaitingClaimThatBecomesBusyBriefly_IsKept()
+    {
+        (Rig rig, _, FakeBot late) = WaitingRaiders(provision: true);
+        FakeBot held = rig.Host.Find("Siegebotb");
+        held.HeldBy = "is in a group";
+        rig.Ticks(3);
+        held.HeldBy = null;
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs);
+        late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        rig.Ticks(6);
+
+        Assert.NotNull(rig.Engine.ClaimOf(held.Id));
+        Assert.Empty(rig.Host.Created);
+        Assert.Single(rig.Host.SiegeStarts);
+    }
+
+    [Fact]
+    public void ASiegeBotOnAGmsDefendPostElsewhere_IsNotMovedFromUnderIt_NotReady_AndGivenUpAfterTheTimeout()
+    {
+        (Rig rig, _, _) = WaitingRaiders();
+        FakeBot gm = rig.Host.Find("Siegebotb");
+        gm.Position = Start + new Vector3(800f, 0f, 0f);
+        rig.Host.Posts[gm.Id] = new PlayerbotDefendPost(0, gm.Position, 40f, 7); // a GM's post (not a scenario id)
+        rig.Ticks(4);
+
+        Assert.Equal(4, rig.Host.Teleports.Count); // not teleported away from its post
+        Assert.Contains("siege waiting: 3/5 ready", rig.Status());
+        Assert.Empty(rig.Host.SiegeStarts);
+
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs + 1_000);
+        Assert.Null(rig.Engine.ClaimOf(gm.Id));
+        Assert.Equal(7, rig.Host.Posts[gm.Id]!.PostId); // the GM's post is untouched
     }
 
     [Fact]
