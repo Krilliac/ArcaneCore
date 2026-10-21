@@ -165,6 +165,18 @@ internal static class PlayerbotMotion
         state.LastRejectedDestination = default;
     }
 
+    /// <summary>
+    /// Lifts the refusal of one place: removes the blacklist entries within <see cref="SamePlaceYards"/> of <paramref name="destination"/>
+    /// and nothing else. The other refused places, the loop pattern and the rejection count stay (<see cref="ForgetLoops"/> clears them
+    /// all, which a caller that may run again and again would turn into a guard that never trips). 2D like <see cref="IsBlacklisted"/>, whose refusal it lifts. Thread affinity: the world update, as
+    /// the rest of the motion state.
+    /// </summary>
+    internal static void Unblacklist(Player player, Vector3 destination)
+    {
+        if (!States.TryGetValue(player, out MotionState? state) || state.Blacklist.Count == 0) return;
+        state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(destination)) <= SamePlaceYards);
+    }
+
     /// <summary>Whether <paramref name="destination"/> was given up after a loop and is still refused.</summary>
     internal static bool IsBlacklisted(Player player, Vector3 destination)
     {

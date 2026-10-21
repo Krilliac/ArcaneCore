@@ -67,7 +67,8 @@ Do it in this order:
    200 yards; more bots than the bulk cap need a trailing `force`; `.playerbot defend HordeDef* clear` ends the post). Use a different prefix per post.
    Example posts inside Undercity (map 0): the three lift tops at (1596, 292), (1544, 241) and (1595, 189); the entrance of the Royal Quarter; the
    Royal Quarter itself, near (1290, 316, -57). What a defender does (`PlayerbotBrain.Defend.cs`): it holds the post (it walks back when it is outside
-   the radius, and stands, rests and buffs while nothing happens); it engages a hostile player inside the radius, or one that attacks it, and helps a
+   the radius, and stands, rests and buffs while nothing happens; a defender revived by the spirit healer waits out its resurrection sickness
+   where it stands, status `decision=defend-wait-sickness; ...`, and walks back when the aura ends); it engages a hostile player inside the radius, or one that attacks it, and helps a
    friendly creature that fights inside it; the defenders of one post heal each other. It turns its own PvP flag on (CMSG_TOGGLE_PVP) and keeps it
    while it has the post: a player may only be attacked while flagged (`CombatHooks.CanAttack`), so the Alliance bots can fight the defenders only
    once they are flagged, and a defender in turn fights only a player the same rule lets it attack (a flagged one; an Alliance bot flags itself on its

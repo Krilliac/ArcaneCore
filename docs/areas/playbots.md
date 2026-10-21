@@ -506,7 +506,7 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   onto the landing there nearest its destination, and the destination plans again from there. Nothing teleports the bot.
 * **Fails closed** with a stall reason (`elevator: ...`, the bot's own set-aside as for the tram, never every bot's): no way to the lift or
   its landing (no progress for 60 s), no car in the world, no floor beside a car, no car standing at the landing within two cycles and 30 s
-  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at.
+  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at, and a car that never stands anywhere drops the bot after two cycles and 30 s.
 * **Never off a car where it stands.** Under a car the static collision data has no floor but the bottom of the shaft (a car is a dynamic
   object, in no vmap; measured on the real Great Lift: 5.3 to 5.5 yards down into the pit at the foot, 134.8 yards at the top), so the bot
   is never stepped off or dropped where it stands. A car that leaves the world under the bot (or a bot knocked off it in the shaft) lets
@@ -1354,6 +1354,11 @@ A bot with a post owns its think right after death and recovery and the transit 
    the heal is safe (`IsSafeHealTarget`, as for a tagger).
 4. **Return.** Outside the full radius, the bot walks back with the home walk (`TryReturnHome`: lift-aware, the Auto return mode's teleport
    rules apply) and stops once it is within 0.75 times the radius of the centre (`PlayerbotHome`); no errand holds a defender off its post.
+   **Not while it carries resurrection sickness** (spell 15007, `SpiritHealerResurrection.ResurrectionSicknessSpell`, read through
+   `PlayerbotSickness.Holder`; a permanent aura does not count): a defender the spirit healer revived stays at the graveyard where it stands,
+   rests, sits and buffs (steps 1 to 3 still apply, so it fights back what attacks it) and walks back the think after the aura ends. Without this the
+   walk-back took it under the raid that had killed it, where it died again (live 2026-10-20: 3 deaths in 253 s near the Undercity lift top). The
+   risk line of `.playerbot status` and `inspect` reads `decision=defend-wait-sickness; <the real risk line>` meanwhile (both are shown); a dead or ghost defender shows the real line only. A defender without the aura is unchanged.
 5. Otherwise it holds, rests and buffs. The goal shows as `Home`; `.playerbot inspect` prints `defend=r=40 post=3 map=0 centre=x,y,z`.
 
 An unflagged enemy player is never attacked, and a hostile player outside the radius only if it attacks the bot.

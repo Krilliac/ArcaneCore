@@ -399,8 +399,76 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   the objective or the skull is on it); out of combat **Regroup** (a member more
   than 30 yards behind, resting, or hurt below 60 % for at most 90 s) or **Hold** (at the waypoint while the other raid is not); **Pull** (a
   hostile within 40 yards, kept until it is farther than 55: hysteresis); **AssignTank** (two or more hostiles and no cross); **Advance**; **Assault**
-  (in combat). The scan for hostiles takes any creature the raid may attack and that is hostile to it, whatever its NPC flags (every Undercity
+  (in combat). Between the retreat rules and the rest, in combat, sit the two **push-through** rules (below). The scan for hostiles takes any creature the raid may attack and that is hostile to it, whatever its NPC flags (every Undercity
   target carries gossip or quest-giver flags); friendly and neutral NPCs are out, critters too (the objective entry excepted).
+* **Push through (`PlayerbotSiegeCommander.PushOf`).** The commander advances only out of combat, but a trickle of returning defenders and
+  respawning guards can keep a raid in combat at one waypoint for good. So a raid in combat gets the order **Advance** (no new order: the raid's
+  `Push` says why, `quiet` or `stalemate`; the status detail carries `push=quiet`, the raid warning is `Pushing through to waypoint N`, the leader's AI
+  step is `lead:siege-advance:push`) in either case: (a) **quiet**, no hostile counted near the leader (`Hostiles == 0`, the 55-yard scan) for
+  `PushThroughQuietMs` (10 s) running; or (b) **stalemate**, the raid has been in combat at the same step for `StalemateMs` (180 s), its average health is
+  at least `StalemateHealthPct` (80 %), no member died in the last `StalemateLossWindowMs` (60 s) and the hostile count is not lower than it was when the
+  step's clock started (a slow win is not a stalemate; a trickle that refills the count is; a push in force (`PushInForce`) is not cancelled by a falling count, which is what walking away from the hostiles or killing them does). Both are off while the raid fights the objective
+  (a member's victim is the objective, or the skull is on it), on the **final leg** (the step heads for the last waypoint or beyond: `Step >= waypoints - 1`),
+  while a retreat or rally latch runs, and in a fight the retreat rules call lost (tank dead, average health under 35 %, a third dead: those still retreat,
+  once per engagement, at most twice, with the same counting as before). A push never begins a retreat and is never counted as one.
+  **A push is the siege's decision, not one raid's** (`GrantPushes`, every 400 ms): a raid that qualifies is held back while the other raid is in combat and
+  does not qualify (the lockstep would wait for that fight and the pushing leader would idle among its hostiles), and once its leader stands at the waypoint
+  while a peer is not there (or a raid is unled, or the waypoint is the last) the order is Assault and the push is held (`Push` is none). Only a push that was
+  **granted** is held: it stays in force (`PushInForce`) and goes on when the hold ends. A qualification that is refused starts nothing and is judged again at every read
+  (see "A push in force carries" below). A push held back only by a member's lag stays granted (see the lockstep below).
+  **Clocks.** The *in-combat clock of a step* starts at the first coordinator read in combat at that step, takes that read's hostile count as the baseline of
+  a stalemate, and resets when the step changes (starting again at once if the raid is still in combat) and after 5 s out of combat (`StepClockQuietMs`, the
+  length of the retreat's quiet); a shorter gap does not break it. It does **not** reset when a retreat begins: a retreat keeps the step (its point is the
+  waypoint behind), so a fight chased out of its rally after `RallyHoldMs` carries the time it has already run; the stalemate then still needs 80 % health and
+  no loss in 60 s, which a raid that has just retreated rarely has. The *quiet clock* runs only while the raid is in combat with `Hostiles == 0`, starts over at
+  the first read that is not, and also starts over at a step change (each waypoint needs its own 10 s). The loss clock is the last read in which a member was
+  dead that was not at the read before (the first read counts nobody); **a member that goes offline is not found alive and counts as a loss**, as does one
+  that logs back in dead.
+  **A push in force carries.** A push **begins only from a granted one** (`GrantPushes` said yes, the order is Advance): a qualification the siege refused starts nothing, so it is judged again at every read and cannot be carried later past the 80 %, loss-window and hostile-count checks it passed only at the moment of the refusal (`NextPushInForce`). A granted push the coordinator keeps in `PushInForce` and feeds back (`PlayerbotSiegeFacts.Pushing`); `PushOf` returns it
+  unchanged, through the step bump (which zeroes both clocks), a hold at the waypoint for the peer, a falling hostile count and a dip under 80 % health. It ends on:
+  out of combat, nobody alive, a member fighting the objective, the final leg, a retreat latch, the denial below (`PushDeniedStep`) and a fight the
+  retreat rules call lost (those still retreat). A block of the siege's grant (the peer is in a fight that does not qualify, or the leader waits at the waypoint for a peer that
+  is not there) only **holds** the push: the order is Assault meanwhile (`Push` is none, `PushInForce` stays), and it resumes when the block ends.
+  **While a raid pushes through** the skull and cross are taken off their units when the push begins (and `PullTarget` is empty). The **leader walks**: away from its
+  waypoint it fights nothing (its target is none, so `PlayerbotGroupAI.Update` reaches the walk; its attackers follow it), and at its waypoint, waiting, it fights back.
+  **Every member answers any attacker of any raid member** within `AssistYards` (50 yards), its own attacker first, then the nearest, and with none follows the leader;
+  there are no marks and no new targets (`SelectTarget`). A rally is different: there a member fights back only its own attackers (a healer also a raid member's).
+  **At the waypoint the pushing leader picks no fights, but answers what attacks it**: it takes what is at the waypoint (within `WaypointYards`, 6 yards, of it, in 3D so that a
+  unit on the other level of a lift top is not) and an attacker that is on it, wherever it stands within `SiegeAnswerLeashYards` (30 yards, 3D) of the waypoint (a caster, a
+  flagged player, a long-reach melee unit). A leader that cannot hit that attacker from where it stands closes on it (a melee tank under fire from a ranged attacker; a ranged
+  leader casts from where it stands) but only while the attacker is inside the leash: an attacker that kites beyond it is not followed, the leader walks back to the waypoint
+  (and stands there taking what it takes until the lag hold ends, `LagHoldMs`), and so it does when the attacker dies or stops attacking. Units outside the disk that do not
+  attack the leader are ignored. While the leader fights from the waypoint its own blacklist entry is lifted on every think (only that place, `PlayerbotMotion.Unblacklist`), so the chase out and the walk back do not read as a loop. While the leader answers, the raid reads it as at the waypoint, so the lag hold and the no-progress clock do not flip because it left the disk
+  (`PlayerbotGroupCoordinator.UpdateAnswer`); the **lockstep step advance** needs the leader really in the disk (`AtWaypointReal`, level-aware), so the step never moves while the leader is out answering. An answer **begins** only from a real, level-aware reading (`IsAtWaypoint`) at the current step, for the current leader, while the raid
+  pushes, when the leader's AI has asked for it (`AnswerRequestedMs`, fresh for `AnswerFreshMs`, 3 s). It **lasts** until the leader is back in the disk and no longer fighting (a
+  walk back longer than 3 s keeps it), and is **bounded**: it ends when the leader is more than `SiegeAnswerLeashYards` plus `WaypointYards` (36 yards) from the waypoint in the
+  plane or more than `WaypointLevelYards` (10 yards) off its level, and once the leader has spent `LagHoldMs` out of the disk answering on the step (summed over the step's excursions, not per excursion: a re-request does not restart it; fighting inside the disk costs none of it; once spent the step has no further answer and the leader fights only what is in the disk; the next step has its own). The request must come from the current leader (`AnswerRequestedLeader`). It belongs to its step and its leader: a step change, a promoted leader or the end of
+  the push ends it, so it neither carries over to the next waypoint, nor is inherited, nor sustains itself (a leader fighting at waypoint N is not read at N+1). Chasing without that leash drew the leader out of the 6-yard
+  radius, so that its target was none and it walked back, then chased again; the loop watch read that as an A, B, A pattern and refused the waypoint, the walk reported no path
+  and the push was denied after 30 s. **A leader death is not a retreat**: a retreat needs every tank dead (`WouldRetreat`); the death of the leader promotes the next tank
+  (`PromoteLeader`) and the push goes on. Members are unchanged (any attacker of a raid member within 50 yards). Since the push has its own no-progress bound
+  (`PushStallMs`, 30 s, which ends a push whose leader cannot get on whatever it does), `LeadSiege` lifts the waypoint's own loop-watch refusal on every think while the waypoint is
+  refused (`PlayerbotMotion.Unblacklist`: only the entries at that place; the other refusals, the loop pattern and the rejection count stay, so the guard against a walk refused
+  again and again still trips). `Unblacklist` is 2D like the refusal itself (`IsBlacklisted`), so it also lifts a refused spot with the same XY on another level: the walk would
+  refuse that spot as well. **A pushing leader away from its waypoint does not rest, eat, loot or buff** (queued loot packets wait, no `FinishLoot`, `Resurrect`, `LootHeld`,
+  buffs or `Rest`, and a rest already running is ended): a sit at 30 % health with weak food stood the leader still until the push was withdrawn. **"At the waypoint" is
+  level-aware**: within `WaypointYards` in the plane and no more than `WaypointLevelYards` (10 yards) in height, because a lift-top waypoint shares its XY with the floor
+  up to about 100 yards below it and the Undercity levels are about 20 yards apart (lift bottom -40.8, floors -59 to -62; within 6 yards in the plane walkable ground does not climb more than about 7).
+  **The no-progress bound** (`NotePushProgress`): while the raid pushes and its leader is not at its waypoint, the leader's 2D distance to the step goal must set a
+  new least value, by more than `PushProgressYards` (2 yards), within `PushStallMs` (30 s). A push that does not is withdrawn and denied for the rest of the step
+  (`PushDeniedStep`): the raid is back at Assault, which is the baseline, a note and a log warning say so (`push withdrawn, the leader got no nearer to waypoint N`), and
+  the status detail ends in `push=denied`. Standing at the waypoint counts as progress (the lockstep and its own bound govern there), and so does an elevator trip of the leader at any stage (`PlayerbotElevator.IsTraveling`): both levels of an Undercity lift share their XY, so a wait and a ride gain no 2D yards; the elevator has its own bounds (60 s of no progress on the walk to the stop, two cycles and 30 s waiting for the car, a cycle and 30 s aboard, and aboard is also dropped at two cycles and 30 s if the car never stands anywhere).
+  **Lockstep:** the step moves on once every leader stands at its waypoint, no living member of any raid is more than `LagYards` (30 yards) behind its leader, and each
+  raid is out of combat or pushing. A pushing leader that reaches the next waypoint waits there, fighting back, until the members that disengaged (on the other lift
+  level, say) have caught up. That wait is bound too: after `LagHoldMs` (90 s) of a member more than 30 yards behind, the lag is waived for that step change (`LagWaived`):
+  an event note, a log warning and the raid warning `Pushing on without the stragglers` say so, and the status detail ends in `lag=waived` while the step cannot move
+  yet because the peer, standing at its waypoint too, has a straggler of its own that is not waived yet (a peer that is not at its waypoint blocks the push instead, which resets the lag clock). Assault between waypoints ignores the lag because its leader does not walk. **Stall watch:** a hold of a push for the peer (`PushInForce` set, no progress), a push whose
+  leader gets no nearer, and a fight that has lasted longer than `StalemateMs` at one step, the objective's fight and the one on the leg to it excepted, are not progress (a pushing leader that is getting nearer is), so such a siege is
+  reported stalled 120 s later.
+  **Lifts:** a ride to the stop (`ElevatorStage.ToStop`) is ended by combat
+  (`PlayerbotGroupAI.Update`), so a raid in combat at the lift top would begin the ride and cancel it at every think for as long as it stayed in combat
+  (the cancel keeps no backoff). A raid that pushes through is exempt (`PlayerbotGroupAI.CombatEndsRide`): its leader and members ride on; when the push
+  ends (the raid is back to Assault, or retreats), the cancel applies again. A member aboard is never cancelled (as before).
 * **The retreat, in two phases.** The retreat point is the waypoint behind the step (where the siege began when the step is the first).
   **Retreat** (disengage) lasts while the leader is more than `RallyYards` (8 yards) from it: nobody fights or casts (a cast-time spell stops the
   mover, so healers do not heal either), the leader walks to the point, the members follow it, and no mark is set. **Rally** (the order name once
@@ -423,7 +491,7 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   says so) and the siege goes on. A hot reload ends a siege as `stopped: reload` and tells the watchers.
   Bots with a defend post are not free for a siege (nor for a quest group). A siege whose raids have all ended is `stopped: raids-ended`.
 * **Status and watch.** `.playerbot siege status` prints the siege (step, running time) and a line per raid (leader, who lives, the last order and
-  its numbers, retreats; the order is one of `hold`, `regroup`, `advance`, `pull`, `assigntank`, `assault`, `retreat`, `rally`); `status $leader` only that raid
+  its numbers, retreats; the order is one of `hold`, `regroup`, `advance`, `pull`, `assigntank`, `assault`, `retreat`, `rally`; the detail adds `push=stalemate|quiet` while the raid pushes, `push=denied` once the no-progress bound has withdrawn the push for the step, and `lag=waived` while the lag hold is waived); `status $leader` only that raid
   and its last three raid warnings. `.playerbot siege watch on|off` makes the coordinator
   send the GM one system line per raid whenever its order, step or strength changes (at most one batch every 2 s), and one when the siege ends;
   without an argument it says whether you watch. Both are in memory with the siege.
