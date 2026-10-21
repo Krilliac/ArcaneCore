@@ -3,11 +3,16 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Population;
+using ArcaneCore.World.Tests.Playerbots.Population;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -390,6 +395,83 @@ public sealed partial class PlayerbotTaxiTests
         Assert.Equal(10, options.Taxi.BackoffMinutes);
         options.Taxi.BackoffMinutes = 0;
         Assert.Throws<InvalidOperationException>(options.Validate);
+    }
+
+    [Fact]
+    public async Task AFlightAbortedMidAir_CancelsTheTripWithoutReportingLandedOffNodeOrWrongMap()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            TaxiFlightSystem flights = rig.Host.WorldServices.GetRequiredService<NpcServicesFeature>().Flights!;
+            int abortedCount = 0;
+            flights.Aborted += (p, _) => { if (ReferenceEquals(p, player)) abortedCount++; };
+
+            // Case 1: Mid-flight external relocation causes Advance to abort (landed: false) far from destination.
+            TaxiTrip trip1 = BoardFlight(rig, player, options);
+            flights.Update(player.Map!, 1000);
+            Assert.True(flights.IsFlying(player));
+            player.Relocate(player.X - 500f, player.Y, player.Z, 0, rig.Session.World.NowMs);
+            flights.Update(player.Map!, 1000);
+            Assert.False(flights.IsFlying(player));
+            Assert.Equal(1, abortedCount);
+
+            Assert.Equal(TaxiStep.Failed, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out string? failure1));
+            Assert.NotNull(failure1);
+            Assert.True(trip1.Interrupted);
+            Assert.False(PlayerbotTaxi.IsActive(player));
+            AssertNoTaxiAnomaly(cap);
+
+            // Case 2: Mid-flight cross-map teleport calls Abort(player) directly with the player on another map.
+            player.Relocate(TaxiFixture.StartX, TaxiFixture.StartY, TaxiFixture.Z, 0, rig.Session.World.NowMs);
+            TaxiTrip trip2 = BoardFlight(rig, player, options);
+            flights.Update(player.Map!, 1000);
+            Assert.True(flights.IsFlying(player));
+            trip2.MapId = 1u;
+            flights.Abort(player);
+            Assert.False(flights.IsFlying(player));
+            Assert.Equal(2, abortedCount);
+
+            Assert.Equal(TaxiStep.Failed, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out string? failure2));
+            Assert.NotNull(failure2);
+            Assert.True(trip2.Interrupted);
+            Assert.False(PlayerbotTaxi.IsActive(player));
+            AssertNoTaxiAnomaly(cap);
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task PopulationProvisioner_Relocate_RefusesAndDoesNotTeleport_WhileBotIsFlyingOnTaxi()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 0);
+        PlayerbotOperationResult made = await world.Bots.CreateAsync("Taxiflyer", 1, 1);
+        Guid id = Assert.IsType<Guid>(made.BotId);
+        Assert.True((await world.Bots.StartAsync(id.ToString())).Success);
+        var safeAt = new WorldSafeLoc(9901, 0, -8200f, -700f, 90f, 0f, "safe");
+
+        await world.Host.World.InvokeAsync(() =>
+        {
+            var provisioner = new PopulationProvisioner(world.Host.WorldServices) { AreaLevelSource = _ => 1 };
+            Player bot = world.Bots.FindSession(id)!.Player!;
+            float startX = bot.X;
+            float startY = bot.Y;
+
+            bot.UnitFlags |= UnitFlags.TaxiFlight;
+            Assert.True(PlayerbotTaxi.IsFlying(bot));
+            string? refusal = provisioner.Relocate(id, safeAt);
+            Assert.NotNull(refusal);
+            Assert.Equal(startX, bot.X);
+            Assert.Equal(startY, bot.Y);
+
+            bot.UnitFlags &= ~UnitFlags.TaxiFlight;
+            Assert.Null(provisioner.Relocate(id, safeAt));
+            return true;
+        });
     }
 
     /// <summary>A host with the taxi fixture, the managed bot, and the fixture's helpers.</summary>
