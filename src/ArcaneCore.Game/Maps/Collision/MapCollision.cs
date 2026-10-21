@@ -447,8 +447,10 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     }
 
     /// <summary>
-    /// vmangos <c>TerrainInfo::IsOutdoors</c> without WMOAreaTable.dbc: outside every WMO group,
-    /// or inside a group flagged exterior.
+    /// vmangos <c>TerrainInfo::IsOutdoors</c> (GridMap.cpp:878-888) from the group the model query finds at the point itself: outside every
+    /// WMO group, or inside a group whose MOGP flags say exterior. WMOAreaTable.dbc plays no part in this test (vmangos reads only the MOGP
+    /// flag; <see cref="TerrainInfo.GetAreaFlag"/> is where the area table is read). The ground-over-a-building check of
+    /// <see cref="TerrainInfo.TryGetWmoGroup"/> is not applied here; vmangos does apply it, and adding it would move every caller (rest, mounting, bot routing).
     /// </summary>
     public bool IsOutdoors(float x, float y, float z)
         => !_services.LineOfSight.TryGetAreaInfo(Map.MapId, x, y, z, out ModelAreaInfo info) || info.IsOutdoors;

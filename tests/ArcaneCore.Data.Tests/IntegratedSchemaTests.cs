@@ -107,6 +107,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.Instances.InstanceEncounterDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Instances.InstanceEncounterDataModule.Version),
             (typeof(ArcaneCore.Data.Npc.VendorTemplateDataModule), DatabaseComponent.World, ArcaneCore.Data.Npc.VendorTemplateDataModule.Version),
             (typeof(ArcaneCore.Data.World.WorldState.GameEventPlayerbotDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.GameEventPlayerbotDataModule.Version),
+            (typeof(WmoAreaDataModule), DatabaseComponent.World, WmoAreaDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

@@ -300,11 +300,27 @@ Recorded so no one assumes them:
 - Zone-entry consumers owned elsewhere: `UpdateLocalChannels`, `DestroyZoneLimitedItem`, `UpdateZoneDependentAuras` /
   `UpdateAreaDependentAuras` (spell_area), `DismountCheck`, zone scripts, group/guild zone refresh beyond `Player.ZoneId`.
 - PvP: battlegrounds, taxi flights, capture points and flag carriers (see the PvP section).
-- WMO sub-area names and the `IsOutdoors` flag: `TerrainInfo.GetAreaFlag` returns the tile cell value only (no WMO
-  override, no per-map fallback flag). `ModelAreaInfo.IsOutdoors` (`CollisionContracts.cs`) tests MOGP flag `0x8000` (`ModelAreaInfo.MogpExterior`) as vmangos
+- WMO areas (done): `TerrainInfo.GetAreaFlag` (and with it `Map.GetZoneAndAreaId`, the zone locator, exploration and the bots' zone
+  and level lookups) answers the explore flag of the area of the WMO group the position is inside, else the tile cell (vmangos
+  `TerrainInfo::GetAreaFlag`, `GridMap.cpp:913-945`). The group comes from `ILineOfSight.TryGetAreaInfo` (root id, ADT name-set id,
+  group id) as `TerrainInfo.TryGetWmoGroup` finds it (`TerrainInfo::GetAreaInfo`, `GridMap.cpp:889-907`: looked for from 1 yard above
+  the point, and not counted where terrain rises to within 2 yards over that point above the group floor, i.e. the ground over a
+  building); the area is `wmo_area_template` (the client `WMOAreaTable.dbc`, `WmoAreaTable`, `GetWMOAreaTableEntryByTripple`,
+  `DBCStores.cpp:479-485`) by the exact (root, name set, group) key; a duplicated key takes its lowest row id (vmangos fills a
+  `std::map` with `insert`). Without a row for the group, with a row whose area is 0 or not in `area_template`, without model data (or
+  the model tile not loaded), or with an empty table, the answer is the tile cell as before; an empty table is logged once at start
+  (`WorldMaps.Load`) and the model service is not asked. There is no `(root, name set, -1)` fallback: neither vmangos nor the
+  1.12-line cores read for this (mangos-zero `GridMap.cpp:273`, AzerothCore `Map.cpp:1303`) have one. Undercity (zone 1497, a Horde
+  capital) now enforces PvP on an Alliance player and keeps its flag past the five minute linger (`WmoAreaRealTerrainTests`).
+  Limits: `TerrainManager.ReadZoneAndAreaIdDetached` (background work, off the world thread) still reads the tile cell only, so inside a
+  WMO it can differ from the cached lookup; a position whose vmap tile no grid holds reads the tile cell too (`GraveyardRepopService` asks
+  for graveyards that may be in such a place). `wmo_area_template` is filled by `arcane-content-importer refresh --dbc-dir` (with
+  `WMOAreaTable.dbc` beside `AreaTable.dbc`) or `import-map-dbc <Map.dbc> <AreaTable.dbc> <WMOAreaTable.dbc>`, like `area_template`.
+- The `IsOutdoors` flag: `ModelAreaInfo.IsOutdoors` (`CollisionContracts.cs`) tests MOGP flag `0x8000` (`ModelAreaInfo.MogpExterior`) as vmangos
   and mangos-classic do (`GridMap.cpp:875-878`, `:887-889`; it was `0x8`, see
   [collision and pathing](collision-pathing.md#path-contract-follows-vmangos-collisioncontracts-pathmover)), and
-  `MapCollision.IsOutdoors` uses it, still without WMOAreaTable.dbc.
+  `MapCollision.IsOutdoors` uses it from the group found at the point itself (vmangos reads no `WMOAreaTable` flag there either); the
+  terrain-over-a-building test of `GetAreaInfo` is not applied to it, because every caller (rest, mounting, bot routing) would move.
 - The first-login cinematic and "explore after the cinematic ends": there is no cinematic data, so the first explore check
   runs right after the map add (same XP and packet, no camera sequence).
 - The 108 default world-state pairs (sniffed retail data under GPL; supply a file).

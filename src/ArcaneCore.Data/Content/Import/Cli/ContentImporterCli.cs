@@ -57,10 +57,11 @@ public static partial class ContentImporterCli
                                 game-event tables (game_event, game_event_time, game_event_creature, game_event_gameobject,
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
-          import-map-dbc <Map.dbc> <AreaTable.dbc>
+          import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>]
                                 import every map and area (map_template, area_template) using the build-5875
                                 layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
-                                entrance, script) from a classic-db instance_template or vmangos map_template
+                                entrance, script) from a classic-db instance_template or vmangos map_template;
+                                a WMOAreaTable.dbc also fills wmo_area_template (the area of each WMO group)
           verify                count the imported tables and check references
           class-masks <dump>... read spell_affect (the 64-bit class masks of the talent modifier auras)
                                 and write the overlay file Spells:Mods:ClassMaskFile reads
@@ -818,8 +819,8 @@ public static partial class ContentImporterCli
 
     private static async Task<int> ImportMapDbcAsync(CliArguments a, TextWriter output, CancellationToken ct)
     {
-        if (a.Positional.Count != 2)
-            throw new UsageException("import-map-dbc takes exactly Map.dbc and AreaTable.dbc paths");
+        if (a.Positional.Count is not (2 or 3))
+            throw new UsageException("import-map-dbc takes the Map.dbc and AreaTable.dbc paths, and optionally WMOAreaTable.dbc");
         Target target = ResolveTarget(a);
         string? reportPath = a.Value("--report");
         GuardPath(target.FilePath);
@@ -843,7 +844,7 @@ public static partial class ContentImporterCli
         try
         {
             // Validate the complete admission before opening or bootstrapping a destination database.
-            snapshot = MapAreaDbcImporter.ReadSnapshot(a.Positional[0], a.Positional[1], instances);
+            snapshot = MapAreaDbcImporter.ReadSnapshot(a.Positional[0], a.Positional[1], instances, a.Positional.Count == 3 ? a.Positional[2] : null);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
         {
@@ -873,6 +874,11 @@ public static partial class ContentImporterCli
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
         }
         output.WriteLine($"Imported {report.MappedMaps} maps and {report.MappedAreas} areas; {report.InstanceRows} map(s) took instance data from the dump.");
+        if (a.Positional.Count == 3)
+        {
+            output.WriteLine($"Imported {report.MappedWmoAreas} WMO group area rows (wmo_area_template).");
+        }
+
         foreach (string correction in corrections)
         {
             output.WriteLine($"  instance data: {correction}");

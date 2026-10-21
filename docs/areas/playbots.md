@@ -1059,9 +1059,10 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   teleports, a level-20 one walks; an area with no known level is never dangerous), or when its walk was set aside as blocked (failed plans, no
   progress, a stall); otherwise it walks. The rules are `PlayerbotHomeRules.Decide`; the level check is made once per return. The points of the line
   inside the home area itself are left out, and a level no higher than the area at the home's centre never counts (`PlayerbotHomeReturn.DangerLevelOnLine`):
-  the operator homed the bot there, so a bot homed above its level does not teleport at every return. Indoors the level is the outdoor one: the
-  terrain's area flag is the ADT cell's only (`TerrainInfo.GetAreaFlag`, vmangos `TerrainInfo::GetAreaFlag` without the WMO area info), so a cave or
-  building sub-area with a higher level of its own reports the outdoor area's level and its danger can be under-reported. The teleport is the one
+  the operator homed the bot there, so a bot homed above its level does not teleport at every return. Inside a WMO group that has an area in
+  `wmo_area_template` the level is that area (`TerrainInfo.GetAreaFlag`, vmangos `TerrainInfo::GetAreaFlag`); a cave that is not a WMO, a
+  world without the table, or a place with no loaded model tile reads the ADT cell area, so a sub-area with a higher level of its own
+  reports the outdoor area level and its danger can be under-reported. The teleport is the one
   the follower's catch-up (`PlayerbotFollower`, `World:Playerbots:Follow:CatchUpMode`) and `.playerbot send` use: the ordinary
   `TeleportService.TeleportTo` (vmangos `Player::TeleportTo`), its near or far acknowledgement answered by `PlayerbotMovementControl` as a client's,
   to the home's centre. **Never** in combat, in a duel, dead or as a ghost, in a group, on a battleground, to a home map `PlayerbotMapPolicy.Allows`
