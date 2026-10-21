@@ -102,7 +102,7 @@ public sealed class GridContainer
 
     public bool Contains(WorldObject obj) => _cells.ContainsKey(obj);
 
-    public bool IsActive(WorldObject obj) => _active.Contains(obj);
+    public bool IsActive(WorldObject obj) => obj.IsGridActiveObject;
 
     // One bit per cell of the map (1024 x 1024), allocated on the first mark; the words set last time are cleared next time.
     private ulong[]? _activeCells;
@@ -173,21 +173,23 @@ public sealed class GridContainer
             return false;
         }
 
-        if (!_cells.TryGetValue(obj, out CellCoord cell))
+        int id = obj.GridCellId;
+        if (id < 0)
         {
             if (!float.IsFinite(obj.X) || !float.IsFinite(obj.Y))
             {
                 return false;
             }
 
-            cell = GridDefines.ComputeCellCoord(obj.X, obj.Y);
+            CellCoord cell = GridDefines.ComputeCellCoord(obj.X, obj.Y);
             if ((uint)cell.X >= GridDefines.TotalNumberOfCellsPerMap || (uint)cell.Y >= GridDefines.TotalNumberOfCellsPerMap)
             {
                 return false;
             }
+
+            id = (cell.Y * GridDefines.TotalNumberOfCellsPerMap) + cell.X;
         }
 
-        int id = (cell.Y * GridDefines.TotalNumberOfCellsPerMap) + cell.X;
         return (bits[id >> 6] & (1UL << (id & 63))) != 0;
     }
 
@@ -211,17 +213,23 @@ public sealed class GridContainer
         Grid grid = active ? EnsureGridLoadedAtEnter(cell.Grid) : EnsureGridCreated(cell.Grid);
         grid.Add(cell, obj);
         _cells[obj] = cell;
+        obj.GridCellId = (cell.Y * GridDefines.TotalNumberOfCellsPerMap) + cell.X;
         TrackRadius(obj);
         TrackPlacement(obj);
 
         if (active)
         {
             _active.Add(obj);
+            obj.IsGridActiveObject = true;
             grid.ActiveObjectCount++;
             if (obj is Player)
             {
                 LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance); // a non-player active object pins only its own grid (SetActive)
             }
+        }
+        else
+        {
+            obj.IsGridActiveObject = false;
         }
 
         Approach(obj, active && obj is Player);
@@ -235,6 +243,8 @@ public sealed class GridContainer
             return false;
         }
 
+        obj.GridCellId = -1;
+        obj.IsGridActiveObject = false;
         _unplaced.Remove(obj);
         Grid? grid = _grids[cell.Grid.Id];
         grid?.Remove(cell, obj);
@@ -338,6 +348,7 @@ public sealed class GridContainer
             : EnsureGridCreated(newCell.Grid);
         newGrid.Add(newCell, obj);
         _cells[obj] = newCell;
+        obj.GridCellId = (newCell.Y * GridDefines.TotalNumberOfCellsPerMap) + newCell.X;
 
         if (active)
         {
@@ -406,6 +417,7 @@ public sealed class GridContainer
         Grid grid = _grids[cell.Grid.Id]!;
         if (active && _active.Add(obj))
         {
+            obj.IsGridActiveObject = true;
             grid.ActiveObjectCount++;
             if (!grid.ObjectDataLoaded || grid.State != GridState.Active)
             {
@@ -416,6 +428,7 @@ public sealed class GridContainer
         }
         else if (!active && _active.Remove(obj))
         {
+            obj.IsGridActiveObject = false;
             grid.ActiveObjectCount--;
         }
     }

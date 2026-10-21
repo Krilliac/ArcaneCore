@@ -194,6 +194,12 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal bool IsFrozenOutsideActiveCells { get; set; }
 
+    /// <summary>Index in <see cref="CreatureMapSystem"/>'s <c>_scratchCreatures</c> snapshot; -1 when not in the world.</summary>
+    internal int ScratchIndex { get; set; } = -1;
+
+    /// <summary>Whether this creature belongs to a spawn group with a <see cref="Maps.SpawnGroups.FormationState"/> on its map.</summary>
+    internal bool IsFormationMember { get; set; }
+
     /// <summary>
     /// Set by script command 21 (SCRIPT_COMMAND_SET_ACTIVEOBJECT): vmangos keeps m_isActiveObject on the creature for its life, so
     /// the mark outlives a death and is applied again when the creature re-enters the map (CreatureMapSystem.QueueActivationIfFlagged).

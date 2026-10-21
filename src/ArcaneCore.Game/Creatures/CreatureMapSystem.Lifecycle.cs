@@ -335,16 +335,19 @@ public sealed partial class CreatureMapSystem
         {
             // Two creatures with one ObjectGuid: the old one leaves _creatures, so it must leave the indexes too.
             System.Diagnostics.Debug.Fail($"creature {creature.Guid} added over a different creature of the same guid");
+            replaced.ScratchIndex = -1;
             UnindexCreature(replaced);
         }
 
         _creatures[creature.Guid] = creature;
+        _creaturesVersion++;
         IndexCreature(creature);
         if (creature.IsNewObject)
         {
             _newCreatures.Add(creature);
         }
         grid.Creatures.Add(creature);
+        creature.IsFormationMember = FormationOfMember(creature) is not null;
         if (creature.DeathState != CreatureDeathState.Dead)
         {
             Map.AddObject(creature, isNewObject: creature.IsNewObject);
@@ -378,6 +381,8 @@ public sealed partial class CreatureMapSystem
         }
 
         _creatures.Remove(creature.Guid);
+        _creaturesVersion++;
+        creature.ScratchIndex = -1;
         UnindexCreature(creature);
         _corpseDespawns.Remove(creature);
         _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
@@ -390,6 +395,7 @@ public sealed partial class CreatureMapSystem
         ForgetObservers(creature);
         OnFormationMemberRemoved(creature);
         OnGroupMemberRemoved(creature);
+        creature.IsFormationMember = false;
     }
 
     private ICreatureMovementGenerator CreateMovementGenerator(Creature creature)

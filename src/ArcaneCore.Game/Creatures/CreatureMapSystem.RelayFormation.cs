@@ -174,10 +174,13 @@ public sealed partial class CreatureMapSystem
         _formations[group.Id] = formation;
         foreach (Creature creature in _creatures.Values)
         {
-            if (creature.IsAlive && creature.Spawn is { } spawn && group.Objects.ContainsKey(spawn.Guid)
-                && formation.DefaultSlotOf(spawn.Guid) is { } slot && slot.Owner is null)
+            if (creature.Spawn is { } spawn && group.Objects.ContainsKey(spawn.Guid))
             {
-                slot.Owner = creature;
+                creature.IsFormationMember = true;
+                if (creature.IsAlive && formation.DefaultSlotOf(spawn.Guid) is { } slot && slot.Owner is null)
+                {
+                    slot.Owner = creature;
+                }
             }
         }
 
@@ -198,11 +201,23 @@ public sealed partial class CreatureMapSystem
     private void DisbandFormation(FormationState formation)
     {
         _formations.Remove(formation.GroupId);
+        foreach (Creature creature in _creatures.Values)
+        {
+            if (creature.Spawn is { } spawn && _groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? group) && group.Id == formation.GroupId)
+            {
+                creature.IsFormationMember = false;
+            }
+        }
+
         foreach (FormationSlot slot in formation.Slots)
         {
-            if (slot.Owner is Creature member && member.IsAlive && _creatures.ContainsKey(member.Guid) && !(formation.IsDynamic && slot.SlotId == 0))
+            if (slot.Owner is Creature member)
             {
-                member.Motion.Initialize(CreateMovementGenerator(member), this, start: true);
+                member.IsFormationMember = false;
+                if (member.IsAlive && _creatures.ContainsKey(member.Guid) && !(formation.IsDynamic && slot.SlotId == 0))
+                {
+                    member.Motion.Initialize(CreateMovementGenerator(member), this, start: true);
+                }
             }
 
             slot.Owner = null;

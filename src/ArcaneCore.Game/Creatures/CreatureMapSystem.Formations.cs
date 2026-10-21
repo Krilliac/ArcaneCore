@@ -95,6 +95,8 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
+            member.IsFormationMember = true;
+
             if (slot.SlotId == 0)
             {
                 if (!ReferenceEquals(formation.MovingLeader, member))

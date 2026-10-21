@@ -774,18 +774,23 @@ public sealed class Map
         return _diagnostics;
     }
 
+    /// <summary>True while <see cref="Update(uint, MapUpdateDiagnostics?)"/> is running with a non-null <see cref="MapUpdateDiagnostics"/>.</summary>
+    internal bool IsCollectingDiagnostics { get; private set; }
+
     /// <summary>One simulation step (world thread).</summary>
     public void Update(uint diffMs)
         => Update(diffMs, diagnostics: null);
 
     internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
+        IsCollectingDiagnostics = diagnostics is not null;
         try
         {
             UpdateCore(diffMs, diagnostics);
         }
         finally
         {
+            IsCollectingDiagnostics = false;
             ReleaseHeldGate();
         }
     }
