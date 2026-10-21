@@ -1222,7 +1222,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         });
 
         // The story (with the world trace) is built only when something fails: the trace is a live buffer.
-        async Task<string> await Story() => $"run {run}: step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}, retreats {raid.Retreats}, leader reached x+{maxX:F1}, {raid.LastFacts}"
+        async Task<string> Story() => $"run {run}: step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}, retreats {raid.Retreats}, leader reached x+{maxX:F1}, {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         bool walkedOn = maxX > 60f && siege.Step > stepAtPush;
         bool retreated = raid.Retreats > 0;
@@ -1400,7 +1400,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return back || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 80_000;
         });
 
-        async Task<string> await Story() => $"done={done} sent={attacker is not null} engaged={engaged} killed={killed} back={back} refused={refused} flipped={flipped} lagKept={lagKept} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+        async Task<string> Story() => $"done={done} sent={attacker is not null} engaged={engaged} killed={killed} back={back} refused={refused} flipped={flipped} lagKept={lagKept} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
         if (!engaged) Assert.Fail("the melee leader never closed on the attacker that was shooting it: " + await Story());
@@ -1469,7 +1469,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return back || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 80_000 || !raid.PushingThrough;
         });
 
-        async Task<string> await Story() => $"done={done} sent={attacker is not null} chased={chased} kited={kited} back={back} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+        async Task<string> Story() => $"done={done} sent={attacker is not null} chased={chased} kited={kited} back={back} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
         if (!chased) Assert.Fail("the leader never left the disk to answer the attacker: " + await Story());
@@ -1534,7 +1534,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return injected && (siege.Step > stepAtPush || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0);
         });
 
-        async Task<string> await Story() => $"done={done} injected={injected} lifted={lifted} decoyKept={decoyKept} counterKept={counterKept} walked={walked} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
+        async Task<string> Story() => $"done={done} injected={injected} lifted={lifted} decoyKept={decoyKept} counterKept={counterKept} walked={walked} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         if (!injected) Assert.Fail("the probe never fired: " + await Story());
         if (!lifted) Assert.Fail("the push's own waypoint stayed refused: " + await Story());
@@ -1609,7 +1609,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return sawDiskAtNext || siege.Step > stepAtPush + 1 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 450_000;
         });
 
-        async Task<string> await Story() => $"{stepChange} done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
+        async Task<string> Story() => $"{stepChange} done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
         if (!advanced) Assert.Fail("the step never moved on while the leader answered: " + await Story());
@@ -1684,7 +1684,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return t > 25_000 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || siege.Step > stepAtPush;
         });
 
-        async Task<string> await Story() => $"done={done} chased={chased} lagReset={lagReset} flipped={flipped} refused={refused} noPath={noPath} maxRejections={maxRejections} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+        async Task<string> Story() => $"done={done} chased={chased} lagReset={lagReset} flipped={flipped} refused={refused} noPath={noPath} maxRejections={maxRejections} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
         if (!chased) Assert.Fail("the leader never left the disk to answer the kiter: " + await Story());
@@ -1731,7 +1731,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return queued && (!walking && walkTicks > 0 || siege.Step > stepAtPush);
         });
 
-        async Task<string> await Story() => $"done={done} queued={queued} drained={drained} walkTicks={walkTicks} step={siege.Step}/{stepAtPush} {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync();
+        async Task<string> Story() => $"done={done} queued={queued} drained={drained} walkTicks={walkTicks} step={siege.Step}/{stepAtPush} {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync();
         if (!queued) Assert.Fail("the probe never fired: " + await Story());
         if (walkTicks < 3) Assert.Fail("the leader was not seen walking long enough: " + await Story());
         if (drained) Assert.Fail("the queued loot was sent while the pushing leader was walking: " + await Story());
