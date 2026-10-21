@@ -1601,7 +1601,6 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         string Story() => $"done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
         output.WriteLine($"STEP-ADVANCE-PROBE done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} answerStep={raid.AnsweringStep}");
-')[0]}");
         if (attacker is null) Assert.Fail("the probe never fired: " + Story());
         if (!advanced) Assert.Fail("the step never moved on while the leader answered: " + Story());
         if (readAtNext) Assert.Fail("the raid read the leader at the next waypoint while it was still out where it fought: " + Story());
