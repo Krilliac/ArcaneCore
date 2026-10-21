@@ -174,6 +174,7 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
         bool revivedOnTram = false;
         float closest = float.MaxValue;
         uint finalMap = TramTestData.Tram;
+        Vector3 previousAt = default;
         for (int step = 0; step < 6_000 && finalMap != 0; step++)
         {
             (bool alive, uint map, Vector3 at) = await world.TickAsync(() =>
@@ -184,6 +185,10 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
                 return (p.IsAlive, p.MapId, new Vector3(p.X, p.Y, p.Z));
             });
             if (!alive) closest = MathF.Min(closest, Vector2.Distance(new(at.X, at.Y), new(body.X, body.Y)));
+            // The walk plans over tiles that load on background threads, in real time, while the plan's wait is bounded in game time.
+            // The manual-clock world answers a step in well under a millisecond, so a bot standing still waits real time for them.
+            if (at == previousAt) await Task.Delay(1);
+            previousAt = at;
             revivedOnTram |= alive && map == TramTestData.Tram;
             finalMap = map;
         }
