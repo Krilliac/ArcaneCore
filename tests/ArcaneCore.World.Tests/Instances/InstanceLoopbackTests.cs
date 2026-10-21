@@ -311,6 +311,47 @@ public sealed class InstanceLoopbackTests
         Assert.True(Array.IndexOf(writes, $"unbind {id} {instance}") is int unbound && unbound > bound && unbound < purged);
     }
 
+    [Fact]
+    public async Task ReloginIntoAGroupPermanentlyBoundInstance_SendsSaveCreatedAfterVerifyWorld()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient leader = await host.EnterWorldAsync("INSTPL", "Instpl");
+        byte[] key = await host.AddAccountAsync("INSTPM");
+        WorldTestClient member = await host.ConnectAsync();
+        await member.AuthenticateAsync("INSTPM", key);
+        await member.CreateCharacterAsync("Instpm");
+        Account account = (await host.Accounts.FindByUsernameAsync("INSTPM"))!;
+        int id = (await host.Characters.GetByAccountAsync(account.Id)).Single().Id;
+        await member.LoginAsync((ulong)id);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Instpm") is not null, "Instpm enters the world");
+        await GroupAsync(host, leader, member, "Instpl", "Instpm");
+        await EnterThroughTriggerAsync(host, leader, "Instpl");
+        await EnterThroughTriggerAsync(host, member, "Instpm");
+
+        // The member logs out inside; while it is away the group's bind becomes permanent (a boss kill).
+        var guid = Game.ObjectGuid.Player((uint)id);
+        await member.DisposeAsync();
+        await host.WaitForWorldAsync(() => !host.World.IsOnline(guid), "Instpm leaves the world");
+        InstanceFeature feature = await host.PlayerStateAsync("Instpl", p => Services(p).GetRequiredService<InstanceFeature>());
+        await host.OnWorldAsync(() =>
+        {
+            Player lead = host.World.FindOnlinePlayer("Instpl")!;
+            feature.Instances.PermBindAllPlayers(lead.Map!, lead);
+        });
+
+        await using WorldTestClient again = await host.ConnectAsync();
+        await again.AuthenticateAsync("INSTPM", key);
+        await again.SendAsync(WorldOpcode.CmsgPlayerLogin, BitConverter.GetBytes((ulong)id));
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await again.CollectAsync(Quiet);
+
+        int verify = packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgLoginVerifyWorld);
+        int created = packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgInstanceSaveCreated);
+        Assert.True(verify >= 0, "the login sends SMSG_LOGIN_VERIFY_WORLD");
+        Assert.True(created > verify, "vmangos binds inside DungeonMap::Add: SMSG_INSTANCE_SAVE_CREATED follows SMSG_LOGIN_VERIFY_WORLD");
+        Assert.True(created > packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgLoginSettimespeed), "and SendInitialPacketsBeforeAddToMap");
+        Assert.Equal(Deadmines, await host.PlayerStateAsync("Instpm", p => p.MapId));
+    }
+
     private static IServiceProvider Services(Player player) => ((WorldSession)player.Session).Services;
 
     private static TeleportFeature TeleportFeatureOf(Player player) => Services(player).GetRequiredService<TeleportFeature>();

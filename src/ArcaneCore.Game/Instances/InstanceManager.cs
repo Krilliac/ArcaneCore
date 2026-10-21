@@ -354,10 +354,7 @@ public sealed partial class InstanceManager : IMapResolver
         TransferAbortReason? loginRefusal = save is not null && lastMatches ? CheckEntry(player, template, save, sendErrors: false) : null;
         if (save is not null && lastMatches && loginRefusal is null)
         {
-            Map map = GetOrCreateInstanceMap(save);
-            BindPlayerOrGroupOnEnter(player, save, map);
-            _enterLimiter.Record(player.AccountId, save.InstanceId, Now);
-            return map;
+            return GetOrCreateInstanceMap(save); // the bind waits for OnLoginMapAdd (vmangos DungeonMap::Add)
         }
 
         if (loginRefusal is { } refused)
@@ -367,6 +364,16 @@ public sealed partial class InstanceManager : IMapResolver
 
         RelocateToEntrance(player, template);
         return _world.GetMap(player.MapId);
+    }
+
+    /// <inheritdoc />
+    public void OnLoginMapAdd(Player player, Map map)
+    {
+        if (_mapStates.TryGetValue(map, out InstanceMapState? state))
+        {
+            BindPlayerOrGroupOnEnter(player, state.Save, map);
+            _enterLimiter.Record(player.AccountId, state.Save.InstanceId, Now);
+        }
     }
 
     /// <inheritdoc />
