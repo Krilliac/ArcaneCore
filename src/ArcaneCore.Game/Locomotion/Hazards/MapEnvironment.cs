@@ -157,13 +157,16 @@ internal sealed class MapEnvironment : IMapUpdater
         SendMirrorTimers(player);
     }
 
+    private static bool IsOnTransport(Player player)
+        => player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0;
+
     private static bool CheckActivation(Player player, MirrorTimerType type)
     {
         EnvironmentFlags flags = player.Locomotion.Environment;
         return type switch
         {
-            MirrorTimerType.Fatigue => (flags & EnvironmentFlags.HighSea) != 0 && (player.UnitFlags & UnitFlags.TaxiFlight) == 0,
-            MirrorTimerType.Breath => (flags & EnvironmentFlags.Underwater) != 0 && LiquidEnvironment.WaterBreathingInterval(player) != 0,
+            MirrorTimerType.Fatigue => (flags & EnvironmentFlags.HighSea) != 0 && (player.UnitFlags & UnitFlags.TaxiFlight) == 0 && !IsOnTransport(player),
+            MirrorTimerType.Breath => (flags & EnvironmentFlags.Underwater) != 0 && LiquidEnvironment.WaterBreathingInterval(player) != 0 && !IsOnTransport(player),
             MirrorTimerType.Environmental => (flags & EnvironmentFlags.MaskLiquidHazard) != 0,
             _ => false,
         };
@@ -173,10 +176,11 @@ internal sealed class MapEnvironment : IMapUpdater
     {
         EnvironmentFlags flags = player.Locomotion.Environment;
         bool liquid = (flags & EnvironmentFlags.Liquid) != 0;
+        bool onTransport = IsOnTransport(player);
         return type switch
         {
-            MirrorTimerType.Fatigue => !liquid || (!player.IsAlive && (player.Flags & PlayerFlags.Ghost) == 0),
-            MirrorTimerType.Breath => !liquid || !player.IsAlive,
+            MirrorTimerType.Fatigue => onTransport || !liquid || (!player.IsAlive && (player.Flags & PlayerFlags.Ghost) == 0),
+            MirrorTimerType.Breath => onTransport || !liquid || !player.IsAlive,
             MirrorTimerType.FeignDeath => true,
             MirrorTimerType.Environmental => !liquid || !player.IsAlive,
             _ => false,

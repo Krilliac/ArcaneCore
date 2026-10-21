@@ -38,5 +38,56 @@ public sealed class PlayerbotElevatorVaultPitTests
         var lift = new ElevatorLift(1, [new ElevatorCar(1, 1, 2, new Vector3(-1033f, -39f, 69f), new Vector3(-1033f, -39f, 140f), 40_000)]);
         Assert.False(PlayerbotElevator.InPit(lift, new Vector3(-1033f + 6f, -39f + 6f, 60f), 60f));
         Assert.True(PlayerbotElevator.InPit(lift, new Vector3(-1033f + 2f, -39f, 60f), 60f));
+        // Issue #811: 5.82 yards horizontally from the Thunder Bluff lower stop at z=60.6 (below Low.Z=68.6) is inside the shaft pit.
+        Assert.True(PlayerbotElevator.InPit(lift, new Vector3(-1033f + 5.82f, -39f, 60.6f), 60.6f));
+    }
+
+    [Fact]
+    public async Task LandingBesideReachable_WhenBotIsMoreThan250YardsAway_StillSelectsReachableLanding()
+    {
+        var stop = new Vector3(-4669.2f, -1832.8f, ElevatorTestWorld.BottomFloor);
+        var northOnlyMesh = new NorthSideOnlyMesh(stop);
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: northOnlyMesh,
+            pathfinder: northOnlyMesh));
+        var start = new Vector3(stop.X - 280.4f, stop.Y, stop.Z);
+        await world.PlaceAsync(start);
+        var options = new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100 };
+
+        Vector3? chosen = await world.OnWorldAsync(() =>
+            PlayerbotElevator.LandingBesideReachable(world.Player, world.Player.Map!, stop, start, options));
+
+        Assert.NotNull(chosen);
+        Assert.True(chosen.Value.Y > stop.Y + 4f, $"expected reachable North-side candidate, got {chosen.Value}");
+    }
+
+    private sealed class NorthSideOnlyMesh(Vector3 stop) : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => stop.Z;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(end.X, end.Y), new Vector2(stop.X, stop.Y)) < 50f && end.Y <= stop.Y + 4f)
+                return ArcaneCore.Game.Maps.Collision.PathResult.None(start);
+            return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = stop.Z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(start.X, start.Y), new Vector2(stop.X, stop.Y)) < 50f && start.Y <= stop.Y + 4f)
+                return ArcaneCore.Game.Maps.Collision.MeshRaycastResult.Unavailable(end);
+            return new ArcaneCore.Game.Maps.Collision.MeshRaycastResult(true, false, 1f, end with { Z = stop.Z });
+        }
     }
 }

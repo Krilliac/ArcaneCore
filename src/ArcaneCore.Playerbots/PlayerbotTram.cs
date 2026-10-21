@@ -425,8 +425,10 @@ internal static class PlayerbotTram
         if (!found.CanConsider(map.MapId, at, goal)) return null;
         uint sourceZone = zoneAt is null ? map.GetZoneAndAreaId(at.X, at.Y, at.Z).ZoneId : zoneAt(at);
         uint goalZone = zoneAt is null ? map.GetZoneAndAreaId(goal.X, goal.Y, goal.Z).ZoneId : zoneAt(goal);
+        if (found.Choose(map.MapId, at, goal, sourceZone, goalZone) is not { } leg) return null;
+        if (PlayerbotNavigation.IsUnreachableOnFoot(player, leg.From.Approach, out _, out _)) return null;
         network = found;
-        return found.Choose(map.MapId, at, goal, sourceZone, goalZone);
+        return leg;
     }
 
     /// <summary>Drop the trip without a packet (death, a controller taking the bot over); the entrance consent goes with it.</summary>
@@ -462,6 +464,8 @@ internal static class PlayerbotTram
         if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map || map.MapId != TramNetwork.TramMapId) return;
         if (!Trips.TryGetValue(player, out TramTrip? trip) || trip.Stage is TramStage.Done or TramStage.Failed) return;
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
+        if (trip.Stage == TramStage.ToEntrance)
+            EnterTramMapFromEntrance(player, trip, now);
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
 
@@ -664,6 +668,11 @@ internal static class PlayerbotTram
             trip.Failure ??= $"tram: the {trip.To.Name} exit did not take the bot ({exitWhy})";
         }
 
+        if (trip.Stage == TramStage.ToEntrance && map.MapId == TramNetwork.TramMapId)
+        {
+            EnterTramMapFromEntrance(player, trip, now);
+        }
+
         if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported)
         {
             uint mapStartMs = trip.PlatformSinceMs != 0 ? trip.PlatformSinceMs : trip.StartedMs;
@@ -699,18 +708,23 @@ internal static class PlayerbotTram
         }
     }
 
+    private static void EnterTramMapFromEntrance(Player player, TramTrip trip, uint now)
+    {
+        // Through the entrance: from here only the ride's own consent is needed (the exits lead back to the continent).
+        PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+        // The landing of the entrance taken: its platform is where the bot boards, the other one where it gets off.
+        TramPlatform here = trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
+        trip.To = trip.Network.Other(here);
+        trip.IntendedTo = trip.To;
+        Enter(trip, TramStage.ToPlatform, now);
+        if (trip.PlatformSinceMs == 0) trip.PlatformSinceMs = now;
+    }
+
     private static TramStep ToEntrance(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
     {
         if (map.MapId == TramNetwork.TramMapId)
         {
-            // Through the entrance: from here only the ride's own consent is needed (the exits lead back to the continent).
-            PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
-            // The landing of the entrance taken: its platform is where the bot boards, the other one where it gets off.
-            TramPlatform here = trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
-            trip.To = trip.Network.Other(here);
-            trip.IntendedTo = trip.To;
-            Enter(trip, TramStage.ToPlatform, now);
-            trip.PlatformSinceMs = now;
+            EnterTramMapFromEntrance(player, trip, now);
             return TramStep.Traveling;
         }
 

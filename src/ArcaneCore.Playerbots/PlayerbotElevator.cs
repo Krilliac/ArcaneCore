@@ -1528,7 +1528,9 @@ internal static class PlayerbotElevator
         trip.Failure ??= why;
         Vector3 at = new(player.X, player.Y, player.Z);
         float floor = FloorBelow(map, at);
-        bool pit = float.IsFinite(floor) && InPit(trip.Lift, at, floor);
+        bool pit = (float.IsFinite(floor) && InPit(trip.Lift, at, floor))
+            || InPit(trip.Lift, at, at.Z)
+            || InFromShaftPit(trip, at);
         if (pit)
         {
             ReportPitFall(session, player, trip, floor);
@@ -1595,7 +1597,7 @@ internal static class PlayerbotElevator
     internal static bool InPit(ElevatorLift lift, Vector3 at, float floor)
     {
         bool vault = ElevatorRegions.IsVaultLift(lift.MapId, new Vector3(lift.Centre, lift.LowZ));
-        float footprint = vault ? VaultDoorOuterYards : CarHalfYards;
+        float footprint = vault ? VaultDoorOuterYards : CarHalfYards + 1.5f;
         foreach (ElevatorCar car in lift.Cars)
         {
             if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) <= footprint && floor < car.Low.Z - PitYards)
@@ -2193,8 +2195,6 @@ internal static class PlayerbotElevator
     {
         if (LandingBeside(map, stop, toward) is not { } primary) return null;
         if (map.Collision.MeshPoints is null) return primary;
-        if (Vector2.Distance(ElevatorNetwork.Flat(new Vector3(player.X, player.Y, player.Z)), ElevatorNetwork.Flat(stop)) > 250f)
-            return null;
         if (PlayerbotNavigation.TryPlanToward(player, primary, options, out _))
             return primary;
 

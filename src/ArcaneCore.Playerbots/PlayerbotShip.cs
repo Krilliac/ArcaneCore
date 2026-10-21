@@ -285,6 +285,7 @@ internal static class PlayerbotShip
 
         PlayerbotThinkProbe.Phase("ship");
         Step(session, player, trip, options, Math.Max(1u, elapsedMs), now, pump: false);
+        if (!Trips.TryGetValue(player, out _)) return TravelLegStep.Idle;
         return trip.Stage is ShipStage.Done or ShipStage.Failed ? Ended(trip, out failure) : TravelLegStep.Traveling;
     }
 
@@ -399,7 +400,8 @@ internal static class PlayerbotShip
             return;
         }
 
-        if (!Walk(session, player, trip, trip.From.Position, options, elapsedMs, now, out string? why))
+        Vector3 dockTarget = ResolveDockTarget(map, trip.From.Position, Position(player));
+        if (!Walk(session, player, trip, dockTarget, options, elapsedMs, now, out string? why))
             Fail(session, player, trip, now, "dock-unreachable", why!, backoff: true);
     }
 
@@ -521,6 +523,16 @@ internal static class PlayerbotShip
         bool onShip = ReferenceEquals(player.Transport, ship);
         if (!onShip)
         {
+            // A bot that died or repopped/teleported away from the ship and port left the ride through death/teleport, not a ship drop.
+            if (!player.IsAlive || (player.Transport is null
+                && Flat(Position(player), new Vector3(ship.X, ship.Y, ship.Z)) > 100f
+                && Flat(Position(player), trip.From.Position) > 100f))
+            {
+                Trips.Remove(player);
+                if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? cancelState)) cancelState.ShipTrip = null;
+                return;
+            }
+
             // Off the ship (the server let it go): nothing carries the bot any more, and the leg ends here.
             Fail(session, player, trip, now, "left-ship", string.Create(CultureInfo.InvariantCulture,
                 $"no longer aboard ship {trip.Route.Entry} (transport {(player.Transport is { } other ? other.Entry.ToString(CultureInfo.InvariantCulture) : "none")}) {unchecked(now - trip.BoardedMs) / 1000} s after boarding"),
@@ -643,7 +655,8 @@ internal static class PlayerbotShip
         if (trip.Walk is null && unchecked(now - trip.StageMs) <= NoProgressMs)
         {
             if (unchecked((int)(trip.NextPlanMs - now)) > 0) return;
-            PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, at.Position, options, ref trip.Tiles, now, out PlayerbotRoute? route);
+            Vector3 dockTarget = ResolveDockTarget(map, at.Position, Position(player));
+            PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, dockTarget, options, ref trip.Tiles, now, out PlayerbotRoute? route);
             if (outcome == PlanOutcome.Route && route is not null && route.Distance > ProgressYards)
             {
                 trip.Walk = route;
@@ -885,6 +898,80 @@ internal static class PlayerbotShip
 
         float under = map.Collision.GetHeight(deck.X, deck.Y, deck.Z + 2f);
         return ValidHeight(under) && under <= deck.Z ? new Vector3(deck.X, deck.Y, under + 0.05f) : deck;
+    }
+
+    private static readonly float[] DockSearchRadiiYards = [4f, 8f, 12f, 16f, 20f, 25f, 30f, 35f, 38f];
+    private static readonly float[] DockSearchZOffsets = [0f, -8f, -16f, 6f];
+
+    /// <summary>
+    /// Resolve a walkable dock floor near <paramref name="portPos"/> when the ship's port keyframe is over water or in mid-air
+    /// (boat hull origin at z=0 in the harbour water or zeppelin hull origin ~18 yards above the tower platform).
+    /// </summary>
+    internal static Vector3 ResolveDockTarget(Map map, Vector3 portPos, Vector3 toward)
+    {
+        map.Collision.LoadTilesOnDemand(portPos.X, portPos.Y);
+        if (map.Collision.MeshPoints is null || PlayerbotNavigation.OnWalkableMesh(map, portPos))
+            return portPos;
+
+        Vector3? best = null;
+        float bestDist = float.PositiveInfinity;
+        foreach (float radius in DockSearchRadiiYards)
+        {
+            for (int i = 0; i < StepOffDirections; i++)
+            {
+                float angle = i * MathF.Tau / StepOffDirections;
+                float x = portPos.X + (MathF.Cos(angle) * radius);
+                float y = portPos.Y + (MathF.Sin(angle) * radius);
+                if (!TryResolveDockPoint(map, x, y, portPos.Z, out Vector3 candidate))
+                    continue;
+                float dist = Flat(candidate, toward);
+                if (dist < bestDist)
+                {
+                    best = candidate;
+                    bestDist = dist;
+                }
+            }
+
+            if (best is { } found)
+                return found;
+        }
+
+        return portPos;
+    }
+
+    private static bool TryResolveDockPoint(Map map, float x, float y, float portZ, out Vector3 point)
+    {
+        float floor = map.Collision.GetHeight(x, y, portZ + DockHeightYards);
+        if (ValidHeight(floor) && MathF.Abs(floor - portZ) <= DockHeightYards)
+        {
+            var candidate = new Vector3(x, y, floor + 0.05f);
+            if (PlayerbotNavigation.OnWalkableMesh(map, candidate))
+            {
+                point = candidate;
+                return true;
+            }
+        }
+
+        foreach (float zOff in DockSearchZOffsets)
+        {
+            var probe = new Vector3(x, y, portZ + zOff);
+            PathResult res = PlayerbotThinkProbe.Find(map.Collision, probe, probe, new PathOptions
+            {
+                MaxPoints = 4,
+                Mover = PathMover.Player,
+                ExcludeFlags = NavTerrain.SteepSlopes,
+                AllowPartial = true,
+                MaxSearchNodes = 64,
+            });
+            if ((res.Type & PathType.NoPath) == 0 && MathF.Abs(res.End.Z - portZ) <= DockHeightYards)
+            {
+                point = new Vector3(x, y, res.End.Z + 0.05f);
+                return true;
+            }
+        }
+
+        point = default;
+        return false;
     }
 
     private static bool ValidHeight(float height)

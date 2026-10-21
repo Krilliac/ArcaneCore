@@ -177,4 +177,24 @@ public sealed class LiquidEnvironmentTests
 
         Assert.Equal(EnvironmentFlags.None, player.Locomotion.Environment);
     }
+
+    [Fact]
+    public void OnTransport_SuppressesLiquidAndHighSeaFlags_AndDeactivatesFatigueAndBreath()
+    {
+        using var kit = new HazardKit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
+        Player player = kit.AddPlayer(1, 97f, out _);
+        Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.HighSea));
+        Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.Underwater));
+
+        var mov = player.Movement;
+        mov.Flags |= ArcaneCore.Protocol.MovementFlags.OnTransport;
+        player.ApplyMovement(mov, 100);
+        player.Locomotion.LastEnvironmentSample = null;
+        LiquidEnvironment.UpdateTerrainFlags(player);
+
+        Assert.Equal(EnvironmentFlags.None, player.Locomotion.Environment & EnvironmentFlags.MaskLiquidFlags);
+        kit.Tick(1100);
+        Assert.False(player.Locomotion.MirrorTimers[(int)MirrorTimerType.Fatigue].IsActive);
+        Assert.False(player.Locomotion.MirrorTimers[(int)MirrorTimerType.Breath].IsActive);
+    }
 }

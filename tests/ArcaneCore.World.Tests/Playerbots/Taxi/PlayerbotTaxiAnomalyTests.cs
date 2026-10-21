@@ -463,4 +463,43 @@ public sealed partial class PlayerbotTaxiTests
             return 0;
         });
     }
+
+    [Fact]
+    public async Task DepartureMaster_UnreachableOnFoot_IsSkippedWithoutMasterUnreachableOrMasterNotFound()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+
+            var disconnectedMesh = new DisconnectedFromMasterMesh();
+            ArcaneCore.Game.Maps.Collision.WorldCollision.Of(rig.World).Install(
+                lineOfSight: new FlatFloor(),
+                pathfinder: disconnectedMesh);
+
+            Assert.Equal(TaxiTravel.Walk, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            AssertNoTaxiAnomaly(cap);
+            return 0;
+        });
+    }
+
+    private sealed class DisconnectedFromMasterMesh : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => ArcaneCore.Game.Maps.Collision.PathResult.None(start);
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => ArcaneCore.Game.Maps.Collision.MeshRaycastResult.Unavailable(end);
+    }
 }

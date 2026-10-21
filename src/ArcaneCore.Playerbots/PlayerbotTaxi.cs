@@ -4,6 +4,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
@@ -611,7 +612,7 @@ internal static class PlayerbotTaxi
         {
             if (!PlayerbotTram.IsTraveling(player) && !PlayerbotElevator.IsTraveling(player)
                 && !PlayerbotHearthstone.IsActive(player) && !PlayerbotMageService.IsActive(player))
-                TryBeginLearnTrip(session, player, services, index, state, content, now);
+                TryBeginLearnTrip(session, player, services, index, state, content, options, now);
         }
 
         return false;
@@ -623,7 +624,7 @@ internal static class PlayerbotTaxi
     /// spawns inside the radius.
     /// </summary>
     private static void TryBeginLearnTrip(WorldSession session, Player player, QuestNpcServices services, TaxiIndex index, PlayerNpcState state,
-        CreatureContent? content, uint now)
+        CreatureContent? content, PlayerbotOptions options, uint now)
     {
         if (content is null || session.Services.GetService<QuestNpcFeature>()?.FactionTemplates is not { } factions || player.Map is not { } map) return;
         Vector3 here = new(player.X, player.Y, player.Z);
@@ -641,6 +642,7 @@ internal static class PlayerbotTaxi
             uint node = index.Nearest(spawn.MapId, spawn.X, spawn.Y, spawn.Z, alliance);
             if (node == 0 || TaxiIndex.IsKnown(state.TaxiMask, node) || IsBackedOff(player, node, now)) continue;
             if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, faction)) continue;
+            if (!CanReachMaster(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options)) continue;
             best = spawn;
             bestNode = node;
             bestSq = distSq;
@@ -737,7 +739,7 @@ internal static class PlayerbotTaxi
         Memo cache = Memos.GetOrCreateValue(player);
         // What the fare may cost: the money, and a journey's spend left (the cache is keyed by this budget, not the money alone).
         uint budget = Math.Min(player.Money, maxFare);
-        if (source is not null && TryDeparture(session, player, services, index, cache, state, mapId, source, here, destination, budget, taxi.MaxWalkToMasterYards, straight, out route, out fare, out master))
+        if (source is not null && TryDeparture(session, player, services, index, cache, state, mapId, source, here, destination, budget, taxi.MaxWalkToMasterYards, straight, options, out route, out fare, out master))
             return true;
         // A nearby node that flies but has no master the bot may approach is a dead end: the report already went out. A nearby node with
         // no route (or no nearby node at all) still leaves a farther known node, which flies when the win test says so.
@@ -746,7 +748,7 @@ internal static class PlayerbotTaxi
         // No known node inside the walk radius (quest 6362: the Crossroads wind rider is ~600 yards off while Thunder Bluff is a couple of
         // thousand away). The win test is still the one TryRoute applies — the walk to the node plus the walk from the landing at most half
         // the straight line — so a flight master beyond the radius is spoken to when flying is that clear a win, and walked past otherwise.
-        return TryFartherDeparture(session, player, services, index, cache, state, alliance, mapId, here, destination, budget, taxi.MaxWalkToMasterYards, straight, now, out route, out fare, out master);
+        return TryFartherDeparture(session, player, services, index, cache, state, alliance, mapId, here, destination, budget, taxi.MaxWalkToMasterYards, straight, options, now, out route, out fare, out master);
     }
 
     /// <summary>
@@ -754,7 +756,7 @@ internal static class PlayerbotTaxi
     /// False when none is (the caller walks). A route whose master the bot may not approach is reported once, as <see cref="TryDeparture"/> does.
     /// </summary>
     private static bool TryFartherDeparture(WorldSession session, Player player, QuestNpcServices services, TaxiIndex index, Memo cache, PlayerNpcState state,
-        bool alliance, uint mapId, Vector3 here, Vector3 destination, uint budget, float maxWalk, float straight, uint now,
+        bool alliance, uint mapId, Vector3 here, Vector3 destination, uint budget, float maxWalk, float straight, PlayerbotOptions options, uint now,
         out uint[] route, out uint fare, out CreatureSpawn master)
     {
         route = [];
@@ -781,7 +783,7 @@ internal static class PlayerbotTaxi
         uint[] missingRoute = [];
         foreach ((TaxiNode node, _) in departures)
         {
-            if (!TryDeparture(session, player, services, index, cache, state, mapId, node, here, destination, budget, maxWalk, straight, out route, out fare, out master, reportMissingMaster: false))
+            if (!TryDeparture(session, player, services, index, cache, state, mapId, node, here, destination, budget, maxWalk, straight, options, out route, out fare, out master, reportMissingMaster: false))
             {
                 if (route.Length > 0 && missingMaster == 0)
                 {
@@ -813,7 +815,7 @@ internal static class PlayerbotTaxi
     /// (the within-radius search); a farther search reports the nearest such node itself after every candidate has been tried.
     /// </summary>
     private static bool TryDeparture(WorldSession session, Player player, QuestNpcServices services, TaxiIndex index, Memo cache, PlayerNpcState state,
-        uint mapId, TaxiNode source, Vector3 here, Vector3 destination, uint budget, float maxWalk, float straight,
+        uint mapId, TaxiNode source, Vector3 here, Vector3 destination, uint budget, float maxWalk, float straight, PlayerbotOptions options,
         out uint[] route, out uint fare, out CreatureSpawn master, bool reportMissingMaster = true)
     {
         route = [];
@@ -845,8 +847,29 @@ internal static class PlayerbotTaxi
             return false;
         }
 
+        if (!CanReachMaster(player, new Vector3(found.X, found.Y, found.Z), options))
+        {
+            route = [];
+            fare = 0;
+            return false;
+        }
+
         cache.MasterMissingNode = 0;
         master = found;
+        return true;
+    }
+
+    private static bool CanReachMaster(Player player, Vector3 masterPos, PlayerbotOptions options)
+    {
+        if (PlayerbotNavigation.IsUnreachableOnFoot(player, masterPos, out _, out _))
+            return false;
+        if (player.Map is { } map && map.Collision.MeshPoints is not null)
+        {
+            TileWait retry = default;
+            if (PlayerbotNavigation.PlanToward(player, masterPos, options, ref retry, 0, out _) == PlanOutcome.Refused)
+                return false;
+        }
+
         return true;
     }
 

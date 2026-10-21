@@ -47,6 +47,12 @@ public static class LiquidEnvironment
         LocomotionState state = player.Locomotion;
         state.LastEnvironmentSample = (map, x, y, z);
 
+        if (player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0)
+        {
+            SetFlags(player, EnvironmentFlags.MaskLiquidFlags, false);
+            return;
+        }
+
         LiquidStatus res = map.GetLiquidStatus(x, y, z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid);
         if (res == LiquidStatus.NoWater)
         {
