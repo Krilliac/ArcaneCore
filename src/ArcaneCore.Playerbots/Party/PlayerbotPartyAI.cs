@@ -1267,6 +1267,7 @@ internal sealed class PlayerbotPartyAI
         _attacking = false;
         _thinkElapsed = 0;
         _releaseTries.Clear();
+        _unreachable.Clear();
         _followAngle = (float)(_random.NextDouble() * MathF.Tau);
         _followDistance = PlayerbotParty.MinFollowDistance
             + ((float)_random.NextDouble() * (PlayerbotParty.MaxFollowDistance - 0.5f - PlayerbotParty.MinFollowDistance));
@@ -1306,6 +1307,7 @@ internal sealed class PlayerbotPartyAI
         _restUntilMs = 0;
         _rangedIdleMs = 0;
         _releaseTries.Clear();
+        _unreachable.Clear();
         _deadSinceMs = -1;
         _corpseRun = false;
         _deadEpisode.Reset();
@@ -1846,6 +1848,7 @@ internal sealed class PlayerbotPartyAI
         _thinkElapsed = 0;
         TargetEntry = 0;
         _combatSpells.Reset();
+        _unreachable.Clear();
     }
 
     /// <summary>

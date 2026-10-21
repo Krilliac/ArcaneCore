@@ -125,4 +125,16 @@ public sealed class PlayerbotPartyUnreachableTargetTests
             NoPathTo(ai, victim);
             Assert.Same(victim, Select(ai, bot, master));
         });
+
+    [Fact]
+    public async Task Disengaging_ClearsRememberedUnreachableTargets()
+        => await Run("PUTE", "Putme", "Putbe", (ai, master, bot, host) =>
+        {
+            Creature near = Attacker(host, bot, 994541, 25f), far = Attacker(host, bot, 994542, 40f);
+            NoPathTo(ai, near);
+            Assert.Same(far, Select(ai, bot, master));
+            ai.Disengage(bot);
+            Assert.True(ai.Drives(bot));
+            Assert.Same(near, Select(ai, bot, master));
+        });
 }

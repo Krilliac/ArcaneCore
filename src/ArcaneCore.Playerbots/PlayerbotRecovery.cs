@@ -1810,8 +1810,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
         // A civilian, or a creature that does not attack on sight, is no camp of a body or a hold on the bot's rest: it counts only once it
         // is actually attacking the bot or fighting it (a passive creature that was struck, a Reactor that fights back).
-        if (PlayerbotTargetFilter.IsCivilian(creature)
-            || (!PlayerbotTargetFilter.AggroesOnSight(creature) && !IsEngagedWith(creature, player)))
+        bool engaged = IsEngagedWith(creature, player);
+        if (!engaged && (PlayerbotTargetFilter.IsCivilian(creature) || !PlayerbotTargetFilter.AggroesOnSight(creature)))
             return;
         var at = new Vector3(creature.X, creature.Y, creature.Z);
         if (system is null)
@@ -1820,7 +1820,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             return;
         }
 
-        if (!system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player)) return;
+        if (engaged
+            ? (creature.UnitFlags & (UnitFlags.Spawning | UnitFlags.NotSelectable)) != 0
+            : !system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player))
+            return;
         float radii = creature.BoundingRadius + player.BoundingRadius;
         float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
         if (radius <= 0) return;
