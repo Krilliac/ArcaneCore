@@ -18,6 +18,12 @@ public interface IMapResolver
     Map ResolveLoginMap(Player player);
 
     /// <summary>
+    /// The login map is about to receive the player, after the login packets (vmangos <c>DungeonMap::Add</c>
+    /// binds the player or its group there, which sends SMSG_INSTANCE_SAVE_CREATED). The default does nothing.
+    /// </summary>
+    void OnLoginMapAdd(Player player, Map map) { }
+
+    /// <summary>
     /// Checks that do not need the destination map yet, run when a far teleport starts
     /// (vmangos <c>MapManager::CanPlayerEnter</c> + <c>Map::CanEnter</c> of an existing map).
     /// Returns false — after telling the client why — to refuse the teleport.

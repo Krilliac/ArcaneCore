@@ -420,9 +420,11 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         // Login order per vmangos WorldSession::HandlePlayerLogin (LoginSequence): the login
-        // relocation (Player::LoadFromDB: a dungeon without its instance sends the player to the
-        // entrance), login packets, SendInitialPacketsBeforeAddToMap, the map add (which sends the
-        // self create), SendInitialPacketsAfterAddToMap; then the world features hear of the login.
+        // relocation and map pick (Player::LoadFromDB: a dungeon without its instance sends the
+        // player to the entrance; no instance bind yet), login packets,
+        // SendInitialPacketsBeforeAddToMap, the map add (the instance bind and its
+        // SMSG_INSTANCE_SAVE_CREATED, then the self create), SendInitialPacketsAfterAddToMap; then
+        // the world features hear of the login.
         player.Relocate(character.X, character.Y, character.Z, character.Orientation, world.NowMs);
         Map map;
         try
@@ -432,7 +434,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         catch (Exception ex)
         {
             session.Logger.LogError(ex, "[{Endpoint}] could not resolve the login map of '{Name}'", session.RemoteEndpoint, player.Name);
-            session.Kick();
+            session.Kick("login map could not be resolved");
             return;
         }
 

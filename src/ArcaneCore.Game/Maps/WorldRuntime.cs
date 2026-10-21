@@ -591,6 +591,7 @@ public sealed partial class WorldRuntime : IDisposable
         player.StartPlayedTime(NowMs);
         Map map = resolvedMap ?? ResolveLoginMap(player);
         player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
+        MapResolver?.OnLoginMapAdd(player, map);
         map.AddPlayer(player);
     }
 
