@@ -579,7 +579,12 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     private void Muster(ScenarioGroupRun g, ScenarioClaim claim, bool busy, long now)
     {
         EventScenarioGroup def = g.Group;
-        if (busy) { claim.StaySet = false; return; }
+        if (busy)
+        {
+            if (claim.StaySet) host.SetStay(claim.BotId, null); // clearing is always allowed; the refusal string does not matter
+            claim.StaySet = false;
+            return;
+        }
         if (now < claim.NextStayMs) return;
         var stay = new PlayerbotStay(def.StartMap, def.Start, StayRadiusYards, EventScenarioPostIds.For(def.EventId, def.GroupId, 0), unchecked(host.NowMs + (uint)StayLeaseMs));
         string? refusal = host.SetStay(claim.BotId, stay);

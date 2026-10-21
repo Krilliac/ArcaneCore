@@ -615,6 +615,21 @@ public sealed class EventScenarioEngineTests
     }
 
     [Fact]
+    public void AWaitingClaimThatTurnsBusy_HasItsStayClearedAtOnce_NotAtTheEndOfTheLease()
+    {
+        var rig = new Rig(Raiders(count: 4, minReady: 100));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        FakeBot held = rig.Host.Find("Siegebotd");
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Tick();
+        Assert.NotNull(rig.Host.Stays[held.Id]);
+        held.HeldBy = "is queued for a battleground";
+        rig.Tick();
+
+        Assert.Null(rig.Host.Stays[held.Id]); // cleared on the next pass, long before the 30 s lease ends
+    }
+
+    [Fact]
     public void TheBusyClock_DoesNotRunWhileTheBotIsOffline()
     {
         (Rig rig, _, FakeBot late) = WaitingRaiders(provision: true);
