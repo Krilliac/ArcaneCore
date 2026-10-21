@@ -456,7 +456,7 @@ none may cycle. A dungeon or raid without an instance row keeps player limit 0 (
 `import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>] [--dump <file>] [--replace]` writes only these two tables, and
 `wmo_area_template` when it is given the third file (refused over existing rows without `--replace`).
 
-`wmo_area_template` (world schema 54, `Content/Maps/WmoAreaTableDbcReader.cs`, `WmoAreaDataModule.cs`) holds the client `WMOAreaTable.dbc`
+`wmo_area_template` (world schema 55, `Content/Maps/WmoAreaTableDbcReader.cs`, `WmoAreaDataModule.cs`) holds the client `WMOAreaTable.dbc`
 (20 fields; id, WMOID = root id, NameSetID = ADT id, WMOGroupID, flags, AreaTableID): the area of each WMO group, which the world reads to
 tell that a position is in Undercity and not in the Tirisfal Glades above it (docs/areas/world-state.md, "WMO areas"). It takes the route
 `area_template` takes, not shipped rows: the client file is read by the importer (`refresh --dbc-dir` takes `WMOAreaTable.dbc` from the same

@@ -81,6 +81,28 @@ public sealed class WmoAreaDbcImporterTests
     }
 
     [Fact]
+    public async Task AWorldWithOnlyWmoAreaRows_RefusesAnImportThatCarriesThem_UnlessReplace()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using WorldDbContext db = Context(connection);
+        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+        db.Set<WmoAreaTemplateRow>().Add(new WmoAreaTemplateRow { Id = 9, RootId = 9, AreaId = 9 });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        using TempFiles files = Create();
+        MapAreaDbcSnapshot withWmo = MapAreaDbcImporter.ReadSnapshot(files.Map, files.Area, instances: null, files.Wmo);
+        MapAreaDbcSnapshot withoutWmo = MapAreaDbcImporter.ReadSnapshot(files.Map, files.Area, instances: null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => MapAreaDbcImporter.ImportSnapshotAsync(db, withWmo, replace: false, default));
+        Assert.Equal(0, await db.Set<MapTemplateRow>().CountAsync());
+
+        // A snapshot without WMO rows does not touch the table, so its rows are no reason to refuse.
+        await MapAreaDbcImporter.ImportSnapshotAsync(db, withoutWmo, replace: false, default);
+        Assert.Equal(2, await db.Set<MapTemplateRow>().CountAsync());
+    }
+
+    [Fact]
     public async Task WithoutAWmoAreaTable_TheTableIsLeftAsItIs()
     {
         await using SqliteConnection connection = new("Data Source=:memory:");
