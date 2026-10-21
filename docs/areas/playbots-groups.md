@@ -398,7 +398,9 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   the leader off the 6-yard disk, and the lockstep needs both leaders in it at once. So each raid records the highest waypoint index its leader has stood at (`IsAtWaypoint`, level-aware;
   `PlayerbotSiegeRaid.FurthestWaypoint`, checked from the step on, never lowered). When every led raid has reached the step's waypoint or a later one and at least one has gone beyond it,
   the step becomes one past the lowest of those (an event note and a log line say so; the answers, clocks and push flags restart as for any step change). It is the last waypoint's
-  successor at most: the approach to the objective, and the win (the objective seen alive, then dead) are judged as ever. Not with an unled raid; where every leader has been at the
+  successor at most: the approach to the objective, and the win (the objective seen alive, then dead) are judged as ever. The credit is gated on lag like the lockstep: none while a living member is more than `LagYards` behind its leader in any raid, unless
+  the lag is waived (`LagWaived`); the step then moves once the lag clears. A pass through a later waypoint while the leader answers an attacker (a chase within the leash) is not recorded, and no credit is given while a leader answers.
+  `FurthestWaypoint` belongs to the raid, not the leader, so it survives `PromoteLeader`. Not with an unled raid; where every leader has been at the
   step's waypoint and none beyond it, the lockstep above (lag, combat, push rules) still decides.
 * **Route tether (`RouteYards`, `PlayerbotSiegeCommander.RouteTetherYards`, 40 yards).** The route of a step is the segment from the waypoint behind it (where the siege began, for the
   first) to its goal (the waypoint, or the living objective past the last). A hostile counts for the siege (the pull candidates, the skull and cross, the `Hostiles` of the facts) only within 40

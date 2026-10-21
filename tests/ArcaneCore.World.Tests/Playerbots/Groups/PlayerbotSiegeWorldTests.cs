@@ -1548,8 +1548,9 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     [Fact]
     public async Task AStepThatAdvancesWhileTheLeaderAnswers_IsNotReadAtTheNextWaypoint_TheLeaderReachesItBeforeTheStepMovesOn()
     {
-        // Waypoints at 4, 150, 162 and 212 yards: waypoint 2 is 12 yards from where the leader stands when it answers an attacker 29 yards past waypoint 1.
-        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture(4f, 150f, 162f, 212f);
+        // Waypoints at 4, 150, 188 and 238 yards: waypoint 2 is 38 yards past waypoint 1, outside the answer leash (the leader never stands in its disk, so the furthest-waypoint credit cannot give it),
+        // and about 10 yards from where the leader stands when it answers an attacker 29 yards past waypoint 1.
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture(4f, 150f, 188f, 238f);
         await using GroupTestWorld _ = world;
         world.Options.Party.TeleportToLeader = false;
         Guid leaderBot = raid.Group!.LeaderBotId;
@@ -1586,9 +1587,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (attacker is null) return false;
             if (attacker.IsAlive && !ReferenceEquals(attacker.Combat.Victim, leader)) attacker.Combat.Threat.AddThreat(leader, 100_000f); // it keeps shooting the leader
             if (unchecked(Now(world) - lastLine) >= 1_000) { lastLine = Now(world); trail.Add(AnswerLine(world, raid, leaderBot, leader, siege.Waypoints[stepAtPush], attacker, began) + $" step={siege.Step}"); }
-            // A leader that really stands in the next waypoint's disk while it answers has been there: the furthest-waypoint credit then moves the step past it at once (not a skip of a waypoint the leader never reached).
-            bool credited = siege.Step > stepAtPush + 1 && raid.FurthestWaypoint >= stepAtPush + 1;
-            if (siege.Step == stepAtPush + 1 || credited && !advanced)
+            if (siege.Step == stepAtPush + 1)
             {
                 float toNext = YardsFrom(leader, siege.Waypoints[stepAtPush + 1]);
                 if (!advanced)
@@ -1596,7 +1595,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                     // The lockstep moves the step only with the leader really in the old waypoint's disk (level-aware); a little slack for the leader's move within the tick.
                     Vector3 old = siege.Waypoints[stepAtPush];
                     float oldFlat = FlatYards(leader, old), oldLevel = Math.Abs(leader.Z - old.Z);
-                    movedWhileOut = !credited && (oldFlat > PlayerbotSiegeCommander.WaypointYards + 1f || oldLevel > PlayerbotSiegeCommander.WaypointLevelYards);
+                    movedWhileOut = oldFlat > PlayerbotSiegeCommander.WaypointYards + 1f || oldLevel > PlayerbotSiegeCommander.WaypointLevelYards;
                     stepChange = $"the step moved at +{unchecked(Now(world) - began)}ms with the leader {oldFlat:F1} yards (level {oldLevel:F1}) from the old waypoint and {toNext:F1} from the next, atWp={raid.AtWaypoint} real={raid.AtWaypointReal} answerStep={raid.AnsweringStep}";
                 }
 
@@ -1607,7 +1606,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 else sawDiskAtNext = true;
             }
 
-            if (siege.Step > stepAtPush + 1 && !sawDiskAtNext && !credited) skipped = true;
+            if (siege.Step > stepAtPush + 1 && !sawDiskAtNext) skipped = true;
             return sawDiskAtNext || siege.Step > stepAtPush + 1 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 450_000;
         });
 
@@ -1907,17 +1906,19 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     // --- the furthest-waypoint credit and the route tether -------------------------------------------------------------------
 
     /// <summary>Moves the leader of <paramref name="raid"/> (and its members, so none lags) to <paramref name="x"/> yards east of the start, <paramref name="y"/> north of it.</summary>
-    private static void Teleport(GroupTestWorld world, PlayerbotSiegeRaid raid, float x, float y = 0f, bool leaderOnly = false)
+    private static void Teleport(GroupTestWorld world, PlayerbotSiegeRaid raid, float x, float y = 0f)
     {
-        foreach (var member in raid.Group!.Members.Where(m => !m.Real && m.Joined && (!leaderOnly || m.BotId == raid.Group.LeaderBotId)))
+        foreach (var member in raid.Group!.Members.Where(m => !m.Real && m.Joined))
             if (world.World.Host.World.FindOnlinePlayer(member.Guid) is { } player)
                 player.Relocate(Origin.X + x, Origin.Y + y, Origin.Z, 0, Now(world));
     }
 
-    /// <summary>Four waypoints (15, 30, 45 and 60 yards), the objective at 70, no guards: the raids are teleported over the waypoints.</summary>
-    private static async Task<(GroupTestWorld World, PlayerbotSiege Siege)> CreditFixture(int raids)
+    /// <summary>Four waypoints (15, 30, 45 and 60 yards), no guards, the objective at 70 yards or (<paramref name="objectiveFar"/>) 400, out of any pull range: the raids are teleported over the waypoints.</summary>
+    private static async Task<(GroupTestWorld World, PlayerbotSiege Siege)> CreditFixture(int raids, bool objectiveFar = true)
     {
-        GroupTestWorld world = await StartWorld(guards: false);
+        GroupTestWorld world = objectiveFar
+            ? await GroupTestWorld.StartAsync([], null, extraCreatures: [Guard(Objective, 400f, 0f, health: 120)])
+            : await StartWorld(guards: false);
         (Guid Id, string Name)[] bots = await Enlist(world, 15f, 30f, 45f, 60f);
         PlayerbotSiege siege = await Start(world, bots, raids);
         Assert.True(siege.Step <= 1, $"the siege is at step {siege.Step} already");
@@ -1983,14 +1984,51 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
         Assert.Equal(-1, await NextStep(world, siege, 2_000));
         Assert.Equal(before, siege.Step);
-        Assert.True(siege.Raids[0].FurthestWaypoint >= 2, "the raid that stood at the third waypoint has it recorded");
+        Assert.Equal(2, siege.Raids[0].FurthestWaypoint);
         Assert.Equal(-1, siege.Raids[1].FurthestWaypoint);
+    }
+
+    [Fact]
+    public async Task AFurtherWaypointReached_WithAMemberBeyondLagYards_GivesNoCredit_UntilTheLagClears()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 2);
+        await using GroupTestWorld _ = world;
+        world.Options.Party.TeleportToLeader = false;
+        int before = siege.Step;
+        PlayerbotSiegeRaid lagging = siege.Raids[0];
+        var held = lagging.Group!.Members.First(m => !m.Real && m.BotId != lagging.Group.LeaderBotId);
+        await world.OnWorldAsync(() =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, 45f);
+            return true;
+        });
+
+        // One member of the first raid stays 130 yards behind its leader: the leaders have both been at the third waypoint, and the step must not move.
+        bool moved = false;
+        await world.RunUntilAsync(4_000, () =>
+        {
+            world.World.Host.World.FindOnlinePlayer(held.Guid)!.Relocate(Origin.X - 80f, Origin.Y, Origin.Z, 0, Now(world));
+            moved |= siege.Step != before;
+            return moved;
+        });
+        Assert.False(moved, $"the step moved to {siege.Step} with a member {lagging.LastFacts.MaxLagYards:F0} yd behind: {lagging.LastFacts}");
+        Assert.True(lagging.LastFacts.MaxLagYards > PlayerbotSiegeCommander.LagYards, "the member is far: " + lagging.LastFacts);
+        Assert.True(siege.Raids.All(r => r.FurthestWaypoint >= 2), "both leaders have stood at the third waypoint");
+
+        // The member catches up: the credit applies, to the step after the third waypoint.
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, lagging);
+            world.World.Host.World.FindOnlinePlayer(held.Guid)!.Relocate(leader.X, leader.Y, leader.Z, 0, Now(world));
+            return true;
+        });
+        Assert.Equal(3, await NextStep(world, siege, 20_000));
     }
 
     [Fact]
     public async Task ALoneRaidThatFoughtItsWayToTheLastWaypoint_HeadsForTheObjective_AndWinsAsEver()
     {
-        (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 1);
+        (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 1, objectiveFar: false);
         await using GroupTestWorld _ = world;
         await world.OnWorldAsync(() =>
         {
