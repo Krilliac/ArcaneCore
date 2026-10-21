@@ -580,7 +580,13 @@ public sealed class PlayerbotSiegeCommanderTests
     private static PlayerbotSiegeRaid PushingRaid(uint requestedAt)
     {
         var siege = new PlayerbotSiege(1, 0, 990_000, [Wp, new System.Numerics.Vector3(115f, 50f, 40f), new System.Numerics.Vector3(160f, 50f, 40f)], System.Numerics.Vector3.Zero, 0);
-        return new PlayerbotSiegeRaid(siege, 1) { Push = PlayerbotSiegePush.Stalemate, AnswerRequestedMs = requestedAt };
+        return new PlayerbotSiegeRaid(siege, 1) { Push = PlayerbotSiegePush.Stalemate, AnswerRequestedMs = requestedAt, AnswerRequestedLeader = LeaderA };
+    }
+
+    private static void Request(PlayerbotSiegeRaid raid, ArcaneCore.Game.ObjectGuid leader, uint at)
+    {
+        raid.AnswerRequestedMs = at;
+        raid.AnswerRequestedLeader = leader;
     }
 
     private static bool Read(PlayerbotSiegeRaid raid, ArcaneCore.Game.ObjectGuid leader, int step, System.Numerics.Vector3 at, System.Numerics.Vector3 waypoint, uint now)
@@ -611,10 +617,10 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
         Assert.True(Read(raid, LeaderA, 0, leaderAt, Wp, 10_500)); // answering, out of the disk
         // The step moves on to waypoint 1 (115): the leader, still at the old place and still fighting, is not at it and starts nothing.
-        raid.AnswerRequestedMs = 10_900;
+        Request(raid, LeaderA, 10_900);
         Assert.False(Read(raid, LeaderA, 1, leaderAt, new System.Numerics.Vector3(115f, 50f, 40f), 11_000));
         Assert.Equal(-1, raid.AnsweringStep);
-        raid.AnswerRequestedMs = 11_500;
+        Request(raid, LeaderA, 11_500);
         Assert.False(Read(raid, LeaderA, 1, leaderAt, new System.Numerics.Vector3(115f, 50f, 40f), 11_600));
     }
 
@@ -625,9 +631,52 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_000));
         Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 11_000));
         // Leader A died, B stands 20 yards out: B is not answering at this waypoint.
-        raid.AnswerRequestedMs = 11_900;
+        Request(raid, LeaderB, 11_900);
         Assert.False(Read(raid, LeaderB, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 12_000));
         Assert.Equal(-1, raid.AnsweringStep);
+    }
+
+    [Fact]
+    public void ARequestFromADemotedLeader_CannotStartAnAnswerForTheNewOne()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000); // written by leader A
+        // Leader B stands in the disk now, A's request is still fresh: nothing begins for B.
+        Assert.True(Read(raid, LeaderB, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_500)); // the real reading only
+        Assert.Equal(-1, raid.AnsweringStep);
+        Assert.False(Read(raid, LeaderB, 0, new System.Numerics.Vector3(120f, 50f, 40f), Wp, 10_600));
+        // B's own request begins one.
+        Request(raid, LeaderB, 10_700);
+        Assert.True(Read(raid, LeaderB, 0, new System.Numerics.Vector3(102f, 50f, 40f), Wp, 10_800));
+        Assert.Equal(LeaderB, raid.AnsweringLeader);
+    }
+
+    [Fact]
+    public void TheAnswerBoundIsPerStep_AReRequestOnTheSameStepDoesNotRestartIt_ANewStepStartsAnother()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        System.Numerics.Vector3 inDisk = new(102f, 50f, 40f), out20 = new(120f, 50f, 40f);
+        Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 10_000));
+        // First excursion, the leader back in the disk after 20 s without a request: over.
+        Assert.True(Read(raid, LeaderA, 0, out20, Wp, 30_000));
+        Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 30_100));
+        Assert.Equal(-1, raid.AnsweringStep);
+        // A second excursion on the same step begins (within the bound) and ends with the bound counted from the FIRST answer, not from this one.
+        Request(raid, LeaderA, 40_000);
+        Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 40_000));
+        Assert.Equal(0, raid.AnsweringStep);
+        Request(raid, LeaderA, 10_000 + PlayerbotGroupCoordinator.LagHoldMs - 500);
+        Assert.True(Read(raid, LeaderA, 0, out20, Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs - 400));
+        Assert.False(Read(raid, LeaderA, 0, out20, Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs)); // 90 s after the first answer began
+        Assert.Equal(-1, raid.AnsweringStep);
+        // Spent: a re-request on the same step begins nothing.
+        Request(raid, LeaderA, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 100);
+        Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 200)); // the real reading
+        Assert.Equal(-1, raid.AnsweringStep);
+        // The next step has its own bound.
+        System.Numerics.Vector3 next = new(115f, 50f, 40f);
+        Request(raid, LeaderA, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 300);
+        Assert.True(Read(raid, LeaderA, 1, new System.Numerics.Vector3(116f, 50f, 40f), next, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 400));
+        Assert.Equal(1, raid.AnsweringStep);
     }
 
     [Fact]
@@ -662,7 +711,7 @@ public sealed class PlayerbotSiegeCommanderTests
         for (int round = 0; round < 6; round++)
         {
             // out to the edge, requesting while it chases, then back in without a request
-            for (int i = 0; i < 4; i++) { t += 500; raid.AnswerRequestedMs = t; Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(100f + (6f * (i + 1)), 50f, 40f), Wp, t)); }
+            for (int i = 0; i < 4; i++) { t += 500; Request(raid, LeaderA, t); Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(100f + (6f * (i + 1)), 50f, 40f), Wp, t)); }
             for (int i = 0; i < 4; i++) { t += 500; Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(124f - (6f * (i + 1)), 50f, 40f), Wp, t)); }
         }
     }

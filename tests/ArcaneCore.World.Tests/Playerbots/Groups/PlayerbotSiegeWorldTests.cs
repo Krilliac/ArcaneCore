@@ -1565,7 +1565,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         uint sentAt = 0, lastLine = 0;
         bool readAtNext = false, sawDiskAtNext = false, skipped = false, advanced = false;
         float closestToNext = float.MaxValue;
-        string nextInfo = string.Empty;
+        bool movedWhileOut = false;
+        string stepChange = string.Empty;
         var trail = new List<string>();
         uint began = Now(world);
         bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 500_000, () =>
@@ -1588,7 +1589,15 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (siege.Step == stepAtPush + 1)
             {
                 float toNext = YardsFrom(leader, siege.Waypoints[stepAtPush + 1]);
-                if (!advanced) nextInfo = $"first tick at the next step: +{unchecked(Now(world) - began)}ms toNext={toNext:F1} toOld={YardsFrom(leader, siege.Waypoints[stepAtPush]):F1} atWp={raid.AtWaypoint} answerStep={raid.AnsweringStep} lagSince={raid.LagSinceMs}";
+                if (!advanced)
+                {
+                    // The lockstep moves the step only with the leader really in the old waypoint's disk (level-aware); a little slack for the leader's move within the tick.
+                    Vector3 old = siege.Waypoints[stepAtPush];
+                    float oldFlat = FlatYards(leader, old), oldLevel = Math.Abs(leader.Z - old.Z);
+                    movedWhileOut = oldFlat > PlayerbotSiegeCommander.WaypointYards + 1f || oldLevel > PlayerbotSiegeCommander.WaypointLevelYards;
+                    stepChange = $"the step moved at +{unchecked(Now(world) - began)}ms with the leader {oldFlat:F1} yards (level {oldLevel:F1}) from the old waypoint and {toNext:F1} from the next, atWp={raid.AtWaypoint} real={raid.AtWaypointReal} answerStep={raid.AnsweringStep}";
+                }
+
                 advanced = true;
                 closestToNext = Math.Min(closestToNext, toNext);
                 // At the next waypoint while the leader is still out where it fought: it is not at it.
@@ -1600,12 +1609,11 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return sawDiskAtNext || siege.Step > stepAtPush + 1 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 450_000;
         });
 
-        string Story() => $"done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
+        string Story() => $"{stepChange} done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        output.WriteLine($"STEP-ADVANCE-PROBE done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} answerStep={raid.AnsweringStep} [{nextInfo}]");
-        foreach (string line in trail.Skip(Math.Max(0, trail.Count - 140)).Where((_, i) => i % 3 == 0)) output.WriteLine("  " + line);
         if (attacker is null) Assert.Fail("the probe never fired: " + Story());
         if (!advanced) Assert.Fail("the step never moved on while the leader answered: " + Story());
+        if (movedWhileOut) Assert.Fail("the lockstep moved the step while the leader was out of the old waypoint's disk, answering: " + Story());
         if (readAtNext) Assert.Fail("the raid read the leader at the next waypoint while it was still out where it fought: " + Story());
         if (skipped) Assert.Fail("the step moved past the next waypoint before the leader reached it: " + Story());
         if (!sawDiskAtNext) Assert.Fail("the leader never reached the next waypoint: " + Story());
