@@ -1350,6 +1350,53 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return results;
     }
 
+    /// <summary>
+    /// Give the running autonomous bots <paramref name="botIds"/> a scenario stay (<see cref="PlayerbotStay"/>), renew the one they hold, or
+    /// end theirs with null (world thread). Refusals as <see cref="SetDefend"/>: not running, scripted, and (only when setting) driven by a
+    /// party, a bot-led group or a battleground. A stay with a new id cancels a taxi ride and the journey legs the bot was on. Memory only.
+    /// </summary>
+    internal IReadOnlyList<PlayerbotOperationResult> SetStay(IReadOnlyList<Guid> botIds, PlayerbotStay? stay)
+    {
+        ArgumentNullException.ThrowIfNull(botIds);
+        if (_world is not { } world || !world.IsWorldThread) throw new InvalidOperationException("playerbot-stay-thread");
+        var results = new List<PlayerbotOperationResult>(botIds.Count);
+        foreach (Guid botId in botIds)
+        {
+            if (!_active.TryGetValue(botId, out ActiveBot? bot) || bot.Paused || bot.Session.State != SessionState.InWorld
+                || bot.Session.Player is not { } player)
+            {
+                results.Add(new(false, "bot-not-running", botId));
+                continue;
+            }
+
+            if (bot.Controller is not null) results.Add(new(false, "bot-scripted", botId, player.Name));
+            else if (stay is not null && (bot.PartyDriven || bot.GroupDriven || bot.BattlegroundDriven)) results.Add(new(false, "bot-busy", botId, player.Name));
+            else
+            {
+                if (stay is not null && bot.Brain.Stay?.StayId != stay.StayId)
+                {
+                    PlayerbotTaxi.Cancel(player);
+                    PlayerbotTravel.CancelLegs(bot.Session, player);
+                }
+
+                bot.Brain.Stay = stay;
+                results.Add(new(true, stay is null ? "stay-cleared" : "staying", botId, player.Name));
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>The id of the scenario stay a running bot holds (a lease already run out still counts until the brain drops it), or null.</summary>
+    internal int? StayIdOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? active.Brain.Stay?.StayId : null;
+
+    /// <summary>
+    /// Why the group, run and battleground coordinators will not match the bot (null when they may): it is queued for a battleground. A
+    /// coordinator that already drives it is reported by <see cref="HeldFromBrain"/>.
+    /// </summary>
+    internal string? HeldFromCoordinators(Guid botId)
+        => battlegrounds?.Holds(botId) == true ? "is queued for a battleground" : null;
+
     /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
     private enum StartKind { Operator, Restore, QuarantineRetry }
 
@@ -2035,7 +2082,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 foreach (ActiveBot active in bots)
                     if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                         _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                            // A bot with a defend post holds it: it is neither matched into a quest group nor enlisted in a siege.
+                            // A bot with a defend post holds it: it is neither matched into a quest group nor enlisted in a siege. A scenario stay is
+                            // not a hold: the bot stays free, the coordinators' own pick sites leave it out of group, run and battleground matching, and
+                            // a siege enlists it (and clears the stay).
                             active.Controller is null && !active.PartyDriven && fields?.Holds(active.Record.BotId) != true && active.Brain.Defend is null,
                             Scripted: active.Controller is not null));
                 try { groups.Update(_groupBotsScratch, elapsedMs); }

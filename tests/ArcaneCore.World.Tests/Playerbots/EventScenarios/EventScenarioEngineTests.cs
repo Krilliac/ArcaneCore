@@ -35,6 +35,7 @@ public sealed class EventScenarioEngineTests
         {
             Host.Now += ms;
             Engine.Tick();
+            Host.Wander();
         }
 
         public void Ticks(int count, uint ms = 2_000)
@@ -456,14 +457,18 @@ public sealed class EventScenarioEngineTests
         return (rig, rig.Host.Find("Siegebota"), late);
     }
 
-    private static void AssertDriftedBotIsPlacedAgainAndEnlistedOnlyWhenBack(Rig rig, FakeBot drifter, FakeBot late)
+    private static void AssertDriftedBotIsTeleportedBackAfterTheGrace_AndEnlistedOnlyWhenBack(Rig rig, FakeBot drifter, FakeBot late)
     {
         rig.Host.TeleportRefusal = "teleport-refused";
         rig.Ticks(2);
+        rig.Tick(30_000); // inside the grace: the bot's own walk-back has its chance, nothing is teleported
+        Assert.Equal(4, rig.Host.Teleports.Count);
+        Assert.Contains("placed 4", rig.Status()); // still counted placed: its own walk-back may bring it home
+        Assert.Empty(rig.Host.SiegeStarts);
+        rig.Tick(20_000); // past the 45 seconds
 
-        Assert.True(rig.Host.Teleports.Count > 4, "the drifted bot is teleported back");
+        Assert.True(rig.Host.Teleports.Count > 4, "the drifted bot is teleported back after the grace");
         Assert.Contains("placed 3", rig.Status());
-        Assert.Contains("siege waiting: 3/5 ready", rig.Status());
         Assert.Empty(rig.Host.SiegeStarts);
 
         rig.Host.TeleportRefusal = null;
@@ -477,32 +482,218 @@ public sealed class EventScenarioEngineTests
     }
 
     [Fact]
-    public void APlacedSiegeBotCarriedOffByDistance_IsPlacedAgain_AndNeitherReadyNorEnlistedUntilBack()
+    public void APlacedSiegeBotCarriedOffByDistance_IsTeleportedBackAfterTheGrace_AndNotEnlistedUntilBack()
     {
         (Rig rig, FakeBot drifter, FakeBot late) = WaitingRaiders();
-        drifter.Position = Start + new Vector3(1000f, 0f, 0f); // same map, 1,000 yards off: autonomous play walked it away
-        AssertDriftedBotIsPlacedAgainAndEnlistedOnlyWhenBack(rig, drifter, late);
+        drifter.Position = Start + new Vector3(1000f, 0f, 0f); // same map, 1,000 yards off: a retreat or a fight carried it away
+        AssertDriftedBotIsTeleportedBackAfterTheGrace_AndEnlistedOnlyWhenBack(rig, drifter, late);
     }
 
     [Fact]
-    public void APlacedSiegeBotOnAnotherMap_IsPlacedAgain_AndNeitherReadyNorEnlistedUntilBack()
+    public void APlacedSiegeBotOnAnotherMap_IsTeleportedBackAfterTheGrace_AndNotEnlistedUntilBack()
     {
         (Rig rig, FakeBot drifter, FakeBot late) = WaitingRaiders();
         drifter.Map = 1; // same coordinates, another map (a dungeon portal)
-        AssertDriftedBotIsPlacedAgainAndEnlistedOnlyWhenBack(rig, drifter, late);
+        AssertDriftedBotIsTeleportedBackAfterTheGrace_AndEnlistedOnlyWhenBack(rig, drifter, late);
     }
 
     [Fact]
-    public void WaitingSiegeBots_GetNoDefendPost_SoTheCoordinatorStillFindsThemFree()
+    public void APlacedBotAway_IsNotTeleportedBeforeTheGrace_AndIsAfterIt()
+    {
+        (Rig rig, FakeBot drifter, _) = WaitingRaiders();
+        drifter.Position = Start + new Vector3(500f, 0f, 0f);
+        rig.Tick();
+        rig.Tick((uint)EventScenarioEngine.DriftTeleportMs - 4_000);
+        Assert.Equal(4, rig.Host.Teleports.Count);
+
+        rig.Tick(6_000);
+        Assert.Equal(5, rig.Host.Teleports.Count);
+        Assert.Equal("Siegebota", rig.Host.Teleports[^1].Bot);
+    }
+
+    [Fact]
+    public void WaitingSiegeBots_HoldAStay_NotADefendPost()
     {
         (Rig rig, _, FakeBot late) = WaitingRaiders();
         Assert.All(rig.Host.Posts.Values, post => Assert.Null(post));
+        FakeBot[] online = [.. rig.Host.Bots.Where(b => b.Online)];
+        Assert.Equal(4, online.Length);
+        foreach (FakeBot bot in online)
+        {
+            PlayerbotStay stay = Assert.IsType<PlayerbotStay>(rig.Host.Stays[bot.Id]);
+            Assert.True(EventScenarioPostIds.IsScenario(stay.StayId));
+            Assert.Equal(Start, stay.Centre);
+            Assert.Equal(0u, stay.MapId);
+            Assert.True(stay.Radius < EventScenarioEngine.PlacedYards);
+        }
 
         late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
         rig.Ticks(6);
 
         Assert.Single(rig.Host.SiegeStarts);
         Assert.Equal(5, rig.Host.SiegeStarts[0].Bots.Count);
+    }
+
+    [Fact]
+    public void TheStay_IsMusteredBeforeThePlacement_AndRenewedEveryPass()
+    {
+        var rig = new Rig(Raiders(count: 5, minReady: 100));
+        FakeBot far = FarBot(rig.Host, "Siegebota", team: 0);
+        rig.Host.Add("Siegebotb", team: 0).Desired = true;
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Tick();
+
+        Assert.NotNull(rig.Host.Stays[far.Id]);
+        uint first = rig.Host.Stays[far.Id]!.UntilMs;
+        int calls = rig.Host.StayCalls;
+        rig.Tick();
+        rig.Tick();
+
+        Assert.Equal(calls + 2, rig.Host.StayCalls);
+        Assert.True(unchecked((int)(rig.Host.Stays[far.Id]!.UntilMs - first)) > 0);
+    }
+
+    [Fact]
+    public void TheStay_IsClearedWhenTheSiegeStarts_WhenTheEventStops_AndWhenAClaimIsGivenUp()
+    {
+        (Rig rig, _, FakeBot late) = WaitingRaiders();
+        FakeBot held = rig.Host.Find("Siegebotb");
+        held.HeldBy = "is in a group";
+        rig.Tick();
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs + 1_000);
+        Assert.Null(rig.Host.Stays[held.Id]); // given up
+        Assert.Null(rig.Engine.ClaimOf(held.Id));
+
+        // a siege that starts clears every stay
+        late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        rig.Host.Add("Siegebotf", team: 0).OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        rig.Ticks(8);
+        Assert.Single(rig.Host.SiegeStarts);
+        Assert.All(rig.Host.Stays.Values, stay => Assert.Null(stay));
+
+        // an event that stops while the siege waits clears them too
+        (Rig waiting, _, _) = WaitingRaiders();
+        Assert.All(waiting.Host.Bots.Where(b => b.Online), b => Assert.NotNull(waiting.Host.Stays[b.Id]));
+        waiting.Engine.EventChanged(Event, active: false);
+        Assert.All(waiting.Host.Stays.Values, stay => Assert.Null(stay));
+    }
+
+    [Fact]
+    public void ARefusedStay_IsShown_NotCountedReady_AndRetriedAtTheUsualCadence()
+    {
+        var rig = new Rig(Raiders(count: 4, minReady: 100));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        rig.Host.StayRefusal = "bot-busy";
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(4);
+
+        Assert.Empty(rig.Host.SiegeStarts);
+        Assert.Contains("stay: bot-busy x4", rig.Status());
+        Assert.Contains("siege waiting: 0/4 ready", rig.Status());
+
+        rig.Host.StayRefusal = null;
+        rig.Tick((uint)EventScenarioEngine.RetryMs);
+        rig.Ticks(3);
+        Assert.Single(rig.Host.SiegeStarts);
+    }
+
+    [Fact]
+    public void ABotHeldElsewhere_GetsNoStay_AndIsNotReady()
+    {
+        var rig = new Rig(Raiders(count: 4, minReady: 100));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        FakeBot held = rig.Host.Find("Siegebotd");
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Tick();
+        uint until = rig.Host.Stays[held.Id]!.UntilMs;
+        held.HeldBy = "is queued for a battleground";
+        rig.Ticks(3);
+
+        Assert.Equal(until, rig.Host.Stays[held.Id]!.UntilMs); // not renewed
+        Assert.Contains("siege waiting: 3/4 ready", rig.Status());
+        Assert.Contains("held 1", rig.Status());
+    }
+
+    [Fact]
+    public void TheBusyClock_DoesNotRunWhileTheBotIsOffline()
+    {
+        (Rig rig, _, FakeBot late) = WaitingRaiders(provision: true);
+        FakeBot held = rig.Host.Find("Siegebotb");
+        held.HeldBy = "is in a group";
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs - 10_000); // busy for most of the window
+        held.Online = false;
+        held.State = ManagedPlayerbotState.Running; // logged out for a long while
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs);
+        held.Online = true;
+        late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        rig.Tick();
+
+        Assert.NotNull(rig.Engine.ClaimOf(held.Id)); // the clock restarted when it came back
+    }
+
+    [Fact]
+    public void ReplacementCreation_IsCappedToATenthOfTheGroup_AndAReleasedBotIsClaimedAgainWhenFree()
+    {
+        var rig = new Rig(Raiders(count: 10, minReady: 100, provision: true));
+        for (int i = 0; i < 9; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        rig.Host.Add("Siegebotzz", team: 0).Desired = true; // the tenth is not online yet, so the siege keeps waiting
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(3);
+        FakeBot[] busy = [rig.Host.Find("Siegebota"), rig.Host.Find("Siegebotb"), rig.Host.Find("Siegebotc")];
+        foreach (FakeBot bot in busy) bot.HeldBy = "is in a group";
+        rig.Tick();
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs + 1_000);
+        rig.Ticks(20);
+
+        Assert.Single(rig.Host.Created); // 3 given up, a tenth of 10 may be replaced
+        Assert.Contains("replacements 1/1", rig.Status());
+
+        foreach (FakeBot bot in busy) bot.HeldBy = null;
+        rig.Ticks(12);
+        Assert.Single(rig.Host.Created);
+        Assert.Equal(10, rig.Host.Bots.Count(b => rig.Engine.ClaimOf(b.Id) is not null));
+    }
+
+    [Fact]
+    public void EightyBotSiegeAt100Pct_UnderThrottledFill_StartsWithinBoundedPasses_AlthoughUnpinnedBotsWander()
+    {
+        var rig = RunEighty(honourStays: true, out FakeBot[] all);
+        Assert.Single(rig.Host.SiegeStarts);
+        Assert.Equal(80, rig.Host.SiegeStarts[0].Bots.Count);
+        Assert.All(all, bot => Assert.True(Vector3.Distance(bot.Position, Start) <= EventScenarioEngine.PlacedYards));
+        Assert.True(rig.Host.Teleports.Count <= 80 + 20, "teleports " + rig.Host.Teleports.Count);
+    }
+
+    [Fact]
+    public void EightyBotSiegeAt100Pct_WhenBotsIgnoreTheirStay_NeverConverges()
+    {
+        var rig = RunEighty(honourStays: false, out _);
+        Assert.Empty(rig.Host.SiegeStarts);
+        Assert.True(rig.Host.Teleports.Count > 80, "teleports " + rig.Host.Teleports.Count);
+    }
+
+    private static Rig RunEighty(bool honourStays, out FakeBot[] all)
+    {
+        var rig = new Rig(Raiders(count: 80, minReady: 100));
+        rig.Host.WanderAfterPasses = 2;
+        rig.Host.HonourStays = honourStays;
+        all = new FakeBot[80];
+        for (int i = 0; i < 80; i++)
+        {
+            all[i] = rig.Host.Add("Siegebot" + (char)('a' + (i / 26)) + (char)('a' + (i % 26)), team: 0);
+            all[i].State = ManagedPlayerbotState.Running; // registered and running, but not logged in yet: the fill is throttled
+            all[i].Desired = true;
+        }
+
+        rig.Engine.EventChanged(Event, active: true);
+        for (int pass = 0; pass < 40 && (!honourStays || rig.Host.SiegeStarts.Count == 0); pass++)
+        {
+            if (pass % 3 == 0 && pass / 3 < 8)
+                for (int k = 0; k < 10; k++) all[((pass / 3) * 10) + k].OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+            rig.Tick();
+        }
+
+        return rig;
     }
 
     [Fact]

@@ -32,6 +32,15 @@ internal sealed class ScenarioClaim(Guid botId, string name, int slot)
     /// <summary>Milliseconds on the engine clock since the claim was first seen held by another system or by a GM's defend post, -1 while free.</summary>
     public long BusySinceMs { get; set; } = -1;
 
+    /// <summary>The bot holds the scenario's stay at the start as of the last pass (siege groups, while the siege waits).</summary>
+    public bool StaySet { get; set; }
+
+    /// <summary>Milliseconds on the engine clock since a placed bot was first seen away from the start, -1 while it is there.</summary>
+    public long AwaySinceMs { get; set; } = -1;
+
+    /// <summary>World time before which a refused stay is not tried again.</summary>
+    public long NextStayMs { get; set; }
+
     /// <summary>The claim is given up (busy too long): removed at the end of the group's pass so a replacement can be claimed or created.</summary>
     public bool Released { get; set; }
 
@@ -101,6 +110,12 @@ internal sealed class ScenarioGroupRun(EventScenarioGroup group)
 
     /// <summary>Bots of the group's prefix are in the siege under way that was not adopted: no bot is created while that siege runs.</summary>
     public bool HoldCreates { get; set; }
+
+    /// <summary>Claims this run gave up (busy too long); once any, the bots it creates are replacements and count against the cap.</summary>
+    public int GivenUp { get; set; }
+
+    /// <summary>Bots created since the first claim was given up (<see cref="EventScenarioEngine.MaxReplacements"/> caps them).</summary>
+    public int Replacements { get; set; }
 }
 
 /// <summary>The groups of one wanted event.</summary>
@@ -138,6 +153,18 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
     /// <summary>A bot this close to the group's start counts as placed.</summary>
     internal const float PlacedYards = 60f;
+
+    /// <summary>Radius of the stay a waiting siege bot keeps at the group's start (inside <see cref="PlacedYards"/>).</summary>
+    internal const float StayRadiusYards = 30f;
+
+    /// <summary>How long a stay lives without being renewed (renewed every pass, so a stopped engine frees the bots after this).</summary>
+    internal const long StayLeaseMs = 30_000;
+
+    /// <summary>A placed bot that has been away from the start this long is teleported back (its stay's walk-back had its chance first).</summary>
+    internal const long DriftTeleportMs = 45_000;
+
+    /// <summary>Bots a group may create beyond its count over the whole run, to replace given-up claims (a tenth, at least one).</summary>
+    internal static int MaxReplacements(EventScenarioGroup def) => Math.Max(1, def.Count / 10);
 
     /// <summary>A waiting siege claim another system (a group, a script) or a GM's defend post has held this long is given up and replaced.</summary>
     internal const long BusyReleaseMs = 120_000;
@@ -231,6 +258,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     {
         if (!_runs.Remove(eventId, out ScenarioEventRun? run)) return;
         int cleared = 0;
+        int stays = 0;
         foreach (ScenarioGroupRun g in run.Groups)
         {
             foreach (ScenarioClaim claim in g.Claims)
@@ -240,13 +268,16 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
                 if (g.Group.Role == EventScenarioRole.Defend && host.Probe(claim.BotId) is { DefendPostId: { } held } && EventScenarioPostIds.IsScenario(held)
                     && host.SetDefend(claim.BotId, null) is null)
                     cleared++;
+                if (g.Group.Role == EventScenarioRole.Siege && host.Probe(claim.BotId) is { StayId: { } stayId } && EventScenarioPostIds.IsScenario(stayId)
+                    && host.SetStay(claim.BotId, null) is null)
+                    stays++;
             }
 
             if (g.SiegeId != 0 && host.RunningSiegeId == g.SiegeId && host.StopSiege("event stopped"))
                 logger.LogInformation("Bot event scenario {Event} group {Group}: siege {Siege} stopped with the event", eventId, g.Group.GroupId, g.SiegeId);
         }
 
-        logger.LogInformation("Bot event scenario {Event} stopped: {Cleared} defend posts cleared", eventId, cleared);
+        logger.LogInformation("Bot event scenario {Event} stopped: {Cleared} defend posts and {Stays} stays cleared", eventId, cleared, stays);
     }
 
     private long Advance()
@@ -425,6 +456,15 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         EventScenarioGroup def = g.Group;
         int missing = def.Count - g.Claims.Count - g.Pending;
         g.NoRoom = false;
+        if (g.GivenUp > 0)
+        {
+            // Past the first given-up claim only a bounded number of replacements is made: a group whose bots keep being taken does not
+            // fill the registry with new ones.
+            int replacementRoom = MaxReplacements(def) - g.Replacements;
+            if (replacementRoom <= 0) { g.NoRoom = true; return; }
+            missing = Math.Min(missing, replacementRoom);
+        }
+
         if (missing <= 0 || !def.Provision || g.SiegeId != 0 || ((g.HoldCreates || (def.Role == EventScenarioRole.Siege && !g.SiegeChecked)) && host.RunningSiegeId is not null)) return; // while a siege that holds the group's bots runs (or may), no bot is made
         if (now < g.CreateRetryMs) return;
         int room = host.CreateRoom() - _creatingNow;
@@ -443,6 +483,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             string name = EventScenarioNames.For(def.NamePrefix, ref index);
             g.NameIndex = index;
             g.Pending++;
+            if (g.GivenUp > 0) g.Replacements++;
             _creatingNow++;
             host.BeginCreate(name, slot.Race, slot.Class, result => Created(g, name, result));
         }
@@ -475,6 +516,9 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             claim.Online = false;
             claim.Alive = false;
             claim.DefendSet = false; // a restarted bot has a new brain, and the post lived in the old one
+            claim.StaySet = false; // and so did the stay
+            claim.BusySinceMs = -1; // the busy and away clocks run only while the bot is seen online
+            claim.AwaySinceMs = -1;
             Restore(g, claim, now);
             return;
         }
@@ -509,18 +553,46 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             else if (now - claim.BusySinceMs >= BusyReleaseMs) claim.Released = true;
         }
 
-        // Placed bots wait for the rest of the group (starts are throttled, so that can take long) and may be carried off by their own play:
-        // placed again, every pass until the siege starts. A bot with a GM's defend post is not moved from under it (it would walk back).
-        if (waiting && claim.Placed && !AtStart(def, probe) && !(probe.DefendPostId is { } held && !EventScenarioPostIds.IsScenario(held)))
+        // A waiting bot keeps a stay at the start (renewed every pass), so its own play does not carry it off while the group fills. Even so
+        // a reactive mover (a retreat, a fight) may: it walks back by itself, and one still away after the grace is teleported back (placed
+        // again). A busy bot is not moved from under its owner (Place refuses it).
+        if (waiting && claim.Placed)
         {
-            claim.Placed = false;
-            claim.TeleportAtMs = -1;
-            claim.TeleportAttempts = 0;
+            if (AtStart(def, probe)) claim.AwaySinceMs = -1;
+            else if (claim.AwaySinceMs < 0) claim.AwaySinceMs = now;
+            else if (now - claim.AwaySinceMs >= DriftTeleportMs)
+            {
+                claim.Placed = false;
+                claim.TeleportAtMs = -1;
+                claim.TeleportAttempts = 0;
+                claim.AwaySinceMs = -1;
+            }
         }
 
         if (claim.AtLevel && !claim.Placed) Place(g, claim, probe, now);
-        if (claim.Placed && claim.Alive && claim.AtLevel && !busy) g.ReadyCount++;
+        if (waiting && claim.AtLevel) Muster(g, claim, busy, now); // also while the teleport budget keeps the bot waiting: it stands still
+        if (claim.Placed && claim.Alive && claim.AtLevel && !busy && (def.Role != EventScenarioRole.Siege || claim.StaySet)) g.ReadyCount++;
         if (def.Role == EventScenarioRole.Defend && claim.Placed) Defend(g, claim, probe, now);
+    }
+
+    /// <summary>
+    /// Renew the bot's stay at the group's start (every pass: the lease is short, so an engine that stops frees its bots). A busy bot gets none
+    /// (the coordinators or a GM own it); a refusal is tried again at the usual retry cadence.
+    /// </summary>
+    private void Muster(ScenarioGroupRun g, ScenarioClaim claim, bool busy, long now)
+    {
+        EventScenarioGroup def = g.Group;
+        if (busy) { claim.StaySet = false; return; }
+        if (now < claim.NextStayMs) return;
+        var stay = new PlayerbotStay(def.StartMap, def.Start, StayRadiusYards, EventScenarioPostIds.For(def.EventId, def.GroupId, 0), unchecked(host.NowMs + (uint)StayLeaseMs));
+        string? refusal = host.SetStay(claim.BotId, stay);
+        claim.StaySet = refusal is null;
+        if (refusal is not null)
+        {
+            claim.NextStayMs = now + RetryMs;
+            claim.Refusal = "stay: " + refusal;
+        }
+        else if (claim.Refusal is { } old && old.StartsWith("stay:", StringComparison.Ordinal)) claim.Refusal = null;
     }
 
     private static bool AtStart(EventScenarioGroup def, ScenarioBotProbe probe)
@@ -538,6 +610,8 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             if (!claim.Released) continue;
             g.Claims.RemoveAt(i);
             _claimed.Remove(claim.BotId);
+            host.SetStay(claim.BotId, null);
+            g.GivenUp++;
             logger.LogInformation("Bot event scenario {Event} group {Group}: {Bot} stayed busy elsewhere and is given up; a replacement is claimed or created", g.Group.EventId, g.Group.GroupId, claim.Name);
         }
     }
@@ -567,7 +641,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         if (AtStart(def, probe))
         {
             claim.Placed = true;
-            claim.Refusal = null;
+            if (claim.Refusal is { } placedOld && !placedOld.StartsWith("stay:", StringComparison.Ordinal)) claim.Refusal = null;
             return;
         }
 
@@ -592,7 +666,8 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         claim.TeleportAtMs = now;
         claim.TeleportAttempts++;
         claim.Refusal = refusal is not null ? "place: " + refusal
-            : claim.TeleportAttempts >= TeleportAttemptsReported ? "place: not arrived" : null;
+            : claim.TeleportAttempts >= TeleportAttemptsReported ? "place: not arrived"
+            : claim.Refusal is { } stayRefusal && stayRefusal.StartsWith("stay:", StringComparison.Ordinal) ? stayRefusal : null;
     }
 
     /// <summary>
@@ -657,7 +732,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         {
             if (!claim.Online || !claim.Alive || !claim.AtLevel || !claim.Placed) continue;
             if (host.Probe(claim.BotId) is not { } enlistProbe || IsBusy(enlistProbe)) continue;
-            if (!AtStart(def, enlistProbe)) { claim.Placed = false; claim.TeleportAtMs = -1; claim.TeleportAttempts = 0; continue; }
+            if (!AtStart(def, enlistProbe)) continue; // away right now: not sent in; the grace teleports it back if it stays away
             _readyIds.Add(claim.BotId);
         }
 
@@ -671,6 +746,13 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
 
         g.SiegeId = result.SiegeId;
         g.SiegeRefusal = null;
+        foreach (ScenarioClaim claim in g.Claims)
+        {
+            if (!claim.StaySet) continue;
+            claim.StaySet = false;
+            host.SetStay(claim.BotId, null); // the siege owns the enlisted bots; the turned-away ones are free again
+        }
+
         g.SiegeEnlisted = result.Enlisted;
         logger.LogInformation("Bot event scenario {Event} group {Group}: siege {Siege} started with {Enlisted} bots ({Skipped} turned away)",
             def.EventId, def.GroupId, result.SiegeId, result.Enlisted, result.Skipped);
@@ -724,7 +806,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     private static string GroupLine(ScenarioGroupRun g)
     {
         EventScenarioGroup def = g.Group;
-        int online = 0, atLevel = 0, placed = 0, posted = 0;
+        int online = 0, atLevel = 0, placed = 0, posted = 0, held = 0;
         var refusals = new SortedDictionary<string, int>(StringComparer.Ordinal);
         foreach (ScenarioClaim claim in g.Claims)
         {
@@ -732,6 +814,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             if (claim.Online && claim.AtLevel) atLevel++;
             if (claim.Placed) placed++;
             if (claim.DefendSet) posted++;
+            if (claim.BusySinceMs >= 0) held++;
             if (claim.Refusal is { } refusal) refusals[refusal] = refusals.GetValueOrDefault(refusal) + 1;
         }
 
@@ -742,7 +825,9 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         if (g.Pending > 0) text.Append(CultureInfo.InvariantCulture, $", creating {g.Pending}");
         if (shortBy > 0) text.Append(CultureInfo.InvariantCulture, $", short {shortBy}{(g.NoRoom ? ", no room" : !def.Provision ? ", not provisioned" : string.Empty)}");
         if (g.CreateRefusal is { } create) text.Append(CultureInfo.InvariantCulture, $", create refused: {create}");
+        if (g.Replacements > 0) text.Append(CultureInfo.InvariantCulture, $", replacements {g.Replacements}/{MaxReplacements(def)}");
         if (g.Unavailable > 0) text.Append(CultureInfo.InvariantCulture, $", unavailable {g.Unavailable} ({g.UnavailableSample})");
+        if (def.Role == EventScenarioRole.Siege && held > 0) text.Append(CultureInfo.InvariantCulture, $", held {held}");
         if (def.Role == EventScenarioRole.Siege) text.Append(", siege ").Append(SiegeText(g));
         if (refusals.Count > 0)
             text.Append(", refused: ").AppendJoin("; ", refusals.Select(r => string.Create(CultureInfo.InvariantCulture, $"{r.Key} x{r.Value}")));

@@ -977,6 +977,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotThinkProbe.Phase("pvp");
         if (TryFightPlayer(player, interval)) return;
 
+        // A scenario stay (PlayerbotStay) owns the bot while its lease lives: no quest, grind or explore step chooses a destination.
+        if (TryStay(player, interval)) return;
+
         PlayerbotThinkProbe.Phase("quest return");
         if (_quests.AbandonDistantCompletedQuest(player))
         {

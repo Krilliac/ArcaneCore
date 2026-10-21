@@ -491,7 +491,8 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
 * **Winning.** The objective entry is seen alive and later none is alive on the map *while the grid at its last known position is loaded*: each
   leader says `Siege complete`, the raids disband and the outcome is `won`. With that grid unloaded the objective is only unseen (the status line
   says so) and the siege goes on. A hot reload ends a siege as `stopped: reload` and tells the watchers.
-  Bots with a defend post are not free for a siege (nor for a quest group). A siege whose raids have all ended is `stopped: raids-ended`.
+  Bots with a defend post are not free for a siege (nor for a quest group). A bot with an event-scenario stay (`PlayerbotStay`) is still
+  free for a siege, which enlists it and clears the stay, but the quest-group, run and battleground pick sites leave it out. A siege whose raids have all ended is `stopped: raids-ended`.
 * **Status and watch.** `.playerbot siege status` prints the siege (step, running time) and a line per raid (leader, who lives, the last order and
   its numbers, retreats; the order is one of `hold`, `regroup`, `advance`, `pull`, `assigntank`, `assault`, `retreat`, `rally`; the detail adds `push=stalemate|quiet` while the raid pushes, `push=denied` once the no-progress bound has withdrawn the push for the step, and `lag=waived` while the lag hold is waived); `status $leader` only that raid
   and its last three raid warnings. `.playerbot siege watch on|off` makes the coordinator
