@@ -61,6 +61,35 @@ public sealed class SpellWorldTests
     }
 
     [Fact]
+    public async Task CastSpell_WithACastTime_AdvancesOnWorldUpdated_WhenCommandQueueIsSaturated()
+    {
+        await using var host = WorldTestHost.Start(configure: o => { o.TickIntervalMs = 20; o.MaxCommandsPerTick = 1; });
+        await using WorldTestClient caster = await host.EnterWorldAsync("SATCASTER", "Satcaster");
+        await using WorldTestClient target = await host.EnterWorldAsync("SATTARGET", "Sattarget");
+        await caster.CollectAsync();
+        await target.CollectAsync();
+        ulong targetGuid = await host.PlayerStateAsync("Sattarget", p => p.Guid.Value);
+        Player casterPlayer = await host.PlayerAsync("Satcaster");
+        Player targetPlayer = await host.PlayerAsync("Sattarget");
+        SpellFeature spells = ((ArcaneCore.World.Net.WorldSession)casterPlayer.Session).Services.GetRequiredService<SpellFeature>();
+        uint health = await host.OnWorldAsync(() =>
+        {
+            uint hp = targetPlayer.Health;
+            Assert.Equal(SpellCastResult.CastOk, spells.System.CastSpell(casterPlayer, Bolt, SpellCastTargets.ForUnit(new ObjectGuid(targetGuid)), triggered: false));
+            for (int i = 0; i < 200; i++)
+            {
+                host.World.Post(static () => { });
+            }
+
+            return hp;
+        });
+
+        await caster.ReadUntilAsync(WorldOpcode.SmsgSpellGo, TimeSpan.FromMilliseconds(1500));
+        await target.ReadUntilAsync(WorldOpcode.SmsgSpellnonmeleedamagelog, TimeSpan.FromMilliseconds(1500));
+        Assert.Equal(health - 7, targetPlayer.Health);
+    }
+
+    [Fact]
     public async Task CancelCast_InterruptsTheCastInProgress()
     {
         await using var host = WorldTestHost.Start(configure: o => o.TickIntervalMs = 50);

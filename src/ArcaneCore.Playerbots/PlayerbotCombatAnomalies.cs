@@ -81,7 +81,7 @@ internal sealed class PlayerbotCombatWatch
         }
 
         if (_castReported) return;
-        long allowed = (long)Math.Max(0, current.CastTime) + Math.Max(0, current.Duration) + StuckSlackMs;
+        long allowed = (long)Math.Max(0, current.CastTime) + Math.Max(0, current.Duration) + (current.PushbackCount * 1000L) + StuckSlackMs;
         uint elapsed = unchecked(nowMs - _castSeenMs);
         if (elapsed <= int.MaxValue && elapsed > allowed)
         {

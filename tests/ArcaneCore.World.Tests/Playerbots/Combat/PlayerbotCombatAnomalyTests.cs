@@ -175,6 +175,49 @@ public sealed class PlayerbotCombatAnomalyTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task ACastWithPushback_IsNotReportedUntilThePushbackAllowanceExpires()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 7, 62);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                SpellInfo bolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+                feature.System.Store = new SpellStore(
+                    feature.System.Store.All.Select(s => s.Id == bolt.Id ? bolt with { InterruptFlags = bolt.InterruptFlags | SpellInterruptFlags.DamagePushback } : s),
+                    [],
+                    []);
+                var helper = new PlayerbotCombatSpells(session);
+                session.ManagedBudget = new ManagedActionBudget(2);
+                Assert.True(helper.Update(player, target, 0));
+                SpellSystem spells = feature.System;
+                SpellCast cast = spells.GetState(player.Guid)!.CurrentCast
+                    ?? throw new InvalidOperationException("no cast in progress");
+                spells.OnDamageTaken(player, target, 10, periodic: false);
+                spells.OnDamageTaken(player, target, 10, periodic: false);
+                Assert.Equal(2, cast.PushbackCount);
+                using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+
+                var watch = new PlayerbotCombatWatch();
+                watch.Casting(player, cast, 1000);
+                uint unpushedDeadline = 1000 + (uint)cast.CastTime + (uint)Math.Max(0, cast.Duration) + PlayerbotCombatWatch.StuckSlackMs;
+                watch.Casting(player, cast, unpushedDeadline + 1500);
+                Assert.False(cap.Any(Key("combat", "cast-stuck")), "pushback allowance (2000 ms) must extend the cast-stuck deadline: " + cap.Describe());
+
+                watch.Casting(player, cast, unpushedDeadline + 2001);
+                Assert.Equal(1, cap.Count(Key("combat", "cast-stuck")));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     // --- combat/out-of-mana-loop -----------------------------------------------------------------------------------------
 
     [Fact]

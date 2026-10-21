@@ -33,9 +33,9 @@ namespace ArcaneCore.World.Spells;
 /// and starts its tick; handlers reach it through
 /// <c>session.Services.GetRequiredService&lt;SpellFeature&gt;()</c>.
 /// <para>
-/// The tick is a timer that posts <see cref="SpellSystem.Update"/> to the world thread every
-/// world tick interval. This system serves all maps, so attaching the same update to each map
-/// would advance its auras multiple times per world tick. At most one update is queued at a time.
+/// <see cref="SpellSystem.Update"/> runs directly on <see cref="WorldRuntime.Updated"/> every
+/// world tick. This system serves all maps, so attaching the same update to each map
+/// would advance its auras multiple times per world tick.
 /// </para>
 /// <para>
 /// Cooldowns and auras persist across logout (<see cref="SpellStatePersistence"/>,
@@ -53,8 +53,6 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
     private readonly ConditionalWeakTable<Player, SpellStateSnapshot> _staged = [];
     private readonly HashSet<MapCombat> _combatSubscriptions = new(ReferenceEqualityComparer.Instance);
     private WorldRuntime? _world;
-    private Timer? _timer;
-    private int _updateQueued;
     private uint _lastUpdateMs;
 
     public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger, TimeProvider? timeProvider = null, IItemEnchantmentCatalog? itemEnchantments = null)
@@ -202,9 +200,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             SubscribeCombat(map);
         }
 
-        int interval = Math.Max(1, world.Options.TickIntervalMs);
         _lastUpdateMs = world.NowMs;
-        _timer = new Timer(_ => QueueUpdate(), null, interval, interval);
     }
 
     /// <summary>
@@ -292,11 +288,6 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
     public async ValueTask DisposeAsync()
     {
-        if (_timer is not null)
-        {
-            await _timer.DisposeAsync().ConfigureAwait(false);
-        }
-
         if (_world is not null)
         {
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
@@ -375,39 +366,15 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
     private void OnWorldUpdated(uint diffMs)
     {
-        // Manual advances can run many world ticks before a wall-clock timer fires.
-        // Consume the same game-time delta on each tick, including zero-diff command ticks.
-        if (_world?.IsManualClock == true)
+        try
         {
             Update();
         }
-    }
-
-    private void QueueUpdate()
-    {
-        WorldRuntime? world = _world;
-        if (world is null || world.IsManualClock || Interlocked.Exchange(ref _updateQueued, 1) == 1)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            return;
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell-update", ex);
+            _logger.LogError(ex, "spell update failed");
         }
-
-        world.Post(() =>
-        {
-            Volatile.Write(ref _updateQueued, 0);
-            if (world.IsManualClock)
-            {
-                return;
-            }
-            try
-            {
-                Update();
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell-update", ex);
-                _logger.LogError(ex, "spell update failed");
-            }
-        });
     }
 
     /// <summary>
