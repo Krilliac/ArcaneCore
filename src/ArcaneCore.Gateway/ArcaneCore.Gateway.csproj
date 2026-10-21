@@ -6,6 +6,7 @@
        splitting those into a small shared assembly is follow-up work, so this process loads the World assembly but runs none
        of its game code. -->
   <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
     <OutputType>Exe</OutputType>
     <RootNamespace>ArcaneCore.Gateway</RootNamespace>
     <AssemblyName>ArcaneCore.Gateway</AssemblyName>
