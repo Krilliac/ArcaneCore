@@ -275,7 +275,7 @@ public static class GroundHeight
                     float y = prev.Y + (dy * t);
                     (float lastAt, Vector3 last, _) = nodes[^1];
                     float expected = last.Z + ((corner.Z - last.Z) * ((at - lastAt) / (length - lastAt)));
-                    float guardZ = at <= length - at ? prev.Z : corner.Z; // the nearer end of the whole segment: the floor a step-up is next to
+                    float guardZ = (at - lastAt) <= (length - at) ? last.Z : corner.Z; // the nearer end: the last sample, or the corner when it is the nearer one
                     if (TrySnap(collision, x, y, expected, guardZ, q, out float ground, out GroundSource source))
                     {
                         nodes.Add((at, new Vector3(x, y, ground), source is GroundSource.Model or GroundSource.Mesh ? modelTolerance : tolerance));
