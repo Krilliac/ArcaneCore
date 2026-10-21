@@ -42,7 +42,7 @@ public sealed class DeathFeature : IWorldFeature, IDisposable
         var options = new DeathOptions();
         _services.GetService<IConfiguration>()?.GetSection(DeathOptions.SectionName).Bind(options);
         Options = options;
-        if (!DeathHooks.TryRegister(world, new DeathHooks(options, DeathClock.System)))
+        if (!DeathHooks.TryRegister(world, new DeathHooks(options, new WorldDeathClock(world))))
         {
             _logger.LogWarning("Death hooks were already registered for this world; the {Section} options are not applied", DeathOptions.SectionName);
         }

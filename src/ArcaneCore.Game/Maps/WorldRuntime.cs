@@ -125,9 +125,10 @@ public sealed partial class WorldRuntime : IDisposable
     /// <summary>
     /// Test seam (never configuration-bound): from now on game time — <see cref="NowMs"/>, <see cref="Uptime"/> and
     /// every tick's diff — advances only through <see cref="AdvanceClockAsync"/>, in steps of at most
-    /// <paramref name="stepMs"/> (default 50, vmangos WORLD_SLEEP_CONST). Posted commands still run every
-    /// <see cref="WorldRuntimeOptions.TickIntervalMs"/> of wall time (with a zero diff), so sessions and
-    /// <see cref="InvokeAsync{T}"/> keep working while the simulation stands still. Call before <see cref="Start"/>.
+    /// <paramref name="stepMs"/> (default 50, vmangos WORLD_SLEEP_CONST). Queued work runs at once: <see cref="Post"/>,
+    /// <see cref="InvokeAsync{T}"/>, <see cref="AdvanceClockAsync"/> and a session's packet queue wake the world thread (real clock: they
+    /// never do). Otherwise the world thread ticks every <see cref="WorldRuntimeOptions.TickIntervalMs"/> of wall time with a zero diff,
+    /// so sessions and <see cref="InvokeAsync{T}"/> keep working while the simulation stands still. Call before <see cref="Start"/>.
     /// </summary>
     public void UseManualClock(uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs: null);
 
@@ -841,7 +842,10 @@ public sealed partial class WorldRuntime : IDisposable
         Stop();
         DisposeMapScheduler();
         _stopSignal.Dispose();
-        // _wakeSignal is not disposed: a session may still enqueue (and wake) after shutdown, and Set on a disposed event throws.
+        // A session may still enqueue (and wake) after shutdown: ManualResetEventSlim.Set does not check disposal (it only flips the state
+        // bit and, under the lock, sets an event object that Dispose already nulled), so that late Set is harmless. Wait and Reset do throw
+        // once disposed, but only the world thread calls them and it is gone by now.
+        _wakeSignal.Dispose();
     }
 
     private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)

@@ -18,6 +18,7 @@ public static class PathSearchCounters
     [ThreadStatic] private static long t_tileLoadTicks;
     [ThreadStatic] private static long t_capped;
     [ThreadStatic] private static long t_tilesPending;
+    [ThreadStatic] private static bool t_lastPendingWasRealRead;
     [ThreadStatic] private static long t_gridTileLoads;
     [ThreadStatic] private static long t_tileFailures;
     [ThreadStatic] private static long t_gridTileLoadTicks;
@@ -81,7 +82,24 @@ public static class PathSearchCounters
     public static long TilesPending => t_tilesPending;
 
     /// <summary>A search needed a tile whose background read had not finished (or had to be started).</summary>
-    internal static void RecordTilePending() => t_tilesPending++;
+    internal static void RecordTilePending()
+    {
+        t_tilesPending++;
+        t_lastPendingWasRealRead = false;
+    }
+
+    /// <summary>
+    /// <see cref="RecordTilePending"/> for a tile whose read really runs on a background thread (the navigation mesh), as opposed to a
+    /// pathfinder that only answers "pending" (tests): a waiter then owes the read its wall-clock time.
+    /// </summary>
+    internal static void RecordTilePendingOnRealRead()
+    {
+        t_tilesPending++;
+        t_lastPendingWasRealRead = true;
+    }
+
+    /// <summary>Whether the latest pending answer on this thread was for a background read in flight (see <see cref="RecordTilePendingOnRealRead"/>).</summary>
+    internal static bool LastPendingWasRealRead => t_lastPendingWasRealRead;
 
     /// <summary>One A* search ended: <paramref name="nodes"/> created, <paramref name="expansions"/> expanded, whether the node cap was hit.</summary>
     internal static void RecordSearch(int nodes, int expansions, bool capped)

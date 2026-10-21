@@ -110,7 +110,9 @@ public sealed class ToolsCommandTests
         {
             Assert.Contains(await RunAsync(gm, ".debug opcodes on"), l => l == "Per-opcode counting on; window reset.");
             await RunAsync(gm, ".gps");
-            string[] opcodes = await RunAsync(gm, ".debug opcodes in 5");
+            // The meter is process-wide and the suite runs other worlds in parallel: ask for the most rows the command gives (60), not a top 5
+            // that busy neighbours can fill, so this session's own chat packet is among them.
+            string[] opcodes = await RunAsync(gm, ".debug opcodes in 60");
             Assert.Contains(opcodes, l => l.StartsWith("Per-opcode traffic over the last ", StringComparison.Ordinal));
             Assert.Contains(opcodes, l => l.StartsWith("  world CMSG_MESSAGECHAT: in ", StringComparison.Ordinal) || l.StartsWith("  world CmsgMessagechat: in ", StringComparison.Ordinal));
             Assert.Contains(await RunAsync(gm, ".debug opcodes bogus"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));

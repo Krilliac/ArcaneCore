@@ -30,6 +30,7 @@ public sealed class PlayerbotTileHoldTests
     [Fact]
     public void TileWait_HoldsForFifteenSeconds_ThenTheRefusalStands_UntilTheRunBreaksOffOrAPlanSucceeds()
     {
+        PathSearchCounters.RecordTilePending(); // a pathfinder that only answers pending: bounded by the game clock alone
         var wait = new TileWait();
         for (uint t = 1_000; t <= 1_000 + TileWait.MaxMs; t += 3_000)
             Assert.True(wait.Hold(t), $"held at +{t - 1_000} ms");
@@ -45,8 +46,55 @@ public sealed class PlayerbotTileHoldTests
     }
 
     [Fact]
+    public void TileWait_OnARealBackgroundRead_IsSpentOnlyWhenBothTheGameClockAndTheWallClockPassedTheBound()
+    {
+        long realMs = 0;
+        var wait = new TileWait { RealTicks = () => realMs * System.Diagnostics.Stopwatch.Frequency / 1000 };
+        PathSearchCounters.RecordTilePendingOnRealRead();
+        Assert.True(wait.Hold(1_000));
+
+        // A world running faster than real time: 20 s of game time, 1 s of wall time. The read had no time: keep waiting.
+        for (uint t = 4_000; t <= 21_000; t += 3_000) Assert.True(wait.Hold(t), $"held at game +{t - 1_000} ms");
+        realMs = 1_000;
+        Assert.True(wait.Hold(22_000));
+
+        // The wall clock catches up to the bound, not past it: still held.
+        realMs = TileWait.MaxMs;
+        Assert.True(wait.Hold(23_000));
+
+        // Both clocks past the bound: the refusal stands, and keeps standing.
+        realMs = TileWait.MaxMs + 1;
+        Assert.False(wait.Hold(24_000));
+        Assert.False(wait.Hold(25_000));
+        Assert.False(wait.Active);
+    }
+
+    [Fact]
+    public void TileWait_OnARealBackgroundRead_WallClockAloneNeverSpendsIt()
+    {
+        long realMs = 0;
+        var wait = new TileWait { RealTicks = () => realMs * System.Diagnostics.Stopwatch.Frequency / 1000 };
+        PathSearchCounters.RecordTilePendingOnRealRead();
+        Assert.True(wait.Hold(1_000));
+        realMs = 60_000;
+        Assert.True(wait.Hold(2_000)); // 1 s of game time since the start of the wait
+        Assert.True(wait.Active);
+    }
+
+    [Fact]
+    public void TileWait_OnAPathfinderThatOnlyAnswersPending_IsSpentOnTheGameClockAlone()
+    {
+        long realMs = 0;
+        var wait = new TileWait { RealTicks = () => realMs * System.Diagnostics.Stopwatch.Frequency / 1000 };
+        PathSearchCounters.RecordTilePending();
+        Assert.True(wait.Hold(1_000));
+        Assert.False(wait.Hold(1_000 + TileWait.MaxMs + 1), "no read in flight: nothing to give wall time to");
+    }
+
+    [Fact]
     public void TileWait_CountsAcrossTheClockWrapAndFromZero()
     {
+        PathSearchCounters.RecordTilePending();
         var wrapped = new TileWait();
         uint start = uint.MaxValue - 4_000;
         Assert.True(wrapped.Hold(start));

@@ -1863,9 +1863,15 @@ packets (movement and object-update noise filtered).
 **Deterministic clock.** `WorldRuntime.UseManualClock(stepMs = 50)` is a code-only test seam
 (chosen before `Start`, never configuration). Game time (`NowMs`, `Uptime`, tick diffs) then
 advances only through `AdvanceClockAsync(ms)` or `AdvanceClockUntilAsync(max, condition)`, which
-run ticks of at most the step back to back and check the condition after every tick. Posted
-commands keep running every tick interval with a zero diff, so sessions and `InvokeAsync` work
-while the simulation stands still. `ScenarioClock.Manual(world, time)` drives it; a
+run ticks of at most the step back to back and check the condition after every tick. Queued work
+(`Post`, `InvokeAsync`, `AdvanceClock*`, a session's packet queue) wakes the world thread at once;
+otherwise it ticks every `TickIntervalMs` of wall time with a zero diff, so sessions and
+`InvokeAsync` work while the simulation stands still. The real clock never wakes early. Because a
+step now costs well under a millisecond of wall time, anything that completes in real time (an
+async tile read, a database reply) gets proportionally fewer game ms: the tile wait
+(`TileWait`) is spent only when 15 s have passed on the game clock and, for a read really in
+flight, on the wall clock too. The death clock (`WorldDeathClock`) follows world time on the manual
+clock, so corpse-reclaim delay and resurrection sickness run in virtual time. `ScenarioClock.Manual(world, time)` drives it; a
 `ScenarioTimeProvider` registered as the host's `TimeProvider` follows game time tick by tick
 (mail delay, trade anti-scam window, duel countdown) and can jump ahead (`Advance`). On the
 manual clock a wait's timeout is game time, after which it keeps polling without advancing until
