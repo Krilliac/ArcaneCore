@@ -41,12 +41,14 @@ internal sealed class PlayerbotThinkBudget
 
     /// <summary>
     /// <see cref="Budget(double, double, double, double, double)"/> with the floor raised to what the rotation needs to walk
-    /// <paramref name="bots"/> bots within the starvation bound (<see cref="CoverageMs"/>: the measured cost of a main-lane visit and the
-    /// measured length of a tick, plus the time the combat lane uses).
+    /// <paramref name="bots"/> bots within the starvation bound (<see cref="CoverageMs"/>: the measured cost of a main-lane visit at the
+    /// configured <paramref name="tickIntervalMs"/>, plus the time the combat lane uses). Sized from the nominal tick rather than
+    /// <see cref="RealTickMs"/> so an overrunning tick does not raise the bots' floor and lock the world into slow ticks; the
+    /// <see cref="CoverageFraction"/> margin and <see cref="PlayerbotThinkStarvation.PriorityScale"/> absorb slow stretches.
     /// </summary>
     internal double Budget(double tickIntervalMs, double spentMs, double floorMs, double ceilingMs, double share, int bots, double boundMs)
         => Compute(tickIntervalMs, _nonBotMs, spentMs, floorMs, ceilingMs, share,
-            CoverageMs(bots, RealTickMs(tickIntervalMs), boundMs, _visitMs, _priorityMs));
+            CoverageMs(bots, tickIntervalMs, boundMs, _visitMs, _priorityMs));
 
     /// <summary>Weight of a new main-lane visit in the smoothed visit cost.</summary>
     internal const double VisitAlpha = 0.02;

@@ -76,17 +76,19 @@ public sealed class PlayerbotThinkCoverageTests
     }
 
     [Theory]
-    [InlineData(50)]
-    [InlineData(100)]
-    public void At1000Bots_TheCoverageFloor_WalksThemWithinHalfTheBound(double realTickMs)
+    [InlineData(50, PlayerbotThinkBudget.CoverageFraction * BoundMs * 1.1)]
+    [InlineData(100, BoundMs)]
+    public void At1000Bots_TheCoverageFloor_WalksThemWithinTheBound_WithoutInflatingOnSlowTicks(double realTickMs, double maxSilenceMs)
     {
-        // The floor is sized to walk the bots in CoverageFraction of the bound; the longest silence keeps a margin over that, not just under the bound.
+        // Nominal 50 ms ticks walk the bots in CoverageFraction (0.5) of the bound; 100 ms ticks use that headroom to stay within BoundMs
+        // without doubling the per-tick think budget floor.
         (double longest, double budgetMs) = Simulate(1.3, realTickMs, coverage: true);
-        Assert.True(longest <= PlayerbotThinkBudget.CoverageFraction * BoundMs * 1.1, $"longest silence {longest} ms at budget {budgetMs} ms");
+        Assert.True(longest <= maxSilenceMs, $"longest silence {longest} ms at budget {budgetMs} ms (bound {maxSilenceMs} ms)");
+        Assert.InRange(budgetMs, 13, 20);
     }
 
     [Fact]
-    public void ASlowerRealTick_RaisesTheFloor()
+    public void ASlowerRealTick_DoesNotRaiseTheFloor()
     {
         var fast = new PlayerbotThinkBudget();
         var slow = new PlayerbotThinkBudget();
@@ -105,7 +107,7 @@ public sealed class PlayerbotThinkCoverageTests
         double fastFloor = fast.Budget(NominalTickMs, 0, 8, 100, 0.6, 1000, BoundMs);
         double slowFloor = slow.Budget(NominalTickMs, 0, 8, 100, 0.6, 1000, BoundMs);
         Assert.Equal(10, fastFloor, 3); // 1000 x 50 x 1.0 / (0.5 x 10000)
-        Assert.Equal(20, slowFloor, 3);
+        Assert.Equal(10, slowFloor, 3); // a slow tick must not raise the floor and feed back into slower ticks
         // Before any sample the configured interval stands; a tick shorter than it never shortens the bound's wall time; a stall is capped.
         Assert.Equal(NominalTickMs, new PlayerbotThinkBudget().RealTickMs(NominalTickMs));
         var early = new PlayerbotThinkBudget();
@@ -114,6 +116,72 @@ public sealed class PlayerbotThinkCoverageTests
         var stalled = new PlayerbotThinkBudget();
         stalled.ObserveTickInterval(60_000);
         Assert.Equal(PlayerbotThinkBudget.MaxRealTickMs, stalled.RealTickMs(NominalTickMs));
+    }
+
+    [Fact]
+    public void MeasuredSlowTick_DoesNotFeedbackIntoTheCoverageFloor()
+    {
+        var budget = new PlayerbotThinkBudget();
+        budget.Observe(tickMs: 60, botMs: 12);
+        for (int i = 0; i < 50; i++) budget.ObserveVisit(0.21);
+        budget.ObservePriorityTick(0.2);
+
+        budget.ObserveTickInterval(NominalTickMs);
+        double atNominalTick = budget.Budget(NominalTickMs, spentMs: 0, floorMs: 8, ceilingMs: 30, share: 0.6, bots: 1000, boundMs: BoundMs);
+
+        for (int i = 0; i < 50; i++) budget.ObserveTickInterval(120);
+        double afterSlowTicks = budget.Budget(NominalTickMs, spentMs: 0, floorMs: 8, ceilingMs: 30, share: 0.6, bots: 1000, boundMs: BoundMs);
+
+        Assert.Equal(atNominalTick, afterSlowTicks, 6);
+        Assert.True(afterSlowTicks < 8.0 + 1e-6);
+    }
+
+    [Fact]
+    public void LiveShape_1350Bots_85msTick_021msVisit_SizesCoverageToTheTargetTickRate()
+    {
+        var budget = new PlayerbotThinkBudget();
+        for (int i = 0; i < 100; i++)
+        {
+            budget.Observe(tickMs: 85, botMs: 28);
+            budget.ObserveTickInterval(85);
+            budget.ObserveVisit(0.21);
+            budget.ObservePriorityTick(0.21);
+        }
+
+        // 1350 bots scales the 2 s window (2000 ms) by EffectiveBoundMs -> 2700 ms; or at 0.21 ms visit with 2000 ms bound:
+        // 1350 * 50 * 0.21 / (0.5 * 2000) + 0.21 = 14.175 + 0.21 = 14.385 ms.
+        double budgetMs = budget.Budget(NominalTickMs, spentMs: 0, floorMs: 8, ceilingMs: 30, share: 0.6, bots: 1350, boundMs: 2000);
+        Assert.InRange(budgetMs, 14.0, 15.0);
+        double visitsPerSecond = (budgetMs - budget.PriorityMs) / budget.VisitMs * (1000.0 / NominalTickMs);
+        Assert.True(visitsPerSecond * 2.0 >= 1350, $"visitsPerSecond={visitsPerSecond:F1}");
+    }
+
+    [Fact]
+    public void TransientTickSpike_DoesNotLockBudgetAtCeiling_WhenTickDurationIncludesBotTime()
+    {
+        var budget = new PlayerbotThinkBudget();
+        for (int i = 0; i < 100; i++)
+        {
+            budget.ObserveVisit(1.35);
+            budget.ObservePriorityTick(3.0);
+        }
+
+        for (int tick = 0; tick < 5; tick++)
+        {
+            budget.Observe(tickMs: 110, botMs: 25);
+            budget.ObserveTickInterval(110);
+        }
+
+        double currentBudget = 30.0;
+        for (int tick = 0; tick < 40; tick++)
+        {
+            double totalTickMs = 48.0 + currentBudget;
+            budget.Observe(tickMs: totalTickMs, botMs: currentBudget);
+            budget.ObserveTickInterval(totalTickMs);
+            currentBudget = budget.Budget(NominalTickMs, spentMs: 4.5, floorMs: 8, ceilingMs: 30, share: 0.6, bots: 1000, boundMs: BoundMs);
+        }
+
+        Assert.True(currentBudget < 20.0, $"Expected budget < 20.0 ms after transient spike, got {currentBudget:F2} ms");
     }
 
     [Fact]
