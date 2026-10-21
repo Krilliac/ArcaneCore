@@ -324,6 +324,16 @@ internal sealed class PlayerbotSiegeAnnouncer
     /// <summary>The lines sent so far, oldest first (status and tests).</summary>
     internal List<string> Sent { get; } = [];
 
+    /// <summary>Records <paramref name="text"/> as sent now whatever the gap and the last line say (the caller sends it).</summary>
+    internal void Force(string text, uint nowMs)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        _last = text;
+        _lastMs = nowMs;
+        Sent.Add(text);
+        if (Sent.Count > 64) Sent.RemoveAt(0);
+    }
+
     /// <summary>Whether <paramref name="text"/> is to be sent now; when true it counts as sent.</summary>
     internal bool Offer(string text, uint nowMs)
     {
@@ -361,6 +371,9 @@ internal sealed class PlayerbotSiege(int id, uint mapId, uint objectiveEntry, IR
 
     /// <summary>When the siege came to <see cref="Step"/> (its start for the first): the per-step deadline counts from here (<see cref="PlayerbotGroupCoordinator.StepDeadlineMs"/>).</summary>
     public uint StepSinceMs { get; set; } = startedMs;
+
+    /// <summary>The step logic has run once (the forming time is over and <see cref="StepSinceMs"/> was restarted).</summary>
+    public bool StepClockStarted { get; set; }
 
     public List<PlayerbotSiegeRaid> Raids { get; } = [];
 
@@ -563,6 +576,9 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     /// <summary>When the last promotion of a fallen leader was tried.</summary>
     public uint PromoteTriedMs { get; set; }
+
+    /// <summary>The raid had no leader at its last tick (a leader that returns restarts the step deadline).</summary>
+    public bool WasUnled { get; set; }
 
     public PlayerbotSiegeAnnouncer Announcer { get; } = new();
 

@@ -325,7 +325,8 @@ internal sealed class PlayerbotGroupAI
             }
             Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
             // A siege leader that can plan no way to its target gives it up for a minute (siege raids have no stall watch of their own), and the coordinator names the next hostile skull.
-            if (_noPathToTarget && isLeader && group.Siege is not null && target is Creature or Player)
+            // The objective is never given up: it is what the siege is after.
+            if (_noPathToTarget && isLeader && group.Siege is { } shunSiege && !(target is Creature objectiveCandidate && objectiveCandidate.Entry == shunSiege.Siege.ObjectiveEntry) && target is Creature or Player)
                 group.Shun(target.Guid, unchecked(_session.World.NowMs + SiegeShunMs));
             return;
         }

@@ -1316,14 +1316,14 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
     private static float FlatYards(Unit unit, Vector3 point) => MathF.Sqrt(((unit.X - point.X) * (unit.X - point.X)) + ((unit.Y - point.Y) * (unit.Y - point.Y)));
 
-    /// <summary>
-    /// A ranged attacker on the waiting leader, as the tests make one: a guard 25 yards from the waypoint that cannot move (rooted, so it neither walks to the leader nor is pushed about by the test) and has the leader on its threat
-    /// list. Returns it once the waiting leader's lag hold has run for 5 s, or null before.
-    /// </summary>
     private sealed class WaitingSince { public uint Since; }
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<PlayerbotSiegeRaid, WaitingSince> Waiting = new();
 
+    /// <summary>
+    /// A ranged attacker on the waiting leader, as the tests make one: a guard 25 yards from the waypoint that cannot move (rooted, so it neither walks to the leader nor is pushed about by the test) and has the leader on its threat
+    /// list. Returns it once the waiting leader's lag hold has run for 5 s, or null before.
+    /// </summary>
     private static Creature? SendRangedAttacker(PlayerbotSiege siege, PlayerbotSiegeRaid raid, Player leader, int stepAtPush, uint now, float yards = 25f)
     {
         // The lag clock runs from the first read of the straggler, before the leader arrives: "waiting 5 s" is counted here, from the leader's arrival at the waypoint with its push in force.
@@ -1560,7 +1560,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     [Fact]
     public async Task AStepThatAdvancesWhileTheLeaderAnswers_IsNotReadAtTheNextWaypoint_TheLeaderReachesItBeforeTheStepMovesOn()
     {
-        // Waypoints at 4, 150, 188 and 238 yards: waypoint 2 is 38 yards past waypoint 1, outside the answer leash (the leader never stands in its disk, so the furthest-waypoint credit cannot give it),
+        // Waypoints at 4, 150, 188 and 238 yards: waypoint 2 is 38 yards past waypoint 1, outside the answer leash (the leader is not in its disk while it answers, so the furthest-waypoint credit has no waypoint-2 visit to give; a credit after the answer's bound is spent and the lag waived is the credit's own rule, which the test exempts),
         // and about 10 yards from where the leader stands when it answers an attacker 29 yards past waypoint 1.
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture(4f, 150f, 188f, 238f);
         await using GroupTestWorld _ = world;
@@ -2295,7 +2295,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         });
 
     [Fact]
-    public async Task TwoRaidsHeldInAFightNearAWaypoint_ForStepDeadlineMs_MoveOnOneStep_AndSaySo()
+    public async Task TwoRaidsHeldAwayFromTheWaypoint_ForStepDeadlineMs_MoveOnOneStep_AndSaySo()
     {
         (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 2);
         await using GroupTestWorld _ = world;
@@ -2314,6 +2314,46 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.Contains(siege.Raids, r => r.Announcer.Sent.Any(line => line.Contains("not taken", StringComparison.Ordinal)));
         await world.RunAsync(1_000);
         Assert.Contains(siege.Raids, r => r.Detail.Contains("furthest=", StringComparison.Ordinal) && r.Detail.Contains("deadline=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AStepWhoseRetreatLatchWasHeldPastTheDeadline_MovesOnlyAFreshDeadlineAfterTheLatchClears()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege) = await CreditFixture(raids: 2);
+        await using GroupTestWorld _ = world;
+        int step = siege.Step;
+        PlayerbotSiegeRaid latched = siege.Raids[0];
+        Assert.True(await world.RunUntilAsync(PlayerbotGroupCoordinator.StepDeadlineMs + 120_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            latched.RetreatLatched = true;
+            KeepInCombat(world, latched);
+            return unchecked(Now(world) - siege.StepSinceMs) >= PlayerbotGroupCoordinator.StepDeadlineMs + 30_000;
+        }), "the run ended early: " + await world.TraceAsync());
+        Assert.Equal(step, siege.Step); // the latch held the step past the deadline
+
+        // The latch clears (the raid is out of combat): the step does not move at once.
+        uint cleared = 0;
+        Assert.True(await world.RunUntilAsync(60_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            if (!latched.RetreatLatched) cleared = Now(world);
+            return cleared != 0;
+        }), "the latch never cleared: " + latched.LastFacts);
+        await world.RunUntilAsync(30_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            return siege.Step != step;
+        });
+        Assert.Equal(step, siege.Step);
+
+        // And it moves after a fresh deadline.
+        Assert.True(await world.RunUntilAsync(PlayerbotGroupCoordinator.StepDeadlineMs + 60_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            return siege.Step != step;
+        }), "the step never moved after the latch cleared: " + await world.TraceAsync());
+        Assert.True(unchecked(Now(world) - cleared) >= PlayerbotGroupCoordinator.StepDeadlineMs - 5_000, $"the step moved {unchecked(Now(world) - cleared)} ms after the latch cleared");
     }
 
     [Fact]
@@ -2424,6 +2464,45 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.True(skulledFirst, "the nearest hostile was never skulled: " + raid.LastFacts);
         Assert.True(await world.OnWorldAsync(() => raid.Group!.IsShunned(unreachable, Now(world))), "the unreachable target was not given up");
         Assert.True(skullMoved, $"the skull never moved to the next hostile: {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync());
+    }
+
+    [Fact]
+    public async Task TheObjectiveWithNoPathToIt_IsNeverShunned_StaysInHostiles_AndRemainsAValidPullTarget()
+    {
+        // The objective 30 yards ahead, walking refused: every plan to it fails.
+        GroupTestWorld world = await GroupTestWorld.StartAsync([], null, extraCreatures: [Guard(Objective, 30f, 0f, health: 1_000_000)]);
+        await using GroupTestWorld _ = world;
+        (Guid Id, string Name)[] bots = await Enlist(world, 100f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        ObjectGuid objective = default;
+        await world.OnWorldAsync(() =>
+        {
+            Creature sylvanas = Spawned(world, raid, Objective);
+            objective = sylvanas.Guid;
+            sylvanas.Map!.FindUpdater<CreatureMapSystem>()!.SetAiImmobilized(sylvanas, true, combatOnly: false);
+            world.Options.AllowedMaps = [1];
+            return true;
+        });
+
+        var leaderMember = raid.Group!.Members.First(m => m.BotId == raid.Group.LeaderBotId);
+        bool noPath = false, shunned = false, hostileGone = false, pulledThenDropped = false, pulled = false;
+        await world.RunUntilAsync(30_000, () =>
+        {
+            string step = leaderMember.AI?.Step ?? string.Empty;
+            noPath |= step.EndsWith(":no-path", StringComparison.Ordinal);
+            if (!noPath) return false;
+            shunned |= raid.Group.IsShunned(objective, Now(world));
+            hostileGone |= raid.LastFacts.Hostiles < 1;
+            if (raid.PullTarget == objective) pulled = true;
+            else if (pulled) pulledThenDropped = true;
+            return false; // the run lasts its whole time
+        });
+
+        Assert.True(noPath, "the leader never failed to plan a way to the objective: " + await world.TraceAsync());
+        Assert.False(shunned, "the objective was shunned");
+        Assert.False(hostileGone, "the objective dropped out of the hostiles: " + raid.LastFacts);
+        Assert.False(pulledThenDropped, "the pull target left the objective");
     }
 
     [Fact]

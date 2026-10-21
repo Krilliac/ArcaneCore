@@ -414,6 +414,13 @@ public sealed partial class PlayerbotGroupCoordinator
 
         if (!allEngaging) return; // a raid still forms: the siege waits for it
 
+        // The forming time does not count towards the step deadline: its clock starts with the first tick that runs the step logic.
+        if (!siege.StepClockStarted)
+        {
+            siege.StepClockStarted = true;
+            siege.StepSinceMs = Math.Max(1u, now);
+        }
+
         GroupManager? groups = GroupManagerOrNull();
         _siegeViews.Clear();
         _siegeUnled = 0;
@@ -425,12 +432,20 @@ public sealed partial class PlayerbotGroupCoordinator
                 // A raid without a leader holds the others at their waypoint until it has one again (or ends): it is not dropped from the plan.
                 // Its engagement is still tracked, so the fight is not stale when a new leader takes over (the retreat latch is kept too).
                 _siegeUnled++;
+                raid.WasUnled = true;
                 TrackEngagement(group, raid, world, now);
                 raid.Order = PlayerbotSiegeOrder.Hold;
                 raid.Push = PlayerbotSiegePush.None;
                 raid.PushInForce = PlayerbotSiegePush.None;
                 raid.PullTarget = default;
                 continue;
+            }
+
+            // A raid that has a leader again: the time it had none made no progress possible, so the step deadline starts afresh.
+            if (raid.WasUnled)
+            {
+                raid.WasUnled = false;
+                siege.StepSinceMs = Math.Max(1u, now);
             }
 
             var view = new SiegeView(raid, group, leader, server);
@@ -480,7 +495,10 @@ public sealed partial class PlayerbotGroupCoordinator
             logger.LogWarning("Playerbot siege {Siege}: waypoint {Waypoint} not taken in {Seconds}s, moving on to waypoint {Next}", siege.Id, from + 1, StepDeadlineMs / 1000, from + 2);
             string deadline = string.Create(CultureInfo.InvariantCulture, $"Waypoint {from + 1} not taken in {StepDeadlineMs / 1000}s, moving on");
             foreach (SiegeView view in _siegeViews)
-                if (view.Raid.Announcer.Offer(deadline, now)) RaidWarning(view.Group, view.Leader, deadline);
+            {
+                view.Raid.Announcer.Force(deadline, now); // not dropped by the gap rule: a step change by the deadline is rare and the raid should hear it
+                RaidWarning(view.Group, view.Leader, deadline);
+            }
         }
 
         WatchProgress(siege, now);
@@ -490,7 +508,8 @@ public sealed partial class PlayerbotGroupCoordinator
 
     /// <summary>
     /// Whether the step has lasted <see cref="StepDeadlineMs"/> and the siege moves on: a waypoint still ahead, every raid led (<paramref name="unled"/> raids without a leader hold it), none in a retreat latch
-    /// (<paramref name="retreatLatched"/>: a lost fight is not a reason to go on).
+    /// (<paramref name="retreatLatched"/>: a lost fight is not a reason to go on). The clock (<see cref="PlayerbotSiege.StepSinceMs"/>) restarts where progress was impossible: the siege's first tick past forming,
+    /// the end of a retreat latch, a raid that has a leader again.
     /// </summary>
     internal static bool StepDeadlineDue(PlayerbotSiege siege, int unled, bool retreatLatched, uint now)
         => siege.Step < siege.Waypoints.Count && unled == 0 && !retreatLatched && unchecked(now - siege.StepSinceMs) >= StepDeadlineMs;
@@ -1043,10 +1062,11 @@ public sealed partial class PlayerbotGroupCoordinator
                     // carries them (Sylvanas 268435459, Varimathras 3, the guardians 1, the Royal Dreadguard and the Seekers 2). A friendly or
                     // neutral NPC is out by the hostility test below; the objective entry is a valid target whatever its type.
                     objective = creature.Entry == view.Raid.Siege.ObjectiveEntry;
+                    // The objective is kept whatever the shun table says (a failed plan to it must not hide it).
                     if (!creature.IsInWorld || !creature.IsAlive || creature.IsInEvadeMode || !objective && creature.Template.CreatureType == 8
                         || !float.IsFinite(creature.X) || !float.IsFinite(creature.Y) || !float.IsFinite(creature.Z)
                         || !map.Combat.Hooks.CanAttack(leader, creature) || !map.Combat.Hooks.IsHostileTo(creature, leader)
-                        || group.IsShunned(creature.Guid, now)) continue;
+                        || !objective && group.IsShunned(creature.Guid, now)) continue;
                     break;
                 case Player other:
                     if (!PlayerbotHostility.MayEngage(leader, other, PlayerbotEngageReason.Siege, groups) || group.IsShunned(other.Guid, now)) continue;
@@ -1160,6 +1180,8 @@ public sealed partial class PlayerbotGroupCoordinator
             raid.PushBestYards = -1f;
             raid.PushProgressMs = Math.Max(1u, now);
         }
+        // A retreat latch that ends restarts the step deadline: while it held no progress was possible.
+        if (raid.RetreatLatched && !decision.RetreatLatched) siege.StepSinceMs = Math.Max(1u, now);
         raid.RetreatLatched = decision.RetreatLatched;
         raid.PullLatched = decision.PullLatched;
         if (!decision.RetreatLatched)
