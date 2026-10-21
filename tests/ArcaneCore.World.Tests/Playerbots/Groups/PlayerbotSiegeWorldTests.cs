@@ -82,7 +82,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.NotNull(siege);
         Assert.True(string.IsNullOrEmpty(refusal), refusal);
         Assert.True(await world.RunUntilAsync(60_000, () => siege.Raids.Count == raids
-            && siege.Raids.All(r => r.Group is { State: PlayerbotGroupState.Engaging })), world.Trace());
+            && siege.Raids.All(r => r.Group is { State: PlayerbotGroupState.Engaging })), await world.TraceAsync());
         return siege;
     }
 
@@ -151,7 +151,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step >= siege.Waypoints.Count;
         }
 
-        Assert.True(await world.RunUntilAsync(120_000, Sample), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, Sample), await world.TraceAsync());
         Assert.Empty(overshoot);
         // When the step moved on from the first waypoint both leaders stood at it.
         Assert.InRange(firstArrival[0].First, 10f - 7f, 10f + 7f);
@@ -192,7 +192,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             }
 
             return skull && cross && warnings.Count >= 3;
-        }), world.Trace() + Environment.NewLine + string.Join(Environment.NewLine, raid.Announcer.Sent));
+        }), await world.TraceAsync() + Environment.NewLine + string.Join(Environment.NewLine, raid.Announcer.Sent));
 
         Assert.Contains(WorldOpcode.MsgRaidTargetUpdate, leaderOpcodes);
         Assert.Contains(WorldOpcode.CmsgMessagechat, leaderOpcodes);
@@ -221,7 +221,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return true;
         });
 
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), await world.TraceAsync());
         await world.OnWorldAsync(() =>
         {
             Player next = Leader(world, raid);
@@ -231,7 +231,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return true;
         });
 
-        Assert.True(await world.RunUntilAsync(60_000, () => siege.Step >= 1), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => siege.Step >= 1), await world.TraceAsync());
     }
 
     [Fact]
@@ -241,8 +241,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
         PlayerbotSiege siege = await Start(world, bots, raids: 2);
 
-        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.Siege is null), world.Trace());
-        Assert.True(world.Coordinator.SiegeOutcome == "won", world.Coordinator.SiegeOutcome + Environment.NewLine + world.Trace());
+        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.Siege is null), await world.TraceAsync());
+        Assert.True(world.Coordinator.SiegeOutcome == "won", world.Coordinator.SiegeOutcome + Environment.NewLine + await world.TraceAsync());
         Assert.Contains(siege.Raids, r => r.Announcer.Sent.Any(line => line.Contains("Siege complete", StringComparison.Ordinal)));
         Assert.True(await world.OnWorldAsync(() => world.Coordinator.Groups.Count(g => g.Siege is not null) == 0));
     }
@@ -301,7 +301,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return world.Coordinator.SiegeStatus(null)[0].Contains("stalled", StringComparison.Ordinal);
         });
 
-        Assert.True(stalled, world.Trace());
+        Assert.True(stalled, await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("no progress", StringComparison.Ordinal));
         Assert.Equal(0, siege.Step);
         Assert.NotNull(world.Coordinator.Siege);
@@ -313,7 +313,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await using GroupTestWorld world = await StartWorld(guards: false);
         (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
         PlayerbotSiege siege = await Start(world, bots, raids: 1);
-        Assert.True(await world.RunUntilAsync(60_000, () => siege.ObjectiveSeen), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => siege.ObjectiveSeen), await world.TraceAsync());
 
         await world.OnWorldAsync(() =>
         {
@@ -356,7 +356,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             Creature? flagged = leader.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.FirstOrDefault(c => c.Entry == GuardA);
             if (flagged is not null && world.GroupManager.GetGroup(leader.Guid) is { } server && server.TargetIcons[7] == flagged.Guid) skulled = true;
             return skulled;
-        }), world.Trace());
+        }), await world.TraceAsync());
     }
 
     // --- the retreat: disengage, rally, one per engagement ------------------------------------------------------------------
@@ -397,7 +397,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
         PlayerbotSiege siege = await Start(world, bots, raids: 1);
         PlayerbotSiegeRaid raid = siege.Raids[0];
-        Assert.True(await world.RunUntilAsync(240_000, () => siege.Step >= 1 && raid.WasInCombat && YardsFrom(Leader(world, raid), RetreatPoint(siege)) > 12f), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => siege.Step >= 1 && raid.WasInCombat && YardsFrom(Leader(world, raid), RetreatPoint(siege)) > 12f), await world.TraceAsync());
         return (siege, raid);
     }
 
@@ -416,7 +416,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
         await KillAsync(world, raid, "mage");
 
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), await world.TraceAsync());
         Assert.Equal(1, raid.Retreats);
         ObjectGuid skull = Skull(world, raid);
         uint since = Now(world);
@@ -453,10 +453,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         // At the rally point a member answers what attacks it.
         Assert.True(await world.RunUntilAsync(30_000, () => raid.Group!.Members.Any(m =>
             m.AI?.TargetUnit is { } target && world.World.Host.World.FindOnlinePlayer(m.Guid) is { } player && player.Combat.Attackers.Any(a => ReferenceEquals(a, target)))),
-            world.Trace());
+            await world.TraceAsync());
 
         // The latch ends by quiet or by the bound, and that was one retreat.
-        Assert.True(await world.RunUntilAsync(90_000, () => !raid.RetreatLatched), world.Trace());
+        Assert.True(await world.RunUntilAsync(90_000, () => !raid.RetreatLatched), await world.TraceAsync());
         Assert.Equal(1, raid.Retreats);
         Assert.Equal(step, siege.Step);
     }
@@ -467,21 +467,21 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await using GroupTestWorld world = await StartStrongGuards();
         (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
         await KillAsync(world, raid, "mage");
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), await world.TraceAsync());
 
         // The guards cannot die, so what followed the raid fights on past the hold.
         var stray = new List<string>();
         Vector3 point = RetreatPoint(siege);
-        Assert.True(await world.RunUntilAsync(60_000, () => { TopUpGuards(world, raid); return raid.Order == PlayerbotSiegeOrder.Rally; }), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => { TopUpGuards(world, raid); return raid.Order == PlayerbotSiegeOrder.Rally; }), await world.TraceAsync());
         Assert.True(await world.RunUntilAsync(PlayerbotSiegeCommander.RallyHoldMs + 30_000, () =>
         {
             TopUpGuards(world, raid);
             if (raid.Order == PlayerbotSiegeOrder.Rally && YardsFrom(Leader(world, raid), point) > PlayerbotSiegeCommander.RallyYards + 1.5f)
                 stray.Add($"the leader left the rally point: {YardsFrom(Leader(world, raid), point):F1} yd");
             return !raid.RetreatLatched;
-        }), world.Trace());
+        }), await world.TraceAsync());
         Assert.Empty(stray);
-        Assert.True(raid.WasInCombat, "the latch ended because the fight ended, not by the bound" + Environment.NewLine + world.Trace());
+        Assert.True(raid.WasInCombat, "the latch ended because the fight ended, not by the bound" + Environment.NewLine + await world.TraceAsync());
         Assert.Equal(1, raid.Retreats);
 
         // Still fighting, still a lost fight by the numbers: no second retreat and no rally in this engagement.
@@ -491,7 +491,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.DoesNotContain(PlayerbotSiegeOrder.Retreat, orders);
         Assert.DoesNotContain(PlayerbotSiegeOrder.Rally, orders);
         Assert.Equal(1, raid.Retreats);
-        Assert.True(fought, "the raid left combat in the window: no engagement was kept" + Environment.NewLine + world.Trace());
+        Assert.True(fought, "the raid left combat in the window: no engagement was kept" + Environment.NewLine + await world.TraceAsync());
         Assert.True(raid.RetreatedThisEngagement);
         Assert.Contains(raid.Order, new[] { PlayerbotSiegeOrder.Assault, PlayerbotSiegeOrder.AssignTank });
     }
@@ -502,7 +502,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await using GroupTestWorld world = await StartStrongGuards();
         (_, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
         await KillAsync(world, raid, "mage");
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), await world.TraceAsync());
         Guid oldLeader = raid.Group!.LeaderBotId;
 
         await world.OnWorldAsync(() =>
@@ -534,7 +534,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         {
             Sample();
             return raid.Group.LeaderBotId != oldLeader && raid.Order is PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally;
-        }), world.Trace());
+        }), await world.TraceAsync());
         await world.RunUntilAsync(5_000, () => { Sample(); return false; });
         Assert.True(most == 1, string.Join(Environment.NewLine, states));
         Assert.Equal(1, raid.Retreats);
@@ -550,7 +550,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         PlayerbotSiegeRaid raid = siege.Raids[0];
         await KillAsync(world, raid, "heal");
 
-        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat), await world.TraceAsync());
         var orders = new List<PlayerbotSiegeOrder>();
         await world.RunUntilAsync(3_000, () => { orders.Add(raid.Order); return false; });
         Assert.Equal(2, raid.DeadAtEngagement.Count);
@@ -564,7 +564,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.Equal(0, raid.Retreats);
 
         await KillAsync(world, raid, "Sgbmage");
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Retreat), await world.TraceAsync());
         Assert.Equal(1, raid.Retreats);
     }
 
@@ -575,7 +575,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         (Guid Id, string Name)[] bots = await Enlist(world, 20f, 40f);
         PlayerbotSiege siege = await Start(world, bots, raids: 1);
         PlayerbotSiegeRaid raid = siege.Raids[0];
-        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat && Leader(world, raid).X - Origin.X > 45f), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat && Leader(world, raid).X - Origin.X > 45f), await world.TraceAsync());
 
         // The leader falls and nobody takes over (the promotion is kept off for the rest of the test).
         await world.OnWorldAsync(() =>
@@ -586,7 +586,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             raid.PromoteTriedMs = Math.Max(1u, Now(world));
             return true;
         });
-        Assert.True(await world.RunUntilAsync(10_000, () => { raid.PromoteTriedMs = Math.Max(1u, Now(world)); return !Leader(world, raid).IsAlive; }), world.Trace());
+        Assert.True(await world.RunUntilAsync(10_000, () => { raid.PromoteTriedMs = Math.Max(1u, Now(world)); return !Leader(world, raid).IsAlive; }), await world.TraceAsync());
         await world.RunUntilAsync(3_000, () => { raid.PromoteTriedMs = Math.Max(1u, Now(world)); return false; });
         Assert.True(raid.WasInCombat, "the members still fight while the raid is unled");
 
@@ -602,7 +602,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         {
             raid.PromoteTriedMs = Math.Max(1u, Now(world));
             return !raid.WasInCombat;
-        }), "WasInCombat froze while the raid was unled" + Environment.NewLine + world.Trace());
+        }), "WasInCombat froze while the raid was unled" + Environment.NewLine + await world.TraceAsync());
         Assert.All(Living(world, raid), p => Assert.False(p.Combat.IsInCombat));
     }
 
@@ -615,11 +615,11 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         PlayerbotSiege siege = await Start(world, bots, raids: 1);
         PlayerbotSiegeRaid raid = siege.Raids[0];
         raid.Retreats = PlayerbotSiegeCommander.MaxRetreats;
-        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat && Leader(world, raid).X - Origin.X > 45f), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => raid.WasInCombat && Leader(world, raid).X - Origin.X > 45f), await world.TraceAsync());
         await KillAsync(world, raid, "mage");
 
         var orders = new List<PlayerbotSiegeOrder>();
-        Assert.True(await world.RunUntilAsync(30_000, () => { orders.Add(raid.Order); return raid.CommitAnnounced; }), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => { orders.Add(raid.Order); return raid.CommitAnnounced; }), await world.TraceAsync());
         Assert.True(await world.RunUntilAsync(40_000, () =>
         {
             orders.Add(raid.Order);
@@ -660,7 +660,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (Skull(world, raid) == npc) seen.Add("the npc is skulled");
             if (raid.PullTarget == npc) seen.Add("the npc is the pull target");
             return world.Coordinator.Siege is null;
-        }), world.Trace());
+        }), await world.TraceAsync());
         Assert.Empty(seen);
         Assert.Equal("won", world.Coordinator.SiegeOutcome);
     }
@@ -683,7 +683,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 if (Skull(world, raid) == critter) seen.Add("the critter is skulled");
                 if (raid.PullTarget == critter) seen.Add("the critter is the pull target");
                 return world.Coordinator.Siege is null;
-            }), world.Trace());
+            }), await world.TraceAsync());
             Assert.Empty(seen);
         }
 
@@ -699,7 +699,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 Creature? objective = Leader(world, raid).Map?.FindUpdater<CreatureMapSystem>()?.Creatures.FirstOrDefault(c => c.Entry == Objective && c.IsAlive);
                 if (objective is not null && Skull(world, raid) == objective.Guid) skulled = true;
                 return world.Coordinator.Siege is null;
-            }), world.Trace());
+            }), await world.TraceAsync());
             Assert.True(skulled, "the objective critter was never skulled");
             Assert.Equal("won", world.Coordinator.SiegeOutcome);
         }
@@ -714,8 +714,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
         // Walking is refused on this map from the retreat on (the planner answers no path), so the leader cannot leave the fight.
         world.Options.AllowedMaps = [1];
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order is PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally), world.Trace());
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order is PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally), await world.TraceAsync());
         Assert.True(raid.RetreatNoPath);
         Assert.True(YardsFrom(Leader(world, raid), RetreatPoint(siege)) > PlayerbotSiegeCommander.RallyYards, "the leader did not move: it rallies in place");
         Assert.Equal(1, raid.Retreats);
@@ -723,8 +723,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         // The members answer their attackers, and the bound ends the latch (the guards cannot be killed meanwhile).
         Assert.True(await world.RunUntilAsync(30_000, () => raid.Group!.Members.Any(m =>
             m.AI?.TargetUnit is { } target && world.World.Host.World.FindOnlinePlayer(m.Guid) is { } player && player.Combat.Attackers.Any(a => ReferenceEquals(a, target)))),
-            world.Trace());
-        Assert.True(await world.RunUntilAsync(PlayerbotSiegeCommander.RallyHoldMs + 30_000, () => { TopUpGuards(world, raid); return !raid.RetreatLatched; }), world.Trace());
+            await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(PlayerbotSiegeCommander.RallyHoldMs + 30_000, () => { TopUpGuards(world, raid); return !raid.RetreatLatched; }), await world.TraceAsync());
         Assert.False(raid.RetreatNoPath);
     }
 
@@ -749,7 +749,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         });
         PlayerbotSiege siege = await Start(world, [.. bots.Select(b => (b.Item1, b.Item2))], raids: 1);
         PlayerbotSiegeRaid raid = siege.Raids[0];
-        Assert.True(await world.RunUntilAsync(60_000, () => siege.ObjectiveSeen), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => siege.ObjectiveSeen), await world.TraceAsync());
 
         // The leader stands on another map (the Deadmines), on the objective's own X/Y: the grid there is loaded and no such creature lives there.
         // (The raid dissolves when its leader leaves the map, so the commander's tick never gets that far; the judgement of the objective itself must
@@ -760,7 +760,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             Vector3 at = siege.ObjectivePosition;
             return world.World.Services.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports.TeleportTo(witness, 36, at.X, at.Y, at.Z, 0f);
         }), "teleport refused");
-        Assert.True(await world.RunUntilAsync(20_000, () => witness.MapId == 36), world.Trace());
+        Assert.True(await world.RunUntilAsync(20_000, () => witness.MapId == 36), await world.TraceAsync());
         bool won = await world.OnWorldAsync(() =>
         {
             Assert.True(witness.Map!.FindUpdater<CreatureMapSystem>()!.IsGridLoaded(siege.ObjectivePosition.X, siege.ObjectivePosition.Y),
@@ -784,15 +784,15 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         uint[] allowed = world.Options.AllowedMaps;
 
         world.Options.AllowedMaps = [1];
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath), await world.TraceAsync());
         Vector3 point = RetreatPoint(siege);
         Assert.True(YardsFrom(Leader(world, raid), point) > PlayerbotSiegeCommander.RallyYards);
 
         // The path comes back: within a few retries the flag clears and the raid retreats again, the leader walking to its point.
         world.Options.AllowedMaps = allowed;
-        Assert.True(await world.RunUntilAsync(15_000, () => !raid.RetreatNoPath), world.Trace());
-        Assert.True(await world.RunUntilAsync(15_000, () => raid.Order == PlayerbotSiegeOrder.Retreat || raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath), world.Trace());
-        Assert.True(await world.RunUntilAsync(60_000, () => YardsFrom(Leader(world, raid), point) <= PlayerbotSiegeCommander.RallyYards + 1.5f), world.Trace());
+        Assert.True(await world.RunUntilAsync(15_000, () => !raid.RetreatNoPath), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(15_000, () => raid.Order == PlayerbotSiegeOrder.Retreat || raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(60_000, () => YardsFrom(Leader(world, raid), point) <= PlayerbotSiegeCommander.RallyYards + 1.5f), await world.TraceAsync());
         Assert.Equal(1, raid.Retreats);
     }
 
@@ -803,7 +803,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         (_, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
         await KillAsync(world, raid, "mage");
         world.Options.AllowedMaps = [1];
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath && raid.RallySinceMs != 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Order == PlayerbotSiegeOrder.Rally && raid.RetreatNoPath && raid.RallySinceMs != 0), await world.TraceAsync());
         (uint oldSince, Guid oldLeader) = (raid.RallySinceMs, raid.Group!.LeaderBotId);
 
         // The maps stay refused: the new leader has no path either, so only the promotion itself can restart the clock.
@@ -814,8 +814,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             leader.Map!.Combat.KillPlayer(leader);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), world.Trace());
-        Assert.True(await world.RunUntilAsync(1_500, () => raid.RallySinceMs != oldSince), "the new leader inherited the clock of the no-path rally" + Environment.NewLine + world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(1_500, () => raid.RallySinceMs != oldSince), "the new leader inherited the clock of the no-path rally" + Environment.NewLine + await world.TraceAsync());
         Assert.True(raid.RallyClockRestarted);
     }
 
@@ -825,7 +825,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await using GroupTestWorld world = await StartStrongGuards();
         (_, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
         await KillAsync(world, raid, "mage");
-        Assert.True(await world.RunUntilAsync(60_000, () => { TopUpGuards(world, raid); return raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath && raid.RallySinceMs != 0; }), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => { TopUpGuards(world, raid); return raid.Order == PlayerbotSiegeOrder.Rally && !raid.RetreatNoPath && raid.RallySinceMs != 0; }), await world.TraceAsync());
         (uint since, Guid oldLeader) = (raid.RallySinceMs, raid.Group!.LeaderBotId);
 
         await world.OnWorldAsync(() =>
@@ -835,7 +835,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             leader.Map!.Combat.KillPlayer(leader);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.Group.LeaderBotId != oldLeader), await world.TraceAsync());
         var changed = new List<uint>();
         await world.RunUntilAsync(2_000, () => { TopUpGuards(world, raid); if (raid.RallySinceMs != since) changed.Add(raid.RallySinceMs); return false; });
         Assert.Empty(changed);
@@ -850,7 +850,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await KillAsync(world, raid, "mage");
         uint[] allowed = world.Options.AllowedMaps;
         world.Options.AllowedMaps = [1];
-        Assert.True(await world.RunUntilAsync(30_000, () => raid.RetreatLatched), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.RetreatLatched), await world.TraceAsync());
 
         // The path flaps: it is back when a retry comes (the flag clears), and refused again at once (the next walk finds none).
         Vector3 point = RetreatPoint(siege);
@@ -922,7 +922,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step >= 2;
         });
 
-        Assert.True(done, $"the raid never pushed through (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + world.Trace());
+        Assert.True(done, $"the raid never pushed through (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + await world.TraceAsync());
         Assert.True(pushed && detailed && leaderStep, $"pushed {pushed} detailed {detailed} leader step {leaderStep}");
         Assert.InRange(firstStepMs, 1u, PlayerbotSiegeCommander.PushThroughQuietMs + 40_000);
         Assert.True(await world.OnWorldAsync(() => Leader(world, raid).X - startX > 30f), "the leader walked on");
@@ -1037,7 +1037,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         });
 
         string story = string.Join(Environment.NewLine, trail);
-        Assert.True(done, $"the step never moved (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + story + Environment.NewLine + world.Trace());
+        Assert.True(done, $"the step never moved (step {siege.Step}, order {raid.Order}, push {raid.Push}, facts {raid.LastFacts})" + Environment.NewLine + story + Environment.NewLine + await world.TraceAsync());
         Assert.True(engagedBefore && pushed && hostileNear, $"engaged before {engagedBefore}, pushed {pushed}, hostile near the leader {hostileNear}" + Environment.NewLine + story);
         Assert.Empty(engagedWhilePushing);
         Assert.Empty(marksWhilePushing);
@@ -1091,7 +1091,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             firstQualified |= PlayerbotSiegeCommander.PushOf(first.LastFacts) == PlayerbotSiegePush.Quiet;
             return Invariant();
         });
-        Assert.True(firstQualified, "the first raid never qualified for a push: " + first.LastFacts + Environment.NewLine + world.Trace());
+        Assert.True(firstQualified, "the first raid never qualified for a push: " + first.LastFacts + Environment.NewLine + await world.TraceAsync());
         Assert.Empty(violations);
         Assert.Equal((PlayerbotSiegePush.None, PlayerbotSiegeOrder.Assault, 0), (first.Push, first.Order, siege.Step));
         Assert.True(second.LastFacts.Hostiles > 0 && second.LastFacts.InCombat, "the second raid fights the guard: " + second.LastFacts);
@@ -1113,7 +1113,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             Invariant();
             return siege.Step >= 1;
         });
-        Assert.True(moved, $"the step never moved (first {first.Order}/{first.Push} {first.LastFacts}; second {second.Order}/{second.Push} {second.LastFacts})" + Environment.NewLine + world.Trace());
+        Assert.True(moved, $"the step never moved (first {first.Order}/{first.Push} {first.LastFacts}; second {second.Order}/{second.Push} {second.LastFacts})" + Environment.NewLine + await world.TraceAsync());
         Assert.True(bothPushed, "the raids never pushed together");
         Assert.Empty(violations);
         Assert.Equal(0, first.Retreats + second.Retreats);
@@ -1160,7 +1160,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (siege.Step >= 1 && lagAtStep < 0f) lagAtStep = MaxLag(world, raid);
             return siege.Step >= 1;
         });
-        Assert.True(moved, $"the step never moved after the member was released: {raid.LastFacts}" + Environment.NewLine + world.Trace());
+        Assert.True(moved, $"the step never moved after the member was released: {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync());
         Assert.InRange(lagAtStep, 0f, PlayerbotSiegeCommander.LagYards + 6f);
     }
 
@@ -1222,21 +1222,21 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         });
 
         // The story (with the world trace) is built only when something fails: the trace is a live buffer.
-        string Story() => $"run {run}: step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}, retreats {raid.Retreats}, leader reached x+{maxX:F1}, {raid.LastFacts}"
-            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
+        async Task<string> await Story() => $"run {run}: step {siege.Step} (at the push {stepAtPush}), denied {raid.PushDeniedStep}, push {raid.Push}, retreats {raid.Retreats}, leader reached x+{maxX:F1}, {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         bool walkedOn = maxX > 60f && siege.Step > stepAtPush;
         bool retreated = raid.Retreats > 0;
         output.WriteLine($"STALEMATE-ROW run={run} outcome={(walkedOn ? "walked" : retreated ? "retreat" : "neither")} step={siege.Step}/{stepAtPush} maxX={maxX:F1} retreats={raid.Retreats} denied={raid.PushDeniedStep}");
         int rows = Interlocked.Increment(ref _stalemateRows);
         int retreatRows = retreated && !walkedOn ? Interlocked.Increment(ref _stalemateRetreatRows) : Volatile.Read(ref _stalemateRetreatRows);
-        if (!pushed) Assert.Fail("the raid never pushed through: " + Story());
-        if (!done) Assert.Fail("the push neither moved the step nor ended in a retreat: " + Story());
+        if (!pushed) Assert.Fail("the raid never pushed through: " + await Story());
+        if (!done) Assert.Fail("the push neither moved the step nor ended in a retreat: " + await Story());
         Assert.Empty(problems);
         // Never a denial: the leader walks on (it passed 60 yards from the start and the step moved), or the raid lost members and retreated, as designed.
         Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
-        if (!(walkedOn || retreated)) Assert.Fail(Story());
+        if (!(walkedOn || retreated)) Assert.Fail(await Story());
         // The retreat is a designed outcome of a row, not of the test: if every row of the run retreated the leader never walked on and the test proves nothing about it.
-        if (rows == StalemateRunCount() && retreatRows == rows) Assert.Fail($"every one of the {rows} rows retreated, none walked on: " + Story());
+        if (rows == StalemateRunCount() && retreatRows == rows) Assert.Fail($"every one of the {rows} rows retreated, none walked on: " + await Story());
     }
 
     private static int _stalemateRows, _stalemateRetreatRows;
@@ -1400,18 +1400,18 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return back || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 80_000;
         });
 
-        string Story() => $"done={done} sent={attacker is not null} engaged={engaged} killed={killed} back={back} refused={refused} flipped={flipped} lagKept={lagKept} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
-            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        if (attacker is null) Assert.Fail("the probe never fired: " + Story());
-        if (!engaged) Assert.Fail("the melee leader never closed on the attacker that was shooting it: " + Story());
-        if (leaderOff <= PlayerbotSiegeCommander.WaypointYards + 2f) Assert.Fail("the leader never left the disk, the probe proves nothing: " + Story());
-        if (leaderOff > PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards) Assert.Fail("the leader went past the leash: " + Story());
-        if (!killed) Assert.Fail("the attacker did not die: " + Story());
-        if (!back) Assert.Fail("the leader did not return to the waypoint: " + Story());
-        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
-        if (refused) Assert.Fail("the waypoint was blacklisted: " + Story());
-        if (flipped) Assert.Fail("the raid read the answering leader as away from its waypoint: " + Story());
-        if (!lagKept) Assert.Fail("the lag hold was reset by the answer: " + Story());
+        async Task<string> await Story() => $"done={done} sent={attacker is not null} engaged={engaged} killed={killed} back={back} refused={refused} flipped={flipped} lagKept={lagKept} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
+        if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
+        if (!engaged) Assert.Fail("the melee leader never closed on the attacker that was shooting it: " + await Story());
+        if (leaderOff <= PlayerbotSiegeCommander.WaypointYards + 2f) Assert.Fail("the leader never left the disk, the probe proves nothing: " + await Story());
+        if (leaderOff > PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards) Assert.Fail("the leader went past the leash: " + await Story());
+        if (!killed) Assert.Fail("the attacker did not die: " + await Story());
+        if (!back) Assert.Fail("the leader did not return to the waypoint: " + await Story());
+        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + await Story());
+        if (refused) Assert.Fail("the waypoint was blacklisted: " + await Story());
+        if (flipped) Assert.Fail("the raid read the answering leader as away from its waypoint: " + await Story());
+        if (!lagKept) Assert.Fail("the lag hold was reset by the answer: " + await Story());
     }
 
     [Fact]
@@ -1469,14 +1469,14 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return back || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 80_000 || !raid.PushingThrough;
         });
 
-        string Story() => $"done={done} sent={attacker is not null} chased={chased} kited={kited} back={back} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
-            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        if (attacker is null) Assert.Fail("the probe never fired: " + Story());
-        if (!chased) Assert.Fail("the leader never left the disk to answer the attacker: " + Story());
-        if (leaderOff > PlayerbotSiegeCommander.SiegeAnswerLeashYards + 3f) Assert.Fail("the leader followed the kiting attacker past the leash: " + Story());
-        if (!back) Assert.Fail("the leader did not return to the waypoint: " + Story());
-        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
-        if (refused) Assert.Fail("the waypoint was blacklisted: " + Story());
+        async Task<string> await Story() => $"done={done} sent={attacker is not null} chased={chased} kited={kited} back={back} refused={refused} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
+        if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
+        if (!chased) Assert.Fail("the leader never left the disk to answer the attacker: " + await Story());
+        if (leaderOff > PlayerbotSiegeCommander.SiegeAnswerLeashYards + 3f) Assert.Fail("the leader followed the kiting attacker past the leash: " + await Story());
+        if (!back) Assert.Fail("the leader did not return to the waypoint: " + await Story());
+        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + await Story());
+        if (refused) Assert.Fail("the waypoint was blacklisted: " + await Story());
     }
 
     [Fact]
@@ -1534,15 +1534,15 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return injected && (siege.Step > stepAtPush || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0);
         });
 
-        string Story() => $"done={done} injected={injected} lifted={lifted} decoyKept={decoyKept} counterKept={counterKept} walked={walked} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
-            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        if (!injected) Assert.Fail("the probe never fired: " + Story());
-        if (!lifted) Assert.Fail("the push's own waypoint stayed refused: " + Story());
-        if (!walked) Assert.Fail("the leader did not walk on: " + Story());
-        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
-        if (!counterKept) Assert.Fail("lifting one refused place reset the rejection count: " + Story());
-        if (!decoyKept) Assert.Fail("the other refused place was forgotten as well (ForgetLoops on every think): " + Story());
-        if (!(done && siege.Step > stepAtPush)) Assert.Fail("the step did not move: " + Story());
+        async Task<string> await Story() => $"done={done} injected={injected} lifted={lifted} decoyKept={decoyKept} counterKept={counterKept} walked={walked} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
+        if (!injected) Assert.Fail("the probe never fired: " + await Story());
+        if (!lifted) Assert.Fail("the push's own waypoint stayed refused: " + await Story());
+        if (!walked) Assert.Fail("the leader did not walk on: " + await Story());
+        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + await Story());
+        if (!counterKept) Assert.Fail("lifting one refused place reset the rejection count: " + await Story());
+        if (!decoyKept) Assert.Fail("the other refused place was forgotten as well (ForgetLoops on every think): " + await Story());
+        if (!(done && siege.Step > stepAtPush)) Assert.Fail("the step did not move: " + await Story());
     }
 
     [Fact]
@@ -1609,15 +1609,15 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return sawDiskAtNext || siege.Step > stepAtPush + 1 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || unchecked(Now(world) - sentAt) > 450_000;
         });
 
-        string Story() => $"{stepChange} done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
-            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        if (attacker is null) Assert.Fail("the probe never fired: " + Story());
-        if (!advanced) Assert.Fail("the step never moved on while the leader answered: " + Story());
-        if (movedWhileOut) Assert.Fail("the lockstep moved the step while the leader was out of the old waypoint's disk, answering: " + Story());
-        if (readAtNext) Assert.Fail("the raid read the leader at the next waypoint while it was still out where it fought: " + Story());
-        if (skipped) Assert.Fail("the step moved past the next waypoint before the leader reached it: " + Story());
-        if (!sawDiskAtNext) Assert.Fail("the leader never reached the next waypoint: " + Story());
-        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
+        async Task<string> await Story() => $"{stepChange} done={done} advanced={advanced} readAtNext={readAtNext} sawDiskAtNext={sawDiskAtNext} skipped={skipped} closestToNext={closestToNext:F1} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
+        if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
+        if (!advanced) Assert.Fail("the step never moved on while the leader answered: " + await Story());
+        if (movedWhileOut) Assert.Fail("the lockstep moved the step while the leader was out of the old waypoint's disk, answering: " + await Story());
+        if (readAtNext) Assert.Fail("the raid read the leader at the next waypoint while it was still out where it fought: " + await Story());
+        if (skipped) Assert.Fail("the step moved past the next waypoint before the leader reached it: " + await Story());
+        if (!sawDiskAtNext) Assert.Fail("the leader never reached the next waypoint: " + await Story());
+        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + await Story());
     }
 
     [Fact]
@@ -1684,17 +1684,17 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return t > 25_000 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || siege.Step > stepAtPush;
         });
 
-        string Story() => $"done={done} chased={chased} lagReset={lagReset} flipped={flipped} refused={refused} noPath={noPath} maxRejections={maxRejections} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
-            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + world.Trace();
-        if (attacker is null) Assert.Fail("the probe never fired: " + Story());
-        if (!chased) Assert.Fail("the leader never left the disk to answer the kiter: " + Story());
-        if (siege.Step > stepAtPush) Assert.Fail("the step moved on during the kiting, the probe proves nothing: " + Story());
-        if (lagReset) Assert.Fail("the kiter reset the lag hold: " + Story());
-        if (flipped) Assert.Fail("the raid read the leader as away from its waypoint while it answered or walked back: " + Story());
-        if (refused) Assert.Fail("the waypoint stayed blacklisted: " + Story());
-        if (noPath) Assert.Fail("the leader's walk to the waypoint found no path: " + Story());
-        if (maxRejections >= PlayerbotMotion.MaxRejectionsBeforeLoop) Assert.Fail("the rejection guard was tripped: " + Story());
-        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + Story());
+        async Task<string> await Story() => $"done={done} chased={chased} lagReset={lagReset} flipped={flipped} refused={refused} noPath={noPath} maxRejections={maxRejections} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+            + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
+        if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
+        if (!chased) Assert.Fail("the leader never left the disk to answer the kiter: " + await Story());
+        if (siege.Step > stepAtPush) Assert.Fail("the step moved on during the kiting, the probe proves nothing: " + await Story());
+        if (lagReset) Assert.Fail("the kiter reset the lag hold: " + await Story());
+        if (flipped) Assert.Fail("the raid read the leader as away from its waypoint while it answered or walked back: " + await Story());
+        if (refused) Assert.Fail("the waypoint stayed blacklisted: " + await Story());
+        if (noPath) Assert.Fail("the leader's walk to the waypoint found no path: " + await Story());
+        if (maxRejections >= PlayerbotMotion.MaxRejectionsBeforeLoop) Assert.Fail("the rejection guard was tripped: " + await Story());
+        if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + await Story());
     }
 
     [Fact]
@@ -1731,10 +1731,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return queued && (!walking && walkTicks > 0 || siege.Step > stepAtPush);
         });
 
-        string Story() => $"done={done} queued={queued} drained={drained} walkTicks={walkTicks} step={siege.Step}/{stepAtPush} {raid.LastFacts}" + Environment.NewLine + world.Trace();
-        if (!queued) Assert.Fail("the probe never fired: " + Story());
-        if (walkTicks < 3) Assert.Fail("the leader was not seen walking long enough: " + Story());
-        if (drained) Assert.Fail("the queued loot was sent while the pushing leader was walking: " + Story());
+        async Task<string> await Story() => $"done={done} queued={queued} drained={drained} walkTicks={walkTicks} step={siege.Step}/{stepAtPush} {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync();
+        if (!queued) Assert.Fail("the probe never fired: " + await Story());
+        if (walkTicks < 3) Assert.Fail("the leader was not seen walking long enough: " + await Story());
+        if (drained) Assert.Fail("the queued loot was sent while the pushing leader was walking: " + await Story());
     }
 
     private const uint WeakFoodItem = 992101;
@@ -1821,7 +1821,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             TopUpGuards(world, raid);
             TopUpMembers(world, raid);
             return raid.Push == PlayerbotSiegePush.Stalemate;
-        }), "the raid never pushed through: " + raid.LastFacts + Environment.NewLine + world.Trace());
+        }), "the raid never pushed through: " + raid.LastFacts + Environment.NewLine + await world.TraceAsync());
 
         // The leader can no longer plan a way (the maps the bots may enter exclude this one): it stands, and the push gets it nowhere.
         int step = siege.Step;
@@ -1834,7 +1834,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             TopUpMembers(world, raid);
             return raid.PushDeniedStep == step && raid.Push == PlayerbotSiegePush.None;
         });
-        Assert.True(withdrawn, $"the push was not withdrawn (step {siege.Step}, push {raid.Push}, denied {raid.PushDeniedStep}, best {raid.PushBestYards:F1}, leader moved {Leader(world, raid).X - movedFrom:F1})" + Environment.NewLine + world.Trace());
+        Assert.True(withdrawn, $"the push was not withdrawn (step {siege.Step}, push {raid.Push}, denied {raid.PushDeniedStep}, best {raid.PushBestYards:F1}, leader moved {Leader(world, raid).X - movedFrom:F1})" + Environment.NewLine + await world.TraceAsync());
         Assert.Equal(PlayerbotSiegePush.None, raid.PushInForce);
 
         // Back at the baseline (Assault), and no push is granted again at this step, though the fight has lasted longer than StalemateMs.
@@ -1893,12 +1893,12 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step >= 1;
         });
 
-        Assert.True(moved, $"the step never moved: {raid.LastFacts}" + Environment.NewLine + world.Trace());
+        Assert.True(moved, $"the step never moved: {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync());
         Assert.True(arrivedAt != 0, "the pushing leader never waited at the waypoint");
         Assert.True(lagWhenMoved > PlayerbotSiegeCommander.LagYards, $"the member was within reach when the step moved: {lagWhenMoved:F0} yd");
         Assert.True(unchecked(movedAt - arrivedAt) >= PlayerbotGroupCoordinator.LagHoldMs - 1_000, $"the step moved {unchecked(movedAt - arrivedAt)} ms after the leader arrived (the hold is {PlayerbotGroupCoordinator.LagHoldMs} ms)");
         Assert.True(waived, "the lag was never waived: " + raid.LastFacts);
-        Assert.True(noted, "no event note says the raid pushed on:" + Environment.NewLine + world.Trace());
+        Assert.True(noted, "no event note says the raid pushed on:" + Environment.NewLine + await world.TraceAsync());
         Assert.Contains(PlayerbotGroupCoordinator.PushOnLine, raid.Announcer.Sent);
     }
 }

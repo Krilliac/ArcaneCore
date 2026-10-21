@@ -39,9 +39,9 @@ public sealed class PlayerbotGroupWorldTests
         var healer = await world.AddBotAsync("Stopheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
         var mage = await world.AddBotAsync("Stopmage", Human, Mage, 10, [Fireball]);
         Guid[] ids = [tank.Id, healer.Id, mage.Id];
-        Assert.True(await world.RunUntilAsync(60_000, () => ids.All(id => world.HasQuest(id, EliteQuest))), world.Trace());
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
-        Assert.All(ids, id => Assert.True(world.Coordinator.Drives(id), world.Trace()));
+        Assert.True(await world.RunUntilAsync(60_000, () => ids.All(id => world.HasQuest(id, EliteQuest))), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
+        foreach (Guid id in ids) Assert.True(world.Coordinator.Drives(id), await world.TraceAsync());
 
         // Leader and members stop in one batch while the world thread keeps forgetting them; the goals are read behind each bot's own Forget.
         await world.Bots.ShutdownBeforeWorldStopAsync();
@@ -72,8 +72,8 @@ public sealed class PlayerbotGroupWorldTests
             await world.OnWorldAsync(() => world.Session(id).ManagedDispatchObserver = opcode => sent.Enqueue((name, opcode)));
 
         // The brains take the elite quest from the giver beside them; the coordinator holds its objective for a group.
-        Assert.True(await world.RunUntilAsync(60_000, () => new[] { tank, healer, mage }.All(b => world.HasQuest(b.Id, EliteQuest))), world.Trace());
-        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => new[] { tank, healer, mage }.All(b => world.HasQuest(b.Id, EliteQuest))), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
 
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(PlayerbotGroupGoalKind.Quest, group.Goal.Kind);
@@ -100,7 +100,7 @@ public sealed class PlayerbotGroupWorldTests
         Assert.Contains("group=", (await world.OnWorldAsync(() => world.Bots.Snapshot().Single(s => s.Name == tank.Name))).Group);
 
         // Together they kill the ogre: every member gets the credit, the group disbands and the brains take over again.
-        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal(1, world.Coordinator.Totals.Completed);
         await world.OnWorldAsync(() =>
         {
@@ -125,13 +125,13 @@ public sealed class PlayerbotGroupWorldTests
         var warrior = await world.AddBotAsync("Riskwar", Human, Warrior, 1, []);
         var mage = await world.AddBotAsync("Riskmage", Human, Mage, 1, [Fireball]);
 
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal("risk", group.Goal.Source);
         Assert.Equal(BruteEntry, group.Goal.ObjectiveEntry);
         Assert.Equal(2, group.Goal.Size);
 
-        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal(1, world.Coordinator.Totals.Completed);
         Assert.True(await world.OnWorldAsync(() => world.Coordinator.ObjectiveDone(world.Player(warrior.Id), BruteEntry)
             && world.Coordinator.ObjectiveDone(world.Player(mage.Id), BruteEntry)));
@@ -144,7 +144,7 @@ public sealed class PlayerbotGroupWorldTests
         var tank = await world.AddBotAsync("Healtank", Human, Warrior, 10, [Taunt]);
         var healer = await world.AddBotAsync("Healprie", Human, Priest, 10, [LesserHeal, Smite]);
         await world.AddBotAsync("Healmage", Human, Mage, 10, [Fireball]);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), await world.TraceAsync());
 
         (uint wounded, uint manaBefore) = await world.OnWorldAsync(() =>
         {
@@ -153,7 +153,7 @@ public sealed class PlayerbotGroupWorldTests
             return (player.Health, SpellSystem.GetPower(world.Player(healer.Id), PowerType.Mana));
         });
 
-        Assert.True(await world.RunUntilAsync(15_000, () => world.Player(tank.Id).Health >= wounded + 40), world.Trace());
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Player(tank.Id).Health >= wounded + 40), await world.TraceAsync());
         Assert.True(await world.OnWorldAsync(() => SpellSystem.GetPower(world.Player(healer.Id), PowerType.Mana) < manaBefore), "the priest spent no mana");
     }
 
@@ -164,7 +164,7 @@ public sealed class PlayerbotGroupWorldTests
         var tank = await world.AddBotAsync("Taunttank", Human, Warrior, 10, [Taunt]);
         var healer = await world.AddBotAsync("Tauntprie", Human, Priest, 10, [LesserHeal, Smite]);
         await world.AddBotAsync("Tauntmage", Human, Mage, 10, [Fireball]);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), await world.TraceAsync());
 
         Creature ogre = await world.OnWorldAsync(() =>
         {
@@ -172,12 +172,12 @@ public sealed class PlayerbotGroupWorldTests
             target.Combat.Threat.AddThreat(world.Player(healer.Id), 100_000f); // the ogre turns on the priest
             return target;
         });
-        Assert.True(await world.RunUntilAsync(5_000, () => ReferenceEquals(ogre.Combat.Victim, world.Player(healer.Id))), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => ReferenceEquals(ogre.Combat.Victim, world.Player(healer.Id))), await world.TraceAsync());
 
         // The tank answers with its Taunt (the class rotation's NeedsTaunt for the group's tank) and gets the ogre back.
         Assert.True(await world.RunUntilAsync(10_000, () => world.World.Services.GetRequiredService<SpellFeature>().System
-            .GetActiveCooldowns(world.Player(tank.Id)).Any(c => c.SpellId == Taunt)), world.Trace());
-        Assert.True(await world.RunUntilAsync(5_000, () => ReferenceEquals(ogre.Combat.Victim, world.Player(tank.Id)) || !ogre.IsAlive), world.Trace());
+            .GetActiveCooldowns(world.Player(tank.Id)).Any(c => c.SpellId == Taunt)), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(5_000, () => ReferenceEquals(ogre.Combat.Victim, world.Player(tank.Id)) || !ogre.IsAlive), await world.TraceAsync());
     }
 
     [Fact]
@@ -189,14 +189,14 @@ public sealed class PlayerbotGroupWorldTests
         var mage = await world.AddBotAsync("Delvemage", Human, Mage, 12, [Fireball], EntranceArea);
         (Guid Id, string Name)[] bots = [tank, healer, mage];
 
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(PlayerbotGroupGoalKind.Dungeon, group.Goal.Kind);
         Assert.Equal(36u, group.Goal.MapId);
         Assert.Equal(World.Playerbots.Scenarios.DungeonEntryScenario.EntranceTrigger, group.Goal.EntranceTrigger);
 
         // Every member walks into the entrance (no scripted CMSG_AREATRIGGER): one instance, bound to the group.
-        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == 36)), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == 36)), await world.TraceAsync());
         await world.OnWorldAsync(() =>
         {
             uint instance = world.Player(tank.Id).Map!.InstanceId;
@@ -208,7 +208,7 @@ public sealed class PlayerbotGroupWorldTests
         });
 
         // The boss falls, the group walks out through the exit trigger and disbands outside.
-        Assert.True(await world.RunUntilAsync(360_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(360_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal(1, world.Coordinator.Totals.Completed);
         await world.OnWorldAsync(() =>
         {
@@ -234,12 +234,12 @@ public sealed class PlayerbotGroupWorldTests
         var mage = await world.AddBotAsync("Trophymage", Human, Mage, 12, [Fireball], EntranceArea);
         (Guid Id, string Name)[] bots = [tank, healer, mage];
 
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(PlayerbotGroupGoalKind.Dungeon, group.Goal.Kind);
         Assert.Equal((36u, BossEntry, BossTrophy, DungeonItemQuest), (group.Goal.MapId, group.Goal.ObjectiveEntry, group.Goal.ObjectiveItem, group.Goal.QuestId));
 
-        Assert.True(await world.RunUntilAsync(480_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(480_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Equal(1, world.Coordinator.Totals.Completed);
         await world.OnWorldAsync(() =>
         {
@@ -265,7 +265,7 @@ public sealed class PlayerbotGroupWorldTests
         var mage = await world.AddBotAsync("Sharemage", Human, Mage, 10, [Fireball]);
         foreach ((Guid id, string name) in new[] { tank, healer, mage })
             await world.OnWorldAsync(() => world.Session(id).ManagedDispatchObserver = opcode => sent.Enqueue((name, opcode)));
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
 
         await world.OnWorldAsync(() =>
         {
@@ -280,12 +280,12 @@ public sealed class PlayerbotGroupWorldTests
         });
 
         Assert.True(await world.RunUntilAsync(60_000, () => world.World.Services.GetRequiredService<QuestNpcFeature>().Services
-            .StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest) == QuestStatus.Incomplete), world.Trace());
+            .StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest) == QuestStatus.Incomplete), await world.TraceAsync());
         Assert.Contains(sent, s => s.Opcode == WorldOpcode.CmsgPushquesttoparty && s.Bot != mage.Name);
         Assert.Contains(sent, s => s.Opcode == WorldOpcode.CmsgQuestgiverAcceptQuest && s.Bot == mage.Name);
         Assert.Contains(world.Coordinator.Events, e => e.Contains($"shares quest {EliteQuest} with {mage.Name}", StringComparison.Ordinal));
 
-        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         await world.OnWorldAsync(() =>
         {
             Assert.True(world.Coordinator.ObjectiveDone(world.Player(mage.Id), OgreEntry));
@@ -301,7 +301,7 @@ public sealed class PlayerbotGroupWorldTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
         var tank = await world.AddBotAsync("Wipetank", Human, Warrior, 10, [Taunt]);
         var healer = await world.AddBotAsync("Wipeprie", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), world.Trace());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
 
         // The tank falls in the fight (the priest is on the ogre's threat list, as a healer that healed it): half the group is dead, the
@@ -315,8 +315,8 @@ public sealed class PlayerbotGroupWorldTests
             Assert.False(victim.IsAlive);
             return creature;
         });
-        Assert.True(await world.RunUntilAsync(5_000, () => group.State == PlayerbotGroupState.Wiped), world.Trace());
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.FindAI(healer.Id)!.Retreat.Active), world.Trace());
+        Assert.True(await world.RunUntilAsync(5_000, () => group.State == PlayerbotGroupState.Wiped), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.FindAI(healer.Id)!.Retreat.Active), await world.TraceAsync());
 
         // The ogre goes away for a while; the priest comes back and resurrects the tank (its party intake accepts a group member's
         // offer), and the group gathers again, one failure down.
@@ -325,10 +325,10 @@ public sealed class PlayerbotGroupWorldTests
             ogre.Map!.FindUpdater<CreatureMapSystem>()!.Despawn(ogre);
             return true;
         });
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(tank.Id).IsAlive), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Player(tank.Id).IsAlive), await world.TraceAsync());
         Assert.Equal(tank.Name, world.Coordinator.FindAI(healer.Id)!.LastResurrection);
         Assert.True(await world.RunUntilAsync(60_000, () => group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling
-            or PlayerbotGroupState.Engaging), world.Trace());
+            or PlayerbotGroupState.Engaging), await world.TraceAsync());
         Assert.Equal(1, group.Failures);
         Assert.Contains(world.Coordinator.Events, e => e.Contains("wiped (1/2)", StringComparison.Ordinal));
     }
@@ -344,7 +344,7 @@ public sealed class PlayerbotGroupWorldTests
         await world.AddBotAsync("Raidlock", Human, Warlock, 20, []);
         await world.AddBotAsync("Raidhunt", Dwarf, Hunter, 20, []);
 
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(PlayerbotGroupGoalKind.Raid, group.Goal.Kind);
         Assert.True(group.Raid);
@@ -366,11 +366,11 @@ public sealed class PlayerbotGroupWorldTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options => options.Groups.FormationTimeoutSeconds = 30);
         var lone = await world.AddBotAsync("Loneone", Human, Mage, 10, [Fireball]);
 
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == lone.Id)), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == lone.Id)), await world.TraceAsync());
         Assert.True(await world.OnWorldAsync(() => world.Bots.FindBrain(lone.Id)!.GroupHeld.Contains((EliteQuest, OgreEntry))));
         Assert.Contains("group=waiting", (await world.OnWorldAsync(() => world.Bots.Snapshot().Single(s => s.BotId == lone.Id))).Group);
 
-        Assert.True(await world.RunUntilAsync(40_000, () => world.Coordinator.IsSetAside(lone.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry))), world.Trace());
+        Assert.True(await world.RunUntilAsync(40_000, () => world.Coordinator.IsSetAside(lone.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry))), await world.TraceAsync());
         Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == lone.Id);
         Assert.Empty(await world.OnWorldAsync(() => world.Bots.FindBrain(lone.Id)!.GroupHeld.ToArray()));
         Assert.Contains(world.Coordinator.Events, e => e.Contains("found no partners", StringComparison.Ordinal));
@@ -401,13 +401,13 @@ public sealed class PlayerbotGroupWorldTests
             }
 
             return ids.All(id => world.HasQuest(id, EliteQuest));
-        }), world.Trace());
+        }), await world.TraceAsync());
 
         // Long enough for the three to be matched and the group to leave Forming, as in the test above.
         await world.RunAsync(40_000);
         await world.OnWorldAsync(() =>
         {
-            Assert.False(world.Coordinator.Drives(healer.Id), world.Trace());
+            Assert.False(world.Coordinator.Drives(healer.Id), world.Trace()); // on the world thread
             Assert.DoesNotContain(world.Coordinator.Groups, g => g.Members.Any(m => m.BotId == healer.Id));
             return true;
         });

@@ -28,7 +28,7 @@ public sealed class PlayerbotLeashGroupMemberTests
         var healer = await world.AddBotAsync("Leashheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
         var mage = await world.AddBotAsync("Leashmage", Human, Mage, 10, [Fireball]);
         Guid[] ids = [tank.Id, healer.Id, mage.Id];
-        Assert.True(await world.RunUntilAsync(60_000, () => ids.All(id => world.HasQuest(id, EliteQuest))), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => ids.All(id => world.HasQuest(id, EliteQuest))), await world.TraceAsync());
         // A leash needs a real player as master (a managed bot is no master).
         await using WorldTestClient real = await world.World.EnterWorldAsync("LEASHM", "Leashmaster", AccountSecurity.Player);
         ObjectGuid realGuid = await world.OnWorldAsync(() => world.World.Host.World.OnlinePlayers.Single(p => p.Name == "Leashmaster").Guid);
