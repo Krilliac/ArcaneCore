@@ -2369,6 +2369,151 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.False(moved, "the step moved with a raid without a leader");
     }
 
+    // --- what the scan counts, and the marching leader ----------------------------------------------------------------------------
+
+    /// <summary>One raid, one waypoint 100 yards east (the way covers x 0..100), the given creatures near it and the objective far away; the creatures stand where they were put.</summary>
+    private static async Task<(GroupTestWorld World, PlayerbotSiege Siege, PlayerbotSiegeRaid Raid)> ScanFixture(
+        Func<List<(CreatureTemplate Template, CreatureSpawn Spawn)>> creatures, float waypointZ = 0f)
+    {
+        List<(CreatureTemplate, CreatureSpawn)> extra = creatures();
+        extra.Add(Guard(Objective, 400f, 0f, health: 120));
+        GroupTestWorld world = await GroupTestWorld.StartAsync([], null, extraCreatures: [.. extra]);
+        (Guid Id, string Name)[] bots = await Enlist(world);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.Null(world.Coordinator.AddSiegeWaypoint(0, new Vector3(Origin.X + 100f, Origin.Y, Origin.Z + waypointZ)));
+            return true;
+        });
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        await world.OnWorldAsync(() =>
+        {
+            CreatureMapSystem system = Leader(world, siege.Raids[0]).Map!.FindUpdater<CreatureMapSystem>()!;
+            foreach (Creature creature in system.Creatures.Where(c => c.Entry != Objective)) system.SetAiImmobilized(creature, true, combatOnly: false);
+            return true;
+        });
+        return (world, siege, siege.Raids[0]);
+    }
+
+    private static Creature Spawned(GroupTestWorld world, PlayerbotSiegeRaid raid, uint entry)
+        => Leader(world, raid).Map!.FindUpdater<CreatureMapSystem>()!.Creatures.First(c => c.Entry == entry);
+
+    [Fact]
+    public async Task ASiegeLeaderWithNoPathToItsPullTarget_ShunsIt_AndTheSkullMovesOn()
+    {
+        // An unreachable hostile within 40 yards (30) and a reachable one at 45.
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await ScanFixture(() => [Guard(GuardA, 30f, 0f, health: 600), Guard(GuardB, 45f, 0f, health: 600)]);
+        await using GroupTestWorld _ = world;
+        ObjectGuid unreachable = default, next = default;
+        await world.OnWorldAsync(() =>
+        {
+            unreachable = Spawned(world, raid, GuardA).Guid;
+            next = Spawned(world, raid, GuardB).Guid;
+            world.Options.AllowedMaps = [1]; // walking is refused: the leader finds no way to the guard it is sent at
+            return true;
+        });
+
+        bool skulledFirst = false, skullMoved = false;
+        await world.RunUntilAsync(30_000, () =>
+        {
+            ObjectGuid skull = Skull(world, raid);
+            skulledFirst |= skull == unreachable;
+            skullMoved |= skulledFirst && skull == next;
+            return skullMoved;
+        });
+
+        Assert.True(skulledFirst, "the nearest hostile was never skulled: " + raid.LastFacts);
+        Assert.True(await world.OnWorldAsync(() => raid.Group!.IsShunned(unreachable, Now(world))), "the unreachable target was not given up");
+        Assert.True(skullMoved, $"the skull never moved to the next hostile: {raid.LastFacts}" + Environment.NewLine + await world.TraceAsync());
+    }
+
+    [Fact]
+    public async Task ACivilianNotFightingTheRaid_IsNotInHostiles_OneThatDoesIs()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await ScanFixture(() =>
+        {
+            (CreatureTemplate template, CreatureSpawn spawn) = Guard(GuardA, 30f, 0f, health: 600);
+            return [(template with { Civilian = true }, spawn)];
+        });
+        await using GroupTestWorld _ = world;
+        int most = 0;
+        await world.RunUntilAsync(3_000, () => { most = Math.Max(most, raid.LastFacts.Hostiles); return false; });
+        Assert.Equal(0, most);
+
+        await world.OnWorldAsync(() =>
+        {
+            Spawned(world, raid, GuardA).Combat.Threat.AddThreat(Leader(world, raid), 100_000f); // it attacks the raid
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(5_000, () => raid.LastFacts.Hostiles >= 1), "a civilian that fights the raid was not counted: " + raid.LastFacts);
+    }
+
+    [Fact]
+    public async Task AUnit15YardsAboveTheLeader_IsNotInHostiles_UnlessItAttacksTheRaid()
+    {
+        // The way climbs 30 yards to its waypoint, so the unit is on the route's levels but 15 yards above the leader.
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await ScanFixture(() =>
+        {
+            (CreatureTemplate template, CreatureSpawn spawn) = Guard(GuardA, 30f, 0f, health: 600);
+            return [(template, spawn with { Z = spawn.Z + 15f })];
+        }, waypointZ: 30f);
+        await using GroupTestWorld _ = world;
+        Assert.True(await world.OnWorldAsync(() => Spawned(world, raid, GuardA).Z - Leader(world, raid).Z > PlayerbotSiegeCommander.WaypointLevelYards), "the unit is not above the leader");
+        int most = 0;
+        await world.RunUntilAsync(3_000, () => { most = Math.Max(most, raid.LastFacts.Hostiles); return false; });
+        Assert.Equal(0, most);
+
+        await world.OnWorldAsync(() =>
+        {
+            Spawned(world, raid, GuardA).Combat.Threat.AddThreat(Leader(world, raid), 100_000f);
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(5_000, () => raid.LastFacts.Hostiles >= 1), "a unit above the leader that attacks the raid was not counted: " + raid.LastFacts);
+    }
+
+    [Fact]
+    public async Task AnAdvancingLeader_DoesNotTurnToPeelForAMember_AndReachesTheWaypoint()
+    {
+        // A guard (not rooted) beside a member 20 yards behind the leader attacks that member.
+        GroupTestWorld world = await GroupTestWorld.StartAsync([], null, extraCreatures: [Guard(GuardA, 30f, 60f, health: 600), Guard(Objective, 400f, 0f, health: 120)]);
+        await using GroupTestWorld _ = world;
+        (Guid Id, string Name)[] bots = await Enlist(world, 60f);
+        PlayerbotSiege siege = await Start(world, bots, raids: 1);
+        PlayerbotSiegeRaid raid = siege.Raids[0];
+        var leaderMember = raid.Group!.Members.First(m => m.BotId == raid.Group.LeaderBotId);
+        var victim = raid.Group.Members.First(m => !m.Real && m.BotId != raid.Group.LeaderBotId);
+        Creature? guard = null;
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = Leader(world, raid);
+            Player member = world.World.Host.World.FindOnlinePlayer(victim.Guid)!;
+            guard = Spawned(world, raid, GuardA);
+            member.Relocate(leader.X - 20f, leader.Y, leader.Z, 0, Now(world));
+            guard.Relocate(member.X - 2f, member.Y, member.Z, 0, Now(world));
+            guard.Combat.Threat.AddThreat(member, 100_000f);
+            return true;
+        });
+
+        Assert.True(await world.RunUntilAsync(10_000, () => world.World.Host.World.FindOnlinePlayer(victim.Guid)!.Combat.Attackers.Contains(guard!)), "the guard never attacked the member: " + await world.TraceAsync());
+
+        // Under a marching order the tank leader peels for no member; the member itself answers its attacker.
+        MethodInfo select = typeof(PlayerbotGroupAI).GetMethod("SelectTarget", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        (Unit? ofLeader, Unit? ofMember) = await world.OnWorldAsync(() =>
+        {
+            raid.Order = PlayerbotSiegeOrder.Advance;
+            raid.Push = PlayerbotSiegePush.None;
+            Player leader = Leader(world, raid);
+            Player member = world.World.Host.World.FindOnlinePlayer(victim.Guid)!;
+            Unit? forLeader = (Unit?)select.Invoke(leaderMember.AI, [leader, raid.Group, leaderMember, leader, true]);
+            Unit? forMember = (Unit?)select.Invoke(victim.AI, [member, raid.Group, victim, leader, false]);
+            return (forLeader, forMember);
+        });
+        Assert.Null(ofLeader);
+        Assert.Same(guard, ofMember);
+
+        // And once the raid has dealt with the guard the leader reaches the waypoint.
+        Assert.True(await world.RunUntilAsync(240_000, () => siege.Step >= 1), "the leader never reached the waypoint: " + raid.LastFacts + Environment.NewLine + await world.TraceAsync());
+    }
+
     /// <summary>
     /// The old answer fixture: waypoint 2 lies 12 yards past waypoint 1, so a leader answering an attacker 29 yards past waypoint 1 walks through waypoint 2's disk, and back. The step moves by one at a time, and not while the leader is out answering.
     /// </summary>

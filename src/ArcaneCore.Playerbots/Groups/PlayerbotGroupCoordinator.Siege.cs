@@ -1023,6 +1023,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>
     /// The living things the leader would fight within the pull range: hostile creatures, and players the siege may engage. The route tether
     /// (<see cref="PlayerbotSiegeCommander.RouteTetherYards"/>): only what stands near the route <paramref name="routeFrom"/> to <paramref name="goal"/> counts, besides the objective and whatever fights the raid.
+    /// Civilians and units more than <see cref="PlayerbotSiegeCommander.WaypointLevelYards"/> above or below the leader count only when they fight the raid; what the leader's group AI gave up as unreachable (<see cref="BotGroup.Shun"/>) does not count.
     /// </summary>
     private void ScanHostiles(BotGroup group, SiegeView view, uint now, Vector3 routeFrom, Vector3 goal)
     {
@@ -1048,7 +1049,7 @@ public sealed partial class PlayerbotGroupCoordinator
                         || group.IsShunned(creature.Guid, now)) continue;
                     break;
                 case Player other:
-                    if (!PlayerbotHostility.MayEngage(leader, other, PlayerbotEngageReason.Siege, groups)) continue;
+                    if (!PlayerbotHostility.MayEngage(leader, other, PlayerbotEngageReason.Siege, groups) || group.IsShunned(other.Guid, now)) continue;
                     break;
                 default:
                     continue;
@@ -1056,7 +1057,15 @@ public sealed partial class PlayerbotGroupCoordinator
 
             yards = Distance(leader, unit);
             if (yards > PlayerbotSiegeCommander.PullOffYards) continue;
-            if (!objective && RouteYards(new Vector3(unit.X, unit.Y, unit.Z), routeFrom, goal) > PlayerbotSiegeCommander.RouteTetherYards && !FightsRaid(unit, members ??= MemberGuids(group))) continue;
+            if (!objective)
+            {
+                // Left alone unless they fight the raid: civilians (a city is full of them), units on another level of the leader (3D distance picks up the floor below), and what stands off the route.
+                bool civilian = unit is Creature npc && (npc.Template.Civilian || (npc.Template.Behaviour & Kernel.WorldData.Creatures.CreatureBehaviourFlags.Civilian) != 0);
+                bool otherLevel = MathF.Abs(unit.Z - leader.Z) > PlayerbotSiegeCommander.WaypointLevelYards;
+                if ((civilian || otherLevel || RouteYards(new Vector3(unit.X, unit.Y, unit.Z), routeFrom, goal) > PlayerbotSiegeCommander.RouteTetherYards)
+                    && !FightsRaid(unit, members ??= MemberGuids(group))) continue;
+            }
+
             view.Hostiles.Add((unit, yards));
         }
 
@@ -1181,12 +1190,10 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (Member member in view.Group.Members)
             member.FocusIcon = member.Role == PlayerbotGroupRole.Tank && cross is not null ? PlayerbotSiegeCommander.CrossIcon : Party.PlayerbotParty.SkullIcon;
 
-        raid.MoveTo = decision.Order switch
-        {
-            PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally => RetreatPointOf(siege),
-            PlayerbotSiegeOrder.Advance => siege.Step < siege.Waypoints.Count ? siege.Waypoints[siege.Step] : ObjectivePointOf(siege, view.Leader),
-            _ => raid.MoveTo,
-        };
+        // Never stale: every order but the retreat's heads for the step's goal.
+        raid.MoveTo = decision.Order is PlayerbotSiegeOrder.Retreat or PlayerbotSiegeOrder.Rally
+            ? RetreatPointOf(siege)
+            : siege.Step < siege.Waypoints.Count ? siege.Waypoints[siege.Step] : ObjectivePointOf(siege, view.Leader);
 
         string line = decision.Order switch
         {

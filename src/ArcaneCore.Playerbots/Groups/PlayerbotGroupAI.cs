@@ -324,6 +324,9 @@ internal sealed class PlayerbotGroupAI
                 if (PlayerbotMotion.IsBlacklisted(player, waiting.MoveTo)) PlayerbotMotion.Unblacklist(player, waiting.MoveTo);
             }
             Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
+            // A siege leader that can plan no way to its target gives it up for a minute (siege raids have no stall watch of their own), and the coordinator names the next hostile skull.
+            if (_noPathToTarget && isLeader && group.Siege is not null && target is Creature or Player)
+                group.Shun(target.Guid, unchecked(_session.World.NowMs + SiegeShunMs));
             return;
         }
 
@@ -719,6 +722,11 @@ internal sealed class PlayerbotGroupAI
             return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
 
+        // A siege leader that marches (an Advance that is no push) fights only what attacks it: the generic tank and non-tank rules below (peel a member's attacker, follow a mark, finish the target) would turn it
+        // back from its goal for any fight of the raid. The members answer attackers as ever.
+        if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Advance })
+            return loose.Where(l => l.OnSelf).OrderBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
+
         Unit? marked = null;
         if (player.Combat.IsInCombat || group.InFight(_session.World.NowMs) || leader is not null && leader.Combat.Victim is not null)
             marked = MarkedTarget(player, me, map, groups);
@@ -748,7 +756,7 @@ internal sealed class PlayerbotGroupAI
         if (isLeader && group.Siege is { } siegeRaid)
         {
             if (siegeRaid.Order is PlayerbotSiegeOrder.Pull or PlayerbotSiegeOrder.AssignTank or PlayerbotSiegeOrder.Assault
-                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled))
+                && !siegeRaid.PullTarget.IsEmpty && map.FindObject(siegeRaid.PullTarget) is Unit pulled && IsValidTarget(player, pulled) && !group.IsShunned(pulled.Guid, _session.World.NowMs))
                 return pulled;
             return null;
         }
@@ -876,10 +884,17 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
+    /// <summary>How long a siege leader gives up a target it can plan no way to.</summary>
+    internal const uint SiegeShunMs = 60_000;
+
+    /// <summary>The last <see cref="Fight"/> could plan no way to its target.</summary>
+    private bool _noPathToTarget;
+
     /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
     /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent.</param>
     private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
     {
+        _noPathToTarget = false;
         if (!ReferenceEquals(_target, target))
         {
             _target = target;
@@ -927,6 +942,7 @@ internal sealed class PlayerbotGroupAI
                 {
                     Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:no-path");
                     _target = null;
+                    _noPathToTarget = true;
                 }
 
                 return;
