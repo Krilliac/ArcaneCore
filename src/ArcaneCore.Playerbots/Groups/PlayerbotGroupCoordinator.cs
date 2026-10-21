@@ -129,6 +129,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>The members count as gathered within this distance of the leader.</summary>
     internal const float GatherYards = 20f;
 
+    /// <summary>How long the gathering waits for a missing member before it catches the member up (or goes on without it).</summary>
+    internal const uint GatherCatchUpMs = 60_000;
+
+    /// <summary>How many times the leaving state teleports stragglers to the entrance before it lets the group go.</summary>
+    internal const int MaxBringOuts = 2;
+
     /// <summary>A real player is invited from at most this far (<see cref="PlayerbotGroupOptions.InvitePlayers"/>).</summary>
     internal const float InvitePlayerYards = 100f;
 
@@ -1006,7 +1012,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         group.HadQuest = run is null && (goal.QuestId != 0 || group.Members.Any(m => !m.Real && _world?.FindOnlinePlayer(m.Guid) is { } p
             && QuestFor(p, goal.ObjectiveEntry) != 0));
-        group.Approach = ApproachPoint(goal, plan.Leader.Position);
+        IPathfinder? pathfinder = _world is not null ? WorldCollision.Of(_world).Pathfinder : null;
+        group.Approach = SnapToMesh(pathfinder, goal.MeetingMap, plan.Leader.Position, ApproachPoint(goal, plan.Leader.Position));
         _groups.Add(group);
         Totals = (Totals.Formed + 1, Totals.Completed, Totals.Failed);
         Note($"group {group.Id} formed for {goal}: leader {plan.Leader.Name}, "
@@ -1094,9 +1101,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             return;
         }
 
-        if (group.Run is { } faulty && group.RunFault is { } fault && !faulty.Finished)
+        if (group.RunFault is { } fault)
         {
-            faulty.Apply(PlayerbotRunSignal.NoPath(fault));
+            if (group.Run is { Finished: false } faulty) faulty.Apply(PlayerbotRunSignal.NoPath(fault));
             Finish(group, success: false, fault);
             return;
         }
@@ -1116,7 +1123,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 AdvanceForming(group, leader, groupManager);
                 break;
             case PlayerbotGroupState.Gathering:
-                if (Gathered(group, leader)) Enter(group, PlayerbotGroupState.Travelling);
+                if (Gathered(group, leader) || CatchUpGathering(group, leader, now)) Enter(group, PlayerbotGroupState.Travelling);
                 else if (group.StepTimedOut(now, stepLimit))
                 {
                     ReportTimeout(group, leader, "gather-timeout");
@@ -1125,7 +1132,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 break;
             case PlayerbotGroupState.Travelling:
                 if (CheckWipe(group, leader)) break;
-                if (leader.MapId == group.Goal.MeetingMap && (Arrived(leader, group.Approach, 5f) || WithinApproachRing(leader, group)) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
+                if (leader.MapId == group.Goal.MeetingMap && (group.ApproachReached || Arrived(leader, group.Approach, 5f) || WithinApproachRing(leader, group)) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
                 {
                     group.Run?.Apply(PlayerbotRunSignal.Arrived);
                     Enter(group, group.Goal.InInstance ? PlayerbotGroupState.Entering : PlayerbotGroupState.Engaging);
@@ -1206,7 +1213,15 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                     group.Run?.Apply(PlayerbotRunSignal.Left);
                     Enter(group, PlayerbotGroupState.Disbanding);
                 }
-                else if (group.StepTimedOut(now, stepLimit)) BringOut(group);
+                else if (group.StepTimedOut(now, stepLimit))
+                {
+                    if (group.BringOuts < MaxBringOuts) BringOut(group);
+                    else
+                    {
+                        group.Run?.Apply(PlayerbotRunSignal.Left);
+                        Enter(group, PlayerbotGroupState.Disbanding);
+                    }
+                }
                 break;
             case PlayerbotGroupState.Disbanding:
                 Disband(group);
@@ -1369,8 +1384,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return goal.Meeting + (Vector3.Normalize(flat) * yards);
     }
 
-    /// <summary>Scaffold: the approach point on the navigation mesh.</summary>
-    internal static Vector3 SnapToMesh(IPathfinder? pathfinder, uint mapId, Vector3 from, Vector3 point) => point;
+    /// <summary>
+    /// The approach point on the navigation mesh: when a ray along the mesh from <paramref name="from"/> to <paramref name="point"/> hits a
+    /// boundary before <paramref name="point"/>, the last point of the mesh on that ray (<see cref="MeshRaycastResult.Point"/>); otherwise
+    /// <paramref name="point"/> itself.
+    /// </summary>
+    internal static Vector3 SnapToMesh(IPathfinder? pathfinder, uint mapId, Vector3 from, Vector3 point)
+        => pathfinder is IMeshPointQuery mesh && mesh.Raycast(mapId, from, point) is { Available: true, Hit: true } hit ? hit.Point : point;
 
     /// <summary>How far short of an instance entrance the group gathers before it goes in (<see cref="ApproachPoint"/>).</summary>
     internal const float ApproachYards = 15f;
@@ -1381,6 +1401,26 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private bool Gathered(BotGroup group, Player leader)
         => _world is { } world && group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid).All(m => world.FindOnlinePlayer(m.Guid) is not { } p
             || !p.IsAlive || ReferenceEquals(p.Map, leader.Map) && Distance(p, leader) <= GatherYards);
+
+    /// <summary>
+    /// Past <see cref="GatherCatchUpMs"/> in <see cref="PlayerbotGroupState.Gathering"/>: bring each missing member to the leader with the
+    /// follow catch-up teleport (<see cref="PlayerbotGroupAI.CatchUpNow"/>), and when none is still pending let the gathering go on.
+    /// </summary>
+    private bool CatchUpGathering(BotGroup group, Player leader, uint now)
+    {
+        if (_world is not { } world || unchecked(now - group.StateSinceMs) <= GatherCatchUpMs) return false;
+        bool pending = false;
+        foreach (Member member in group.Members)
+        {
+            if (member.Real || !member.Joined || member.Guid == leader.Guid) continue;
+            if (world.FindOnlinePlayer(member.Guid) is not { IsAlive: true } player) continue;
+            if (ReferenceEquals(player.Map, leader.Map) && Distance(player, leader) <= GatherYards) continue;
+            if ((member.AI?.CatchUpNow(player, leader, group) ?? PlayerbotCatchUpResult.Unable) == PlayerbotCatchUpResult.Pending)
+                pending = true;
+        }
+
+        return !pending;
+    }
 
     /// <summary>
     /// The leader is already as near the content as the approach point is (within the approach distance of the meeting point and
@@ -1480,7 +1520,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             if (!member.Joined || member.AI is not { } ai || world.FindOnlinePlayer(member.Guid) is not { } player) continue;
             members.Add(new PlayerbotGroupStallMember(member.BotId, player.MapId, new Vector3(player.X, player.Y, player.Z),
-                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.TargetUnit?.Guid.Value ?? 0));
+                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.TargetUnit?.Guid.Value ?? ai.LastTargetGuid.Value));
         }
 
         PlayerbotGroupStallVerdict verdict = group.Stall.Observe(group.State, members, now, (uint)Math.Max(1, _options.StallSeconds) * 1000u);
@@ -1488,6 +1528,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         PlayerbotGroupAI? leaderAI = group.Find(group.LeaderBotId)?.AI;
         Game.Creatures.Creature? target = leaderAI?.Target;
+        ObjectGuid targetGuid = target?.Guid ?? leaderAI?.LastTargetGuid ?? default;
+        uint targetEntry = target?.Entry ?? leaderAI?.LastTargetEntry ?? 0;
         uint seconds = group.Stall.IdleMs / 1000;
         string step = leaderAI?.Step ?? "none";
         string state = group.State.ToString().ToLowerInvariant();
@@ -1495,12 +1537,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             StallCount++;
             // The objective is the target only while the group engages it; elsewhere (gathering, travelling, regrouping) it has none.
-            uint entry = group.State == PlayerbotGroupState.Engaging ? target?.Entry ?? group.ObjectiveEntry : 0;
+            uint entry = group.State == PlayerbotGroupState.Engaging ? (targetEntry != 0 ? targetEntry : group.ObjectiveEntry) : 0;
             _stalls.Add((group.LeaderBotId, leader.Name, string.Create(CultureInfo.InvariantCulture,
                 $"stalled {seconds}s: goal={PlayerbotGoalKind.Group} target={entry} quest={group.Goal.QuestId} at {leader.X:F1},{leader.Y:F1},{leader.Z:F1} map {leader.MapId}")));
-            if (target is not null) group.Shun(target.Guid, unchecked(now + SetAsideMs));
+            if (!targetGuid.IsEmpty) group.Shun(targetGuid, unchecked(now + SetAsideMs));
             leaderAI?.Retarget(leader);
-            string what = target is not null ? string.Create(CultureInfo.InvariantCulture, $"gives up target {target.Entry} and re-targets") : "re-targets";
+            string what = targetEntry != 0 ? string.Create(CultureInfo.InvariantCulture, $"gives up target {targetEntry} and re-targets") : "re-targets";
             Note(string.Create(CultureInfo.InvariantCulture, $"group {group.Id} stalled {seconds}s in {state} (leader {step}): {what}"));
             logger.LogWarning("Playerbot group {Group} stalled {Seconds}s in {State} (leader {Leader}: {Step}): {What}",
                 group.Id, seconds, state, leader.Name, step, what);
@@ -1521,6 +1563,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
             if (_world.FindOnlinePlayer(member.Guid) is { IsAlive: true } player && player.MapId == group.Goal.MapId && !teleports.IsBeingTeleported(player))
                 teleports.TeleportTo(player, group.Goal.MeetingMap, group.Goal.Meeting.X, group.Goal.Meeting.Y, group.Goal.Meeting.Z, 0f);
+        group.BringOuts++;
         group.StateSinceMs = Now;
         Note($"group {group.Id} could not walk out: brought to the entrance");
     }
@@ -1573,10 +1616,15 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         group.StateSinceMs = Now;
         group.StateEnteredMs = group.StateSinceMs;
         group.StepBudgetMs = 0;
+        group.BringOuts = 0;
         if (state is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling) BudgetTravel(group, state);
         if (state == PlayerbotGroupState.Gathering) group.ObjectiveKilled = false;
         if (state == PlayerbotGroupState.Wiped && group.Run is not null) group.ClearObjective();
-        if (state == PlayerbotGroupState.Travelling) TeleportToEntranceIfConfigured(group);
+        if (state == PlayerbotGroupState.Travelling)
+        {
+            group.ApproachReached = false;
+            TeleportToEntranceIfConfigured(group);
+        }
     }
 
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
@@ -1878,6 +1926,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         /// <summary>Where the group gathers before the content (<see cref="ApproachPoint"/>).</summary>
         public Vector3 Approach { get; set; }
+
+        /// <summary>The leader walked toward <see cref="Approach"/> without getting nearer for <see cref="PlayerbotGroupAI.ApproachNoProgressMs"/>.</summary>
+        public bool ApproachReached { get; set; }
+
+        /// <summary>How many times <see cref="BringOut"/> has run in the current <see cref="PlayerbotGroupState.Leaving"/> state.</summary>
+        public int BringOuts { get; set; }
         public bool ObjectiveKilled { get; set; }
 
         /// <summary>When a living member was last seen in combat (0: never).</summary>

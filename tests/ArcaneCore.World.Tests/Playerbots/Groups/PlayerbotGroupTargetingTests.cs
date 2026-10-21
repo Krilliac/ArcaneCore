@@ -84,9 +84,9 @@ public sealed class PlayerbotGroupTargetingTests
         Assert.False(watch.Observe(Foe, 90, 30f, 15_000));
         Assert.False(watch.Observe(Foe, 90, 30f, 34_999));
         // ... so is closing in by more than a yard ...
-        Assert.False(watch.Observe(Foe, 90, 20f, 30_000));
-        Assert.False(watch.Observe(Foe, 90, 20f, 49_999));
-        Assert.True(watch.Observe(Foe, 90, 20f, 50_000));
+        Assert.False(watch.Observe(Foe, 90, 20f, 35_000));
+        Assert.False(watch.Observe(Foe, 90, 20f, 54_999));
+        Assert.True(watch.Observe(Foe, 90, 20f, 55_000));
         // ... and a target that heals back is not progress.
         watch.Reset();
         Assert.False(watch.Observe(Foe, 50, 5f, 100_000));
@@ -145,7 +145,8 @@ public sealed class PlayerbotGroupTargetingTests
         Assert.Equal(60_000u, PlayerbotGroupAI.NoPathShunMs);
         Assert.True(await world.OnWorldAsync(() => group.IsShunned(brute, unchecked(world.World.Host.World.NowMs + 50_000))), "the shun is still in force 50 s on");
 
-        // ... and the leader moves on: it fights nothing, and does not choose the brute again at every think.
+        // ... and the leader moves on at its next think: it fights nothing, and does not choose the brute again at every think.
+        Assert.True(await world.RunUntilAsync(1_000, () => !leader.Step.StartsWith("fight:", StringComparison.Ordinal)), await world.TraceAsync());
         var fights = new List<string>();
         await world.RunUntilAsync(5_000, () =>
         {
@@ -217,16 +218,17 @@ public sealed class PlayerbotGroupTargetingTests
         });
 
         PlayerbotGroupAI member = world.Coordinator.FindAI(memberId)!;
-        int noPath = 0;
+        Assert.True(await world.RunUntilAsync(5_000, () => member.Step == $"fight:{BruteEntry}:no-path"), await world.TraceAsync());
+
+        // ... moves on at its next think, and does not try the unreachable brute again at each of the 25 thinks of the next five seconds.
+        Assert.True(await world.RunUntilAsync(1_000, () => !member.Step.StartsWith("fight:", StringComparison.Ordinal)), await world.TraceAsync());
+        var fights = new List<string>();
         await world.RunUntilAsync(5_000, () =>
         {
-            if (member.Step.StartsWith("fight:", StringComparison.Ordinal) && member.Step.EndsWith(":no-path", StringComparison.Ordinal)) noPath++;
+            if (member.TargetUnit is not null || member.Step.StartsWith("fight:", StringComparison.Ordinal)) fights.Add(member.Step);
             return false;
         });
-
-        // ... does not try it again at each of the 25 thinks of those five seconds.
-        Assert.True(noPath >= 1, "the member never tried the brute: the test did not set the case up");
-        Assert.True(noPath <= 2, $"the member tried the unreachable brute {noPath} times in 5 s");
+        Assert.Empty(fights);
     }
 
     /// <summary>Plans straight lines, except to a point within <paramref name="radius"/> of <paramref name="center"/>: no path there.</summary>
