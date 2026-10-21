@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
 
@@ -24,31 +25,76 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     internal const float GroundModelToleranceYards = 0.4f;
 
+    /// <summary>The floor window (yd up and down) for a height that is already a floor: a spawn's database z when the creature stands at home.</summary>
+    internal const float AtHomeSnapYards = 0.5f;
+
     /// <summary>
     /// A creature leg draped over the ground (<see cref="GroundHeight.DrapePath"/>): every point on the floor plus the stand offset, and
-    /// split every 4 yd where the chord between points would pass over or under it. Walkers and swimmers; a flier keeps the mesh's heights
+    /// split every 1 yd where the chord between points would pass over or under it. Walkers and swimmers; a flier keeps the mesh's heights
     /// and a creature that only swims (<c>InhabitType</c> 2) stays in its water. A creature that also swims is put on the liquid surface
-    /// where the liquid covers the floor, a pure walker on the floor. Where no floor is in the window (another storey, no data) a
-    /// point keeps its height. On the calling thread, which must be allowed to read the model trees: the world thread, or a map thread
-    /// inside the serial gate (an ungated wander leg enters it for the drape, like its other model reads).
+    /// where the liquid covers the floor, a pure walker on the floor. Where no floor is in the window (another storey, no data, a terrain
+    /// tile that is not in memory) a point keeps its height. On the calling thread, which must be allowed to read the model trees: the world
+    /// thread, or a map thread inside the serial gate (an ungated wander leg enters it for the drape, like its other model reads).
+    /// The time it takes is part of the update's path-time budget (<see cref="PathTicksThisTick"/>, <see cref="HasPathBudget"/>), and a
+    /// finished path job's result is only applied while that budget has room (<see cref="HasDrapeBudget"/>).
     /// </summary>
-    private List<Vector3> DrapeOnGround(Creature creature, Vector3 start, IReadOnlyList<Vector3> corners)
+    /// <param name="cornersOnMesh">The corners are navigation-mesh heights (a mesh or partial path): a floor more than a yard above one is
+    /// a roof or an upper storey, never the walkable floor (<see cref="GroundHeight.DrapePath"/> <c>cornersOnMesh</c>).</param>
+    /// <param name="window">A narrower floor window (yards up and down) for a height that is already a floor: a spawn's database z.</param>
+    internal List<Vector3> DrapeOnGround(Creature creature, Vector3 start, IReadOnlyList<Vector3> corners, bool cornersOnMesh = false, float? window = null)
     {
         uint inhabit = creature.Template.InhabitType;
-        if (corners.Count == 0 || (inhabit & 4) != 0 || inhabit == 2)
+        if (!GroundSnapEnabled || corners.Count == 0 || (inhabit & 4) != 0 || inhabit == 2)
         {
             return corners as List<Vector3> ?? [.. corners];
         }
 
         GroundQuery query = GroundHeight.Walker with { Liquid = (inhabit & 2) != 0 ? LiquidMode.Surface : LiquidMode.Bottom };
+        if (window is { } w)
+        {
+            query = query with { Up = w, Down = w };
+        }
+
+        long started = Stopwatch.GetTimestamp();
+        DrapedPaths++;
+        List<Vector3> draped;
         if (_ungatedMotion)
         {
             using (Serial())
             {
-                return GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query, modelTolerance: GroundModelToleranceYards);
+                draped = GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query,
+                    modelTolerance: GroundModelToleranceYards, cornersOnMesh: cornersOnMesh);
+                NoteDrapeTicks(Stopwatch.GetTimestamp() - started);
             }
+
+            return draped;
         }
 
-        return GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query, modelTolerance: GroundModelToleranceYards);
+        draped = GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query,
+            modelTolerance: GroundModelToleranceYards, cornersOnMesh: cornersOnMesh);
+        NoteDrapeTicks(Stopwatch.GetTimestamp() - started);
+        return draped;
     }
+
+    /// <summary>
+    /// Whether this update's path-time budget still has room for the drape of one more finished path-job result. Searches and nodes are
+    /// not asked: a job's search ran on a pool thread. Unlike <see cref="HasPathBudget"/> it is not spent by count, so only the time the
+    /// searches and drapes of this update took limits how many results are applied; the rest wait with their creatures for the next update.
+    /// </summary>
+    internal bool HasDrapeBudget => _pathTicksThisTick < _pathTickLimit;
+
+    /// <summary>Paths put on the ground since the system was created (diagnostics, tests).</summary>
+    internal long DrapedPaths { get; private set; }
+
+    /// <summary>The <see cref="Stopwatch"/> ticks those drapes took (diagnostics, tests).</summary>
+    internal long DrapeTicksTotal { get; private set; }
+
+    private void NoteDrapeTicks(long ticks)
+    {
+        _pathTicksThisTick += ticks;
+        DrapeTicksTotal += ticks;
+    }
+
+    /// <summary>Whether finished paths are put on the ground (<see cref="DrapeOnGround"/>); off only to measure what it costs.</summary>
+    internal bool GroundSnapEnabled { get; set; } = true;
 }

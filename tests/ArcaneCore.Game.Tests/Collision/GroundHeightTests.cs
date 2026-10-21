@@ -21,6 +21,11 @@ public sealed class GroundHeightTests
     /// <summary>Model floors from a function of (x, y); null where the function has none.</summary>
     private sealed class ModelFloors(Func<float, float, float?> floorAt) : ILineOfSight
     {
+        private int _calls;
+
+        /// <summary>Model height questions asked so far.</summary>
+        public int Calls => Volatile.Read(ref _calls);
+
         public bool Enabled => true;
 
         public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
@@ -32,7 +37,44 @@ public sealed class GroundHeightTests
         }
 
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
-            => floorAt(x, y) is { } floor && floor <= z && floor >= z - maxSearchDistance ? floor : null;
+        {
+            Interlocked.Increment(ref _calls);
+            return floorAt(x, y) is { } floor && floor <= z && floor >= z - maxSearchDistance ? floor : null;
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+    }
+
+    /// <summary>Several model surfaces over every point (a floor, a roof, an upper storey): the highest one at or under the probe, as the real tree answers.</summary>
+    private sealed class StackedFloors(params float[] surfaces) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            float? best = null;
+            foreach (float surface in surfaces)
+            {
+                if (surface <= z && surface >= z - maxSearchDistance && (best is null || surface > best))
+                {
+                    best = surface;
+                }
+            }
+
+            return best;
+        }
 
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
         {
@@ -346,5 +388,86 @@ public sealed class GroundHeightTests
         List<Vector3> draped = GroundHeight.DrapePath(collision, start, corners);
 
         Assert.Equal(corners, draped);
+    }
+
+    [Fact]
+    public void ARoofTwoYardsOverTheFloor_IsNotTakenForTheFloor_UnderAMeshCorner()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        // A walkable floor at 0 and a roof at 2.3. A mesh corner stands 0.6 over the floor (Recast rounds up, p95 +0.55): a probe from its
+        // plain 2 yd window starts at 2.6 and takes the roof; the floor of a corner is looked for from at most MeshCeilingYards above it.
+        WorldCollision.Of(world).Install(lineOfSight: new StackedFloors(0f, 2.3f));
+        MapCollision collision = world.GetMap(0).Collision;
+        PreloadAroundOrigin(world);
+        var start = new Vector3(0f, 0f, GroundHeight.StandOffset); // standing on the floor
+        Vector3 corner = new(20f, 0f, 0.6f); // a mesh corner 0.6 over it
+
+        List<Vector3> asMesh = GroundHeight.DrapePath(collision, start, [corner], cornersOnMesh: true);
+        List<Vector3> asAuthored = GroundHeight.DrapePath(collision, start, [corner], cornersOnMesh: false);
+
+        Assert.Equal(GroundHeight.StandOffset, asMesh[^1].Z, 0.001f);
+        Assert.Equal(2.3f + GroundHeight.StandOffset, asAuthored[^1].Z, 0.001f); // the lift the guard is for
+        Assert.All(asMesh, p => Assert.True(p.Z < 1f, $"a point at {p.Z} is on the roof"));
+    }
+
+    [Fact]
+    public void AMeshCornerUnderATerrainThatRisesAboveIt_StillTakesTheTerrain()
+    {
+        // The mesh dips under the terrain by up to 0.3 yd on a slope (measured): the corner guard must not push that point down to the mesh.
+        using var kit = Kit(liquid: null);
+        MapCollision collision = kit.Map.Collision;
+        var corner = new Vector3(X, Y, Ground - 0.4f);
+
+        List<Vector3> draped = GroundHeight.DrapePath(collision, corner, [corner with { X = X + 10f }], cornersOnMesh: true);
+
+        Assert.Equal(Ground + GroundHeight.StandOffset, draped[^1].Z, 0.001f);
+    }
+
+    [Fact]
+    public void WhetherAModelFloorOverTheTerrainIsAProp_IsDecidedByTheNearerEndsHeight_NotTheInterpolatedOne()
+    {
+        // Terrain at 20, a model floor at 21 (a WMO floor stepped onto). A sample looked for near an interpolated 19.85 (the chord rises from a
+        // lower floor) is closer to the terrain than to the floor, and the interpolated height would call the floor a prop; the end it is
+        // next to stands on that floor (21.05), so the floor it is.
+        using var kit = Kit(liquid: null);
+        WorldCollision.Of(kit.Kit.World).Install(lineOfSight: new ModelFloors((_, _) => 21f));
+        MapCollision collision = kit.Map.Collision;
+
+        Assert.True(GroundHeight.TrySnap(collision, X, Y, 19.85f, 19.85f, GroundHeight.Walker, out float asProp, out GroundSource propSource));
+        Assert.Equal(GroundSource.Terrain, propSource);
+        Assert.Equal(Ground + GroundHeight.StandOffset, asProp, 0.001f);
+
+        Assert.True(GroundHeight.TrySnap(collision, X, Y, 19.85f, 21.05f, GroundHeight.Walker, out float asFloor, out GroundSource floorSource));
+        Assert.Equal(GroundSource.Model, floorSource);
+        Assert.Equal(21f + GroundHeight.StandOffset, asFloor, 0.001f);
+    }
+
+    [Fact]
+    public void ALegThatAlreadyFillsTheCap_IsReturnedWithItsSnappedCornersOnly_WithoutSampling()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        var floors = new ModelFloors((x, _) => Hill(x));
+        WorldCollision.Of(world).Install(lineOfSight: floors);
+        MapCollision collision = world.GetMap(0).Collision;
+        PreloadAroundOrigin(world);
+        var start = new Vector3(0f, 0f, Hill(0f));
+        Vector3[] corners = [new(120f, 0f, Hill(120f)), new(240f, 0f, Hill(240f))];
+
+        List<Vector3> draped = GroundHeight.DrapePath(collision, start, corners, maxPoints: 2);
+
+        Assert.Equal(2, draped.Count);
+        Assert.True(floors.Calls <= 4, $"{floors.Calls} model questions for two corners: the cap was not honoured before sampling");
+    }
+
+    /// <summary>The terrain tiles around the origin in memory, as the grids of a player nearby would have them: a drape reads no terrain tile from disk.</summary>
+    private static void PreloadAroundOrigin(WorldRuntime world)
+    {
+        for (int tx = 31; tx <= 33; tx++)
+        {
+            for (int ty = 31; ty <= 33; ty++)
+            {
+                world.GetMap(0).Terrain.GetTile(tx, ty);
+            }
+        }
     }
 }

@@ -155,6 +155,16 @@ public sealed partial class CreatureMapSystem
                 return true;
             }
 
+            if (fits && job.Status == NavJobStatus.Completed && job.Result is not null && !HasDrapeBudget)
+            {
+                // The update's path time is spent (the searches and drapes before this one): the result waits, with its creature, for the
+                // next update. The job stays; the creature that waited longest is where the next update's creature walk starts.
+                NoteDeferredPath(creature);
+                _lastPlanQueued = true;
+                plan = PlannedPath.Of(PathOutcome.Deferred);
+                return true;
+            }
+
             _creaturePathJobs.Remove(creature);
             if (fits && job.Status == NavJobStatus.Completed && job.Result is { } result)
             {

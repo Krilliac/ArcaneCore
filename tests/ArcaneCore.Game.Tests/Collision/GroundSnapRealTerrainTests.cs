@@ -86,6 +86,30 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         return float.IsFinite(g) && g > TerrainTile.InvalidHeight ? g : float.NaN;
     }
 
+    /// <summary>
+    /// The independent oracle: the navigation mesh, which is built from the same terrain and models but is not the <c>GetHeight</c> probe the
+    /// snap itself uses. The mesh is never under the floor and sits 0.2 to 0.3 yd over it, so a snapped point should be about
+    /// mesh - <see cref="GroundHeight.MeshBias"/> + stand offset ("vs-mesh"); one more than a yard over the mesh ("over-mesh-1.0" = 1) stands on a roof,
+    /// an upper storey or a prop top, never the walkable floor (terrain over a mesh that dips under it, a rock beside the path: up to 0.3 yd over measured).
+    /// </summary>
+    private static float AddOracle(Map map, Vector3 m, Dist d)
+    {
+        // Roof probe: any mesh surface within 3 yd either way; a point more than half a yard over one stands on something the mesh is not.
+        if (map.Collision.TryGetMeshFloor(m.X, m.Y, m.Z, 3f, 3f, out float around))
+        {
+            d.Add("over-mesh-0.1", m.Z > around + 0.1f ? 1f : 0f);
+            d.Add("over-mesh-0.5", m.Z > around + 0.5f ? 1f : 0f);
+            d.Add("over-mesh-1.0", m.Z > around + 1.0f ? 1f : 0f);
+        }
+
+        // Offset from the floor the mesh implies: its surface under the point or at most a yard over it (a deck 2 yd over a creature standing
+        // under a bridge is another storey, not its floor).
+        if (!map.Collision.TryGetMeshFloor(m.X, m.Y, m.Z, 3f, 1f, out float mesh)) return float.NaN;
+        float offset = m.Z - (mesh - GroundHeight.MeshBias + GroundHeight.StandOffset);
+        d.Add("vs-mesh", offset);
+        return offset;
+    }
+
     private static string Source(Map map, float x, float y, float z, float floor)
     {
         if ((map.GetLiquidStatus(x, y, z, LiquidTypeFlags.AllLiquids, out _) & (LiquidStatus.InWater | LiquidStatus.UnderWater)) != 0)
@@ -107,6 +131,8 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             l.Add(v);
         }
 
+        public float Sum(string key) => _by.TryGetValue(key, out List<float>? l) ? l.Sum() : 0f;
+
         public int Count(string key) => _by.TryGetValue(key, out List<float>? l) ? l.Count : 0;
 
         /// <summary>The q-quantile (0..1) of the key's samples, or NaN with none; <paramref name="absolute"/> takes |v|.</summary>
@@ -126,7 +152,7 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             foreach (string key in _by.Keys.Order(StringComparer.Ordinal))
             {
                 yield return string.Create(CultureInfo.InvariantCulture,
-                    $"{prefix,-16} {key,-24} n={Count(key),6} p05={Quantile(key, 0.05),6:F3} med={Quantile(key, 0.5),6:F3} p95={Quantile(key, 0.95),6:F3} |p95|={Quantile(key, 0.95, absolute: true),6:F3}");
+                    $"{prefix,-16} {key,-24} n={Count(key),6} p05={Quantile(key, 0.05),6:F3} med={Quantile(key, 0.5),6:F3} p95={Quantile(key, 0.95),6:F3} |p95|={Quantile(key, 0.95, absolute: true),6:F3} sum={Sum(key),7:F0}");
             }
         }
     }
@@ -136,14 +162,14 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
     {
         private readonly WorldRuntime _seed;
 
-        public Harness(Region r, uint entry, int spawnCount, float spawnRadius, int seed, bool wander)
+        public Harness(Region r, uint entry, int spawnCount, float spawnRadius, int seed, bool wander, uint inhabit = 1, bool pathJobs = false)
         {
             _seed = Load(r.Map, r.X, r.Y);
             Map seedMap = _seed.GetMap(r.Map);
             Center = GroundSnapRealTerrainTests.Center(seedMap, r);
             Random = new Random(seed);
             var spawns = new List<CreatureSpawn>();
-            for (uint i = 0; i < 400 && spawns.Count < spawnCount; i++)
+            for (int i = 0; i < Math.Max(400, spawnCount * 4) && spawns.Count < spawnCount; i++)
             {
                 if (!seedMap.Collision.MeshPoints!.TryGetRandomPointAround(r.Map, Center, MathF.Min(r.Radius, spawnRadius), Random, new PathOptions(), out Vector3 p)) continue;
                 float g = Floor(seedMap, p.X, p.Y, p.Z, 2f);
@@ -154,14 +180,23 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
             }
 
             Spawned = spawns.Count;
-            CreatureTemplate template = Template(entry) with { InhabitType = 1 };
+            CreatureTemplate template = Template(entry) with { InhabitType = (byte)inhabit };
             var content = new CreatureContent([template], spawns, [], [], [], CreatureAiContent.Empty);
             World = Load(r.Map, r.X, r.Y);
             Map = World.GetMap(r.Map, 0);
             System = new CreatureMapSystem(Map, content, null, random: new Random(1), aiServices: new CreatureAiServices());
             // FindPath in a loop is one update's worth of searches: the default 64 searches / 12 ms budget would defer the rest (an empty result),
             // so how many legs a run measured, and which, depended on the machine's load (the Undercity median and Ashenvale's leg count flaked).
-            System.PathBudget = CreaturePathBudget.Unlimited;
+            if (pathJobs)
+            {
+                Jobs = new NavJobSystem(threads: 2);
+                System.PathJobs = Jobs;
+            }
+            else
+            {
+                System.PathBudget = CreaturePathBudget.Unlimited;
+            }
+
             Map.AddUpdater(System);
             Player player = TestWorld.CreatePlayer(1, Center.X, Center.Y, new FakeSession(1));
             player.MapId = r.Map;
@@ -182,8 +217,11 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
 
         public int Spawned { get; }
 
+        public NavJobSystem? Jobs { get; }
+
         public void Dispose()
         {
+            Jobs?.Dispose();
             World.Dispose();
             _seed.Dispose();
         }
@@ -315,30 +353,29 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         Region r = RegionNamed(regionName);
         using var h = new Harness(r, 949301, 40, 60f, seed: 5, wander: true);
         var d = new Dist();
-        var worstModel = new List<string>();
         for (int tick = 0; tick < 1200; tick++)
         {
             h.World.RunTick(100);
             foreach (Creature cr in h.System.Creatures)
             {
+                float vsMesh = AddOracle(h.Map, new Vector3(cr.X, cr.Y, cr.Z), d);
                 float g = Floor(h.Map, cr.X, cr.Y, cr.Z, 2f);
                 if (float.IsNaN(g) || MathF.Abs(cr.Z - g) > 6f) continue;
                 string src = Source(h.Map, cr.X, cr.Y, cr.Z, g);
                 d.Add($"pos-{(cr.IsMoving ? "moving" : "idle")}-{src}", cr.Z - g);
-                if (src == "model") d.Add("pos-model", cr.Z - g);
-                if (src == "model" && MathF.Abs(cr.Z - g) > 0.5f && worstModel.Count < 6)
+                if (src == "model")
                 {
-                    float t = h.Map.Terrain.GetHeight(cr.X, cr.Y, cr.Z);
-                    GroundHeight.TrySnap(h.Map.Collision, cr.X, cr.Y, cr.Z, GroundHeight.Walker, out float snap, out GroundSource gs);
-                    worstModel.Add(string.Create(CultureInfo.InvariantCulture, $"model sample ({cr.X:F1},{cr.Y:F1}) z {cr.Z:F2} terrain {t:F2} raw floor {g:F2} snap {snap:F2} {gs}"));
+                    d.Add("pos-model", cr.Z - g);
+                    d.Add("vs-mesh-model", vsMesh);
                 }
             }
         }
 
         foreach (string line in d.Lines(regionName)) output.WriteLine(line);
-        foreach (string line in worstModel) output.WriteLine(line);
-        AssertOffsets(d, regionName, "pos-moving-terrain", "pos-idle-terrain");
-        AssertModelOffsets(d, regionName, 500, "pos-model");
+        Coverage c = Expect(regionName);
+        AssertOffsets(d, regionName, c.PosTerrain, "pos-moving-terrain", "pos-idle-terrain");
+        AssertModelOffsets(d, regionName, c.PosModel, c.RawModelGate, "pos-model");
+        AssertOracle(d, regionName);
     }
 
     /// <summary>Authored legs of 15-60 yd, as sent: terrain |offset| p95 under 0.15 (p05 not under -0.15), models p95 under 0.5, at most 8 points per leg (median) and never over 32 (float lane probe 6 shape).</summary>
@@ -349,7 +386,6 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         Region r = RegionNamed(regionName);
         using var h = new Harness(r, 949302, 40, 60f, seed: 9, wander: false);
         var d = new Dist();
-        var worstModel = new List<string>();
         int legs = 0;
         foreach (Creature cr in h.System.Creatures.ToList())
         {
@@ -369,16 +405,12 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
                     for (int j = 1; j <= n; j++)
                     {
                         Vector3 m = Vector3.Lerp(prev, q, j / (float)n);
+                        float vsMesh = AddOracle(h.Map, m, d);
                         float g = Floor(h.Map, m.X, m.Y, m.Z, 2.5f);
                         if (float.IsNaN(g) || MathF.Abs(m.Z - g) > 6f) continue;
                         string src = Source(h.Map, m.X, m.Y, m.Z, g);
                         d.Add($"leg-{src}", m.Z - g);
-                        if (src == "model" && MathF.Abs(m.Z - g) > 0.5f && worstModel.Count < 6)
-                        {
-                            float t = h.Map.Terrain.GetHeight(m.X, m.Y, m.Z);
-                            GroundHeight.TrySnap(h.Map.Collision, m.X, m.Y, m.Z, GroundHeight.Walker, out float snap, out GroundSource gs);
-                            worstModel.Add(string.Create(CultureInfo.InvariantCulture, $"model sample ({m.X:F1},{m.Y:F1}) z {m.Z:F2} terrain {t:F2} raw floor {g:F2} snap {snap:F2} {gs}"));
-                        }
+                        if (src == "model") d.Add("vs-mesh-model", vsMesh);
                     }
 
                     prev = q;
@@ -387,15 +419,17 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         }
 
         foreach (string line in d.Lines(regionName)) output.WriteLine(line);
-        foreach (string line in worstModel) output.WriteLine(line);
         Assert.True(legs >= 20, $"only {legs} legs were measured");
-        if (d.Count("leg-terrain") >= 200)
+        Coverage c = Expect(regionName);
+        if (c.LegTerrain > 0)
         {
+            Require(d, regionName, "leg-terrain", c.LegTerrain);
             Assert.True(d.Quantile("leg-terrain", 0.95) <= 0.15f, $"{regionName} terrain p95 {d.Quantile("leg-terrain", 0.95):F3} over 0.15: {d.Summary(regionName)}");
             Assert.True(d.Quantile("leg-terrain", 0.05) >= -0.15f, $"{regionName} terrain p05 {d.Quantile("leg-terrain", 0.05):F3} under -0.15: {d.Summary(regionName)}");
         }
 
-        AssertModelOffsets(d, regionName, 50, "leg-model");
+        AssertModelOffsets(d, regionName, c.LegModel, c.RawModelGate, "leg-model");
+        AssertOracle(d, regionName);
 
         // Undercity's WMO ramps and stairs hold the median at 8 only because model floors are drawn with the looser model tolerance (12 points at 0.11, 7 at 0.40).
         const float medianCap = 8f;
@@ -403,33 +437,86 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         Assert.True(d.Quantile("points-per-leg", 1.0) <= CreatureSplineSmoothing.MaxSplinePoints, $"{regionName} {d.Quantile("points-per-leg", 1.0)} points in a leg: {d.Summary(regionName)}");
     }
 
-    private static void AssertOffsets(Dist d, string region, params string[] keys)
+    /// <summary>
+    /// How many samples a region must yield for each gate to mean anything, from what the fixed seeds give on the 1.12.1 extraction (about
+    /// half of it, so a small change of the walk does not trip them, a gate that has stopped sampling does). A gate whose minimum is 0 is not
+    /// expected in the region (Undercity has no open ground, Orgrimmar no models in reach). A region under its minimum FAILS: a gate that
+    /// samples nothing must not read as a pass. <c>RawModelGate</c> false: the model subset is a few hundred samples of steps off ledges
+    /// (Tirisfal p95 1.5 yd of 111 samples), gated by the mesh oracle only.
+    /// </summary>
+    private sealed record Coverage(int LegTerrain, int LegModel, int PosTerrain, int PosModel, bool RawModelGate = true);
+
+    private static Coverage Expect(string region) => region switch
     {
+        "Undercity" => new(0, 5000, 0, 10000),
+        "LordaeronRuins" => new(0, 0, 0, 2000),
+        "Brill" => new(5000, 300, 5000, 1000),
+        "TirisfalFields" => new(5000, 50, 5000, 50, RawModelGate: false),
+        "Orgrimmar" => new(5000, 0, 5000, 0),
+        "ElwynnForest" => new(5000, 300, 5000, 200),
+        "Ashenvale" => new(5000, 500, 5000, 1000),
+        _ => throw new ArgumentOutOfRangeException(nameof(region), region, "no coverage expectation"),
+    };
+
+    private static void Require(Dist d, string region, string key, int min)
+        => Assert.True(d.Count(key) >= min, $"{region} {key}: only n={d.Count(key)} samples, {min} expected (the gate would pass without measuring): {d.Summary(region)}");
+
+    private static void AssertOffsets(Dist d, string region, int min, params string[] keys)
+    {
+        if (min == 0) return;
         foreach (string key in keys)
         {
-            if (d.Count(key) < 100) continue;
+            Require(d, region, key, min);
             Assert.True(d.Quantile(key, 0.95, absolute: true) <= 0.15f, $"{region} {key}: |offset| p95 {d.Quantile(key, 0.95, absolute: true):F3}: {d.Summary(region)}");
             Assert.True(d.Quantile(key, 0.5) is >= -0.06f and <= 0.06f, $"{region} {key}: median {d.Quantile(key, 0.5):F3} outside +-0.06: {d.Summary(region)}");
         }
     }
 
     /// <summary>
-    /// Model floors: the floating side (positive offset) p95 under 0.5. A unit under a doodad's top is not floating (the walker query takes the
-    /// terrain beside a prop), so the negative side is printed, not gated. Subsets under <paramref name="minSamples"/> samples (500 for wanderers, 50 for legs) are printed and not
-    /// asserted: they are the few steps down off a ledge or into a pit, where a 1 yd step of the leg drops 2 yd and no polyline follows it.
+    /// Model floors against the raw floor probe: the floating side (positive offset) p95 under 0.5. A unit under a doodad's top is under the
+    /// probe's floor by design (the walker query takes the terrain beside a prop), so the negative side of the raw probe is not gated; the
+    /// oracle gates it (<see cref="AssertOracle"/>). Fewer than <paramref name="min"/> samples fails.
     /// </summary>
-    private void AssertModelOffsets(Dist d, string region, int minSamples, params string[] keys)
+    private static void AssertModelOffsets(Dist d, string region, int min, bool rawGate, params string[] keys)
     {
+        if (min == 0) return;
         foreach (string key in keys)
         {
-            if (d.Count(key) < minSamples)
+            Require(d, region, key, min);
+            if (rawGate)
             {
-                output.WriteLine($"{region} {key}: n={d.Count(key)} is under {minSamples} samples, floating p95 {d.Quantile(key, 0.95):F3} printed, not asserted");
-                continue;
+                Assert.True(d.Quantile(key, 0.95) <= 0.5f, $"{region} {key}: p95 {d.Quantile(key, 0.95):F3}: {d.Summary(region)}");
             }
 
-            Assert.True(d.Quantile(key, 0.95) <= 0.5f, $"{region} {key}: p95 {d.Quantile(key, 0.95):F3}: {d.Summary(region)}");
+            Require(d, region, "vs-mesh-model", min / 2);
+            Assert.True(d.Quantile("vs-mesh-model", 0.95) <= 0.5f, $"{region} model samples stand {d.Quantile("vs-mesh-model", 0.95):F3} over mesh - bias (p95): {d.Summary(region)}");
+            Assert.True(d.Quantile("vs-mesh-model", 0.05) >= -0.8f, $"{region} model samples stand {d.Quantile("vs-mesh-model", 0.05):F3} under mesh - bias (p05): {d.Summary(region)}");
         }
+    }
+
+    /// <summary>
+    /// The independent oracle (the navigation mesh, not the probe the snap itself reads): a snapped point stands about mesh - bias + stand offset
+    /// (the mesh is 0.2 to 0.6 yd over the floor: p05 -0.62 and p95 +0.31 measured), and a point more than half a yard over the mesh (a roof,
+    /// an upper storey, or a model deck the mesh sags under) is rare: none in Brill, Tirisfal, Elwynn, Orgrimmar or LordaeronRuins, 0.96 percent
+    /// of the Undercity wander samples and 0.05 percent of Ashenvale's. The Undercity ones are positions along a chord between two snapped points
+    /// on different storeys of a ramp (the point is not a roof: a snap of it returns the floor a yard under it); the Ashenvale ones stand on a
+    /// model deck and re-snap to the same height, the mesh being up to 1.2 yd under it. Counts are the same with and without the corner guard
+    /// (<see cref="GroundHeight.MeshCeilingYards"/>), which gets its own synthetic test (a roof 2.3 yd over a floor).
+    /// </summary>
+    private static void AssertOracle(Dist d, string region)
+    {
+        Require(d, region, "vs-mesh", 1000);
+        Assert.True(d.Quantile("vs-mesh", 0.95) <= 0.45f, $"{region} vs mesh - bias p95 {d.Quantile("vs-mesh", 0.95):F3} over 0.45: {d.Summary(region)}");
+        Assert.True(d.Quantile("vs-mesh", 0.05) >= -0.8f, $"{region} vs mesh - bias p05 {d.Quantile("vs-mesh", 0.05):F3} under -0.8: {d.Summary(region)}");
+        float allowed = region switch
+        {
+            "Undercity" => 0.015f,
+            "Ashenvale" => 0.002f,
+            _ => 0f,
+        };
+        int n = d.Count("over-mesh-0.5");
+        float over = d.Sum("over-mesh-0.5");
+        Assert.True(over <= n * allowed, $"{region}: {over} of {n} samples stand over half a yard over the mesh (allowed {allowed:P1}): {d.Summary(region)}");
     }
 
     /// <summary>
@@ -521,6 +608,117 @@ public sealed class GroundSnapRealTerrainTests(ITestOutputHelper output)
         Assert.Equal(123f, kept);
     }
 
+
+    /// <summary>
+    /// A shallow stretch of water in the region (0.6 to 2.5 yd over a terrain bed with nothing else under it): the bed and the surface.
+    /// </summary>
+    private static bool TryFindShallowWater(Map map, Region r, out Vector3 bed, out float level)
+    {
+        bed = default;
+        level = 0f;
+        for (float dx = -300f; dx <= 300f; dx += 4f)
+        {
+            for (float dy = -300f; dy <= 300f; dy += 4f)
+            {
+                float x = r.X + dx;
+                float y = r.Y + dy;
+                float ground = map.Terrain.GetHeight(x, y, 0f);
+                if (ground <= TerrainTile.InvalidHeight) continue;
+                if ((map.Terrain.GetLiquidStatus(x, y, ground, LiquidTypeFlags.AllLiquids, out LiquidData data) & (LiquidStatus.InWater | LiquidStatus.UnderWater)) == 0) continue;
+                float depth = data.Level - ground;
+                if (depth < 0.6f || depth > 2.5f) continue;
+                if (MathF.Abs(map.Collision.GetHeight(x, y, data.Level) - ground) > 0.02f) continue; // a model in the water: not a clean bed
+                bed = new Vector3(x, y, ground);
+                level = data.Level;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The inhabit-type gates of <c>DrapeOnGround</c> on the real data, in a region with shallow water: a walker is put on the bed, a creature that
+    /// also swims (InhabitType 3) on the water surface, a water-only creature (2) and a flier (4) keep the height they came with.
+    /// </summary>
+    [RealTerrainFact]
+    public void ByInhabitType_AWalkerIsOnTheBed_ASwimmerOnTheSurface_AndWaterOnlyAndFliersKeepTheirHeight()
+    {
+        foreach (string name in new[] { "ElwynnForest", "Ashenvale", "TirisfalFields", "Brill" })
+        {
+            Region r = RegionNamed(name);
+            Vector3 bed;
+            float level;
+            using (var probe = new Harness(r, 949304, 1, 30f, seed: 1, wander: false))
+            {
+                if (!TryFindShallowWater(probe.Map, r, out bed, out level)) continue;
+            }
+
+            var corner = new Vector3(bed.X, bed.Y, level - 0.4f);
+            var start = new Vector3(bed.X - 3f, bed.Y, level - 0.4f);
+            float? walker = null, swimmer = null, waterOnly = null, flier = null, flyingWalker = null;
+            foreach (uint inhabit in new uint[] { 1, 3, 2, 4, 5 })
+            {
+                using var h = new Harness(r, 949304, 1, 30f, seed: 1, wander: false, inhabit: inhabit);
+                Creature cr = h.System.Creatures.First();
+                float z = h.System.DrapeOnGround(cr, start, [corner])[^1].Z;
+                switch (inhabit)
+                {
+                    case 1: walker = z; break;
+                    case 3: swimmer = z; break;
+                    case 2: waterOnly = z; break;
+                    case 4: flier = z; break;
+                    default: flyingWalker = z; break;
+                }
+            }
+
+            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{name}: water at ({bed.X:F1},{bed.Y:F1}) bed {bed.Z:F2} surface {level:F2}; walker {walker:F2} swimmer {swimmer:F2} water-only {waterOnly:F2} flier {flier:F2} flying walker {flyingWalker:F2}"));
+            Assert.Equal(bed.Z + GroundHeight.StandOffset, walker!.Value, 0.03f);
+            Assert.Equal(level, swimmer!.Value, 0.01f);
+            Assert.Equal(corner.Z, waterOnly!.Value);
+            Assert.Equal(corner.Z, flier!.Value);
+            Assert.Equal(corner.Z, flyingWalker!.Value);
+            return;
+        }
+
+        Assert.Fail("no shallow water in Elwynn, Ashenvale, Tirisfal or Brill: the fixture changed");
+    }
+
+    /// <summary>
+    /// What the drape adds to a map update under a crowd, in this build configuration (printed, not asserted): 300 wanderers with the path-job
+    /// pool on and the default per-update budget, 600 updates of 100 ms, once with the drape and once without it.
+    /// </summary>
+    [RealTerrainFact]
+    public void CrowdUpdateCost_WithAndWithoutTheDrape_IsPrinted()
+    {
+        foreach (string name in new[] { "Brill", "Undercity" })
+        {
+            Region r = RegionNamed(name);
+            foreach (bool snap in new[] { false, true })
+            {
+                using var h = new Harness(r, 949301, 300, 80f, seed: 5, wander: true, pathJobs: true);
+                h.System.GroundSnapEnabled = snap;
+                for (int i = 0; i < 100; i++) h.World.RunTick(100);
+                long drapes = h.System.DrapedPaths;
+                long drapeTicks = h.System.DrapeTicksTotal;
+                long deferred = h.System.DeferredPathSearches;
+                long applied = h.System.PathJobsApplied;
+                var ms = new List<double>(600);
+                for (int i = 0; i < 600; i++)
+                {
+                    long t = Stopwatch.GetTimestamp();
+                    h.World.RunTick(100);
+                    ms.Add(Stopwatch.GetElapsedTime(t).TotalMilliseconds);
+                }
+
+                ms.Sort();
+                long n = h.System.DrapedPaths - drapes;
+                double meanDrapeUs = n == 0 ? 0 : (h.System.DrapeTicksTotal - drapeTicks) * 1_000_000.0 / Stopwatch.Frequency / n;
+                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"{name,-10} {h.Spawned} wanderers drape {(snap ? "on " : "off")}: update p50 {ms[ms.Count / 2]:F2} ms p99 {ms[(int)(0.99 * (ms.Count - 1))]:F2} ms max {ms[^1]:F2} ms; {n} drapes (mean {meanDrapeUs:F0} us), {h.System.PathJobsApplied - applied} job results applied, {h.System.DeferredPathSearches - deferred} deferred ({RuntimeConfiguration})"));
+            }
+        }
+    }
 
     /// <summary>Cost of the drape per leg on the real data (printed, not asserted: the number depends on the build configuration and the machine).</summary>
     [RealTerrainFact]

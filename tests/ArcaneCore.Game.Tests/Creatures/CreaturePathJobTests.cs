@@ -301,4 +301,41 @@ public sealed class CreaturePathJobTests
 
         Assert.Equal(0, s.System.PathJobsInFlight);
     }
+
+    [Fact]
+    public void AFinishedJobResult_WaitsForANextUpdate_WhenThePathTimeIsSpent_AndIsNotLost()
+    {
+        using Scene s = Start(movementType: 1);
+        s.Paths.Gate.Reset();
+        for (int i = 0; i < 300 && s.System.PathJobsSubmitted == 0; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        s.Paths.Gate.Set();
+        WaitForPool(s.Jobs!, 1);
+
+        // An update whose path time is already spent (the searches and drapes before it) applies no result: the job stays with its creature.
+        s.System.PathBudget = new CreaturePathBudget(MaxSearches: 64, MaxNodes: 16384, MaxMilliseconds: 0);
+        for (int i = 0; i < 6; i++)
+        {
+            s.World.RunTick(50);
+        }
+
+        Assert.False(s.Wolf.IsMoving, "the result was applied with no path time left");
+        Assert.Equal(0, s.System.PathJobsApplied);
+        Assert.Equal(1, s.System.PathJobsInFlight);
+        Assert.True(s.System.DeferredPathSearches >= 1);
+
+        s.System.PathBudget = CreaturePathBudget.Default;
+        for (int i = 0; i < 6 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(50);
+        }
+
+        Assert.True(s.Wolf.IsMoving, "the deferred result was lost");
+        Assert.Equal(1, s.System.PathJobsApplied);
+        Assert.Equal(0, s.System.PathJobsInFlight);
+    }
 }

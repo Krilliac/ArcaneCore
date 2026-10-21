@@ -185,6 +185,15 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     /// </list>
     /// </summary>
     public float GetHeight(float x, float y, float z, bool useModels = true, float maxSearchDistance = DefaultHeightSearch)
+        => GetHeight(x, y, z, FloorProbeOffset, useModels, maxSearchDistance);
+
+    /// <summary>
+    /// <see cref="GetHeight(float, float, float, bool, float)"/> probing from <c>z + </c><paramref name="probeOffset"/> instead of <c>z + 2</c>
+    /// (the terrain counts only below the probe, models are searched down from it), while the choice between a model floor and the terrain
+    /// still compares with the real <paramref name="z"/> (a probe set low by shifting z would make every terrain over the point
+    /// "above it" and prefer the models under it).
+    /// </summary>
+    public float GetHeight(float x, float y, float z, float probeOffset, bool useModels = true, float maxSearchDistance = DefaultHeightSearch)
     {
         if (!Invariant.Check(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z),
                 $"MapCollision.GetHeight called with non-finite coordinates ({x}, {y}, {z}) on map {Map.MapId}"))
@@ -192,7 +201,7 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             return TerrainTile.InvalidHeightValue;
         }
 
-        float probe = z + FloorProbeOffset;
+        float probe = z + probeOffset;
         float mapHeight = TerrainTile.InvalidHeightValue;
         float terrain = Map.Terrain.GetHeight(x, y, z);
         if (terrain > TerrainTile.InvalidHeight && probe > terrain)

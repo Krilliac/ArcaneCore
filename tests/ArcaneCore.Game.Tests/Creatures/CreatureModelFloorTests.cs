@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
@@ -55,6 +56,64 @@ public sealed class CreatureModelFloorTests : IDisposable
     }
 
     public void Dispose() => _models.Dispose();
+
+    /// <summary>
+    /// The model service with every read watched: a read of the model trees made without the serial gate while maps update in parallel is
+    /// recorded (<see cref="WorldRuntime.HoldsSerialGate"/>). Tile loading and coverage questions pass through to the real service.
+    /// </summary>
+    private sealed class GateWatcher(ILineOfSight inner, WorldRuntime world) : ILineOfSight, ICollisionTileLifecycle, ICollisionTilePrefetch, ICollisionTileDemand, IModelCoverage
+    {
+        private int _reads;
+
+        public ConcurrentQueue<string> OutsideGate { get; } = new();
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public bool Enabled => inner.Enabled;
+
+        private void Watch(string read)
+        {
+            Interlocked.Increment(ref _reads);
+            if (!world.HoldsSerialGate)
+            {
+                OutsideGate.Enqueue($"{read} on thread {Environment.CurrentManagedThreadId}");
+            }
+        }
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
+        {
+            Watch(nameof(IsInLineOfSight));
+            return inner.IsInLineOfSight(mapId, from, to, ignoreM2);
+        }
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            Watch(nameof(TryGetObjectHit));
+            return inner.TryGetObjectHit(mapId, from, to, modifyDistance, out hit);
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            Watch(nameof(GetModelHeight));
+            return inner.GetModelHeight(mapId, x, y, z, maxSearchDistance);
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            Watch(nameof(TryGetAreaInfo));
+            return inner.TryGetAreaInfo(mapId, x, y, z, out info);
+        }
+
+        public void OnTileLoaded(uint mapId, int tileX, int tileY) => (inner as ICollisionTileLifecycle)?.OnTileLoaded(mapId, tileX, tileY);
+
+        public void OnTileUnloaded(uint mapId, int tileX, int tileY) => (inner as ICollisionTileLifecycle)?.OnTileUnloaded(mapId, tileX, tileY);
+
+        public void Prefetch(uint mapId, int tileX, int tileY) => (inner as ICollisionTilePrefetch)?.Prefetch(mapId, tileX, tileY);
+
+        public bool LoadTileOnDemand(uint mapId, float x, float y) => (inner as ICollisionTileDemand)?.LoadTileOnDemand(mapId, x, y) ?? false;
+
+        public ModelCoverage CoverageAt(uint mapId, int tileX, int tileY) => (inner as IModelCoverage)?.CoverageAt(mapId, tileX, tileY) ?? ModelCoverage.None;
+    }
 
     private WorldRuntime CreateWorld(ParallelMapOptions? parallel = null)
     {
@@ -147,6 +206,8 @@ public sealed class CreatureModelFloorTests : IDisposable
             MapUpdateThreads = 2, OwnerGuard = OwnerGuardMode.Throw, Ungated = "CreatureMapSystem", CreatureSplinePass = true,
         });
         world.UseManualClockFrom(0);
+        var watcher = new GateWatcher(world.GetMap(0).Collision.LineOfSight, world);
+        WorldCollision.Of(world).Install(lineOfSight: watcher);
         CreatureMapSystem system = AddWanderer(world.GetMap(0));
         Map other = world.GetMap(1); // a second map, so the maps phase runs in parallel
         other.AddPlayer(TestWorld.CreatePlayer(2, 0, 0, new FakeSession(2), mapId: 1));
@@ -162,7 +223,10 @@ public sealed class CreatureModelFloorTests : IDisposable
         Assert.True(wolf.IsMoving, "the wanderer never started a leg");
         Assert.Contains("1 wanderers outside the gate", breakdown, StringComparison.Ordinal);
         Assert.Equal(LowFloor + GroundHeight.StandOffset, wolf.Spline!.EndZ, 3);
-        Assert.Equal(0, world.ParallelCounters.OwnerViolations); // the leg's ground snap read the model trees inside the gate, as the guard demands
+        Assert.Equal(0, world.ParallelCounters.OwnerViolations); // the owner guard sees map ownership only, not model reads: the watcher below does
+        Assert.True(watcher.Reads > 0, "the legs read no model floor at all");
+        Assert.True(watcher.OutsideGate.IsEmpty, "model reads outside the serial gate: " + string.Join("; ", watcher.OutsideGate.Take(5)));
+        // Terrain tile reads are not instrumented (TerrainInfo has no seam); the drape reads only tiles already in memory.
     }
 
     [Fact]

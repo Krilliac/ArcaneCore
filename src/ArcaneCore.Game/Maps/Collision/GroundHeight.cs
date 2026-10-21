@@ -92,6 +92,9 @@ public static class GroundHeight
     /// <summary>The walker default query.</summary>
     public static readonly GroundQuery Walker = new();
 
+    /// <summary>How far above a navigation-mesh height a floor may be and still be the one the mesh stands on (<see cref="DrapePath"/> <c>cornersOnMesh</c>).</summary>
+    public const float MeshCeilingYards = 1.0f;
+
     /// <summary>Tolerance for a window edge (float noise of heights near z + Up or z - Down).</summary>
     private const float WindowEpsilon = 0.001f;
 
@@ -105,6 +108,15 @@ public static class GroundHeight
     /// data, or another storey): the caller keeps the height it had.
     /// </summary>
     public static bool TrySnap(MapCollision collision, float x, float y, float z, in GroundQuery query, out float snappedZ, out GroundSource source)
+        => TrySnap(collision, x, y, z, z, query, out snappedZ, out source);
+
+    /// <summary>
+    /// <see cref="TrySnap(MapCollision, float, float, float, in GroundQuery, out float, out GroundSource)"/> with the height the model-top guard
+    /// (<see cref="GroundQuery.PreferTerrainOverProps"/>) compares against given apart from <paramref name="z"/>: a point between two known
+    /// heights is looked for near the interpolated <paramref name="z"/>, but whether a model floor over the terrain is a prop or a floor
+    /// stepped onto is decided by the nearer end's height (<paramref name="guardZ"/>), which is a floor, not an interpolation.
+    /// </summary>
+    internal static bool TrySnap(MapCollision collision, float x, float y, float z, float guardZ, in GroundQuery query, out float snappedZ, out GroundSource source)
     {
         ArgumentNullException.ThrowIfNull(collision);
         snappedZ = z;
@@ -119,8 +131,6 @@ public static class GroundHeight
             collision.LoadTilesOnDemand(x, y);
         }
 
-        // MapCollision.GetHeight probes from its z + 2 (vmangos GetHeightStatic): hand it z + Up - 2 so the probe starts at z + Up.
-        float probeZ = z + query.Up - 2f;
         float terrain;
         float floor;
         if (!query.LoadTiles && !collision.Map.Terrain.TryGetLoadedHeight(x, y, out terrain))
@@ -132,12 +142,12 @@ public static class GroundHeight
         }
         else
         {
-            terrain = collision.Map.Terrain.GetHeight(x, y, probeZ);
-            floor = collision.GetHeight(x, y, probeZ, useModels: true, maxSearchDistance: query.Up + query.Down);
+            terrain = collision.Map.Terrain.GetHeight(x, y, z);
+            floor = collision.GetHeight(x, y, z, query.Up, useModels: true, maxSearchDistance: query.Up + query.Down); // the probe starts at z + Up
         }
 
         if (query.PreferTerrainOverProps && Known(terrain) && Known(floor)
-            && floor > terrain + PropHeightYards && MathF.Abs(terrain - z) + PropCloserYards < MathF.Abs(floor - z))
+            && floor > terrain + PropHeightYards && MathF.Abs(terrain - guardZ) + PropCloserYards < MathF.Abs(floor - guardZ))
         {
             floor = terrain;
         }
@@ -190,6 +200,9 @@ public static class GroundHeight
     /// client draws a leg as straight chords between points, so the sent points are the only ground it follows.
     /// </summary>
     /// <param name="query">The floor query; the walker default (<see cref="Walker"/>) when null.</param>
+    /// <param name="cornersOnMesh"><paramref name="points"/> are navigation-mesh heights, which are never under the floor they stand over by more
+    /// than a hair (Recast rounds a span top up): their floor is looked for from at most <see cref="MeshCeilingYards"/> above, so a roof or
+    /// an upper storey 2 yd over the walkable floor is not taken for it (it would be inside the plain window of 2 yd).</param>
     /// <param name="modelTolerance">The tolerance at a sample whose floor is a model (a WMO ramp or stair) or the mesh; <paramref name="tolerance"/> when null.
     /// Terrain is what the eye follows over open ground and gets the tight one; a model floor is stepped and its client chords are looser
     /// anyway, so a looser tolerance there saves points (Undercity's median leg: 12 points at 0.11, 7 at 0.40).</param>
@@ -201,20 +214,22 @@ public static class GroundHeight
         float tolerance = 0.15f,
         int maxPoints = 32,
         GroundQuery? query = null,
-        float? modelTolerance = null)
+        float? modelTolerance = null,
+        bool cornersOnMesh = false)
     {
         ArgumentNullException.ThrowIfNull(collision);
         ArgumentNullException.ThrowIfNull(points);
         GroundQuery q = query ?? Walker;
         var corners = new List<Vector3>(points.Count);
+        GroundQuery cornerQuery = cornersOnMesh ? q with { Up = MathF.Min(q.Up, MeshCeilingYards) } : q;
         for (int i = 0; i < points.Count; i++)
         {
-            corners.Add(SnapOrKeep(collision, points[i], q));
+            corners.Add(SnapOrKeep(collision, points[i], cornerQuery));
         }
 
-        if (corners.Count == 0 || !float.IsFinite(step) || step <= 0f)
+        if (corners.Count == 0 || !float.IsFinite(step) || step <= 0f || corners.Count >= maxPoints)
         {
-            return corners;
+            return corners; // nothing to insert: a leg that already fills the cap would only redo the whole sampling up to six times
         }
 
         float stride = MathF.Max(step, 0.5f);
@@ -260,7 +275,8 @@ public static class GroundHeight
                     float y = prev.Y + (dy * t);
                     (float lastAt, Vector3 last, _) = nodes[^1];
                     float expected = last.Z + ((corner.Z - last.Z) * ((at - lastAt) / (length - lastAt)));
-                    if (TrySnap(collision, x, y, expected, q, out float ground, out GroundSource source))
+                    float guardZ = (at - lastAt) <= (length - at) ? last.Z : corner.Z;
+                    if (TrySnap(collision, x, y, expected, guardZ, q, out float ground, out GroundSource source))
                     {
                         nodes.Add((at, new Vector3(x, y, ground), source is GroundSource.Model or GroundSource.Mesh ? modelTolerance : tolerance));
                     }
