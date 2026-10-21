@@ -32,6 +32,11 @@ public sealed class MountCastCheck : ISpellCastCheck
         Unit caster = context.Caster;
         bool mountSpell = context.Spell.Effects.Any(e => e.Effect == SpellEffectName.ApplyAura && e.AuraType == AuraType.Mounted);
 
+        if (mountSpell && !context.Triggered && caster is Player looting && (looting.UnitFlags & UnitFlags.Looting) != 0)
+        {
+            return SpellCastResult.SpellInProgress;
+        }
+
         // These caster checks precede vmangos' mounted-caster check (Spell.cpp:5357-5388,
         // 5679). A rejected indoor or water cast does not dismount an existing rider.
         if (mountSpell && !context.Triggered && context.Spell.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.UnderWaterCancels)

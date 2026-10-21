@@ -395,6 +395,10 @@ internal static class PlayerbotCombatView
         {
             if (reagent.IsPresent && player.Inventory.GetItemCount(reagent.ItemId) < reagent.Count) return false;
         }
+        foreach (uint tool in spell.Totems)
+        {
+            if (tool != 0 && player.Inventory.GetItemCount(tool) < 1) return false;
+        }
         return true;
     }
 

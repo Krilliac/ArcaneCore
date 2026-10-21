@@ -685,6 +685,64 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    [Fact]
+    public async Task ASpellRequiringATotemTool_IsNotCastableWithoutTheToolInInventory_AndBecomesCastableOnceAdded()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                const uint earthTotemItem = 5175;
+                host.WorldServices.GetRequiredService<ArcaneCore.World.Items.ItemsFeature>().ReplaceTemplates(
+                    new ArcaneCore.Game.Items.ItemTemplateStore(
+                    [
+                        new ArcaneCore.Kernel.Items.ItemTemplate
+                        {
+                            Entry = earthTotemItem,
+                            Name = "Earth Totem",
+                            Class = 15,
+                            Quality = 1,
+                            Stackable = 1,
+                        },
+                    ]));
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                var strengthOfEarth = new SpellInfo
+                {
+                    Id = 8075,
+                    Name = "Strength of Earth Totem",
+                    RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                    Totems = [earthTotemItem, 0],
+                    Effects =
+                    [
+                        new SpellEffectInfo
+                        {
+                            Effect = SpellEffectName.SummonTotemSlot1,
+                            TargetA = SpellImplicitTarget.UnitCaster,
+                        },
+                    ],
+                };
+
+                RotationState state = PlayerbotCombatView.Build(session, feature, player, null,
+                    PlayerbotAbilities.Empty, PlayerbotRole.MeleeDps, static _ => false);
+                Assert.Equal(0u, player.Inventory.GetItemCount(earthTotemItem));
+                Assert.False(state.CanCast(strengthOfEarth, state.Self));
+
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(earthTotemItem, 1, out _));
+                Assert.Equal(1u, player.Inventory.GetItemCount(earthTotemItem));
+                Assert.True(state.CanCast(strengthOfEarth, state.Self));
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     private static async Task<Creature> AddTargetAsync(WorldTestHost host, WorldSession session, float xOffset, uint low)
     {
         Creature target = null!;

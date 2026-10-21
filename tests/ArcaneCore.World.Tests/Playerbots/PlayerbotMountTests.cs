@@ -559,6 +559,164 @@ public sealed class PlayerbotMountTests
         Assert.False(PlayerbotMount.IsTransientRefusal(SpellCastResult.OnlyIndoors));
     }
 
+    [Fact]
+    public async Task ClassMountSpell_WithInsufficientMana_SkipsMountingWithoutReportingSummonFailed()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                PowerType = (int)PowerType.Mana,
+                ManaCost = 100,
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            }], [], []);
+            Player player = session.Player!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 200);
+            player.SetUInt32(UpdateFields.UnitFieldPower1, 50); // < 100 mana
+
+            using var capture = PlayerbotAnomalies.CaptureFor(player);
+            var options = new PlayerbotOptions { Enabled = true };
+            session.ManagedBudget = new ManagedActionBudget(5);
+
+            Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.False(MountService.IsMounted(player));
+            Assert.Equal(5, session.ManagedBudget.Remaining);
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+            return true;
+        }));
+    }
+
+    [Fact]
+    public async Task StuckLootingFlag_IsClearedBeforeMount_AndSummonWarhorseCompletesWithMountAuraApplied()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            var warhorseSpell = new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                PowerType = (int)PowerType.Mana,
+                ManaCost = 100,
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            };
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), warhorseSpell], [], []);
+            Player player = session.Player!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 200);
+            player.SetUInt32(UpdateFields.UnitFieldPower1, 200);
+
+            player.UnitFlags |= UnitFlags.Looting;
+            Assert.False(PlayerbotMount.CanMountHere(player));
+
+            using var capture = PlayerbotAnomalies.CaptureFor(player);
+            var options = new PlayerbotOptions { Enabled = true };
+            session.ManagedBudget = new ManagedActionBudget(5);
+
+            // Walking step clears the stuck Looting flag and begins the 3000 ms cast.
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.Equal(0u, (uint)(player.UnitFlags & UnitFlags.Looting));
+            Assert.True(PlayerbotMount.IsBusy(session));
+
+            feature.System.Update(3000);
+            Assert.True(MountService.IsMounted(player));
+            Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.False(PlayerbotMount.IsBusy(session));
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+            return true;
+        }));
+    }
+
+    [Fact]
+    public async Task DeepWaterEnvironment_WithoutSwimmingFlag_DoesNotAttemptToMount()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            InstallMountSpell(host);
+            Player player = session.Player!;
+            player.Inventory.AddItem(98003, 1, out _);
+            player.Locomotion.Environment = EnvironmentFlags.InWater | EnvironmentFlags.HighLiquid;
+            Assert.False(player.Movement.HasFlag(MovementFlags.Swimming));
+            Assert.False(PlayerbotMount.CanMountHere(player));
+
+            var options = new PlayerbotOptions { Enabled = true };
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.False(MountService.IsMounted(player));
+            Assert.Equal(5, session.ManagedBudget.Remaining);
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            return true;
+        }));
+    }
+
+    [Fact]
+    public async Task MountCastInterruptedByCombatSitOrDismount_ClearsCastingWithoutReportingSummonFailed()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            }], [], []);
+            Player player = session.Player!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            using var capture = PlayerbotAnomalies.CaptureFor(player);
+            var options = new PlayerbotOptions { Enabled = true };
+
+            // 1. Interrupted by entering combat before the next Step.
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.True(PlayerbotMount.IsBusy(session));
+            feature.System.InterruptCurrentCast(player);
+            player.Map!.Combat.SetInCombatState(player, 10_000);
+            Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.False(PlayerbotMount.IsBusy(session));
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+            player.Map!.Combat.CombatStop(player);
+
+            // 2. Interrupted by sitting before the next Step.
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.True(PlayerbotMount.IsBusy(session));
+            feature.System.InterruptCurrentCast(player);
+            player.SetStandState(StandState.Sit);
+            Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.False(PlayerbotMount.IsBusy(session));
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+            player.SetStandState(StandState.Stand);
+
+            // 3. Interrupted by DismountForAction mid-cast.
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.True(PlayerbotMount.IsBusy(session));
+            feature.System.InterruptCurrentCast(player);
+            PlayerbotMount.DismountForAction(session, player, WorldOpcode.CmsgAttackswing);
+            Assert.False(PlayerbotMount.IsBusy(session));
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+            return true;
+        }));
+    }
+
     private static PlayerbotRidingTrips FarTrips(WorldTestHost host, WorldSession session, PlayerbotOptions options, out PlayerbotBudget budget)
     {
         WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
