@@ -559,6 +559,22 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.True(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 1, 90f, true, 6_000)); // a lift ride
     }
 
+    [Fact]
+    public void TheCredit_IsBlockedWhileTheLeaderAnswers_AndByLagUnlessWaived()
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new System.Numerics.Vector3(100f, 0f, 0f)], default, 0);
+        var raid = new PlayerbotSiegeRaid(siege, 1);
+        Assert.False(PlayerbotGroupCoordinator.BlocksCredit(Calm, raid));
+        Assert.False(PlayerbotGroupCoordinator.BlocksCredit(Calm with { MaxLagYards = PlayerbotSiegeCommander.LagYards }, raid));
+        Assert.True(PlayerbotGroupCoordinator.BlocksCredit(Calm with { MaxLagYards = PlayerbotSiegeCommander.LagYards + 1f }, raid));
+        Assert.False(PlayerbotGroupCoordinator.BlocksCredit(Calm with { MaxLagYards = 112f, LagWaived = true }, raid));
+        raid.AnsweringStep = 0; // the leader is out answering an attacker
+        Assert.True(PlayerbotGroupCoordinator.BlocksCredit(Calm, raid));
+        Assert.True(PlayerbotGroupCoordinator.BlocksCredit(Calm with { MaxLagYards = 112f, LagWaived = true }, raid));
+        raid.EndAnswer();
+        Assert.False(PlayerbotGroupCoordinator.BlocksCredit(Calm, raid));
+    }
+
     // --- the route tether ----------------------------------------------------------------------------------------------------
 
     private static System.Numerics.Vector3 V(float x, float y, float z = 0f) => new(x, y, z);

@@ -447,7 +447,7 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     public int Retreats { get; set; }
 
-    /// <summary>The highest waypoint index the leader has stood at (<see cref="PlayerbotGroupCoordinator.IsAtWaypoint"/>, level-aware) at or beyond the step it was heading for; -1: none yet. Never lowered: the siege credits it (<see cref="PlayerbotGroupCoordinator.CreditedStep"/>).</summary>
+    /// <summary>The highest waypoint index the leader has stood at (<see cref="PlayerbotGroupCoordinator.IsAtWaypoint"/>, level-aware) at or beyond the step it was heading for; -1: none yet. Never lowered, and it stays with the raid when the leader changes: the siege credits it (<see cref="PlayerbotGroupCoordinator.CreditedStep"/>).</summary>
     public int FurthestWaypoint { get; set; } = -1;
 
     /// <summary>The step <see cref="GoalBestYards"/> is for (-1: none).</summary>

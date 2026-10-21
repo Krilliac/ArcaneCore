@@ -437,9 +437,9 @@ public sealed partial class PlayerbotGroupCoordinator
         // With none on the map the objective is not judged this tick.
         if (WatchObjective(siege, _siegeViews.FirstOrDefault(v => v.Leader.MapId == siege.MapId)?.Leader, now)) return;
 
-        // Furthest-waypoint credit (CreditedStep): a leader that fought its way past the waypoint the siege heads for has been there, and every raid has: the step goes on past the
-        // furthest waypoint they have all reached, so a defender post at a waypoint that keeps dragging the leaders off it cannot hold the siege at that step for good. It keeps the
-        // lockstep's lag rule (no member more than LagYards behind its leader unless waived) and is refused while a leader answers an attacker.
+        // Furthest-waypoint credit (CreditedStep): a lockstep that does not need the leaders at the waypoint at the same moment. Every raid's leader has stood at the waypoint the siege heads for
+        // (or beyond it) at some time, so the step goes on by one, which keeps a defender post that drags the leaders off the waypoint from holding the siege at that step for good. It keeps the
+        // lockstep's lag rule (no member more than LagYards behind its leader unless waived, and a waiver is spent by the one step it moves) and is refused while a leader answers an attacker.
         // Lockstep: otherwise the step moves on once every raid's leader stands at the waypoint and nothing fights; a raid with a dead leader holds it. A raid
         // that pushes through its fight (PlayerbotSiegeCommander.PushOf) does not wait for the fight, but no raid moves the step while a living member
         // is more than LagYards behind its leader (the members of a pushing raid disengage and catch up).
@@ -447,10 +447,13 @@ public sealed partial class PlayerbotGroupCoordinator
         int credited = CreditedStep(siege);
         if (credited > siege.Step)
         {
+            foreach (SiegeView view in _siegeViews)
+                if (view.Facts.LagWaived) NoteLagWaived(siege, view, now);
+
             int from = siege.Step;
             SetStep(siege, credited);
-            Note($"siege {siege.Id}: every raid has reached waypoint {credited}, step {from} -> {credited}");
-            logger.LogInformation("Playerbot siege {Siege}: every raid has reached waypoint {Waypoint}, step {From} -> {To}", siege.Id, credited, from, credited);
+            Note($"siege {siege.Id}: every raid has reached waypoint {from + 1}, step {from} -> {credited}");
+            logger.LogInformation("Playerbot siege {Siege}: every raid has reached waypoint {Waypoint}, step {From} -> {To}", siege.Id, from + 1, from, credited);
         }
         else if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
             && _siegeViews.All(v => v.Facts.AtWaypointReal && (v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards || v.Facts.LagWaived)
@@ -484,24 +487,29 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>
-    /// The step the furthest-waypoint credit moves the siege to, or -1 for none: every led raid's leader has stood at a waypoint at or beyond the step (<see cref="PlayerbotSiegeRaid.FurthestWaypoint"/>) and at least one has
-    /// gone beyond it, so the step becomes one past the lowest of those; at most the last waypoint's successor (the approach to the objective, where the win is judged as ever). Where every leader has been at the step's waypoint
-    /// and none beyond it, the lockstep and its lag, combat and push rules govern. The lockstep's lag rule holds here too (every raid: no member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind its leader, or the lag
-    /// waived), and no credit while a leader answers an attacker. No credit with an unled raid, nor past the end.
+    /// The step the furthest-waypoint credit moves the siege to, or -1 for none: always the next step, and only when every led raid's leader has stood at the waypoint of the step or beyond it
+    /// (<see cref="PlayerbotSiegeRaid.FurthestWaypoint"/>) and at least one leader is not at it now (where all are, the lockstep and its combat and push rules decide), and no raid blocks it
+    /// (<see cref="BlocksCredit"/>). No credit with an unled raid, nor past the last waypoint.
     /// </summary>
     private int CreditedStep(PlayerbotSiege siege)
     {
         if (_siegeUnled != 0 || _siegeViews.Count == 0 || siege.Step >= siege.Waypoints.Count) return -1;
-        int lowest = int.MaxValue, highest = -1;
+        bool allAtNow = true;
         foreach (SiegeView view in _siegeViews)
         {
-            if (view.Facts.MaxLagYards > PlayerbotSiegeCommander.LagYards && !view.Facts.LagWaived || view.Raid.AnsweringStep >= 0) return -1;
-            lowest = Math.Min(lowest, view.Raid.FurthestWaypoint);
-            highest = Math.Max(highest, view.Raid.FurthestWaypoint);
+            if (view.Raid.FurthestWaypoint < siege.Step || BlocksCredit(view.Facts, view.Raid)) return -1;
+            allAtNow &= view.Facts.AtWaypointReal;
         }
 
-        return lowest >= siege.Step && highest > siege.Step ? lowest + 1 : -1;
+        return allAtNow ? -1 : siege.Step + 1;
     }
+
+    /// <summary>
+    /// A raid blocks the furthest-waypoint credit while its leader answers an attacker (<see cref="PlayerbotSiegeRaid.AnsweringStep"/>) or a living member is more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind
+    /// it and the lag is not waived (<see cref="PlayerbotSiegeFacts.LagWaived"/>: the lockstep's rule, a waiver being spent by the one step it moves).
+    /// </summary>
+    internal static bool BlocksCredit(in PlayerbotSiegeFacts facts, PlayerbotSiegeRaid raid)
+        => raid.AnsweringStep >= 0 || (facts.MaxLagYards > PlayerbotSiegeCommander.LagYards && !facts.LagWaived);
 
     /// <summary>Raises <paramref name="raid"/>'s furthest waypoint to the highest waypoint at or beyond <paramref name="step"/> that a leader at <paramref name="leader"/> stands at (level-aware, <see cref="IsAtWaypoint"/>).</summary>
     internal static void NoteFurthestWaypoint(PlayerbotSiegeRaid raid, IReadOnlyList<Vector3> waypoints, int step, Vector3 leader)
@@ -713,8 +721,7 @@ public sealed partial class PlayerbotGroupCoordinator
             bool real = IsAtWaypoint(leaderAt, siege.Waypoints[siege.Step]);
             atWaypointReal = real;
             atWaypoint = UpdateAnswer(raid, leader.Guid, siege.Step, leaderAt, siege.Waypoints[siege.Step], real, now) || real;
-            // A pass through a later waypoint while answering an attacker (a chase within the leash) is no arrival there.
-            if (leader.MapId == siege.MapId && raid.AnsweringStep < 0) NoteFurthestWaypoint(raid, siege.Waypoints, siege.Step, leaderAt);
+            if (leader.MapId == siege.MapId) NoteFurthestWaypoint(raid, siege.Waypoints, siege.Step, leaderAt);
         }
         else
         {

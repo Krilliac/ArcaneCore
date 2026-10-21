@@ -394,14 +394,13 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   has a leader again or ends. A siege whose leaders get no nearer to the step goal for 120 s (see **Stall watch** below) is reported stalled: one event note, a
   log warning, a raid warning from each led raid and `, stalled: ...` in the status line; a step or progress clears it. Past the last waypoint the leaders walk to the
   living objective. Lifts are ridden by the ordinary walk (`PlayerbotElevator`, the three Undercity lifts).
-* **Furthest-waypoint credit (`CreditedStep`).** A defender post at a waypoint (the Undercity lift bottom has one 7.6 yards from it) turns every approach into a fight that drags
-  the leader off the 6-yard disk, and the lockstep needs both leaders in it at once. So each raid records the highest waypoint index its leader has stood at (`IsAtWaypoint`, level-aware;
-  `PlayerbotSiegeRaid.FurthestWaypoint`, checked from the step on, never lowered). When every led raid has reached the step's waypoint or a later one and at least one has gone beyond it,
-  the step becomes one past the lowest of those (an event note and a log line say so; the answers, clocks and push flags restart as for any step change). It is the last waypoint's
-  successor at most: the approach to the objective, and the win (the objective seen alive, then dead) are judged as ever. The credit is gated on lag like the lockstep: none while a living member is more than `LagYards` behind its leader in any raid, unless
-  the lag is waived (`LagWaived`); the step then moves once the lag clears. A pass through a later waypoint while the leader answers an attacker (a chase within the leash) is not recorded, and no credit is given while a leader answers.
-  `FurthestWaypoint` belongs to the raid, not the leader, so it survives `PromoteLeader`. Not with an unled raid; where every leader has been at the
-  step's waypoint and none beyond it, the lockstep above (lag, combat, push rules) still decides.
+* **Furthest-waypoint credit (`CreditedStep`).** The credit is the lockstep without the need for both leaders to stand at the waypoint at the same moment. A defender post at a waypoint (the
+  Undercity lift bottom has one 7.6 yards from it) turns every approach into a fight that drags the leader off the 6-yard disk, so the two leaders are never in it together. Each raid records the highest
+  waypoint index its leader has stood at (`IsAtWaypoint`, level-aware, including the 10-yard height check; `PlayerbotSiegeRaid.FurthestWaypoint`, checked from the step on, never lowered; it belongs to the raid,
+  so it survives `PromoteLeader`). When every led raid's record is at least the step, at least one leader is not at the step's waypoint now, and no raid blocks it (`BlocksCredit`), the step moves on by **one**, never more
+  (an event note and a log line say so). Where all leaders are at the waypoint now, the lockstep above decides, with its combat and push rules. The credit keeps the lockstep's lag rule: none while a living member of any raid is more
+  than `LagYards` behind its leader, unless the lag is waived (`LagWaived`; the waiver is spent by the one step it moves, and `NoteLagWaived` says so as for the lockstep), and none while a leader answers an
+  attacker (a chase within the leash). A leader that passed a later waypoint therefore buys one step per bump, as a visit to each would. Not with an unled raid.
 * **Route tether (`RouteYards`, `PlayerbotSiegeCommander.RouteTetherYards`, 40 yards).** The route of a step is the segment from the waypoint behind it (where the siege began, for the
   first) to its goal (the waypoint, or the living objective past the last). A hostile counts for the siege (the pull candidates, the skull and cross, the `Hostiles` of the facts) only within 40
   yards of that segment in the plane, and on its levels (no more than `WaypointLevelYards` above or below the segment's heights, so a hostile on another Undercity floor does not count),
