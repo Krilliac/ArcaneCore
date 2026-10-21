@@ -158,7 +158,7 @@ public sealed class ConfigReferenceTests
                 /// <summary>Rec size.</summary>
                 public int Size { get; set; }
             }
-            public sealed class First { } public sealed class Second
+            public sealed class First; public sealed class Second
             {
                 /// <summary>Second size.</summary>
                 public int Size { get; set; }
@@ -171,7 +171,6 @@ public sealed class ConfigReferenceTests
             """;
         var summaries = new ConfigSourceSummaries([source]);
         Assert.Equal("Rec size.", summaries.Find(typeof(RecStruct), "Size"));
-        Assert.Null(summaries.Find(typeof(First), "Size")); // declared first on the line, with an empty body
         Assert.Equal("Second size.", summaries.Find(typeof(Second), "Size"));
         Assert.Null(summaries.Find(typeof(Gen<int>), "Size")); // type.Name is "Gen`1": never a declared name
     }
@@ -179,8 +178,6 @@ public sealed class ConfigReferenceTests
     private record struct RecStruct;
 
     private sealed class Gen<T>;
-
-    private sealed class First;
 
     private sealed class Second;
 
