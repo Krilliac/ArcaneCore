@@ -387,7 +387,7 @@ public sealed partial class ManagedPlayerbotFeature
                 }
                 finally
                 {
-                    session.Kick();
+                    session.Kick("playerbot fleet reset character deleted");
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
                     catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
                 }

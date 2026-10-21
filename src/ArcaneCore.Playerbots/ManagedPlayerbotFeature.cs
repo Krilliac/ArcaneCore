@@ -774,7 +774,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
             finally
             {
-                session.Kick();
+                session.Kick("playerbot character created");
                 await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
             }
         }
@@ -831,7 +831,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
                 finally
                 {
-                    session.Kick();
+                    session.Kick("playerbot spare account cleanup");
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
                     catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
                 }
@@ -1523,7 +1523,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     if (session is not null)
                     {
-                        session.Kick();
+                        session.Kick("playerbot start aborted");
                         await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
                         if (bot is not null) await FlushBoundedAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                     }
@@ -1607,7 +1607,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
                 finally
                 {
-                    session.Kick();
+                    session.Kick("playerbot character deleted");
                     // A close that is slow after a committed deletion must not skip the cleanup below.
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
                     catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
@@ -3328,7 +3328,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
             finally
             {
-                session.Kick();
+                session.Kick("playerbot provisioning cleanup");
                 await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
             }
             if ((await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false)).Count != 0
