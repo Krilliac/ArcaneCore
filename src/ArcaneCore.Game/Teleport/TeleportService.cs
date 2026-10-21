@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Combat.Threat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
@@ -400,8 +402,16 @@ public sealed class TeleportService
             };
             if (leavesCombat)
             {
-                // vmangos Player::TeleportTo near branch (Player.cpp:1923-1927): CombatStop() unless TELE_TO_NOT_LEAVE_COMBAT.
+                // vmangos Player::TeleportTo near branch (Player.cpp:1923-1927): CombatStop() unless TELE_TO_NOT_LEAVE_COMBAT,
+                // plus HostileRefManager::deleteReferences so creatures from the old location do not keep the teleported player
+                // (or its pet) pinned in combat via ThreatenedBy.
                 current.Combat.CombatStop(player);
+                HostileRefs.DeleteReferences(player);
+                if (player.PetGuid is { IsEmpty: false } petGuid && current.Combat.FindUnit(petGuid) is { } pet)
+                {
+                    current.Combat.CombatStop(pet);
+                    HostileRefs.DeleteReferences(pet);
+                }
             }
 
             NearTeleportStarting?.Invoke(player, destination);

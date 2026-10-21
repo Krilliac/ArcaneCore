@@ -178,7 +178,17 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         }
 
         // vmangos :7589: out of combat, or a taunt aura is up (its caster dead or gone: no taunt target), it does not evade.
-        if (!combat.IsInCombat || combat.Threat.HasTauntCasters)
+        if (!combat.IsInCombat)
+        {
+            if (combat.HasThreatList)
+            {
+                combat.Threat.Clear();
+            }
+
+            return false;
+        }
+
+        if (combat.Threat.HasTauntCasters)
         {
             return false;
         }
