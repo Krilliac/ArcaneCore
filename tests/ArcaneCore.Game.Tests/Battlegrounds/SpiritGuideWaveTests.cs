@@ -4,6 +4,10 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -133,5 +137,39 @@ public sealed class SpiritGuideWaveTests : IDisposable
             Update(guide, 50);
 
         Assert.True(ghost.IsAlive);
+    }
+
+    [Fact]
+    public void SpiritGuideCreature_UsesNullCreatureAI_DoesNotAggroHostileEnemy_AndRecastsChannelWhenAuraRemoved()
+    {
+        var template = new CreatureTemplate
+        {
+            Entry = 13117,
+            Name = "Warsong Spirit Guide",
+            MinLevel = 60,
+            MaxLevel = 60,
+            MinLevelHealth = 10000,
+            MaxLevelHealth = 10000,
+            Faction = 67,
+            NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.SpiritGuide),
+            Civilian = false,
+        };
+        var guide = new Creature(7001, template, null, CreatureContent.Empty, new Random(1));
+        CreatureAI ai = new CreatureAiFactory().Create(guide, CreatureContent.Empty, out _);
+        Assert.IsType<NullCreatureAI>(ai);
+        guide.AI = ai;
+
+        Map map = _spells.World.GetMap(0);
+        map.AddObject(guide);
+        (Player enemy, _) = _spells.AddPlayer(55, 2, 0);
+        Assert.False(ai.AggroesOnSight);
+        ai.OnUpdate(100);
+        Assert.False(guide.Combat.IsInCombat);
+
+        Assert.Equal(SpellCastResult.CastOk, _spells.System.CastSpell(guide, SpiritHealChannel, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.True(_spells.System.HasAura(guide, SpiritHealChannel));
+
+        _spells.System.RemoveAuras(guide, SpiritHealChannel, AuraRemoveMode.Default);
+        Assert.True(_spells.System.HasAura(guide, SpiritHealChannel));
     }
 }
