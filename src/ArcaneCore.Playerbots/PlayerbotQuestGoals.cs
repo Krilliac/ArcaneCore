@@ -318,7 +318,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             _awaitingBagSpace.Clear();
         if (_stage == Stage.AcceptConfirmation)
         {
-            if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
+            if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) ClearStage(); if (_stage == Stage.None && _stageQuest != 0)
             {
                 ClearStage();
                 return false;
@@ -326,7 +326,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
         else if (_stage == Stage.RewardConfirmation)
         {
-            if (state.Quests.Get(_stageQuest)?.Rewarded == true)
+            if (state.Quests.Get(_stageQuest)?.Rewarded == true) { Suspensions?.QuestSucceeded(_stageQuest); NeedsBagSpaceForTurnIn = false; ClearStage(); } if (_stage == Stage.None && _stageQuest != 0)
             {
                 Suspensions?.QuestSucceeded(_stageQuest);
                 NeedsBagSpaceForTurnIn = false;
@@ -463,9 +463,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         // first: a region portal, or the road around a building. That is the way, not a refusal. Only a
                         // dead-end partial that does not close is no route (quest 428 at Rane Yorick, NoRouteToVisibleEnder,
                         // then goal Quest with no quest).
-                        float curDistSq = System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), enderPos);
-                        float endDistSq = System.Numerics.Vector3.DistanceSquared(partial.Points[^1], enderPos);
-                        if (partial.PartialToGoal && endDistSq + 1f >= curDistSq)
+                        float curFlat = System.Numerics.Vector2.Distance(new(player.X, player.Y), new(enderPos.X, enderPos.Y));
+                        float endFlat = System.Numerics.Vector2.Distance(new(partial.Points[^1].X, partial.Points[^1].Y), new(enderPos.X, enderPos.Y));
+                        if (partial.PartialToGoal && endFlat + 0.5f >= curFlat && !WithinReachAt(partial.Points[^1], player.BoundingRadius, target.Npc))
                         {
                             _route = null;
                             planned = PlanOutcome.Refused;
@@ -483,7 +483,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 if (returning)
                 {
-                    NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now);
+                    NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid);
                     return false;
                 }
                 Backoff(now);
@@ -494,7 +494,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
             {
                 _route = null;
-                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now))
+                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid))
                     return false;
             }
             else if (returning && System.Numerics.Vector3.DistanceSquared(
@@ -526,7 +526,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return false;
             }
             RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, interactRefusal ?? "ender not interactable",
-                TurnInRefusalCode(interactRefusal, "EnderNotInteractable"), now, suspendEntry: true);
+                TurnInRefusalCode(interactRefusal, "EnderNotInteractable"), now, suspendEntry: true, enderGuid: target.Npc.Guid);
             return false;
         }
 
@@ -568,7 +568,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward,
                             WorldOpcode.SmsgQuestgiverQuestFailed, WorldOpcode.SmsgQuestgiverQuestInvalid);
                         string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice) ?? "reward choice refused";
-                        RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now);
+                        RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now, enderGuid: target.Npc.Guid);
                         return false;
                     }
                     NeedsBagSpaceForTurnIn = false;
@@ -594,6 +594,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         bool returning = ReturnQuest != 0 && _stage == Stage.None;
         _roomWanted = false;
+        QuestTarget? fallbackTurnIn = null;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (services.Deps.Creatures?.Find(player, guid, NpcFlags.QuestGiver) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
@@ -621,10 +622,25 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         Stage.RewardChoice => QuestAction.RewardChoice,
                         _ => QuestAction.Complete,
                     };
-                    return new QuestTarget(npc, quest, action);
+                    if (!returning || id == ReturnQuest)
+                        return new QuestTarget(npc, quest, action);
+                    fallbackTurnIn ??= new QuestTarget(npc, quest, action);
                 }
             }
 
+        }
+
+        if (fallbackTurnIn is not null)
+            return fallbackTurnIn;
+
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (services.Deps.Creatures?.Find(player, guid, NpcFlags.QuestGiver) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
+                || (npc.NpcFlags & NpcFlags.QuestGiver) == 0)
+                continue;
+            if (_stage != Stage.None && npc.Guid != _stageNpc)
+                continue;
+            bool entrySuspended = Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true;
             if (entrySuspended || (returning && !WithinReach(player, npc)))
                 continue;
 
@@ -688,6 +704,23 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// creature rule a large object's radius put the bot "in reach" where the server refused it as out of range.
     /// </summary>
     internal static bool WithinReach(Player player, NpcInfo npc)
+        => WithinReachAt(new System.Numerics.Vector3(player.X, player.Y, player.Z), player.BoundingRadius, npc);
+
+    internal static bool WithinReachAt(System.Numerics.Vector3 pos, float playerRadius, NpcInfo npc)
+    {
+        float dx = npc.X - pos.X, dy = npc.Y - pos.Y, dz = npc.Z - pos.Z;
+        float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
+        if (npc.IsGameObject)
+        {
+            float objectReach = npc.GameObjectInteractionDistance;
+            return float.IsFinite(distanceSquared) && float.IsFinite(objectReach) && objectReach >= 0
+                && distanceSquared <= objectReach * objectReach;
+        }
+        float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + playerRadius;
+        return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
+    }
+
+    private static bool UnusedWithinReach(Player player, NpcInfo npc)
     {
         float dx = npc.X - player.X, dy = npc.Y - player.Y, dz = npc.Z - player.Z;
         float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
@@ -1195,7 +1228,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal void RecordTurnInRefusal(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
         => RefuseTurnIn(player, questId, enderEntry, reason, code, now, suspendEntry);
 
-    private bool NoteCloseApproachFailure(Player player, uint questId, uint enderEntry, uint now)
+    private bool NoteCloseApproachFailure(Player player, uint questId, uint enderEntry, uint now, ObjectGuid enderGuid = default)
     {
         var spot = new System.Numerics.Vector3(player.X, player.Y, player.Z);
         if (questId != _approachFailQuest || enderEntry != _approachFailEntry
@@ -1208,13 +1241,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
         if (++_approachFailCount < ApproachConfirmFailures) return false;
         _approachFailCount = 0;
-        RefuseTurnIn(player, questId, enderEntry, "no exact route to visible ender", "NoRouteToVisibleEnder", now, suspendEntry: true);
+        RefuseTurnIn(player, questId, enderEntry, "no exact route to visible ender", "NoRouteToVisibleEnder", now, suspendEntry: true, enderGuid: enderGuid);
         return true;
     }
 
-    private void RefuseTurnIn(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
+    private void RefuseTurnIn(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false, ObjectGuid enderGuid = default)
     {
-        ObjectGuid enderGuid = _stageNpc;
+        if (enderGuid.IsEmpty) enderGuid = _stageNpc;
         LastTurnInRefusal = (questId, enderEntry, reason, code);
         bool inventoryFull = code == "InventoryFull"
             || reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)

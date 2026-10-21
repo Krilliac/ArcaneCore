@@ -972,7 +972,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         QuestId = questId;
         if (SetQuestAside is null || player.Combat.IsInCombat) return;
         Creature? ender = FindArrivedEnder(player, entry, out float distance);
-        if (ender is { Combat.IsInCombat: true }) return;
+        if (ender is { Combat.IsInCombat: true })
+        {
+            Backoff(now);
+            return;
+        }
         Vector3 spot = new(player.X, player.Y, player.Z);
         if (questId != _arrivedQuest || Vector3.DistanceSquared(spot, _arrivedSpot) > SpotYards * SpotYards)
         {
