@@ -391,9 +391,20 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   `busy`, `grouped`, `dead`, `other-map`, `in-group`, `other-team`, `raid-full`.
 * **Lockstep.** The raids share one `Step`, the index of the waypoint they head for. It moves on only when every raid's leader stands within
   6 yards of that waypoint and none fights; a raid that is there first holds for the others, and a raid whose leader is dead holds them too until it
-  has a leader again or ends. A siege that makes no progress (the step unmoved, nobody fighting) for 120 s is reported stalled: one event note, a
-  log warning, a raid warning from each led raid and `, stalled: ...` in the status line; a step or a fight clears it. Past the last waypoint the leaders walk to the
+  has a leader again or ends. A siege whose leaders get no nearer to the step goal for 120 s (see **Stall watch** below) is reported stalled: one event note, a
+  log warning, a raid warning from each led raid and `, stalled: ...` in the status line; a step or progress clears it. Past the last waypoint the leaders walk to the
   living objective. Lifts are ridden by the ordinary walk (`PlayerbotElevator`, the three Undercity lifts).
+* **Furthest-waypoint credit (`CreditedStep`).** A defender post at a waypoint (the Undercity lift bottom has one 7.6 yards from it) turns every approach into a fight that drags
+  the leader off the 6-yard disk, and the lockstep needs both leaders in it at once. So each raid records the highest waypoint index its leader has stood at (`IsAtWaypoint`, level-aware;
+  `PlayerbotSiegeRaid.FurthestWaypoint`, checked from the step on, never lowered). When every led raid has reached the step's waypoint or a later one and at least one has gone beyond it,
+  the step becomes one past the lowest of those (an event note and a log line say so; the answers, clocks and push flags restart as for any step change). It is the last waypoint's
+  successor at most: the approach to the objective, and the win (the objective seen alive, then dead) are judged as ever. Not with an unled raid; where every leader has been at the
+  step's waypoint and none beyond it, the lockstep above (lag, combat, push rules) still decides.
+* **Route tether (`RouteYards`, `PlayerbotSiegeCommander.RouteTetherYards`, 40 yards).** The route of a step is the segment from the waypoint behind it (where the siege began, for the
+  first) to its goal (the waypoint, or the living objective past the last). A hostile counts for the siege (the pull candidates, the skull and cross, the `Hostiles` of the facts) only within 40
+  yards of that segment in the plane, and on its levels (no more than `WaypointLevelYards` above or below the segment's heights, so a hostile on another Undercity floor does not count),
+  besides the objective entry, which always counts, and any hostile that fights the raid (its melee victim is, or its threat list holds, a member): the raid does not ignore what hits it.
+  A leader more than 40 yards off the route (`OffRoute`) that is out of combat advances back to it before it pulls or marks a tank (after Regroup and Hold); in combat nothing changes.
 * **The commander** (`PlayerbotSiegeCommander.Decide`, a pure function; the coordinator re-reads the raids every 400 ms) picks an order for each
   raid in this order: **Retreat** (in combat: the tank dead, the average health under 35 % or a third of the raid dead *in this engagement*, i.e.
   since the raid last entered combat after at least 5 s out of it; one latch in two phases, see below; a raid retreats at most **twice** and at most
@@ -464,9 +475,10 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
   raid is out of combat or pushing. A pushing leader that reaches the next waypoint waits there, fighting back, until the members that disengaged (on the other lift
   level, say) have caught up. That wait is bound too: after `LagHoldMs` (90 s) of a member more than 30 yards behind, the lag is waived for that step change (`LagWaived`):
   an event note, a log warning and the raid warning `Pushing on without the stragglers` say so, and the status detail ends in `lag=waived` while the step cannot move
-  yet because the peer, standing at its waypoint too, has a straggler of its own that is not waived yet (a peer that is not at its waypoint blocks the push instead, which resets the lag clock). Assault between waypoints ignores the lag because its leader does not walk. **Stall watch:** a hold of a push for the peer (`PushInForce` set, no progress), a push whose
-  leader gets no nearer, and a fight that has lasted longer than `StalemateMs` at one step, the objective's fight and the one on the leg to it excepted, are not progress (a pushing leader that is getting nearer is), so such a siege is
-  reported stalled 120 s later.
+  yet because the peer, standing at its waypoint too, has a straggler of its own that is not waived yet (a peer that is not at its waypoint blocks the push instead, which resets the lag clock). Assault between waypoints ignores the lag because its leader does not walk. **Stall watch:** progress is the leader's 2D distance to the step goal setting a new least value by more than `PushProgressYards` (2 yards; `NoteGoalProgress`, a new step or a lift ride
+  starts afresh), fighting or not, or a member fighting the objective; a fight in place that gets no nearer is not progress however long it runs (it used to count until `StalemateMs`), nor is a retreat
+  latch, a hold of a push for the peer (`PushInForce` set, no progress) or a push whose leader gets no nearer (a pushing leader that is getting nearer is progress). A siege with no progress
+  for `StallMs` (120 s) is reported stalled: `siege N: no progress towards waypoint K`.
   **Lifts:** a ride to the stop (`ElevatorStage.ToStop`) is ended by combat
   (`PlayerbotGroupAI.Update`), so a raid in combat at the lift top would begin the ride and cancel it at every think for as long as it stayed in combat
   (the cancel keeps no backoff). A raid that pushes through is exempt (`PlayerbotGroupAI.CombatEndsRide`): its leader and members ride on; when the push

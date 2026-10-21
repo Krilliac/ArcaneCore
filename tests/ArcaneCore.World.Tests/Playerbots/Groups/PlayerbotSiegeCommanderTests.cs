@@ -482,20 +482,118 @@ public sealed class PlayerbotSiegeCommanderTests
         var raid = new PlayerbotSiegeRaid(siege, 1);
         PlayerbotSiegeFacts longFight = Fight with { MsInCombatAtStep = PlayerbotSiegeCommander.StalemateMs + 60_000 };
 
-        // A long fight of the ordinary kind is no progress; the objective's fight, and the one on the leg to it, are.
+        // A fight that gets the leader no nearer to the goal is no progress, young or old, even on the leg to the objective; the objective's fight is.
         Assert.False(PlayerbotGroupCoordinator.ShowsProgress(longFight, raid, 500_000));
-        Assert.True(PlayerbotGroupCoordinator.ShowsProgress(longFight with { ObjectiveEngaged = true }, raid, 500_000));
-        Assert.True(PlayerbotGroupCoordinator.ShowsProgress(longFight with { ObjectiveLeg = true }, raid, 500_000));
-        Assert.True(PlayerbotGroupCoordinator.ShowsProgress(Fight with { MsInCombatAtStep = 10_000 }, raid, 500_000));
-
-        // A push held for the peer (in force, the order is Assault, no push executes) is no progress, even in a young fight.
-        raid.PushInForce = PlayerbotSiegePush.Stalemate;
+        Assert.False(PlayerbotGroupCoordinator.ShowsProgress(longFight with { ObjectiveLeg = true }, raid, 500_000));
         Assert.False(PlayerbotGroupCoordinator.ShowsProgress(Fight with { MsInCombatAtStep = 10_000 }, raid, 500_000));
+        Assert.True(PlayerbotGroupCoordinator.ShowsProgress(longFight with { ObjectiveEngaged = true }, raid, 500_000));
+
+        // A push held for the peer (in force, the order is Assault, no push executes) is no progress, even in a fight that gets nearer.
+        raid.GoalImprovedMs = 500_000;
+        Assert.True(PlayerbotGroupCoordinator.ShowsProgress(Fight, raid, 500_000));
+        raid.PushInForce = PlayerbotSiegePush.Stalemate;
+        Assert.False(PlayerbotGroupCoordinator.ShowsProgress(Fight, raid, 500_000));
         // A push that is executing counts while its leader is getting nearer, and stops counting after the stall window.
+        raid.GoalImprovedMs = 0;
         raid.Push = PlayerbotSiegePush.Stalemate;
         raid.PushProgressMs = 495_000;
         Assert.True(PlayerbotGroupCoordinator.ShowsProgress(longFight, raid, 500_000));
         Assert.False(PlayerbotGroupCoordinator.ShowsProgress(longFight, raid, 495_000 + PlayerbotSiegeCommander.PushStallMs));
+    }
+
+    private const uint Tick = PlayerbotGroupCoordinator.SiegeTickMs;
+
+    /// <summary>Runs the stall watch over <paramref name="ticks"/> reads of a raid fighting at the yards <paramref name="yardsAt"/> from its goal; the time (ms from the start) the siege was first stalled, or -1.</summary>
+    private static long StalledAfter(int ticks, Func<int, float> yardsAt)
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new System.Numerics.Vector3(100f, 0f, 0f)], default, 0);
+        var raid = new PlayerbotSiegeRaid(siege, 1);
+        for (int i = 0; i < ticks; i++)
+        {
+            uint now = 1_000 + ((uint)i * Tick);
+            PlayerbotGroupCoordinator.NoteGoalProgress(raid, siege.Step, yardsAt(i), riding: false, now);
+            bool progress = PlayerbotGroupCoordinator.ShowsProgress(Fight, raid, now);
+            if (PlayerbotGroupCoordinator.NoteSiegeProgress(siege, progress, now)) return now - 1_000;
+        }
+
+        return -1;
+    }
+
+    [Fact]
+    public void ARaidFightingInPlace_GetsNoNearer_IsStalledAfterStallMs_NotNever()
+    {
+        int ticks = 2 * (int)(PlayerbotSiegeCommander.StallMs / Tick);
+        long at = StalledAfter(ticks, _ => 60f);
+        Assert.InRange(at, PlayerbotSiegeCommander.StallMs, PlayerbotSiegeCommander.StallMs + (2 * Tick));
+        // A random walk about the same spot (never 2 yards under its best) is no better.
+        Assert.True(StalledAfter(ticks, i => 60f + ((i % 7) * 3f)) >= 0);
+    }
+
+    [Fact]
+    public void ARaidFightingWhileClosingOnItsGoal_IsNeverStalled()
+    {
+        // 0.5 yd per 400 ms: 1.25 yd/s, more than the 2 yards under its best every few reads.
+        int ticks = 4 * (int)(PlayerbotSiegeCommander.StallMs / Tick);
+        Assert.Equal(-1, StalledAfter(ticks, i => 1_000f - (i * 0.5f)));
+    }
+
+    [Fact]
+    public void AFightThatStopsClosingOnItsGoal_IsStalledStallMsAfterTheLastImprovement()
+    {
+        int closing = 100;
+        long at = StalledAfter(closing + (2 * (int)(PlayerbotSiegeCommander.StallMs / Tick)), i => i < closing ? 1_000f - (i * 3f) : 1_000f - (closing * 3f));
+        Assert.InRange(at, (closing * Tick) + PlayerbotSiegeCommander.StallMs - (2 * Tick), (closing * Tick) + PlayerbotSiegeCommander.StallMs + (2 * Tick));
+    }
+
+    [Fact]
+    public void TheGoalClock_NeedsMoreThanTwoYardsUnderItsBest_AStepOrALiftRideStartsItAfresh()
+    {
+        var siege = new PlayerbotSiege(1, 0, 1, [new System.Numerics.Vector3(100f, 0f, 0f)], default, 0);
+        var raid = new PlayerbotSiegeRaid(siege, 1);
+        Assert.True(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 0, 50f, false, 1_000));
+        Assert.False(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 0, 48.5f, false, 2_000));
+        Assert.True(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 0, 47.5f, false, 3_000));
+        Assert.Equal(3_000u, raid.GoalImprovedMs);
+        Assert.False(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 0, 60f, false, 4_000)); // further away: nothing
+        Assert.True(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 1, 90f, false, 5_000)); // a new step
+        Assert.True(PlayerbotGroupCoordinator.NoteGoalProgress(raid, 1, 90f, true, 6_000)); // a lift ride
+    }
+
+    // --- the route tether ----------------------------------------------------------------------------------------------------
+
+    private static System.Numerics.Vector3 V(float x, float y, float z = 0f) => new(x, y, z);
+
+    [Fact]
+    public void RouteYards_IsThePlaneDistanceToTheSegment_OnTheRoutesLevelsOnly()
+    {
+        System.Numerics.Vector3 from = V(0f, 0f), to = V(100f, 0f);
+        Assert.Equal(0f, PlayerbotGroupCoordinator.RouteYards(V(50f, 0f), from, to), 0.01f);
+        Assert.Equal(50f, PlayerbotGroupCoordinator.RouteYards(V(50f, 50f), from, to), 0.01f);
+        Assert.Equal(30f, PlayerbotGroupCoordinator.RouteYards(V(130f, 0f), from, to), 0.01f); // beyond the end: the distance to the goal
+        Assert.Equal(5f, PlayerbotGroupCoordinator.RouteYards(V(-3f, 4f), from, to), 0.01f); // behind the start
+        // Another floor (the Undercity floors are about 20 yards apart) is off the route whatever its plane distance.
+        Assert.True(float.IsPositiveInfinity(PlayerbotGroupCoordinator.RouteYards(V(50f, 0f, -20f), from, to)));
+        Assert.Equal(0f, PlayerbotGroupCoordinator.RouteYards(V(50f, 0f, PlayerbotSiegeCommander.WaypointLevelYards), from, to), 0.01f);
+        // A route that climbs (a lift: same XY, 100 yards apart) holds every height between.
+        Assert.Equal(0f, PlayerbotGroupCoordinator.RouteYards(V(5f, 5f, -50f), V(5f, 5f, 0f), V(5f, 5f, -100f)), 0.01f);
+        // A route of one point (a siege that begins at its first waypoint).
+        Assert.Equal(10f, PlayerbotGroupCoordinator.RouteYards(V(10f, 0f), from, from), 0.01f);
+    }
+
+    [Fact]
+    public void ALeaderOffTheRoute_AdvancesBeforeItPullsOrMarksATank_ButAFightGoesOn()
+    {
+        PlayerbotSiegeFacts near = Calm with { Hostiles = 1, NearestHostileYards = 12f };
+        Assert.Equal(PlayerbotSiegeOrder.Pull, Order(near));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(near with { OffRoute = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(near with { OffRoute = true, PullLatched = true }));
+        PlayerbotSiegeFacts two = Calm with { Hostiles = 2, NearestHostileYards = 60f };
+        Assert.Equal(PlayerbotSiegeOrder.AssignTank, Order(two));
+        Assert.Equal(PlayerbotSiegeOrder.Advance, Order(two with { OffRoute = true }));
+        Assert.False(PlayerbotSiegeCommander.Decide(near with { OffRoute = true }).PullLatched);
+        // In combat nothing changes: it assaults what it fights, off the route or not. A regroup still comes first.
+        Assert.Equal(PlayerbotSiegeOrder.Assault, Order(Fight with { OffRoute = true }));
+        Assert.Equal(PlayerbotSiegeOrder.Regroup, Order(near with { OffRoute = true, MaxLagYards = 50f }));
     }
 
     [Fact]

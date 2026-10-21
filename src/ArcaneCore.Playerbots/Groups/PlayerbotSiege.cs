@@ -80,6 +80,7 @@ internal enum PlayerbotSiegePush : byte
 /// <param name="Pushing">The push in force, carried by the coordinator (<see cref="PlayerbotSiegeRaid.PushInForce"/>): it ends only by the exclusions of <see cref="PlayerbotSiegeCommander.PushOf"/>, not by a falling hostile count, a dip in health, a step change or a hold for the peer.</param>
 /// <param name="AtWaypointReal">The leader really stands in the waypoint's disk (<see cref="PlayerbotGroupCoordinator.IsAtWaypoint"/>, level-aware), not only answering an attacker from the leash: the lockstep advance needs this, while <paramref name="AtWaypoint"/> (which includes the answer) serves the lag hold and the no-progress clock.</param>
 /// <param name="LagWaived">A pushing leader at its waypoint has waited <see cref="PlayerbotGroupCoordinator.LagHoldMs"/> for a member more than <see cref="PlayerbotSiegeCommander.LagYards"/> behind: the lockstep waives the lag for this bump.</param>
+/// <param name="OffRoute">The leader is more than <see cref="PlayerbotSiegeCommander.RouteTetherYards"/> from the route of the step (the segment from the waypoint behind it to its goal, on that segment's levels): out of combat it advances back to the route before it pulls anything.</param>
 internal readonly record struct PlayerbotSiegeFacts(
     bool InCombat,
     uint MsSinceCombat,
@@ -112,7 +113,8 @@ internal readonly record struct PlayerbotSiegeFacts(
     int HostilesAtStepStart = 0,
     PlayerbotSiegePush Pushing = PlayerbotSiegePush.None,
     bool LagWaived = false,
-    bool AtWaypointReal = false);
+    bool AtWaypointReal = false,
+    bool OffRoute = false);
 
 /// <summary>
 /// The commander's answer: the order, and the two latches to feed back in at the next decision. <paramref name="Committed"/>: the fight is lost by
@@ -139,8 +141,9 @@ internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order
 /// <see cref="StalemateLossWindowMs"/> and the hostile count has not fallen since (a stalemate). It begins no retreat and counts none.</item>
 /// <item>Regroup or Hold, out of combat: a member lags more than <see cref="LagYards"/>, rests or is hurt (Regroup); the raid is at its waypoint,
 /// the other raid is not, and nothing is worth pulling (Hold).</item>
-/// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis).</item>
-/// <item>AssignTank: two or more hostiles and no cross on a living one.</item>
+/// <item>Pull, out of combat: a hostile within <see cref="PullOnYards"/>, kept until it is farther than <see cref="PullOffYards"/> (hysteresis). Not while
+/// the leader is off the route (<see cref="PlayerbotSiegeFacts.OffRoute"/>): it advances back first.</item>
+/// <item>AssignTank: two or more hostiles and no cross on a living one (not off the route, out of combat).</item>
 /// <item>Advance, out of combat.</item>
 /// <item>Assault, in combat.</item>
 /// </list>
@@ -176,6 +179,12 @@ internal static class PlayerbotSiegeCommander
 
     /// <summary>The yards by which the leader's distance to the step goal must beat its best to count as progress of a push.</summary>
     internal const float PushProgressYards = 2f;
+
+    /// <summary>
+    /// The route tether: a hostile counts for the siege (a pull candidate, the skull) only within this many yards (2D, on the levels of the route) of the segment from the waypoint behind the step to its goal,
+    /// unless it fights the raid or is the objective; and a leader farther than this from that segment advances before it pulls.
+    /// </summary>
+    internal const float RouteTetherYards = 40f;
 
     /// <summary>The raid icon index of the cross (skull is 7): the tanks' mark for the second hostile.</summary>
     internal const byte CrossIcon = 6;
@@ -274,7 +283,8 @@ internal static class PlayerbotSiegeCommander
         if (push != PlayerbotSiegePush.None) return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.Advance, false, false, false, push);
 
         // The pull latch: on within PullOnYards, kept until the hostile is beyond PullOffYards (hysteresis).
-        bool pullCandidate = facts.Hostiles > 0
+        bool offRoute = !facts.InCombat && facts.OffRoute;
+        bool pullCandidate = !offRoute && facts.Hostiles > 0
             && (facts.PullLatched ? facts.NearestHostileYards <= PullOffYards : facts.NearestHostileYards <= PullOnYards);
         bool pullLatch = !facts.InCombat && pullCandidate;
 
@@ -291,7 +301,7 @@ internal static class PlayerbotSiegeCommander
         }
 
         // 4. Two hostiles and no cross: mark one for the tanks.
-        if (facts.Hostiles >= 2 && !facts.CrossValid)
+        if (facts.Hostiles >= 2 && !facts.CrossValid && !offRoute)
             return new PlayerbotSiegeDecision(PlayerbotSiegeOrder.AssignTank, false, pullLatch, committed);
 
         // 5. Advance when quiet, 6. assault when fighting.
@@ -436,6 +446,18 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     public bool PullLatched { get; set; }
 
     public int Retreats { get; set; }
+
+    /// <summary>The highest waypoint index the leader has stood at (<see cref="PlayerbotGroupCoordinator.IsAtWaypoint"/>, level-aware) at or beyond the step it was heading for; -1: none yet. Never lowered: the siege credits it (<see cref="PlayerbotGroupCoordinator.CreditedStep"/>).</summary>
+    public int FurthestWaypoint { get; set; } = -1;
+
+    /// <summary>The step <see cref="GoalBestYards"/> is for (-1: none).</summary>
+    public int GoalStep { get; set; } = -1;
+
+    /// <summary>The leader's least 2D distance to the step goal at <see cref="GoalStep"/>, led or not in combat (-1: not read yet): the stall watch's measure of progress (<see cref="PlayerbotGroupCoordinator.NoteGoalProgress"/>).</summary>
+    public float GoalBestYards { get; set; } = -1f;
+
+    /// <summary>When <see cref="GoalBestYards"/> last improved by more than <see cref="PlayerbotSiegeCommander.PushProgressYards"/> (0: never).</summary>
+    public uint GoalImprovedMs { get; set; }
 
     /// <summary>The raid was in combat at the last tick.</summary>
     public bool WasInCombat { get; set; }
