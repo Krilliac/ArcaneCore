@@ -469,11 +469,14 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
     /// <summary>The leader an answer in progress belongs to.</summary>
     public ObjectGuid AnsweringLeader { get; set; }
 
-    /// <summary>The step <see cref="AnswerStepSinceMs"/> counts for (-1: none yet). A new step restarts the clock; an answer ending and another beginning on the same step does not.</summary>
+    /// <summary>The step <see cref="AnswerOutMs"/> counts for (-1: none yet). A new step restarts the count; an answer ending and another beginning on the same step does not.</summary>
     public int AnswerClockStep { get; set; } = -1;
 
-    /// <summary>When the first answer of <see cref="AnswerClockStep"/> began (0: none): every answer on that step is bound by <see cref="PlayerbotGroupCoordinator.LagHoldMs"/> from here, measured per step and not per excursion, so a re-request cannot extend it.</summary>
-    public uint AnswerStepSinceMs { get; set; }
+    /// <summary>How long the leader has been out of the disk answering on <see cref="AnswerClockStep"/>, summed over all its excursions of that step (time fighting inside the disk does not count): the bound of <see cref="PlayerbotGroupCoordinator.LagHoldMs"/> is per step and not per excursion, so a re-request cannot extend it.</summary>
+    public uint AnswerOutMs { get; set; }
+
+    /// <summary>When the answer in progress was last read (0: none), the start of the next interval to add to <see cref="AnswerOutMs"/> while the leader is out of the disk.</summary>
+    public uint AnswerLastMs { get; set; }
 
     /// <summary>Ends the answer and forgets the request (a step change, a new leader, the end of the push, the leader back in the disk).</summary>
     public void EndAnswer()
@@ -482,6 +485,7 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
         AnsweringLeader = default;
         AnswerRequestedMs = 0;
         AnswerRequestedLeader = default;
+        AnswerLastMs = 0;
     }
 
     /// <summary>What the raid's current order executes in combat: the push in force (<see cref="PlayerbotSiegeCommander.PushOf"/>) while the raid advances, <see cref="PlayerbotSiegePush.None"/> otherwise and while the raid holds at a waypoint for the peer. <see cref="PlayerbotGroupAI"/> reads it: a pushing leader fights nothing away from its waypoint, its members answer any attacker of the raid, and a lift ride is not cancelled by combat.</summary>

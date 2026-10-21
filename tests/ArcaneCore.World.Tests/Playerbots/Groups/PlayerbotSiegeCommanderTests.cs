@@ -660,23 +660,42 @@ public sealed class PlayerbotSiegeCommanderTests
         Assert.True(Read(raid, LeaderA, 0, out20, Wp, 30_000));
         Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 30_100));
         Assert.Equal(-1, raid.AnsweringStep);
-        // A second excursion on the same step begins (within the bound) and ends with the bound counted from the FIRST answer, not from this one.
+        // A second excursion on the same step begins (within the bound); the 20 s already spent out count, so 70 s more out of the disk end it, not 90 s.
         Request(raid, LeaderA, 40_000);
         Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 40_000));
         Assert.Equal(0, raid.AnsweringStep);
-        Request(raid, LeaderA, 10_000 + PlayerbotGroupCoordinator.LagHoldMs - 500);
-        Assert.True(Read(raid, LeaderA, 0, out20, Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs - 400));
-        Assert.False(Read(raid, LeaderA, 0, out20, Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs)); // 90 s after the first answer began
+        Assert.True(Read(raid, LeaderA, 0, out20, Wp, 40_000 + PlayerbotGroupCoordinator.LagHoldMs - 20_001));
+        Assert.False(Read(raid, LeaderA, 0, out20, Wp, 40_000 + PlayerbotGroupCoordinator.LagHoldMs - 20_000));
         Assert.Equal(-1, raid.AnsweringStep);
+        uint after = 40_000 + PlayerbotGroupCoordinator.LagHoldMs - 20_000;
         // Spent: a re-request on the same step begins nothing.
-        Request(raid, LeaderA, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 100);
-        Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 200)); // the real reading
+        Request(raid, LeaderA, after + 100);
+        Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, after + 200)); // the real reading
         Assert.Equal(-1, raid.AnsweringStep);
         // The next step has its own bound.
         System.Numerics.Vector3 next = new(115f, 50f, 40f);
-        Request(raid, LeaderA, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 300);
-        Assert.True(Read(raid, LeaderA, 1, new System.Numerics.Vector3(116f, 50f, 40f), next, 10_000 + PlayerbotGroupCoordinator.LagHoldMs + 400));
+        Request(raid, LeaderA, after + 300);
+        Assert.True(Read(raid, LeaderA, 1, new System.Numerics.Vector3(116f, 50f, 40f), next, after + 400));
         Assert.Equal(1, raid.AnsweringStep);
+    }
+
+    [Fact]
+    public void FightingInsideTheDiskForLongerThanTheBound_SpendsNothingOfTheAnswer()
+    {
+        PlayerbotSiegeRaid raid = PushingRaid(10_000);
+        System.Numerics.Vector3 inDisk = new(102f, 50f, 40f);
+        // A stalemate fought from the waypoint for 3 minutes, requesting all the while: the leader never leaves the disk.
+        for (uint t = 10_000; t <= 190_000; t += 1_000)
+        {
+            Request(raid, LeaderA, t);
+            Assert.True(Read(raid, LeaderA, 0, inDisk, Wp, t));
+        }
+
+        Assert.False(raid.AnswerSpent);
+        // Then it is shot from 25 yards: the answer begins and goes out of the disk for the whole bound.
+        Request(raid, LeaderA, 191_000);
+        Assert.True(Read(raid, LeaderA, 0, new System.Numerics.Vector3(125f, 50f, 40f), Wp, 191_000));
+        Assert.Equal(0, raid.AnsweringStep);
     }
 
     [Fact]

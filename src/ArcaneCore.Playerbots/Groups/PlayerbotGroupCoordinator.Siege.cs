@@ -478,7 +478,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// Reads the leader's answer for the raid and returns whether the leader counts as at the waypoint of <paramref name="step"/> because of it. An answer begins only from a real reading (<paramref name="real"/>:
     /// <see cref="IsAtWaypoint"/>, level-aware) at this step, for this leader, while the raid pushes, and when the leader's group AI has asked for it (<see cref="PlayerbotSiegeRaid.AnswerRequestedMs"/>, fresh for
     /// <see cref="PlayerbotSiegeCommander.AnswerFreshMs"/>). It lasts until the leader is back in the disk and no longer fighting, and is bound: it ends when the leader leaves the reach (<see cref="WithinAnswerReach"/>) or
-    /// after <see cref="LagHoldMs"/> counted from the first answer of the step (<see cref="PlayerbotSiegeRaid.AnswerStepSinceMs"/>: per step, not per excursion; once spent, the step has no further answer). The request must come from this leader. It belongs to its step and its leader (another step, another leader or the end of the push end it), so it neither carries over to the next waypoint nor sustains itself.
+    /// after <see cref="LagHoldMs"/> spent out of the disk on the step (<see cref="PlayerbotSiegeRaid.AnswerOutMs"/>: per step, not per excursion, and fighting inside the disk costs none of it; once spent, the step has no further answer). The request must come from this leader. It belongs to its step and its leader (another step, another leader or the end of the push end it), so it neither carries over to the next waypoint nor sustains itself.
     /// </summary>
     internal static bool UpdateAnswer(PlayerbotSiegeRaid raid, ObjectGuid leaderGuid, int step, Vector3 leader, Vector3 waypoint, bool real, uint now)
     {
@@ -487,17 +487,21 @@ public sealed partial class PlayerbotGroupCoordinator
         if (raid.AnswerClockStep != step)
         {
             raid.AnswerClockStep = step;
-            raid.AnswerStepSinceMs = 0;
+            raid.AnswerOutMs = 0;
+            raid.AnswerLastMs = 0;
         }
 
-        bool spent = raid.AnswerStepSinceMs != 0 && unchecked(now - raid.AnswerStepSinceMs) >= LagHoldMs;
+        // Only the time spent out of the disk answers counts against the step's bound: a leader fighting inside the disk answers nothing out there.
+        bool answering = raid.AnsweringStep >= 0;
+        if (answering && !real && raid.AnswerLastMs != 0) raid.AnswerOutMs += unchecked(now - raid.AnswerLastMs);
+        bool spent = raid.AnswerOutMs >= LagHoldMs;
         raid.AnswerSpent = spent;
-        if (raid.AnsweringStep < 0)
+        if (!answering)
         {
             if (!raid.PushingThrough || !real || !requested || spent) return false;
             raid.AnsweringStep = step;
             raid.AnsweringLeader = leaderGuid;
-            if (raid.AnswerStepSinceMs == 0) raid.AnswerStepSinceMs = Math.Max(1u, now);
+            raid.AnswerLastMs = Math.Max(1u, now);
             return true;
         }
 
@@ -513,6 +517,7 @@ public sealed partial class PlayerbotGroupCoordinator
             return real;
         }
 
+        raid.AnswerLastMs = Math.Max(1u, now);
         return true;
     }
 
