@@ -418,6 +418,53 @@ public sealed class PlayerbotCraftingSpellFocusTests
             => PathResult.StraightLine(start, end, PathType.Normal);
     }
 
+    /// <summary>
+    /// Simulates a cooking fire inside a firepit or tent whose center lies 7.5 yards past the walkable mesh edge
+    /// (<paramref name="meshEdgeX"/>): a query to the center itself is outside <c>NearExtents</c> (3 yd) and returns
+    /// <see cref="PathType.NoPath"/>, while a query to the focus-reach ring within 3 yards of the mesh edge returns an
+    /// <see cref="PathType.Incomplete"/> path ending at <paramref name="meshEdgeX"/> (7.5 yards from the fire's center,
+    /// inside its 10-yard <c>data1</c> spell-focus reach).
+    /// </summary>
+    private sealed class OffMeshFireCenterPathfinder(float meshEdgeX) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (end.X > meshEdgeX + 3f)
+                return PathResult.StraightLine(start, end, PathType.NoPath);
+
+            Vector3 clamped = new(MathF.Min(end.X, meshEdgeX), end.Y, end.Z);
+            PathType type = end.X > meshEdgeX ? PathType.Incomplete : PathType.Normal;
+            return PathResult.StraightLine(start, clamped, type);
+        }
+    }
+
+    [Fact]
+    public async Task AFireWhoseCenterIsOffMesh_ButWhoseTenYardFocusRadiusIsReachable_IsWalkedToAndCookedAt()
+    {
+        await RunAsync(knowsCampfire: false, woodCount: 0, async (host, session, crafting, player) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(pathfinder: new OffMeshFireCenterPathfinder(player.X + 4.5f));
+                return true;
+            });
+            await SummonVisibleAsync(host, player, 12f, 0f);
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+
+            for (int i = 0; i < 6 && await CountAsync(host, player, Product) == 0; i++)
+            {
+                Assert.True(await StepAsync(host, session, crafting, player));
+                await host.World.AdvanceClockAsync(500);
+            }
+
+            Assert.Equal(2u, await CountAsync(host, player, Reagent));
+            Assert.Equal(1u, await CountAsync(host, player, Product));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+        }, manualClock: true);
+    }
+
     /// <summary>Hands the crafting goal a route it is "already walking" to the fire, the way the brain tests inject a <c>PlayerbotRoute</c>.</summary>
     private static void InjectRoute(PlayerbotCrafting crafting, PlayerbotRoute route, ObjectGuid target)
     {
