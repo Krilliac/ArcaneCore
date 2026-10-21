@@ -2976,7 +2976,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         string home = HomeLineOf(active) ?? "none";
         string risk = RiskOf(active) ?? "none";
         string snap = active.Brain.FormatDiagnosticSnapshot(player);
-        return $"bot={active.Record.BotId.ToString("N")[..8]} drv={driver} goal={goal}/{target}/q{quest} stall={stall} home={home} risk={risk} {snap}";
+        string grp = active.GroupDriven && coordinator is { } coord ? $" grpStep={coord.FindAI(active.Record.BotId)?.Step ?? "-"}" : string.Empty;
+        return $"bot={active.Record.BotId.ToString("N")[..8]} drv={driver}{grp} goal={goal}/{target}/q{quest} stall={stall} home={home} risk={risk} {snap}";
     }
 
     /// <summary>World thread: the PvP flag a defend post turned on goes off (<see cref="PlayerbotDefend.ReleaseFlag"/>), so the saved character keeps none.</summary>

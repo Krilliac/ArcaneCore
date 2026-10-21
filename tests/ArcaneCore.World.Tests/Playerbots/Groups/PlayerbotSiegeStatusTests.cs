@@ -66,6 +66,12 @@ public sealed class PlayerbotSiegeStatusTests
         Assert.StartsWith($"raid 2 ({leader}, ", one[0], StringComparison.Ordinal);
         Assert.StartsWith("said: ", one[1], StringComparison.Ordinal);
         Assert.Equal(["Playerbot siege: no raid led by 'Nobodyhere'."], await FleetWorld.SayAsync(gm, ".playerbot siege status Nobodyhere"));
+
+        List<string> debug = await FleetWorld.SayAsync(gm, $".playerbot debug {leader}", lines: 2);
+        Assert.DoesNotContain("Playerbot is not running or was not found.", debug);
+        Assert.Contains("drv=group", debug[0], StringComparison.Ordinal);
+        Assert.Contains("grpStep=", debug[0], StringComparison.Ordinal);
+        Assert.EndsWith(", autonomous.", debug[1], StringComparison.Ordinal);
     }
 
     [Fact]

@@ -321,5 +321,13 @@ public sealed class PlayerbotPartyTests
         await gm.SendChatAsync(ChatType.Whisper, Language.Common, "what is your brain state?", "Helpgmdbg");
         ChatMessage gmDebugQuestion = await PartyTestHost.ReadWhisperFromAsync(gm, botGuid);
         Assert.StartsWith("Debug: driver=", gmDebugQuestion.Text);
+
+        // .playerbot debug <name> on an autonomous (non-party) bot succeeds and reports "autonomous" instead of failing or empty "following ".
+        List<string> autoDebug = await FleetWorld.SayAsync(gm, ".playerbot debug Helpgmdbg", lines: 2);
+        Assert.Contains("driver=autonomous", autoDebug[0], StringComparison.Ordinal);
+        Assert.Contains("drv=brain", autoDebug[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("grpStep=", autoDebug[0], StringComparison.Ordinal);
+        Assert.EndsWith(", autonomous.", autoDebug[1], StringComparison.Ordinal);
+        Assert.DoesNotContain("following ", autoDebug[1], StringComparison.Ordinal);
     }
 }

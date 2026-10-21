@@ -141,7 +141,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
         WorldSession? botSession = feature.FindSession(botId);
         if (botSession is null || botSession.State != SessionState.InWorld || botSession.Player is not { IsInWorld: true } botPlayer
-            || feature.FindParty(botId) is not { } party)
+            || feature.FindPartyAI(botId) is not { } party)
         {
             context.Reply("Playerbot is not running or was not found.");
             return true;
