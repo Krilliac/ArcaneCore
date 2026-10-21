@@ -58,19 +58,21 @@ $projectOrder = Get-MutateAllProjectOrder
 $projectRows = @($byProject.Values | Sort-Object { $i = [array]::IndexOf($projectOrder, $_.Name); if ($i -lt 0) { 99 } else { $i } })
 
 # ---- progress and projection ----
+# A batch's cost is its run time without the time it queued for a build slot.
+function Get-RunSec($b) { $q = if ($b.ContainsKey('queueSec') -and $null -ne $b['queueSec']) { [double]$b['queueSec'] } else { 0.0 }; [math]::Max([double]$b.durationSec - $q, 0.0) }
 $done = @($batches | Where-Object { $_.status -eq 'done' }); $errors = @($batches | Where-Object { $_.status -eq 'error' })
 $running = @($batches | Where-Object { $_.status -eq 'running' }); $pending = @($batches | Where-Object { $_.status -eq 'pending' })
-$activeSec = [double](($batches | Where-Object { $_.durationSec } | ForEach-Object { [double]$_.durationSec } | Measure-Object -Sum).Sum)
+$activeSec = [double](($batches | Where-Object { $_.durationSec } | ForEach-Object { Get-RunSec $_ } | Measure-Object -Sum).Sum)
 $created = ([DateTime]$state.createdUtc).ToUniversalTime()
 $wallSec = ([DateTime]::UtcNow - $created).TotalSeconds
 $doneLines = [double](($done | ForEach-Object { [double]$_.lines } | Measure-Object -Sum).Sum)
-$doneSec = [double](($done | ForEach-Object { [double]$_.durationSec } | Measure-Object -Sum).Sum)
+$doneSec = [double](($done | ForEach-Object { Get-RunSec $_ } | Measure-Object -Sum).Sum)
 $globalRate = if ($doneLines -gt 0) { $doneSec / $doneLines } else { $null }
 $remainingSec = 0.0; $unprojected = 0
 foreach ($b in @($pending) + @($running)) {
     $same = @($done | Where-Object { $_.project -eq $b.project })
     $sl = [double](($same | ForEach-Object { [double]$_.lines } | Measure-Object -Sum).Sum)
-    $rate = if ($sl -gt 0) { [double](($same | ForEach-Object { [double]$_.durationSec } | Measure-Object -Sum).Sum) / $sl } else { $globalRate }
+    $rate = if ($sl -gt 0) { [double](($same | ForEach-Object { Get-RunSec $_ } | Measure-Object -Sum).Sum) / $sl } else { $globalRate }
     if ($null -eq $rate) { $unprojected++ } else { $remainingSec += $rate * [double]$b.lines }
 }
 $judged = $total.Killed + $total.Survived + $total.NoCoverage + $total.Timeout

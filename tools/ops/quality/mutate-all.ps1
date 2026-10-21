@@ -24,6 +24,7 @@ param(
     [ValidateRange(0, 200000)] [int]$MaxLines = 0,
     [hashtable]$MaxLinesByProject,
     [string]$TestFilter,
+    [ValidateSet('Auto', 'On', 'Off')] [string]$ScopeTests = 'Auto',
     [hashtable]$TestOverride,
     [string]$PauseFile,
     [switch]$NoSlot,
@@ -107,7 +108,7 @@ else {
     New-Item -ItemType Directory -Force $runDir | Out-Null
     $state = [ordered]@{
         runId = $RunId; createdUtc = [DateTime]::UtcNow.ToString('s') + 'Z'; head = $head; headHistory = @(); repo = $repo
-        settings = [ordered]@{ concurrency = $Concurrency; maxFiles = $MaxFiles; maxLines = $MaxLines; maxLinesByProject = $lineCaps; testFilter = $TestFilter; batchTimeoutMin = $BatchTimeoutMin; slot = (-not $NoSlot); lane = $Lane }
+        settings = [ordered]@{ concurrency = $Concurrency; maxFiles = $MaxFiles; maxLines = $MaxLines; maxLinesByProject = $lineCaps; testFilter = $TestFilter; scopeTests = $ScopeTests; batchTimeoutMin = $BatchTimeoutMin; slot = (-not $NoSlot); lane = $Lane }
         unmapped = @($plan.Unmapped); skippedFiles = @($plan.SkippedFiles)
         batches = $batches
     }
@@ -151,7 +152,15 @@ function Invoke-MutateAllBatch($b) {
         '-Files', (& $quote (Get-MutateAllBatchFileArguments $b)),
         '-Concurrency', "$($settings.concurrency)", '-TimeoutMin', "$($settings.batchTimeoutMin)",
         '-OutputRoot', (& $quote $outDir))
-    if ($settings.testFilter) { $mutateArgs += @('-TestFilter', (& $quote $settings.testFilter)) }
+    # Game.Tests and World.Tests take 5 to 60+ minutes under Stryker's coverage run: scope them to the tests that mirror the batch (see Get-MutateAllScopedTestFilter).
+    $mode = if ($settings['scopeTests']) { [string]$settings['scopeTests'] } else { 'Auto' }
+    $filter = [string]$settings['testFilter']
+    if ($mode -eq 'On' -or ($mode -eq 'Auto' -and @('ArcaneCore.Game.Tests', 'ArcaneCore.World.Tests') -contains $b.testProject)) {
+        $scoped = Get-MutateAllScopedTestFilter -Batch $b -Root $repo
+        if ($scoped) { $filter = if ($filter) { "($filter)&($scoped)" } else { $scoped } }
+    }
+    $b['testFilterUsed'] = $filter
+    if ($filter) { $mutateArgs += @('-TestFilter', (& $quote $filter)) }
     $command = "pwsh -NoProfile -File $(& $quote $mutateScript) $($mutateArgs -join ' ') 2>&1 | Tee-Object -FilePath $(& $quote $mutateOut)"
     $slotOut = Join-Path $outDir 'slot.out'
     if ($settings.slot) {
@@ -241,6 +250,11 @@ try {
         catch { $rc = 1; Add-Content (Join-Path $runDir 'driver.err') "$($b.id): $($_.Exception.Message)" }
         Complete-MutateAllBatch $b $rc
         $b.durationSec = [math]::Round($watch.Elapsed.TotalSeconds, 1)
+        # Time spent queueing for a build slot is not the batch's cost: run-in-slot prints "holding slot-N.lock after <s>s".
+        $queued = 0
+        $slotText = Join-Path $runDir "batches/$($b.id)/slot.out"
+        if (Test-Path $slotText) { $hit = Select-String -Path $slotText -Pattern 'holding slot-\d+\.lock after (\d+)s' | Select-Object -First 1; if ($hit) { $queued = [int]$hit.Matches[0].Groups[1].Value } }
+        $b['queueSec'] = $queued
         $b.endedUtc = [DateTime]::UtcNow.ToString('s') + 'Z'
         Save-MutateAllState $state $runDir
         if ($b.status -eq 'done') {

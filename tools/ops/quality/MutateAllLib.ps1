@@ -321,7 +321,7 @@ function Format-MutateAllDuration {
 
 function Get-MutateAllDefaultMaxLines {
     <# .SYNOPSIS Default -MaxLines (non-blank source lines per batch) per source project, from the measured mutation rate of its test project so that a batch takes about 50 minutes at most. #>
-    @{ Cryptography = 3000; Protocol = 3000; Gateway = 3000; Realm = 3000; Kernel = 3000; Data = 3000; Game = 3000; Playerbots = 3000; 'World.Contracts' = 3000; World = 3000 }
+    @{ Cryptography = 3000; Protocol = 4000; Gateway = 3000; Realm = 3000; Kernel = 3000; Data = 3000; Game = 5000; Playerbots = 4000; 'World.Contracts' = 4000; World = 4000 }
 }
 
 function Split-MutateAllBatch {
@@ -331,18 +331,7 @@ function Split-MutateAllBatch {
       new batch records (status pending, ids <id>a and <id>b, splitDepth one deeper), or $null when the batch has fewer than 2 files.
     #>
     param([Parameter(Mandatory)] $Batch, [Parameter(Mandatory)] [string]$Root)
-    $directory = Join-Path $Root "src/$($Batch['project'])"
-    $excluded = [System.Collections.Generic.HashSet[string]]::new([string[]]@($Batch['exclude']), [StringComparer]::Ordinal)
-    $members = @(Get-MutateAllSourceFiles -ProjectDirectory $directory | Where-Object {
-            $rel = $_.Rel
-            if (-not $_.Eligible -or $excluded.Contains($rel)) { return $false }
-            foreach ($inc in @($Batch['include'])) {
-                if ($inc -ceq '**/*.cs') { return $true }
-                if ($inc.EndsWith('/**/*.cs', [StringComparison]::Ordinal)) { if ($rel.StartsWith($inc.Substring(0, $inc.Length - 7), [StringComparison]::Ordinal)) { return $true } }
-                elseif ($inc -ceq $rel) { return $true }
-            }
-            $false
-        } | Sort-Object Rel)
+    $members = @(Get-MutateAllBatchFiles -Batch $Batch -Root $Root)
     if ($members.Count -lt 2) { return $null }
     $total = [int](($members | Measure-Object Lines -Sum).Sum)
     $cut = 1; $running = 0
@@ -366,4 +355,45 @@ function Split-MutateAllBatch {
             })
     }
     $result
+}
+
+function Get-MutateAllBatchFiles {
+    <# .SYNOPSIS The eligible source files { Rel, Lines } a batch covers (its include globs and explicit files, minus its excluded files), in file order. #>
+    param([Parameter(Mandatory)] $Batch, [Parameter(Mandatory)] [string]$Root)
+    $directory = Join-Path $Root "src/$($Batch['project'])"
+    $excluded = [System.Collections.Generic.HashSet[string]]::new([string[]]@($Batch['exclude']), [StringComparer]::Ordinal)
+    @(Get-MutateAllSourceFiles -ProjectDirectory $directory | Where-Object {
+            $rel = $_.Rel
+            if (-not $_.Eligible -or $excluded.Contains($rel)) { return $false }
+            foreach ($inc in @($Batch['include'])) {
+                if ($inc -ceq '**/*.cs') { return $true }
+                if ($inc.EndsWith('/**/*.cs', [StringComparison]::Ordinal)) { if ($rel.StartsWith($inc.Substring(0, $inc.Length - 7), [StringComparison]::Ordinal)) { return $true } }
+                elseif ($inc -ceq $rel) { return $true }
+            }
+            $false
+        } | Sort-Object Rel)
+}
+
+function Get-MutateAllScopedTestFilter {
+    <#
+    .SYNOPSIS
+      A vstest filter that limits a batch's test run to the tests that plausibly cover its files: every test whose namespace is
+      <TestProject>.<top-level source directory> (when tests/<TestProject>/<directory> exists) or whose full name contains the name of
+      one of the batch's classes (file name up to the first dot, at least 4 characters). Returns $null when the batch gives no term.
+      This is a heuristic: a mutant that only a test outside these names covers is reported NoCoverage, so a scoped score is a lower bound.
+    #>
+    param([Parameter(Mandatory)] $Batch, [Parameter(Mandatory)] [string]$Root)
+    $testRoot = Join-Path $Root "tests/$($Batch['testProject'])"
+    $files = @(Get-MutateAllBatchFiles -Batch $Batch -Root $Root)
+    $terms = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($f in $files) {
+        $segments = $f.Rel.Split('/')
+        if ($segments.Count -gt 1 -and (Test-Path -LiteralPath (Join-Path $testRoot $segments[0]) -PathType Container)) {
+            [void]$terms.Add("FullyQualifiedName~$($Batch['testProject']).$($segments[0]).")
+        }
+        $name = ($segments[-1] -replace '\.cs$', '').Split('.')[0]
+        if ($name.Length -ge 4) { [void]$terms.Add("FullyQualifiedName~$name") }
+    }
+    if ($terms.Count -eq 0) { return $null }
+    $terms -join '|'
 }
