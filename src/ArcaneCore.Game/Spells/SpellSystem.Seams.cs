@@ -250,6 +250,10 @@ public sealed partial class SpellSystem
 
         public bool SlotLimited { get; set; }
 
+        public uint Absorbed { get; set; }
+
+        public uint Resisted { get; set; }
+
         /// <summary>The target's procs already ran (the first direct damage fires them before the sink, Spell.cpp:1444-1456).</summary>
         public bool ProcsDone { get; set; }
 
@@ -262,16 +266,18 @@ public sealed partial class SpellSystem
 
         public List<DeferredNonMeleeDamageLog> DeferredNonMeleeLogs { get; } = [];
 
-        public SpellTargetOutcome Build() => new(Target, SpellMissInfo.None, Damage, Healing, Critical, EffectMask, SlotLimited);
+        public SpellTargetOutcome Build() => new(Target, SpellMissInfo.None, Damage, Healing, Critical, EffectMask, SlotLimited, Absorbed, Resisted);
     }
 
     /// <summary>Credit damage dealt by <paramref name="spell"/> to the outcome being built, if it is for that cast and target.</summary>
-    private void RecordDamage(Unit caster, Unit target, SpellInfo spell, uint dealt, bool critical)
+    private void RecordDamage(Unit caster, Unit target, SpellInfo spell, uint dealt, bool critical, uint absorbed = 0, uint resisted = 0)
     {
         if (_outcome is { } outcome && ReferenceEquals(outcome.Target, target) && ReferenceEquals(outcome.Cast.Caster, caster)
             && outcome.Cast.Spell.Id == spell.Id)
         {
             outcome.Damage += dealt;
+            outcome.Absorbed += absorbed;
+            outcome.Resisted += resisted;
             outcome.Critical |= critical;
         }
     }

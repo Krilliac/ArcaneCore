@@ -197,6 +197,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
     private bool Unmeasurable(SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {
         if ((selected & facts.DamageMask & ~facts.InstakillMask) == 0) return false;
+        if (outcome.Absorbed > 0 || outcome.Resisted > 0) return true;
         IReadOnlyList<SpellAuraHolder> holders = _gaps.System.GetAuras(outcome.Target);
         for (int i = 0; i < holders.Count; i++)
         {
