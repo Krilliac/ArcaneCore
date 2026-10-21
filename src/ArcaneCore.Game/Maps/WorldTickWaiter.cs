@@ -21,8 +21,9 @@ public enum WorldTickTimer
 }
 
 /// <summary>
-/// The world thread's wait until a due time on its <see cref="Stopwatch"/> clock, interruptible by the stop signal. One
-/// instance per world thread; not thread-safe.
+/// The world thread's wait until a due time on its <see cref="Stopwatch"/> clock, interruptible by the stop signal and, when one
+/// was given, by a wake signal (the manual clock's "work arrived"). One instance per world thread; not thread-safe, but the
+/// signals may be set from any thread.
 /// </summary>
 public sealed class WorldTickWaiter : IDisposable
 {
@@ -33,16 +34,29 @@ public sealed class WorldTickWaiter : IDisposable
     public const long DefaultSpinMarginMicros = 0;
 
     private readonly ManualResetEventSlim _stop;
+    private readonly ManualResetEventSlim? _wake;
     private readonly WorldTickTimer _mode;
     private readonly long _spinMarginTicks;
     private readonly HighResolutionTimer? _timer;
     private readonly WaitHandle[]? _handles;
+    private readonly WaitHandle[]? _eventHandles; // stop, wake: the event waits when a wake signal is given
 
-    public WorldTickWaiter(WorldTickTimer mode, ManualResetEventSlim stop, long spinMarginMicros = DefaultSpinMarginMicros)
+    /// <param name="wake">
+    /// Optional second interrupt: when set (before or during the wait) the wait returns early. The caller resets it. Null
+    /// (production) keeps the wait exactly as it was.
+    /// </param>
+    public WorldTickWaiter(WorldTickTimer mode, ManualResetEventSlim stop, long spinMarginMicros = DefaultSpinMarginMicros,
+        ManualResetEventSlim? wake = null)
     {
         ArgumentNullException.ThrowIfNull(stop);
         ArgumentOutOfRangeException.ThrowIfNegative(spinMarginMicros);
         _stop = stop;
+        _wake = wake;
+        if (wake is not null)
+        {
+            _eventHandles = [stop.WaitHandle, wake.WaitHandle];
+        }
+
         _mode = mode;
         _spinMarginTicks = spinMarginMicros * Stopwatch.Frequency / 1_000_000;
         if (mode == WorldTickTimer.Precise && OperatingSystem.IsWindows())
@@ -50,7 +64,7 @@ public sealed class WorldTickWaiter : IDisposable
             _timer = HighResolutionTimer.TryCreate();
             if (_timer is not null)
             {
-                _handles = [_timer, stop.WaitHandle];
+                _handles = wake is null ? [_timer, stop.WaitHandle] : [_timer, stop.WaitHandle, wake.WaitHandle];
             }
             else
             {
@@ -76,7 +90,14 @@ public sealed class WorldTickWaiter : IDisposable
         {
             if (legacyWaitMs > 0)
             {
-                _stop.Wait(legacyWaitMs);
+                if (_eventHandles is not null)
+                {
+                    WaitHandle.WaitAny(_eventHandles, legacyWaitMs);
+                }
+                else
+                {
+                    _stop.Wait(legacyWaitMs);
+                }
             }
 
             return;
@@ -89,15 +110,15 @@ public sealed class WorldTickWaiter : IDisposable
             {
                 // Relative due time in 100 ns units (negative = relative).
                 _timer.Set(-Math.Max(1, sleep * 10_000_000 / Stopwatch.Frequency));
-                if (WaitHandle.WaitAny(_handles!) == 1)
+                if (WaitHandle.WaitAny(_handles!) >= 1)
                 {
-                    return;
+                    return; // stop or wake
                 }
             }
             else
             {
                 int ms = (int)(sleep * 1000 / Stopwatch.Frequency);
-                if (ms > 0 && _stop.Wait(ms))
+                if (ms > 0 && (_eventHandles is not null ? WaitHandle.WaitAny(_eventHandles, ms) != WaitHandle.WaitTimeout : _stop.Wait(ms)))
                 {
                     return;
                 }
@@ -109,7 +130,7 @@ public sealed class WorldTickWaiter : IDisposable
         while (true)
         {
             long now = clock.ElapsedTicks;
-            if (now >= dueTicks || _stop.IsSet)
+            if (now >= dueTicks || _stop.IsSet || (_wake is not null && _wake.IsSet))
             {
                 return;
             }

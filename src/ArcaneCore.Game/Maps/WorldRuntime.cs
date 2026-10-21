@@ -28,6 +28,9 @@ public sealed partial class WorldRuntime : IDisposable
     private readonly ConcurrentDictionary<string, Player> _onlineByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly ManualResetEventSlim _stopSignal = new(false);
+    // Manual clock only: set by Post/InvokeAsync/AdvanceClock*/session enqueue so the world thread does not sleep a whole tick
+    // interval before it looks at the queue. Never set on the real clock (production tick cadence is unchanged).
+    private readonly ManualResetEventSlim _wakeSignal = new(false);
     private Thread? _thread;
     private int _worldThreadId = -1;
     private ulong _autosaveClockMs; // world thread: the sum of tick diffs, the clock the per-character autosave timers run on
@@ -408,7 +411,23 @@ public sealed partial class WorldRuntime : IDisposable
     }
 
     /// <summary>Queue work for the start of the next tick. Thread-safe.</summary>
-    public void Post(Action command) => _commands.Enqueue(command);
+    public void Post(Action command)
+    {
+        _commands.Enqueue(command);
+        WakeIfManual();
+    }
+
+    /// <summary>
+    /// Manual clock only: end the world thread's idle wait now, so work that was just queued (a command, a session packet) runs on
+    /// the next tick instead of after the rest of the tick interval. A no-op on the real clock. Thread-safe, allocation-free.
+    /// </summary>
+    public void WakeIfManual()
+    {
+        if (_manualClock)
+        {
+            _wakeSignal.Set();
+        }
+    }
 
     /// <summary>
     /// Run <paramref name="func"/> on the world thread and return its result. The task is cancelled when <paramref name="cancellationToken"/>
@@ -822,6 +841,7 @@ public sealed partial class WorldRuntime : IDisposable
         Stop();
         DisposeMapScheduler();
         _stopSignal.Dispose();
+        // _wakeSignal is not disposed: a session may still enqueue (and wake) after shutdown, and Set on a disposed event throws.
     }
 
     private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)
@@ -1218,7 +1238,7 @@ public sealed partial class WorldRuntime : IDisposable
         int tolerance = Math.Clamp(Options.TickLateToleranceMs, 0, 1000);
         Scheduler = new WorldTickScheduler(interval, tolerance);
         Stats.FrameOverrunToleranceMicros = tolerance * 1000L;
-        using var waiter = new WorldTickWaiter(Options.TickTimer, _stopSignal, TickSpinMarginMicros);
+        using var waiter = new WorldTickWaiter(Options.TickTimer, _stopSignal, TickSpinMarginMicros, _manualClock ? _wakeSignal : null);
         EffectiveTickTimer = waiter.Mode;
         long last = _clock.ElapsedMilliseconds;
         long lastStartTicks = -1;
@@ -1235,6 +1255,12 @@ public sealed partial class WorldRuntime : IDisposable
 
         while (!_stopSignal.IsSet)
         {
+            if (_manualClock)
+            {
+                // Before the tick drains the queue: anything queued after this reset sets the signal again and ends the next wait.
+                _wakeSignal.Reset();
+            }
+
             long startTicks = _clock.ElapsedTicks;
             long tickStart = startTicks * 1000 / Stopwatch.Frequency;
             uint diff = (uint)Math.Clamp(tickStart - last, 0, uint.MaxValue);
@@ -1308,6 +1334,14 @@ public sealed partial class WorldRuntime : IDisposable
                 {
                     continue; // advances run their ticks back to back
                 }
+            }
+
+            if (_manualClock)
+            {
+                // Idle wait of one interval, cut short by a wake. The drift-compensated cadence is not used: early wakes would
+                // push its due time ahead and stretch the periodic zero-diff tick.
+                waiter.WaitUntil(_clock, _clock.ElapsedTicks + interval * Stopwatch.Frequency / 1000, interval);
+                continue;
             }
 
             int wait = Scheduler.NextWait(tickStart, _clock.ElapsedMilliseconds);
