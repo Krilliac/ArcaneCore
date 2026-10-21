@@ -443,6 +443,67 @@ public sealed class EventScenarioEngineTests
     }
 
     [Fact]
+    public void APlacedSiegeBotCarriedOffBeforeTheSiegeStarts_IsPlacedAgain_AndNeitherReadyNorEnlistedUntilBack()
+    {
+        var rig = new Rig(Raiders(count: 5, minReady: 100));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        FakeBot late = rig.Host.Add("Siegebote", team: 0); // the fifth is not online yet, so the group keeps waiting
+        late.Desired = true;
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(3);
+        Assert.Equal(4, rig.Host.Teleports.Count);
+        Assert.Contains("placed 4", rig.Status());
+
+        FakeBot drifter = rig.Host.Find("Siegebota");
+        drifter.Position = new Vector3(-1000f, 100f, 40f); // 1,000 yards away: autonomous play walked it off
+        drifter.Map = 1;
+        rig.Host.TeleportRefusal = "teleport-refused";
+        rig.Ticks(2);
+
+        Assert.True(rig.Host.Teleports.Count > 4, "the drifted bot is teleported back");
+        Assert.Contains("placed 3", rig.Status());
+        Assert.Contains("siege waiting: 3/5 ready", rig.Status());
+        Assert.Empty(rig.Host.SiegeStarts);
+
+        rig.Host.TeleportRefusal = null;
+        late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        rig.Ticks(10);
+
+        Assert.Single(rig.Host.SiegeStarts);
+        Assert.Equal(5, rig.Host.SiegeStarts[0].Bots.Count);
+        Assert.Contains(drifter.Id, rig.Host.SiegeStarts[0].Bots);
+        Assert.True(Vector3.Distance(drifter.Position, Start) <= EventScenarioEngine.PlacedYards);
+    }
+
+    [Fact]
+    public void PlacedSiegeBots_HoldTheStartWhileTheyWait_AndAreReleasedWhenTheSiegeStarts()
+    {
+        var rig = new Rig(Raiders(count: 5, minReady: 100));
+        for (int i = 0; i < 4; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        FakeBot late = rig.Host.Add("Siegebote", team: 0);
+        late.Desired = true;
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(4);
+
+        Assert.Empty(rig.Host.SiegeStarts);
+        FakeBot[] placed = [.. rig.Host.Bots.Where(b => b.Online)];
+        Assert.Equal(4, placed.Length);
+        foreach (FakeBot bot in placed)
+        {
+            PlayerbotDefendPost post = Assert.IsType<PlayerbotDefendPost>(rig.Host.Posts[bot.Id]);
+            Assert.True(EventScenarioPostIds.IsScenario(post.PostId));
+            Assert.Equal(Start, post.Centre);
+            Assert.True(post.Radius < EventScenarioEngine.PlacedYards);
+        }
+
+        late.OnlineAt(1, new Vector3(-3000f, 100f, 40f), 60);
+        rig.Ticks(4);
+
+        Assert.Single(rig.Host.SiegeStarts);
+        foreach (FakeBot bot in rig.Host.Bots) Assert.Null(rig.Host.Posts.GetValueOrDefault(bot.Id));
+    }
+
+    [Fact]
     public void ARefusedSiege_IsShownWithItsReason_AndRetriedUntilItStarts()
     {
         var rig = new Rig(Raiders(count: 4));
