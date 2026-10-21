@@ -26,7 +26,7 @@ param(
     [string]$TestFilter,
     [ValidateSet('Auto', 'On', 'Off')] [string]$ScopeTests = 'Auto',
     [hashtable]$TestOverride,
-    [string]$PauseFile = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path 'artifacts\mutation\mutate.pause'),
+    [string]$PauseFile = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path 'artifacts/mutation/mutate.pause'),
     [switch]$NoSlot,
     [string]$Lane = 'mutate-all',
     [string]$SlotRunner = (Join-Path (Split-Path -Parent $PSScriptRoot) 'ci\run-in-slot.ps1'),
@@ -61,8 +61,8 @@ $mutateScript = Join-Path $PSScriptRoot 'mutate.ps1'
 $reportScript = Join-Path $PSScriptRoot 'mutate-report.ps1'
 
 # The repo pins a .NET 11 preview SDK (global.json) that lives in the user's own dotnet root.
-$userDotnet = Join-Path $env:USERPROFILE '.dotnet'
-if (Test-Path (Join-Path $userDotnet 'dotnet.exe')) { $env:DOTNET_ROOT = $userDotnet; $env:PATH = "$userDotnet;$env:PATH" }
+$userDotnet = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.dotnet' } elseif ($HOME) { Join-Path $HOME '.dotnet' } else { '' }
+if ($userDotnet -and (Test-Path (Join-Path $userDotnet 'dotnet.exe'))) { $env:DOTNET_ROOT = $userDotnet; $env:PATH = "$userDotnet;$env:PATH" }
 
 function Get-Head { $h = (& git -C $repo rev-parse HEAD 2>&1); if ($LASTEXITCODE -ne 0) { Stop-MutateAll "git rev-parse HEAD failed: $h" }; "$h".Trim() }
 function Test-Dirty { [bool](@(& git -C $repo status --porcelain -- src tests) | Where-Object { $_ }) }
