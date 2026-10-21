@@ -78,6 +78,8 @@ needs recovering: fix the cause and run the file again.
 The files carry the schema and the version row only. Initial rows (configured realms, the Warden scan table, M3 world data) are
 written by the daemons' initializers at start, into empty tables, and are not part of the schema.
 
+Content ArcaneCore ships as rows (the Undercity siege bot scenario) is separate idempotent SQL under [`sql/content`](../content/README.md).
+
 ## For contributors
 
 A change that adds a schema step must regenerate and commit its update files in the same PR:

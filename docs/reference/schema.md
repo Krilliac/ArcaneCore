@@ -11,7 +11,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
 | `characters` | 63 | `characters` |
-| `world` | 53 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 54 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -145,5 +145,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 51 | `World.Creatures.SmartScriptConditionDataModule` | adds columns `smart_scripts.ConditionId` |
 | 52 | `World.Instances.InstanceEncounterDataModule` | creates `instance_encounter` |
 | 53 | `Npc.VendorTemplateDataModule` | creates `npc_vendor_template`; adds columns `creature_template.VendorTemplateId` |
+| 54 | `World.WorldState.GameEventPlayerbotDataModule` | creates `game_event_playerbot_group`, `game_event_playerbot_post`, `game_event_playerbot_siege`, `game_event_playerbot_waypoint` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

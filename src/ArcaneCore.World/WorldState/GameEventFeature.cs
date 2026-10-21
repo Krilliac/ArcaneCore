@@ -150,13 +150,34 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     /// <summary>
     /// Register a listener that outlives service replacement (a reload builds a new <see cref="GameEventService"/>; a listener
     /// added to the service itself would be lost with it). It is told after every start and stop, like
-    /// <see cref="GameEventService.AddListener"/>.
+    /// <see cref="GameEventService.AddListener"/>. Dispose the returned registration to take the listener off again (a detachable
+    /// feature does it when it detaches); disposing twice does nothing more. World thread.
     /// </summary>
-    public void AddListener(IGameEventListener listener)
+    public IDisposable AddListener(IGameEventListener listener)
     {
         ArgumentNullException.ThrowIfNull(listener);
         _listeners.Add(listener);
         _service?.AddListener(listener);
+        return new ListenerRegistration(this, listener);
+    }
+
+    /// <summary>The listeners registered through <see cref="AddListener"/> and not yet disposed.</summary>
+    public int ListenerCount => _listeners.Count;
+
+    private void RemoveListener(IGameEventListener listener)
+    {
+        _listeners.Remove(listener);
+        _service?.RemoveListener(listener);
+    }
+
+    private sealed class ListenerRegistration(GameEventFeature owner, IGameEventListener listener) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) owner.RemoveListener(listener);
+        }
     }
 
     private readonly List<IGameEventListener> _listeners = [];
