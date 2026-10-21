@@ -206,7 +206,17 @@ internal sealed class PlayerbotMount
     /// <summary>Takes the bot's mount off when <paramref name="opcode"/> is one a rider cannot send. Called on the world thread by <c>TryManagedAction</c>.</summary>
     internal static void DismountForAction(WorldSession session, Player player, WorldOpcode opcode)
     {
-        if (!NeedsDismount(opcode) || !MountService.IsMounted(player) || session.Services.GetService<SpellFeature>() is not { } spells) return;
+        if (!NeedsDismount(opcode)) return;
+        bool mounted = MountService.IsMounted(player);
+        bool taxiShapeshifted = opcode is WorldOpcode.CmsgActivatetaxi or WorldOpcode.CmsgActivatetaxiexpress
+            && FormInterlocks.BlocksTaxi(player);
+        if ((!mounted && !taxiShapeshifted) || session.Services.GetService<SpellFeature>() is not { } spells) return;
+        if (taxiShapeshifted)
+        {
+            spells.System.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
+            if (FormInterlocks.BlocksTaxi(player)) player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
+        }
+        if (!mounted) return;
         spells.System.RemoveSpellsCausingAura(player, AuraType.Mounted);
         if (MountService.IsMounted(player)) MountService.Unmount(spells.System, player);
         For(session)._casting = false;

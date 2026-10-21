@@ -333,6 +333,100 @@ public sealed partial class PlayerbotTaxiTests
     }
 
     [Fact]
+    public async Task AShapeshiftedBot_LeavesItsFormBeforeTheFlightRequest_AndFlies()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            Rig.Know(state, 1, 2, 3);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            ArcaneCore.World.Spells.SpellFeature spells = rig.Session.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>();
+            var catForm = new ArcaneCore.Game.Spells.SpellInfo
+            {
+                Id = 768,
+                Name = "Cat Form",
+                RangeIndex = ArcaneCore.Game.Spells.SpellConstants.RangeIndexSelfOnly,
+                Duration = new ArcaneCore.Game.Spells.SpellDuration(-1, 0, -1),
+                Effects =
+                [
+                    new ArcaneCore.Game.Spells.SpellEffectInfo
+                    {
+                        Effect = ArcaneCore.Game.Spells.SpellEffectName.ApplyAura,
+                        AuraType = ArcaneCore.Game.Spells.AuraType.ModShapeshift,
+                        MiscValue = (int)ArcaneCore.Game.Spells.ShapeshiftForm.Cat,
+                        TargetA = ArcaneCore.Game.Spells.SpellImplicitTarget.UnitCaster,
+                    },
+                ],
+            };
+            var battleStance = new ArcaneCore.Game.Spells.SpellInfo
+            {
+                Id = 2457,
+                Name = "Battle Stance",
+                RangeIndex = ArcaneCore.Game.Spells.SpellConstants.RangeIndexSelfOnly,
+                Duration = new ArcaneCore.Game.Spells.SpellDuration(-1, 0, -1),
+                Effects =
+                [
+                    new ArcaneCore.Game.Spells.SpellEffectInfo
+                    {
+                        Effect = ArcaneCore.Game.Spells.SpellEffectName.ApplyAura,
+                        AuraType = ArcaneCore.Game.Spells.AuraType.ModShapeshift,
+                        MiscValue = (int)ArcaneCore.Game.Spells.ShapeshiftForm.BattleStance,
+                        TargetA = ArcaneCore.Game.Spells.SpellImplicitTarget.UnitCaster,
+                    },
+                ],
+            };
+            spells.System.Store = new ArcaneCore.Game.Spells.SpellStore(
+                spells.System.Store.All.Append(catForm).Append(battleStance), [], []);
+
+            // 1. 2-node flight (CmsgActivatetaxi) in Cat Form: form is cancelled and flight succeeds.
+            Assert.True(spells.System.AddAura(player, catForm.Id));
+            Assert.Equal(ArcaneCore.Game.Spells.ShapeshiftForm.Cat, ArcaneCore.Game.Spells.ShapeshiftService.GetForm(player));
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            Assert.Equal([1u, 2u], Assert.IsType<TaxiTrip>(PlayerbotTaxi.TripOf(player)).Nodes);
+            rig.Session.ManagedBudget = new ManagedActionBudget(2);
+            Assert.Equal(TaxiStep.Traveling, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out string? failure));
+            Assert.Null(failure);
+            Assert.Equal(ArcaneCore.Game.Spells.ShapeshiftForm.None, ArcaneCore.Game.Spells.ShapeshiftService.GetForm(player));
+            Assert.False(spells.System.HasAura(player, catForm.Id));
+            Assert.True(PlayerbotTaxi.IsFlying(player));
+            rig.FlyUntilLanded(player);
+            Assert.Equal(TaxiStep.Arrived, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out _));
+            Assert.Equal(TaxiStep.Idle, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out _));
+
+            // 2. 3-node flight (CmsgActivatetaxiexpress) in Cat Form: form is cancelled and express flight succeeds.
+            Vector3 node1 = rig.NodePosition(1);
+            player.Relocate(node1.X, node1.Y, node1.Z, 0, rig.Session.World.NowMs);
+            Assert.True(spells.System.AddAura(player, catForm.Id));
+            Assert.Equal(ArcaneCore.Game.Spells.ShapeshiftForm.Cat, ArcaneCore.Game.Spells.ShapeshiftService.GetForm(player));
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(3), options));
+            Assert.Equal([1u, 2u, 3u], Assert.IsType<TaxiTrip>(PlayerbotTaxi.TripOf(player)).Nodes);
+            rig.Session.ManagedBudget = new ManagedActionBudget(2);
+            Assert.Equal(TaxiStep.Traveling, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out failure));
+            Assert.Null(failure);
+            Assert.Equal(ArcaneCore.Game.Spells.ShapeshiftForm.None, ArcaneCore.Game.Spells.ShapeshiftService.GetForm(player));
+            Assert.False(spells.System.HasAura(player, catForm.Id));
+            Assert.True(PlayerbotTaxi.IsFlying(player));
+            rig.FlyUntilLanded(player);
+            Assert.Equal(TaxiStep.Arrived, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out _));
+            Assert.Equal(TaxiStep.Idle, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out _));
+
+            // 3. Allowed stance (BattleStance) is preserved when boarding a flight.
+            player.Relocate(node1.X, node1.Y, node1.Z, 0, rig.Session.World.NowMs);
+            Assert.True(spells.System.AddAura(player, battleStance.Id));
+            Assert.Equal(ArcaneCore.Game.Spells.ShapeshiftForm.BattleStance, ArcaneCore.Game.Spells.ShapeshiftService.GetForm(player));
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+            rig.Session.ManagedBudget = new ManagedActionBudget(2);
+            Assert.Equal(TaxiStep.Traveling, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out failure));
+            Assert.Null(failure);
+            Assert.Equal(ArcaneCore.Game.Spells.ShapeshiftForm.BattleStance, ArcaneCore.Game.Spells.ShapeshiftService.GetForm(player));
+            Assert.True(spells.System.HasAura(player, battleStance.Id));
+            Assert.True(PlayerbotTaxi.IsFlying(player));
+            return 0;
+        });
+    }
+
+    [Fact]
     public async Task TheBrain_NeitherThinksNorMoves_WhileTheBotIsInTheAir_AndContinuesAfterTheLanding()
     {
         await using Rig rig = await Rig.StartAsync();
