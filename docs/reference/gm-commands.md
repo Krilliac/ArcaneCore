@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 558 |
+| `Administrator` | 6 | 561 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
