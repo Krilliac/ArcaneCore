@@ -52,8 +52,8 @@ with a single re-file.
 A unit has its position twice: `X`/`Y`/`Z`/`Orientation` and the position in its movement block (`Unit.Movement`, written
 in create blocks and re-applied by `ApplyMovement`). The two are always equal: every position write, by `SetPosition`,
 `Relocate` or a single setter, copies itself into the movement block (`Unit.OnPositionWritten`), as vmangos
-`WorldObject::Relocate` and `SetOrientation` write `m_movementInfo` (`Object.cpp:1567-1598`). Only the position follows: the
-flags, time stamp and transport data stay what the last movement, relocation or flag change made them, so a server-side move
+`WorldObject::Relocate` and `SetOrientation` write `m_movementInfo` ([Object.cpp:1567-1598](https://github.com/vmangos/core/blob/0e3ff01e76d4758e8a7c3108b2717cc785ed56fa/src/game/Objects/Object.cpp#L1567-L1598)). Only the position follows: the
+flags, time stamp (see [Reference discrepancies](#reference-discrepancies)) and transport data stay what the last movement, relocation or flag change made them, so a server-side move
 keeps walk mode, and a teleport start (`ResetMovementForTeleport`, which re-applies the block with the moving flags cleared)
 leaves the unit where it is.
 
@@ -278,6 +278,7 @@ and `import` the teleports (docs/areas/content-import.md).
 | Terrain of a map id after its last map | deleted with that map, tiles at once (`Map::~Map` → `UnloadTerrain`) | — | — | dropped by the clean-up that frees its last tile (up to a minute later); an instance made meanwhile takes it again |
 | `areatrigger_teleport` / `map_template` columns | also `patch`, `build`, `required_condition`, `ghost_entrance_*` | `required_quest_*`, `required_item*`, … | — | the columns ArcaneCore uses, including `ghost_entrance_*`, `required_item`/`required_item2`, `required_quest_done` and the condition reference (docs/areas/area-triggers.md); the importer keeps the newest `patch` up to 10 and stores no patch column (docs/areas/content-import.md) |
 | Teleport observers set | `ObjectMessageDeliverer`: players in the cells within visibility distance | — | — | observers within visibility distance (clients without the mover ignore the packet anyway) |
+| Movement block on a position write | `WorldObject::Relocate` calls `m_movementInfo.ChangePosition` and `UpdateTime(getMSTime())` ([Object.cpp:1567-1577](https://github.com/vmangos/core/blob/0e3ff01e76d4758e8a7c3108b2717cc785ed56fa/src/game/Objects/Object.cpp#L1567-L1577); `UpdateTime` sets `stime`, [MovementInfo.h:204](https://github.com/vmangos/core/blob/0e3ff01e76d4758e8a7c3108b2717cc785ed56fa/src/game/Objects/MovementInfo.h#L204)); `SetOrientation` calls `ChangeOrientation` ([Object.cpp:1592-1598](https://github.com/vmangos/core/blob/0e3ff01e76d4758e8a7c3108b2717cc785ed56fa/src/game/Objects/Object.cpp#L1592-L1598)) | — | — | the position and orientation are copied (`Unit.OnPositionWritten`); the time stamp is deliberately kept: `FlagAuthorityObserver` measures speed from the stored block's server time to the next client block, and a fresh stamp on every server-side move (a bot floor snap, a creature turning) would shorten that interval and could flag an ordinary move |
 
 ## Tests
 
