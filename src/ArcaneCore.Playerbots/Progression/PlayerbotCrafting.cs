@@ -4,7 +4,10 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+
+
 using ArcaneCore.Game.Loot;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
@@ -390,9 +393,9 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                     while (distantFocus is not null)
                     {
                         TargetEntry = distantFocus.Entry;
-                        PlanOutcome planned = PlayerbotNavigation.PlanExact(
+                        PlanOutcome planned = PlanToSpellFocus(
                             player,
-                            new Vector3(distantFocus.X, distantFocus.Y, distantFocus.Z),
+                            distantFocus,
                             _options,
                             ref _tileWait,
                             now,
@@ -426,7 +429,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                     _routeTarget = distantFocus!.Guid;
                 }
 
-                if (PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
+                if (PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now)
+                    && !HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, null, out _))
                     return true;
 
                 // The walk is over: when it ended in reach of the focus the recipe is cast now, else the bot gives up on it for a while.
@@ -846,6 +850,69 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _refusedUntil[SpellKey(recipe.Id)] = unchecked(now + backoff);
         _refusedUntil[FocusKey(recipe.RequiresSpellFocus)] = unchecked(now + backoff);
         _refusedUntil[focus.Guid.Value] = unchecked(now + backoff);
+    }
+
+    /// <summary>
+    /// Plans a route that ends within <paramref name="focus"/>'s server-accepted reach
+    /// (<see cref="GameObjectMapSystem.FindSpellFocus"/>: <c>data1 + go.BoundingRadius + player.BoundingRadius</c>). Tries the exact
+    /// centre first; when the centre lies inside an unwalkable firepit or tent (e.g. Camp Taurajo), accepts a nearest-end partial path or
+    /// one of eight evenly-spaced ring points inside the focus radius whose route end lands within reach.
+    /// </summary>
+    private static PlanOutcome PlanToSpellFocus(
+        Player player,
+        GameObject focus,
+        PlayerbotOptions options,
+        ref TileWait tileWait,
+        uint now,
+        out PlayerbotRoute? route)
+    {
+        Vector3 focusPos = new(focus.X, focus.Y, focus.Z);
+        float focusReach = MathF.Max(focus.Template.GetData(1), 1f) + focus.BoundingRadius + player.BoundingRadius;
+
+        PlanOutcome exact = PlayerbotNavigation.PlanExact(player, focusPos, options, ref tileWait, now, out route);
+        if (exact is PlanOutcome.Route or PlanOutcome.Pending)
+            return exact;
+
+        if (focusReach > PlayerbotNavigationAnomalies.PathEndShortYards
+            && PlayerbotNavigation.TryPlan(player, focusPos, options, out PlayerbotRoute? nearRoute, trial: true, nearestEnd: true)
+            && nearRoute is { Points.Count: > 0 }
+            && Vector3.Distance(nearRoute.Points[^1], focusPos) <= focusReach - 0.25f)
+        {
+            tileWait.Reset();
+            route = nearRoute;
+            return PlanOutcome.Route;
+        }
+
+        float ringRadius = MathF.Min(focusReach * 0.65f, focusReach - 0.5f);
+        if (ringRadius > 0.5f)
+        {
+            var collision = player.Map?.Collision;
+            for (int i = 0; i < 8; i++)
+            {
+                float angle = i * (MathF.Tau / 8f);
+                float rx = focusPos.X + (MathF.Cos(angle) * ringRadius);
+                float ry = focusPos.Y + (MathF.Sin(angle) * ringRadius);
+                float rz = focusPos.Z;
+                if (collision is not null)
+                {
+                    float h = collision.GetHeight(rx, ry, focusPos.Z);
+                    if (!PlayerbotNavigation.InvalidHeight(h))
+                        rz = h;
+                }
+
+                var ringPoint = new Vector3(rx, ry, rz);
+                if (PlayerbotNavigation.TryPlan(player, ringPoint, options, out PlayerbotRoute? ringRoute, trial: true)
+                    && ringRoute is { Points.Count: > 0 }
+                    && Vector3.Distance(ringRoute.Points[^1], focusPos) <= focusReach - 0.25f)
+                {
+                    tileWait.Reset();
+                    route = ringRoute;
+                    return PlanOutcome.Route;
+                }
+            }
+        }
+
+        return exact;
     }
 
     private static bool HasNearbySpellFocus(Player player, uint spellFocusType, Dictionary<ulong, uint>? refused, out GameObject? nearestOutOfRange)
