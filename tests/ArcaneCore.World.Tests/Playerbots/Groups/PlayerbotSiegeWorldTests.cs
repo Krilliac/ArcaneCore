@@ -2386,7 +2386,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     {
         var siege = new PlayerbotSiege(1, 0, 1, [new Vector3(10f, 0f, 0f), new Vector3(20f, 0f, 0f)], default, 1_000);
         uint now = 1_000, unledTotal = 0, moved = 0;
-        // Every 10 s the raid loses its leader for 1 s (a death and a prompt promotion), every second tick-step of 500 ms is simulated.
+        // Every 10 s the raid loses its leader for 1 s (a death and a prompt promotion); the ticks are 500 ms apart.
         while (moved == 0 && now < 1_000 + (2 * PlayerbotGroupCoordinator.StepDeadlineMs))
         {
             now += 500;
@@ -2422,6 +2422,50 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.False(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, true, due)); // a retreat latch
         siege.Step = 2; // past the last waypoint: nothing to move on to
         Assert.False(PlayerbotGroupCoordinator.StepDeadlineDue(siege, 0, false, due + 1_000_000));
+    }
+
+    [Fact]
+    public async Task ARaidUnledPastTheDeadline_ThenLedAgain_DoesNotMoveTheStepAtOnce_ButAfterTheRemainingLedTime()
+    {
+        await using GroupTestWorld world = await StartWorld(guards: false);
+        (PlayerbotSiege siege, PlayerbotSiegeRaid fallen) = await LeaderlessRaid(world);
+        PlayerbotSiegeRaid other = siege.Raids[0];
+        uint stepSince = 0, unledSince = 0, began = Now(world);
+
+        // Unled for longer than the deadline: the step stays.
+        await world.RunUntilAsync(PlayerbotGroupCoordinator.StepDeadlineMs + 60_000, () =>
+        {
+            fallen.PromoteTriedMs = Math.Max(1u, Now(world)); // no promotion
+            Teleport(world, other, -60f);
+            if (stepSince == 0 && siege.UnledSinceMs != 0) { stepSince = siege.StepSinceMs; unledSince = siege.UnledSinceMs; }
+            return unchecked(Now(world) - began) >= PlayerbotGroupCoordinator.StepDeadlineMs + 40_000;
+        });
+        Assert.NotEqual(0u, unledSince);
+        Assert.Equal(0, siege.Step);
+
+        // Promotion runs: the raid is led again. The step does not move at once, nor within 30 s.
+        uint ledAt = 0;
+        bool movedEarly = false;
+        await world.RunUntilAsync(120_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) if (raid.Group is not null && (raid != fallen || siege.UnledSinceMs == 0)) Teleport(world, raid, -60f);
+            if (ledAt == 0 && siege.UnledSinceMs == 0) ledAt = Now(world);
+            movedEarly |= siege.Step != 0;
+            return ledAt != 0 && unchecked(Now(world) - ledAt) >= 30_000;
+        });
+        Assert.NotEqual(0u, ledAt);
+        Assert.False(movedEarly, "the step moved within 30 s of the leader's return");
+
+        // It moves after what remained of the deadline when the raid lost its leader.
+        uint movedAt = 0;
+        Assert.True(await world.RunUntilAsync(PlayerbotGroupCoordinator.StepDeadlineMs + 60_000, () =>
+        {
+            foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
+            if (siege.Step != 0 && movedAt == 0) movedAt = Now(world);
+            return movedAt != 0;
+        }), "the step never moved: " + await world.TraceAsync());
+        uint expected = ledAt + PlayerbotGroupCoordinator.StepDeadlineMs - unchecked(unledSince - stepSince);
+        Assert.InRange(movedAt, expected - 3_000, expected + 4_000);
     }
 
     [Fact]
