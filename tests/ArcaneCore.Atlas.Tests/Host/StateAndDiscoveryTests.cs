@@ -214,7 +214,7 @@ public sealed class DiscoveryTests
             {
                 started = child.StartTime.ToUniversalTime();
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
             {
                 started = DateTimeOffset.UtcNow;
             }
