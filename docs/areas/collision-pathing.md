@@ -88,6 +88,39 @@ are still not implemented: a swimmer takes the mesh path, and with `EndTolerance
 `FindWalkPoly` reach (more than 10 yd above the lake-bottom mesh, or more than 3 yd under a polygon) gets `NoPath`, so home
 teleports (vmangos would swim straight via `IsSwimmable`, `PathFinder.cpp:199-201`).
 
+### Ground snap (GroundHeight)
+
+`Maps/Collision/GroundHeight.cs`: puts a position on the floor a creature would stand on. Navmesh detail heights sit
+0.20 to 0.31 yd (p95 about 0.55) above the real floor (Recast rounds a span top up and adds a cell height to detail
+vertices), and a straight chord between string-pulled corners misses rolling ground by up to about 1.6 yd (p95), so
+a creature walking a mesh path floated. `GroundQuery` selects the window (`Up`/`Down` around the current z, default 2/4),
+`Liquid` (`Bottom` for walkers, `Surface` for swimmers) and the prop guard.
+
+* `TrySnap` reads `MapCollision.GetHeight` (terrain plus models, probe from z + Up) and accepts a floor inside the window. The
+  prop guard is the bots' `ResolveWalkFloor` rule: a model floor more than 0.4 yd over the terrain and farther from z than
+  the terrain by 0.25 yd gives the terrain (a creature beside an M2 does not climb it). With no data or no floor in the window
+  it falls back to the mesh surface - 0.20 + 0.05 (window up to 4 yd), else keeps z. The result is the floor + 0.05 yd.
+* `SnapOrKeep` is `TrySnap` or the input z. `DrapePath` snaps the corners, then samples each segment every `step` yd and keeps
+  a sample only where dropping it would put the polyline more than `tolerance` yd off the sampled ground (sliding window),
+  within `maxPoints` (32): the step doubles up to 6 times to fit, and a path that still cannot fit keeps its snapped corners.
+* Creatures: `CreatureMapSystem.FinishPlannedPath` (every outcome, after smoothing) uses step 1 yd, tolerance 0.11 yd where the floor is terrain and 0.40 yd where it is a model or the mesh (Undercity's
+  WMO ramps: median 12 points a leg at 0.11, 7 at 0.40, model offsets p95 +0.30 and p05 -0.25); fliers and
+  water-only creatures are left alone. Thread: the snap reads terrain and the model tree, which belong to the world thread;
+  an ungated wander leg takes `Serial()` around it (path jobs themselves only run navmesh searches).
+* Budget: the drape's time counts in the per-update path time (`_pathTicksThisTick`, `CreaturePathBudget.MaxMilliseconds`) with the path searches. A finished path-job result is applied (and draped) only while `HasDrapeBudget`; otherwise the job stays with its creature, `DeferredPathSearches` counts it and the next update starts its creature walk at the first deferred creature, so results wait and the oldest are served first. A result nobody applies within `PathJobUnclaimedMs` (10 s) is dropped by the stale sweep and the creature plans again, so a budget spent for longer than that loses results. A crowd of 300 wanderers with path jobs on, Debug, 100 ms ticks (`CrowdUpdateCost_WithAndWithoutTheDrape_IsPrinted`): Brill update p50 0.77 -> 0.78 ms, p99 1.45 -> 1.77, max 1.95 -> 2.52, mean drape 11 us; Undercity p50 1.09 -> 1.33, p99 3.24 -> 2.60, max 4.97 -> 3.44, mean drape 61 us; no result was deferred.
+* Roofs: a corner that comes from the mesh (`cornersOnMesh`: Mesh and Partial outcomes) is looked for from at most `MeshCeilingYards` (1 yd) above it, so a roof or storey between 1 and 2 yd over a floor is not taken for it; the other points keep the 2 yd window (stairs need it). The probe is `MapCollision.GetHeight(x, y, z, probeOffset)` (the model-versus-terrain choice compares the real z, not the probe's). The prop guard on a step-up compares against the nearer end's height, not the interpolated one. A leg whose corners already fill the 32-point cap is returned with its snapped corners and no sampling. At home the spawn's own z is snapped only within 0.5 yd (`AtHomeSnapYards`), from terrain and model floors only (no mesh fallback, which looks 4 yd up). Creatures on a transport and creatures with script-set Flying or Hover are not draped, like fliers and water-only creatures.
+* Measured on the real data (test `GroundSnapRealTerrainTests`, skipped visibly when the data root is absent): wanderers'
+  terrain offset p95 <= 0.15 yd with a median within 0.06; authored legs terrain p95 <= 0.15 and p05 >= -0.15 with a median of at most 8 points per leg (the cap is 32).
+  Real-terrain tests need the extracted data (`ARCANECORE_TEST_TERRAIN_DIR`): they skip in GitHub CI, where there is none, and run in the slot runs (`run-in-slot` sets the variable). Under-sampled gates fail rather than skip.
+  The independent oracle is the navmesh (snapped point = mesh - 0.20 + 0.05: p05 -0.62..-0.4, p95 +0.17..+0.31; over-mesh-0.5 counts: none in Brill, Tirisfal, Elwynn, Orgrimmar, Lordaeron; Undercity 456 of 47464 wander samples and 60 of 16925 leg samples (chords between two storeys of a ramp), Ashenvale 25 and 12 (model decks the mesh sags under); identical with and without the corner guard).
+  Cost per leg (200 legs per region, `DrapeCostPerLeg_IsPrinted`, run with 16 CPU burners running, so an upper bound), Release: median
+  33 to 148 us, p95 56 to 271 us, p99 66 to 418 us, max 215 to 691 us, 6 to 9 points a leg (Undercity the dearest). An earlier run showed a
+  Debug (the live build), unloaded machine: median 68 to 375 us, p95 115 to 795 us, p99 169 to 2967 us, max 487 to 6165 us (Brill's 6 ms is a GC pause or
+  a cache miss, not a read). An earlier run showed a
+  35 ms maximum: that was the drape reading a terrain tile from disk (`TerrainInfo.GetTile` loads on first touch).
+  A drape now never reads a tile: a point over a terrain tile that is not in memory (`TerrainInfo.TryGetLoadedHeight`) keeps its height or takes
+  the mesh fallback (which does not load either), and the normal loaders bring the tile in; `GroundQuery.LoadTiles` is the explicit opt-in.
+
 ### Region graph (NavRegionGraph)
 
 Not a vmangos feature: a coarse level over a whole map's mesh for long walks (the playerbots' far goals, issues

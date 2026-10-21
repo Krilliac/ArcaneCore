@@ -228,8 +228,9 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         }
 
         _consecutiveNoPath = 0;
-        IReadOnlyList<Vector3> corners = DrapeCornersOverMeshFloor(creature, plan.Corners);
-        mover.MovePath(creature, corners, run, SplineFacing.None);
+        // plan.Corners are already on the ground (CreatureMapSystem.FinishPlannedPath drapes every finished path: the mesh point's height
+        // is not kept, and a chord across rolling or arched ground is split).
+        mover.MovePath(creature, plan.Corners, run, SplineFacing.None);
 
         if (_wanderSteps > 0 && mover is not ICreaturePathQuery { IsCrowdedRandomPass: true })
         {
@@ -275,69 +276,5 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         }
 
         return (behaviour & CreatureBehaviourFlags.AlwaysRun) != 0;
-    }
-
-    /// <summary>
-    /// Straight 3D chords between coarse polygon corners across an arched cave floor (such as Grizzled Den, where Wendigo 1135
-    /// spawns 3564/3574/3576 dipped 2.6–3.2 yd below the cave mesh at z 365.8–368.5 under mesh 368.5–371.7) sink below the mesh
-    /// surface. Samples every 4 yards along each segment and raises any point that sits below the local mesh floor.
-    /// </summary>
-    internal static IReadOnlyList<Vector3> DrapeCornersOverMeshFloor(Creature creature, IReadOnlyList<Vector3> corners)
-    {
-        if (corners.Count == 0 || (creature.Template.InhabitType & 4) != 0 || creature.Map?.Collision is not { } collision)
-        {
-            return corners;
-        }
-
-        List<Vector3>? draped = null;
-        var prev = new Vector3(creature.X, creature.Y, creature.Z);
-        for (int i = 0; i < corners.Count; i++)
-        {
-            Vector3 corner = corners[i];
-            float dx = corner.X - prev.X;
-            float dy = corner.Y - prev.Y;
-            float flatDist = MathF.Sqrt((dx * dx) + (dy * dy));
-            int steps = (int)MathF.Ceiling(flatDist / 4f);
-            if (steps > 1)
-            {
-                for (int s = 1; s < steps; s++)
-                {
-                    float t = (float)s / steps;
-                    var mid = Vector3.Lerp(prev, corner, t);
-                    if (collision.TryGetMeshFloor(mid.X, mid.Y, mid.Z, 4f, 4f, out float midFloor) && midFloor > mid.Z + 0.05f)
-                    {
-                        if (draped is null)
-                        {
-                            draped = new List<Vector3>(corners.Count + steps);
-                            for (int k = 0; k < i; k++)
-                            {
-                                draped.Add(corners[k]);
-                            }
-                        }
-
-                        draped.Add(mid with { Z = midFloor });
-                    }
-                }
-            }
-
-            Vector3 adjusted = corner;
-            if (collision.TryGetMeshFloor(corner.X, corner.Y, corner.Z, 4f, 4f, out float floorZ) && floorZ > corner.Z + 0.05f)
-            {
-                adjusted = corner with { Z = floorZ };
-                if (draped is null)
-                {
-                    draped = new List<Vector3>(corners.Count);
-                    for (int k = 0; k < i; k++)
-                    {
-                        draped.Add(corners[k]);
-                    }
-                }
-            }
-
-            draped?.Add(adjusted);
-            prev = adjusted;
-        }
-
-        return draped ?? corners;
     }
 }

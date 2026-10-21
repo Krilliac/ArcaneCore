@@ -85,6 +85,17 @@ public sealed class SteepSlopeLegTests
 
         public Creature Wolf { get; }
 
+        /// <summary>The oracle for a snapped height here: no terrain or model in this world, so the ground is the mesh surface less its bias, plus the stand offset.</summary>
+        public void AssertOnTheMeshGround(IEnumerable<Vector3> points)
+        {
+            Map map = World.GetMap(MapId);
+            foreach (Vector3 p in points)
+            {
+                Assert.True(map.Collision.TryGetMeshFloor(p.X, p.Y, p.Z, 2f, 2f, out float mesh), $"no mesh under {p}");
+                Assert.Equal(mesh - GroundHeight.MeshBias + GroundHeight.StandOffset, p.Z, 0.02f);
+            }
+        }
+
         /// <summary>Stand the creature still at <paramref name="at"/>, under the same motion, for a leg planned from there.</summary>
         public void StandAt(Vector3 at)
         {
@@ -133,7 +144,10 @@ public sealed class SteepSlopeLegTests
         PlannedPath plan = scene.Creatures.PlanPath(scene.Wolf, EastOfSlope);
 
         Assert.Equal(PathOutcome.Mesh, plan.Outcome);
-        Assert.True(Vector3.Distance(EastOfSlope, plan.Corners[^1]) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
+        // This world has a mesh and no terrain or models, so the leg's ground is the mesh less its bias (GroundHeight.MeshBias), not the mesh's
+        // own height: every point is checked against the mesh, and the ends in the plane.
+        scene.AssertOnTheMeshGround(plan.Corners);
+        Assert.True(Vector2.Distance(new Vector2(EastOfSlope.X, EastOfSlope.Y), new Vector2(plan.Corners[^1].X, plan.Corners[^1].Y)) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
         Assert.Null(FirstPointOnSlope(WestOfSlope, plan.Corners));
         Assert.True(plan.Corners.Count >= 2, $"the {motion} leg is a straight line to {plan.Corners[^1]}");
     }
@@ -168,7 +182,8 @@ public sealed class SteepSlopeLegTests
         PlannedPath plan = scene.Creatures.PlanPath(scene.Wolf, flat);
 
         Assert.Equal(PathOutcome.Mesh, plan.Outcome);
-        Assert.True(Vector3.Distance(flat, plan.Corners[^1]) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
+        Assert.True(Vector2.Distance(new Vector2(flat.X, flat.Y), new Vector2(plan.Corners[^1].X, plan.Corners[^1].Y)) <= 0.1f, $"the {motion} leg ends at {plan.Corners[^1]}");
+        scene.AssertOnTheMeshGround(plan.Corners);
     }
 
     [Fact]

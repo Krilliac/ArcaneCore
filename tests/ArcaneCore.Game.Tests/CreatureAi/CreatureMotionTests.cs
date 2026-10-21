@@ -63,6 +63,31 @@ public sealed class CreatureMotionTests
     public void PackXYZ_RoundTrips(float x, float y, float z)
         => Assert.Equal(new Vector3(x, y, z), CreatureMovePackets.UnpackXYZ(CreatureMovePackets.PackXYZ(new Vector3(x, y, z))));
 
+    [Theory]
+    [InlineData(0.24f, -0.49f, 0.74f)]
+    [InlineData(-0.13f, 0.37f, -0.62f)]
+    [InlineData(0.125f, -0.125f, 0.375f)]
+    [InlineData(-0.126f, 0.126f, -0.376f)]
+    [InlineData(37.19f, -81.93f, 12.07f)]
+    public void PackXYZ_RoundsToTheNearestQuarterYard_LikeVmangosLroundf(float x, float y, float z)
+    {
+        // appendPackXYZ packs lroundf(v * 4): the client's decoded offset is within half a quarter (0.125) of the true one, unbiased.
+        // Truncation toward zero erred by up to 0.25 and always toward the destination.
+        var offset = new Vector3(x, y, z);
+        Vector3 back = CreatureMovePackets.UnpackXYZ(CreatureMovePackets.PackXYZ(offset));
+        Assert.InRange(MathF.Abs(back.X - x), 0f, 0.125f);
+        Assert.InRange(MathF.Abs(back.Y - y), 0f, 0.125f);
+        Assert.InRange(MathF.Abs(back.Z - z), 0f, 0.125f);
+    }
+
+    [Theory]
+    [InlineData(0.125f, 0.25f)]
+    [InlineData(-0.125f, -0.25f)]
+    [InlineData(0.375f, 0.5f)]
+    [InlineData(-0.375f, -0.5f)]
+    public void PackXYZ_RoundsHalfwayAwayFromZero(float input, float expected)
+        => Assert.Equal(new Vector3(expected, expected, expected), CreatureMovePackets.UnpackXYZ(CreatureMovePackets.PackXYZ(new Vector3(input, input, input))));
+
     [Fact]
     public void MultiPointSpline_FollowsThePathfinderAndInterpolatesBySegment()
     {

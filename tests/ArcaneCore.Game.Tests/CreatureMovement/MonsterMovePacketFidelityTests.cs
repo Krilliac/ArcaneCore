@@ -74,7 +74,7 @@ public sealed class MonsterMovePacketFidelityTests
     }
 
     [Theory]
-    [InlineData(19.9f, 20f, 6.1f, 1u)]   // offset (0.1,0,-0.1): z < 0 -> +0.51 = 0.41 yd = 1 quarter
+    [InlineData(19.9f, 20f, 6.1f, 2u)]   // offset (0.1,0,-0.1): z < 0 -> +0.51 = 0.41 yd = lroundf(1.64) = 2 quarters (ByteBuffer.h:482-489 rounds)
     [InlineData(19.9f, 20f, 5.9f, 1u)]   // offset (0.1,0,+0.1): z >= 0 -> +0.26 = 0.36 yd = 1 quarter
     [InlineData(20f, 20f, 6f, 1u)]       // offset zero: the client freezes on a zero offset -> +0.26
     public void TinyOffsets_GetTheVmangosZAdjustment_SoNoZeroOffsetIsEverSent(float x, float y, float z, uint zQuarters)

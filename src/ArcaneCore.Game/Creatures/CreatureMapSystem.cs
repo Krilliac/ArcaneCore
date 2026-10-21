@@ -576,7 +576,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             case PathOutcome.NoPath:
                 DirectFallbackPaths++;
                 CreaturePathStats.AddDirectFallback();
-                return [destination];
+                return DrapeOnGround(creature, new Vector3(creature.X, creature.Y, creature.Z), [destination]);
             default:
                 return plan.Corners;
         }
@@ -660,7 +660,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             // itself, and that is no unreachable home (live: entry 1224 reported "no mesh path to home" 0.0 yd from home). The walk
             // home is the zero-length straight move, which still ends in the usual reached-home.
             creature.ClearHomeUnreachableEpisode();
-            return new PlannedPath(PathOutcome.Direct, [destination]);
+            return new PlannedPath(PathOutcome.Direct, DrapeOnGround(creature, start, [destination], window: AtHomeSnapYards));
         }
 
         if (!path.HasPath)
@@ -707,7 +707,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 creature, start, corners, mesh, _height.GetHeight, pathOptions, allowVariation: !toSpawn && !creature.Combat.IsInCombat);
         }
 
-        return new PlannedPath(outcome, corners);
+        // Every outcome (a mesh path, a partial one, a straight shortcut): the mesh's own heights sit +0.2 yd (p95 +0.55) over the floor
+        // and a chord between its corners misses the ground by p95 1.4 yd, so the leg is put on the ground and split where it misses.
+        return new PlannedPath(outcome, DrapeOnGround(creature, start, corners, cornersOnMesh: outcome is PathOutcome.Mesh or PathOutcome.Partial));
     }
 
     // --- per-tick creature path-search budget ------------------------------------------------------
