@@ -84,7 +84,7 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     public IPathfinder PathfinderForMap => _services.PathfinderFor(Map.MapId);
 
     /// <summary>Whether a static model blocks the segment (no data: always in sight).</summary>
-    public bool IsInLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2)
+    public bool IsInLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2, bool ignoreM2 = true)
     {
         if (!Invariant.Check(
                 float.IsFinite(x1) && float.IsFinite(y1) && float.IsFinite(z1)
@@ -94,7 +94,7 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             return false;
         }
 
-        return _services.LineOfSight.IsInLineOfSight(Map.MapId, new Vector3(x1, y1, z1), new Vector3(x2, y2, z2));
+        return _services.LineOfSight.IsInLineOfSight(Map.MapId, new Vector3(x1, y1, z1), new Vector3(x2, y2, z2), ignoreM2);
     }
 
     /// <summary>

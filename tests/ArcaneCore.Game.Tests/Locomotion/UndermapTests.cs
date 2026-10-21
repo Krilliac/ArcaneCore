@@ -134,4 +134,22 @@ public sealed class UndermapTests
         Assert.Equal(1u, player.Health);
         Assert.Equal(1, hooks.GraveyardRepops);
     }
+
+    [Fact]
+    public void WhenBelowTerrainFloorWithNoModelSupport_ThePlayerIsSnappedBackToTerrainSurface()
+    {
+        using var kit = new HazardKit(liquid: null);
+        Player player = kit.AddPlayer(4_105_099, HazardKit.Ground, out _);
+
+        MovementInfo previous = player.Movement;
+        var incoming = new MovementInfo { Flags = MovementFlags.None, Time = 1, X = HazardKit.X, Y = HazardKit.Y, Z = HazardKit.Ground - 12f };
+        var context = new MovementObserverContext(player, kit.Kit.World, WorldOpcode.MsgMoveHeartbeat);
+        MovementObservers.Before(context, in previous, ref incoming);
+        player.ApplyClientMovement(incoming, 1);
+        MovementObservers.After(context, in previous);
+
+        Assert.Equal(HazardKit.Ground + 0.05f, player.Movement.Z, 0.01f);
+        Assert.Equal(HazardKit.Ground + 0.05f, player.Z, 0.01f);
+        Assert.Equal(MovementFlags.None, player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar));
+    }
 }

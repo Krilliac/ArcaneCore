@@ -103,6 +103,13 @@ internal static class PlayerbotMotionAnomalies
     /// </summary>
     internal const float MeshStoreyYards = 2f;
 
+    private static readonly PathOptions SteepMeshOptions = new()
+    {
+        Mover = PathMover.Player,
+        ExcludeFlags = NavTerrain.Empty,
+        IncludeFlags = PathMover.Player.IncludeFlags | NavTerrain.SteepSlopes,
+    };
+
     internal enum Code
     {
         Airwalk,
@@ -266,7 +273,7 @@ internal static class PlayerbotMotionAnomalies
             AnomalySeverity.Warning);
     }
 
-    /// <summary>The route being walked is not walkable ahead of <paramref name="at"/>: the bot stopped there.</summary>
+    /// <summary>The route being walked is not walkable ahead of <paramref name="at"/>: the bot stopped.</summary>
     internal static void ReportRouteBlocked(WorldSession session, Player player, PlayerbotRoute route, Vector3 at, uint now,
         int consecutiveRejections = 1, string? reason = null, string? moveMode = null)
     {
@@ -365,6 +372,15 @@ internal static class PlayerbotMotionAnomalies
     internal static float FloorUnder(MapCollision collision, Vector3 at)
     {
         float floor = collision.GetHeight(at.X, at.Y, at.Z);
+        if (!ValidHeight(floor) || at.Z - floor > AirwalkYards)
+        {
+            float highFloor = collision.GetHeight(at.X, at.Y, at.Z + PlayerbotMotion.MeshFloorToleranceYards);
+            if (ValidHeight(highFloor) && highFloor <= at.Z + 1.0f && (!ValidHeight(floor) || highFloor > floor))
+            {
+                floor = highFloor;
+            }
+        }
+
         if (ValidHeight(floor) && at.Z - floor > AirwalkYards
             && collision.TryGetMeshFloorUnder(at.X, at.Y, at.Z, AirwalkYards, out float mesh) && mesh > floor)
         {
@@ -419,7 +435,7 @@ internal static class PlayerbotMotionAnomalies
         int tested = 0;
         for (int index = first; index <= last && tested < MaxCrossingSegments; index++)
         {
-            Vector3 end = index < last ? route.Points[index] : to;
+            Vector3 end = index < last ? ResolveIntermediateCorner(map, from, to, route.Points[index]) : to;
             if (!Finite(end)) return;
             if (Vector2.Distance(new Vector2(previous.X, previous.Y), new Vector2(end.X, end.Y)) >= MinSegmentYards)
             {
@@ -441,6 +457,53 @@ internal static class PlayerbotMotionAnomalies
         }
     }
 
+    internal static bool CrossesStaticWall(Map map, PlayerbotRoute route, int fromNext, int nextPoint, Vector3 from, Vector3 to)
+    {
+        ILineOfSight los = map.Collision.LineOfSight;
+        if (!los.Enabled || !Finite(from) || !Finite(to) || !route.LegsNavigated(fromNext, nextPoint)) return false;
+        int first = Math.Max(1, fromNext);
+        int last = Math.Min(nextPoint, route.Points.Count);
+        Vector3 previous = from;
+        int tested = 0;
+        for (int index = first; index <= last && tested < MaxCrossingSegments; index++)
+        {
+            Vector3 end = index < last ? ResolveIntermediateCorner(map, from, to, route.Points[index]) : to;
+            if (!Finite(end)) return false;
+            if (Vector2.Distance(new Vector2(previous.X, previous.Y), new Vector2(end.X, end.Y)) >= MinSegmentYards)
+            {
+                tested++;
+                Vector3 a = previous with { Z = previous.Z + PlayerbotMoveCheck.ChestYards };
+                Vector3 b = end with { Z = end.Z + PlayerbotMoveCheck.ChestYards };
+                if (!los.IsInLineOfSight(map.MapId, a, b, ignoreM2: true) && !StaysOnMesh(map, previous, end))
+                {
+                    return true;
+                }
+            }
+
+            previous = end;
+        }
+
+        return false;
+    }
+
+    internal static Vector3 ResolveIntermediateCorner(Map map, Vector3 from, Vector3 to, Vector3 end)
+    {
+        float minZ = MathF.Min(from.Z, to.Z) - PlayerbotMotion.MeshFloorToleranceYards;
+        float maxZ = MathF.Max(from.Z, to.Z) + PlayerbotMotion.MeshFloorToleranceYards;
+        float probeZ = Math.Clamp(end.Z, minZ, maxZ);
+        float floor = PlayerbotMotion.ResolveWalkFloor(map, end.X, end.Y, probeZ, PlayerbotMotion.MeshFloorProbeExtraYards, maxZ + 1.25f);
+        if (ValidHeight(floor) && floor >= minZ && floor <= maxZ)
+        {
+            end.Z = floor + 0.05f;
+        }
+        else if (end.Z < minZ || end.Z > maxZ)
+        {
+            end.Z = Math.Clamp(end.Z, MathF.Min(from.Z, to.Z), MathF.Max(from.Z, to.Z));
+        }
+
+        return end;
+    }
+
     /// <summary>
     /// Whether the segment from <paramref name="from"/> to <paramref name="to"/> is a walk over the bot's walkable mesh
     /// (<see cref="PlayerbotMoveCheck.MeshOptions"/>: steep slopes excluded) on the leg's own storey: the walk
@@ -454,11 +517,17 @@ internal static class PlayerbotMotionAnomalies
     internal static bool StaysOnMesh(Map map, Vector3 from, Vector3 to)
     {
         if (map.Collision.MeshPoints is not { } mesh) return false;
-        MeshRaycastResult walk = mesh.Raycast(map.MapId, from, to, PlayerbotMoveCheck.MeshOptions);
-        if (walk is not { Available: true, Hit: false } || !(MathF.Abs(walk.Point.Z - to.Z) <= MeshStoreyYards)) return false;
+        return StaysOnMeshWithOptions(mesh, map.MapId, from, to, PlayerbotMoveCheck.MeshOptions)
+            || StaysOnMeshWithOptions(mesh, map.MapId, from, to, SteepMeshOptions);
+    }
+
+    private static bool StaysOnMeshWithOptions(IMeshPointQuery mesh, uint mapId, Vector3 from, Vector3 to, PathOptions options)
+    {
+        MeshRaycastResult walk = mesh.Raycast(mapId, from, to, options);
+        if (walk is not { Available: true, Hit: false } || !(MathF.Abs(walk.Point.Z - to.Z) < PlayerbotMotion.MeshFloorToleranceYards)) return false;
         // A zero-length walk answers the start polygon's surface under the start.
-        MeshRaycastResult start = mesh.Raycast(map.MapId, from, from, PlayerbotMoveCheck.MeshOptions);
-        return start.Available && MathF.Abs(start.Point.Z - from.Z) <= MeshStoreyYards;
+        MeshRaycastResult start = mesh.Raycast(mapId, from, from, options);
+        return start.Available && MathF.Abs(start.Point.Z - from.Z) < PlayerbotMotion.MeshFloorToleranceYards;
     }
 
     private static void ReportCrossing(Player player, MotionWatch watch, bool wall, Vector3 from, Vector3 to, uint now)

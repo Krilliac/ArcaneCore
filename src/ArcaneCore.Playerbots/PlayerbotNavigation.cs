@@ -42,13 +42,14 @@ internal sealed class PlayerbotRoute
             throw new ArgumentException("one flag per leg", nameof(legNavigated));
         Points = points;
         Distance = distance;
-        _legs = legNavigated;
+        _legs = legNavigated.ToArray();
         Navigated = legNavigated.Count > 0 && legNavigated.All(leg => leg);
     }
 
-    private readonly IReadOnlyList<bool>? _legs;
+    private bool[]? _legs;
 
     internal IReadOnlyList<Vector3> Points { get; }
+    internal IReadOnlyList<Vector3>? MeshPoints { get; set; }
     internal float Distance { get; }
 
     /// <summary>
@@ -60,6 +61,20 @@ internal sealed class PlayerbotRoute
     /// </summary>
     internal bool Navigated { get; }
 
+    internal void SetLegNavigated(int legIndex, bool navigated)
+    {
+        int count = Math.Max(0, Points.Count - 1);
+        if (legIndex < 0 || legIndex >= count) return;
+        if (_legs is null || _legs.Length != count)
+        {
+            var legs = new bool[count];
+            Array.Fill(legs, Navigated);
+            _legs = legs;
+        }
+
+        _legs[legIndex] = navigated;
+    }
+
     /// <summary>
     /// Whether every leg walked from the one ending at point <paramref name="fromPoint"/> through the one ending at point
     /// <paramref name="toPoint"/> came from the navigation mesh (<see cref="Navigated"/> for a route of one origin). A position on a
@@ -67,8 +82,8 @@ internal sealed class PlayerbotRoute
     /// </summary>
     internal bool LegsNavigated(int fromPoint, int toPoint)
     {
-        if (_legs is null || _legs.Count == 0) return Navigated;
-        int first = Math.Clamp(fromPoint, 1, _legs.Count), last = Math.Clamp(toPoint, 1, _legs.Count);
+        if (_legs is null || _legs.Length == 0) return Navigated;
+        int first = Math.Clamp(fromPoint, 1, _legs.Length), last = Math.Clamp(toPoint, 1, _legs.Length);
         for (int point = first; point <= last; point++)
             if (!_legs[point - 1]) return false;
         return true;
@@ -101,7 +116,7 @@ internal sealed class PlayerbotRoute
     internal bool Complete => NextPoint >= Points.Count;
 
     /// <summary>Whether the leg ending at point <paramref name="point"/> (1-based) came from the navigation mesh.</summary>
-    internal bool LegNavigatedAt(int point) => _legs is null || _legs.Count == 0 ? Navigated : _legs[Math.Clamp(point, 1, _legs.Count) - 1];
+    internal bool LegNavigatedAt(int point) => _legs is null || _legs.Length == 0 ? Navigated : _legs[Math.Clamp(point, 1, _legs.Length) - 1];
 
     /// <summary>
     /// This route's unwalked rest, from <paramref name="here"/>, joined to <paramref name="next"/> (a route planned from this one's end):
@@ -131,6 +146,7 @@ internal sealed class PlayerbotRoute
         {
             CompletedQuestReturn = CompletedQuestReturn,
             Pathfinder = Pathfinder ?? next.Pathfinder,
+            MeshPoints = MeshPoints is not null || next.MeshPoints is not null ? points : null,
         };
     }
 }
@@ -730,6 +746,7 @@ internal static class PlayerbotNavigation
                     && risk?.Blocking(player, smoothed.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
                 {
                     smoothed.MeshEndedShort = route.MeshEndedShort;
+                    smoothed.MeshPoints ??= route.MeshPoints ?? smoothed.Points;
                     route = smoothed;
                 }
             }
@@ -777,6 +794,7 @@ internal static class PlayerbotNavigation
                 var detour = new PlayerbotRoute(points, length, legs)
                 {
                     Pathfinder = map.Collision.Pathfinder,
+                    MeshPoints = points,
                 };
                 if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not null) continue;
                 detour.CompletedQuestReturn = completedQuestReturn;
@@ -803,7 +821,7 @@ internal static class PlayerbotNavigation
         if ((path.Type & PathType.NotUsingPath) != 0)
             return PlayerbotMoveCheck.TerrainRoute(map, from, to, options, out PlayerbotRoute? terrain) ? terrain : null;
         return IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) && (path.Type & PathType.Incomplete) == 0
-            ? new PlayerbotRoute(path.Points, path.Length, navigated: true) : null;
+            ? new PlayerbotRoute(path.Points, path.Length, navigated: true) { MeshPoints = path.Points } : null;
     }
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
@@ -1036,7 +1054,9 @@ internal static class PlayerbotNavigation
             kept.Add(point);
         }
 
-        return kept.Count < 2 ? null : new PlayerbotRoute(kept.ToArray(), distance, navigated: true);
+        if (kept.Count < 2) return null;
+        Vector3[] arr = kept.ToArray();
+        return new PlayerbotRoute(arr, distance, navigated: true) { MeshPoints = arr };
     }
 
     /// <summary>Whether a mesh answer reaches its destination (a whole way, or the first part of one cut at the point bound).</summary>
@@ -1135,12 +1155,11 @@ internal static class PlayerbotNavigation
                 float floor = map.Collision.GetHeight(x, y, start.Z + 2f);
                 if (InvalidHeight(floor) || MathF.Abs(floor - start.Z) > 2.5f) continue;
                 Vector3 beside = new(x, y, floor + 0.05f);
-                // The doodad-blind line of sight, on purpose: the start stands on a fragment of mesh, which is often a rock or a root (a
-                // doodad), and a doodad-aware sight from inside it is blocked in every direction. This is a hop of at most 5 yards onto
-                // ground the mesh joins; the legs that follow are the mesh's own, and the doodad-aware leg check applies to stepped routes.
-                if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
+                if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)
+                    || !PlayerbotMoveCheck.LineClear(map.Collision, start, beside)) continue;
                 PathResult path = Query(map, beside, destination, options, partial, steep: false, out bool capped);
                 if ((path.Type & PathType.TilesPending) != 0) return null;
+                if (path.Points.Count > 0 && !PlayerbotMoveCheck.LineClear(map.Collision, start, path.Points[0])) continue;
                 // The same arrival rule as Usable: an end at the destination's own spot (EndsAt) reaches it.
                 bool reaches = Reaches(path) || EndsAt(path, destination);
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
@@ -1155,7 +1174,10 @@ internal static class PlayerbotNavigation
                 }
 
                 if (Bounded([start, .. path.Points], options, reaches) is { } joined && joined.Points.Count <= options.MaxPathPoints + 1)
+                {
+                    joined.SetLegNavigated(0, false);
                     return joined;
+                }
             }
         }
 
@@ -1286,7 +1308,8 @@ internal static class PlayerbotNavigation
                     continue;
                 }
             }
-            route = new PlayerbotRoute(steep.Points.Take(index + 1).ToArray(), distance, navigated: true);
+            Vector3[] steepArr = steep.Points.Take(index + 1).ToArray();
+            route = new PlayerbotRoute(steepArr, distance, navigated: true) { MeshPoints = steepArr };
             return true;
         }
 
