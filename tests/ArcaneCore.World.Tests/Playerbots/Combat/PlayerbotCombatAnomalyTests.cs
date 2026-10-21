@@ -230,6 +230,134 @@ public sealed class PlayerbotCombatAnomalyTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task OutOfCombatPullWalkAndBetweenFightUpkeep_ResetLowManaWatch_AcrossBackToBackFights()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 7, 64);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+                player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana, 1000);
+                SpellSystem.SetPower(player, PowerType.Mana, 10);
+                player.Map!.Combat.SetInCombatState(player, 60_000);
+                return true;
+            });
+            using AnomalyCapture cap = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(session.Player!));
+            try
+            {
+                var helper = new PlayerbotCombatSpells(session);
+
+                // Fight 1: 25 s in combat below 10% mana.
+                await host.World.AdvanceClockAsync(1_000);
+                await host.OnWorldAsync(() => { helper.Update(session.Player!, target, 1000); return true; });
+                await host.World.AdvanceClockAsync(25_000);
+                await host.OnWorldAsync(() => { helper.Update(session.Player!, target, 1000); return true; });
+
+                // Combat drops between pulls; out-of-combat upkeep and pre-combat pull walk run within FightGapMs (30 s).
+                await host.OnWorldAsync(() =>
+                {
+                    session.Services.GetRequiredService<SpellFeature>().System.CancelCast(session.Player!, 0);
+                    session.Player!.Map!.Combat.CombatStop(target);
+                    session.Player!.Map!.Combat.CombatStop(session.Player!);
+                    Assert.False(session.Player!.Combat.IsInCombat);
+                    return true;
+                });
+                await host.World.AdvanceClockAsync(1_000);
+                await host.OnWorldAsync(() =>
+                {
+                    Assert.False(session.Player!.Combat.IsInCombat);
+                    helper.UpdateOutOfCombat(session.Player!, 1000);
+                    return true;
+                });
+                await host.World.AdvanceClockAsync(1_000);
+                await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(0);
+                    helper.Update(session.Player!, target, 1000);
+                    return true;
+                });
+
+                // Fight 2: another 25 s in combat below 10% mana (total 50 s > 45 s, but across two separate fights).
+                await host.OnWorldAsync(() => { session.Player!.Map!.Combat.SetInCombatState(session.Player!, 60_000); return true; });
+                await host.World.AdvanceClockAsync(1_000);
+                await host.OnWorldAsync(() => { helper.Update(session.Player!, target, 1000); return true; });
+                await host.World.AdvanceClockAsync(25_000);
+                await host.OnWorldAsync(() => { helper.Update(session.Player!, target, 1000); return true; });
+
+                Assert.False(cap.Any(Key("combat", "out-of-mana-loop")), cap.Describe());
+            }
+            finally { cap.Dispose(); }
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task CasterBelowTenPercentManaForTenSecondsInCombat_WithholdsOffensiveManaSpells_UntilManaRecoversAboveTenPercent()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 7, 65);
+            var helper = new PlayerbotCombatSpells(session);
+            SpellInfo costlyBolt = null!;
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                SpellInfo bolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+                feature.System.Store = new SpellStore(feature.System.Store.All.Select(s =>
+                    s.Id == bolt.Id ? bolt with { ManaCost = 30, PowerType = (int)PowerType.Mana } : s), [], []);
+                costlyBolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+
+                player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+                player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana, 1000);
+                player.SetUInt32(UpdateFields.UnitFieldMaxhealth, 1000);
+                player.Health = 800; // > 40% HP
+                SpellSystem.SetPower(player, PowerType.Mana, 50); // 5% mana (< 10%), but enough to afford ManaCost=30
+                player.Map!.Combat.SetInCombatState(player, 120_000);
+                return true;
+            });
+
+            await host.World.AdvanceClockAsync(1_000);
+            await host.OnWorldAsync(() =>
+            {
+                helper.Update(session.Player!, target, 1000);
+                session.Services.GetRequiredService<SpellFeature>().System.CancelCast(session.Player!, 0);
+                SpellSystem.SetPower(session.Player!, PowerType.Mana, 50);
+                return true;
+            });
+
+            // After >= 10 s of continuous < 10% mana in combat, offensive mana spells are withheld so Spirit regen can recover above 10%.
+            await host.World.AdvanceClockAsync(11_000);
+            await host.OnWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(2);
+                Assert.False(helper.Update(session.Player!, target, 1000));
+                Assert.False(helper.CanCastNow(session.Player!, costlyBolt, target));
+                SpellSystem.SetPower(session.Player!, PowerType.Mana, 120);
+                return true;
+            });
+
+            // Once mana recovers to >= 10% (120/1000), the next combat think clears the low-mana hold and allows casting again.
+            await host.World.AdvanceClockAsync(2_000);
+            await host.OnWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(2);
+                Assert.True(helper.Update(session.Player!, target, 1000));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     // --- combat/phantom-combat ---------------------------------------------------------------------------------------------
 
     [Fact]
