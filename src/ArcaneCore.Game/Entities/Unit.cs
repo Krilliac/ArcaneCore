@@ -52,9 +52,20 @@ public abstract partial class Unit : WorldObject
 
     /// <summary>
     /// The last accepted movement state. Its position always mirrors <see cref="WorldObject.X"/>
-    /// etc.; use <see cref="ApplyMovement"/> to change it.
+    /// etc.: every position write copies itself here (<see cref="OnPositionWritten"/>), as vmangos
+    /// <c>WorldObject::Relocate</c> does with <c>m_movementInfo.ChangePosition</c>. Use <see cref="ApplyMovement"/> to change
+    /// the rest of it.
     /// </summary>
     public ref readonly MovementInfo Movement => ref _movement;
+
+    /// <summary>Keep the movement block's position equal to the unit's (docs/areas/grid-terrain.md "Position and movement block").</summary>
+    private protected sealed override void OnPositionWritten()
+    {
+        _movement.X = X;
+        _movement.Y = Y;
+        _movement.Z = Z;
+        _movement.Orientation = Orientation;
+    }
 
     public float WalkSpeed
     {

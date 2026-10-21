@@ -47,6 +47,16 @@ is listed in [Reference discrepancies](#reference-discrepancies).
 always filed in the right cell however it moved; `SetPosition(x, y, z, o)` changes all four
 with a single re-file.
 
+### Position and movement block
+
+A unit has its position twice: `X`/`Y`/`Z`/`Orientation` and the position in its movement block (`Unit.Movement`, written
+in create blocks and re-applied by `ApplyMovement`). The two are always equal: every position write, by `SetPosition`,
+`Relocate` or a single setter, copies itself into the movement block (`Unit.OnPositionWritten`), as vmangos
+`WorldObject::Relocate` and `SetOrientation` write `m_movementInfo` (`Object.cpp:1567-1598`). Only the position follows: the
+flags, time stamp and transport data stay what the last movement, relocation or flag change made them, so a server-side move
+keeps walk mode, and a teleport start (`ResetMovementForTeleport`, which re-applies the block with the moving flags cleared)
+leaves the unit where it is.
+
 ### Visibility on cells (`src/ArcaneCore.Game/Maps/Map.cs`)
 
 The public `Map` API and the visible behaviour are unchanged (all existing visibility tests
