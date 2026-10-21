@@ -601,7 +601,8 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Contains("no WMOAreaTable.dbc in", output, StringComparison.Ordinal);
         Assert.Contains("wmo_area_template is left as it is", output, StringComparison.Ordinal);
         await using WorldDbContext after = Open(world);
-        Assert.Equal([9u], await after.Set<WmoAreaTemplateRow>().Select(r => r.Id).ToArrayAsync());
+        uint[] kept = await after.Set<WmoAreaTemplateRow>().Select(r => r.Id).ToArrayAsync();
+        Assert.Equal([9u], kept);
     }
 
     private static object[] WmoRow(int id, int root, int adt, int group, int area)

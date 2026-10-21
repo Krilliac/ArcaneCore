@@ -16,12 +16,13 @@ public sealed class WmoCapitalStartCountryTests
 {
     private const uint Tirisfal = 85, Undercity = 1497, DunMorogh = 1, Ironforge = 1537;
 
-    private static readonly PlayerbotPopulationOptions Pop = new();
+    // A radius smaller than the distance to either city, so that only the zone rule decides (the default 4,500 yards reaches both).
+    private static readonly PlayerbotPopulationOptions Pop = new() { FreshZoneHomeRadius = 500 };
 
     private static PopulationBotFacts Bot(uint zone, float x = 1600f, float y = 240f)
         => new(Guid.NewGuid(), 8, Team.Horde, zone, true, false, false, false, MapId: 0, X: x, Y: y);
 
-    // Deathknell and Coldridge Valley are about 1,400 and 5,700 yards from their cities: far outside the graduated home radius.
+    // Deathknell and Coldridge Valley are about 1,400 and 1,850 yards from their cities: outside the 500 yard radius used here.
     private static readonly StartPosition Deathknell = new(0, Tirisfal, 1676f, 1677f, 95f, 0f);
     private static readonly StartPosition Coldridge = new(0, DunMorogh, -6240f, 331f, 383f, 0f);
 
