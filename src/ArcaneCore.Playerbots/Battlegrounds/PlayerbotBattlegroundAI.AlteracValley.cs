@@ -79,7 +79,7 @@ internal sealed partial class PlayerbotBattlegroundAI
                 Activity = objective.Kind == AvObjectiveKind.KillCaptain ? "av-captain" : "av-general";
                 TargetEntry = boss.Entry;
                 // Within reach the fight picks it (or its guards first, the nearest enemy); until then the bot closes in.
-                if (Distance(player, boss) <= EngageYards && IsEnemyCreature(player, boss)) Fight(player, boss, interval);
+                if (Distance(player, boss) <= EngageYards && IsEnemyCreature(player, boss, deliberate: true)) Fight(player, boss, interval, mustPursue: true);
                 else WalkTo(player, Position(boss), interval, toward: true);
                 return;
             case AvObjectiveKind.Advance:

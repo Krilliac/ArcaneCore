@@ -154,6 +154,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         _route = null;
         _pvp.Target = null;
         _pvp.Attacking = false;
+        _pvp.Forget();
         TravelRefused = false;
         _atMasterMs = 0;
         _inMatchIdleMs = 0;
@@ -315,7 +316,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             EndRest(player);
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
-            Fight(player, enemy, interval);
+            Fight(player, enemy, interval, mustPursue: IsFlagCarrier(match, team, enemy));
             ObserveStill(player, match, enemy, interval);
             return;
         }
@@ -360,8 +361,14 @@ internal sealed partial class PlayerbotBattlegroundAI
     private Player? OrderedEnemy(Player player, Battleground match, Team team)
     {
         if (Order is not { Target.IsEmpty: false } order || order.Duty is not (PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom)) return null;
-        return Online(order.Target) is { } enemy && IsEnemy(player, enemy, match, BattlegroundConstants.OtherTeam(team)) ? enemy : null;
+        // The carrier is never set aside; an intruder the bot found no path to is (and is picked again after UnreachableMs).
+        return Online(order.Target) is { } enemy && IsEnemy(player, enemy, match, BattlegroundConstants.OtherTeam(team))
+            && (IsFlagCarrier(match, team, enemy) || !_pvp.IsSkipped(enemy)) ? enemy : null;
     }
+
+    /// <summary>The enemy carries the bot's own flag (Warsong Gulch): the one target a bot never gives up on, whatever the path.</summary>
+    private static bool IsFlagCarrier(Battleground match, Team team, Unit unit)
+        => match is WarsongGulch wsg && unit is Player enemy && wsg.FlagState(team) == WsgFlagState.OnPlayer && wsg.FlagPicker(team) == enemy.Guid;
 
     /// <summary>
     /// The idle check of one think (<see cref="PlayerbotWarsongTactics.IsIdle"/>): a living bot out of combat that stood still for
@@ -581,35 +588,46 @@ internal sealed partial class PlayerbotBattlegroundAI
             && IsEnemy(player, thief, match, enemyTeam) && Distance(player, thief) <= ChaseCarrierYards)
             return thief;
 
+        // A target the bot found no path to (PlayerbotPvpFight.Unreachable) is skipped for 30 s, here and in the scan below; the carrier
+        // of the own flag was returned above and is never skipped.
         foreach (Unit unit in player.Combat.Attackers)
         {
-            if (unit is Player attacker && IsEnemy(player, attacker, match, enemyTeam)) return attacker;
-            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker, requireHostile: false)) return npcAttacker;
+            if (unit is Player attacker && IsEnemy(player, attacker, match, enemyTeam) && !_pvp.IsSkipped(attacker)) return attacker;
+            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker, requireHostile: false)
+                && !_pvp.IsSkipped(npcAttacker)) return npcAttacker;
         }
 
-        if (_pvp.Target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
-        if (match is AlteracValley && _pvp.Target is Game.Creatures.Creature currentNpc && IsEnemyCreature(player, currentNpc) && Distance(player, currentNpc) <= EngageYards * 1.5f) return currentNpc;
+        if (_pvp.Target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f
+            && !_pvp.IsSkipped(current)) return current;
+        if (match is AlteracValley && _pvp.Target is Game.Creatures.Creature currentNpc && IsEnemyCreature(player, currentNpc)
+            && Distance(player, currentNpc) <= EngageYards * 1.5f && !_pvp.IsSkipped(currentNpc)) return currentNpc;
 
+        // The nearest within reach; of those, one on the bot's own level first (walls, cliffs, the floors of an AV base).
         Unit? nearest = null;
         float best = EngageYards;
+        bool bestOtherLevel = true;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             WorldObject? obj = map.FindObject(guid);
-            if (obj is Player other && IsEnemy(player, other, match, enemyTeam))
+            if (obj is Player other && IsEnemy(player, other, match, enemyTeam) && !_pvp.IsSkipped(other))
             {
                 float distance = Distance(player, other);
-                if (distance <= best)
+                bool otherLevel = PlayerbotPvpFight.OnOtherLevel(player, other);
+                if (nearest is null ? distance <= EngageYards : PlayerbotPvpFight.IsBetterTarget(otherLevel, distance, bestOtherLevel, best))
                 {
                     best = distance;
+                    bestOtherLevel = otherLevel;
                     nearest = other;
                 }
             }
-            else if (match is AlteracValley && nearest is not Player && obj is Game.Creatures.Creature npc && IsEnemyCreature(player, npc))
+            else if (match is AlteracValley && nearest is not Player && obj is Game.Creatures.Creature npc && IsEnemyCreature(player, npc) && !_pvp.IsSkipped(npc))
             {
                 float distance = Distance(player, npc);
-                if (distance <= best)
+                bool otherLevel = PlayerbotPvpFight.OnOtherLevel(player, npc);
+                if (nearest is null ? distance <= EngageYards : PlayerbotPvpFight.IsBetterTarget(otherLevel, distance, bestOtherLevel, best))
                 {
                     best = distance;
+                    bestOtherLevel = otherLevel;
                     nearest = npc;
                 }
             }
@@ -626,10 +644,13 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// A living, attackable and hostile Alterac Valley NPC guard, captain, commander or general on the bot's map: the neutral wildlife of the
     /// valley (the rams and wolves) is left alone unless it attacks the bot (<paramref name="requireHostile"/> false).
     /// </summary>
-    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature, bool requireHostile = true)
+    /// <param name="deliberate">The script targets this creature on purpose (the enemy captain or general): it is never filtered as a civilian.</param>
+    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature, bool requireHostile = true, bool deliberate = false)
         => creature.IsInWorld && creature.IsAlive && ReferenceEquals(creature.Map, player.Map)
             && (creature.NpcFlags & (uint)Game.Npc.NpcFlags.SpiritGuide) == 0 && player.Map is { } map
-            && map.Combat.Hooks.CanAttack(player, creature) && (!requireHostile || map.Combat.Hooks.IsHostileTo(player, creature));
+            && map.Combat.Hooks.CanAttack(player, creature) && (!requireHostile || map.Combat.Hooks.IsHostileTo(player, creature))
+            // A civilian (a villager, a vendor) is not picked from a scan; one that attacks the bot (requireHostile false) is fought back.
+            && (deliberate || !requireHostile || !PlayerbotTargetFilter.IsCivilian(creature));
 
     /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
     private static Unit? FirstAttacker(Player player)
@@ -641,11 +662,12 @@ internal sealed partial class PlayerbotBattlegroundAI
         => _pvp.Target is { IsAlive: true } current && player.Combat.Attackers.Contains(current) && MapCombat.CanReachWithMeleeAutoAttack(player, current)
             ? current : null;
 
-    private void Fight(Player player, Unit target, uint interval)
+    /// <param name="mustPursue">The target is the carrier of the own flag or an objective of the script: a refused path never sets it aside.</param>
+    private void Fight(Player player, Unit target, uint interval, bool mustPursue = false)
     {
         TargetEntry = target is Game.Creatures.Creature creature ? creature.Entry : 0;
         _fighter = player;
-        _pvp.Fight(player, target, interval, _chase, _dropRoute);
+        _pvp.Fight(player, target, interval, _chase, _dropRoute, mustPursue);
     }
 
     private void ClearTarget(Player player)
