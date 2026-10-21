@@ -56,6 +56,12 @@ per-address connection caps were reworked. Measurements and limits: [lane report
   opt-in deviation that logs only the tick body's duration (and the tick interval).
   Slow packets are timed around the in-world handler call (`WorldSession.cs`,
   vmangos `WorldSession.cpp:620`).
+- By default slow world frames and slow map updates are not one line each: `PerformanceLog:SummaryIntervalSeconds` (60) writes ONE
+  `Slow update summary` per interval, and only when something was slow (world frames over the threshold as N of M with p50/p95/max; per map
+  instance the count, p50/p95/max of its own work and the top three contributors by summed ms; the host-starved / quiet / gc verdict counts;
+  the number of suppressed detail lines). An update over `SlowWorldUpdateDetail` (250) / `SlowMapUpdateDetail` (200) ms still gets its own
+  line, at most `DetailLinesPerMapPerInterval` (1) per map instance (and for the world) per interval. `SummaryIntervalSeconds = 0` restores
+  one vmangos-style line per slow update. The aggregation is `PerfLogAggregator` (world thread, no allocation per sample once a map is known).
 - A slow map update lists its phases (simulation, visibility, values, flush, cleanup) and
   counters: players, moved objects, changed objects, new objects and `visibility candidates`
   (how many viewer/target candidates the visibility phase evaluated). A visibility phase with a

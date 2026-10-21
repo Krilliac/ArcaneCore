@@ -12,6 +12,7 @@ public sealed class WorldRuntimeTickTests
     private static WorldRuntime Create(CapturingLogger log, Action<WorldRuntimeOptions>? tune = null)
     {
         var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0 };
+        options.Perf.SummaryIntervalSeconds = 0; // these tests pin the per-event slow-update lines; the summary has its own tests
         tune?.Invoke(options);
         return new WorldRuntime(options, new RecordingSaveQueue(), log);
     }

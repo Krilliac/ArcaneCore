@@ -65,7 +65,7 @@ IP bans and the live enforcement options are described in [live bans](../securit
 ## Monitoring
 
 The world daemon logs slow updates through the `PerformanceLog` section (`SlowWorldUpdate`, `SlowMapUpdate`, `SlowPackets`, in milliseconds; 0 disables a
-threshold), tagged with the `Perf` event id so a log sink can route them to their own file. `.server info` shows the version, the players online and the uptime.
+threshold), tagged with the `Perf` event id so a log sink can filter them. By default they are summarised once a minute (`PerformanceLog:SummaryIntervalSeconds`, 0 = one line per slow update), with a detail line only for the outliers. `.server info` shows the version, the players online and the uptime.
 See [operations and performance](../areas/ops-perf.md). Both daemons also run the `Ops:Watchdog` monitors on a dedicated thread: rate-limited
 warnings on world-tick overruns with percentiles, a critical line on a hung tick, heap high-water marks and memory-pressure warnings, a
 thread-pool starvation probe, a periodic counter dump and a supervisor heartbeat (systemd `Type=notify` with `WatchdogSec`, a liveness file, or
