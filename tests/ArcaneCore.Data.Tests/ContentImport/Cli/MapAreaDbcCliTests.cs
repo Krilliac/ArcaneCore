@@ -97,7 +97,7 @@ public sealed class MapAreaDbcCliTests : IDisposable
     [Fact]
     public async Task CliWithTwoPaths_LeavesWmoAreaTemplateAlone()
     {
-        string map = Input("Map.dbc", 42, Map(0));
+        string map = Input("Map.dbc", 42, Map(0), Map(1));
         string area = Input("AreaTable.dbc", 25, Area(12, 0, 0, 12));
         string wmo = Input("WMOAreaTable.dbc", 20, Wmo(100, 1500, 3, 77, 12));
         string database = Path.Combine(_root, "world.db");
