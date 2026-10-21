@@ -111,11 +111,11 @@ internal sealed class ScenarioGroupRun(EventScenarioGroup group)
     /// <summary>Bots of the group's prefix are in the siege under way that was not adopted: no bot is created while that siege runs.</summary>
     public bool HoldCreates { get; set; }
 
-    /// <summary>Claims this run gave up (busy too long); once any, the bots it creates are replacements and count against the cap.</summary>
-    public int GivenUp { get; set; }
-
-    /// <summary>Bots created since the first claim was given up (<see cref="EventScenarioEngine.MaxReplacements"/> caps them).</summary>
-    public int Replacements { get; set; }
+    /// <summary>
+    /// Bots this run created (begun, less the ones whose creation was refused: a refused creation gives its allowance back). The group may
+    /// create at most its count plus <see cref="EventScenarioEngine.MaxReplacements"/> over the run.
+    /// </summary>
+    public int Created { get; set; }
 }
 
 /// <summary>The groups of one wanted event.</summary>
@@ -456,14 +456,10 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         EventScenarioGroup def = g.Group;
         int missing = def.Count - g.Claims.Count - g.Pending;
         g.NoRoom = false;
-        if (g.GivenUp > 0)
-        {
-            // Past the first given-up claim only a bounded number of replacements is made: a group whose bots keep being taken does not
-            // fill the registry with new ones.
-            int replacementRoom = MaxReplacements(def) - g.Replacements;
-            if (replacementRoom <= 0) { g.NoRoom = true; return; }
-            missing = Math.Min(missing, replacementRoom);
-        }
+        // A group whose bots keep being taken does not fill the registry with new ones: over the run it creates its count plus a tenth.
+        int creationRoom = def.Count + MaxReplacements(def) - g.Created;
+        if (creationRoom <= 0) { g.NoRoom = true; return; }
+        missing = Math.Min(missing, creationRoom);
 
         if (missing <= 0 || !def.Provision || g.SiegeId != 0 || ((g.HoldCreates || (def.Role == EventScenarioRole.Siege && !g.SiegeChecked)) && host.RunningSiegeId is not null)) return; // while a siege that holds the group's bots runs (or may), no bot is made
         if (now < g.CreateRetryMs) return;
@@ -483,7 +479,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             string name = EventScenarioNames.For(def.NamePrefix, ref index);
             g.NameIndex = index;
             g.Pending++;
-            if (g.GivenUp > 0) g.Replacements++;
+            g.Created++;
             _creatingNow++;
             host.BeginCreate(name, slot.Race, slot.Class, result => Created(g, name, result));
         }
@@ -493,6 +489,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     {
         g.Pending = Math.Max(0, g.Pending - 1);
         _creatingNow = Math.Max(0, _creatingNow - 1);
+        if (!result.Success) g.Created = Math.Max(0, g.Created - 1); // a refused creation (a taken name, a full registry) uses no allowance
         if (_disposed) return;
         if (result.Success)
         {
@@ -611,7 +608,6 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
             g.Claims.RemoveAt(i);
             _claimed.Remove(claim.BotId);
             host.SetStay(claim.BotId, null);
-            g.GivenUp++;
             logger.LogInformation("Bot event scenario {Event} group {Group}: {Bot} stayed busy elsewhere and is given up; a replacement is claimed or created", g.Group.EventId, g.Group.GroupId, claim.Name);
         }
     }
@@ -825,7 +821,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         if (g.Pending > 0) text.Append(CultureInfo.InvariantCulture, $", creating {g.Pending}");
         if (shortBy > 0) text.Append(CultureInfo.InvariantCulture, $", short {shortBy}{(g.NoRoom ? ", no room" : !def.Provision ? ", not provisioned" : string.Empty)}");
         if (g.CreateRefusal is { } create) text.Append(CultureInfo.InvariantCulture, $", create refused: {create}");
-        if (g.Replacements > 0) text.Append(CultureInfo.InvariantCulture, $", replacements {g.Replacements}/{MaxReplacements(def)}");
+        if (g.Created > def.Count) text.Append(CultureInfo.InvariantCulture, $", replacements {g.Created - def.Count}/{MaxReplacements(def)}");
         if (g.Unavailable > 0) text.Append(CultureInfo.InvariantCulture, $", unavailable {g.Unavailable} ({g.UnavailableSample})");
         if (def.Role == EventScenarioRole.Siege && held > 0) text.Append(CultureInfo.InvariantCulture, $", held {held}");
         if (def.Role == EventScenarioRole.Siege) text.Append(", siege ").Append(SiegeText(g));

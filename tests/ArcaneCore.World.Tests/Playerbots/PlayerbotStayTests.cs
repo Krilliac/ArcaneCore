@@ -142,10 +142,28 @@ public sealed class PlayerbotStayTests
     [Fact]
     public Task RenewingTheSameStay_KeepsTheIntent_ANewOneDropsIt() => Run(4f, rig => rig.Host.OnWorldAsync(() =>
     {
+        // The stayer swings at a player who attacked it: that fight is the intent a drop stops on the wire (CMSG_ATTACKSTOP).
+        Player bot = rig.BotPlayer;
+        PlayerbotPvpTestKit.Flag(bot);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
         PlayerbotStay stay = rig.Stay();
         rig.Brain.Stay = stay;
-        rig.Brain.Stay = stay with { UntilMs = stay.UntilMs + 2_000 };
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Brain.InspectionPvpTarget);
+
+        var sent = new List<WorldOpcode>();
+        rig.Bot.ManagedDispatchObserver = sent.Add;
+        rig.Bot.ManagedBudget = new ManagedActionBudget(4);
+        rig.Brain.Stay = stay with { UntilMs = stay.UntilMs + 2_000 }; // the owner renews the lease
         Assert.Equal(stay.UntilMs + 2_000, rig.Brain.Stay!.UntilMs);
+        Assert.DoesNotContain(WorldOpcode.CmsgAttackstop, sent);
+        Assert.Same(rig.EnemyPlayer, rig.Brain.InspectionPvpTarget);
+
+        rig.Brain.Stay = stay with { StayId = stay.StayId + 1 }; // another stay is a new errand: the old intent is dropped
+        Assert.Contains(WorldOpcode.CmsgAttackstop, sent);
+        Assert.Null(rig.Brain.InspectionPvpTarget);
         rig.Brain.Stay = null;
         Assert.Null(rig.Brain.Stay);
     }));

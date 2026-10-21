@@ -635,23 +635,58 @@ public sealed class EventScenarioEngineTests
     public void ReplacementCreation_IsCappedToATenthOfTheGroup_AndAReleasedBotIsClaimedAgainWhenFree()
     {
         var rig = new Rig(Raiders(count: 10, minReady: 100, provision: true));
-        for (int i = 0; i < 9; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
-        rig.Host.Add("Siegebotzz", team: 0).Desired = true; // the tenth is not online yet, so the siege keeps waiting
+        rig.Host.SiegeRefusal = "held-for-the-test"; // the siege keeps waiting however ready the group is
         rig.Engine.EventChanged(Event, active: true);
-        rig.Ticks(3);
-        FakeBot[] busy = [rig.Host.Find("Siegebota"), rig.Host.Find("Siegebotb"), rig.Host.Find("Siegebotc")];
+        rig.Ticks(12);
+        Assert.Equal(10, rig.Host.Created.Count);
+        foreach (FakeBot created in rig.Host.Bots) created.Team = 0; // the fake registers new characters as Horde; the group is Alliance
+        FakeBot[] busy = [.. rig.Host.Bots.Take(3)];
         foreach (FakeBot bot in busy) bot.HeldBy = "is in a group";
         rig.Tick();
         rig.Tick((uint)EventScenarioEngine.BusyReleaseMs + 1_000);
         rig.Ticks(20);
 
-        Assert.Single(rig.Host.Created); // 3 given up, a tenth of 10 may be replaced
+        Assert.Equal(11, rig.Host.Created.Count); // a tenth of 10 beyond the 10 the group needed
         Assert.Contains("replacements 1/1", rig.Status());
 
         foreach (FakeBot bot in busy) bot.HeldBy = null;
         rig.Ticks(12);
-        Assert.Single(rig.Host.Created);
+        Assert.Equal(11, rig.Host.Created.Count);
         Assert.Equal(10, rig.Host.Bots.Count(b => rig.Engine.ClaimOf(b.Id) is not null));
+    }
+
+    [Fact]
+    public void AClaimGivenUpWhileTheGroupIsStillFilling_DoesNotStopTheFill()
+    {
+        var rig = new Rig(Raiders(count: 20, minReady: 100, provision: true));
+        rig.Host.SiegeRefusal = "held-for-the-test";
+        for (int i = 0; i < 5; i++) FarBot(rig.Host, "Siegebot" + (char)('a' + i), team: 0);
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(2);
+        Assert.True(rig.Host.Created.Count is > 0 and < 10, "the fill is under way: " + rig.Host.Created.Count);
+
+        FakeBot held = rig.Host.Find("Siegebota");
+        held.HeldBy = "is in a group";
+        rig.Tick();
+        rig.Tick((uint)EventScenarioEngine.BusyReleaseMs + 1_000); // given up while many are still missing
+        Assert.Null(rig.Engine.ClaimOf(held.Id));
+        rig.Ticks(30);
+
+        Assert.Equal(20, rig.Host.Bots.Count(b => rig.Engine.ClaimOf(b.Id) is not null)); // still filled to the count
+        Assert.Equal(16, rig.Host.Created.Count); // 4 existing bots remain, 16 created: within the count plus a tenth
+    }
+
+    [Fact]
+    public void ARefusedCreation_GivesItsAllowanceBack()
+    {
+        var rig = new Rig(Raiders(count: 10, minReady: 100, provision: true));
+        rig.Host.SiegeRefusal = "held-for-the-test";
+        int refusals = 0;
+        rig.Host.CreateAnswer = name => refusals++ < 30 ? new PlayerbotOperationResult(false, "name-in-use") : null;
+        rig.Engine.EventChanged(Event, active: true);
+        rig.Ticks(40);
+
+        Assert.Equal(10, rig.Host.Bots.Count(b => rig.Engine.ClaimOf(b.Id) is not null)); // 30 refusals did not use up the cap of 11
     }
 
     [Fact]
