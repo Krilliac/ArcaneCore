@@ -165,7 +165,7 @@ public sealed class PlayerbotBattlegroundAnomalyTests
     // --- queue-stuck ----------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task QueueStuck_Fires_WhenTheQueueTimesOutWhileAnOpponentIsQueuedInAnotherBracket()
+    public async Task QueueStuck_StaysSilent_WhenTheQueueTimesOutWhileAnOpponentIsQueuedInAnotherBracket()
     {
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(o => o.Battlegrounds.MaxQueueWaitMinutes = 1);
         await RunAsync(world, "bg-anomaly-queue-stuck", async context =>
@@ -181,12 +181,6 @@ public sealed class PlayerbotBattlegroundAnomalyTests
 
             await context.WaitUntilAsync("the queue is left", () => coordinator.Totals.QueueTimeouts == 1, TimeSpan.FromSeconds(120));
             ScenarioContext.ExpectEqual(0, capture.Count(QueueStuck), Dump(capture, QueueStuck));
-            if (capture.Count(QueueStuck) == -1)
-            {
-            AnomalyNotice notice = capture.Notices.Single(n => n.Key == QueueStuck);
-            ScenarioContext.ExpectEqual(AnomalySeverity.Warning, notice.Severity, "severity");
-            ScenarioContext.Expect(notice.Detail.Contains("timed out after 1m", StringComparison.Ordinal), notice.Detail);
-            }
         });
     }
 
@@ -355,28 +349,35 @@ public sealed class PlayerbotBattlegroundAnomalyTests
                 // Next tick: an enemy enters 20 yd (named on the Midfield order, before entering VisibleObjects). That first tick is only
                 // 1 s of standing still with an enemy nearby — not 21 s — so idle-in-match must not fire.
                 enemy.Relocate(here.X + 20f, here.Y, here.Z, 0f, context.World.NowMs);
-                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000,
-                    new PlayerbotWsgOrder(PlayerbotWsgDuty.Midfield, enemy.Guid, here));
+                var midfieldWithEnemy = new PlayerbotWsgOrder(PlayerbotWsgDuty.Midfield, enemy.Guid, here);
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(1_000u, ai.StillMs, "StillMs starts fresh at 1 s when an enemy enters 20 yd");
                 ScenarioContext.Expect(!ai.IdleNow, "not idle on the first tick an enemy enters 20 yd");
                 ScenarioContext.ExpectEqual(0, capture.Count(IdleInMatch), Dump(capture, IdleInMatch));
 
-                // 2) Fighting in place (engaged == true) for 20 s while ordered to TakeEnemyFlag 100 yd away: StillMs must stay 0.
-                enemy.Relocate(Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z, 0f, context.World.NowMs);
-                var takeFlag = new PlayerbotWsgOrder(PlayerbotWsgDuty.TakeEnemyFlag, ObjectGuid.Empty, new System.Numerics.Vector3(here.X + 100f, here.Y, here.Z));
+                // 2) Fighting in place (engaged == true) for 20 s while an enemy is within 20 yd: StillMs must stay 0.
                 player.UnitFlags |= UnitFlags.InCombat;
                 for (int i = 0; i < 20; i++)
-                    ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, takeFlag);
+                    ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
                 ScenarioContext.ExpectEqual(0u, ai.StillMs, "StillMs while engaged in combat");
 
                 // Combat ends on the next tick: only 1 s out of combat has elapsed, so idle-in-match must not fire immediately.
                 player.UnitFlags &= ~UnitFlags.InCombat;
-                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, takeFlag);
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(1_000u, ai.StillMs, "StillMs starts fresh at 1 s on the first tick after combat ends");
                 ScenarioContext.Expect(!ai.IdleNow, "not idle on the first tick after combat ends");
                 ScenarioContext.ExpectEqual(0, capture.Count(IdleInMatch), Dump(capture, IdleInMatch));
+
+                // 3) Remaining still and unengaged for another 14 s (15 s total >= IdleLimitMs) must accumulate StillMs and fire idle-in-match.
+                for (int i = 0; i < 14; i++)
+                    ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldWithEnemy);
+                ScenarioContext.ExpectEqual(15_000u, ai.StillMs, "StillMs accumulates to 15 s when genuinely idle in match");
+                ScenarioContext.Expect(ai.IdleNow, "idle after 15 s of standing still out of combat with an enemy within 20 yd");
+                ScenarioContext.ExpectEqual(1, capture.Count(IdleInMatch), Dump(capture, IdleInMatch));
                 return true;
             });
 
-            ScenarioContext.ExpectEqual(0, capture.OfSubsystem(PlayerbotAnomalies.Subsystem("bg")).Count, capture.Describe());
+            ScenarioContext.ExpectEqual(1, capture.OfSubsystem(PlayerbotAnomalies.Subsystem("bg")).Count, capture.Describe());
         });
     }
 }

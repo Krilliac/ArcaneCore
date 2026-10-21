@@ -247,8 +247,6 @@ internal sealed partial class PlayerbotBattlegroundAI
             Activity = "dead";
             _inMatchIdleMs = 0;
             StillMs = 0;
-            IdleNow = false;
-            StillMs = 0;
             _lastThinkAt = null;
             _stillDuty = null;
             IdleNow = false;
@@ -326,8 +324,6 @@ internal sealed partial class PlayerbotBattlegroundAI
             EndRest(player);
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
-            StillMs = 0;
-            IdleNow = false;
             Fight(player, enemy, interval, mustPursue: MustPursue(match, team, enemy));
             ObserveStill(player, match, enemy, interval);
             return;
@@ -454,8 +450,6 @@ internal sealed partial class PlayerbotBattlegroundAI
         else
         {
             _inMatchIdleMs = 0;
-            StillMs = 0;
-            IdleNow = false;
         }
     }
 

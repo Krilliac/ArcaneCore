@@ -561,29 +561,6 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return allianceOnline >= minPerTeam && hordeOnline >= minPerTeam;
     }
 
-    private bool HasOpposingQueueActivityLegacy(Tracked t, Player player, BattlegroundManager manager)
-    {
-        Team enemy = BattlegroundConstants.OtherTeam(t.Team);
-        foreach (Tracked other in _tracked.Values)
-        {
-            if (other.BotId != t.BotId && other.Type == t.Type && other.Bracket == t.Bracket && other.Team == enemy
-                && other.Phase is PlayerbotBattlegroundPhase.Queued or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering or PlayerbotBattlegroundPhase.InMatch)
-                return true;
-        }
-
-        if (_world is not null)
-        {
-            foreach (Player online in _world.OnlinePlayers)
-            {
-                if (online.Guid == player.Guid || online.Team != enemy) continue;
-                if (manager.QueuedGroupOf(online.Guid, t.Type) is { } group && group.Team == enemy)
-                    return true;
-            }
-        }
-
-        return false;
-    }
-
     private void Leave(Tracked t, PlayerbotBattlegroundBot bot, Player player)
     {
         Act(bot.Session, WorldOpcode.CmsgLeaveBattlefield, BitConverter.GetBytes(player.MapId));
