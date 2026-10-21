@@ -30,6 +30,9 @@ public sealed partial class WorldRuntime : IDisposable
     private PerfLogAggregator? _perfLog; // world thread: the slow-update summary (null: per-event lines, see PerfLog)
     private bool _perfLogResolved;
     private readonly ManualResetEventSlim _stopSignal = new(false);
+    // Manual clock only: set by Post/InvokeAsync/AdvanceClock*/session enqueue so the world thread does not sleep a whole tick
+    // interval before it looks at the queue. Never set on the real clock (production tick cadence is unchanged).
+    private readonly ManualResetEventSlim _wakeSignal = new(false);
     private Thread? _thread;
     private int _worldThreadId = -1;
     private ulong _autosaveClockMs; // world thread: the sum of tick diffs, the clock the per-character autosave timers run on
@@ -124,9 +127,10 @@ public sealed partial class WorldRuntime : IDisposable
     /// <summary>
     /// Test seam (never configuration-bound): from now on game time — <see cref="NowMs"/>, <see cref="Uptime"/> and
     /// every tick's diff — advances only through <see cref="AdvanceClockAsync"/>, in steps of at most
-    /// <paramref name="stepMs"/> (default 50, vmangos WORLD_SLEEP_CONST). Posted commands still run every
-    /// <see cref="WorldRuntimeOptions.TickIntervalMs"/> of wall time (with a zero diff), so sessions and
-    /// <see cref="InvokeAsync{T}"/> keep working while the simulation stands still. Call before <see cref="Start"/>.
+    /// <paramref name="stepMs"/> (default 50, vmangos WORLD_SLEEP_CONST). Queued work runs at once: <see cref="Post"/>,
+    /// <see cref="InvokeAsync{T}"/>, <see cref="AdvanceClockAsync"/> and a session's packet queue wake the world thread (real clock: they
+    /// never do). Otherwise the world thread ticks every <see cref="WorldRuntimeOptions.TickIntervalMs"/> of wall time with a zero diff,
+    /// so sessions and <see cref="InvokeAsync{T}"/> keep working while the simulation stands still. Call before <see cref="Start"/>.
     /// </summary>
     public void UseManualClock(uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs: null);
 
@@ -410,7 +414,23 @@ public sealed partial class WorldRuntime : IDisposable
     }
 
     /// <summary>Queue work for the start of the next tick. Thread-safe.</summary>
-    public void Post(Action command) => _commands.Enqueue(command);
+    public void Post(Action command)
+    {
+        _commands.Enqueue(command);
+        WakeIfManual();
+    }
+
+    /// <summary>
+    /// Manual clock only: end the world thread's idle wait now, so work that was just queued (a command, a session packet) runs on
+    /// the next tick instead of after the rest of the tick interval. A no-op on the real clock. Thread-safe, allocation-free.
+    /// </summary>
+    public void WakeIfManual()
+    {
+        if (_manualClock)
+        {
+            _wakeSignal.Set();
+        }
+    }
 
     /// <summary>
     /// Run <paramref name="func"/> on the world thread and return its result. The task is cancelled when <paramref name="cancellationToken"/>
@@ -836,6 +856,10 @@ public sealed partial class WorldRuntime : IDisposable
         Stop();
         DisposeMapScheduler();
         _stopSignal.Dispose();
+        // A session may still enqueue (and wake) after shutdown: ManualResetEventSlim.Set does not check disposal (it only flips the state
+        // bit and, under the lock, sets an event object that Dispose already nulled), so that late Set is harmless. Wait and Reset do throw
+        // once disposed, but only the world thread calls them and it is gone by now.
+        _wakeSignal.Dispose();
     }
 
     private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)
@@ -1266,7 +1290,7 @@ public sealed partial class WorldRuntime : IDisposable
         int tolerance = Math.Clamp(Options.TickLateToleranceMs, 0, 1000);
         Scheduler = new WorldTickScheduler(interval, tolerance);
         Stats.FrameOverrunToleranceMicros = tolerance * 1000L;
-        using var waiter = new WorldTickWaiter(Options.TickTimer, _stopSignal, TickSpinMarginMicros);
+        using var waiter = new WorldTickWaiter(Options.TickTimer, _stopSignal, TickSpinMarginMicros, _manualClock ? _wakeSignal : null);
         EffectiveTickTimer = waiter.Mode;
         long last = _clock.ElapsedMilliseconds;
         long lastStartTicks = -1;
@@ -1283,6 +1307,12 @@ public sealed partial class WorldRuntime : IDisposable
 
         while (!_stopSignal.IsSet)
         {
+            if (_manualClock)
+            {
+                // Before the tick drains the queue: anything queued after this reset sets the signal again and ends the next wait.
+                _wakeSignal.Reset();
+            }
+
             long startTicks = _clock.ElapsedTicks;
             long tickStart = startTicks * 1000 / Stopwatch.Frequency;
             uint diff = (uint)Math.Clamp(tickStart - last, 0, uint.MaxValue);
@@ -1363,6 +1393,14 @@ public sealed partial class WorldRuntime : IDisposable
                 {
                     continue; // advances run their ticks back to back
                 }
+            }
+
+            if (_manualClock)
+            {
+                // Idle wait of one interval, cut short by a wake. The drift-compensated cadence is not used: early wakes would
+                // push its due time ahead and stretch the periodic zero-diff tick.
+                waiter.WaitUntil(_clock, _clock.ElapsedTicks + interval * Stopwatch.Frequency / 1000, interval);
+                continue;
             }
 
             int wait = Scheduler.NextWait(tickStart, _clock.ElapsedMilliseconds);

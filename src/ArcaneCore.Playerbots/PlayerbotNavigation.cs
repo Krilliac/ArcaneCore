@@ -149,8 +149,11 @@ internal enum PlanOutcome : byte
 /// <summary>
 /// One goal's wait for navigation tiles (<see cref="PlanOutcome.Pending"/>): held by the caller, passed by reference to the planning call.
 /// A wait is a run of holds, each within <see cref="GapMs"/> of the last. Past <see cref="MaxMs"/> it is spent: the refusal stands, for
-/// every further pending answer of the run, until a plan succeeds (<see cref="Reset"/>) or the run breaks off. Owned and touched by the
-/// world thread only.
+/// every further pending answer of the run, until a plan succeeds (<see cref="Reset"/>) or the run breaks off. The tiles load on
+/// background threads in real time, so a wait that saw such a read in flight is spent only when <see cref="MaxMs"/> have passed on the
+/// game clock AND on the wall clock: a world that runs faster than real time (the manual test clock) does not give up before the load
+/// had its time. A wait that only met pathfinders answering "pending" (tests) is bounded by the game clock alone. In production the two
+/// clocks agree and nothing changes. Owned and touched by the world thread only.
 /// </summary>
 internal struct TileWait
 {
@@ -160,9 +163,14 @@ internal struct TileWait
     /// <summary>Holds further apart than this are separate waits.</summary>
     internal const uint GapMs = 5_000;
 
+    /// <summary>Test seam: the wall clock as a <see cref="System.Diagnostics.Stopwatch"/> timestamp (null: the real one).</summary>
+    internal Func<long>? RealTicks { get; init; }
+
     private uint _since;
+    private long _sinceRealTicks;
     private uint _lastHold;
     private bool _started;
+    private bool _realRead;
     private bool _spent;
 
     /// <summary>Whether a wait is under way (not yet spent).</summary>
@@ -175,15 +183,22 @@ internal struct TileWait
         {
             _started = true;
             _since = now;
+            _sinceRealTicks = RealNow();
+            _realRead = false;
             _spent = false;
         }
+
+        _realRead |= PathSearchCounters.LastPendingWasRealRead;
 
         _lastHold = now;
         if (_spent) return false;
         if (unchecked(now - _since) <= MaxMs) return true;
+        if (_realRead && (RealNow() - _sinceRealTicks) * 1000 / System.Diagnostics.Stopwatch.Frequency <= MaxMs) return true;
         _spent = true;
         return false;
     }
+
+    private readonly long RealNow() => RealTicks?.Invoke() ?? System.Diagnostics.Stopwatch.GetTimestamp();
 
     /// <summary>A plan succeeded or the goal changed: the next pending answer starts a new wait.</summary>
     internal void Reset()

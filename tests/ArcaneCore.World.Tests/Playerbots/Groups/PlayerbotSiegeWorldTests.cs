@@ -4,8 +4,10 @@ using System.Reflection;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -302,6 +304,11 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.True(await world.OnWorldAsync(() => world.Coordinator.Groups.Count(g => g.Siege is not null) == 0));
     }
 
+    private sealed class FrozenDeathClock(long seconds) : DeathClock
+    {
+        public override long UnixSeconds => seconds;
+    }
+
     /// <summary>One raid of two is left without a living leader (nobody promotes a new one): the other raid must keep waiting for it.</summary>
     private static async Task<(PlayerbotSiege Siege, PlayerbotSiegeRaid Fallen)> LeaderlessRaid(GroupTestWorld world)
     {
@@ -311,6 +318,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         await world.OnWorldAsync(() =>
         {
             Player leader = Leader(world, fallen);
+            // The death clock follows the manual world clock: a ghost bot would reclaim its body after the 30 s delay within this run.
+            // The test is about a leaderless raid, so the death clock stands still and the leader stays dead.
+            WorldRuntime runtime = world.World.Host.World;
+            DeathHooks.Register(runtime, new DeathHooks(DeathHooks.For(runtime).Options, new FrozenDeathClock(DeathHooks.For(runtime).Clock.UnixSeconds)));
             leader.Health = 0;
             leader.Map!.Combat.KillPlayer(leader);
             fallen.PromoteTriedMs = Math.Max(1u, world.World.Host.World.NowMs); // no promotion before the run below keeps it off

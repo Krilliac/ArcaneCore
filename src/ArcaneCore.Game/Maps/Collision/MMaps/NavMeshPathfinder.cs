@@ -879,7 +879,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             switch (PollTileRead(mapId, terrain.X, terrain.Y, out readTile))
             {
                 case TileReadState.Pending:
-                    PathSearchCounters.RecordTilePending();
+                    PathSearchCounters.RecordTilePendingOnRealRead();
                     if (_trackPendingThisQuery)
                     {
                         _pendingThisQuery.Add((mapId, terrain.X, terrain.Y));

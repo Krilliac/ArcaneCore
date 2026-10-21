@@ -800,6 +800,7 @@ public sealed partial class WorldSession : IPlayerSession
                     Interlocked.Increment(ref _queuedPackets);
                     Interlocked.Add(ref _queuedBytes, payload.Length);
                     _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds(), _injectDispatch));
+                    World.WakeIfManual();
                 }
                 else
                 {

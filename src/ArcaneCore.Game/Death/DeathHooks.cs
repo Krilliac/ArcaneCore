@@ -21,6 +21,8 @@ public sealed class DeathHooks
     /// <summary>Retail defaults and the system clock; used when nothing is registered.</summary>
     public static DeathHooks Default { get; } = new(new DeathOptions(), DeathClock.System);
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldRuntime, DeathHooks> s_manualDefaults = new();
+
     public DeathOptions Options { get; }
 
     public DeathClock Clock { get; }
@@ -41,10 +43,20 @@ public sealed class DeathHooks
         return !ReferenceEquals(hooks, Default) && s_registered.TryAdd(world, hooks);
     }
 
-    /// <summary>The hooks registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
+    /// <summary>
+    /// The hooks registered for <paramref name="world"/>, or <see cref="Default"/>; a world on the manual test clock with nothing
+    /// registered gets retail defaults whose clock follows world time (<see cref="WorldDeathClock"/>).
+    /// </summary>
     public static DeathHooks For(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return s_registered.TryGetValue(world, out DeathHooks? hooks) ? hooks : Default;
+        if (s_registered.TryGetValue(world, out DeathHooks? hooks))
+        {
+            return hooks;
+        }
+
+        return world.IsManualClock
+            ? s_manualDefaults.GetValue(world, static w => new DeathHooks(new DeathOptions(), new WorldDeathClock(w)))
+            : Default;
     }
 }
