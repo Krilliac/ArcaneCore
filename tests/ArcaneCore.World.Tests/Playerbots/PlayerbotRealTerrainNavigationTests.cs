@@ -40,10 +40,11 @@ internal sealed class RealTerrainBotFactAttribute : FactAttribute
 /// route planning and its motion are checked there. Positions are the live characters' and the world database's creature spawns.
 /// Time moves only on the manual world clock; every wait is for a state, bounded by game time.
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output)
+public sealed class PlayerbotRealTerrainNavigationTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotRealTerrainNavigationTests(ITestOutputHelper output) : base(output) { }
+
     // Undead start inside the Deathknell crypt (playercreateinfo race 5), where Graveweaver stood for hours.
-    private static readonly Vector3 CryptStart = new(1676.35f, 1677.45f, 121.67f);
 
     // Undertaker Mordo (creature 1568), outside the crypt at the top of its stairs.
     private static readonly Vector3 Mordo = new(1678.99f, 1667.86f, 135.85f);
@@ -52,11 +53,9 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
     private static readonly Vector3 CryptStairs = new(1645.4f, 1665.9f, 132.6f);
 
     // Where Mirthblade stood after its revive with goal Quest, target 1718 (Rockjaw Raider) for quest 179, and that raider's spawn.
-    private static readonly Vector3 ColdridgeAfterRevive = new(-6222.2f, 236.17f, 388.48f);
     private static readonly Vector3 RockjawRaider = new(-6150.35f, 50.82f, 416.67f);
 
     // Where Dawnrover stood (goal Quest, target 253) and William Pestle (creature 253), inside the Lion's Pride Inn.
-    private static readonly Vector3 InnBesidePestle = new(-9465.6f, 35.2f, 57.0f);
     private static readonly Vector3 WilliamPestle = new(-9460.3f, 31.94f, 57.05f);
 
     // Mirthblade's ghost and its body in the rehearsal snapshot (359 yards apart, Dun Morogh).
@@ -239,193 +238,6 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
         Assert.True(atBody, $"the ghost did not reach its body; last step {recovery.LastStep}");
     }
 
-    private sealed class RevivalClock(long seconds) : DeathClock
-    {
-        public long Seconds { get; set; } = seconds;
-        public override long UnixSeconds => Seconds;
-    }
-
-    /// <summary>A world on the real terrain with one managed bot session on the manual clock.</summary>
-    private sealed class Terrain : IAsyncDisposable
-    {
-        private Terrain(WorldTestHost host, WorldSession session)
-        {
-            Host = host;
-            Session = session;
-        }
-
-        public WorldTestHost Host { get; }
-
-        public WorldSession Session { get; }
-
-        public Player Player => Session.Player!;
-
-        private TeleportService Teleports => Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-
-        public static async Task<Terrain> StartAsync(bool withFactions = false, Action<IServiceCollection>? services = null)
-        {
-            string root = Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable)!;
-            Action<IServiceCollection>? extra = services;
-            WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = root,
-                configureServices: services =>
-                {
-                    services.AddSingleton<IWorldFeature, ManualClock>();
-                    extra?.Invoke(services);
-                    if (!withFactions) return;
-                    // The scenario world's factions (DungeonBotHost): faction 14 monsters are hostile to the human bot.
-                    services.AddSingleton(new FactionTemplateCatalog(
-                    [
-                        new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),
-                        new FactionTemplateRecord(14, 14, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 1),
-                    ]));
-                });
-            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
-            return new Terrain(host, session);
-        }
-
-        /// <summary>Teleport the bot (eastern kingdoms unless <paramref name="map"/> says otherwise) and acknowledge like a client until it stands there.</summary>
-        public async Task PlaceAsync(Vector3 at, uint map = 0)
-        {
-            Assert.True(await Host.OnWorldAsync(() => Teleports.TeleportTo(Player, map, at.X, at.Y, at.Z, 0)), "teleport refused");
-            for (int tick = 0; tick < 200; tick++)
-            {
-                bool there = await Host.OnWorldAsync(() =>
-                {
-                    PlayerbotMovementControl.Update(Session, Player);
-                    return Player.IsInWorld && Teleports.StageOf(Player) is null && Player.MapId == map
-                        && Vector2.Distance(new(Player.X, Player.Y), new(at.X, at.Y)) < 1f;
-                });
-                if (there) return;
-                await Host.World.AdvanceClockAsync(50);
-            }
-
-            throw new TimeoutException($"the bot did not arrive at {at}");
-        }
-
-        /// <summary>Kill the bot where it stands and release its spirit; the body's position.</summary>
-        public async Task<Vector3> KillAndReleaseAsync()
-        {
-            await Host.OnWorldAsync(() =>
-            {
-                Player.Health = 0;
-                Player.Map!.Combat.KillPlayer(Player);
-                if (!Player.Map!.Combat.RepopPlayer(Player)) throw new InvalidOperationException("release refused");
-            });
-            await WaitAsync(() => (Player.Flags & PlayerFlags.Ghost) != 0 && Teleports.StageOf(Player) is null, "the release");
-            return await Host.OnWorldAsync(() => new Vector3(Player.Combat.Corpse!.X, Player.Combat.Corpse.Y, Player.Combat.Corpse.Z));
-        }
-
-        /// <summary>Tick the world and acknowledge the server orders until <paramref name="done"/> holds (bounded by game time).</summary>
-        public async Task WaitAsync(Func<bool> done, string what)
-        {
-            for (int tick = 0; tick < 400; tick++)
-            {
-                bool reached = await Host.OnWorldAsync(() =>
-                {
-                    PlayerbotMovementControl.Update(Session, Player);
-                    return Player.IsInWorld && done();
-                });
-                if (reached) return;
-                await Host.World.AdvanceClockAsync(50);
-            }
-
-            throw new TimeoutException($"timed out waiting for: {what}");
-        }
-
-        /// <summary>Plan one route to <paramref name="goal"/> and follow it as the brain does; the distance left when it stops.</summary>
-        public async Task<float> WalkAsync(Vector3 goal, uint maxMs, ITestOutputHelper log)
-        {
-            var options = new PlayerbotOptions();
-            TileWait[] wait = [new TileWait()];
-            PlayerbotRoute? route = null;
-            PlanOutcome outcome = PlanOutcome.Pending;
-            while (outcome == PlanOutcome.Pending)
-            {
-                outcome = await Host.OnWorldAsync(() => PlayerbotNavigation.PlanExact(Player, goal, options, ref wait[0], Host.World.NowMs, out route));
-                if (outcome != PlanOutcome.Pending) break;
-                await Task.Delay(20);
-                await Host.World.AdvanceClockAsync(100);
-            }
-
-            Assert.NotNull(route);
-            log.WriteLine($"route: {string.Join(" ", route!.Points)}");
-            return await FollowAsync(route, goal, maxMs);
-        }
-
-        /// <summary>
-        /// Follow routes from <see cref="PlayerbotNavigation.PlanToward"/> until within <paramref name="reach"/> of the goal. A
-        /// <see cref="PlanOutcome.Pending"/> answer (a navigation tile is being read in the background) is waited out as the brain does:
-        /// the world clock moves on and the plan is asked again, until <see cref="TileWait.MaxMs"/> turns it into a refusal.
-        /// </summary>
-        public async Task<float> WalkTowardAsync(Vector3 goal, float reach, uint maxMs, ITestOutputHelper log, PlayerbotOptions? with = null)
-        {
-            PlayerbotOptions options = with ?? new PlayerbotOptions();
-            float left = float.PositiveInfinity;
-            TileWait[] wait = [new TileWait()]; // boxed: a ref local cannot be captured by the world-thread lambda
-            const int MaxLegs = 2000;
-            int legs = 0;
-            for (uint spent = 0; spent < maxMs;)
-            {
-                Vector3 legStart = await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z));
-                Assert.True(++legs <= MaxLegs,
-                    $"walk towards {goal}: still {left:F1} yards away after {MaxLegs} legs, last at {legStart}");
-                PlayerbotRoute? route = null;
-                PlanOutcome outcome = PlanOutcome.Pending;
-                while (outcome == PlanOutcome.Pending)
-                {
-                    outcome = await Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(Player, goal, options, ref wait[0], Host.World.NowMs, out route));
-                    if (outcome != PlanOutcome.Pending) break;
-                    await Task.Delay(20); // the tile is read on a background thread: real time, not game time
-                    await Host.World.AdvanceClockAsync(100);
-                }
-
-                Assert.True(outcome == PlanOutcome.Route && route is not null,
-                    $"no route towards {goal} from {await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z))} ({outcome})");
-                log.WriteLine($"leg to {route!.Points[^1]}");
-                uint started = Host.World.NowMs;
-                left = await FollowAsync(route, goal, maxMs - spent);
-                uint used = unchecked(Host.World.NowMs - started);
-                spent += used;
-                if (left < reach) return left;
-
-                // A leg that used no game time and moved the bot nowhere would be planned again forever (the clock the cap counts
-                // never advances): that is a stall, and fails here instead of hanging the run.
-                Vector3 legEnd = await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z));
-                Assert.False(used == 0 && Vector3.Distance(legStart, legEnd) < 0.5f,
-                    $"walk towards {goal}: the leg to {route.Points[^1]} made no progress, stalled at {legEnd} ({left:F1} yards away)");
-            }
-
-            return left;
-        }
-
-        private async Task<float> FollowAsync(PlayerbotRoute route, Vector3 goal, uint maxMs)
-        {
-            var options = new PlayerbotOptions();
-            for (uint elapsed = 0; elapsed <= maxMs; elapsed += 100)
-            {
-                bool moving = await Host.OnWorldAsync(() =>
-                {
-                    Session.ManagedBudget = new ManagedActionBudget(4);
-                    return PlayerbotNavigation.TryAdvance(Session, route, options, 100, Host.World.NowMs);
-                });
-                if (!moving) break;
-                await Host.World.AdvanceClockAsync(50);
-                await Host.OnWorldAsync(() => PlayerbotMotion.Pump(Session, Player, Host.World.NowMs));
-                await Host.World.AdvanceClockAsync(50);
-                await Host.OnWorldAsync(() => PlayerbotMotion.Pump(Session, Player, Host.World.NowMs));
-            }
-
-            return await Host.OnWorldAsync(() => Vector2.Distance(new(Player.X, Player.Y), new(goal.X, goal.Y)));
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            Session.Kick();
-            await Session.ManagedClosed;
-            await Host.DisposeAsync();
-        }
-    }
-
     /// <summary>
     /// The wave-8 rehearsal's quest-35 stall ("Further Concerns", Dawnrover to Guard Thomas, creature 261, 610 yards south of where it
     /// stopped; docs/integration/wave8-20261008.md). Replayed, the bot stood at (-9532.9, -426.7) for good: the 126-yard point towards
@@ -465,8 +277,4 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
     // Guard Thomas (creature 261, spawn 80880), the ender of quest 35, at the bridge east of Elwynn.
     private static readonly Vector3 GuardThomas = new(-9610.23f, -1032.05f, 41.3058f);
 
-    private sealed class ManualClock : IWorldFeature
-    {
-        public void Attach(WorldRuntime world) => world.UseManualClock();
-    }
 }

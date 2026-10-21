@@ -4,11 +4,14 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotFloorTrackingRealTerrainTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotFloorTrackingRealTerrainTests(ITestOutputHelper output) : base(output) { }
+
     // The Dun Morogh - Loch Modan tunnel (Smalltunnel.wmo), where the live server reported bots 2-5 yards under the tunnel floor
     // (move/under-map at -5590.54,-2475.30,394.35; the floor there is 396.97): both mouths on the navigation mesh.
     // Points of Piltrus's live walk (bot-motion lease/under-map reports, 18:36-18:38): the west mouth, then on through the tunnel.

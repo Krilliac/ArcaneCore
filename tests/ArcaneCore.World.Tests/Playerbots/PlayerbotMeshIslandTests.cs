@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -17,8 +18,10 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// refused. Wfbotac's saved position is on the island. Now a stall that gives a goal up there moves the bot off (its home, or its bind
 /// point), as an unsafe landing does.
 /// </summary>
-public sealed partial class PlayerbotRealTerrainNavigationTests
+public sealed class PlayerbotMeshIslandTests : RealTerrainNavigationTestBase
 {
+    public PlayerbotMeshIslandTests(ITestOutputHelper output) : base(output) { }
+
     // Wfbotac's saved position (live-w23-r1 characters; it logged in there and stalled within two minutes) and Wfbotaj's stall spot.
     private static readonly Vector3 MolsenIslandSouth = new(-10281.6f, 1356.533f, 40.484f);
     private static readonly Vector3 MolsenIslandNorth = new(-10283.04f, 1379.96f, 40.49f);
