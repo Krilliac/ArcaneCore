@@ -319,10 +319,11 @@ internal sealed class PlayerbotGroupAI
             if (waiting is not null)
             {
                 waiting.AnswerRequestedMs = Math.Max(1u, _session.World.NowMs);
+                waiting.AnswerRequestedLeader = player.Guid;
                 // The chase out and the walk back are an A, B, A pattern to the loop watch; the waypoint's own refusal is lifted as LeadSiege does (only that place).
                 if (PlayerbotMotion.IsBlacklisted(player, waiting.MoveTo)) PlayerbotMotion.Unblacklist(player, waiting.MoveTo);
             }
-            Fight(player, target, interval, waiting?.MoveTo);
+            Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
             return;
         }
 
@@ -713,7 +714,7 @@ internal sealed class PlayerbotGroupAI
             // is within SiegeAnswerLeashYards of the waypoint (a caster, a flagged player, a long-reach melee unit). Beyond the leash (a kiting attacker) it is not followed: the leader walks back to its waypoint. Fight closes on
             // an attacker the leader cannot hit from where it stands, within that leash only.
             if (isLeader)
-                return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= (l.OnSelf ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : PlayerbotSiegeCommander.WaypointYards))
+                return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= (l.OnSelf && !pushing.AnswerSpent ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : PlayerbotSiegeCommander.WaypointYards))
                     .OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
             return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
@@ -875,8 +876,9 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
+    /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent.</param>
     /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
-    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null)
+    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
     {
         if (!ReferenceEquals(_target, target))
         {
@@ -916,7 +918,7 @@ internal sealed class PlayerbotGroupAI
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee when leashCentre is { } centre
-                && Vector3.Distance(new Vector3(target.X, target.Y, target.Z), centre) > PlayerbotSiegeCommander.SiegeAnswerLeashYards:
+                && Vector3.Distance(new Vector3(target.X, target.Y, target.Z), centre) > leashYards:
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;

@@ -442,7 +442,7 @@ public sealed partial class PlayerbotGroupCoordinator
         // is more than LagYards behind its leader (the members of a pushing raid disengage and catch up).
         GrantPushes(siege);
         if (siege.Step < siege.Waypoints.Count && _siegeUnled == 0
-            && _siegeViews.All(v => v.Facts.AtWaypoint && (v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards || v.Facts.LagWaived)
+            && _siegeViews.All(v => v.Facts.AtWaypointReal && (v.Facts.MaxLagYards <= PlayerbotSiegeCommander.LagYards || v.Facts.LagWaived)
                 && (!v.Facts.InCombat || PlayerbotSiegeCommander.PushOf(v.Facts) != PlayerbotSiegePush.None)))
         {
             foreach (SiegeView view in _siegeViews)
@@ -452,10 +452,11 @@ public sealed partial class PlayerbotGroupCoordinator
             foreach (SiegeView view in _siegeViews)
             {
                 view.Raid.AtWaypoint = false;
+                view.Raid.AtWaypointReal = false;
                 view.Raid.EndAnswer();
                 view.Facts = view.Facts with
                 {
-                    AtWaypoint = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, MsQuietInCombat = 0, ObjectiveLeg = OnFinalLeg(siege), PushBlocked = false, LagWaived = false,
+                    AtWaypoint = false, AtWaypointReal = false, PeersAtWaypoint = true, MsInCombatAtStep = 0, MsQuietInCombat = 0, ObjectiveLeg = OnFinalLeg(siege), PushBlocked = false, LagWaived = false,
                 };
             }
         }
@@ -477,18 +478,26 @@ public sealed partial class PlayerbotGroupCoordinator
     /// Reads the leader's answer for the raid and returns whether the leader counts as at the waypoint of <paramref name="step"/> because of it. An answer begins only from a real reading (<paramref name="real"/>:
     /// <see cref="IsAtWaypoint"/>, level-aware) at this step, for this leader, while the raid pushes, and when the leader's group AI has asked for it (<see cref="PlayerbotSiegeRaid.AnswerRequestedMs"/>, fresh for
     /// <see cref="PlayerbotSiegeCommander.AnswerFreshMs"/>). It lasts until the leader is back in the disk and no longer fighting, and is bound: it ends when the leader leaves the reach (<see cref="WithinAnswerReach"/>) or
-    /// after <see cref="LagHoldMs"/>. It belongs to its step and its leader (another step, another leader or the end of the push end it), so it neither carries over to the next waypoint nor sustains itself.
+    /// after <see cref="LagHoldMs"/> counted from the first answer of the step (<see cref="PlayerbotSiegeRaid.AnswerStepSinceMs"/>: per step, not per excursion; once spent, the step has no further answer). The request must come from this leader. It belongs to its step and its leader (another step, another leader or the end of the push end it), so it neither carries over to the next waypoint nor sustains itself.
     /// </summary>
     internal static bool UpdateAnswer(PlayerbotSiegeRaid raid, ObjectGuid leaderGuid, int step, Vector3 leader, Vector3 waypoint, bool real, uint now)
     {
-        bool requested = raid.AnswerRequestedMs != 0 && unchecked((int)(now - raid.AnswerRequestedMs)) <= PlayerbotSiegeCommander.AnswerFreshMs;
+        bool requested = raid.AnswerRequestedMs != 0 && raid.AnswerRequestedLeader == leaderGuid && unchecked((int)(now - raid.AnswerRequestedMs)) <= PlayerbotSiegeCommander.AnswerFreshMs;
         if (raid.AnsweringStep >= 0 && (!raid.PushingThrough || raid.AnsweringStep != step || raid.AnsweringLeader != leaderGuid)) raid.EndAnswer();
+        if (raid.AnswerClockStep != step)
+        {
+            raid.AnswerClockStep = step;
+            raid.AnswerStepSinceMs = 0;
+        }
+
+        bool spent = raid.AnswerStepSinceMs != 0 && unchecked(now - raid.AnswerStepSinceMs) >= LagHoldMs;
+        raid.AnswerSpent = spent;
         if (raid.AnsweringStep < 0)
         {
-            if (!raid.PushingThrough || !real || !requested) return false;
+            if (!raid.PushingThrough || !real || !requested || spent) return false;
             raid.AnsweringStep = step;
             raid.AnsweringLeader = leaderGuid;
-            raid.AnswerSinceMs = Math.Max(1u, now);
+            if (raid.AnswerStepSinceMs == 0) raid.AnswerStepSinceMs = Math.Max(1u, now);
             return true;
         }
 
@@ -498,7 +507,7 @@ public sealed partial class PlayerbotGroupCoordinator
             return true;
         }
 
-        if (!WithinAnswerReach(leader, waypoint) || unchecked(now - raid.AnswerSinceMs) >= LagHoldMs)
+        if (!WithinAnswerReach(leader, waypoint) || spent)
         {
             raid.EndAnswer();
             return real;
@@ -628,11 +637,14 @@ public sealed partial class PlayerbotGroupCoordinator
         float nearest = view.Hostiles.Count == 0 ? float.PositiveInfinity : view.Hostiles.Min(h => h.Yards);
 
         bool atWaypoint = false;
+        bool atWaypointReal = false;
         if (siege.Step < siege.Waypoints.Count)
         {
             var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
             // A leader that left the waypoint's disk to answer an attacker of its own (within the leash) is still at the waypoint for the raid until it is back: the lag hold, the lockstep and the no-progress clock do not flip because of the answer.
+            // Only the real reading lets the lockstep advance; the answer serves the lag hold and the no-progress clock.
             bool real = IsAtWaypoint(leaderAt, siege.Waypoints[siege.Step]);
+            atWaypointReal = real;
             atWaypoint = UpdateAnswer(raid, leader.Guid, siege.Step, leaderAt, siege.Waypoints[siege.Step], real, now) || real;
         }
         else
@@ -641,6 +653,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         raid.AtWaypoint = atWaypoint;
+        raid.AtWaypointReal = atWaypointReal;
         (uint stepCombatMs, uint quietCombatMs) = ReadClocks(siege, raid, inCombat, sinceCombat, view.Hostiles.Count, now);
 
         // The push is bound by progress: a pushing leader that gets no nearer to its goal for PushStallMs has the push withdrawn for this step.
@@ -685,7 +698,7 @@ public sealed partial class PlayerbotGroupCoordinator
             atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched,
             deadSince, raid.Retreats, objectiveEngaged, atRally, msAtRally, raid.RetreatedThisEngagement,
             stepCombatMs, quietCombatMs, raid.LastLossMs == 0 ? uint.MaxValue : unchecked(now - raid.LastLossMs), OnFinalLeg(siege), denied,
-            raid.HostilesAtStepStart, denied ? PlayerbotSiegePush.None : raid.PushInForce, lagWaived);
+            raid.HostilesAtStepStart, denied ? PlayerbotSiegePush.None : raid.PushInForce, lagWaived, atWaypointReal);
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
         view.Facts = view.Facts with { CrossValid = cross is not null };
         raid.LastFacts = view.Facts;
