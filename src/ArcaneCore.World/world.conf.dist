@@ -58,7 +58,7 @@
 #   NPCSERVICES                 8 keys
 #   OPS                         60 keys
 #   PAGETEXT                    1 keys
-#   PERFORMANCELOG              4 keys
+#   PERFORMANCELOG              8 keys
 #   PETS                        7 keys
 #   PROGRESSION                 7 keys
 #   QUESTS                      14 keys
@@ -6195,6 +6195,18 @@ Ops.Watchdog.TickMonitor.WarnIntervalSeconds = 30
 #----------------------------------------------------------------------------
 
 #
+#    PerformanceLog.DetailLinesPerMapPerInterval
+#        Description: With a summary interval: the most detail lines written per map instance (and
+#                     for the world) in one interval; the rest are counted in the summary (0: none).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#performancelog
+#
+PerformanceLog.DetailLinesPerMapPerInterval = 1
+
+#
 #    PerformanceLog.SlowMapUpdate
 #        Description: Log one map's update longer than this many ms.
 #        Type: int
@@ -6204,6 +6216,18 @@ Ops.Watchdog.TickMonitor.WarnIntervalSeconds = 30
 #        Docs: docs/reference/configuration.md#performancelog
 #
 PerformanceLog.SlowMapUpdate = 100
+
+#
+#    PerformanceLog.SlowMapUpdateDetail
+#        Description: With a summary interval: one map's update longer than this many ms also gets
+#                     its own detail line (0: never).
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#performancelog
+#
+PerformanceLog.SlowMapUpdateDetail = 200
 
 #
 #    PerformanceLog.SlowPackets
@@ -6229,6 +6253,18 @@ PerformanceLog.SlowPackets = 20
 PerformanceLog.SlowWorldUpdate = 100
 
 #
+#    PerformanceLog.SlowWorldUpdateDetail
+#        Description: With a summary interval: a world frame (or tick) longer than this many ms also
+#                     gets its own detail line (0: never).
+#        Type: int
+#        Default: 250
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#performancelog
+#
+PerformanceLog.SlowWorldUpdateDetail = 250
+
+#
 #    PerformanceLog.SlowWorldUpdateMeasure
 #        Description: What SlowWorldUpdate is compared with. Defaults to the retail frame interval.
 #                     Values: FrameInterval, TickDuration.
@@ -6239,6 +6275,23 @@ PerformanceLog.SlowWorldUpdate = 100
 #        Docs: docs/reference/configuration.md#performancelog
 #
 PerformanceLog.SlowWorldUpdateMeasure = FrameInterval
+
+#
+#    PerformanceLog.SummaryIntervalSeconds
+#        Description: Seconds between the slow-update summary lines. Slow world frames and slow map
+#                     updates are counted over the interval and written as one summary (counts,
+#                     p50/p95/max, top contributors per map, host verdicts) instead of one line
+#                     each; only the updates over SlowWorldUpdateDetail / SlowMapUpdateDetail still
+#                     get their own line, a few per map per interval. 0 writes every slow update as
+#                     its own line (the vmangos behaviour) and ignores the Slow*Detail keys and
+#                     DetailLinesPerMapPerInterval.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#performancelog
+#
+PerformanceLog.SummaryIntervalSeconds = 60
 
 ###############################################################################
 # PETS

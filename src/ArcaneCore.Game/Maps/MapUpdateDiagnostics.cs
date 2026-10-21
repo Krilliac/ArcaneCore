@@ -183,6 +183,15 @@ internal sealed class MapUpdateDiagnostics
 
     private static string Ms(long micros) => (micros / 1000.0).ToString("F1", CultureInfo.InvariantCulture) + " ms";
 
+    internal const string NamePackets = "session packets";
+    internal const string NamePlayerHeartbeats = "player heartbeats";
+    internal const string NameUnitHeartbeats = "creature AI and unit heartbeats";
+    internal const string NameVisibility = "visibility and relocation";
+    internal const string NameValues = "values updates";
+    internal const string NameFlush = "flush";
+    internal const string NameGrid = "grid lifecycle";
+    internal const string NameDeferred = "deferred work";
+
     /// <summary>One named share of a map update.</summary>
     internal readonly record struct Contributor(string Name, long Micros);
 
@@ -196,14 +205,14 @@ internal sealed class MapUpdateDiagnostics
     {
         var all = new List<Contributor>(Updaters.Count + 9)
         {
-            new("session packets", PacketsMicros),
-            new("player heartbeats", HeartbeatPlayersMicros),
-            new("creature AI and unit heartbeats", Math.Max(0, HeartbeatMicros - HeartbeatPlayersMicros)),
-            new("visibility and relocation", VisibilityMicros),
-            new("values updates", ValuesMicros),
-            new("flush", FlushMicros),
-            new("grid lifecycle", GridMicros),
-            new("deferred work", DeferredMicros),
+            new(NamePackets, PacketsMicros),
+            new(NamePlayerHeartbeats, HeartbeatPlayersMicros),
+            new(NameUnitHeartbeats, Math.Max(0, HeartbeatMicros - HeartbeatPlayersMicros)),
+            new(NameVisibility, VisibilityMicros),
+            new(NameValues, ValuesMicros),
+            new(NameFlush, FlushMicros),
+            new(NameGrid, GridMicros),
+            new(NameDeferred, DeferredMicros),
         };
         foreach ((IMapUpdater updater, long micros) in Updaters)
         {

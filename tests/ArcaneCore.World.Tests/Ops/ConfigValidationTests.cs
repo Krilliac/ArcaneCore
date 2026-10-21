@@ -89,6 +89,25 @@ public sealed class ConfigValidationTests
     }
 
     [Theory]
+    [InlineData("PerformanceLog:SummaryIntervalSeconds")]
+    [InlineData("PerformanceLog:SlowWorldUpdateDetail")]
+    [InlineData("PerformanceLog:SlowMapUpdateDetail")]
+    [InlineData("PerformanceLog:DetailLinesPerMapPerInterval")]
+    public void SlowUpdateSummaryKeys_RejectNegativeValues_AndAcceptZeroAndSmallValues(string key)
+    {
+        Assert.Contains(Run(Config((key, "-1"))).Issues, i => i.Key == key && i.Severity == ConfigSeverity.Error);
+        Assert.DoesNotContain(Run(Config((key, "0"))).Issues, i => i.Key == key);
+        Assert.DoesNotContain(Run(Config((key, "5"))).Issues, i => i.Key == key);
+    }
+
+    [Fact]
+    public void SlowUpdateSummaryKeys_RejectValuesAboveTheirCaps()
+    {
+        Assert.Contains(Run(Config(("PerformanceLog:SummaryIntervalSeconds", "86401"))).Issues, i => i.Key == "PerformanceLog:SummaryIntervalSeconds" && i.Severity == ConfigSeverity.Error);
+        Assert.Contains(Run(Config(("PerformanceLog:DetailLinesPerMapPerInterval", "17"))).Issues, i => i.Key == "PerformanceLog:DetailLinesPerMapPerInterval" && i.Severity == ConfigSeverity.Error);
+    }
+
+    [Theory]
     [InlineData("Quests:SettlementBudgetSeconds")]
     [InlineData("Economy:SettlementBudgetSeconds")]
     [InlineData("GameObjects:LootSettlementBudgetSeconds")]
