@@ -873,14 +873,22 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (exact is PlanOutcome.Route or PlanOutcome.Pending)
             return exact;
 
-        if (focusReach > PlayerbotNavigationAnomalies.PathEndShortYards
-            && PlayerbotNavigation.TryPlan(player, focusPos, options, out PlayerbotRoute? nearRoute, trial: true, nearestEnd: true)
-            && nearRoute is { Points.Count: > 0 }
-            && Vector3.Distance(nearRoute.Points[^1], focusPos) <= focusReach - 0.25f)
+        if (focusReach > PlayerbotNavigationAnomalies.PathEndShortYards)
         {
-            tileWait.Reset();
-            route = nearRoute;
-            return PlanOutcome.Route;
+            PlanOutcome nearOutcome = PlayerbotNavigation.PlanExact(
+                player, focusPos, options, ref tileWait, now, out PlayerbotRoute? nearRoute, trial: true, nearestEnd: true);
+            if (nearOutcome == PlanOutcome.Pending)
+            {
+                route = null;
+                return PlanOutcome.Pending;
+            }
+            if (nearOutcome == PlanOutcome.Route
+                && nearRoute is { Points.Count: > 0 }
+                && Vector3.Distance(nearRoute.Points[^1], focusPos) <= focusReach - 0.25f)
+            {
+                route = nearRoute;
+                return PlanOutcome.Route;
+            }
         }
 
         float ringRadius = MathF.Min(focusReach * 0.65f, focusReach - 0.5f);
@@ -901,11 +909,17 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 }
 
                 var ringPoint = new Vector3(rx, ry, rz);
-                if (PlayerbotNavigation.TryPlan(player, ringPoint, options, out PlayerbotRoute? ringRoute, trial: true)
+                PlanOutcome ringOutcome = PlayerbotNavigation.PlanExact(
+                    player, ringPoint, options, ref tileWait, now, out PlayerbotRoute? ringRoute, trial: true);
+                if (ringOutcome == PlanOutcome.Pending)
+                {
+                    route = null;
+                    return PlanOutcome.Pending;
+                }
+                if (ringOutcome == PlanOutcome.Route
                     && ringRoute is { Points.Count: > 0 }
                     && Vector3.Distance(ringRoute.Points[^1], focusPos) <= focusReach - 0.25f)
                 {
-                    tileWait.Reset();
                     route = ringRoute;
                     return PlanOutcome.Route;
                 }

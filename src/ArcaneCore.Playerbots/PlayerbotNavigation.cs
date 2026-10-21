@@ -247,11 +247,12 @@ internal static class PlayerbotNavigation
     /// <paramref name="wait"/> (<see cref="TileWait.MaxMs"/>): past it a pending answer is returned as <see cref="PlanOutcome.Refused"/>.
     /// </summary>
     internal static PlanOutcome PlanExact(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false, bool chase = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false, bool chase = false,
+        bool trial = false, bool nearestEnd = false)
     {
         long mark = PendingMark;
-        return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn,
-            friendlyTownEnder: friendlyTownEnder, chase: chase), mark, ref wait, now, ref route);
+        return Outcome(TryPlan(player, destination, options, out route, trial: trial, completedQuestReturn: completedQuestReturn,
+            friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd), mark, ref wait, now, ref route);
     }
 
     /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
