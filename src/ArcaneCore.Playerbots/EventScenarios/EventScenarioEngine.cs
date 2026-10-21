@@ -89,6 +89,9 @@ internal sealed class ScenarioGroupRun(EventScenarioGroup group)
 
     /// <summary>Whether a siege already under way was looked at (a re-attached feature adopts the one its bots are in) at the run's first pass.</summary>
     public bool SiegeChecked { get; set; }
+
+    /// <summary>Bots of the group's prefix are in the siege under way that was not adopted: no bot is created while that siege runs.</summary>
+    public bool HoldCreates { get; set; }
 }
 
 /// <summary>The groups of one wanted event.</summary>
@@ -287,21 +290,33 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
     /// </summary>
     private void AdoptSiegeUnderWay(ScenarioGroupRun g)
     {
-        g.SiegeChecked = true;
-        if (host.RunningSiegeId is not { } running) return;
+        if (host.RunningSiegeId is not { } running)
+        {
+            g.SiegeChecked = true;
+            return;
+        }
+
+        // A siege is running but its members are not known yet (the roster is not published): look again next pass, and make no bot meanwhile.
         IReadOnlyCollection<Guid> members = host.SiegeMembers();
-        if (members.Count == 0) return;
+        if (members.Count == 0 || Roster().Count == 0) return;
+        g.SiegeChecked = true;
         var inRaids = new HashSet<Guid>(members);
         var mine = new List<PlayerbotStatus>();
+        int prefixInRaids = 0;
         foreach (PlayerbotStatus status in Roster())
-            if (status.Name.StartsWith(g.Group.NamePrefix, StringComparison.OrdinalIgnoreCase) && inRaids.Contains(status.BotId) && !_claimed.ContainsKey(status.BotId))
-                mine.Add(status);
+        {
+            if (!status.Name.StartsWith(g.Group.NamePrefix, StringComparison.OrdinalIgnoreCase) || !inRaids.Contains(status.BotId)) continue;
+            prefixInRaids++;
+            if (!_claimed.ContainsKey(status.BotId)) mine.Add(status);
+        }
+
+        g.HoldCreates = prefixInRaids > 0; // bots of the prefix are in that siege (held, so unclaimable): making more would double the group
         if (mine.Count == 0 || mine.Count * 10 < members.Count * 9) return;
         mine.Sort(static (a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         foreach (PlayerbotStatus status in mine)
         {
             if (g.Claims.Count >= g.Group.Count) break;
-            g.Claims.Add(new ScenarioClaim(status.BotId, status.Name, g.NextSlot++));
+            g.Claims.Add(new ScenarioClaim(status.BotId, status.Name, g.NextSlot++) { Placed = true }); // the siege placed them: they are not walked back to the start
             _claimed[status.BotId] = (g.Group.EventId, g.Group.GroupId);
         }
 
@@ -396,7 +411,7 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         EventScenarioGroup def = g.Group;
         int missing = def.Count - g.Claims.Count - g.Pending;
         g.NoRoom = false;
-        if (missing <= 0 || !def.Provision || g.SiegeId != 0) return; // a group that owns a running siege never makes more bots
+        if (missing <= 0 || !def.Provision || g.SiegeId != 0 || ((g.HoldCreates || (def.Role == EventScenarioRole.Siege && !g.SiegeChecked)) && host.RunningSiegeId is not null)) return; // while a siege that holds the group's bots runs (or may), no bot is made
         if (now < g.CreateRetryMs) return;
         int room = host.CreateRoom() - _creatingNow;
         if (room <= 0)

@@ -781,6 +781,117 @@ public sealed class EventScenarioEngineTests
         Assert.Equal(2, rig.Host.DefendAttempts);
         Assert.Contains("defend: bot-busy", rig.Status());
     }
+
+    /// <summary>A server where a siege with the given bots in its raids is under way, and a fresh engine (a reloaded feature) over it.</summary>
+    private static (FakeScenarioHost Host, EventScenarioEngine Engine) Reloaded(EventScenarioGroup group, int prefixBots, int otherBots = 0)
+    {
+        var host = new FakeScenarioHost();
+        for (int i = 0; i < prefixBots; i++)
+        {
+            FakeBot bot = host.Add("Siegebot" + (char)('a' + i), 0).OnlineAt(0, new Vector3(1900f, 225f, 49f), 60);
+            bot.HeldBy = "in a group";
+            host.SiegeBots.Add(bot.Id);
+        }
+
+        for (int i = 0; i < otherBots; i++)
+        {
+            FakeBot bot = host.Add("Other" + (char)('a' + i), 0).OnlineAt(0, new Vector3(1900f, 225f, 49f), 60);
+            bot.HeldBy = "in a group";
+            host.SiegeBots.Add(bot.Id);
+        }
+
+        host.RunningSiegeId = 5;
+        var engine = new EventScenarioEngine(host, NullLogger.Instance);
+        engine.SetCatalog(EventScenarioCatalogFixtures.Catalog(group));
+        engine.EventChanged(Event, active: true);
+        return (host, engine);
+    }
+
+    private static void TickAll(FakeScenarioHost host, EventScenarioEngine engine, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            host.Now += 2_000;
+            engine.Tick();
+        }
+    }
+
+    [Fact]
+    public void AdoptedBots_AreNotWalkedBackToTheStart_WhenTheSiegeReleasesThem()
+    {
+        (FakeScenarioHost host, EventScenarioEngine engine) = Reloaded(Raiders(count: 4), 4);
+        TickAll(host, engine, 3);
+        Assert.Contains("siege 5 running", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+
+        host.RunningSiegeId = null;
+        host.SiegeOutcome = "won";
+        foreach (FakeBot bot in host.Bots) { bot.HeldBy = null; bot.Position = new Vector3(1300f, 300f, 50f); }
+        TickAll(host, engine, 8);
+
+        Assert.Empty(host.Teleports);
+        Assert.Empty(host.SiegeStarts);
+    }
+
+    [Theory]
+    [InlineData(9, 1, true)]  // exactly 90 percent
+    [InlineData(8, 2, false)] // 80 percent
+    public void AdoptionNeedsNinetyPercentOfTheRaidToBeThePrefix(int prefixBots, int others, bool adopted)
+    {
+        (FakeScenarioHost host, EventScenarioEngine engine) = Reloaded(Raiders(count: 9, provision: true), prefixBots, others);
+        TickAll(host, engine, 4);
+
+        string status = string.Join('\n', engine.StatusLines(Event, _ => "t"));
+        Assert.Equal(adopted, status.Contains("siege 5 running", StringComparison.Ordinal));
+        Assert.Empty(host.Created); // the prefix bots are in the running siege either way: nothing is made
+        if (adopted) Assert.Equal(prefixBots, host.Bots.Count(b => engine.ClaimOf(b.Id) is not null));
+        engine.EventChanged(Event, active: false);
+        Assert.Equal(adopted ? 1 : 0, host.SiegeStops.Count(s => s == "event stopped"));
+    }
+
+    [Fact]
+    public void MoreRaidBotsThanTheGroupCount_AreAdoptedUpToTheCount_AndNothingIsCreated()
+    {
+        (FakeScenarioHost host, EventScenarioEngine engine) = Reloaded(Raiders(count: 4, provision: true), 6);
+        TickAll(host, engine, 4);
+
+        Assert.Equal(4, host.Bots.Count(b => engine.ClaimOf(b.Id) is not null));
+        Assert.Empty(host.Created);
+        Assert.Contains("claimed 4/4", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+    }
+
+    [Fact]
+    public void AnAdoptedSiege_WithOfflineMembers_KeepsThemClaimed_AndCreatesNothing()
+    {
+        (FakeScenarioHost host, EventScenarioEngine engine) = Reloaded(Raiders(count: 4, provision: true), 4);
+        FakeBot offline = host.Find("Siegebotd");
+        offline.Online = false;
+        offline.State = ManagedPlayerbotState.Stopped;
+        offline.Desired = true; // the restore is on its way
+        TickAll(host, engine, 4);
+
+        Assert.Equal((Event, 1u), engine.ClaimOf(offline.Id));
+        Assert.Empty(host.Created);
+        Assert.Contains("claimed 4/4, online 3", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+        Assert.Contains("siege 5 running", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+    }
+
+    [Fact]
+    public void WhenTheSiegeMembersAreNotKnownYet_AdoptionWaits_NothingIsCreated_AndTheNextPassAdopts()
+    {
+        (FakeScenarioHost host, EventScenarioEngine engine) = Reloaded(Raiders(count: 4, provision: true), 4);
+        List<Guid> members = [.. host.SiegeBots];
+        host.SiegeBots.Clear(); // the coordinator's raids are not formed yet
+        TickAll(host, engine, 3);
+        Assert.Empty(host.Created);
+        Assert.DoesNotContain("siege 5 running", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+
+        host.SiegeBots.AddRange(members);
+        TickAll(host, engine, 2);
+
+        Assert.Empty(host.Created);
+        Assert.Contains("siege 5 running", string.Join('\n', engine.StatusLines(Event, _ => "t")));
+        Assert.Equal(4, host.Bots.Count(b => engine.ClaimOf(b.Id) is not null));
+    }
 }
 
 /// <summary>Catalogs built from groups directly.</summary>
