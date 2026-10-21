@@ -1170,6 +1170,7 @@ internal sealed class PlayerbotPartyAI
         if (!player.IsAlive) return "dead";
         if (_restUntilMs != 0) return "resting";
         if (_target is { IsAlive: true } target) return "fighting " + (target is Creature creature ? creature.Template.Name : (target as Player)?.Name);
+        if (!_engaged || string.IsNullOrEmpty(_masterName)) return "autonomous";
         return _mode switch
         {
             PlayerbotPartyMode.Stay => "staying",

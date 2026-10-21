@@ -2407,6 +2407,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         {
             foreach (PlayerbotSiegeRaid raid in siege.Raids) Teleport(world, raid, -60f);
             latched.RetreatLatched = true;
+            latched.RetreatSinceMs = Now(world);
             KeepInCombat(world, latched);
             return unchecked(Now(world) - siege.StepSinceMs) >= PlayerbotGroupCoordinator.StepDeadlineMs + 30_000;
         }), "the run ended early: " + await world.TraceAsync());
@@ -2434,6 +2435,39 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step != step;
         }), "the step never moved after the latch cleared: " + await world.TraceAsync());
         Assert.True(unchecked(Now(world) - cleared) >= PlayerbotGroupCoordinator.StepDeadlineMs - 5_000, $"the step moved {unchecked(Now(world) - cleared)} ms after the latch cleared");
+    }
+
+    [Fact]
+    public async Task APinnedRetreat_AdvancesRetreatSinceMs_AndReleasesAfterRetreatMaxMs_ResettingStepSinceMs()
+    {
+        await using GroupTestWorld world = await StartStrongGuards();
+        (PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await IntoTheFight(world);
+        uint stepSinceBefore = siege.StepSinceMs;
+        await KillAsync(world, raid, "mage");
+        Assert.True(await world.RunUntilAsync(30_000, () => raid.RetreatLatched && raid.Order == PlayerbotSiegeOrder.Retreat), await world.TraceAsync());
+        Assert.NotEqual(0u, raid.RetreatSinceMs);
+        uint retreatSince = raid.RetreatSinceMs;
+
+        // Keep the raid pinned in combat far from the retreat point (60 yards out, while the retreat point is at 20 yards).
+        uint maxRetreating = 0;
+        bool seenOrderRally = false;
+        bool released = await world.RunUntilAsync(PlayerbotSiegeCommander.RetreatMaxMs + 20_000, () =>
+        {
+            TopUpGuards(world, raid);
+            KeepInCombat(world, raid);
+            Teleport(world, raid, 60f);
+            maxRetreating = Math.Max(maxRetreating, raid.LastFacts.MsRetreating);
+            seenOrderRally |= raid.Order == PlayerbotSiegeOrder.Rally;
+            return !raid.RetreatLatched;
+        });
+
+        Assert.True(released, $"the pinned retreat latch never released (MsRetreating={maxRetreating}, Order={raid.Order}): " + await world.TraceAsync());
+        Assert.False(seenOrderRally, "the raid reached AtRally instead of expiring via RetreatMaxMs");
+        Assert.True(maxRetreating >= PlayerbotSiegeCommander.RetreatMaxMs - 1_000, $"MsRetreating only reached {maxRetreating}");
+        Assert.Equal(0u, raid.RetreatSinceMs);
+        Assert.True(raid.WasInCombat, "the raid left combat instead of expiring via RetreatMaxMs");
+        Assert.True(siege.StepSinceMs > stepSinceBefore && unchecked(siege.StepSinceMs - retreatSince) >= PlayerbotSiegeCommander.RetreatMaxMs - 1_000,
+            $"StepSinceMs ({siege.StepSinceMs}) was not reset when the retreat latch released after {retreatSince}");
     }
 
     [Fact]

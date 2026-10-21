@@ -114,7 +114,8 @@ internal readonly record struct PlayerbotSiegeFacts(
     PlayerbotSiegePush Pushing = PlayerbotSiegePush.None,
     bool LagWaived = false,
     bool AtWaypointReal = false,
-    bool OffRoute = false);
+    bool OffRoute = false,
+    uint MsRetreating = 0);
 
 /// <summary>
 /// The commander's answer: the order, and the two latches to feed back in at the next decision. <paramref name="Committed"/>: the fight is lost by
@@ -131,7 +132,8 @@ internal readonly record struct PlayerbotSiegeDecision(PlayerbotSiegeOrder Order
 /// engagement (<see cref="PlayerbotSiegeFacts.DeadSinceEngagement"/>). A latch in two phases: <see cref="PlayerbotSiegeOrder.Retreat"/> disengages
 /// (nobody fights, the leader walks to the retreat point, the members follow) until the leader is within <see cref="RallyYards"/> of it, then
 /// <see cref="PlayerbotSiegeOrder.Rally"/> stands there and fights back what followed. The latch ends when the raid has been out of combat for
-/// <see cref="RetreatQuietMs"/>, or has stood at the point <see cref="RallyHoldMs"/> and still fights (the bound: a pursuit that does not end is fought).
+/// <see cref="RetreatQuietMs"/>, or has stood at the point <see cref="RallyHoldMs"/> and still fights, or has been retreating for
+/// <see cref="RetreatMaxMs"/> in combat before reaching the point (the bounds: a pursuit or pin that does not end is fought).
 /// It begins once per engagement (<see cref="PlayerbotSiegeFacts.RetreatedThisEngagement"/>), never while the raid fights the objective, nor after
 /// <see cref="MaxRetreats"/>.</item>
 /// <item>Push through, in combat (<see cref="PushOf"/>, an <see cref="PlayerbotSiegeOrder.Advance"/> in combat; never in a fight the retreat rules
@@ -213,6 +215,9 @@ internal static class PlayerbotSiegeCommander
     /// <summary>A rally that has stood at its point this long while still in combat ends (what followed the raid is fought on, not run from again).</summary>
     internal const uint RallyHoldMs = 30_000;
 
+    /// <summary>A retreat that has lasted this long while still in combat ends even if the leader has not reached the retreat point.</summary>
+    internal const uint RetreatMaxMs = 60_000;
+
     /// <summary>No hostile near the leader for this long in combat: the raid pushes through (<see cref="PushOf"/>).</summary>
     internal const uint PushThroughQuietMs = 10_000;
 
@@ -273,7 +278,8 @@ internal static class PlayerbotSiegeCommander
         // One retreat per engagement: a latch already running is not cut short, but a lost fight begins a second one only in a new engagement.
         bool begins = wouldRetreat && !commit && !facts.RetreatLatched && !facts.RetreatedThisEngagement;
         bool quiet = !facts.InCombat && facts.MsSinceCombat >= RetreatQuietMs;
-        bool chasedOut = facts.AtRally && facts.MsAtRally >= RallyHoldMs;
+        bool chasedOut = (facts.AtRally && facts.MsAtRally >= RallyHoldMs)
+            || (facts.RetreatLatched && facts.MsRetreating >= RetreatMaxMs);
         if ((held || begins) && !quiet && !chasedOut)
             return new PlayerbotSiegeDecision(facts.AtRally ? PlayerbotSiegeOrder.Rally : PlayerbotSiegeOrder.Retreat, true, false);
         bool committed = wouldRetreat && !facts.RetreatLatched && !facts.ObjectiveEngaged && facts.RetreatsUsed >= MaxRetreats;
@@ -470,6 +476,7 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
         if (RallyClockRestarted) return;
         RallyClockRestarted = true;
         RallySinceMs = 0;
+        RetreatSinceMs = 0;
     }
 
     /// <summary>The bot that led the raid at the last read; a change (a promotion) starts the retreat afresh for the new leader.</summary>
@@ -477,6 +484,9 @@ internal sealed class PlayerbotSiegeRaid(PlayerbotSiege siege, int index)
 
     /// <summary>When the leader first stood at the retreat point during the current retreat (0: not there during this latch).</summary>
     public uint RallySinceMs { get; set; }
+
+    /// <summary>When the current retreat latch began (0: not retreating during this latch).</summary>
+    internal uint RetreatSinceMs;
 
     /// <summary>The facts the last read of the raid saw (status and tests).</summary>
     internal PlayerbotSiegeFacts LastFacts { get; set; }

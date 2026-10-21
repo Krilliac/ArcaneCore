@@ -811,6 +811,7 @@ public sealed partial class PlayerbotGroupCoordinator
         // A leader that cannot plan a way to the point (it stands boxed in) rallies where it is: the raid fights back and the bound applies.
         bool atRally = MathF.Sqrt((rx * rx) + (ry * ry)) <= PlayerbotSiegeCommander.RallyYards || raid.RetreatNoPath;
         uint msAtRally = raid.RallySinceMs == 0 ? 0u : unchecked(now - raid.RallySinceMs);
+        uint msRetreating = raid.RetreatSinceMs == 0 ? 0u : unchecked(now - raid.RetreatSinceMs);
         // The skull the commander last set on the objective counts as fighting it too.
         if (!objectiveEngaged && !raid.PullTarget.IsEmpty)
             foreach ((Unit unit, float _) in view.Hostiles)
@@ -820,7 +821,7 @@ public sealed partial class PlayerbotGroupCoordinator
             atWaypoint, PeersAtWaypoint: true, view.Hostiles.Count, nearest, CrossValid: false, raid.RetreatLatched, raid.PullLatched,
             deadSince, raid.Retreats, objectiveEngaged, atRally, msAtRally, raid.RetreatedThisEngagement,
             stepCombatMs, quietCombatMs, raid.LastLossMs == 0 ? uint.MaxValue : unchecked(now - raid.LastLossMs), OnFinalLeg(siege), denied,
-            raid.HostilesAtStepStart, denied ? PlayerbotSiegePush.None : raid.PushInForce, lagWaived, atWaypointReal, offRoute);
+            raid.HostilesAtStepStart, denied ? PlayerbotSiegePush.None : raid.PushInForce, lagWaived, atWaypointReal, offRoute, MsRetreating: msRetreating);
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);
         view.Facts = view.Facts with { CrossValid = cross is not null };
         raid.LastFacts = view.Facts;
@@ -989,6 +990,7 @@ public sealed partial class PlayerbotGroupCoordinator
             raid.DeadAtEngagement.Clear();
             foreach (ObjectGuid dead in _siegeDeadScratch) raid.DeadAtEngagement.Add(dead);
             raid.RetreatedThisEngagement = false;
+            raid.RetreatSinceMs = 0;
         }
 
         NoteLosses(raid, now);
@@ -1185,10 +1187,15 @@ public sealed partial class PlayerbotGroupCoordinator
         if (!decision.RetreatLatched)
         {
             raid.RallySinceMs = 0;
+            raid.RetreatSinceMs = 0;
             raid.RetreatNoPath = false;
             raid.RallyClockRestarted = false;
         }
-        else if (facts.AtRally && raid.RallySinceMs == 0) raid.RallySinceMs = Math.Max(1u, now);
+        else
+        {
+            if (raid.RetreatSinceMs == 0) raid.RetreatSinceMs = Math.Max(1u, now);
+            if (facts.AtRally && raid.RallySinceMs == 0) raid.RallySinceMs = Math.Max(1u, now);
+        }
 
         Unit? skull = null;
         Unit? cross = IconUnit(view, PlayerbotSiegeCommander.CrossIcon);

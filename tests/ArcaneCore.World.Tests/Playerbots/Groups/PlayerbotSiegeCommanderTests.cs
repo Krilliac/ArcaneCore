@@ -105,9 +105,22 @@ public sealed class PlayerbotSiegeCommanderTests
         PlayerbotSiegeDecision chasedOut = PlayerbotSiegeCommander.Decide(latched with { MsAtRally = 30_000 });
         Assert.Equal((PlayerbotSiegeOrder.Assault, false), (chasedOut.Order, chasedOut.RetreatLatched));
 
-        // Not at the point, the bound does not apply: the raid is still walking.
+        // Not at the point, the rally hold does not apply: the raid is still walking until RetreatMaxMs.
         PlayerbotSiegeDecision walking = PlayerbotSiegeCommander.Decide(Fight with { RetreatLatched = true, AtRally = false, MsAtRally = 30_000 });
         Assert.Equal((PlayerbotSiegeOrder.Retreat, true), (walking.Order, walking.RetreatLatched));
+    }
+
+    [Fact]
+    public void Decide_EndsRetreatLatch_WhenPinnedInCombatBeforeRallyExceedsRetreatMax()
+    {
+        Assert.Equal(60_000u, PlayerbotSiegeCommander.RetreatMaxMs);
+        PlayerbotSiegeFacts pinned = Fight with { RetreatLatched = true, AtRally = false, MsAtRally = 0 };
+
+        PlayerbotSiegeDecision before = PlayerbotSiegeCommander.Decide(pinned with { MsRetreating = 59_999 });
+        Assert.Equal((PlayerbotSiegeOrder.Retreat, true), (before.Order, before.RetreatLatched));
+
+        PlayerbotSiegeDecision expired = PlayerbotSiegeCommander.Decide(pinned with { MsRetreating = 60_000 });
+        Assert.Equal((PlayerbotSiegeOrder.Assault, false), (expired.Order, expired.RetreatLatched));
     }
 
     [Fact]
