@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Host;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -224,7 +225,7 @@ internal sealed class HostRig : IAsyncDisposable
     private readonly ConcurrentQueue<(string Topic, JsonNode? Data)> _events = new();
     private readonly IDisposable _subscription;
 
-    private HostRig(string directory, bool headless, bool renderer, bool maps, AtlasPaths paths, Action<AtlasContext>? register)
+    private HostRig(string directory, bool headless, bool renderer, bool maps, AtlasPaths paths, Action<AtlasContext>? register, ILoggerFactory? loggers)
     {
         Directory = directory;
         State = new AtlasState(Path.Combine(directory, "state"));
@@ -249,7 +250,7 @@ internal sealed class HostRig : IAsyncDisposable
             context.Commands.Register(TestCommands.Echo);
             register?.Invoke(context);
         });
-        Context = HostComposer.Compose(paths, NullLoggerFactory.Instance, headless, [new HostModule(State), module]);
+        Context = HostComposer.Compose(paths, loggers ?? NullLoggerFactory.Instance, headless, [new HostModule(State), module]);
         _subscription = Context.Events.Subscribe((topic, data) => _events.Enqueue((topic, data?.DeepClone())));
         Http = new HttpClient(new SocketsHttpHandler { UseProxy = false });
         Anonymous = new HttpClient(new SocketsHttpHandler { UseProxy = false });
@@ -275,16 +276,16 @@ internal sealed class HostRig : IAsyncDisposable
 
     public IReadOnlyCollection<(string Topic, JsonNode? Data)> Events => _events;
 
-    public static HostRig Create(bool headless = false, bool renderer = true, bool maps = true, AtlasPaths? paths = null, Action<AtlasContext>? register = null)
+    public static HostRig Create(bool headless = false, bool renderer = true, bool maps = true, AtlasPaths? paths = null, Action<AtlasContext>? register = null, ILoggerFactory? loggers = null)
     {
         string directory = Path.Combine(Path.GetTempPath(), "atlas-host-tests-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(directory);
-        return new HostRig(directory, headless, renderer, maps, paths ?? new AtlasPaths(null, null), register);
+        return new HostRig(directory, headless, renderer, maps, paths ?? new AtlasPaths(null, null), register, loggers);
     }
 
-    public static async Task<HostRig> StartAsync(AtlasServerOptions? options = null, IWebAssets? assets = null, bool renderer = true, bool maps = true, AtlasPaths? paths = null, Action<AtlasContext>? register = null)
+    public static async Task<HostRig> StartAsync(AtlasServerOptions? options = null, IWebAssets? assets = null, bool renderer = true, bool maps = true, AtlasPaths? paths = null, Action<AtlasContext>? register = null, ILoggerFactory? loggers = null)
     {
-        HostRig rig = Create(headless: false, renderer, maps, paths, register);
+        HostRig rig = Create(headless: false, renderer, maps, paths, register, loggers);
         AtlasServerOptions chosen = (options ?? new AtlasServerOptions()) with { Port = 0, Assets = assets ?? options?.Assets ?? new FakeAssets() };
         rig.Server = await AtlasServer.StartAsync(rig.Context, chosen);
         rig.Http.BaseAddress = rig.Server.BaseAddress;

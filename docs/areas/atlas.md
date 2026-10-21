@@ -14,15 +14,21 @@ Code: `tools/ArcaneCore.Atlas`. Tests: `tests/ArcaneCore.Atlas.Tests`. Live worl
 
 | Verb | Usage | Meaning |
 |---|---|---|
-| `serve` | `arcane-atlas serve [--data DIR] [--client DIR] [--port N] [--open]` | Starts the loopback Kestrel server on `127.0.0.1` (random port unless `--port`), writes a discovery file under the Atlas state directory, and prints `{pid, port, url, discovery, version}` as one JSON line on stdout. `--open` launches Microsoft Edge or Google Chrome in app-window mode with the per-instance token in the URL fragment (`#t=<token>`). |
+| `serve` | `arcane-atlas serve [--data DIR] [--client DIR] [--port N] [--open] [--log-level LEVEL] [--log-file PATH]` | Starts the loopback Kestrel server on `127.0.0.1` (random port unless `--port`), writes a discovery file under the Atlas state directory, and prints `{pid, port, url, discovery, version}` as one JSON line on stdout. `--open` launches Microsoft Edge or Google Chrome in app-window mode with the per-instance token in the URL fragment (`#t=<token>`). |
 | `ctl` | `arcane-atlas ctl [--pid N] [--compact] <command> [key=value ...] [--json OBJECT\|-]` | Sends one command over loopback HTTP (`POST /api/command`) to a running `serve` instance discovered via its state file. |
-| `run` | `arcane-atlas run [--data DIR] [--client DIR] [--compact] <command> [key=value ...] [--json OBJECT\|-]` | Executes one command headless without starting Kestrel or a browser; `capture` and `render.png` use the CPU renderer (`CpuRenderer`). |
-| `script` | `arcane-atlas script [--attach [--pid N]] [--keep-going] [--data DIR] [--client DIR] <file.jsonl\|->` | Runs a JSONL command script (`{"command":"...","args":{...}}` per line), either headless or attached to a live `serve` instance. |
-| `mcp` | `arcane-atlas mcp [--attach \| --headless] [--pid N] [--data DIR] [--client DIR]` | Runs a JSON-RPC 2.0 MCP server on stdio (`tools/list`, `tools/call`) exposing every registered Atlas command as an MCP tool. Attaches to a running `serve` instance when one is present unless `--headless` is specified. |
+| `run` | `arcane-atlas run [--data DIR] [--client DIR] [--compact] [--log-level LEVEL] [--log-file PATH] <command> [key=value ...] [--json OBJECT\|-]` | Executes one command headless without starting Kestrel or a browser; `capture` and `render.png` use the CPU renderer (`CpuRenderer`). |
+| `script` | `arcane-atlas script [--attach [--pid N]] [--keep-going] [--data DIR] [--client DIR] [--log-level LEVEL] [--log-file PATH] <file.jsonl\|->` | Runs a JSONL command script (`{"command":"...","args":{...}}` per line), either headless or attached to a live `serve` instance. |
+| `mcp` | `arcane-atlas mcp [--attach \| --headless] [--pid N] [--data DIR] [--client DIR] [--log-level LEVEL] [--log-file PATH]` | Runs a JSON-RPC 2.0 MCP server on stdio (`tools/list`, `tools/call`) exposing every registered Atlas command as an MCP tool. Attaches to a running `serve` instance when one is present unless `--headless` is specified. |
 | `layers` | `arcane-atlas layers` | Prints the static catalog of all 32 visual layers (`id`, `group`, `view`, `title`). |
 | `help` | `arcane-atlas help` | Prints CLI usage (`ctl help` and `run help` return the full command catalog as JSON). |
 
 Exit codes: `0` success, `1` command or environment failure, `2` command-line usage error.
+
+Logging (`serve`, `run`, `script`, `mcp`): log lines go to standard error, never standard output. `--log-level LEVEL` (`trace`, `debug`, `information`/`info`,
+`warning`/`warn`, `error`, `critical`, `none`) sets the lowest level written; the default is `information` for `serve` and `warning` for the others.
+The per-request ASP.NET Core lines (`Microsoft.AspNetCore`: "Request starting" / "Request finished", one pair per poll of the web UI) are written from
+`warning` up whatever the level, so a request that fails still shows; the `Microsoft.Hosting.Lifetime` lines ("Now listening on ...") stay at `information`.
+`--log-file PATH` also writes the log to `PATH` as UTF-8 through Kernel's `RollingFileWriter` (rolls at 10 MB and daily, keeps five segments).
 
 ### 2. Views, compare modes, and layer catalog (`LayerCatalog`)
 
