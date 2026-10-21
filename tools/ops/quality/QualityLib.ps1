@@ -240,22 +240,58 @@ function Get-QualityProcessTable {
         }
     }
     else {
-        & ps -A -o 'pid=,ppid=' | ForEach-Object {
-            $p = $_.Trim() -split '\s+'
-            if ($p.Count -eq 2) { [pscustomobject]@{ ProcessId = [int]$p[0]; ParentProcessId = [int]$p[1]; Start = [datetime]::MinValue; Name = ''; CommandLine = '' } }
+        # args= is last so a command line with spaces stays whole; Name is the leaf of its first word (enough for Test-QualitySharedBuildServer).
+        & ps -A -o 'pid=,ppid=,args=' | ForEach-Object {
+            $p = $_.Trim() -split '\s+', 3
+            if ($p.Count -ge 2) {
+                $command = if ($p.Count -eq 3) { $p[2] } else { '' }
+                $name = if ($command) { [IO.Path]::GetFileName(($command -split '\s+', 2)[0]) } else { '' }
+                [pscustomobject]@{ ProcessId = [int]$p[0]; ParentProcessId = [int]$p[1]; Start = [datetime]::MinValue; Name = $name; CommandLine = $command }
+            }
         }
     }
 }
 
+function Get-QualityTaggedIds {
+    <#
+    .SYNOPSIS
+      The ids of the processes whose environment holds -Tag ("NAME=value"), read from /proc/<id>/environ. Linux only: elsewhere (no /proc)
+      the result is empty, and so is it for a process whose environment cannot be read (another user's, or one that has already exited).
+      Reads only. The current process is never returned.
+    #>
+    param([Parameter(Mandatory)] [string]$Tag)
+    if (-not (Test-Path -LiteralPath '/proc/self/environ')) { return }
+    $needle = "`0$Tag`0"
+    foreach ($entry in [IO.Directory]::EnumerateDirectories('/proc')) {
+        $id = 0
+        if (-not [int]::TryParse([IO.Path]::GetFileName($entry), [ref]$id) -or $id -eq $PID) { continue }
+        try { $bytes = [IO.File]::ReadAllBytes("$entry/environ") } catch { continue }
+        if ($bytes.Length -gt 0 -and ("`0" + [Text.Encoding]::Latin1.GetString($bytes)).Contains($needle)) { $id }
+    }
+}
+
 function Add-QualityDescendants {
-    <# .SYNOPSIS Adds the current descendants of -RootId to the -Tracked hashtable (id -> start). Call it while the root runs: once it has exited, its children are orphans that only the process table still ties to it. #>
-    param([Parameter(Mandatory)] [hashtable]$Tracked, [Parameter(Mandatory)] [int]$RootId, [datetime]$RootStart = [datetime]::MinValue)
+    <#
+    .SYNOPSIS
+      Adds the current descendants of -RootId to the -Tracked hashtable (id -> start). On Windows a child keeps its parent's id after the
+      parent exits, so the process table still ties an orphan to the root. On Linux an orphan is re-parented (to init or a subreaper) and
+      that tie is gone; -Tag ("NAME=value", an environment variable the root was started with and its descendants inherit) finds those
+      too. Without -Tag, call it while the root runs. -RootId itself is never added.
+    #>
+    param([Parameter(Mandatory)] [hashtable]$Tracked, [Parameter(Mandatory)] [int]$RootId, [datetime]$RootStart = [datetime]::MinValue, [string]$Tag)
     $table = @(Get-QualityProcessTable)
     $byId = @{}
     foreach ($row in $table) { $byId[[int]$row.ProcessId] = $row }
     foreach ($d in (Get-QualityDescendantIds -Table $table -RootId $RootId -RootStart $RootStart)) {
         if (Test-QualitySharedBuildServer -Row $byId[$d.ProcessId]) { continue }
         $Tracked[$d.ProcessId] = $d.Start
+    }
+    if ($Tag) {
+        foreach ($id in @(Get-QualityTaggedIds -Tag $Tag)) {
+            if ($id -eq $RootId -or $Tracked.ContainsKey($id) -or -not $byId.ContainsKey($id)) { continue }
+            if (Test-QualitySharedBuildServer -Row $byId[$id]) { continue }
+            $Tracked[$id] = $byId[$id].Start
+        }
     }
 }
 
@@ -297,34 +333,62 @@ function Invoke-QualityProcess {
       When the process ends, normally or by the limit, every process that descended from it is stopped, except shared build servers
       (see Test-QualitySharedBuildServer). -Environment sets variables for the child only; -OnTick is called after every 3 s poll and once
       after the end (to show a growing log). Returns { ExitCode, TimedOut, Stopped } (ExitCode is -1 after a timeout).
+
+      Linux: Start-Process -RedirectStandardOutput is a pipe there (PowerShell copies it to the file), and Process.WaitForExit() waits for
+      that pipe to close, i.e. for every orphan holding it. So the child is started through /bin/sh, which points its stdout and stderr
+      at the files and execs the tool in place (same process id). An orphan is re-parented on Linux, so the child also gets a unique
+      ARCANECORE_QUALITY_RUN variable that its descendants inherit; after the end they are found by it (see Add-QualityDescendants).
     #>
     param([Parameter(Mandatory)] [string]$FilePath, [Parameter(Mandatory)] [string[]]$Arguments, [Parameter(Mandatory)] [string]$LogFile,
         [Parameter(Mandatory)] [int]$TimeoutSec, [string]$WorkingDirectory = (Get-Location).Path, [hashtable]$Environment, [scriptblock]$OnTick)
+    $tagName = 'ARCANECORE_QUALITY_RUN'
+    $tagValue = [guid]::NewGuid().ToString('N')
+    $childEnvironment = @{}
+    if ($Environment) { foreach ($key in @($Environment.Keys)) { $childEnvironment[$key] = $Environment[$key] } }
+    $childEnvironment[$tagName] = $tagValue
     $saved = @{}
-    if (-not $Environment) { $Environment = @{} }
-    foreach ($key in @($Environment.Keys)) {
+    foreach ($key in @($childEnvironment.Keys)) {
         $saved[$key] = [Environment]::GetEnvironmentVariable($key)
-        [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key])
+        [Environment]::SetEnvironmentVariable($key, [string]$childEnvironment[$key])
     }
     try {
-        $process = Start-Process $FilePath -ArgumentList (ConvertTo-QualityArgumentString $Arguments) -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru `
-            -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
+        if ($IsWindows) {
+            $process = Start-Process $FilePath -ArgumentList (ConvertTo-QualityArgumentString $Arguments) -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru `
+                -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
+        }
+        else {
+            $tool = (Get-Command $FilePath -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+            $out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LogFile)
+            $shell = @('-c', 'out=$1; err=$2; shift 2; exec "$@" >"$out" 2>"$err"', 'sh', $out, "$out.err", $tool) + $Arguments
+            $process = Start-Process '/bin/sh' -ArgumentList (ConvertTo-QualityArgumentString $shell) -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru
+        }
     }
     finally {
         foreach ($key in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
     }
+    $tag = "$tagName=$tagValue"
     $start = try { $process.StartTime } catch { [datetime]::MinValue }
     $tracked = @{}
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
     $timedOut = $false
     while (-not $process.WaitForExit(3000)) {
-        Add-QualityDescendants -Tracked $tracked -RootId $process.Id -RootStart $start
+        Add-QualityDescendants -Tracked $tracked -RootId $process.Id -RootStart $start -Tag $tag
         if ($OnTick) { & $OnTick }
         if ([DateTime]::UtcNow -gt $deadline) { $timedOut = $true; break }
     }
-    Add-QualityDescendants -Tracked $tracked -RootId $process.Id -RootStart $start
+    Add-QualityDescendants -Tracked $tracked -RootId $process.Id -RootStart $start -Tag $tag
     if ($timedOut) { try { $process.Kill() } catch { } } else { $process.WaitForExit() }
     $stopped = Stop-QualityTracked -Tracked $tracked
+    # A descendant started after the last look (between the poll and the end) is caught here; on Linux by the tag, since its parent may
+    # be gone. Repeat while new ones turn up (a dying descendant may have started one), a few times at most.
+    for ($pass = 0; $pass -lt 5; $pass++) {
+        $more = @{}
+        Add-QualityDescendants -Tracked $more -RootId $process.Id -RootStart $start -Tag $tag
+        foreach ($id in @($more.Keys)) { if ($tracked.ContainsKey($id)) { $more.Remove($id) } }
+        if ($more.Count -eq 0) { break }
+        $stopped += Stop-QualityTracked -Tracked $more
+        foreach ($id in @($more.Keys)) { $tracked[$id] = $more[$id] }
+    }
     if ($OnTick) { & $OnTick }
     [pscustomobject]@{ ExitCode = $(if ($timedOut) { -1 } else { $process.ExitCode }); TimedOut = $timedOut; Stopped = $stopped }
 }

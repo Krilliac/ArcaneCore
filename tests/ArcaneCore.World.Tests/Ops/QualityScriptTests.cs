@@ -246,19 +246,22 @@ public sealed class QualityScriptTests
         JsonElement r = Eval($$"""
             . '{{Path.Combine(Quality, "QualityLib.ps1").Replace("'", "''")}}'
             $dir = '{{temp.Path.Replace("'", "''")}}'
+            $pid1 = Join-Path $dir 'child1.pid'; $pid2 = Join-Path $dir 'child2.pid'
             $child = 'Start-Sleep 120'
-            $parentSleeps = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$dir\child1.pid' `$p.Id; Start-Sleep 120"
-            $parentExits = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$dir\child2.pid' `$p.Id"
+            $parentSleeps = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$pid1' `$p.Id; Start-Sleep 120"
+            $parentExits = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$pid2' `$p.Id"
             $started = Get-Date
             $timeout = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', $parentSleeps) -LogFile (Join-Path $dir 'a.log') -TimeoutSec 3
             $elapsed = ((Get-Date) - $started).TotalSeconds
+            $started = Get-Date
             $normal = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', $parentExits) -LogFile (Join-Path $dir 'b.log') -TimeoutSec 60
+            $normalElapsed = ((Get-Date) - $started).TotalSeconds
             Start-Sleep -Milliseconds 500
             [ordered]@{
                 timedOut = $timeout.TimedOut; exit = $timeout.ExitCode; elapsed = $elapsed
-                child1Alive = [bool](Get-Process -Id ([int](Get-Content "$dir\child1.pid")) -ErrorAction SilentlyContinue)
-                normalTimedOut = $normal.TimedOut; normalExit = $normal.ExitCode
-                child2Alive = [bool](Get-Process -Id ([int](Get-Content "$dir\child2.pid")) -ErrorAction SilentlyContinue)
+                child1Alive = [bool](Get-Process -Id ([int](Get-Content $pid1)) -ErrorAction SilentlyContinue)
+                normalTimedOut = $normal.TimedOut; normalExit = $normal.ExitCode; normalElapsed = $normalElapsed
+                child2Alive = [bool](Get-Process -Id ([int](Get-Content $pid2)) -ErrorAction SilentlyContinue)
             }
             """);
         Assert.True(r.GetProperty("timedOut").GetBoolean());
@@ -267,6 +270,9 @@ public sealed class QualityScriptTests
         Assert.False(r.GetProperty("child1Alive").GetBoolean(), "the descendant of the timed-out process was left running");
         Assert.False(r.GetProperty("normalTimedOut").GetBoolean());
         Assert.Equal(0, r.GetProperty("normalExit").GetInt32());
+        // The orphan sleeps 120 s holding whatever its parent gave it as stdout: the end of the parent must not wait for it (on Linux
+        // Start-Process -RedirectStandardOutput is a pipe that Process.WaitForExit() drains to its end).
+        Assert.True(r.GetProperty("normalElapsed").GetDouble() < 60, "the end of the parent waited for its orphan");
         Assert.False(r.GetProperty("child2Alive").GetBoolean(), "the orphan of the process that exited was left running");
     }
 
