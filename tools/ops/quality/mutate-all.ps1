@@ -38,6 +38,9 @@ param(
     [switch]$NoReport
 )
 $ErrorActionPreference = 'Stop'
+# pwsh -File passes 'a,b' as one string: split the list parameters on commas.
+$Projects = @($Projects | ForEach-Object { $_ -split ',' } | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+$BatchFilter = @($BatchFilter | ForEach-Object { $_ -split ',' } | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
 . (Join-Path $PSScriptRoot 'QualityLib.ps1')
 . (Join-Path $PSScriptRoot 'MutateAllLib.ps1')
 
