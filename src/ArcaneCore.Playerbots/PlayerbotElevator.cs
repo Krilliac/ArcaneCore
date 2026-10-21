@@ -749,6 +749,7 @@ internal static class PlayerbotElevator
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
+        if (trip.PendingStep is not null) return; // completed: the step-off is sent, the next Drive reports it (no second step-off)
 
         switch (trip.Stage)
         {
@@ -808,7 +809,6 @@ internal static class PlayerbotElevator
             }
             case ElevatorStage.Aboard:
             {
-                if (trip.PendingStep is not null) return;
                 if (trip.Car is not { } car || trip.CarObject is not { IsInWorld: true } live || !ReferenceEquals(live.Map, map)
                     || map.FindUpdater<GameObjectMapSystem>() is not { } system || system.ElevatorPosition(live) is not { } position)
                 {

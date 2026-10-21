@@ -483,6 +483,97 @@ public sealed class PlayerbotElevatorH1ReviewTests
         Assert.False(Reported(onLanding, "trip-slow"), onLanding.Describe());
     }
 
+    // ---------------------------------------------------------------- a parked step is not sent again
+
+    [Fact]
+    public async Task PumpWithAnArrivedStepParked_DoesNotSendTheStepOffAgain()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar car = lift.Cars.Single(c => c.SpawnGuid == 16874);
+        ElevatorTrip trip = await world.OnWorldAsync(() =>
+        {
+            ElevatorTrip begun = PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet);
+            begun.Car = car;
+            return begun;
+        });
+        Vector3 stop = car.At(ElevatorLevel.High);
+        await world.PlaceAsync(stop + new Vector3(PlayerbotElevator.LandingRadii[0] + 1f, 0f, 0f));
+
+        int sends = 0;
+        await world.OnWorldAsync(() =>
+        {
+            world.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.MsgMoveHeartbeat) sends++; };
+            return 0;
+        });
+
+        for (int pass = 0; pass < 3; pass++)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                uint now = world.Host.World.NowMs;
+                trip.LastDriveMs = unchecked(now - 1_000);
+                trip.LastPumpMs = unchecked(now - 1_000);
+                PlayerbotElevator.Pump(world.Session, world.Player, now);
+                return 0;
+            });
+            Assert.Equal(ElevatorStep.Arrived, trip.PendingStep);
+        }
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Session.ManagedDispatchObserver = null;
+            return 0;
+        });
+        Assert.Equal(1, sends);
+    }
+
+    [Fact]
+    public async Task PumpWaitingWithAnArrivedStepParked_DoesNotSendTheStepOffAgain()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar car = lift.Cars.Single(c => c.SpawnGuid == 16874);
+        ElevatorTrip trip = await world.OnWorldAsync(() =>
+        {
+            ElevatorTrip begun = PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet);
+            begun.Car = car;
+            return begun;
+        });
+        await world.OnWorldAsync(() => { trip.Stage = ElevatorStage.Waiting; return 0; }); // waiting for the car at its first stop when the bot reached the top floor
+        Vector3 stop = car.At(ElevatorLevel.High);
+        await world.PlaceAsync(stop + new Vector3(PlayerbotElevator.LandingRadii[0] + 1f, 0f, 0f));
+
+        int sends = 0;
+        await world.OnWorldAsync(() =>
+        {
+            world.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.MsgMoveHeartbeat) sends++; };
+            return 0;
+        });
+
+        for (int pass = 0; pass < 3; pass++)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                uint now = world.Host.World.NowMs;
+                trip.LastDriveMs = unchecked(now - 1_000);
+                trip.LastPumpMs = unchecked(now - 1_000);
+                PlayerbotElevator.Pump(world.Session, world.Player, now);
+                return 0;
+            });
+            Assert.Equal(ElevatorStep.Arrived, trip.PendingStep);
+        }
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Session.ManagedDispatchObserver = null;
+            return 0;
+        });
+        Assert.Equal(1, sends);
+    }
+
     [Fact]
     public async Task ArrivalChecks_AreSkippedForABotFarFromTheStop()
     {
