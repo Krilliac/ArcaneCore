@@ -730,39 +730,6 @@ public sealed partial class CreatureMapSystem
         return classifier.ClassifyUnderMap(creature.X, creature.Y, creature.Z, CreatureAnomalies.UnderMapMarginYards).Kind == UnderMapKind.UnderMap;
     }
 
-    private bool TryRecoverClippedUnderTerrain(Creature creature, float surface)
-    {
-        if (_underMap is not null)
-        {
-            return false;
-        }
-
-        UnderMapVerdict verdict = Map.Collision.ClassifyUnderMap(creature.X, creature.Y, creature.Z, CreatureAnomalies.UnderMapMarginYards);
-        if (verdict.Kind == UnderMapKind.Ok)
-        {
-            return true;
-        }
-
-        if (verdict.Kind == UnderMapKind.UnderMap
-            || (verdict.Kind == UnderMapKind.Unknown && !Map.Collision.LineOfSight.Enabled))
-        {
-            float standZ = surface + GroundHeight.StandOffset;
-            if (Map.Collision.GetHeight(creature.X, creature.Y, surface + 2f) is float ground
-                && ground > Maps.Terrain.TerrainTile.InvalidHeight
-                && float.IsFinite(ground)
-                && ground >= surface - CreatureAnomalies.UnderMapMarginYards)
-            {
-                standZ = ground + GroundHeight.StandOffset;
-            }
-
-            creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, _serverTime());
-            creature.ClearUnderMapEpisode();
-            return true;
-        }
-
-        return false;
-    }
-
     private void CheckUnderMap(Creature creature)
     {
         if (!creature.ShouldSampleUnderMap(_clockMs))
@@ -792,9 +759,7 @@ public sealed partial class CreatureMapSystem
         float? localFloor = _height.GetTerrainHeight(Map.MapId, creature.X, creature.Y, creature.Z + 5f);
         if (localFloor is { } validLocal && float.IsFinite(validLocal))
         {
-            if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards
-                && !TryRecoverClippedUnderTerrain(creature, validLocal)
-                && ConfirmUnderMap(creature))
+            if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
             {
                 CreatureAnomalies.ReportUnderMap(
                     creature,
@@ -813,7 +778,6 @@ public sealed partial class CreatureMapSystem
         float? upperFloor = _height.GetTerrainHeight(Map.MapId, creature.X, creature.Y, probeZ);
         if (upperFloor is { } validUpper && float.IsFinite(validUpper)
             && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
-            && !TryRecoverClippedUnderTerrain(creature, validUpper)
             && ConfirmUnderMap(creature))
         {
             CreatureAnomalies.ReportUnderMap(

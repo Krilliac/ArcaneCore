@@ -654,27 +654,6 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return PlannedPath.Of(PathOutcome.Deferred);
         }
 
-        if (toSpawn
-            && (!path.HasPath || (path.Type & PathType.Incomplete) != 0)
-            && Vector3.DistanceSquared(start, destination) > AtHomeYards * AtHomeYards)
-        {
-            PathOptions wideOptions = PathOptionsFor(creature, toSpawn: false, chase: true);
-            PathResult wide = _ungatedMotion
-                ? Map.Collision.FindPath(start, destination, wideOptions)
-                : SearchPath(creature, start, destination, wideOptions);
-            if ((wide.Type & PathType.TilesPending) != 0)
-            {
-                NoteDeferredPath(creature);
-                return PlannedPath.Of(PathOutcome.Deferred);
-            }
-
-            if (wide.HasPath && (!path.HasPath || (wide.Type & PathType.Incomplete) == 0))
-            {
-                pathOptions = wideOptions;
-                path = wide;
-            }
-        }
-
         if (!path.HasPath && toSpawn && Vector3.DistanceSquared(start, destination) <= AtHomeYards * AtHomeYards)
         {
             // Already standing on its spawn point: a spawn off the mesh (a mesh hole, a doodad top) has no path from itself to
@@ -984,12 +963,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// A formation member also counts from the moment it enters, before its queued activation applies.
     /// </summary>
     private bool IsAlwaysUpdated(Creature creature)
-        => creature.IsFormationMember || Map.Grids.IsActive(creature) || UnitControl.ViewerOf(creature) is not null || IsDueForRespawn(creature);
-
-    private bool IsDueForRespawn(Creature creature)
-        => creature.Spawn is not null
-            && _clockMs >= creature.RespawnAtMs
-            && creature.DeathState is CreatureDeathState.Dead or CreatureDeathState.Corpse;
+        => creature.IsFormationMember || Map.Grids.IsActive(creature) || UnitControl.ViewerOf(creature) is not null;
 
     private readonly List<Creature> _pendingActivation = [];
 

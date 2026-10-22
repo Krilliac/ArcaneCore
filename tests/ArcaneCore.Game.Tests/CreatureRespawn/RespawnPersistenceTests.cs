@@ -407,8 +407,13 @@ public sealed class RespawnPersistenceTests
         Assert.True(system.IsGridLoaded(30, 0));
         Assert.False(system.IsGridLoaded(2000, 0));
 
-        // Advance well past RespawnAtMs (80 s) + 60 s dormant-stuck threshold while home cell (30, 0) remains inactive.
+        // Advance well past RespawnAtMs (80 s) + 60 s dormant-stuck threshold while home cell (30, 0) remains inactive;
+        // then reactivate the home cell and verify the creature respawns cleanly.
         Run(world, 80_000, 1_000);
+        Assert.Empty(capture.Notices);
+
+        homeAnchor.Relocate(30, 0, 83.5f, 0, 0);
+        world.RunTick(500);
 
         Assert.Empty(capture.Notices);
         Creature respawned = Assert.Single(system.Creatures);
