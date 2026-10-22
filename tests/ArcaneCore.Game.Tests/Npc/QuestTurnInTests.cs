@@ -174,4 +174,53 @@ public sealed class QuestTurnInTests
         Assert.Equal(QuestAdapter.Autocomplete, kit.Services.ProvidedAdapters & QuestAdapter.Autocomplete);
         Assert.True(kit.Services.Supported(kit.Services.Quests.Get(Id)!));
     }
+
+    [Fact]
+    public void CanFitQuestRewards_RespectsBagSpaceAndRequiredItemRemovals()
+    {
+        var quest = new QuestTemplate
+        {
+            Entry = Id,
+            Method = 2,
+            QuestLevel = 1,
+            Title = "Reward fit",
+            ReqItemId1 = ItemTestData.ToughJerky,
+            ReqItemCount1 = 1,
+            RewItemId1 = ItemTestData.WornShortsword,
+            RewItemCount1 = 1,
+            RewChoiceItemId1 = ItemTestData.WornWoodenShield,
+            RewChoiceItemCount1 = 1,
+        };
+        using QuestFlowKit kit = AutoKit(quest);
+        Quest definition = kit.Services.Quests.Get(Id)!;
+
+        // Fill all 16 backpack slots with non-stacking swords so 0 free slots remain.
+        for (int i = 0; i < 16; i++)
+        {
+            ItemTestData.Give(kit.Player.Inventory, ItemTestData.WornShortsword);
+        }
+
+        // With 0 free slots and no removable delivery item in the bags, 2 reward items cannot fit.
+        Assert.False(QuestNpcServices.CanFitQuestRewards(kit.Player, definition, 0));
+
+        // Even with 1 delivery item in the bags and 15 swords (0 free slots), 2 non-stacking rewards (RewItemId1 + RewChoiceItemId1) need 2 slots, while removal only frees 1.
+        Assert.Equal(1u, kit.Player.Inventory.DestroyItemCount(ItemTestData.WornShortsword, 1));
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        Assert.False(QuestNpcServices.CanFitQuestRewards(kit.Player, definition, 0));
+
+        // A quest that grants only 1 reward item fits at 0 free slots when turning it in removes the 1 required delivery item.
+        var singleRewardTemplate = new QuestTemplate
+        {
+            Entry = Id + 1,
+            Method = 2,
+            QuestLevel = 1,
+            Title = "Single reward fit",
+            ReqItemId1 = ItemTestData.ToughJerky,
+            ReqItemCount1 = 1,
+            RewItemId1 = ItemTestData.WornShortsword,
+            RewItemCount1 = 1,
+        };
+        var singleQuest = new Quest(singleRewardTemplate);
+        Assert.True(QuestNpcServices.CanFitQuestRewards(kit.Player, singleQuest, 0));
+    }
 }

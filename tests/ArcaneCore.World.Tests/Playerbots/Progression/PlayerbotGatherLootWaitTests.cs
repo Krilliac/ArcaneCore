@@ -232,4 +232,57 @@ public sealed class PlayerbotGatherLootWaitTests
         await rig.Host.OnWorldAsync(rig.Think);
         Assert.Equal(1, capture.Count(CraftFailed));
     }
+
+    [Fact]
+    public async Task LargeBoundingRadiusNodeBeyondCentreReach_IsNotCastFromAfar_AndDespawnedNodeWaitDoesNotReportTimeout()
+    {
+        await using Rig rig = await Rig.StartAsync();
+
+        bool castAttemptedFromAfar = false;
+        await rig.Host.OnWorldAsync(() =>
+        {
+            Player player = rig.Player;
+            var nodeGuid = new ObjectGuid(ChestGuid(Node));
+            var node = (ArcaneCore.Game.GameObjects.GameObject)player.Map!.FindObject(nodeGuid)!;
+            node.ReplaceTemplate(new ArcaneCore.Kernel.WorldData.GameObjects.GameObjectTemplate
+            {
+                Entry = node.Entry,
+                Type = (uint)ArcaneCore.Game.GameObjects.GameObjectType.Chest,
+                Name = node.Template.Name,
+                Size = 4.0f,
+                Data = node.Template.Data,
+            });
+            // Place at 4.8 yd centre-to-centre (> GatherInteractYards 4.5f, even though DistanceTo(player) < 4.5f due to Size=4.0f bounding radius).
+            node.SetPosition(player.X + 4.8f, player.Y, player.Z, 0f);
+            Assert.True(node.DistanceTo(player) < 4.5f);
+
+            int castPackets = 0;
+            rig.Bot.Session.ManagedDispatchObserver = op =>
+            {
+                if (op == WorldOpcode.CmsgCastSpell) castPackets++;
+            };
+
+            rig.Think();
+            castAttemptedFromAfar = castPackets > 0;
+            rig.Bot.Session.ManagedDispatchObserver = null;
+            node.SetPosition(player.X + 3.0f, player.Y, player.Z, 0f);
+            return true;
+        });
+
+        Assert.False(castAttemptedFromAfar);
+        await rig.Host.World.AdvanceClockAsync(61_000);
+
+        using AnomalyCapture capture = await rig.Host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        await CastAndLandAsync(rig);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            _ = rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse);
+            var node = (ArcaneCore.Game.GameObjects.GameObject)rig.Player.Map!.FindObject(new ObjectGuid(ChestGuid(Node)))!;
+            rig.Player.Map!.RemoveObject(node);
+            return true;
+        });
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(rig.Think);
+        Assert.False(capture.Any(CraftFailed), capture.Describe());
+    }
 }

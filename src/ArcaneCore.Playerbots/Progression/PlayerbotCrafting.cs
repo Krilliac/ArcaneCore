@@ -1066,12 +1066,24 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         GameObject? bestNode = null;
         SpellInfo? bestGatherSpell = null;
         float bestDistSq = MaxGatherRangeYards * MaxGatherRangeYards;
+        GameObjectMapSystem? goSystem = objects.FindSystem(map);
 
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (_refusedUntil.ContainsKey(guid.Value)
-                || map.FindObject(guid) is not GameObject { IsSpawned: true, Type: GameObjectType.Chest } go
-                || (go.Flags & GameObjectFlags.InUse) != 0)
+                || map.FindObject(guid) is not GameObject { IsSpawned: true, Type: GameObjectType.Chest } go)
+                continue;
+
+            uint reqQuest = go.Template.GetData(8);
+            if ((go.Flags & (GameObjectFlags.InUse | GameObjectFlags.NoInteract)) != 0
+                || go.LootState is GameObjectLootState.JustDeactivated or GameObjectLootState.NotReady
+                || (!go.User.IsEmpty && go.User != player.Guid)
+                || go.Loot is { IsEmpty: true }
+                || go.Template.GetData(GameObjectMapSystem.ChestLevelData) > player.Level + GameObjectMapSystem.ChestLevelLeeway
+                || (reqQuest != 0
+                    && (goSystem?.Quests is { } goQuests
+                        ? !goQuests.IsQuestIncomplete(player, reqQuest)
+                        : !(_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } qState && qState.Quests.GetStatus(reqQuest) == ArcaneCore.Game.Quests.QuestStatus.Incomplete))))
                 continue;
 
             if (Home is { } home && go.MapId == home.MapId && !home.Contains(go.MapId, go.X, go.Y, go.Z))
@@ -1124,7 +1136,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = bestNode.Entry;
 
-        if (bestNode.DistanceTo(player) > GatherInteractYards)
+        if (bestDistSq > GatherInteractYards * GatherInteractYards)
         {
             if (_route is null || _routeTarget != bestNode.Guid)
             {
@@ -1368,8 +1380,12 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if ((!_waitingForGatherLoot && _pendingLoot.Count == 0) || !player.IsInWorld || !player.IsAlive)
             return false;
 
+        if (_waitingForGatherLoot)
+            TakeGatherLoot(player);
+
         // Still on its cast bar (a pushback can stretch it past the wait's deadline): no window is due yet.
-        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
+        if (_pendingLoot.Count == 0
+            && _session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
             { State: SpellCastState.Preparing or SpellCastState.Casting })
         {
             return false;
@@ -1380,6 +1396,9 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
 
     private bool DrainGatherLoot(Player player, uint now)
     {
+        if (_waitingForGatherLoot)
+            TakeGatherLoot(player);
+
         if (_pendingLoot.TryPeek(out (WorldOpcode Opcode, byte[] Payload) next))
         {
             if (!PlayerbotMovementControl.Stop(_session, player))
@@ -1392,11 +1411,6 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!_waitingForGatherLoot)
             return false;
 
-        // The reply is read before the deadline is: a bot thinks seconds apart under load (live think gap p95 13-16 s outside
-        // combat), so a window that opened while it was not thinking is waiting in its ring, not late.
-        if (TakeGatherLoot(player))
-            return _pendingLoot.Count > 0;
-
         // No window and none coming: the cast failed (TRY_AGAIN, interrupted, refused), which is not a loot timeout.
         if (LootCastFailed(player))
         {
@@ -1408,6 +1422,19 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         {
             ObjectGuid timedOutTarget = _gatheringTarget;
             EndLootWait();
+            if (timedOutTarget.High == HighGuid.GameObject)
+            {
+                _refusedUntil[timedOutTarget.Value] = unchecked(now + RefusalBackoffMs);
+                if (player.Map?.FindObject(timedOutTarget) is not GameObject { IsSpawned: true } go
+                    || (go.Flags & GameObjectFlags.NoInteract) != 0
+                    || ((go.Flags & GameObjectFlags.InUse) != 0 && go.User != player.Guid)
+                    || go.LootState is GameObjectLootState.JustDeactivated or GameObjectLootState.NotReady
+                    || (!go.User.IsEmpty && go.User != player.Guid))
+                {
+                    return false;
+                }
+            }
+
             if (!_session.IsInChaosProbe)
                 PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant loot timed out for target {timedOutTarget}");
         }
