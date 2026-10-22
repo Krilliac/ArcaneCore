@@ -37,6 +37,7 @@ public static class Invariant
     private static readonly ConcurrentDictionary<InvariantSite, SiteCounter> Sites = new();
     private static readonly AsyncLocal<InvariantCapture?> ActiveCapture = new();
     private static long _failures;
+    private static long _epoch;
     private static volatile InvariantPolicy _policy = InvariantPolicy.Continue;
     private static volatile bool _breakOnFailure;
     private static volatile int _logLimit = 10;
@@ -44,6 +45,9 @@ public static class Invariant
 
     /// <summary>Failures recorded since the process started (every Assert and Check, logged or not).</summary>
     public static long FailureCount => Volatile.Read(ref _failures);
+
+    /// <summary>Changes each time <see cref="ResetCounters"/> forgets the counters, so a reader of <see cref="Failures()"/> can tell a reset from a site that stopped failing.</summary>
+    public static long Epoch => Volatile.Read(ref _epoch);
 
     /// <summary>The policy in force (<c>Diagnostics:OnInvariant</c>).</summary>
     public static InvariantPolicy Policy => _policy;
@@ -66,6 +70,7 @@ public static class Invariant
     {
         Sites.Clear();
         Interlocked.Exchange(ref _failures, 0);
+        Interlocked.Increment(ref _epoch);
     }
 
     /// <summary>Every call site that has failed, most frequent first (part of each crash report).</summary>
@@ -74,7 +79,11 @@ public static class Invariant
         var list = new List<InvariantFailure>(Sites.Count);
         foreach (KeyValuePair<InvariantSite, SiteCounter> pair in Sites)
         {
-            list.Add(new InvariantFailure(pair.Key.Member, pair.Key.File, pair.Key.Line, pair.Value.Count, pair.Value.LastMessage));
+            list.Add(new InvariantFailure(pair.Key.Member, pair.Key.File, pair.Key.Line, pair.Value.Count, pair.Value.LastMessage)
+            {
+                FirstSeen = pair.Value.FirstSeen,
+                LastSeen = pair.Value.LastSeen,
+            });
         }
 
         list.Sort(static (a, b) => b.Count.CompareTo(a.Count));
@@ -327,18 +336,34 @@ public static class Invariant
     private sealed class SiteCounter
     {
         private long _count;
+        private long _firstTicks;
+        private long _lastTicks;
 
         public long Count => Volatile.Read(ref _count);
 
         public string? LastMessage { get; private set; }
 
+        public DateTimeOffset? FirstSeen => Volatile.Read(ref _firstTicks) is var ticks and not 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+
+        public DateTimeOffset? LastSeen => Volatile.Read(ref _lastTicks) is var ticks and not 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+
         public long Record(string message)
         {
+            long now = DateTimeOffset.UtcNow.UtcTicks;
             LastMessage = message;
+            Interlocked.CompareExchange(ref _firstTicks, now, 0);
+            Interlocked.Exchange(ref _lastTicks, now);
             return Interlocked.Increment(ref _count);
         }
     }
 }
 
 /// <summary>One call site that has failed at least once.</summary>
-public sealed record InvariantFailure(string Member, string File, int Line, long Count, string? LastMessage);
+public sealed record InvariantFailure(string Member, string File, int Line, long Count, string? LastMessage)
+{
+    /// <summary>The site's first failure since start or the last reset (null for a failure built by hand, such as a test's).</summary>
+    public DateTimeOffset? FirstSeen { get; init; }
+
+    /// <summary>The site's latest failure (null for a failure built by hand).</summary>
+    public DateTimeOffset? LastSeen { get; init; }
+}

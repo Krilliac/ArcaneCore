@@ -217,7 +217,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             _faultFeed = new PlayerbotQaFaultFeed(
                 faultLedger ?? new FaultLedger(),
                 invariantSource,
-                FaultSource is null ? anomalyLedger : null);
+                FaultSource is null ? anomalyLedger : null,
+                InvariantSource is null && FaultSource is null ? (Func<long>)(static () => Invariant.Epoch) : null);
         }
 
         if (anomalyLedger is not null) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);

@@ -20,7 +20,7 @@ internal sealed class PlayerbotQaAnomalyFeed(
     internal const int DefaultMinDistinctSubjects = 3;
 
     private readonly object _gate = new();
-    private Dictionary<string, long> _seen = new(StringComparer.Ordinal);
+    private readonly DiagnosticDeltaTracker _tracker = new();
 
     /// <summary>Pulls new <see cref="QaSignalKind.Anomaly"/> signals since the previous poll.</summary>
     internal IReadOnlyList<QaSignal> Pull()
@@ -28,27 +28,22 @@ internal sealed class PlayerbotQaAnomalyFeed(
         var signals = new List<QaSignal>();
         lock (_gate)
         {
-            IReadOnlyList<AnomalySnapshot> snapshot = ledger.Snapshot();
-            var seen = new Dictionary<string, long>(snapshot.Count, StringComparer.Ordinal);
-            foreach (AnomalySnapshot anomaly in snapshot)
+            _tracker.BeginPass(ledger.Epoch);
+            foreach (AnomalySnapshot anomaly in ledger.Snapshot())
             {
                 if (!Qualifies(anomaly))
                 {
                     continue;
                 }
 
-                long before = _seen.TryGetValue(anomaly.Key, out long previous) && previous <= anomaly.Count ? previous : 0;
-                seen[anomaly.Key] = anomaly.Count;
-                long added = anomaly.Count - before;
-                if (added <= 0)
+                long added = _tracker.Added(anomaly.Key, anomaly.Count);
+                if (added > 0)
                 {
-                    continue;
+                    signals.Add(SignalOf(anomaly, added));
                 }
-
-                signals.Add(SignalOf(anomaly, added));
             }
 
-            _seen = seen;
+            _tracker.EndPass();
         }
 
         return signals;

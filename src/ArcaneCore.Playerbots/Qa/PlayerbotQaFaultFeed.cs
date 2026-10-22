@@ -17,7 +17,8 @@ namespace ArcaneCore.World.Playerbots.Qa;
 internal sealed class PlayerbotQaFaultFeed(
     FaultLedger ledger,
     Func<IReadOnlyList<InvariantFailure>>? invariantSource = null,
-    AnomalyLedger? serverAnomalySource = null)
+    AnomalyLedger? serverAnomalySource = null,
+    Func<long>? invariantEpoch = null)
 {
     /// <summary>The ledger site of a bot's update exception (ManagedPlayerbotFeature.Fault).</summary>
     internal const string BotSite = "playerbot";
@@ -43,9 +44,9 @@ internal sealed class PlayerbotQaFaultFeed(
     internal const int DefaultMinServerWarningSubjects = 3;
 
     private readonly object _gate = new();
-    private Dictionary<string, long> _seen = new(StringComparer.Ordinal);
-    private Dictionary<string, long> _seenInvariants = new(StringComparer.Ordinal);
-    private Dictionary<string, long> _seenServerAnomalies = new(StringComparer.Ordinal);
+    private readonly DiagnosticDeltaTracker _faults = new();
+    private readonly DiagnosticDeltaTracker _invariants = new();
+    private readonly DiagnosticDeltaTracker _serverAnomalies = new();
 
     /// <summary>The signals for what the ledger, invariant tracker, and server error anomalies recorded since the previous call (none when nothing changed).</summary>
     internal IReadOnlyList<QaSignal> Pull()
@@ -53,10 +54,10 @@ internal sealed class PlayerbotQaFaultFeed(
         var signals = new List<QaSignal>();
         lock (_gate)
         {
+            // Under the gate: two overlapping pulls must not both send the same delta. Each epoch is read before its snapshot (DiagnosticDeltaTracker).
             ledger.ReplayCrashJournal();
-            IReadOnlyList<FaultSnapshot> snapshot = ledger.Snapshot(); // under the gate: two overlapping pulls must not both send the same delta
-            var seen = new Dictionary<string, long>(snapshot.Count, StringComparer.Ordinal);
-            foreach (FaultSnapshot fault in snapshot)
+            _faults.BeginPass(ledger.Epoch);
+            foreach (FaultSnapshot fault in ledger.Snapshot())
             {
                 if (fault.Id == FaultLedger.OverflowId || string.Equals(fault.Site, BotSite, StringComparison.Ordinal) || IsConnectionNoise(fault)
                     || EnvironmentSites.Contains(fault.Site))
@@ -64,35 +65,18 @@ internal sealed class PlayerbotQaFaultFeed(
                     continue;
                 }
 
-                // A ledger reset (count below what was seen) starts the signature over.
-                long before = _seen.TryGetValue(fault.Id, out long previous) && previous <= fault.Count ? previous : 0;
-                seen[fault.Id] = fault.Count;
-                long added = fault.Count - before;
-                if (added <= 0)
-                {
-                    continue;
-                }
-
-                if (before == 0)
-                {
-                    signals.Add(SignalOf(fault, fault.FirstSeen, 1));
-                    added--;
-                }
-
-                if (added > 0)
-                {
-                    signals.Add(SignalOf(fault, fault.LastSeen, added));
-                }
+                AddDelta(signals, _faults.Added(fault.Id, fault.Count, out bool fromStart), fromStart,
+                    (at, n) => SignalOf(fault, at, n), fault.FirstSeen, fault.LastSeen);
             }
 
-            _seen = seen;
+            _faults.EndPass();
 
             if (invariantSource is not null)
             {
-                IReadOnlyList<InvariantFailure> invariants = invariantSource();
-                var seenInvariants = new Dictionary<string, long>(invariants.Count, StringComparer.Ordinal);
-                DateTime nowUtc = DateTime.UtcNow;
-                foreach (InvariantFailure inv in invariants)
+                // invariantEpoch is Invariant.Epoch when the source is the process-wide tracker; a source without one has no resets to tell apart.
+                _invariants.BeginPass(invariantEpoch?.Invoke() ?? 0);
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                foreach (InvariantFailure inv in invariantSource())
                 {
                     if (inv.Count <= 0 || string.IsNullOrWhiteSpace(inv.Member))
                     {
@@ -100,56 +84,58 @@ internal sealed class PlayerbotQaFaultFeed(
                     }
 
                     string siteKey = $"{inv.Member}@{inv.File}:{inv.Line}";
-                    long before = _seenInvariants.TryGetValue(siteKey, out long previous) && previous <= inv.Count ? previous : 0;
-                    seenInvariants[siteKey] = inv.Count;
-                    long added = inv.Count - before;
-                    if (added <= 0)
+                    long added = _invariants.Added(siteKey, inv.Count);
+                    if (added > 0)
                     {
-                        continue;
+                        signals.Add(InvariantSignalOf(inv, siteKey, (inv.LastSeen ?? now).UtcDateTime, added));
                     }
-
-                    signals.Add(InvariantSignalOf(inv, siteKey, nowUtc, added));
                 }
 
-                _seenInvariants = seenInvariants;
+                _invariants.EndPass();
             }
 
             if (serverAnomalySource is not null)
             {
-                IReadOnlyList<AnomalySnapshot> anomalies = serverAnomalySource.Snapshot();
-                var seenAnomalies = new Dictionary<string, long>(anomalies.Count, StringComparer.Ordinal);
-                foreach (AnomalySnapshot anomaly in anomalies)
+                _serverAnomalies.BeginPass(serverAnomalySource.Epoch);
+                foreach (AnomalySnapshot anomaly in serverAnomalySource.Snapshot())
                 {
                     if (!QualifiesServerAnomaly(anomaly))
                     {
                         continue;
                     }
 
-                    long before = _seenServerAnomalies.TryGetValue(anomaly.Key, out long previous) && previous <= anomaly.Count ? previous : 0;
-                    seenAnomalies[anomaly.Key] = anomaly.Count;
-                    long added = anomaly.Count - before;
-                    if (added <= 0)
-                    {
-                        continue;
-                    }
-
-                    if (before == 0)
-                    {
-                        signals.Add(ServerAnomalySignalOf(anomaly, anomaly.FirstSeen, 1));
-                        added--;
-                    }
-
-                    if (added > 0)
-                    {
-                        signals.Add(ServerAnomalySignalOf(anomaly, anomaly.LastSeen, added));
-                    }
+                    AddDelta(signals, _serverAnomalies.Added(anomaly.Key, anomaly.Count, out bool fromStart), fromStart,
+                        (at, n) => ServerAnomalySignalOf(anomaly, at, n), anomaly.FirstSeen, anomaly.LastSeen);
                 }
 
-                _seenServerAnomalies = seenAnomalies;
+                _serverAnomalies.EndPass();
             }
         }
 
         return signals;
+    }
+
+    /// <summary>
+    /// A key that starts from zero sends its first occurrence on its own, stamped with its first-seen time, so a finding's first sighting is right;
+    /// the rest of the new occurrences go in one signal stamped with the last-seen time.
+    /// </summary>
+    private static void AddDelta(List<QaSignal> signals, long added, bool fromStart, Func<DateTimeOffset, long, QaSignal> make, DateTimeOffset first, DateTimeOffset last)
+    {
+        if (added <= 0)
+        {
+            return;
+        }
+
+        if (fromStart)
+        {
+            signals.Add(make(first, 1));
+            added--;
+        }
+
+        if (added > 0)
+        {
+            signals.Add(make(last, added));
+        }
     }
 
     internal static bool QualifiesServerAnomaly(AnomalySnapshot anomaly)

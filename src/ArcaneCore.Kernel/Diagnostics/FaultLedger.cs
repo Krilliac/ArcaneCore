@@ -76,6 +76,7 @@ public sealed class FaultLedger
     private volatile bool _beepOnException;
     private volatile string? _crashJournalPath;
     private long _total;
+    private long _epoch;
     private long _lastTicks;
     private readonly RateWindow _rate = new();
     private long _firstTicks;
@@ -94,7 +95,7 @@ public sealed class FaultLedger
         _time = time;
         _maxSignatures = Math.Max(1, limits.MaxSignatures);
         _logLimit = Math.Max(0, limits.LogLimit);
-        _overflow = new FaultEntry(OverflowId, "(overflow)", "(various)", [], time.GetUtcNow(), string.Empty, string.Empty, string.Empty);
+        _overflow = new FaultEntry(OverflowId, "(overflow)", "(various)", [], string.Empty, string.Empty, string.Empty);
     }
 
     /// <summary>The process-wide ledger.</summary>
@@ -118,6 +119,9 @@ public sealed class FaultLedger
 
     /// <summary>Faults recorded since start or the last <see cref="Reset"/> (every occurrence, logged or not).</summary>
     public long Total => Volatile.Read(ref _total);
+
+    /// <summary>Changes each time <see cref="Reset"/> forgets the ledger, so a reader comparing two snapshots can tell a reset from a key that stopped firing.</summary>
+    public long Epoch => Volatile.Read(ref _epoch);
 
     /// <summary>Distinct signatures held (the overflow bucket is not counted).</summary>
     public int Distinct => _entries.Count;
@@ -293,6 +297,7 @@ public sealed class FaultLedger
             _entries.Clear();
             _overflow.Clear();
             Interlocked.Exchange(ref _total, 0);
+            Interlocked.Increment(ref _epoch);
             Interlocked.Exchange(ref _lastTicks, 0);
             Interlocked.Exchange(ref _firstTicks, 0);
             _rate.Clear();
@@ -517,7 +522,7 @@ public sealed class FaultLedger
                     }
                     else
                     {
-                        entry = new FaultEntry(id, site, type, frames, at, msg, stack, chain);
+                        entry = new FaultEntry(id, site, type, frames, msg, stack, chain);
                         _entries[id] = entry;
                     }
                 }
@@ -607,7 +612,6 @@ public sealed class FaultLedger
                             site,
                             type,
                             frames,
-                            now,
                             Truncate(exception.Message),
                             FormatCondensedStack(exception),
                             FormatExceptionChain(exception));
@@ -830,42 +834,30 @@ public sealed class FaultLedger
         return message.Length <= MaxMessageLength ? message : message[..MaxMessageLength];
     }
 
-    /// <summary>Mutable per-signature state; every field is guarded by <c>this</c>.</summary>
+    /// <summary>Mutable per-signature state: the shared <see cref="LedgerEntryCore"/> plus the fault's own samples; every field is guarded by <c>this</c>.</summary>
     private sealed class FaultEntry(
         string id,
         string site,
         string type,
         IReadOnlyList<string> frames,
-        DateTimeOffset now,
         string message,
         string stack,
         string chain)
     {
-        private DateTimeOffset _first = now;
-        private DateTimeOffset _last = now;
-        private DateTimeOffset _lastLog = DateTimeOffset.MinValue;
+        private readonly LedgerEntryCore _core = new(MaxTrackedMessages, RecentMessageCount);
         private string _message = message;
         private string _stack = stack;
         private string _chain = chain;
-        private long _count;
-        private long _sinceLog;
         private HashSet<string>? _overflowSeen;
-        private readonly SubjectTally _messages = new(MaxTrackedMessages);
-        private readonly RecentDistinct _recent = new(RecentMessageCount);
         private string? _lastRaw;
         private string _lastText = string.Empty;
         private string _lastLine = string.Empty;
-        private readonly RateWindow _rate = new();
-        private GapRing? _gaps;
 
         public FaultRecording Note(DateTimeOffset now, int logLimit, Exception exception, string? overflowId)
         {
             lock (this)
             {
-                _count++;
-                DateTimeOffset previous = _last;
-                _last = now;
-                _rate.Add(now);
+                long count = _core.Occur(now);
                 string raw = exception.Message ?? string.Empty;
                 string text;
                 if (_lastRaw is not null && string.Equals(raw, _lastRaw, StringComparison.Ordinal))
@@ -874,7 +866,7 @@ public sealed class FaultLedger
                     text = _lastText;
                     if (_lastLine.Length != 0)
                     {
-                        _messages.Add(_lastLine);
+                        _core.Tally.Add(_lastLine);
                     }
                 }
                 else
@@ -887,19 +879,13 @@ public sealed class FaultLedger
                     _lastLine = tallied;
                     if (line.Length != 0)
                     {
-                        _messages.Add(tallied);
-                        _recent.Add(line);
+                        _core.Tally.Add(tallied);
+                        _core.Recent.Add(line);
                     }
                 }
 
-                if (_count > 1)
+                if (count == 1)
                 {
-                    (_gaps ??= new GapRing()).Add(now - previous);
-                }
-
-                if (_count == 1)
-                {
-                    _first = now;
                     _message = text;
                     if (overflowId is null)
                     {
@@ -910,27 +896,8 @@ public sealed class FaultLedger
 
                 // A brand-new signature that lands in the overflow bucket still logs its first occurrence (with the exception): the bucket keeps no frames.
                 bool firstOverflow = overflowId is not null && (_overflowSeen ??= []).Count < MaxOverflowSeen && _overflowSeen.Add(overflowId);
-                bool log;
-                long suppressed = 0;
-                if (firstOverflow || _count <= logLimit)
-                {
-                    log = true;
-                    _lastLog = now;
-                }
-                else if (_lastLog == DateTimeOffset.MinValue || now - _lastLog >= TimeSpan.FromMinutes(1))
-                {
-                    log = true;
-                    suppressed = _sinceLog;
-                    _sinceLog = 0;
-                    _lastLog = now;
-                }
-                else
-                {
-                    log = false;
-                    _sinceLog++;
-                }
-
-                return new FaultRecording(id, _count, log, suppressed) { Timing = log ? TimingAt(now) : null };
+                (bool log, long suppressed) = _core.Throttle(now, logLimit, firstOverflow);
+                return new FaultRecording(id, count, log, suppressed) { Timing = log ? _core.TimingAt(now) : null };
             }
         }
 
@@ -938,26 +905,17 @@ public sealed class FaultLedger
         {
             lock (this)
             {
-                _count++;
-                DateTimeOffset previous = _last;
-                _last = now;
-                _rate.Add(now);
+                long count = _core.Occur(now);
                 string line = message.ReplaceLineEndings(" ");
                 string tallied = line.Length <= MaxTallyMessageLength ? line : line[..MaxTallyMessageLength];
                 if (line.Length != 0)
                 {
-                    _messages.Add(tallied);
-                    _recent.Add(line);
+                    _core.Tally.Add(tallied);
+                    _core.Recent.Add(line);
                 }
 
-                if (_count > 1)
+                if (count == 1)
                 {
-                    (_gaps ??= new GapRing()).Add(now - previous);
-                }
-
-                if (_count == 1)
-                {
-                    _first = now;
                     _message = message;
                     _stack = stack;
                     _chain = chain;
@@ -969,15 +927,9 @@ public sealed class FaultLedger
         {
             lock (this)
             {
-                _count = 0;
-                _sinceLog = 0;
-                _lastLog = DateTimeOffset.MinValue;
+                _core.Clear();
                 _overflowSeen?.Clear();
-                _messages.Clear();
-                _recent.Clear();
                 _lastRaw = null;
-                _rate.Clear();
-                _gaps?.Clear();
                 _message = string.Empty;
                 _stack = string.Empty;
                 _chain = string.Empty;
@@ -988,20 +940,13 @@ public sealed class FaultLedger
         {
             lock (this)
             {
-                return new FaultSnapshot(id, site, type, frames, _count, _first, _last, _message, _stack, _chain)
+                return new FaultSnapshot(id, site, type, frames, _core.Count, _core.First, _core.Last, _message, _stack, _chain)
                 {
-                    Timing = TimingAt(now),
-                    TopMessages = _messages.Top(SnapshotTopMessages),
-                    RecentMessages = _recent.ToList(),
+                    Timing = _core.TimingAt(now),
+                    TopMessages = _core.Tally.Top(SnapshotTopMessages),
+                    RecentMessages = _core.Recent.ToList(),
                 };
             }
-        }
-
-        /// <summary>Caller holds the entry lock.</summary>
-        private LedgerTiming TimingAt(DateTimeOffset now)
-        {
-            (TimeSpan? p50, TimeSpan? p99) = _gaps?.Percentiles() ?? (null, null);
-            return new LedgerTiming(_count == 0 ? null : _first, _count == 0 ? null : _last, _rate.CountSince(now, 15), _rate.CountSince(now, 60), p50, p99);
         }
     }
 }
