@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -79,6 +80,8 @@ internal sealed class PlayerbotQaStore(string directory, ILogger logger)
         }
         catch (JsonException ex)
         {
+            FaultLedger.Shared.Record("playerbot.qa", ex);
+            AnomalyLedger.Shared.Report("qa", "store-corrupt", FilePath, ex.GetType().Name, AnomalySeverity.Error);
             return Disable($"{FilePath} is not valid findings JSON ({ex.GetType().Name}); it is kept untouched");
         }
 

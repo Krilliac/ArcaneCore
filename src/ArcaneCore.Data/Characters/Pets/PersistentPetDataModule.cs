@@ -2,6 +2,7 @@ using System.Text.Json;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -104,8 +105,9 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
             await WriteRowsAsync(db, snapshot, cancellationToken, actionBarJson, spellsJson).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.persistent-pet", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -160,8 +162,9 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
             await db.Set<PersistentPetRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.persistent-pet", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }

@@ -1,5 +1,6 @@
 using System.Data.Common;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
@@ -35,8 +36,10 @@ public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ow
         {
             await CharacterOwnershipGuard.VerifyOnTransactionAsync(Require(eventData), connection, result, Token(), cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.character-write-fence", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", "character-write-fence", ex.Message, AnomalySeverity.Warning);
             await AbandonAsync(result).ConfigureAwait(false);
             throw;
         }
@@ -54,8 +57,10 @@ public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ow
             // A synchronous SaveChanges: the guard has no synchronous form, and the connection is not shared with a synchronization context.
             CharacterOwnershipGuard.VerifyOnTransactionAsync(Require(eventData), connection, result, Token(), CancellationToken.None).GetAwaiter().GetResult();
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.character-write-fence", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", "character-write-fence", ex.Message, AnomalySeverity.Warning);
             AbandonAsync(result).AsTask().GetAwaiter().GetResult();
             throw;
         }
@@ -94,9 +99,11 @@ public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ow
         {
             await transaction.RollbackAsync().ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // The refusal is the error to report; a failed rollback of a transaction that is being discarded must not replace it.
+            FaultLedger.Shared.Record("data.character-write-fence-rollback", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", "character-write-fence-rollback", ex.Message, AnomalySeverity.Warning);
         }
 
         await transaction.DisposeAsync().ConfigureAwait(false);

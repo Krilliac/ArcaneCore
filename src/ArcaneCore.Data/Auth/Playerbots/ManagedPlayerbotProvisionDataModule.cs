@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -71,8 +72,9 @@ public sealed class EfManagedPlayerbotProvisionStore(AuthDbContext db) : IManage
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return account;
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.managed-playerbot-provision", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             db.Entry(proof).State = EntityState.Detached;
             db.Entry(account).State = EntityState.Detached;

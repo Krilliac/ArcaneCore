@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Characters.Pets;
@@ -45,8 +46,9 @@ public sealed class EfPetAdminStore(CharacterDbContext db) : IPetAdminStore
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return changed + stabled.Count > 0;
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.pet-admin", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -68,8 +70,9 @@ public sealed class EfPetAdminStore(CharacterDbContext db) : IPetAdminStore
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return removed > 0;
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.pet-admin", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }

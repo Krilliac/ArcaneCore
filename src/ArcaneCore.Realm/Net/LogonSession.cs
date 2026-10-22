@@ -145,6 +145,7 @@ public sealed class LogonSession(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            AnomalyLedger.Shared.Report("logon", "handshake-timeout", "logon-session", "logon session read timed out before handshake completed", AnomalySeverity.Info);
             if (deadline.Expired)
             {
                 if (guard is not null)
@@ -245,6 +246,8 @@ public sealed class LogonSession(
             }
             catch (ResilienceException ex)
             {
+                FaultLedger.Shared.Record("logon.resilience", ex);
+                AnomalyLedger.Shared.Report("logon", "resilience-rejected", "logon-session", ex.Message, AnomalySeverity.Warning);
                 await RefuseDatabaseUnavailableAsync(command, ex, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -254,6 +257,8 @@ public sealed class LogonSession(
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("logon.session", ex);
+                AnomalyLedger.Shared.Report("logon", "session-fault", "logon-session", ex.GetType().Name, AnomalySeverity.Error);
                 RecordSessionFault(command, ex);
                 throw;
             }

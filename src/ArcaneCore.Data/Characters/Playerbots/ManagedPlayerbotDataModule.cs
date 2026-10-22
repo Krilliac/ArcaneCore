@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -100,6 +101,7 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
         }
         catch (DbUpdateException ex)
         {
+            FaultLedger.Shared.Record("data.managed-playerbot", ex);
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
             throw new InvalidOperationException("The managed playerbot identity is already owned.", ex);
         }
