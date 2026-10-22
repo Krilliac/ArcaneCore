@@ -603,6 +603,12 @@ public sealed class Map
             return;
         }
 
+        SendToObservers(observers, source, except, opcode, payload);
+    }
+
+    /// <summary>Send to every observer but the source and <paramref name="except"/>. Plain HashSet foreach (struct enumerator, no allocation); takes no gate and touches no outbox.</summary>
+    private static void SendToObservers(HashSet<Player> observers, WorldObject source, Player? except, WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
         foreach (Player other in observers)
         {
             if (!ReferenceEquals(other, source) && !ReferenceEquals(other, except))
@@ -611,6 +617,9 @@ public sealed class Map
             }
         }
     }
+
+    /// <summary>The cell-query bound around <paramref name="o"/>: view range, grey distance, its bounding radius and the largest in the grid (added left to right).</summary>
+    private float VisibilityQueryRadius(WorldObject o) => VisibilityRange + VisibilityGreyDistance + o.BoundingRadius + _grid.MaxBoundingRadius;
 
     private readonly record struct OutboxPacket(WorldObject Source, WorldOpcode Opcode, byte[] Payload, Player? Except);
 
@@ -635,13 +644,7 @@ public sealed class Map
         {
             if (_observers.TryGetValue(packet.Source.Guid, out HashSet<Player>? observers))
             {
-                foreach (Player other in observers)
-                {
-                    if (!ReferenceEquals(other, packet.Source) && !ReferenceEquals(other, packet.Except))
-                    {
-                        other.Session.Send(packet.Opcode, packet.Payload);
-                    }
-                }
+                SendToObservers(observers, packet.Source, packet.Except, packet.Opcode, packet.Payload);
             }
         }
 
@@ -1514,7 +1517,7 @@ public sealed class Map
         // gets its own list.
         List<Player> viewers = _viewerScratchInUse ? [] : _viewerScratch;
         viewers.Clear();
-        float radius = VisibilityRange + VisibilityGreyDistance + obj.BoundingRadius + _grid.MaxBoundingRadius;
+        float radius = VisibilityQueryRadius(obj);
         if (!UseReferenceVisibilityOrder)
         {
             // The join-ordered cells merged, then the few viewers outside them merged in: the same list, no sort.
@@ -1558,7 +1561,7 @@ public sealed class Map
     /// </summary>
     internal void VisibilityCandidates(WorldObject center, List<WorldObject> candidates)
     {
-        float radius = VisibilityRange + VisibilityGreyDistance + center.BoundingRadius + _grid.MaxBoundingRadius;
+        float radius = VisibilityQueryRadius(center);
         List<WorldObject> extras = _candidateExtras;
         extras.Clear();
         if (UseReferenceVisibilityOrder || !_grid.TryCollectObjectsInJoinOrder(center.X, center.Y, radius, candidates, extras, out CellArea area))
@@ -1591,7 +1594,7 @@ public sealed class Map
 
             if (player.ViewPoint is { } eye && !ReferenceEquals(eye, player))
             {
-                float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
+                float eyeRadius = VisibilityQueryRadius(eye);
                 _grid.CollectObjects(eye.X, eye.Y, eyeRadius, extras);
             }
         }
@@ -1631,7 +1634,7 @@ public sealed class Map
             // A camera somewhere else (vmangos Camera view point): what is around it is a candidate too.
             if (player.ViewPoint is { } eye && !ReferenceEquals(eye, player))
             {
-                float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
+                float eyeRadius = VisibilityQueryRadius(eye);
                 _grid.CollectObjects(eye.X, eye.Y, eyeRadius, candidates);
             }
 
@@ -1643,7 +1646,7 @@ public sealed class Map
             candidates.AddRange(observers);
         }
 
-        float radius = VisibilityRange + VisibilityGreyDistance + center.BoundingRadius + _grid.MaxBoundingRadius;
+        float radius = VisibilityQueryRadius(center);
         _grid.CollectObjects(center.X, center.Y, radius, candidates);
         SortByJoinOrderDistinct(candidates);
     }

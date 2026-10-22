@@ -1262,7 +1262,9 @@ public sealed partial class InstanceManager : IMapResolver
         }
     }
 
-    private void RemovePlayerBind(ObjectGuid player, InstanceSave save)
+    // Dictionary removal only: no HashSet, persistence or ForgetIfUnused step, so ResetSave, UnbindAll and Remove*Bind each keep their own.
+    // The player variant drops its emptied inner dictionary; the group variant never has.
+    private void TryDetachPlayerBind(ObjectGuid player, InstanceSave save)
     {
         if (_playerBinds.TryGetValue(player, out Dictionary<uint, InstanceBind>? binds)
             && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
@@ -1273,6 +1275,20 @@ public sealed partial class InstanceManager : IMapResolver
                 _playerBinds.Remove(player);
             }
         }
+    }
+
+    private void TryDetachGroupBind(uint groupId, InstanceSave save)
+    {
+        if (_groupBinds.TryGetValue(groupId, out Dictionary<uint, InstanceBind>? binds)
+            && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
+        {
+            binds.Remove(save.MapId);
+        }
+    }
+
+    private void RemovePlayerBind(ObjectGuid player, InstanceSave save)
+    {
+        TryDetachPlayerBind(player, save);
 
         if (save.Players.Remove(player))
         {
@@ -1284,11 +1300,7 @@ public sealed partial class InstanceManager : IMapResolver
 
     private void RemoveGroupBind(Group group, InstanceSave save)
     {
-        if (_groupBinds.TryGetValue(group.Id, out Dictionary<uint, InstanceBind>? binds)
-            && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
-        {
-            binds.Remove(save.MapId);
-        }
+        TryDetachGroupBind(group.Id, save);
 
         save.Groups.Remove(group.Id);
         ForgetStoredGroupBind(group.Id, save.InstanceId, persist: true);
@@ -1502,24 +1514,12 @@ public sealed partial class InstanceManager : IMapResolver
 
         foreach (ObjectGuid player in save.Players.ToArray())
         {
-            if (_playerBinds.TryGetValue(player, out Dictionary<uint, InstanceBind>? binds)
-                && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
-            {
-                binds.Remove(save.MapId);
-                if (binds.Count == 0)
-                {
-                    _playerBinds.Remove(player);
-                }
-            }
+            TryDetachPlayerBind(player, save);
         }
 
         foreach (uint groupId in save.Groups.ToArray())
         {
-            if (_groupBinds.TryGetValue(groupId, out Dictionary<uint, InstanceBind>? binds)
-                && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
-            {
-                binds.Remove(save.MapId);
-            }
+            TryDetachGroupBind(groupId, save);
         }
 
         foreach (uint groupId in save.Groups)
@@ -1539,15 +1539,7 @@ public sealed partial class InstanceManager : IMapResolver
     {
         foreach (ObjectGuid player in save.Players.ToArray())
         {
-            if (_playerBinds.TryGetValue(player, out Dictionary<uint, InstanceBind>? binds)
-                && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
-            {
-                binds.Remove(save.MapId);
-                if (binds.Count == 0)
-                {
-                    _playerBinds.Remove(player);
-                }
-            }
+            TryDetachPlayerBind(player, save);
 
             save.Players.Remove(player);
             _persistence.PlayerUnbound(player.Counter, save.InstanceId);
@@ -1555,11 +1547,7 @@ public sealed partial class InstanceManager : IMapResolver
 
         foreach (uint groupId in save.Groups.ToArray())
         {
-            if (_groupBinds.TryGetValue(groupId, out Dictionary<uint, InstanceBind>? binds)
-                && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
-            {
-                binds.Remove(save.MapId);
-            }
+            TryDetachGroupBind(groupId, save);
 
             save.Groups.Remove(groupId);
             ForgetStoredGroupBind(groupId, save.InstanceId, persist: true);

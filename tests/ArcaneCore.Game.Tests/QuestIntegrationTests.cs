@@ -276,10 +276,10 @@ public sealed class QuestIntegrationTests
         public uint RemainingCount { get; set; }
         public ItemInfo? GetItem(uint itemId) => itemId == 7 ? new(7, 100, 10, 1, 0, uint.MaxValue, uint.MaxValue, 0, 0, 0, 0) : null;
         public uint GetItemCount(Player player, uint itemId, bool inBankAlso) => RemainingCount;
-        public InventoryResult CanStoreNewItem(Player player, uint itemId, uint count) => InventoryResult.Ok;
+        public ArcaneCore.Game.Items.InventoryResult CanStoreNewItem(Player player, uint itemId, uint count) => ArcaneCore.Game.Items.InventoryResult.Ok;
         public bool StoreNewItem(Player player, uint itemId, uint count) => false;
         public void DestroyItemCount(Player player, uint itemId, uint count) { }
         public ItemSale SellToVendor(Player player, ObjectGuid vendor, ObjectGuid item, byte count) => ItemSale.Ignored;
-        public void SendEquipError(Player player, InventoryResult result, uint itemId) { }
+        public void SendEquipError(Player player, ArcaneCore.Game.Items.InventoryResult result, uint itemId) { }
     }
 }
