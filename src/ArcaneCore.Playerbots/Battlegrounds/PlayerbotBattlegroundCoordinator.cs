@@ -936,20 +936,13 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (distance <= MasterPresenceYards && map.FindObject(master.Guid) is not Creature { IsAlive: true }) continue;
             if (distance > nearest
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
-                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _)
-                || (distance <= _options.MaxRouteYards && IsMasterRouteRefused(player, master.At)))
+                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
                 continue;
             nearest = distance;
             best = master;
         }
 
         return best;
-    }
-
-    private bool IsMasterRouteRefused(Player player, Vector3 at)
-    {
-        TileWait wait = default;
-        return PlayerbotNavigation.PlanExact(player, at, _options, ref wait, Now, out _, trial: true) == PlanOutcome.Refused;
     }
 
     private List<Battlemaster> MastersOn(uint mapId)
