@@ -297,6 +297,9 @@ public sealed class PlayerbotGrindCampTests
             {
                 var player = camp.Session.Player!;
                 PlayerbotMovementControl.Stop(camp.Session, player); // the walk the last think began would carry the bot off again
+                // Since c6364bc6d a route is dropped once the bot is off its next leg; the clock is frozen, so the spawn the
+                // drop blocked would back off for good. Dropping the destination's route too makes each relocation a fresh start.
+                camp.Destinations.Stop();
                 player.Relocate(camp.Origin.X - 12f * (i % 16), camp.Origin.Y - 12f * (i / 16), camp.Origin.Z, 0, camp.Host.World.NowMs);
                 return true;
             });
