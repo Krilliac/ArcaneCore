@@ -32,8 +32,12 @@ internal static class PlayerbotRoutePlanWatch
     /// <summary>Maximum unproductive successful plans allowed from one spot toward one goal before suppression.</summary>
     internal const int MaxUnproductivePlans = 3;
 
-    /// <summary>Minimum elapsed time (ms) across unproductive plans before a replan loop is suppressed.</summary>
-    internal const uint MinLoopSpanMs = 15_000;
+    /// <summary>
+    /// Minimum elapsed time (ms) across unproductive plans before a replan loop is suppressed. Ordered strictly between the destinations' own
+    /// not-closing clock (<see cref="PlayerbotWorldDestinations.SpawnNotClosingMs"/>), which must see a stalled walk first (it suspends the quest
+    /// or passes the spawn over), and <see cref="PlayerbotNavigationAnomalies.ReplanLoopMinMs"/>, which this watch must beat.
+    /// </summary>
+    internal const uint MinLoopSpanMs = PlayerbotWorldDestinations.SpawnNotClosingMs + 5_000;
 
     /// <summary>Maximum consecutive definitive refusals for one origin/goal pair before negative-cache suppression.</summary>
     internal const int MaxConsecutiveRefusals = 4;

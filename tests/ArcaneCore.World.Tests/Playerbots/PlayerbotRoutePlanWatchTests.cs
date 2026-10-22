@@ -49,7 +49,14 @@ public sealed class PlayerbotRoutePlanWatchTests
         });
 
     [Fact]
-    public async Task TimestampedPlanToward_FromSameSpotWithoutProgress_SuppressesAndBlacklistsOnFourthAttempt_BeforeReplanLoopFires()
+    public void MinLoopSpan_LiesBetweenTheDestinationsNotClosingClock_AndTheReplanLoopAnomaly()
+    {
+        Assert.True(PlayerbotWorldDestinations.SpawnNotClosingMs < PlayerbotRoutePlanWatch.MinLoopSpanMs);
+        Assert.True(PlayerbotRoutePlanWatch.MinLoopSpanMs < PlayerbotNavigationAnomalies.ReplanLoopMinMs);
+    }
+
+    [Fact]
+    public async Task TimestampedPlanToward_FromSameSpotWithoutProgress_SuppressesAndBlacklistsOnceTheLoopSpanPasses_BeforeReplanLoopFires()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         var mesh = new Canned((start, end) => new PathResult(PathType.Normal, [start, end]));
@@ -67,7 +74,7 @@ public sealed class PlayerbotRoutePlanWatchTests
                 return PlayerbotNavigation.PlanToward(player, goal, Options, ref wait[0], world.Host.World.NowMs, out _);
             });
 
-            if (i < PlayerbotRoutePlanWatch.MaxUnproductivePlans)
+            if (i < PlayerbotRoutePlanWatch.MaxUnproductivePlans || i * 6_000u < PlayerbotRoutePlanWatch.MinLoopSpanMs)
             {
                 Assert.Equal(PlanOutcome.Route, outcome);
             }
