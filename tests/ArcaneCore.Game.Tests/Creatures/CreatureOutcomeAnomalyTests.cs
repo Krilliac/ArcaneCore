@@ -417,6 +417,30 @@ public sealed class CreatureOutcomeAnomalyTests
     }
 
     [Fact]
+    public void AnEvadingHomeReturnAndUnreachableChase_RecoverWithoutReportingPathFailedHomeUnreachableOrEvadeLoop()
+    {
+        const uint entry = 949098;
+        var options = new CreatureOptions { UnreachableTargetSoftEvadeMs = 1_000, UnreachableTargetEvadeMs = 3_000 };
+        using Scene s = Start(entry, pathfinder: new FixedPathfinder(route: false), options: options);
+        using AnomalyCapture capture = CaptureAny(entry);
+
+        for (int i = 0; i < 3; i++)
+        {
+            s.Map.Combat.DealDamage(s.Player, s.Wolf, 1, direct: false);
+            s.Wolf.Relocate(WolfX + 12f, 0, 83.5f, 0, 0);
+            s.Run(4_000);
+            Assert.False(s.Wolf.IsEvading);
+            Assert.Equal(WolfX, s.Wolf.X, 1);
+
+            // Proximity re-aggro against the same stationary unreachable target is suppressed during the cooldown.
+            s.System.EnterCombatWithTarget(s.Wolf, s.Player);
+            Assert.Null(s.Wolf.Combat.Victim);
+        }
+
+        Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
     public void ARouteThatExists_ReportsNeitherPathFailedNorHomeUnreachable()
     {
         using Scene s = Start(MeshOkEntry, pathfinder: new FixedPathfinder(route: true));

@@ -325,8 +325,11 @@ internal sealed partial class PlayerbotBattlegroundAI
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
             Fight(player, enemy, interval, mustPursue: MustPursue(match, team, enemy));
-            ObserveStill(player, match, enemy, interval);
-            return;
+            if (_pvp.Target is not null)
+            {
+                ObserveStill(player, match, enemy, interval);
+                return;
+            }
         }
 
         if (_pvp.Target is not null) ClearTarget(player);
@@ -421,12 +424,14 @@ internal sealed partial class PlayerbotBattlegroundAI
             _ => GuardYards + 2f,
         };
         // A bot that swings at its enemy in reach fights (the swing puts it in combat a moment later); one that only stands beside it does not.
-        bool engaged = player.Combat.IsInCombat || (fighting is not null && _pvp.Attacking);
+        bool engaged = player.Combat.IsInCombat || (fighting is not null && (_pvp.Attacking || _pvp.Target is not null))
+            || _route is not null || PlayerbotMotion.IsActive(player) || Casting(player);
         float enemyYards = fighting is not null ? Distance(player, fighting)
             : named is not null && order.Duty is PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom or PlayerbotWsgDuty.Midfield
                 ? Distance(player, named) : float.MaxValue;
         bool idleStep = PlayerbotWarsongTactics.IsIdle(player.IsAlive, engaged, PlayerbotWarsongTactics.IdleLimitMs, goal, arrived, enemyYards);
-        StillMs = still && sameDuty && idleStep ? unchecked(StillMs + Math.Max(1u, interval)) : 0;
+        uint stepMs = Math.Min(Math.Max(1u, interval), 5_000u);
+        StillMs = still && sameDuty && idleStep ? unchecked(StillMs + stepMs) : 0;
         IdleNow = PlayerbotWarsongTactics.IsIdle(player.IsAlive, engaged, StillMs, goal, arrived, enemyYards);
         if (!IdleNow) return;
         IdleThinks++;
@@ -443,7 +448,8 @@ internal sealed partial class PlayerbotBattlegroundAI
         bool unproductive = Activity is "idle" or "unsupported" or "no-orders" or "no-flag" or "no-banners" or "no-banner-spell";
         if (unproductive)
         {
-            _inMatchIdleMs = unchecked(_inMatchIdleMs + interval);
+            uint stepMs = Math.Min(Math.Max(1u, interval), 5_000u);
+            _inMatchIdleMs = unchecked(_inMatchIdleMs + stepMs);
             if (Activity == "unsupported" || _inMatchIdleMs >= 15_000)
                 ReportIdleInMatch(player, $"bot idle in {match.Type} match {match.InstanceId} (activity={Activity}, idleMs={_inMatchIdleMs})");
         }
@@ -505,7 +511,16 @@ internal sealed partial class PlayerbotBattlegroundAI
             case PlayerbotWsgDuty.HuntCarrier:
                 // Not attackable from here yet (out of sight or reach): towards it.
                 Activity = "hunting-carrier";
-                WalkTo(player, Online(o.Target) is { } thief && ReferenceEquals(thief.Map, map) ? Position(thief) : o.Goal, interval, toward: true);
+                if (Online(o.Target) is { } thief && ReferenceEquals(thief.Map, map))
+                {
+                    if (!WalkTo(player, Position(thief), interval, toward: true, what: "carrier", chase: true))
+                        WalkTo(player, o.Goal, interval, toward: true, what: "carrier", chase: true);
+                }
+                else
+                {
+                    WalkTo(player, o.Goal, interval, toward: true);
+                }
+
                 return;
 
             case PlayerbotWsgDuty.EscortCarrier:
@@ -752,7 +767,12 @@ internal sealed partial class PlayerbotBattlegroundAI
         }
 
         Vector3 point = Party.PlayerbotParty.FollowPoint(Position(leader), leader.Orientation, _followAngle, _followDistance);
-        if (!WalkTo(player, point, interval, toward: Distance(player, leader) > 60f)) WalkTo(player, Position(leader), interval, toward: true);
+        if (!WalkTo(player, point, interval, toward: Distance(player, leader) > 60f, what: "follow", chase: true)
+            && !WalkTo(player, Position(leader), interval, toward: true, what: "follow", chase: true)
+            && OwnFlagRoom(player.Team) is { } ownRoom)
+        {
+            WalkTo(player, ownRoom, interval, toward: true, what: "follow");
+        }
     }
 
     /// <summary>Stay within <paramref name="radius"/> (<see cref="GuardYards"/> by default) of <paramref name="at"/>.</summary>
@@ -796,7 +816,7 @@ internal sealed partial class PlayerbotBattlegroundAI
                 _route = null;
                 PlayerbotMovementControl.Stop(_session, player);
                 // A tile of the way is still being read: the goal is kept and planned to again next think, not reported unreachable.
-                if (planned != PlanOutcome.Pending && !chase && what is not ("buff" or "battlemaster") && Activity != "taking-buff")
+                if (planned != PlanOutcome.Pending && !chase && what is not ("buff" or "battlemaster" or "follow" or "carrier") && Activity != "taking-buff")
                     ReportObjectiveUnreachable(player, $"route to {what} at {goal} was refused");
                 return planned == PlanOutcome.Pending;
             }
@@ -804,7 +824,26 @@ internal sealed partial class PlayerbotBattlegroundAI
             _routeGoal = goal;
         }
 
-        if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, Math.Max(1u, interval), _session.World.NowMs)) _route = null;
+        if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, Math.Max(1u, interval), _session.World.NowMs))
+        {
+            _route = null;
+            PlanOutcome replanned = toward
+                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route, chase: chase);
+            if (replanned != PlanOutcome.Route || _route is null)
+            {
+                _route = null;
+                return replanned == PlanOutcome.Pending;
+            }
+
+            _routeGoal = goal;
+            if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, Math.Max(1u, interval), _session.World.NowMs))
+            {
+                _route = null;
+                return false;
+            }
+        }
+
         return true;
     }
 

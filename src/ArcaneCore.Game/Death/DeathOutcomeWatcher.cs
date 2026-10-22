@@ -118,8 +118,9 @@ public sealed class DeathOutcomeWatcher : IDisposable
 
     private static void CheckDurability(Unit? killer, Player victim)
     {
-        if (killer is null or Player || killer.GetCharmerOrOwnerPlayerOrSelf() is not null
-            || victim.Map?.Template is { IsBattleground: true } || !victim.Inventory.Options.DurabilityLossEnable)
+        if (killer is null or Player || killer.GetCharmerOrOwnerPlayerOrSelf() is not null || DuelRules.ControllingPlayer(killer) is not null
+            || victim.Map?.Template is { IsBattleground: true } || !victim.Inventory.Options.DurabilityLossEnable
+            || IsChannelingOnVictim(killer, victim))
         {
             return;
         }
@@ -148,6 +149,17 @@ public sealed class DeathOutcomeWatcher : IDisposable
                 string.Create(CultureInfo.InvariantCulture, $"killed by creature {killer.Guid.Entry}: every worn item is still at full durability, a death costs each 10%"),
                 AnomalySeverity.Info);
         }
+    }
+
+    private static bool IsChannelingOnVictim(Unit killer, Player victim)
+    {
+        if (killer.GetUInt32(UpdateFields.UnitChannelSpell) == 0)
+        {
+            return false;
+        }
+
+        ulong channelTarget = killer.GetUInt64(UpdateFields.UnitFieldChannelObject);
+        return channelTarget == 0 || new ObjectGuid(channelTarget) == victim.Guid;
     }
 
     /// <summary>

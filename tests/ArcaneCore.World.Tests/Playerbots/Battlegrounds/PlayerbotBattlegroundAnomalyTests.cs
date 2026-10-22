@@ -484,6 +484,11 @@ public sealed class PlayerbotBattlegroundAnomalyTests
                 player.VisibleObjects.Add(enemy.Guid);
                 ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldOrder);
 
+                // Escorting a carrier whose offset point falls on an unwalkable wall (or hunting a carrier there) must not report objective-unreachable.
+                var escortOrder = new PlayerbotWsgOrder(PlayerbotWsgDuty.EscortCarrier, enemy.Guid, midfield);
+                player.VisibleObjects.Remove(enemy.Guid);
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, escortOrder);
+
                 ScenarioContext.ExpectEqual(0, capture.Count(ObjectiveUnreachable), Dump(capture, ObjectiveUnreachable));
                 return true;
             });

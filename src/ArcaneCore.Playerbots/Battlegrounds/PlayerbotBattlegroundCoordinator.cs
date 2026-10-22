@@ -900,9 +900,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             middle.Z = ground;
         }
 
-        if (map.Collision.MeshPoints is not null && !PlayerbotNavigation.OnWalkableMesh(map, middle))
+        if (map.Collision.MeshPoints is not null && !IsWalkableWarsongMidfield(map, middle, ownStand))
         {
-            ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f];
+            ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f, 28f];
             foreach (float radius in radii)
             {
                 for (int i = 0; i < 8; i++)
@@ -920,13 +920,43 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                     if (map.Collision.TryGetMeshFloor(x, y, candZ, 12f, 4f, out float candMeshZ) && float.IsFinite(candMeshZ))
                         candZ = candMeshZ;
                     var candidate = new Vector3(x, y, candZ);
-                    if (PlayerbotNavigation.OnWalkableMesh(map, candidate))
+                    if (IsWalkableWarsongMidfield(map, candidate, ownStand))
                         return candidate;
                 }
             }
         }
 
         return middle;
+    }
+
+    private static bool IsWalkableWarsongMidfield(Map map, Vector3 candidate, Vector3 ownStand)
+    {
+        if (!PlayerbotNavigation.OnWalkableMesh(map, candidate))
+            return false;
+        Vector2 toOwn = new(ownStand.X - candidate.X, ownStand.Y - candidate.Y);
+        Vector2 dir = toOwn.LengthSquared() > 1f ? Vector2.Normalize(toOwn) : new Vector2(1f, 0f);
+        float probeX = candidate.X + (dir.X * 18f);
+        float probeY = candidate.Y + (dir.Y * 18f);
+        float probeTerrain = map.Terrain.GetHeight(probeX, probeY, candidate.Z);
+        float probeZ = probeTerrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(probeTerrain) ? probeTerrain : candidate.Z;
+        var probe = new Vector3(probeX, probeY, probeZ);
+        PathResult reach = PlayerbotThinkProbe.Find(map.Collision, candidate, probe, new PathOptions
+        {
+            MaxPoints = 32,
+            Mover = PathMover.Player,
+            ExcludeFlags = NavTerrain.SteepSlopes,
+            AllowPartial = true,
+            MaxSearchNodes = 256,
+            LoadTiles = true,
+        });
+        if ((reach.Type & PathType.TilesPending) != 0)
+            return true;
+        if (!reach.HasPath || (reach.Type & PathType.NoPath) != 0)
+            return false;
+        if ((reach.Type & PathType.Incomplete) != 0
+            && Vector2.Distance(new Vector2(reach.End.X, reach.End.Y), new Vector2(candidate.X, candidate.Y)) < 10f)
+            return false;
+        return true;
     }
 
     /// <summary>Where the two Warsong Gulch flag stands are spawned (cached per object content).</summary>

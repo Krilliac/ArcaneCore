@@ -90,6 +90,11 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     {
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(target);
+        if (IsUnreachableTargetOnCooldown(creature, target))
+        {
+            return;
+        }
+
         if (creature.Combat.Victim is null)
         {
             if (creature.AI is { } ai)
@@ -495,12 +500,59 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         if (_options.UnreachableTargetEvadeMs > 0 && count > _options.UnreachableTargetEvadeMs)
         {
             creature.IsEvadingUnreachable = false;
+            if (creature.Combat.Victim is { } unreachableVictim)
+            {
+                RememberUnreachableTarget(creature, unreachableVictim);
+            }
+
             EnterEvadeMode(creature);
             return true;
         }
 
         creature.IsEvadingUnreachable = _options.UnreachableTargetSoftEvadeMs > 0 && count > _options.UnreachableTargetSoftEvadeMs;
         return creature.IsEvadingUnreachable;
+    }
+
+    private readonly record struct UnreachableTargetMemory(ObjectGuid TargetGuid, Vector3 TargetPosition, long ExpiresAtClockMs);
+
+    private readonly Dictionary<ObjectGuid, UnreachableTargetMemory> _unreachableEvadedTargets = [];
+    private const long UnreachableReaggroCooldownMs = 15_000;
+    private const float UnreachableMovedYardsSq = 3f * 3f;
+
+    private void RememberUnreachableTarget(Creature creature, Unit victim)
+        => _unreachableEvadedTargets[creature.Guid] = new UnreachableTargetMemory(
+            victim.Guid,
+            new Vector3(victim.X, victim.Y, victim.Z),
+            _clockMs + UnreachableReaggroCooldownMs);
+
+    private void ForgetUnreachableTarget(Creature creature) => _unreachableEvadedTargets.Remove(creature.Guid);
+
+    private bool IsUnreachableTargetOnCooldown(Creature creature, Unit target)
+    {
+        if (!_unreachableEvadedTargets.TryGetValue(creature.Guid, out UnreachableTargetMemory memory))
+        {
+            return false;
+        }
+
+        if (_clockMs >= memory.ExpiresAtClockMs)
+        {
+            _unreachableEvadedTargets.Remove(creature.Guid);
+            return false;
+        }
+
+        if (memory.TargetGuid != target.Guid)
+        {
+            return false;
+        }
+
+        var nowPos = new Vector3(target.X, target.Y, target.Z);
+        if (Vector3.DistanceSquared(nowPos, memory.TargetPosition) <= UnreachableMovedYardsSq)
+        {
+            return true;
+        }
+
+        _unreachableEvadedTargets.Remove(creature.Guid);
+        return false;
     }
 
     /// <summary>

@@ -329,7 +329,15 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     {
         HomePathTeleports++;
         CreaturePathStats.AddHomeTeleport();
-        CreatureAnomalies.ReportHomeUnreachable(creature, new Vector3(x, y, z), "home return fell back to teleport");
+        if (!creature.IsEvading && creature.Motion.CurrentType != MovementGeneratorType.Home)
+        {
+            CreatureAnomalies.ReportHomeUnreachable(creature, new Vector3(x, y, z), "home return fell back to teleport");
+        }
+        else
+        {
+            creature.ClearHomeUnreachableEpisode();
+        }
+
         NearTeleport(creature, x, y, z, orientation);
     }
 
@@ -667,12 +675,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         {
             NoPathPaths++;
             CreaturePathStats.AddNoPath();
-            if (toSpawn)
+            bool evadingHome = toSpawn && (creature.IsEvading || creature.Motion.CurrentType == MovementGeneratorType.Home);
+            if (toSpawn && !evadingHome)
             {
                 CreatureAnomalies.ReportHomeUnreachable(creature, destination, "no mesh path to home");
             }
 
-            if ((toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType is not (MovementGeneratorType.Random or MovementGeneratorType.Fleeing or MovementGeneratorType.Confused))
+            bool chasingOrFollowing = creature.Motion.CurrentType is MovementGeneratorType.Chase or MovementGeneratorType.Follow;
+            if (!evadingHome
+                && !chasingOrFollowing
+                && (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType is not (MovementGeneratorType.Random or MovementGeneratorType.Fleeing or MovementGeneratorType.Confused))
                 && (toSpawn || !InAMediumItCannotEnter(creature, destination)))
             {
                 CreatureAnomalies.ReportPathFailed(creature, start, destination, toSpawn ? "home" : creature.Motion.CurrentType.ToString());
