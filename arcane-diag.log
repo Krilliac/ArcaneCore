@@ -1,0 +1,870 @@
+update now=946 pref=6 elapsed=100 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+backoff line=711 now=946 failed=0
+in-backoff now=946 until=2946
+update now=134 pref=6 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+update now=140 pref=6 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=2
+arrival reached= takeable=False
+chose spawn=20002 at -9350.0,-132.5 rank=0
+update now=256 pref=6 elapsed=500 route=True rspawn=20002 rtarget=6 end=-9350.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=256 gap=116 elapsed=500 closing=0 dist=400 best=400
+update now=57 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=1 takeable=False
+update now=52 pref=6 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+chose spawn=10001 at -8649.0,-132.5 rank=0
+update now=52 pref=6 elapsed=500 route=True rspawn=10001 rtarget=6 end=-8824.0,-132.5 visited=0 entries=1
+arrival reached= takeable=False
+update now=52 pref=7 elapsed=500 route=True rspawn=10001 rtarget=6 end=-8824.0,-132.5 visited=0 entries=1
+arrival reached= takeable=False
+chose spawn=10002 at -9249.0,-132.5 rank=0
+update now=52 pref=7 elapsed=500 route=True rspawn=10002 rtarget=7 end=-9072.5,-132.5 visited=0 entries=1
+arrival reached= takeable=False
+update now=36 pref=6 elapsed=100 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+backoff line=711 now=36 failed=0
+update now=43 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=1 takeable=False
+chose spawn=5 at -9150.0,-132.5 rank=0
+update now=543 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+notclosing now=543 gap=500 elapsed=500 closing=0 dist=200 best=200
+update now=2136 pref=6 elapsed=100 route=False rspawn=0 rtarget=0 end=- visited=0 entries=2
+arrival reached= takeable=False
+backoff line=711 now=2136 failed=1
+update now=1043 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=1543 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=2043 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=2543 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=3043 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=3543 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=4043 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=4543 pref=80 elapsed=500 route=True rspawn=5 rtarget=80 end=-9150.0,-132.5 visited=4 entries=5
+arrival reached= takeable=False
+update now=26 pref=6 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=526 gap=500 elapsed=500 closing=0 dist=200 best=200
+update now=1026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=1026 gap=500 elapsed=500 closing=500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=1526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=1526 gap=500 elapsed=500 closing=1000 dist=200.00249 best=200
+update now=2026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=2026 gap=500 elapsed=500 closing=1500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=2526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=2526 gap=500 elapsed=500 closing=2000 dist=200.00002 best=200
+update now=3026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=3026 gap=500 elapsed=500 closing=2500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=3526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=3526 gap=500 elapsed=500 closing=3000 dist=200.00249 best=200
+update now=4026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=4026 gap=500 elapsed=500 closing=3500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=4526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=4526 gap=500 elapsed=500 closing=4000 dist=200.00002 best=200
+update now=5026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=5026 gap=500 elapsed=500 closing=4500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=5526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=5526 gap=500 elapsed=500 closing=5000 dist=200.00249 best=200
+update now=6026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=6026 gap=500 elapsed=500 closing=5500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=6526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=6526 gap=500 elapsed=500 closing=6000 dist=200.00002 best=200
+update now=7026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=7026 gap=500 elapsed=500 closing=6500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=7526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=7526 gap=500 elapsed=500 closing=7000 dist=200.00249 best=200
+update now=8026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+update now=45 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+notclosing now=8026 gap=500 elapsed=500 closing=7500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+arrival reached=1 takeable=False
+update now=8526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=8526 gap=500 elapsed=500 closing=8000 dist=200.00002 best=200
+update now=9026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=9026 gap=500 elapsed=500 closing=8500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=9526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=9526 gap=500 elapsed=500 closing=9000 dist=200.00249 best=200
+update now=10026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=10026 gap=500 elapsed=500 closing=9500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=10526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=10526 gap=500 elapsed=500 closing=10000 dist=200.00002 best=200
+update now=11026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=11026 gap=500 elapsed=500 closing=10500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=11526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=11526 gap=500 elapsed=500 closing=11000 dist=200.00249 best=200
+update now=12026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=12026 gap=500 elapsed=500 closing=11500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=12526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=12526 gap=500 elapsed=500 closing=12000 dist=200.00002 best=200
+update now=13026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=13026 gap=500 elapsed=500 closing=12500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=13526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=13526 gap=500 elapsed=500 closing=13000 dist=200.00249 best=200
+update now=14026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=14026 gap=500 elapsed=500 closing=13500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=14526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=14526 gap=500 elapsed=500 closing=14000 dist=200.00002 best=200
+update now=15026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=15026 gap=500 elapsed=500 closing=14500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=15526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=15526 gap=500 elapsed=500 closing=15000 dist=200.00249 best=200
+update now=16026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=16026 gap=500 elapsed=500 closing=15500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=16526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=16526 gap=500 elapsed=500 closing=16000 dist=200.00002 best=200
+update now=17026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=17026 gap=500 elapsed=500 closing=16500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=17526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=17526 gap=500 elapsed=500 closing=17000 dist=200.00249 best=200
+update now=18026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=18026 gap=500 elapsed=500 closing=17500 dist=200.00002 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=18526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=18526 gap=500 elapsed=500 closing=18000 dist=200.00002 best=200
+update now=19026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-131.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=19026 gap=500 elapsed=500 closing=18500 dist=200.00249 best=200
+chose spawn=23001 at -8750.0,-132.5 rank=0
+update now=19526 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=19526 gap=500 elapsed=500 closing=19000 dist=200.00249 best=200
+update now=20026 pref=6 elapsed=500 route=True rspawn=23001 rtarget=6 end=-8950.0,-132.5 visited=0 entries=2
+arrival reached= takeable=False
+notclosing now=20026 gap=500 elapsed=500 closing=19500 dist=200.00002 best=200
+notclosing-fired plan hunting=True ret=0 questId=0
+backoff line=739 now=20026 failed=0
+in-backoff now=20526 until=22026
+in-backoff now=21026 until=22026
+in-backoff now=21526 until=22026
+update now=22026 pref=6 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=2
+arrival reached= takeable=False
+chose spawn=23002 at -9210.0,-132.5 rank=0
+update now=41 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=1 takeable=False
+update now=41 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=1041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=1541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=2041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=2541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=3041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=3541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=4041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=4541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=5041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=5541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=6041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=6541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=7041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=7541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=8041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=8541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=9041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=9541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=10041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=10541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=11041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=11541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=12041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=12541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=13041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=13541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=14041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=14541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=15041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=15541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=16041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=16541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=17041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=17541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=18041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=18541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=19041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=19541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=20041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=20541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=21041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=21541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=22041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=22541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=23041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=23541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=24041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=24541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=25041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=25541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=26041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=26541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=27041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=27541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=28041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=28541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=29041 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=29541 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=43 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=1 takeable=True
+update now=32 pref=0 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=532 gap=500 elapsed=500 closing=0 dist=200 best=200
+update now=1032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=1032 gap=500 elapsed=500 closing=500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=1532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=1532 gap=500 elapsed=500 closing=1000 dist=200.00249 best=200
+update now=2032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=2032 gap=500 elapsed=500 closing=1500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=2532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=2532 gap=500 elapsed=500 closing=2000 dist=200.00002 best=200
+update now=3032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=3032 gap=500 elapsed=500 closing=2500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=3532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=3532 gap=500 elapsed=500 closing=3000 dist=200.00249 best=200
+update now=4032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=4032 gap=500 elapsed=500 closing=3500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=4532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=4532 gap=500 elapsed=500 closing=4000 dist=200.00002 best=200
+update now=5032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=5032 gap=500 elapsed=500 closing=4500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=38 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=1 takeable=False
+update now=5532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=5532 gap=500 elapsed=500 closing=5000 dist=200.00249 best=200
+update now=6032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=6032 gap=500 elapsed=500 closing=5500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=6532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=6532 gap=500 elapsed=500 closing=6000 dist=200.00002 best=200
+update now=7032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=7032 gap=500 elapsed=500 closing=6500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=7532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=7532 gap=500 elapsed=500 closing=7000 dist=200.00249 best=200
+update now=8032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=8032 gap=500 elapsed=500 closing=7500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=8532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=8532 gap=500 elapsed=500 closing=8000 dist=200.00002 best=200
+update now=9032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=9032 gap=500 elapsed=500 closing=8500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=9532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=9532 gap=500 elapsed=500 closing=9000 dist=200.00249 best=200
+update now=10032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=10032 gap=500 elapsed=500 closing=9500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=10532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=10532 gap=500 elapsed=500 closing=10000 dist=200.00002 best=200
+update now=11032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=11032 gap=500 elapsed=500 closing=10500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=11532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=11532 gap=500 elapsed=500 closing=11000 dist=200.00249 best=200
+update now=12032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=12032 gap=500 elapsed=500 closing=11500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=12532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=12532 gap=500 elapsed=500 closing=12000 dist=200.00002 best=200
+update now=13032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=13032 gap=500 elapsed=500 closing=12500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=13532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=13532 gap=500 elapsed=500 closing=13000 dist=200.00249 best=200
+update now=14032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=14032 gap=500 elapsed=500 closing=13500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=14532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=14532 gap=500 elapsed=500 closing=14000 dist=200.00002 best=200
+update now=15032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=15032 gap=500 elapsed=500 closing=14500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=15532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=15532 gap=500 elapsed=500 closing=15000 dist=200.00249 best=200
+update now=16032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=16032 gap=500 elapsed=500 closing=15500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=16532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=16532 gap=500 elapsed=500 closing=16000 dist=200.00002 best=200
+update now=17032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=17032 gap=500 elapsed=500 closing=16500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=17532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=17532 gap=500 elapsed=500 closing=17000 dist=200.00249 best=200
+update now=18032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=18032 gap=500 elapsed=500 closing=17500 dist=200.00002 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=18532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=18532 gap=500 elapsed=500 closing=18000 dist=200.00002 best=200
+update now=19032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-131.5 visited=0 entries=1
+notclosing now=19032 gap=500 elapsed=500 closing=18500 dist=200.00249 best=200
+chose spawn=24001 at -8750.0,-132.5 rank=0
+update now=19532 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=19532 gap=500 elapsed=500 closing=19000 dist=200.00249 best=200
+update now=20032 pref=0 elapsed=500 route=True rspawn=24001 rtarget=42 end=-8950.0,-132.5 visited=0 entries=1
+notclosing now=20032 gap=500 elapsed=500 closing=19500 dist=200.00002 best=200
+notclosing-fired plan hunting=False ret=0 questId=9
+backoff line=739 now=20032 failed=0
+tryadvance follow-false next=2 count=2 pos=-8946.5,-132.5 first=-8946.5,-132.5
+update now=49 pref=0 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+backoff line=772 now=49 failed=0
+in-backoff now=49 until=2049
+update now=170038 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+update now=181038 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=4
+arrival reached= takeable=False
+chose spawn=2 at -8946.0,-132.5 rank=0
+update now=44 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=1 takeable=False
+update now=44 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=5
+arrival reached= takeable=False
+backoff line=515 now=44 failed=0
+update now=2144 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=5
+arrival reached= takeable=False
+chose spawn=5 at -9150.0,-132.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=100 takeable=False
+chose spawn=101 at -8962.0,-132.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=1 entries=128
+arrival reached=101 takeable=False
+chose spawn=117 at -8962.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=2 entries=128
+arrival reached=102 takeable=False
+chose spawn=118 at -8974.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=3 entries=128
+arrival reached=103 takeable=False
+chose spawn=119 at -8986.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=4 entries=128
+arrival reached=104 takeable=False
+chose spawn=120 at -8998.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=5 entries=128
+arrival reached=105 takeable=False
+chose spawn=121 at -9010.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=6 entries=128
+arrival reached=106 takeable=False
+chose spawn=122 at -9022.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=7 entries=128
+arrival reached=107 takeable=False
+chose spawn=123 at -9034.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=8 entries=128
+arrival reached=108 takeable=False
+chose spawn=124 at -9046.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=9 entries=128
+arrival reached=109 takeable=False
+chose spawn=125 at -9058.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=10 entries=128
+arrival reached=110 takeable=False
+chose spawn=126 at -9070.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=11 entries=128
+arrival reached=111 takeable=False
+chose spawn=127 at -9082.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=12 entries=128
+arrival reached=112 takeable=False
+chose spawn=128 at -9094.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=13 entries=128
+arrival reached=113 takeable=False
+chose spawn=129 at -9106.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=14 entries=128
+arrival reached=114 takeable=False
+chose spawn=130 at -9118.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=15 entries=128
+arrival reached=115 takeable=False
+chose spawn=131 at -9130.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=16 entries=128
+arrival reached=116 takeable=False
+chose spawn=117 at -8962.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=17 entries=128
+arrival reached=117 takeable=False
+chose spawn=118 at -8974.0,-144.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=18 entries=128
+arrival reached=118 takeable=False
+chose spawn=134 at -8974.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=19 entries=128
+arrival reached=119 takeable=False
+chose spawn=135 at -8986.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=20 entries=128
+arrival reached=120 takeable=False
+chose spawn=136 at -8998.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=21 entries=128
+arrival reached=121 takeable=False
+chose spawn=137 at -9010.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=22 entries=128
+arrival reached=122 takeable=False
+chose spawn=138 at -9022.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=23 entries=128
+arrival reached=123 takeable=False
+chose spawn=139 at -9034.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=24 entries=128
+arrival reached=124 takeable=False
+chose spawn=140 at -9046.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=25 entries=128
+arrival reached=125 takeable=False
+chose spawn=141 at -9058.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=26 entries=128
+arrival reached=126 takeable=False
+chose spawn=142 at -9070.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=27 entries=128
+arrival reached=127 takeable=False
+chose spawn=143 at -9082.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=28 entries=128
+arrival reached=128 takeable=False
+chose spawn=144 at -9094.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=29 entries=128
+arrival reached=129 takeable=False
+chose spawn=145 at -9106.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=30 entries=128
+arrival reached=130 takeable=False
+chose spawn=146 at -9118.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=31 entries=128
+arrival reached=131 takeable=False
+chose spawn=147 at -9130.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=32 entries=128
+arrival reached=132 takeable=False
+chose spawn=133 at -8962.0,-156.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=33 entries=128
+arrival reached=133 takeable=False
+chose spawn=134 at -8974.0,-156.5 rank=0
+tryadvance follow-false next=1 count=2 pos=-8962.0,-156.5 first=-8962.0,-156.5
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=34 entries=128
+arrival reached=134 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=35 entries=128
+arrival reached=135 takeable=False
+chose spawn=151 at -8986.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=36 entries=128
+arrival reached=136 takeable=False
+chose spawn=152 at -8998.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=37 entries=128
+arrival reached=137 takeable=False
+chose spawn=153 at -9010.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=38 entries=128
+arrival reached=138 takeable=False
+chose spawn=154 at -9022.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=39 entries=128
+arrival reached=139 takeable=False
+chose spawn=155 at -9034.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=40 entries=128
+arrival reached=140 takeable=False
+chose spawn=156 at -9046.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=41 entries=128
+arrival reached=141 takeable=False
+chose spawn=157 at -9058.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=42 entries=128
+arrival reached=142 takeable=False
+chose spawn=158 at -9070.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=43 entries=128
+arrival reached=143 takeable=False
+chose spawn=159 at -9082.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=44 entries=128
+arrival reached=144 takeable=False
+chose spawn=160 at -9094.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=45 entries=128
+arrival reached=145 takeable=False
+chose spawn=161 at -9106.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=46 entries=128
+arrival reached=146 takeable=False
+chose spawn=162 at -9118.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=47 entries=128
+arrival reached=147 takeable=False
+chose spawn=163 at -9130.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=48 entries=128
+arrival reached=148 takeable=False
+chose spawn=149 at -8962.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=49 entries=128
+arrival reached=149 takeable=False
+chose spawn=150 at -8974.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=50 entries=128
+arrival reached=150 takeable=False
+chose spawn=151 at -8986.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=51 entries=128
+arrival reached=151 takeable=False
+chose spawn=152 at -8998.0,-168.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=52 entries=128
+arrival reached=152 takeable=False
+chose spawn=168 at -8998.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=53 entries=128
+arrival reached=153 takeable=False
+chose spawn=169 at -9010.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=54 entries=128
+arrival reached=154 takeable=False
+chose spawn=170 at -9022.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=55 entries=128
+arrival reached=155 takeable=False
+chose spawn=171 at -9034.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=56 entries=128
+arrival reached=156 takeable=False
+chose spawn=172 at -9046.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=57 entries=128
+arrival reached=157 takeable=False
+chose spawn=173 at -9058.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=58 entries=128
+arrival reached=158 takeable=False
+chose spawn=174 at -9070.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=59 entries=128
+arrival reached=159 takeable=False
+chose spawn=175 at -9082.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=60 entries=128
+arrival reached=160 takeable=False
+chose spawn=176 at -9094.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=61 entries=128
+arrival reached=161 takeable=False
+chose spawn=177 at -9106.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=62 entries=128
+arrival reached=162 takeable=False
+chose spawn=178 at -9118.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=63 entries=128
+arrival reached=163 takeable=False
+chose spawn=179 at -9130.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=64 entries=128
+arrival reached=164 takeable=False
+chose spawn=165 at -8962.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=65 entries=128
+arrival reached=165 takeable=False
+chose spawn=166 at -8974.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=66 entries=128
+arrival reached=166 takeable=False
+chose spawn=167 at -8986.0,-180.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=67 entries=128
+arrival reached=167 takeable=False
+chose spawn=168 at -8998.0,-180.5 rank=0
+tryadvance follow-false next=1 count=2 pos=-8986.0,-180.5 first=-8986.0,-180.5
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=68 entries=128
+arrival reached=168 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=69 entries=128
+arrival reached=169 takeable=False
+chose spawn=185 at -9010.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=70 entries=128
+arrival reached=170 takeable=False
+chose spawn=186 at -9022.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=71 entries=128
+arrival reached=171 takeable=False
+chose spawn=187 at -9034.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=72 entries=128
+arrival reached=172 takeable=False
+chose spawn=188 at -9046.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=73 entries=128
+arrival reached=173 takeable=False
+chose spawn=189 at -9058.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=74 entries=128
+arrival reached=174 takeable=False
+chose spawn=190 at -9070.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=75 entries=128
+arrival reached=175 takeable=False
+chose spawn=191 at -9082.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=76 entries=128
+arrival reached=176 takeable=False
+chose spawn=192 at -9094.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=77 entries=128
+arrival reached=177 takeable=False
+chose spawn=193 at -9106.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=78 entries=128
+arrival reached=178 takeable=False
+chose spawn=194 at -9118.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=79 entries=128
+arrival reached=179 takeable=False
+chose spawn=195 at -9130.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=80 entries=128
+arrival reached=180 takeable=False
+chose spawn=181 at -8962.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=81 entries=128
+arrival reached=181 takeable=False
+chose spawn=182 at -8974.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=82 entries=128
+arrival reached=182 takeable=False
+chose spawn=183 at -8986.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=83 entries=128
+arrival reached=183 takeable=False
+chose spawn=184 at -8998.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=84 entries=128
+arrival reached=184 takeable=False
+chose spawn=185 at -9010.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=85 entries=128
+arrival reached=185 takeable=False
+chose spawn=186 at -9022.0,-192.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=86 entries=128
+arrival reached=186 takeable=False
+chose spawn=202 at -9022.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=87 entries=128
+arrival reached=187 takeable=False
+chose spawn=203 at -9034.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=88 entries=128
+arrival reached=188 takeable=False
+chose spawn=204 at -9046.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=89 entries=128
+arrival reached=189 takeable=False
+chose spawn=205 at -9058.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=90 entries=128
+arrival reached=190 takeable=False
+chose spawn=206 at -9070.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=91 entries=128
+arrival reached=191 takeable=False
+chose spawn=207 at -9082.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=92 entries=128
+arrival reached=192 takeable=False
+chose spawn=208 at -9094.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=93 entries=128
+arrival reached=193 takeable=False
+chose spawn=209 at -9106.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=94 entries=128
+arrival reached=194 takeable=False
+chose spawn=210 at -9118.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=95 entries=128
+arrival reached=195 takeable=False
+chose spawn=211 at -9130.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=96 entries=128
+arrival reached=196 takeable=False
+chose spawn=197 at -8962.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=97 entries=128
+arrival reached=197 takeable=False
+chose spawn=198 at -8974.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=98 entries=128
+arrival reached=198 takeable=False
+chose spawn=199 at -8986.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=99 entries=128
+arrival reached=199 takeable=False
+chose spawn=200 at -8998.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=100 entries=128
+arrival reached=200 takeable=False
+chose spawn=201 at -9010.0,-204.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=101 entries=128
+arrival reached=201 takeable=False
+chose spawn=202 at -9022.0,-204.5 rank=0
+tryadvance follow-false next=1 count=2 pos=-9010.0,-204.5 first=-9010.0,-204.5
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=102 entries=128
+arrival reached=202 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=103 entries=128
+arrival reached=203 takeable=False
+chose spawn=219 at -9034.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=104 entries=128
+arrival reached=204 takeable=False
+chose spawn=220 at -9046.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=105 entries=128
+arrival reached=205 takeable=False
+chose spawn=221 at -9058.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=106 entries=128
+arrival reached=206 takeable=False
+chose spawn=222 at -9070.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=107 entries=128
+arrival reached=207 takeable=False
+chose spawn=223 at -9082.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=108 entries=128
+arrival reached=208 takeable=False
+chose spawn=224 at -9094.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=109 entries=128
+arrival reached=209 takeable=False
+chose spawn=225 at -9106.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=110 entries=128
+arrival reached=210 takeable=False
+chose spawn=226 at -9118.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=111 entries=128
+arrival reached=211 takeable=False
+chose spawn=227 at -9130.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=112 entries=128
+arrival reached=212 takeable=False
+chose spawn=213 at -8962.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=113 entries=128
+arrival reached=213 takeable=False
+chose spawn=214 at -8974.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=114 entries=128
+arrival reached=214 takeable=False
+chose spawn=215 at -8986.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=115 entries=128
+arrival reached=215 takeable=False
+chose spawn=216 at -8998.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=116 entries=128
+arrival reached=216 takeable=False
+chose spawn=217 at -9010.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=117 entries=128
+arrival reached=217 takeable=False
+chose spawn=218 at -9022.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=118 entries=128
+arrival reached=218 takeable=False
+chose spawn=219 at -9034.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=119 entries=128
+arrival reached=219 takeable=False
+chose spawn=220 at -9046.0,-216.5 rank=0
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=120 entries=128
+arrival reached=220 takeable=False
+chose spawn=221 at -9058.0,-216.5 rank=0
+tryadvance follow-false next=1 count=2 pos=-9046.0,-216.5 first=-9046.0,-216.5
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=121 entries=128
+arrival reached=221 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=122 entries=128
+arrival reached=222 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=123 entries=128
+arrival reached=223 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=124 entries=128
+arrival reached=224 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=125 entries=128
+arrival reached=225 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=126 entries=128
+arrival reached=226 takeable=False
+update now=17 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=127 entries=128
+arrival reached=227 takeable=False
+update now=17 pref=81 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=128 entries=128
+arrival reached=900 takeable=False
+chose spawn=900 at -8920.0,-132.5 rank=0
+tryadvance follow-false next=2 count=2 pos=-8920.0,-132.5 first=-8920.0,-132.5
+update now=181017 pref=81 elapsed=500 route=True rspawn=900 rtarget=81 end=-8920.0,-132.5 visited=128 entries=1
+arrival reached=900 takeable=False
+update now=25 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached=301 takeable=False
+chose spawn=303 at -8950.0,-121.5 rank=0
+update now=19 pref=80 elapsed=500 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+chose spawn=1 at -8910.0,-132.5 rank=0
+update now=19 pref=80 elapsed=500 route=True rspawn=1 rtarget=80 end=-8910.0,-132.5 visited=0 entries=128
+arrival reached= takeable=False
+chose spawn=9000 at -4950.0,-132.5 rank=0
+tryadvance follow-false next=1 count=2 pos=-8860.0,-132.5 first=-8950.0,-132.5
+update now=18 pref=3100 elapsed=4000 route=False rspawn=0 rtarget=0 end=- visited=0 entries=0
+arrival reached= takeable=False
+chose spawn=588 at -8750.0,-132.5 rank=0
+update now=4018 pref=3100 elapsed=4000 route=True rspawn=588 rtarget=3100 end=-8950.0,-131.5 visited=0 entries=1
+arrival reached= takeable=False
+notclosing now=4018 gap=4000 elapsed=4000 closing=0 dist=200 best=200
+update now=8018 pref=3100 elapsed=4000 route=True rspawn=588 rtarget=3100 end=-8950.0,-131.5 visited=0 entries=1
+arrival reached= takeable=False
+notclosing now=8018 gap=4000 elapsed=4000 closing=4000 dist=200.00249 best=200
+chose spawn=588 at -8750.0,-132.5 rank=0
+update now=12018 pref=3100 elapsed=4000 route=True rspawn=588 rtarget=3100 end=-8950.0,-130.5 visited=0 entries=1
+arrival reached= takeable=False
+notclosing now=12018 gap=4000 elapsed=4000 closing=8000 dist=200.00249 best=200
+update now=16018 pref=3100 elapsed=4000 route=True rspawn=588 rtarget=3100 end=-8950.0,-130.5 visited=0 entries=1
+arrival reached= takeable=False
+notclosing now=16018 gap=4000 elapsed=4000 closing=12000 dist=200.00998 best=200
+chose spawn=588 at -8750.0,-132.5 rank=0
+update now=20018 pref=3100 elapsed=4000 route=True rspawn=588 rtarget=3100 end=-8950.0,-129.5 visited=0 entries=1
+arrival reached= takeable=False
+notclosing now=20018 gap=4000 elapsed=4000 closing=16000 dist=200.00998 best=200
+notclosing-fired route hunting=True ret=0 QuestId=0
+backoff line=489 now=20018 failed=0
+update now=24018 pref=3100 elapsed=4000 route=False rspawn=0 rtarget=0 end=- visited=0 entries=1
+arrival reached= takeable=False
+backoff line=525 now=24018 failed=1
+tryadvance follow-false next=2 count=2 pos=-8946.5,-132.5 first=-8946.5,-132.5

@@ -1,0 +1,40 @@
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Cryptography/ArcaneCore.Cryptography.csproj (in 2 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Game/ArcaneCore.Game.csproj (in 4 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Data/ArcaneCore.Data.csproj (in 6 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotScriptsV1/HotScriptsV1.csproj (in 9 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotGameV1/HotGameV1.csproj (in 9 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotGameV2/HotGameV2.csproj (in 12 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotFixtureV2/HotFixtureV2.csproj (in 16 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/ThirdParty/WowWorldMessages/WowWorldMessages.Vanilla.csproj (in 2 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotFixtureV1/HotFixtureV1.csproj (in 13 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotCreaturesV1/HotCreaturesV1.csproj (in 16 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.World/ArcaneCore.World.csproj (in 8 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj (in 3 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj (in 35 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.World.Contracts/ArcaneCore.World.Contracts.csproj (in 9 ms).
+  Restored /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj (in 12 ms).
+  WowWorldMessages.Vanilla -> /home/runner/work/ArcaneCore/ArcaneCore/tests/ThirdParty/WowWorldMessages/bin/Release/net11.0/WowWorldMessages.Vanilla.dll
+  ArcaneCore.Kernel -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Kernel/bin/Release/net11.0/ArcaneCore.Kernel.dll
+  ArcaneCore.Cryptography -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Cryptography/bin/Release/net11.0/ArcaneCore.Cryptography.dll
+  ArcaneCore.Protocol -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Protocol/bin/Release/net11.0/ArcaneCore.Protocol.dll
+  ArcaneCore.Data -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Data/bin/Release/net11.0/ArcaneCore.Data.dll
+  ArcaneCore.Game -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Game/bin/Release/net11.0/ArcaneCore.Game.dll
+  ArcaneCore.Sniff -> /home/runner/work/ArcaneCore/ArcaneCore/tools/ArcaneCore.Sniff/bin/Release/net11.0/arcane-sniff.dll
+  ArcaneCore.World.Contracts -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.World.Contracts/bin/Release/net11.0/ArcaneCore.World.Contracts.dll
+  ArcaneCore.World -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.World/bin/Release/net11.0/ArcaneCore.World.dll
+  ArcaneCore.Playerbots -> /home/runner/work/ArcaneCore/ArcaneCore/src/ArcaneCore.Playerbots/bin/Release/net11.0/ArcaneCore.Playerbots.dll
+  HotFixtureV1 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotFixtureV1/bin/Release/net11.0/HotFixture.dll
+  HotFixtureV2 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotFixtureV2/bin/Release/net11.0/HotFixture.dll
+  HotGameV1 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotGameV1/bin/Release/net11.0/HotGame.dll
+  HotGameV2 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotGameV2/bin/Release/net11.0/HotGame.dll
+  HotCreaturesV1 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotCreaturesV1/bin/Release/net11.0/HotCreatures.dll
+  SampleGm -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/SampleGm/bin/Release/net11.0/GmCommands.dll
+  HotScriptsV1 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotScriptsV1/bin/Release/net11.0/HotScripts.dll
+  HotScriptsV2 -> /home/runner/work/ArcaneCore/ArcaneCore/tests/hotmodule-fixtures/HotScriptsV2/bin/Release/net11.0/HotScripts.dll
+  ArcaneCore.World.Tests -> /home/runner/work/ArcaneCore/ArcaneCore/tests/ArcaneCore.World.Tests/bin/Release/net11.0/ArcaneCore.World.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:02:44.66
