@@ -1983,7 +1983,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 if (ch != ArcaneCore.Game.Spells.SpellCastResult.CastOk && !spells.HasAura(guide, BattlegroundConstants.SpellSpiritHealChannel))
                     spells.AddAura(guide, BattlegroundConstants.SpellSpiritHealChannel, permanent: false);
             }
-            if (spells.Store.Get(SpiritGuideService.SpellSpiritHeal) is not null
+            bool hasSpiritHealWave = spells.Store.Get(SpiritGuideService.SpellSpiritHeal) is not null
+                || session.Services.GetService<ArcaneCore.World.Battlegrounds.BattlegroundFeature>()?.BattlegroundOf(player.Guid) is null;
+            if (hasSpiritHealWave
                 && (WaitingToResurrect(player) || _areaQueueSentMs >= 0)
                 && now - _areaWaitSinceMs >= AreaResurrectionIntervalMs)
             {
