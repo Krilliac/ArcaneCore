@@ -325,11 +325,8 @@ internal sealed partial class PlayerbotBattlegroundAI
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
             Fight(player, enemy, interval, mustPursue: MustPursue(match, team, enemy));
-            if (_pvp.Target is not null)
-            {
-                ObserveStill(player, match, enemy, interval);
-                return;
-            }
+            if (_pvp.Target is not null) ObserveStill(player, match, enemy, interval);
+            return;
         }
 
         if (_pvp.Target is not null) ClearTarget(player);
