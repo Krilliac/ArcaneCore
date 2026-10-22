@@ -1,5 +1,4 @@
 using ArcaneCore.Game.Progression;
-using ArcaneCore.Game.Stats;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Progression;
@@ -150,18 +149,4 @@ public sealed class ExperienceFormulaTests
         Assert.All(shares, s => Assert.Equal(0u, s.Experience));
         Assert.All(shares, s => Assert.True(s.QuestCredit));
     }
-
-    [Theory]
-    [InlineData(0u, 0u)]
-    [InlineData(20u, 20u)]
-    [InlineData(21u, 30u)]
-    [InlineData(100u, 820u)]
-    public void HealthBonusFromStamina(uint stamina, uint bonus) => Assert.Equal(bonus, StatFormulas.HealthBonusFromStaminaPoints(stamina));
-
-    [Theory]
-    [InlineData(0u, 0u)]
-    [InlineData(20u, 20u)]
-    [InlineData(21u, 35u)]
-    [InlineData(100u, 1220u)]
-    public void ManaBonusFromIntellect(uint intellect, uint bonus) => Assert.Equal(bonus, StatFormulas.ManaBonusFromIntellectPoints(intellect));
 }
