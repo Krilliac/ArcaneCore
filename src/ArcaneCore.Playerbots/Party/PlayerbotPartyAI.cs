@@ -1247,10 +1247,24 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     private void ObserveOrphan(Player player, bool grouped)
     {
+        Group? group = grouped ? Services.Social?.Groups.GetGroup(player.Guid) : null;
+        if (group is { IsBattlegroundGroup: false } && player.IsAlive && !player.Combat.IsInCombat
+            && group.Members.Any(m => _session.World.FindOnlinePlayer(m.Guid) is null)
+            && _orphanEpisode.ElapsedMs(Now) >= 60_000)
+        {
+            Act(WorldOpcode.CmsgGroupDisband, [], budgeted: false);
+            if (Services.Social?.Groups.GetGroup(player.Guid) is null)
+            {
+                _orphanEpisode.Reset();
+                return;
+            }
+        }
+
         if (!_orphanEpisode.Observe(grouped, Now, PlayerbotPartyAnomalies.OrphanBudgetMs, PlayerbotPartyAnomalies.MaxGapMs)) return;
-        Group? group = Services.Social?.Groups.GetGroup(player.Guid);
         PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.LeaderGoneStillGrouped, string.Create(CultureInfo.InvariantCulture,
             $"in a group of {group?.MemberCount ?? 0} with no real player online and no coordinator driving the bot for {PlayerbotPartyAnomalies.Seconds(_orphanEpisode.ElapsedMs(Now))}s"));
+        if (group is { IsBattlegroundGroup: false } && player.IsAlive && !player.Combat.IsInCombat)
+            Act(WorldOpcode.CmsgGroupDisband, [], budgeted: false);
     }
 
     private void Engage(Player player, ObjectGuid master)

@@ -737,6 +737,31 @@ public sealed class PlayerbotOpportunityTests
     }
 
     [Fact]
+    public async Task ASecondGuardOutsideTheHome_EndsTheEpisodeWithoutReportingUnreachable()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        Creature first = await AddGuardAsync(rig, 96422, 4f, 1f);
+        Creature second = await AddGuardAsync(rig, 96423, 18f, 2f);
+        await rig.World(() =>
+        {
+            var home = new PlayerbotHomeArea(rig.Player.MapId, new Vector3(rig.Player.X, rig.Player.Y, rig.Player.Z), 10f, "test-home");
+            rig.Bot.Controller.Home = home;
+            rig.Bot.Controller.Untakeable = (_, creature) => !home.Contains(creature);
+            return true;
+        });
+
+        Assert.Same(first, (await rig.World(() => rig.Bot.Step())).Pull);
+        await Kill(rig, first);
+        OpportunityStep next = await rig.World(() => rig.Bot.Step());
+        Assert.False(next.Busy);
+        Assert.Null(next.Pull);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.False(capture.Any(Key("unreachable")), capture.Describe());
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(Free), rig.Clock));
+    }
+
+    [Fact]
     public async Task TheBrain_GivesUpAGuardItCannotPlanAWalkTo_InsteadOfPullingItAtEveryThink()
     {
         await using Rig rig = await Rig.StartAsync([Free]); // no ground installed: no route to the guard can be planned

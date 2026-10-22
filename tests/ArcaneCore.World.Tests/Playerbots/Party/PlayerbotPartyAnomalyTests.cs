@@ -646,4 +646,45 @@ public sealed class PlayerbotPartyAnomalyTests
             await Finish(led);
         }
     }
+
+    [Fact]
+    public async Task ABotInAnUnownedGroupWithAnOfflineMember_LeavesBeforeTheOrphanBudget()
+    {
+        await using WorldTestHost host = Host();
+        WorldSession orphan = await PartyTestHost.EnterManagedAsync(host, "PARTYORPHD", "Partyorphd");
+        WorldSession friend = await PartyTestHost.EnterManagedAsync(host, "PARTYORPHE", "Partyorphe");
+        try
+        {
+            var orphanAi = new PlayerbotPartyAI(orphan, PartyTestHost.PlayerbotOptionsOf(host));
+            using AnomalyCapture orphanCap = PlayerbotAnomalies.CaptureFor(orphan.Player!);
+            ObjectGuid friendGuid = friend.Player!.Guid;
+            await host.OnWorldAsync(() =>
+            {
+                Groups(host).Invite(friend.Player!, orphan.Player!.Name);
+                Groups(host).Accept(orphan.Player!);
+                Assert.True(Groups(host).AreInSameGroup(friendGuid, orphan.Player!.Guid));
+                return true;
+            });
+
+            await Finish(friend);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(friendGuid) is null, "friend logs out");
+
+            await host.OnWorldAsync(() =>
+            {
+                orphanAi.ClockOffsetMs = 0;
+                Assert.False(orphanAi.Drives(orphan.Player!));
+                orphanAi.ClockOffsetMs = 30_000;
+                Assert.False(orphanAi.Drives(orphan.Player!));
+                orphanAi.ClockOffsetMs = 65_000;
+                Assert.False(orphanAi.Drives(orphan.Player!));
+                Assert.Null(Groups(host).GetGroup(orphan.Player!.Guid));
+                return true;
+            });
+            Assert.False(orphanCap.Any(Key(PlayerbotPartyAnomalies.LeaderGoneStillGrouped)), orphanCap.Describe());
+        }
+        finally
+        {
+            await Finish(orphan);
+        }
+    }
 }

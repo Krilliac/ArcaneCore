@@ -238,6 +238,51 @@ public sealed class PlayerbotDestinationAnomalyTests
         });
     }
 
+    [Fact]
+    public async Task AReturnThatMakesDistanceProgress_OrIsDeferredByErrands_IsNotTimedOut()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+            Player player = world.Player;
+            var homeReturn = new PlayerbotHomeReturn();
+            var area = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + 4_000f, player.Y, player.Z), 100f, "zone:elwynn")
+            {
+                WalkRangeYards = 20_000f,
+            };
+
+            // 1. While Evaluate is ticked at think cadence without Update (errandsFirst deferring the walk home),
+            //    return-timeout does not fire even past ReturnBudgetMs.
+            uint now = 1_000;
+            for (uint step = 0; step <= PlayerbotHomeReturn.ReturnBudgetMs + 60_000; step += 1_000)
+            {
+                now = 1_000 + step;
+                Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, area, now));
+            }
+            Assert.False(cap.Any(HomeKey("return-timeout")), cap.Describe());
+
+            // 2. Once the bot begins actively returning (Judge/Update called) and closes >= 25 yards every few minutes,
+            //    a multi-budget cross-zone walk does not time out until progress actually stalls for ReturnBudgetMs.
+            float startX = player.X;
+            var walk = new PlayerbotHomeOptions { ReturnMode = PlayerbotHomeReturnMode.Walk };
+            for (int leg = 1; leg <= 10; leg++)
+            {
+                now += 200_000;
+                player.SetPosition(startX + (leg * 50f), player.Y, player.Z, player.Orientation);
+                Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, area, now));
+                homeReturn.Judge(player, area, walk);
+            }
+            Assert.False(cap.Any(HomeKey("return-timeout")), cap.Describe());
+
+            // Stalling in place past ReturnBudgetMs after Update was active still reports return-timeout once.
+            now += PlayerbotHomeReturn.ReturnBudgetMs + 1_000;
+            Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, area, now));
+            Assert.Equal(1, cap.Count(HomeKey("return-timeout")));
+            return true;
+        });
+    }
+
     private sealed class Canned(Func<Vector3, Vector3, PathResult> answer) : IPathfinder
     {
         public bool Enabled => true;

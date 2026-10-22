@@ -144,6 +144,40 @@ public sealed class PlayerbotMountAnomalyTests
         }));
     }
 
+    [Fact]
+    public async Task SummonFailed_Silent_WhenCastIsInterruptedByMovementOrCombat()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            spells.Store = new SpellStore([.. spells.Store.All.Where(s => s.Id != MountFixture.MountSpell), new SpellInfo
+            {
+                Id = MountFixture.MountSpell,
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature }, new(), new()],
+            }], [], []);
+
+            Player player = session.Player!;
+            player.Inventory.AddItem(98003, 1, out _);
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            var options = new PlayerbotOptions { Enabled = true };
+            session.ManagedBudget = new ManagedActionBudget(5);
+
+            // Start the 3s mount cast.
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.True(PlayerbotMount.IsBusy(session));
+
+            // External movement cancels the in-flight cast before the next step: must not report summon-failed.
+            spells.GetState(player.Guid)!.CurrentCast = null;
+            player.SetPosition(player.X + 2f, player.Y, player.Z, player.Orientation);
+            PlayerbotMount.BeforeStep(session, player, LongRoute(player), options);
+
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(SummonFailed), capture.Describe());
+            return true;
+        }));
+    }
+
     // --- bot-mount/riding-refused: the vendor exclusion -----------------------------------------------------------------
 
     [Fact]

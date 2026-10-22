@@ -723,7 +723,12 @@ internal sealed class PlayerbotOpportunities
         // A guard the brain would not take as a target (unreachable, set aside, someone else's, outside the home) cannot be cleared: the
         // find is given up now, with a backoff, instead of the same pull being issued at every think until the timeout.
         if (Untakeable?.Invoke(player, pull) == true)
+        {
+            if (PlayerbotBrain.IsSomeoneElses(player, pull, GroupsOf(player))) return Skip(episode, now);
+            if ((Home is { } home && pull.MapId == home.MapId && !home.Contains(pull)) || _risk().IsRemembered(pull))
+                return Fail(episode, now, "untakeable");
             return Unreachable(player, episode, now, $"the guard {pull.Entry} ({pull.Guid.Value:X}) cannot be taken as a target");
+        }
         if (!ReferenceEquals(pull, episode.Pull))
         {
             PlayerbotRisk risk = _risk();
@@ -784,6 +789,7 @@ internal sealed class PlayerbotOpportunities
         if (distance > InteractYards)
         {
             if (!(PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)) return Busy(episode, PlayerbotGoalKind.Loot);
+            if (_route is { Complete: true }) _route = null;
             if (_route is null || _routeTarget != chest.Guid)
             {
                 PlanOutcome planned = PlayerbotNavigation.PlanExact(player, episode.At, _options, ref _tileWait, now, out _route);
@@ -806,7 +812,9 @@ internal sealed class PlayerbotOpportunities
 
             if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, now))
             {
+                bool finishedLeg = _route.Complete;
                 _route = null;
+                if (finishedLeg) return Busy(episode, PlayerbotGoalKind.Loot);
                 return Unreachable(player, episode, now, "the walk to the chest stopped");
             }
 
