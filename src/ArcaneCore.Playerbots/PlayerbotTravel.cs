@@ -238,7 +238,8 @@ internal sealed class JourneyWalk
         out string? why)
     {
         why = null;
-        if (PlayerbotTaxi.IsActive(player) || PlayerbotTram.IsTraveling(player) || PlayerbotElevator.IsTraveling(player))
+        if (PlayerbotTaxi.IsActive(player) || PlayerbotTram.IsTraveling(player) || PlayerbotElevator.IsTraveling(player)
+            || player.MapId == TramNetwork.TramMapId)
         {
             // The trip's own driver owns the bot; the progress bound starts afresh after it.
             _route = null;
@@ -1079,7 +1080,19 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
             && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal;
         if (player.MapId != leg.To.MapId)
         {
-            if (handOff) return StepResult.Next;
+            if (PlayerbotTram.IsTraveling(player) || (player.MapId == TramNetwork.TramMapId && leg.To.MapId != TramNetwork.TramMapId))
+            {
+                _ = journey.Walk.Step(session, player, options, leg.To.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out _);
+                return StepResult.Yield;
+            }
+
+            if (handOff)
+            {
+                TravelLeg nextLeg = journey.Legs[journey.LegIndex + 1];
+                if (player.MapId == nextLeg.From.MapId || player.MapId == nextLeg.To.MapId)
+                    return StepResult.Next;
+            }
+
             why = $"walk: on map {player.MapId}, the leg's end on map {leg.To.MapId}";
             return StepResult.Failed;
         }

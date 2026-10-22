@@ -252,6 +252,51 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
             Assert.NotNull(landing);
             Assert.True(onMesh, $"UC landing {landing} for stop {stop} is not on walkable mesh");
         }
+
+        // Drodouma (1574.7, 149.3, 61.7) and Zaugiog (1574.9, 308.5, 61.7) stand in the enclosed outer moat/garden ring outside the
+        // Ruins of Lordaeron keep walls, which is disconnected from the inner courtyard where the upper lift doors open:
+        // LandingBesideReachable must not fall back to a short route ending outside the wall, and TryBegin must refuse the lift ride.
+        foreach ((Vector3 disconnectedPos, Vector3 stop) in (ValueTuple<Vector3, Vector3>[])
+        [
+            (new(1574.7f, 149.3f, 61.7f), new(1595.24f, 189.647f, 55.65f)),
+            (new(1574.9f, 308.5f, 61.7f), new(1596.22f, 291.798f, 55.65f)),
+        ])
+        {
+            await world.OnWorldAsync(() => world.Teleports.TeleportTo(world.Player, 0, disconnectedPos.X, disconnectedPos.Y, disconnectedPos.Z, 0));
+            for (int i = 0; i < 200; i++)
+            {
+                bool arrived = await world.OnWorldAsync(() =>
+                {
+                    PlayerbotMovementControl.Update(world.Session, world.Player);
+                    return world.Player.IsInWorld && world.Teleports.StageOf(world.Player) is null && world.Player.MapId == 0
+                        && Vector2.Distance(new(world.Player.X, world.Player.Y), new(disconnectedPos.X, disconnectedPos.Y)) < 1f;
+                });
+                if (arrived) break;
+                await world.AdvanceAsync(50);
+            }
+
+            Vector3? reachable = null;
+            bool begun = false;
+            long pendingTiles = 0;
+            for (int attempt = 0; attempt < MaxTileWaitAttempts; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(50);
+                (reachable, begun, pendingTiles) = await world.OnWorldAsync(() =>
+                {
+                    long mark = PathSearchCounters.TilesPending;
+                    Map ek = world.Host.World.GetMap(0);
+                    Vector3? found = PlayerbotElevator.LandingBesideReachable(world.Player, ek, stop, disconnectedPos, options);
+                    bool canBegin = PlayerbotElevator.TryBegin(world.Session, world.Player, new Vector3(1595.0f, 189.0f, -43.0f), options, out _);
+                    if (canBegin) PlayerbotElevator.Cancel(world.Player);
+                    return (found, canBegin, PathSearchCounters.TilesPending - mark);
+                });
+                if (pendingTiles == 0) break;
+            }
+
+            Assert.Equal(0, pendingTiles);
+            Assert.Null(reachable);
+            Assert.False(begun);
+        }
     }
 
     private static ElevatorLift Lift(ElevatorNetwork network, float x, float y)
