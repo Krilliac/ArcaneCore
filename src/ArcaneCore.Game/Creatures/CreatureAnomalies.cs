@@ -584,7 +584,7 @@ public sealed partial class CreatureMapSystem
         // A fight the creature won (its victim, or the last unit it attacked, is dead) ends in an evade by design (vmangos
         // SelectHostileTarget with an empty threat list) and is no loop: live 2026-10-18 the six Stockade guards at -8784,830 killed the
         // four RP Defias Rioters of spawn group 19981 one by one every 10 min respawn, three evades in 5 s each time, ~36 reports an hour.
-        bool won = LastFightWasWon(creature);
+        bool won = LastFightWasWon(creature, reason);
         string? described = string.IsNullOrEmpty(reason) || won ? null : DescribeEvade(creature, reason);
         creature.Combat.LastVictimGuid = default; // the next fight starts without this one's victim
         if (won)
@@ -618,12 +618,29 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>Whether the evading creature's victim, or else the last unit it attacked, is dead (the creature won the fight).</summary>
-    private bool LastFightWasWon(Creature creature)
+    private bool LastFightWasWon(Creature creature, string? reason = null)
     {
         UnitCombat combat = creature.Combat;
         Unit? last = combat.Victim
             ?? (combat.LastVictimGuid.IsEmpty ? null : Map.FindPlayer(combat.LastVictimGuid) as Unit ?? Map.FindObject(combat.LastVictimGuid) as Unit);
-        return last is not null && !last.IsAlive;
+        if (reason == "Execute" && combat.Victim is not Player && combat.LastVictimGuid.High != HighGuid.Player)
+        {
+            return true;
+        }
+
+        if (last is null)
+        {
+            return false;
+        }
+
+        if (!last.IsAlive)
+        {
+            return true;
+        }
+
+        return combat.Victim is null
+            && last is Creature lastNpc
+            && (lastNpc.IsInEvadeMode || !Map.Combat.Hooks.CanAttack(creature, lastNpc));
     }
 
     private static string DescribeEvadeTarget(Creature creature, Unit v)
@@ -713,6 +730,39 @@ public sealed partial class CreatureMapSystem
         return classifier.ClassifyUnderMap(creature.X, creature.Y, creature.Z, CreatureAnomalies.UnderMapMarginYards).Kind == UnderMapKind.UnderMap;
     }
 
+    private bool TryRecoverClippedUnderTerrain(Creature creature, float surface)
+    {
+        if (_underMap is not null)
+        {
+            return false;
+        }
+
+        UnderMapVerdict verdict = Map.Collision.ClassifyUnderMap(creature.X, creature.Y, creature.Z, CreatureAnomalies.UnderMapMarginYards);
+        if (verdict.Kind == UnderMapKind.Ok)
+        {
+            return true;
+        }
+
+        if (verdict.Kind == UnderMapKind.UnderMap
+            || (verdict.Kind == UnderMapKind.Unknown && !Map.Collision.LineOfSight.Enabled))
+        {
+            float standZ = surface + GroundHeight.StandOffset;
+            if (Map.Collision.GetHeight(creature.X, creature.Y, surface + 2f) is float ground
+                && ground > Maps.Terrain.TerrainTile.InvalidHeight
+                && float.IsFinite(ground)
+                && ground >= surface - CreatureAnomalies.UnderMapMarginYards)
+            {
+                standZ = ground + GroundHeight.StandOffset;
+            }
+
+            creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, _serverTime());
+            creature.ClearUnderMapEpisode();
+            return true;
+        }
+
+        return false;
+    }
+
     private void CheckUnderMap(Creature creature)
     {
         if (!creature.ShouldSampleUnderMap(_clockMs))
@@ -742,7 +792,9 @@ public sealed partial class CreatureMapSystem
         float? localFloor = _height.GetTerrainHeight(Map.MapId, creature.X, creature.Y, creature.Z + 5f);
         if (localFloor is { } validLocal && float.IsFinite(validLocal))
         {
-            if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
+            if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards
+                && !TryRecoverClippedUnderTerrain(creature, validLocal)
+                && ConfirmUnderMap(creature))
             {
                 CreatureAnomalies.ReportUnderMap(
                     creature,
@@ -761,6 +813,7 @@ public sealed partial class CreatureMapSystem
         float? upperFloor = _height.GetTerrainHeight(Map.MapId, creature.X, creature.Y, probeZ);
         if (upperFloor is { } validUpper && float.IsFinite(validUpper)
             && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
+            && !TryRecoverClippedUnderTerrain(creature, validUpper)
             && ConfirmUnderMap(creature))
         {
             CreatureAnomalies.ReportUnderMap(

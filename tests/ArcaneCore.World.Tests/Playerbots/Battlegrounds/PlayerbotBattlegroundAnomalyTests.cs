@@ -1,5 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -378,6 +380,112 @@ public sealed class PlayerbotBattlegroundAnomalyTests
             });
 
             ScenarioContext.ExpectEqual(1, capture.OfSubsystem(PlayerbotAnomalies.Subsystem("bg")).Count, capture.Describe());
+        });
+    }
+
+    private sealed class MidfieldStumpLos : ArcaneCore.Game.Maps.Collision.ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance, out System.Numerics.Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            if (mapId == 489 && MathF.Abs(x - 1130f) < 5f && MathF.Abs(y - 1400f) < 5f && z > 325f)
+            {
+                // Elevated tree stump at midfield (319.96f), 13 yards above the walkable midfield floor (307f).
+                return 319.96f;
+            }
+
+            return mapId == 489 ? 307f : StartZ;
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+    }
+
+    private sealed class RefuseGoalAboveFloorPathfinder : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshFloorQuery
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(
+            uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (mapId == 489 && end.Z > 315f)
+            {
+                return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.NoPath, []);
+            }
+
+            return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.Normal, [start, end]);
+        }
+
+        public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float downYards, float upYards, out float meshZ)
+        {
+            if (mapId == 489)
+            {
+                meshZ = 307f;
+                return z - downYards <= 307f && 307f <= z + upYards;
+            }
+
+            meshZ = StartZ;
+            return true;
+        }
+    }
+
+    [Fact]
+    public async Task Wsg_MidfieldStumpAndChasingOrBuffRefusal_SnapMidfieldToWalkableFloor_AndReportNoObjectiveUnreachable()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-anomaly-midfield-stump", async context =>
+        {
+            ScenarioBot ally = await AutonomousAsync(context, "Bgstumpally", race: 1);
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bgstumphord", BattlegroundType.WarsongGulch, Content.HordeWsgMaster);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await PortScriptedAsync(context, horde, 489, (Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z));
+            await context.WaitUntilAsync("the Alliance bot is in the match", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60));
+            var wsg = (WarsongGulch)(await context.BattlegroundOfAsync(ally))!;
+            await context.WaitUntilAsync("the gates open", () => wsg.Status == BattlegroundStatus.InProgress, StartWait);
+
+            using AnomalyCapture capture = await CaptureAsync(ally);
+            await context.ReadAsync(() =>
+            {
+                ArcaneCore.Game.Maps.Collision.WorldCollision.Of(context.World).Install(
+                    lineOfSight: new MidfieldStumpLos(),
+                    pathfinder: new RefuseGoalAboveFloorPathfinder());
+                Player player = ally.RequirePlayer();
+                Player enemy = horde.RequirePlayer();
+
+                // Inspect BuildWarsongPicture's Midfield height directly and issue a Midfield order.
+                var buildMethod = typeof(PlayerbotBattlegroundCoordinator).GetMethod(
+                    "BuildWarsongPicture",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                object picture = buildMethod.Invoke(coordinator, [wsg, Team.Alliance, player])!;
+                var midfieldProp = picture.GetType().GetProperty("Midfield")!;
+                var midfield = (System.Numerics.Vector3)midfieldProp.GetValue(picture)!;
+                ScenarioContext.Expect(midfield.Z < 310f, $"Midfield Z should snap to walkable floor (~307), got {midfield.Z}");
+
+                var ai = new PlayerbotBattlegroundAI(ally.Session!, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+                var midfieldOrder = new PlayerbotWsgOrder(PlayerbotWsgDuty.Midfield, ObjectGuid.Empty, midfield);
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldOrder);
+
+                // Enemy jumps onto the unpathable stump (Z = 319.96): chasing it must not report objective-unreachable.
+                enemy.Relocate(player.X + 15f, player.Y, 319.96f, 0f, context.World.NowMs);
+                player.Map!.Combat.TogglePvp(enemy, true);
+                player.VisibleObjects.Add(enemy.Guid);
+                ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, midfieldOrder);
+
+                ScenarioContext.ExpectEqual(0, capture.Count(ObjectiveUnreachable), Dump(capture, ObjectiveUnreachable));
+                return true;
+            });
         });
     }
 }

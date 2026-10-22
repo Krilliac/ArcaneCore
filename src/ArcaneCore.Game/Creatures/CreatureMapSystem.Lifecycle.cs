@@ -565,7 +565,7 @@ public sealed partial class CreatureMapSystem
         UnloadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         // vmangos Map::CreatureRespawnRelocation returns a moved creature to its loaded
         // home grid before unloading its current grid. Otherwise drop the live ownership.
-        foreach (Creature creature in grid.AllObjects().OfType<Creature>())
+        foreach (Creature creature in grid.AllObjects().OfType<Creature>().ToArray())
         {
             if (!_creatures.ContainsKey(creature.Guid))
             {
@@ -574,14 +574,39 @@ public sealed partial class CreatureMapSystem
 
             GridCoord home = ComputeGrid(creature.Home.X, creature.Home.Y);
             if ((home.X != grid.Coord.X || home.Y != grid.Coord.Y)
-                && _grids.ContainsKey(home) && creature.DeathState == CreatureDeathState.Alive)
+                && _grids.TryGetValue(home, out LoadedGrid? homeGrid)
+                && (creature.DeathState == CreatureDeathState.Alive
+                    || (creature.Spawn is not null && !_groupOfSpawn.ContainsKey(creature.Spawn.Guid))))
             {
+                if (creature.DeathState != CreatureDeathState.Alive)
+                {
+                    if (creature.DeathState == CreatureDeathState.Corpse)
+                    {
+                        RemoveCorpse(creature);
+                    }
+                    else
+                    {
+                        creature.ResetToHome(_serverTime());
+                    }
+
+                    if (!homeGrid.Creatures.Contains(creature))
+                    {
+                        homeGrid.Creatures.Add(creature);
+                    }
+
+                    continue;
+                }
+
                 Map.Combat.Untrack(creature);
                 StopMoving(creature);
                 ResetAiState(creature);
                 MapCombat.ClearInCombat(creature);
                 creature.ResetToHome(_serverTime());
                 creature.Motion.Initialize(creature.Motion.Default, this, start: true);
+                if (!homeGrid.Creatures.Contains(creature))
+                {
+                    homeGrid.Creatures.Add(creature);
+                }
                 continue;
             }
 

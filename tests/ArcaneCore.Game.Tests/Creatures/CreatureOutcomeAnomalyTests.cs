@@ -679,4 +679,67 @@ public sealed class CreatureOutcomeAnomalyTests
         Assert.Equal(2, capture.Notices.Count);
         Assert.All(capture.Notices, n => Assert.Contains("has 0 points", n.Detail));
     }
+
+    private sealed class WideOnlySpawnPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            // Simulate a spawn point whose polygon sits >3 yd above or outside strict 5x10x5 EndTolerance=7f TryLocate,
+            // so strict spawn search fails, while WideEndSearch (EndTolerance == 0f, WideEndSearch == true) finds the path.
+            if (options is { EndTolerance: > 0f })
+            {
+                return new PathResult(PathType.NoPath, []);
+            }
+
+            return new PathResult(PathType.Normal, [start, end]);
+        }
+    }
+
+    [Fact]
+    public void AHomePathWhoseSpawnNeedsWideSearch_RetriesWithWideOptions_AndReportsNoHomeUnreachable()
+    {
+        const uint WideHomeEntry = 949080;
+        using Scene s = Start(WideHomeEntry, pathfinder: new WideOnlySpawnPathfinder());
+        using AnomalyCapture capture = CaptureAny(WideHomeEntry);
+        var spawnPoint = new Vector3(WolfX, 0, 83.5f);
+        s.Wolf.Relocate(WolfX - 25f, 0, 83.5f, 0, 0);
+
+        PlannedPath plan = s.System.PlanPath(s.Wolf, spawnPoint, toSpawn: true);
+
+        Assert.Equal(PathOutcome.Mesh, plan.Outcome);
+        Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
+    public void ACreatureClippedUnderRealTerrainWithNoFloorBelow_RecoversToSurfaceWithoutUnderMapAnomaly()
+    {
+        const uint ClippedUnderEntry = 949081;
+        CreatureContent content = Content([Template(ClippedUnderEntry)], [Spawn(1, ClippedUnderEntry, WolfX, 0, z: 1310.5f)]);
+        WorldRuntime world = TestWorld.CreateRuntime();
+        using (world)
+        {
+            WorldCollision.Of(world).Install(
+                pathfinder: new FixedPathfinder(route: true));
+            Map map = world.GetMap(0);
+            var system = new CreatureMapSystem(map, content, height: new FixedHeight(1310.5f), random: new Random(1));
+            map.AddUpdater(system);
+            AddPlayer(world, 1, 0, 0);
+            world.RunTick(50);
+
+            Creature wolf = Assert.Single(system.Creatures);
+            using AnomalyCapture capture = CaptureFor("creature/under-map", ClippedUnderEntry);
+
+            // Simulate a creature or draped leg dropping 16.2 yd below the 1310.5f surface (z=1294.3f, floor=1310.5f) with no lower floor.
+            wolf.Relocate(WolfX, 0, 1294.3f, 0, 0);
+            for (int elapsed = 0; elapsed < 3_000; elapsed += 500)
+            {
+                world.RunTick(500);
+            }
+
+            Assert.Empty(capture.Notices);
+            Assert.InRange(wolf.Z, 1310.4f, 1311.0f);
+        }
+    }
 }

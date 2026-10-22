@@ -332,4 +332,31 @@ public sealed class PushbackInterruptTests
 
         Assert.False(kit.System.IsSchoolLocked(creature, SpellSchool.Fire));
     }
+
+    [Fact]
+    public void SustainedHitsPastFive_KeepIncrementingPushbackCount_At200MsDelay_AndDoNotReportCastStuck()
+    {
+        using SpellTestKit kit = Kit();
+        (Player attacker, Player caster, FakeSession session, SpellCast cast) = Casting(kit, Bolt);
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture =
+            ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(n => n.Key == "spell/cast-stuck");
+
+        kit.Advance(2500); // 500 ms remaining on the 3000 ms cast bar
+        for (int hit = 0; hit < 5; hit++)
+        {
+            kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
+            kit.Advance(500);
+        }
+
+        for (int hit = 0; hit < 65; hit++)
+        {
+            kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
+            kit.Advance(190);
+        }
+
+        Assert.Equal(70, cast.PushbackCount);
+        Assert.Equal(200u, LastUInt(Sent(session, WorldOpcode.SmsgSpellDelayed)[^1]));
+        Assert.True(cast.ElapsedMs > 16_500, $"expected elapsedMs > 16500, got {cast.ElapsedMs}");
+        Assert.Empty(capture.Notices);
+    }
 }

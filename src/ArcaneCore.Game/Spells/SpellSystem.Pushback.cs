@@ -10,12 +10,12 @@ public sealed partial class SpellSystem
     /// <summary>Delays of the first five pushbacks of one cast in ms, then 200 for every further one (vmangos Spell::GetNextDelayAtDamageMsTime, Spell.h:401).</summary>
     private static int NextDelayMs(SpellCast cast)
     {
-        if (cast.PushbackCount >= 5)
+        if (cast.PushbackCount++ >= 5)
         {
             return 200;
         }
 
-        return 1000 - (cast.PushbackCount++ * 200);
+        return 1000 - ((cast.PushbackCount - 1) * 200);
     }
 
     /// <summary>

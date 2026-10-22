@@ -70,6 +70,7 @@ public sealed partial class CreatureMapSystem
         }
 
         Map.Combat.CombatStop(creature);
+        Combat.Threat.HostileRefs.DeleteReferences(creature);
         if (creature.Combat.HasThreatList)
         {
             creature.Combat.Threat.Clear();
@@ -174,6 +175,7 @@ public sealed partial class CreatureMapSystem
 
         ClearLootTap(creature);
         Map.Combat.CombatStop(creature);
+        Combat.Threat.HostileRefs.DeleteReferences(creature);
         if (creature.Combat.HasThreatList)
         {
             creature.Combat.Threat.Clear();

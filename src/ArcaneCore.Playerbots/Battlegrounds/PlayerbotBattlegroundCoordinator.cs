@@ -804,8 +804,24 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         Vector3 enemyStand = enemy == Team.Alliance ? allianceStand : hordeStand;
         Vector3 ownStand = team == Team.Alliance ? allianceStand : hordeStand;
         Vector3 middle = (ownStand + enemyStand) / 2f;
-        float ground = map.Collision.GetHeight(middle.X, middle.Y, MathF.Max(ownStand.Z, enemyStand.Z) + 5f);
-        if (ground > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(ground)) middle.Z = ground;
+        float probeZ = MathF.Max(ownStand.Z, enemyStand.Z) + 5f;
+        float terrain = map.Terrain.GetHeight(middle.X, middle.Y, middle.Z);
+        float ground = terrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(terrain)
+            ? map.Collision.GetHeight(middle.X, middle.Y, terrain + 2f, maxSearchDistance: 6f)
+            : map.Collision.GetHeight(middle.X, middle.Y, probeZ);
+        if (terrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(terrain)
+            && (ground <= Game.Maps.Terrain.TerrainTile.InvalidHeight || !float.IsFinite(ground) || ground > terrain + Game.Maps.Collision.GroundHeight.PropHeightYards))
+        {
+            ground = terrain;
+        }
+
+        if (ground > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(ground))
+        {
+            if (map.Collision.TryGetMeshFloor(middle.X, middle.Y, ground, 20f, 4f, out float meshZ) && float.IsFinite(meshZ) && meshZ < ground - 1.0f)
+                ground = meshZ;
+            middle.Z = ground;
+        }
+
 
         var bots = new List<PlayerbotWsgMember>();
         foreach (Tracked t in _tracked.Values)
@@ -920,13 +936,20 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (distance <= MasterPresenceYards && map.FindObject(master.Guid) is not Creature { IsAlive: true }) continue;
             if (distance > nearest
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
-                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
+                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _)
+                || (distance <= _options.MaxRouteYards && IsMasterRouteRefused(player, master.At)))
                 continue;
             nearest = distance;
             best = master;
         }
 
         return best;
+    }
+
+    private bool IsMasterRouteRefused(Player player, Vector3 at)
+    {
+        TileWait wait = default;
+        return PlayerbotNavigation.PlanExact(player, at, _options, ref wait, Now, out _, trial: true) == PlanOutcome.Refused;
     }
 
     private List<Battlemaster> MastersOn(uint mapId)
