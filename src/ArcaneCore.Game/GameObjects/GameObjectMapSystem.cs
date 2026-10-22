@@ -194,6 +194,22 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             if (content.FindTemplate(go.Entry) is { } template)
             {
                 go.ReplaceTemplate(template);
+                RefreshQuestFilter(go);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-check which chests are quest related after the loot tables were replaced (live reload, world thread): a chest that gained or
+    /// lost a quest item row starts or stops sparkling for its viewers.
+    /// </summary>
+    public void RefreshChestQuestFilters()
+    {
+        foreach (GameObject go in _objects.Values)
+        {
+            if ((GameObjectType)go.Template.Type == GameObjectType.Chest)
+            {
+                RefreshQuestFilter(go);
             }
         }
     }
@@ -1889,6 +1905,23 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     // --- quest dynamic flags -----------------------------------------------------------------
 
     private void ConfigureQuestFlags(GameObject go) => go.ViewerFieldFilter = IsQuestRelated(go.Template) ? this : null;
+
+    /// <summary>
+    /// <see cref="ConfigureQuestFlags"/> for an object that already exists (live reload): when the filter turns on or off, the viewers' sent
+    /// baselines are dropped and one dynamic flags update is forced, so each viewer is sent the flags the new filter answers.
+    /// </summary>
+    private void RefreshQuestFilter(GameObject go)
+    {
+        bool was = go.ViewerFieldFilter is not null;
+        ConfigureQuestFlags(go);
+        if (was == (go.ViewerFieldFilter is not null))
+        {
+            return;
+        }
+
+        _questFlagsSent.Remove(go.Guid);
+        go.ForceFieldUpdate(UpdateFields.GameobjectDynFlags);
+    }
 
     /// <summary>A chest with a quest or quest loot, or a goober with a quest: what the quest dynamic flags apply to.</summary>
     private bool IsQuestRelated(GameObjectTemplate template) => (GameObjectType)template.Type switch

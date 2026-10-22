@@ -98,6 +98,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         foreach (GameObjectMapSystem system in _systems.Values)
         {
             system.Loot?.ReplaceContent(content);
+            system.RefreshChestQuestFilters();
         }
 
         return previous;
