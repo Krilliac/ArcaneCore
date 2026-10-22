@@ -899,14 +899,6 @@ internal static class PlayerbotMotion
                 return null;
             }
 
-            if (map.Collision.MeshPoints is not null
-                && route.MeshPoints is not null
-                && PlayerbotMotionAnomalies.CrossesStaticWall(map, route, fromPoint, toPoint, from, resolved))
-            {
-                rejectReason = "LineBlocked";
-                return null;
-            }
-
             return resolved;
         }
 

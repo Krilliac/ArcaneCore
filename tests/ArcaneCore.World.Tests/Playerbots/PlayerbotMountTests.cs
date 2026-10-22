@@ -920,6 +920,60 @@ public sealed class PlayerbotMountTests
             return true;
         }));
     }
+
+    [Fact]
+    public async Task OutOfCombatUpkeep_WhenMountedWithoutPullTarget_DoesNotDismountOrReportSummonFailed()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            const uint blessingOfMight = 19740;
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            var warhorseSpell = new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                PowerType = (int)PowerType.Mana,
+                ManaCost = 10,
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            };
+            var battleStance = new SpellInfo
+            {
+                Id = blessingOfMight,
+                Name = "Battle Stance",
+                RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModShapeshift, MiscValue = 17, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            };
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id is not summonWarhorse and not blessingOfMight), warhorseSpell, battleStance], [], []);
+            Player player = session.Player!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            Assert.True(feature.Spellbook.LearnSpell(player, blessingOfMight));
+            player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 500);
+            player.SetUInt32(UpdateFields.UnitFieldPower1, 500);
+
+            using var capture = PlayerbotAnomalies.CaptureFor(player);
+            var options = new PlayerbotOptions { Enabled = true };
+            var combatSpells = new PlayerbotCombatSpells(session);
+            session.ManagedBudget = new ManagedActionBudget(5);
+
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            feature.System.Update(3000);
+            Assert.True(MountService.IsMounted(player));
+
+            session.ManagedBudget = new ManagedActionBudget(5);
+            combatSpells.PullTarget = null;
+            Assert.False(combatSpells.UpdateOutOfCombat(player, 200));
+            Assert.True(MountService.IsMounted(player));
+
+            Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.Equal(0, PlayerbotMount.For(session).Failures);
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+            return true;
+        }));
+    }
 }
 
 /// <summary>A floor with a roof: <see cref="ILineOfSight.TryGetAreaInfo"/> answers an area that is not outdoors.</summary>

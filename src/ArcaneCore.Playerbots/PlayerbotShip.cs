@@ -910,7 +910,7 @@ internal static class PlayerbotShip
     internal static Vector3 ResolveDockTarget(Map map, Vector3 portPos, Vector3 toward)
     {
         map.Collision.LoadTilesOnDemand(portPos.X, portPos.Y);
-        if (map.Collision.MeshPoints is null || PlayerbotNavigation.OnWalkableMesh(map, portPos))
+        if (map.Collision.MeshPoints is null || OnDryDockMesh(map, portPos))
             return portPos;
 
         Vector3? best = null;
@@ -945,7 +945,7 @@ internal static class PlayerbotShip
         if (ValidHeight(floor) && MathF.Abs(floor - portZ) <= DockHeightYards)
         {
             var candidate = new Vector3(x, y, floor + 0.05f);
-            if (PlayerbotNavigation.OnWalkableMesh(map, candidate))
+            if (OnDryDockMesh(map, candidate))
             {
                 point = candidate;
                 return true;
@@ -958,20 +958,49 @@ internal static class PlayerbotShip
             PathResult res = PlayerbotThinkProbe.Find(map.Collision, probe, probe, new PathOptions
             {
                 MaxPoints = 4,
-                Mover = PathMover.Player,
-                ExcludeFlags = NavTerrain.SteepSlopes,
+                IncludeFlags = NavTerrain.Ground,
+                ExcludeFlags = NavTerrain.SteepSlopes | NavTerrain.Water,
                 AllowPartial = true,
                 MaxSearchNodes = 64,
+                LoadTiles = true,
             });
-            if ((res.Type & PathType.NoPath) == 0 && MathF.Abs(res.End.Z - portZ) <= DockHeightYards)
+            if ((res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
+                && MathF.Abs(res.End.Z - portZ) <= DockHeightYards
+                && (res.Points.Count == 0 || MathF.Abs(res.End.Z - probe.Z) <= 5f))
             {
-                point = new Vector3(x, y, res.End.Z + 0.05f);
-                return true;
+                var candidate = new Vector3(x, y, res.End.Z + 0.05f);
+                if (!InDockWater(map, candidate) && !PlayerbotNavigation.IsPointOnMeshFragment(map, candidate))
+                {
+                    point = candidate;
+                    return true;
+                }
             }
         }
 
         point = default;
         return false;
+    }
+
+    private static bool InDockWater(Map map, Vector3 point)
+        => (map.GetLiquidStatus(point.X, point.Y, point.Z + 0.01f, LiquidTypeFlags.AllLiquids, out _)
+            & (LiquidStatus.InWater | LiquidStatus.UnderWater)) != 0;
+
+    private static bool OnDryDockMesh(Map map, Vector3 point)
+    {
+        if (InDockWater(map, point))
+            return false;
+        PathResult res = PlayerbotThinkProbe.Find(map.Collision, point, point, new PathOptions
+        {
+            MaxPoints = 4,
+            IncludeFlags = NavTerrain.Ground,
+            ExcludeFlags = NavTerrain.SteepSlopes | NavTerrain.Water,
+            AllowPartial = true,
+            MaxSearchNodes = 64,
+            LoadTiles = true,
+        });
+        return (res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
+            && (res.Points.Count == 0 || MathF.Abs(res.End.Z - point.Z) <= 5f)
+            && !PlayerbotNavigation.IsPointOnMeshFragment(map, res.Points.Count > 0 ? res.End : point);
     }
 
     private static bool ValidHeight(float height)

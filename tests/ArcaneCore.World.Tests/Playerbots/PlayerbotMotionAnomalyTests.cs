@@ -539,6 +539,17 @@ public sealed class PlayerbotMotionAnomalyTests
         Assert.True(scenario.Capture.Any(Key(Code.RouteBlocked)), scenario.Capture.Describe());
     }
 
+    [Fact]
+    public async Task ANavigatedMeshRoute_WithMeshPoints_IsNotRefusedAtStartForStaticWallGraze()
+    {
+        var mesh = new ScriptedMesh { Edge = static (_, _) => true };
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => true, navigated: true, start: false, mesh: mesh);
+        scenario.Route.MeshPoints = scenario.Route.Points;
+        bool started = await scenario.StartAsync();
+        Assert.True(started, "a navigated mesh route must not be refused by Validate for LineBlocked: " + scenario.Capture.Describe());
+        Assert.False(scenario.Capture.Any(Key(Code.StartBlocked)), scenario.Capture.Describe());
+    }
+
     // ---- fixture -----------------------------------------------------------------------------------------------------------------
 
     private static PlayerbotRoute LineRoute(Player player, float yards, bool navigated)

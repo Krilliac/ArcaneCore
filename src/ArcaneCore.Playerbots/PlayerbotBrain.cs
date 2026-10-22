@@ -1010,6 +1010,19 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 { _attacking = false; _target = null; AbandonRoute(); }
                 return;
             }
+            if (!player.Combat.IsInCombat
+                && (_quests.NeedsBagSpaceForTurnIn || (PlayerbotTownGoals.HasBrokenWornGear(player) && _town.HasUrgentRepairOrSell(player))))
+            {
+                _town.BeginThink();
+                if (_town.Update(player, interval))
+                {
+                    RetireIdleCombatRoute();
+                    _goal = _town.Goal;
+                    QuestId = 0;
+                    TargetEntry = _town.TargetEntry;
+                    return;
+                }
+            }
             if (!player.Combat.IsInCombat && _quests.Update(player, interval))
             { QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
             if (_quests.IsRefused(completedReturn))
@@ -1177,6 +1190,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
             PlayerbotThinkProbe.Phase("policy");
             if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
+            if (_quests.NeedsBagSpaceForTurnIn || (PlayerbotTownGoals.HasBrokenWornGear(player) && _town.HasUrgentRepairOrSell(player)))
+            {
+                PlayerbotThinkProbe.Phase("town");
+                if (_town.Update(player, interval))
+                { RetireIdleCombatRoute(); _goal = _town.Goal; QuestId = 0; TargetEntry = _town.TargetEntry; return; }
+            }
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -3069,18 +3088,20 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (!Invariant.Check(float.IsFinite(bind.X) && float.IsFinite(bind.Y) && float.IsFinite(bind.Z),
             "PlayerbotBrain.TryTeleportToBindPoint requires finite bind point coordinates."))
             return false;
-        if (!urgent && PlayerbotHearthstone.IsReady(_session, player, _options)
-            && PlayerbotHearthstone.TryBegin(_session, player, _options, out _))
+        if (!urgent && PlayerbotHearthstone.IsReady(_session, player, _options))
         {
             PlayerbotTravel.Cancel(player);
-            _bindTeleported = true;
-            _bindTeleportAt = now;
-            DropIntent();
-            _goal = PlayerbotGoalKind.Explore;
-            logger?.LogInformation(
-                "Playerbot {Bot} {Why} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: uses its hearthstone to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
-                player.Name, why, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
-            return true;
+            if (PlayerbotHearthstone.TryBegin(_session, player, _options, out _))
+            {
+                _bindTeleported = true;
+                _bindTeleportAt = now;
+                DropIntent();
+                _goal = PlayerbotGoalKind.Explore;
+                logger?.LogInformation(
+                    "Playerbot {Bot} {Why} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: uses its hearthstone to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
+                    player.Name, why, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
+                return true;
+            }
         }
 
         if (!safety)

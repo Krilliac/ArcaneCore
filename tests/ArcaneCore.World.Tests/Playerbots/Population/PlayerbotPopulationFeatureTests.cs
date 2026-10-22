@@ -58,6 +58,7 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Contains("created 1", status.Reason);
         Assert.Single(world.Members.Snapshot);
         Assert.Equal(SafeStarterZone, world.Members.Snapshot[0].ZoneId);
+        await world.WaitForSettledAsync(2);
         Assert.Equal(2, world.RunningCount);
         Assert.Equal(2, (await world.Owners.LoadAllAsync()).Count); // no throwaway bot in a starting area
     }

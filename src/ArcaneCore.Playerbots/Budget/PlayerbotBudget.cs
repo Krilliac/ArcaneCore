@@ -77,8 +77,9 @@ internal static class PlayerbotBudgetMath
             case PlayerbotSpendKind.Repair:
                 return money;
             case PlayerbotSpendKind.Essentials:
+                uint afterRepair = money - Math.Min(money, ReservedAbove(lines, PlayerbotSpendKind.Essentials));
                 uint left = money - Math.Min(money, ReservedAbove(lines, PlayerbotSpendKind.Discretionary));
-                return Math.Min(money, Math.Max(left, essentialsAllowance));
+                return Math.Min(afterRepair, Math.Max(left, essentialsAllowance));
             case PlayerbotSpendKind.Discretionary:
                 uint over = money - Math.Min(money, ReservedAbove(lines, kind));
                 // The floor never takes a worn bot below its repair cost.

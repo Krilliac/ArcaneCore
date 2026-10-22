@@ -2176,7 +2176,9 @@ internal static class PlayerbotElevator
                         bestAny = candidate;
                     }
 
-                    if (hasMesh && distance < bestMeshDistance && PlayerbotNavigation.OnWalkableMesh(map, candidate))
+                    if (hasMesh && distance < bestMeshDistance
+                        && PlayerbotNavigation.OnWalkableMesh(map, candidate)
+                        && !PlayerbotNavigation.IsPointOnMeshFragment(map, candidate))
                     {
                         bestMeshDistance = distance;
                         bestMesh = candidate;
