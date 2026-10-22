@@ -1509,6 +1509,7 @@ internal static class PlayerbotNavigation
             return false;
         if (route.Complete || route.IsStaleFor(map))
         {
+            DiagLog.W($"tryadvance complete={route.Complete} stale={route.IsStaleFor(map)}");
             PlayerbotMovementControl.Stop(session, player);
             return false;
         }
@@ -1516,7 +1517,7 @@ internal static class PlayerbotNavigation
         if (PlayerbotMotion.ControlLost(player)) return true;
         if (player.StandState != StandState.Stand)
             return session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u));
-        if (!PlayerbotMapPolicy.MayMoveOn(player, options)) return false;
+        if (!PlayerbotMapPolicy.MayMoveOn(player, options)) { DiagLog.W("tryadvance maymoveon"); return false; }
         // A hazard that turned up since the route was planned (a creature that kills outright came into sight): give the route up
         // here, before walking into it; the goal plans again, round it or elsewhere.
         if (Guards.TryGetValue(player, out PlayerbotRisk? risk))
@@ -1527,6 +1528,7 @@ internal static class PlayerbotNavigation
                 crossBesidePlaceMarks: route.CrossBesidePlaceMarks,
                 chase: route.Chase) is not null)
             {
+                DiagLog.W("tryadvance risk-blocking");
                 PlayerbotMovementControl.Stop(session, player);
                 return false;
             }
@@ -1534,7 +1536,9 @@ internal static class PlayerbotNavigation
 
         // A long walk is ridden when the bot has a mount (PlayerbotMount): it stops to cast the mount, then walks on mounted.
         if (PlayerbotMount.BeforeStep(session, player, route, options)) return true;
-        return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs, keepMotion);
+        bool followed = PlayerbotMotion.Follow(session, player, route, options, serverTimeMs, keepMotion);
+        if (!followed) DiagLog.W($"tryadvance follow-false next={route.NextPoint} count={route.Points.Count} pos={player.X:F1},{player.Y:F1} first={route.Points[0].X:F1},{route.Points[0].Y:F1}");
+        return followed;
     }
 
     /// <summary>
