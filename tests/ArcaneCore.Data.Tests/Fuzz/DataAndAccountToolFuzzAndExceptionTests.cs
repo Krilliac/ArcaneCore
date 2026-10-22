@@ -196,9 +196,9 @@ public sealed class DataAndAccountToolFuzzAndExceptionTests
         Assert.Equal("UNTERM", dbc.GetString(0, 1));
         Assert.Throws<InvalidDataException>(() => dbc.GetStringStrict(0, 1));
 
-        // Empty string block throws on both GetString(offset 0) and GetStringStrict(offset 0)
+        // Empty string block: GetString(offset 0) returns empty, GetStringStrict(offset 0) throws
         DbcFile emptyStringBlockDbc = DbcFile.Parse(BuildSyntheticDbc(1, 1, 4, []));
-        Assert.Throws<InvalidDataException>(() => emptyStringBlockDbc.GetString(0, 0));
+        Assert.Equal(string.Empty, emptyStringBlockDbc.GetString(0, 0));
         Assert.Throws<InvalidDataException>(() => emptyStringBlockDbc.GetStringStrict(0, 0));
     }
 
