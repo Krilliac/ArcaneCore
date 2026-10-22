@@ -489,7 +489,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             {
                 if (ex is not (ObjectDisposedException or SocketException or IOException))
                 {
-                    FaultLedger.Shared.Record("cluster-transport", ex);
+                    FaultLedger.Shared.Record("cluster.transport", ex);
                 }
             }
 
@@ -503,7 +503,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 {
                     if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
                     {
-                        FaultLedger.Shared.Record("cluster-transport", ex);
+                        FaultLedger.Shared.Record("cluster.transport", ex);
                     }
                 }
             }
@@ -518,7 +518,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 {
                     if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
                     {
-                        FaultLedger.Shared.Record("cluster-transport", ex);
+                        FaultLedger.Shared.Record("cluster.transport", ex);
                     }
                 }
             }
@@ -574,7 +574,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
                 break;
             }
 
@@ -614,7 +614,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         {
             if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
     }
@@ -738,7 +738,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         {
             if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
         finally
@@ -795,7 +795,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         {
             if (ex is not (ObjectDisposedException or SocketException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
 
@@ -809,7 +809,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             {
                 if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException))
                 {
-                    FaultLedger.Shared.Record("cluster-transport", ex);
+                    FaultLedger.Shared.Record("cluster.transport", ex);
                 }
             }
         }
@@ -1337,7 +1337,7 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
         {
             if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
 
             _helloAckTcs.TrySetException(ex);
@@ -1375,7 +1375,7 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
         {
             if (ex is not (ObjectDisposedException or SocketException or IOException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
 
@@ -1389,7 +1389,7 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
             {
                 if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
                 {
-                    FaultLedger.Shared.Record("cluster-transport", ex);
+                    FaultLedger.Shared.Record("cluster.transport", ex);
                 }
             }
         }

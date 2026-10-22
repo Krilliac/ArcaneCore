@@ -861,7 +861,7 @@ public sealed class Map
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("map.updater", ex);
-                _logger.LogFault("map-updater", ex,
+                _logger.LogFault("map.updater", ex,
                     "map {MapId} instance {InstanceId} updater {Updater} failed (diff={DiffMs} ms, players={Players}, objects={Objects})",
                     MapId, InstanceId, updater.GetType().Name, diffMs, _players.Count, _objects.Count);
                 CountUpdaterFault(updater, ex);
@@ -1057,7 +1057,7 @@ public sealed class Map
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("map.visibility", ex);
-                    _logger.LogFault("map-visibility", ex,
+                    _logger.LogFault("map.visibility", ex,
                         "tracking bounding radius failed for {Guid} (type {Type}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
                         obj.Guid, obj.GetType().Name, MapId, InstanceId, obj.X, obj.Y, obj.Z);
                 }
@@ -1076,7 +1076,7 @@ public sealed class Map
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
                         FaultLedger.Shared.Record("map.visibility", ex);
-                        _logger.LogFault("map-visibility", ex,
+                        _logger.LogFault("map.visibility", ex,
                             "visibility update failed for player {Player} ({Guid}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
                             player.Name, player.Guid, MapId, InstanceId, player.X, player.Y, player.Z);
                     }
@@ -1105,7 +1105,7 @@ public sealed class Map
                             catch (Exception ex) when (ex is not OutOfMemoryException)
                             {
                                 FaultLedger.Shared.Record("map.visibility", ex);
-                                _logger.LogFault("map-visibility", ex,
+                                _logger.LogFault("map.visibility", ex,
                                     "object visibility update failed for {Guid} (entry {Entry}, type {Type}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
                                     obj.Guid, obj.Guid.Entry, obj.GetType().Name, MapId, InstanceId, obj.X, obj.Y, obj.Z);
                             }
@@ -1142,7 +1142,7 @@ public sealed class Map
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("map.values", ex);
-                    _logger.LogFault("map-values", ex,
+                    _logger.LogFault("map.values", ex,
                         "values update failed for {Guid} (type {Type}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
                         obj.Guid, obj.GetType().Name, MapId, InstanceId, obj.X, obj.Y, obj.Z);
                 }
@@ -1166,7 +1166,7 @@ public sealed class Map
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("map.flush", ex);
-                    _logger.LogFault("map-flush", ex,
+                    _logger.LogFault("map.flush", ex,
                         "flushing pending updates failed for player {Player} ({Guid}) on map {MapId} instance {InstanceId}",
                         player.Name, player.Guid, MapId, InstanceId);
                 }
@@ -1189,7 +1189,7 @@ public sealed class Map
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("map.grid", ex);
-            _logger.LogFault("map-grid", ex,
+            _logger.LogFault("map.grid", ex,
                 "grid lifecycle update failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
                 MapId, InstanceId, diffMs);
         }
@@ -1216,7 +1216,7 @@ public sealed class Map
                 catch (Exception ex)
                 {
                     FaultLedger.Shared.Record("map.deferred", ex);
-                    _logger.LogFault("map-deferred", ex, "deferred work on map {MapId} failed", MapId);
+                    _logger.LogFault("map.deferred", ex, "deferred work on map {MapId} failed", MapId);
                 }
             }
 
@@ -1431,7 +1431,7 @@ public sealed class Map
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("map.packet-handling", ex);
-            _logger.LogFault("packet-handling", ex,
+            _logger.LogFault("packet.handling", ex,
                 "packet handling failed for {Player} ({Guid}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1}); disconnecting",
                 player.Name, player.Guid, MapId, InstanceId, player.X, player.Y, player.Z);
             player.Session.Kick();

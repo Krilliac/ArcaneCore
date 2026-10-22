@@ -394,7 +394,7 @@ public sealed partial class PlayerbotGroupCoordinator
                 string.Create(CultureInfo.InvariantCulture, $"siege {_siege?.Id ?? 0}"),
                 string.Create(CultureInfo.InvariantCulture, $"siege {_siege?.Id ?? 0} failed during coordinator update ({ex.GetType().Name}: {ex.Message})"),
                 _world?.Identity);
-            logger.LogFault("playerbot-group-coordinator", ex, "Playerbot siege {Siege} failed during coordinator update", _siege?.Id ?? 0);
+            logger.LogFault("playerbot.group-coordinator", ex, "Playerbot siege {Siege} failed during coordinator update", _siege?.Id ?? 0);
         }
     }
 

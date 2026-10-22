@@ -834,7 +834,7 @@ public sealed class PlayerbotChaosEngine
         Exception ex)
     {
         Interlocked.Increment(ref _faultsCaught);
-        FaultLedger.Shared.Record("playerbot-chaos", ex);
+        FaultLedger.Shared.Record("playerbot.chaos", ex);
 
         string hex = Convert.ToHexString(payload.AsSpan(0, Math.Min(payload.Length, 32)));
         if (payload.Length > 32) hex += "...";

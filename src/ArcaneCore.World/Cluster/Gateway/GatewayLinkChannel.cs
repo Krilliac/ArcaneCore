@@ -161,7 +161,7 @@ internal sealed class GatewayLinkChannel : IAsyncDisposable
         {
             if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
         finally
@@ -184,7 +184,7 @@ internal sealed class GatewayLinkChannel : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("cluster-transport", ex);
+            FaultLedger.Shared.Record("cluster.transport", ex);
         }
 
         _tcp.Dispose();

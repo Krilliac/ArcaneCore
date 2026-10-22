@@ -227,7 +227,7 @@ public sealed partial class MapCombat : IMapUpdater
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("map-combat", ex);
+                        FaultLedger.Shared.Record("map.combat", ex);
                     }
                 }
             }
@@ -281,7 +281,7 @@ public sealed partial class MapCombat : IMapUpdater
                         }
                         catch (Exception ex) when (ex is not OutOfMemoryException)
                         {
-                            FaultLedger.Shared.Record("map-combat", ex);
+                            FaultLedger.Shared.Record("map.combat", ex);
                         }
                     }
                 }
@@ -301,7 +301,7 @@ public sealed partial class MapCombat : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-combat", ex);
+                FaultLedger.Shared.Record("map.combat", ex);
             }
         }
         finally

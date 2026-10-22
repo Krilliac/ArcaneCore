@@ -231,7 +231,7 @@ public sealed partial class WorldRuntime
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("world.parallel-map-update", ex);
-                    _logger.LogFault("map-update", ex,
+                    _logger.LogFault("map.update", ex,
                         "map {MapId} instance {InstanceId} update failed on {Thread} (diff={DiffMs} ms, players={Players}, objects={Objects})",
                         map.MapId, map.InstanceId, Thread.CurrentThread.Name, diffMs, map.PlayerCount, map.ObjectCount);
                 }
@@ -279,7 +279,7 @@ public sealed partial class WorldRuntime
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("world.parallel-map-observer", ex);
-                    _logger.LogFault("map-observer", ex, "MapUpdated observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
+                    _logger.LogFault("map.observer", ex, "MapUpdated observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
                 }
             }
 
@@ -295,7 +295,7 @@ public sealed partial class WorldRuntime
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("world.parallel-map-observer", ex);
-                    _logger.LogFault("map-observer", ex, "map diagnostics observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
+                    _logger.LogFault("map.observer", ex, "map diagnostics observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
                 }
             }
 

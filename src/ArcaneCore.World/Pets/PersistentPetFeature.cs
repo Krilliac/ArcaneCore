@@ -113,7 +113,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.reload", ex);
+            FaultLedger.Shared.Record("pet.reload", ex);
             AnomalyLedger.Shared.Report("pet", "save-failed", $"character {player.Guid.Low}", $"reload error={ex.GetType().Name}: {ex.Message}");
             logger.LogError(ex, "rereading the persistent pet of {CharacterId} after a stored pet change failed", player.Guid.Low);
         }
@@ -124,7 +124,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         try { await pets.Service.SaveCurrentPetAsync(player).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.save", ex);
+            FaultLedger.Shared.Record("pet.save", ex);
             AnomalyLedger.Shared.Report("pet", "save-failed", $"character {player.Guid.Low}", $"save error={ex.GetType().Name}: {ex.Message}");
             logger.LogError(ex, "persistent pet save failed for {CharacterId}", player.Guid.Low);
         }

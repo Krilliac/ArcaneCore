@@ -57,7 +57,7 @@ public sealed class MapDuel : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-duel", ex);
+                FaultLedger.Shared.Record("map.duel", ex);
             }
         }
     }

@@ -277,7 +277,7 @@ public sealed class SpellScriptHotSwapTests
         Assert.Equal(2, raised); // every handler ran on the commit, then again on the undo
         Assert.Same(kept, registry.Find(HotSpell));
         Assert.Same(kept, Assert.Single(registry.HotScripts));
-        Assert.Contains(FaultLedger.Shared.Snapshot(), s => s.Site == "spell-script" && s.ExceptionType == typeof(InvalidOperationException).FullName);
+        Assert.Contains(FaultLedger.Shared.Snapshot(), s => s.Site == "spell.script" && s.ExceptionType == typeof(InvalidOperationException).FullName);
     }
 
     [Fact]

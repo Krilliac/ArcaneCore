@@ -153,7 +153,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
                 break;
             }
 
@@ -266,7 +266,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             }
             else if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException or EndOfStreamException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
         finally
@@ -315,7 +315,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         {
             FaultLedger.Shared.Record("cluster.gateway-host", ex);
             AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"account-{request.AccountId}", $"phase=session-open error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
-            _logger.LogFault("cluster-transport", ex, "Gateway session open for account {Account} failed", request.AccountId);
+            _logger.LogFault("cluster.transport", ex, "Gateway session open for account {Account} failed", request.AccountId);
             result = GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "the worker failed to open the session");
         }
 

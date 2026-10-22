@@ -272,7 +272,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
             else if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException or EndOfStreamException))
             {
-                FaultLedger.Shared.Record("cluster-transport", ex);
+                FaultLedger.Shared.Record("cluster.transport", ex);
             }
         }
         finally
@@ -331,7 +331,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             {
                 FaultLedger.Shared.Record("cluster.gateway-client", ex);
                 AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"session-{session.Generation}", $"phase=open error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
-                _logger.LogFault("cluster-transport", ex, "Gateway session {Generation}: the open handler failed", session.Generation);
+                _logger.LogFault("cluster.transport", ex, "Gateway session {Generation}: the open handler failed", session.Generation);
                 CloseSession(session.Generation, ClusterSessionDetachReason.LinkLost);
             }
         }
@@ -390,7 +390,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             {
                 FaultLedger.Shared.Record("cluster.gateway-client", ex);
                 AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"session-{session.Generation}", $"phase=close error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
-                _logger.LogFault("cluster-transport", ex, "Gateway session {Generation}: the close handler failed", session.Generation);
+                _logger.LogFault("cluster.transport", ex, "Gateway session {Generation}: the close handler failed", session.Generation);
             }
         }
     }

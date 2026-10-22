@@ -190,7 +190,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-taxi", ex);
+                FaultLedger.Shared.Record("map.taxi", ex);
             }
         }
     }

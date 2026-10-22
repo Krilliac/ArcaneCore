@@ -155,7 +155,7 @@ public sealed class DatabaseGuard
         }
         catch (Exception ex) when (ex is not ResilienceException and not OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            FaultLedger.Shared.Record($"db-{component.ToString().ToLowerInvariant()}", ex);
+            FaultLedger.Shared.Record($"db.{component.ToString().ToLowerInvariant()}", ex);
             throw;
         }
     }

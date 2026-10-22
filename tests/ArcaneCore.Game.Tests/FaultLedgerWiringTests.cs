@@ -117,7 +117,7 @@ public sealed class FaultLedgerWiringTests
         world.RunTick(50);
 
         Assert.True(session.Kicked);
-        Assert.NotNull(Find("packet-handling", typeof(PacketProbeException)));
+        Assert.NotNull(Find("packet.handling", typeof(PacketProbeException)));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class FaultLedgerWiringTests
         service.QueueDeletePet(player);
         await Assert.ThrowsAsync<PetPersistenceProbeException>(() => service.FlushCharacterAsync((int)CharLow));
 
-        Assert.NotNull(Find("pets.persistence", typeof(PetPersistenceProbeException)));
+        Assert.NotNull(Find("pet.persistence", typeof(PetPersistenceProbeException)));
         Assert.True(capture.Any("pet/persistence-fault"), capture.Describe());
     }
 

@@ -510,7 +510,7 @@ public sealed partial class SpellSystem
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("aura-tick", ex);
+                    FaultLedger.Shared.Record("aura.tick", ex);
                 }
             }
         }
@@ -655,7 +655,7 @@ public sealed partial class SpellSystem
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("aura-tick", ex);
+                    FaultLedger.Shared.Record("aura.tick", ex);
                 }
             }
         }

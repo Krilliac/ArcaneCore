@@ -198,17 +198,8 @@ public sealed class ServerFaultCommands : ICommandExtension
         return CutText(joined, max);
     }
 
-    /// <summary>Extracts the subsystem prefix of a fault site (the prefix before the first <c>'-'</c> or <c>':'</c>, or the whole site when neither separator is present).</summary>
-    internal static string SubsystemOf(string site)
-    {
-        if (string.IsNullOrWhiteSpace(site))
-        {
-            return "unknown";
-        }
-
-        int sep = site.IndexOfAny(['-', ':']);
-        return sep > 0 ? site[..sep] : site;
-    }
+    /// <summary>The canonical subsystem of a fault site (<see cref="DiagnosticSubsystem.OfSite"/>), the same grouping the ledger's own summary uses.</summary>
+    internal static string SubsystemOf(string site) => DiagnosticSubsystem.OfSite(site);
 
     private static void Summary(FaultLedger ledger, DateTimeOffset now, Action<string> reply)
     {

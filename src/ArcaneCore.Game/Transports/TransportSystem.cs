@@ -258,7 +258,7 @@ public sealed class TransportSystem
                     FaultLedger.Shared.Record("transport.update", ex);
                     AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"transport entry {ship.Entry}", ex.Message);
                     _logger.LogFault(
-                        "map-transport",
+                        "map.transport",
                         ex,
                         "TransportSystem fault updating transport {Entry} (guid={Guid}) on map {MapId}",
                         ship.Entry,
@@ -300,7 +300,7 @@ public sealed class TransportSystem
             FaultLedger.Shared.Record("transport.player-added", ex);
             AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
             _logger.LogFault(
-                "map-transport",
+                "map.transport",
                 ex,
                 "TransportSystem fault adding player {Player} (guid={Guid}) to map {MapId}",
                 player.Name,
@@ -333,7 +333,7 @@ public sealed class TransportSystem
             FaultLedger.Shared.Record("transport.self-block", ex);
             AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
             _logger.LogFault(
-                "map-transport",
+                "map.transport",
                 ex,
                 "TransportSystem fault writing self transport block for player {Player} (guid={Guid}) on map {MapId}",
                 player.Name,
@@ -357,7 +357,7 @@ public sealed class TransportSystem
             FaultLedger.Shared.Record("transport.player-removed", ex);
             AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
             _logger.LogFault(
-                "map-transport",
+                "map.transport",
                 ex,
                 "TransportSystem fault removing player {Player} (guid={Guid}) from map {MapId}",
                 player.Name,
@@ -433,7 +433,7 @@ public sealed class TransportSystem
                 FaultLedger.Shared.Record("transport.teleport-passenger", ex);
                 AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"transport entry {ship.Entry}", ex.Message);
                 _logger.LogFault(
-                    "map-transport",
+                    "map.transport",
                     ex,
                     "TransportSystem fault teleporting passenger {PassengerGuid} on transport {Entry} to map {NewMapId}",
                     passenger.Guid,
@@ -834,7 +834,7 @@ public sealed class TransportSystem
             {
                 FaultLedger.Shared.Record("transport.passenger-handler", ex);
                 AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"transport entry {ship.Entry}", ex.Message);
-                _logger.LogFault("map-transport", ex, "transport passenger handler failed");
+                _logger.LogFault("map.transport", ex, "transport passenger handler failed");
             }
         }
     }

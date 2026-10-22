@@ -530,7 +530,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-spellbook-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.spellbook-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -591,7 +591,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                 }
                 catch (CharacterOwnershipRejectedException ex)
                 {
-                    FaultLedger.Shared.Record("writequeue-spellbook-ownership", ex);
+                    FaultLedger.Shared.Record("writequeue.spellbook-ownership", ex);
                     if (pending.CharacterId is { } characterId)
                     {
                         lock (_lock)
@@ -616,8 +616,8 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                 }
 
                 pending.Done?.TrySetException(ex);
-                FaultLedger.Shared.Record("spells.spellbook-save", ex);
-                _logger.LogFault("writequeue-spellbook", ex, "Saving a spellbook change failed");
+                FaultLedger.Shared.Record("spell.spellbook-save", ex);
+                _logger.LogFault("writequeue.spellbook", ex, "Saving a spellbook change failed");
             }
         }
     }

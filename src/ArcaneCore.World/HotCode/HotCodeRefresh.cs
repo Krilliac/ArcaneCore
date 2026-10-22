@@ -260,7 +260,7 @@ public sealed class HotCodeRefresh
         {
             FaultLedger.Shared.Record("hotcode.refresh", ex);
             AnomalyLedger.Shared.Report("hotcode", "refresh-fault", $"generation-{generation}", $"build_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
-            _logger.LogFault("hotcode-build", ex, "code hot reload (generation {Generation}): building the candidate failed", generation);
+            _logger.LogFault("hotcode.build", ex, "code hot reload (generation {Generation}): building the candidate failed", generation);
             return Reject(generation, $"candidate rejected: {ex.Message}");
         }
 

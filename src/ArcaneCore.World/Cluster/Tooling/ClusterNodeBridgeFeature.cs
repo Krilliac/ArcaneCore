@@ -168,7 +168,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("cluster-bridge", ex);
+                FaultLedger.Shared.Record("cluster.bridge", ex);
             }
         }
 
@@ -204,7 +204,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("cluster-bridge", ex);
+            FaultLedger.Shared.Record("cluster.bridge", ex);
         }
 
         _cts.Dispose();
@@ -322,7 +322,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
                         {
                             if (ex is not (OperationCanceledException or IOException or ObjectDisposedException or System.Net.Sockets.SocketException))
                             {
-                                FaultLedger.Shared.Record("cluster-bridge", ex);
+                                FaultLedger.Shared.Record("cluster.bridge", ex);
                             }
 
                             await HandleDisconnectAsync(node).ConfigureAwait(false);
@@ -370,7 +370,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             {
                 FaultLedger.Shared.Record("cluster.bridge", ex);
                 AnomalyLedger.Shared.Report("cluster", "gateway-fault", "node-bridge", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
-                logger.LogFault("cluster-bridge", ex, "ClusterNodeBridgeFeature monitor iteration faulted");
+                logger.LogFault("cluster.bridge", ex, "ClusterNodeBridgeFeature monitor iteration faulted");
             }
 
             try
@@ -421,7 +421,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         {
             if (ex is not (OperationCanceledException or IOException or ObjectDisposedException or System.Net.Sockets.SocketException))
             {
-                FaultLedger.Shared.Record("cluster-bridge", ex);
+                FaultLedger.Shared.Record("cluster.bridge", ex);
             }
 
             await client.DisposeAsync().ConfigureAwait(false);

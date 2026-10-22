@@ -240,9 +240,9 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
         Assert.Equal(LootOutcome.Unknown, finalOutcome);
 
         Assert.Contains(FaultLedger.Shared.Snapshot(),
-            s => s.Site == "gameobjects.loot" && s.ExceptionType == typeof(LootCommitProbeException).FullName);
+            s => s.Site == "gameobject.loot" && s.ExceptionType == typeof(LootCommitProbeException).FullName);
         Assert.Contains(FaultLedger.Shared.Snapshot(),
-            s => s.Site == "gameobjects.loot" && s.ExceptionType == typeof(LootReconcileProbeException).FullName);
+            s => s.Site == "gameobject.loot" && s.ExceptionType == typeof(LootReconcileProbeException).FullName);
 
         Assert.Contains(capture.Notices,
             n => n.Key == "loot/settlement-failed" && n.Detail.Contains("LootCommitProbeException", StringComparison.Ordinal));
@@ -277,14 +277,14 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
             n => n.Key == "character/delete-hook-failed" && n.Subject == $"character {preFailId}");
         Assert.False(await CharacterDeletion.TryDeleteAsync(session, (ulong)preFailId));
         Assert.Contains(FaultLedger.Shared.Snapshot(),
-            s => s.Site == "characters.delete" && s.ExceptionType == typeof(CharacterDeleteHookProbeException).FullName);
+            s => s.Site == "character.delete" && s.ExceptionType == typeof(CharacterDeleteHookProbeException).FullName);
         Assert.Single(preCapture.Notices);
 
         using AnomalyCapture postCapture = AnomalyLedger.Shared.Capture(
             n => n.Key == "character/delete-hook-failed" && n.Subject == $"character {postFailId}");
         Assert.True(await CharacterDeletion.TryDeleteAsync(session, (ulong)postFailId));
         Assert.Contains(FaultLedger.Shared.Snapshot(),
-            s => s.Site == "characters.delete-hook" && s.ExceptionType == typeof(CharacterDeleteHookProbeException).FullName);
+            s => s.Site == "character.delete-hook" && s.ExceptionType == typeof(CharacterDeleteHookProbeException).FullName);
         Assert.Contains("ThrowingPostDeleteHook", Assert.Single(postCapture.Notices).Detail, StringComparison.Ordinal);
     }
 
@@ -303,7 +303,7 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
         using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
 
         using AnomalyCapture bgCapture = AnomalyLedger.Shared.Capture(
-            n => n.Key == "bg/feature-fault" && n.Detail.Contains("BattlegroundProbeException", StringComparison.Ordinal));
+            n => n.Key == "battleground/feature-fault" && n.Detail.Contains("BattlegroundProbeException", StringComparison.Ordinal));
         using AnomalyCapture opvpCapture = AnomalyLedger.Shared.Capture(
             n => n.Key == "outdoor-pvp/hook-fault" && n.Detail.Contains("OutdoorPvPProbeException", StringComparison.Ordinal));
 
@@ -319,7 +319,7 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
         world.GetMap(1); // triggers LoadSilithystMax on Kalimdor map creation
 
         Assert.Contains(FaultLedger.Shared.Snapshot(),
-            s => s.Site == "battlegrounds.feature" && s.ExceptionType == typeof(BattlegroundProbeException).FullName);
+            s => s.Site == "battleground.feature" && s.ExceptionType == typeof(BattlegroundProbeException).FullName);
         Assert.Contains(bgCapture.Notices, n => n.Subject == "content-load");
         Assert.Contains(bgCapture.Notices, n => n.Subject == "write-loop");
 

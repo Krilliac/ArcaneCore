@@ -37,7 +37,7 @@ public sealed class WorldOpsPersistenceFaultAndAnomalyTests
 
             await Assert.ThrowsAsync<AggregateException>(() => hooks.RunAsync(WorldLifecycleStage.AfterWorldStart));
 
-            Assert.Contains(faults, f => f.Site == "features.lifecycle" && f.ExceptionType == typeof(InvalidOperationException).FullName);
+            Assert.Contains(faults, f => f.Site == "feature.lifecycle" && f.ExceptionType == typeof(InvalidOperationException).FullName);
             Assert.Contains(anomalies, a => a.Subsystem == "feature" && a.Code == "lifecycle-hook-fault" && a.Subject == "AfterWorldStart:broken-hook");
         }
         finally

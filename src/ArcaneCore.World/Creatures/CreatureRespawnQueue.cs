@@ -135,7 +135,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-timer", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn-timer", ex);
             logger.LogError(ex, "creature respawn retry timer faulted");
         }
     }
@@ -370,7 +370,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             }
             catch (Exception ex) when (ex is not OutOfMemoryException && attempt < attempts && !DatabaseTransience.IsBusy(ex))
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-attempt", ex);
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn-attempt", ex);
                 logger.LogWarning(ex, "creature respawn write failed (attempt {Attempt}); retrying", attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
@@ -378,11 +378,11 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 if (sweep)
                 {
-                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-sweep", ex);
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn-sweep", ex);
                 }
                 else
                 {
-                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn", ex);
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn", ex);
                     logger.LogError(ex, "creature respawn write failed; retained for retry");
                 }
 
@@ -429,7 +429,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-consume", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn-consume", ex);
             logger.LogError(ex, "creature respawn queue consumer loop faulted");
         }
     }

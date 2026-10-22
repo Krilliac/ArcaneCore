@@ -355,7 +355,7 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("wiring-audit", ex);
+            FaultLedger.Shared.Record("wiring.audit", ex);
             try
             {
                 logger.LogWarning(ex, "wiring audit could not run");

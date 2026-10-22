@@ -284,7 +284,7 @@ public sealed class DiagnosticsCommands : ICommandExtension
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("diagnostics-dump-reply", ex);
+            FaultLedger.Shared.Record("diagnostics.dump-reply", ex);
         }
     }
 

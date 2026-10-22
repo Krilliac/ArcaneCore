@@ -3216,7 +3216,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>Log and count an exception a fire-and-forget operator command caught (<c>.playerbot</c> subcommands answer the GM with the type only).</summary>
     internal void ReportCommandFault(string command, Exception error)
-        => logger.LogFault("playerbot-command", error, "Playerbot command {Command} failed", command);
+        => logger.LogFault("playerbot.command", error, "Playerbot command {Command} failed", command);
 
     /// <summary>
     /// Count one fault of a bot and schedule its retry: whether the bot stays desired, and the error code to store. The

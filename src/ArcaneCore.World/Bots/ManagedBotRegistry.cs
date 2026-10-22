@@ -221,7 +221,7 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
         }
         catch (TimeoutException ex)
         {
-            FaultLedger.Shared.Record("bots.registry", ex);
+            FaultLedger.Shared.Record("playerbot.registry", ex);
             _logger.LogWarning("Managed bot sessions did not all close within {Seconds} s at shutdown", CloseTimeout.TotalSeconds);
         }
 
@@ -237,7 +237,7 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("bots.registry", ex);
+                FaultLedger.Shared.Record("playerbot.registry", ex);
                 _logger.LogWarning(ex, "Managed bot {BotId}: the character save did not complete at shutdown", bot.BotId);
             }
             finally

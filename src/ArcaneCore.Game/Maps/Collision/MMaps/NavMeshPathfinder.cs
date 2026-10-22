@@ -1031,7 +1031,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             if (done.Error is { } error)
             {
                 string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
-                FaultLedger.Shared.Record("navtile-read", error);
+                FaultLedger.Shared.Record("nav.read", error);
                 _logger.LogError(error, "MMaps: {Path} could not be read or is not a usable navmesh tile; ignored", path);
             }
 
@@ -1086,11 +1086,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
 
         if (oldestTask is { IsCompletedSuccessfully: true, Result.Error: { } droppedError })
         {
-            FaultLedger.Shared.Record("navtile-read", droppedError);
+            FaultLedger.Shared.Record("nav.read", droppedError);
         }
         else if (oldestTask is { IsFaulted: true, Exception: { } taskException })
         {
-            FaultLedger.Shared.Record("navtile-read", taskException);
+            FaultLedger.Shared.Record("nav.read", taskException);
         }
 
         return true;

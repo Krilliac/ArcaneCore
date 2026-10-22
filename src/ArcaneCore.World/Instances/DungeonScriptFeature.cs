@@ -54,8 +54,8 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("instances.dungeon-script", ex);
-                LogFault("dungeon-script-attach", ex, "dungeon script hook attachment failed");
+                FaultLedger.Shared.Record("instance.dungeon-script", ex);
+                LogFault("dungeon.script-attach", ex, "dungeon script hook attachment failed");
             }
         });
     }
@@ -73,8 +73,8 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("instances.dungeon-script", ex);
-            LogFault("dungeon-script-quest-accept", ex, "dungeon script quest accept {QuestId} failed for {Player}", quest.Id, player.Guid);
+            FaultLedger.Shared.Record("instance.dungeon-script", ex);
+            LogFault("dungeon.script-quest-accept", ex, "dungeon script quest accept {QuestId} failed for {Player}", quest.Id, player.Guid);
         }
     }
 
@@ -91,8 +91,8 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("instances.dungeon-script", ex);
-            LogFault("dungeon-script-areatrigger", ex, "dungeon script area trigger {TriggerId} failed for {Player}", triggerId, player.Guid);
+            FaultLedger.Shared.Record("instance.dungeon-script", ex);
+            LogFault("dungeon.script-areatrigger", ex, "dungeon script area trigger {TriggerId} failed for {Player}", triggerId, player.Guid);
         }
     }
 
@@ -109,7 +109,7 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            LogFault("dungeon-script-spell-finished", ex, "dungeon script spell finished {SpellId} failed", cast.Spell.Id);
+            LogFault("dungeon.script-spell-finished", ex, "dungeon script spell finished {SpellId} failed", cast.Spell.Id);
         }
     }
 

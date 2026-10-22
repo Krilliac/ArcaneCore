@@ -113,7 +113,7 @@ public static class MovementObservers
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement-observer-before", ex);
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement.observer-before", ex);
                 logger?.LogError(ex, "movement observer {Observer} failed before applying {Opcode}", observer.GetType().Name, context.Opcode);
             }
         }
@@ -129,7 +129,7 @@ public static class MovementObservers
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement-observer-after", ex);
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement.observer-after", ex);
                 logger?.LogError(ex, "movement observer {Observer} failed after applying {Opcode}", observer.GetType().Name, context.Opcode);
             }
         }

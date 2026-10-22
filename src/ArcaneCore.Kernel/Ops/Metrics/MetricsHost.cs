@@ -172,7 +172,7 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException && !_stop.IsCancellationRequested)
                 {
-                    Diagnostics.FaultLedger.Shared.Record("metrics-otlp-push", ex);
+                    Diagnostics.FaultLedger.Shared.Record("metrics.otlp-push", ex);
                     if (!failing)
                     {
                         failing = true;

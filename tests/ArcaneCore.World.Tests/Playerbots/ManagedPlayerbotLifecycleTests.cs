@@ -510,7 +510,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         await using WorldTestHost host = Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), new MemoryManagedPlayerbotStore(), logger: log);
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         static long CountAtSite() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
-            .Where(f => f.Site == "playerbot-command" && f.ExceptionType.EndsWith(nameof(CommandFaultMarkerException), StringComparison.Ordinal)).Sum(f => f.Count);
+            .Where(f => f.Site == "playerbot.command" && f.ExceptionType.EndsWith(nameof(CommandFaultMarkerException), StringComparison.Ordinal)).Sum(f => f.Count);
         long before = CountAtSite();
 
         feature.ReportCommandFault("probe-command", new CommandFaultMarkerException("fixture-command-fault"));

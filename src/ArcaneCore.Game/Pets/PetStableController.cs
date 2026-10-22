@@ -354,7 +354,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.stable", ex);
+            FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
             _logger.LogError(ex, "pet stable load failed for character {CharacterId}", id);
         }
@@ -399,7 +399,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.stable", ex);
+            FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
             _logger.LogError(ex, "pet stable write failed for character {CharacterId}", id);
         }

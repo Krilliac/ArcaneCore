@@ -70,7 +70,7 @@ public sealed class ConsoleLineReader(TextReader input, string threadName)
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                Diagnostics.FaultLedger.Shared.Record("console-line-reader", ex);
+                Diagnostics.FaultLedger.Shared.Record("console.line-reader", ex);
                 logger.LogError(ex, "console command handler failed");
             }
         }

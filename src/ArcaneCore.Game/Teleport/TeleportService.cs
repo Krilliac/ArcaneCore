@@ -500,7 +500,7 @@ public sealed class TeleportService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("teleport-zone-update", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("teleport.zone-update", ex);
             _logger.LogError(ex, "map {MapId} zone update of {Player} after a near teleport failed", map.MapId, player.Name);
         }
 

@@ -103,7 +103,7 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("metrics-observe", ex);
+            FaultLedger.Shared.Record("metrics.observe", ex);
             return fallback;
         }
     }
@@ -142,7 +142,7 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("metrics-tick", ex);
+            FaultLedger.Shared.Record("metrics.tick", ex);
         }
     }
 
@@ -162,7 +162,7 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("metrics-map-update", ex);
+            FaultLedger.Shared.Record("metrics.map-update", ex);
         }
     }
 
@@ -208,7 +208,7 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("metrics-observe", ex);
+            FaultLedger.Shared.Record("metrics.observe", ex);
             return [];
         }
     }
@@ -229,7 +229,7 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("metrics-observe", ex);
+            FaultLedger.Shared.Record("metrics.observe", ex);
             return [];
         }
     }

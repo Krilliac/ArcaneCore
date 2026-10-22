@@ -214,11 +214,11 @@ public sealed class ScriptHookRegistry
                 string subscriber = handler.Target?.GetType().FullName ?? handler.Method.DeclaringType?.FullName ?? "Action";
                 if (Logger is not null)
                 {
-                    Logger.LogFault("script-hook", ex, "script hook {Subscriber}.{Method} failed (subject={Subject})", subscriber, nameof(HooksChanged), "HooksChanged");
+                    Logger.LogFault("script.hook", ex, "script hook {Subscriber}.{Method} failed (subject={Subject})", subscriber, nameof(HooksChanged), "HooksChanged");
                 }
                 else
                 {
-                    FaultLedger.Shared.Record("script-hook", ex);
+                    FaultLedger.Shared.Record("script.hook", ex);
                 }
             }
         }
@@ -248,11 +248,11 @@ public sealed class ScriptHookRegistry
         string subscriber = hook.GetType().FullName ?? hook.GetType().Name;
         if (Logger is not null)
         {
-            Logger.LogFault("script-hook", ex, "script hook {Hook}.{Method} failed (subscriber={Subscriber}, subject={Subject})", hook.GetType().Name, name, subscriber, subject);
+            Logger.LogFault("script.hook", ex, "script hook {Hook}.{Method} failed (subscriber={Subscriber}, subject={Subject})", hook.GetType().Name, name, subscriber, subject);
         }
         else
         {
-            FaultLedger.Shared.Record("script-hook", ex);
+            FaultLedger.Shared.Record("script.hook", ex);
         }
     }
 

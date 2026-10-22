@@ -122,7 +122,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
         {
             FaultLedger.Shared.Record("warden.load-checks", ex);
             AnomalyLedger.Shared.Report("warden", "check-fault", "load-checks", $"error={ex.GetType().Name}: {ex.Message}");
-            logger.LogFault("warden-load-checks", ex, "Warden: loading warden_checks failed; running the configured scans only");
+            logger.LogFault("warden.load-checks", ex, "Warden: loading warden_checks failed; running the configured scans only");
         }
     }
 
@@ -186,7 +186,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             {
                 FaultLedger.Shared.Record("warden.tick", ex);
                 AnomalyLedger.Shared.Report("warden", "check-fault", $"account {session.AccountId}", $"tick error={ex.GetType().Name}: {ex.Message}");
-                logger.LogFault("warden-tick", ex, "Warden: world tick update faulted for account {AccountId}", session.AccountId);
+                logger.LogFault("warden.tick", ex, "Warden: world tick update faulted for account {AccountId}", session.AccountId);
             }
         }
 
@@ -205,7 +205,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             {
                 FaultLedger.Shared.Record("warden.staff-flush", ex);
                 AnomalyLedger.Shared.Report("warden", "check-fault", "staff-flush", $"error={ex.GetType().Name}: {ex.Message}");
-                logger.LogFault("warden-tick", ex, "Warden: staff notice flush faulted");
+                logger.LogFault("warden.tick", ex, "Warden: staff notice flush faulted");
             }
         }
     }
@@ -248,7 +248,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
                 {
                     FaultLedger.Shared.Record("warden.verdict", ex);
                     AnomalyLedger.Shared.Report("warden", "check-fault", $"account {session.AccountId}", $"verdict subscriber error={ex.GetType().Name}: {ex.Message}");
-                    logger.LogFault("warden-verdict", ex, "Warden: Verdict subscriber threw for account {AccountId}", session.AccountId);
+                    logger.LogFault("warden.verdict", ex, "Warden: Verdict subscriber threw for account {AccountId}", session.AccountId);
                 }
             }
 
@@ -378,7 +378,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
         {
             FaultLedger.Shared.Record("warden.ban", ex);
             AnomalyLedger.Shared.Report("warden", "check-fault", $"account {accountId}", $"ban error={ex.GetType().Name}: {ex.Message}");
-            logger.LogFault("warden-ban", ex, "Warden: ban of account {Account} failed", accountId);
+            logger.LogFault("warden.ban", ex, "Warden: ban of account {Account} failed", accountId);
         }
     }
 }

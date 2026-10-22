@@ -82,7 +82,7 @@ public static class WorldFeatures
             }
             catch (Exception ex)
             {
-                FaultLedger.Shared.Record("features.lifecycle", ex);
+                FaultLedger.Shared.Record("feature.lifecycle", ex);
                 AnomalyLedger.Shared.Report("feature", "detach-fault", feature.GetType().Name, $"stop_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 failures.Add(ex);
             }

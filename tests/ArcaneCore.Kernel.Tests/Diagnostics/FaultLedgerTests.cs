@@ -430,22 +430,35 @@ public sealed class FaultLedgerTests
     }
 
     [Fact]
-    public void BySubsystem_GroupsByPrefixBeforeDashOrColon_AndReturnsSortedSummary()
+    public void BySubsystem_GroupsByCanonicalSubsystem_AndReturnsSortedSummary()
     {
         var ledger = new FaultLedger();
-        ledger.Record("map-update", ThrowA("m1"));
-        ledger.Record("map-update", ThrowA("m2"));
+        ledger.Record("map.update", ThrowA("m1"));
+        ledger.Record("map.update", ThrowA("m2"));
         ledger.Record("map-deferred", ThrowB());
         ledger.Record("db:save", ThrowA("db1"));
         ledger.Record("worldtick", ThrowOther());
 
         IReadOnlyDictionary<string, (int Signatures, long TotalCount)> subsystems = ledger.BySubsystem();
-        Assert.Equal(["db", "map", "worldtick"], subsystems.Keys);
+        Assert.Equal(["db", "map", "world"], subsystems.Keys);
         Assert.Equal((1, 1L), subsystems["db"]);
         Assert.Equal((2, 3L), subsystems["map"]);
-        Assert.Equal((1, 1L), subsystems["worldtick"]);
+        Assert.Equal((1, 1L), subsystems["world"]);
 
         IReadOnlyList<string> reportLines = SelfDiagnosisReport.Format(ledger);
-        Assert.Contains(reportLines, l => l.Contains("subsystems: db=1 (1 sig), map=3 (2 sig), worldtick=1 (1 sig)", StringComparison.Ordinal));
+        Assert.Contains(reportLines, l => l.Contains("subsystems: db=1 (1 sig), map=3 (2 sig), world=1 (1 sig)", StringComparison.Ordinal));
     }
+
+    [Theory]
+    [InlineData("characters.delete-complete", "character")]
+    [InlineData("writequeue.character-retry", "writequeue")]
+    [InlineData("instance-data.update", "instance")]
+    [InlineData("outdoorpvp-tick", "outdoor-pvp")]
+    [InlineData("outdoor-pvp.feature", "outdoor-pvp")]
+    [InlineData("logon/auth/io", "logon")]
+    [InlineData("watchdog.check:tick", "watchdog")]
+    [InlineData("playerbot", "playerbot")]
+    [InlineData("", "unknown")]
+    public void DiagnosticSubsystem_OfSite_UsesOneRuleForEveryForm(string site, string expected)
+        => Assert.Equal(expected, DiagnosticSubsystem.OfSite(site));
 }

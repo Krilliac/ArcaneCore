@@ -295,7 +295,7 @@ public sealed class SpellStatePersistence
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-spellstate-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.spellstate-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -357,7 +357,7 @@ public sealed class SpellStatePersistence
                 }
                 catch (CharacterOwnershipRejectedException ex)
                 {
-                    FaultLedger.Shared.Record("writequeue-spellstate-ownership", ex);
+                    FaultLedger.Shared.Record("writequeue.spellstate-ownership", ex);
                     lock (_lock)
                     {
                         _lastFailure[characterId] = ex;
@@ -382,7 +382,7 @@ public sealed class SpellStatePersistence
                 _lastFailure[characterId] = ex;
             }
 
-            _logger.LogFault("writequeue-spellstate", ex, "Saving the cooldowns and auras of character {Character} failed; kept in memory", characterId);
+            _logger.LogFault("writequeue.spellstate", ex, "Saving the cooldowns and auras of character {Character} failed; kept in memory", characterId);
         }
         finally
         {
@@ -417,7 +417,7 @@ public sealed class SpellStatePersistence
             }
             catch (CharacterOwnershipRejectedException ex)
             {
-                FaultLedger.Shared.Record("writequeue-spellstate-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.spellstate-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
             }
         }
@@ -425,7 +425,7 @@ public sealed class SpellStatePersistence
         {
             FaultLedger.Shared.Record("persist.spellstate", ex);
             AnomalyLedger.Shared.Report("persist", "save-failed", $"character {characterId}", $"queue=SpellStatePersistence operation=Delete error={ex.GetType().Name}", AnomalySeverity.Warning);
-            _logger.LogFault("writequeue-spellstate-delete", ex, "Deleting the cooldowns and auras of character {Character} failed", characterId);
+            _logger.LogFault("writequeue.spellstate-delete", ex, "Deleting the cooldowns and auras of character {Character} failed", characterId);
         }
     }
 }

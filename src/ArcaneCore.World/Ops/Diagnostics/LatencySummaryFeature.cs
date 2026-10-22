@@ -82,7 +82,7 @@ public sealed class LatencySummaryFeature : IWorldFeature
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("latency-summary-tick", ex);
+            FaultLedger.Shared.Record("latency.summary-tick", ex);
         }
     }
 

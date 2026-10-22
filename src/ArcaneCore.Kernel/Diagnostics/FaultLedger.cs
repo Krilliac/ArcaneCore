@@ -234,7 +234,7 @@ public sealed class FaultLedger
         return list;
     }
 
-    /// <summary>Group recorded faults by subsystem prefix (the portion of <see cref="FaultSnapshot.Site"/> before <c>'-'</c> or <c>':'</c>).</summary>
+    /// <summary>Group recorded faults by canonical subsystem (<see cref="DiagnosticSubsystem.OfSite"/> of <see cref="FaultSnapshot.Site"/>).</summary>
     public IReadOnlyDictionary<string, (int Signatures, long TotalCount)> BySubsystem()
     {
         var result = new SortedDictionary<string, (int Signatures, long TotalCount)>(StringComparer.OrdinalIgnoreCase);
@@ -246,17 +246,7 @@ public sealed class FaultLedger
                 continue;
             }
 
-            string site = string.IsNullOrWhiteSpace(snap.Site) ? "unknown" : snap.Site.Trim();
-            int dash = site.IndexOf('-');
-            int colon = site.IndexOf(':');
-            int split = (dash, colon) switch
-            {
-                ( > 0, > 0) => Math.Min(dash, colon),
-                ( > 0, _) => dash,
-                (_, > 0) => colon,
-                _ => -1,
-            };
-            string subsystem = split > 0 ? site[..split] : site;
+            string subsystem = DiagnosticSubsystem.OfSite(snap.Site);
             if (result.TryGetValue(subsystem, out (int Signatures, long TotalCount) agg))
             {
                 result[subsystem] = (agg.Signatures + 1, agg.TotalCount + snap.Count);

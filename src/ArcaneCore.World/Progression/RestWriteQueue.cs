@@ -307,7 +307,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-rest-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.rest-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -386,7 +386,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("persist.rest-write-queue", ex);
-                logger.LogFault("writequeue-rest-consume", ex, "rest queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue.rest-consume", ex, "rest queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -479,7 +479,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             catch (CharacterOwnershipRejectedException ex)
             {
                 failure = ex;
-                FaultLedger.Shared.Record("writequeue-rest-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.rest-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 break;
             }
@@ -488,7 +488,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                 failure = ex;
                 if (!(attempt < attempts && ArcaneCore.Data.Resilience.DatabaseTransience.IsBusy(ex)))
                 {
-                    FaultLedger.Shared.Record("writequeue-rest-attempt", ex);
+                    FaultLedger.Shared.Record("writequeue.rest-attempt", ex);
                 }
 
                 if (!sweep)
@@ -531,7 +531,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                     AnomalySeverity.Error);
             }
 
-            logger.LogFault("writequeue-rest", failure, "rested-state writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
+            logger.LogFault("writequeue.rest", failure, "rested-state writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 
         return failure;

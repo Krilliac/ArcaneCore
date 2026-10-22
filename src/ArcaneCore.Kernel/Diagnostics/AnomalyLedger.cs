@@ -207,13 +207,14 @@ public sealed class AnomalyLedger
         return Snapshot().Where(s => string.Equals(s.Subsystem, wanted, StringComparison.Ordinal)).ToList();
     }
 
-    /// <summary>Per subsystem: how many keys and how many reports.</summary>
+    /// <summary>Per canonical subsystem (<see cref="DiagnosticSubsystem.Canonical"/>): how many keys and how many reports.</summary>
     public IReadOnlyDictionary<string, (int Codes, long Total)> BySubsystem()
     {
         var result = new SortedDictionary<string, (int Codes, long Total)>(StringComparer.Ordinal);
         foreach (AnomalySnapshot snap in Snapshot())
         {
-            result[snap.Subsystem] = result.TryGetValue(snap.Subsystem, out (int Codes, long Total) agg)
+            string subsystem = DiagnosticSubsystem.Canonical(snap.Subsystem);
+            result[subsystem] = result.TryGetValue(subsystem, out (int Codes, long Total) agg)
                 ? (agg.Codes + 1, agg.Total + snap.Count)
                 : (1, snap.Count);
         }

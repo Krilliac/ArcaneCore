@@ -128,7 +128,7 @@ public sealed class AnomalySummaryFeature : IWorldFeature
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("anomaly-summary-tick", ex);
+            FaultLedger.Shared.Record("anomaly.summary-tick", ex);
         }
     }
 

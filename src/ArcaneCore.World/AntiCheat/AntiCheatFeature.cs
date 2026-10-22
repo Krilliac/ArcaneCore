@@ -286,7 +286,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("anticheat.finding", ex);
-                logger.LogFault("anticheat-finding", ex, "AntiCheat: FindingRecorded subscriber threw for player {Player}", player.Name);
+                logger.LogFault("anticheat.finding", ex, "AntiCheat: FindingRecorded subscriber threw for player {Player}", player.Name);
             }
         }
 
@@ -476,7 +476,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("anticheat.autoban", ex);
-            logger.LogFault("anticheat-autoban", ex, "AntiCheat: autoban of account {Account} failed", accountId);
+            logger.LogFault("anticheat.autoban", ex, "AntiCheat: autoban of account {Account} failed", accountId);
             string failed = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}");
             StaffNotice(accountId, "autoban failure", $"{AlertPrefix}Could not autoban {failed}.");
             _announcer?.Announce(
@@ -538,7 +538,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("anticheat.tick", ex);
-            logger.LogFault("anticheat-tick", ex, "AntiCheat: world tick faulted");
+            logger.LogFault("anticheat.tick", ex, "AntiCheat: world tick faulted");
         }
     }
 
@@ -555,7 +555,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("anticheat-flush", ex);
+            FaultLedger.Shared.Record("anticheat.flush", ex);
             if (_flushGate.TryEnter(out int suppressed))
             {
                 logger.LogWarning(ex, "AntiCheat: could not write {Rows} violation log row(s); they are dropped ({Suppressed} more failures since the last line)", batch.Count, suppressed);

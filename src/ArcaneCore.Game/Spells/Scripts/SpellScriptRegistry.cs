@@ -213,7 +213,7 @@ public sealed class SpellScriptRegistry
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("spell-script", ex);
+                FaultLedger.Shared.Record("spell.script", ex);
                 first ??= ex;
             }
         }

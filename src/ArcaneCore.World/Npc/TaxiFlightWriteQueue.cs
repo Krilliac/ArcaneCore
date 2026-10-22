@@ -333,7 +333,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-taxi-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.taxi-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -412,7 +412,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // ExecuteAsync reports store failures itself; this is a queue bug and must not kill the consumer.
-                logger.LogFault("writequeue-taxi-consume", ex, "taxi route write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue.taxi-consume", ex, "taxi route write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -535,11 +535,11 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                                 AnomalySeverity.Error);
                         }
 
-                        logger.LogFault("writequeue-taxi", ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
+                        logger.LogFault("writequeue.taxi", ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
                     }
                     else
                     {
-                        FaultLedger.Shared.Record("writequeue-taxi-sweep", ex);
+                        FaultLedger.Shared.Record("writequeue.taxi-sweep", ex);
                     }
 
                     return ex;
@@ -551,7 +551,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     $"character {characterId}",
                     $"queue=TaxiFlightWriteQueue character={characterId} action=save-abandoned attempts={MaxAttempts} error={ex.GetType().Name}",
                     AnomalySeverity.Error);
-                logger.LogFault("writequeue-taxi", ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
+                logger.LogFault("writequeue.taxi", ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
                 Abandon(characterId, validAbandon);
                 operation = replacement;
                 continue;
@@ -585,7 +585,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogFault("writequeue-taxi-abandon", ex, "taxi route fallback for character {Character} failed; the route row is still deleted", characterId);
+            logger.LogFault("writequeue.taxi-abandon", ex, "taxi route fallback for character {Character} failed; the route row is still deleted", characterId);
         }
     }
 
@@ -624,13 +624,13 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             }
             catch (CharacterOwnershipRejectedException ex)
             {
-                FaultLedger.Shared.Record("writequeue-taxi-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.taxi-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 throw;
             }
             catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("writequeue-taxi-attempt", ex);
+                FaultLedger.Shared.Record("writequeue.taxi-attempt", ex);
                 logger.LogWarning(ex, "taxi route write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }

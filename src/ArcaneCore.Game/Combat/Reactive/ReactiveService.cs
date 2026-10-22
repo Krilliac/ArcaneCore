@@ -169,7 +169,7 @@ public sealed class ReactiveService
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-reactive", ex);
+                    FaultLedger.Shared.Record("map.reactive", ex);
                 }
             }
         }
@@ -378,7 +378,7 @@ public sealed class ReactiveUpdater(ReactiveService reactives) : IMapUpdater
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("map-reactive", ex);
+                        FaultLedger.Shared.Record("map.reactive", ex);
                     }
                 }
 
@@ -397,7 +397,7 @@ public sealed class ReactiveUpdater(ReactiveService reactives) : IMapUpdater
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("map-reactive", ex);
+                        FaultLedger.Shared.Record("map.reactive", ex);
                     }
                 }
             }
@@ -427,7 +427,7 @@ public sealed class ReactiveUpdater(ReactiveService reactives) : IMapUpdater
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("map-reactive", ex);
+                        FaultLedger.Shared.Record("map.reactive", ex);
                     }
                 }
             }
@@ -469,7 +469,7 @@ public sealed class ReactiveUpdater(ReactiveService reactives) : IMapUpdater
                         }
                         catch (Exception ex) when (ex is not OutOfMemoryException)
                         {
-                            FaultLedger.Shared.Record("map-reactive", ex);
+                            FaultLedger.Shared.Record("map.reactive", ex);
                         }
                     }
                 }

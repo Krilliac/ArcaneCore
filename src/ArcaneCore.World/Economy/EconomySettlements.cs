@@ -302,7 +302,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             if (ex is OperationCanceledException && !_stop.IsCancellationRequested)
             {
                 // The caller answers the client with its ordinary failure reply (or the actors are kicked when the outcome is unknown).
-                FaultLedger.Shared.Record("economy-settlement-timeout", ex);
+                FaultLedger.Shared.Record("economy.settlement-timeout", ex);
                 logger.LogWarning("economy operation {Operation} ran out of its {Budget}s budget after {Elapsed} ms (transaction started: {Started})",
                     operation.Id, allowed.TotalSeconds, clock.ElapsedMilliseconds, transactionStarted);
             }
@@ -310,7 +310,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             {
                 FaultLedger.Shared.Record("economy.settlement", ex);
                 AnomalyLedger.Shared.Report("economy", "settlement-failed", $"operation {operation.Id}", $"error={ex.GetType().Name}: {ex.Message}");
-                logger.LogFault("economy-settlement", ex, "economy operation {Operation} failed", operation.Id);
+                logger.LogFault("economy.settlement", ex, "economy operation {Operation} failed", operation.Id);
             }
             if (transactionStarted && outcome != EconomyOutcome.After)
             {
@@ -327,7 +327,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                 {
                     FaultLedger.Shared.Record("economy.settlement-reconcile", reconciliation);
                     AnomalyLedger.Shared.Report("economy", "settlement-reconcile-failed", $"operation {operation.Id}", $"reconcile error={reconciliation.GetType().Name}: {reconciliation.Message}", AnomalySeverity.Error);
-                    logger.LogFault("economy-settlement-reconcile", reconciliation, "could not reconcile economy operation {Operation}", operation.Id);
+                    logger.LogFault("economy.settlement-reconcile", reconciliation, "could not reconcile economy operation {Operation}", operation.Id);
                 }
             }
         }
@@ -369,7 +369,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         {
             FaultLedger.Shared.Record("economy.settlement-callback", ex);
             AnomalyLedger.Shared.Report("economy", "settlement-failed", $"operation {operation.Id}", $"callback error={ex.GetType().Name}: {ex.Message}");
-            logger.LogFault("economy-settlement-callback", ex, "economy operation {Operation} callback failed", operation.Id);
+            logger.LogFault("economy.settlement-callback", ex, "economy operation {Operation} callback failed", operation.Id);
         }
         finally
         {
@@ -440,7 +440,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
 
             FaultLedger.Shared.Record("economy.settlement-publish", ex);
             AnomalyLedger.Shared.Report("economy", "settlement-reconcile-failed", $"character {actor.Id}", $"operation={operation.Id} publish error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
-            logger.LogFault("economy-settlement-publish", ex, "economy publication failed for character {Character}; fresh login is required", actor.Id);
+            logger.LogFault("economy.settlement-publish", ex, "economy publication failed for character {Character}; fresh login is required", actor.Id);
             if (current)
             {
                 actor.Session.Kick();

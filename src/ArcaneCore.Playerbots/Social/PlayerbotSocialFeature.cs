@@ -540,7 +540,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         {
             FaultLedger.Shared.Record("playerbot.social", error);
             AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
-            logger.LogFault("playerbot-social", error, "Playerbot social: the bot registry could not be read ({Type}); the last one stays", error.GetType().Name);
+            logger.LogFault("playerbot.social", error, "Playerbot social: the bot registry could not be read ({Type}); the last one stays", error.GetType().Name);
         }
         finally
         {

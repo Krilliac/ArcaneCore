@@ -97,7 +97,7 @@ public sealed partial class PlayerbotGroupCoordinator
                     string.Create(CultureInfo.InvariantCulture, $"server-group {server.Id} (leader {server.LeaderGuid.Value:X})"),
                     string.Create(CultureInfo.InvariantCulture, $"leader handoff of server group {server.Id} failed ({ex.GetType().Name}: {ex.Message})"),
                     _world?.Identity);
-                logger.LogFault("playerbot-group-coordinator", ex, "Playerbot leader handoff of server group {Group} failed", server.Id);
+                logger.LogFault("playerbot.group-coordinator", ex, "Playerbot leader handoff of server group {Group} failed", server.Id);
             }
         }
     }

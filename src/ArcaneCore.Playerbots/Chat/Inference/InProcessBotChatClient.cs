@@ -119,7 +119,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 Interlocked.Increment(ref _errors);
-                FaultLedger.Shared.Record("playerbot-chat-inprocess", error);
+                FaultLedger.Shared.Record("playerbot.chat-inprocess", error);
                 FaultLedger.Shared.Record("playerbot.chat-inference", error);
                 AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat model", $"{error.GetType().Name}: {error.Message}");
                 _logger?.LogWarning("Bot chat in-process generation failed ({Type}: {Message}); the next provider answers", error.GetType().Name, error.Message);

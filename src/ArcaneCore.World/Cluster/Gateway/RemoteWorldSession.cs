@@ -155,7 +155,7 @@ public sealed class WorldGatewaySessionAcceptor(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("cluster-transport", ex);
+            FaultLedger.Shared.Record("cluster.transport", ex);
         }
     }
 }
