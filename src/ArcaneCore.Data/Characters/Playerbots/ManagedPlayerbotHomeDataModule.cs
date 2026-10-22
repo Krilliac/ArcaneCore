@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -101,8 +102,9 @@ public sealed class EfManagedPlayerbotHomeStore(CharacterDbContext db) : IManage
             {
                 await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                FaultLedger.Shared.Record("data.managed-playerbot-home", ex);
                 db.ChangeTracker.Clear();
                 throw;
             }

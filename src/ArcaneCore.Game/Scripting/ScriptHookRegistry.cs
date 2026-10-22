@@ -583,6 +583,7 @@ public sealed class ItemHookDispatch(ScriptHookRegistry owner)
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("scripting.item-hook", ex);
                 owner.Failed(ex, h, nameof(IItemHooks.OnUse), $"{ScriptHookRegistry.DescribePlayer(player)}, {ScriptHookRegistry.DescribeItem(item)}");
             }
         }

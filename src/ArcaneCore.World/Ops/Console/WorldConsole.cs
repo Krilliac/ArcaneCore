@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Handlers;
@@ -124,6 +125,7 @@ public sealed class WorldConsole : IHostedService
         }
         catch (AggregateException ex)
         {
+            FaultLedger.Shared.Record("ops.console", ex.InnerException ?? ex);
             _logger.LogError(ex.InnerException ?? ex, "console command could not be run");
             executor.WriteLine("The command failed; see the server log.");
         }

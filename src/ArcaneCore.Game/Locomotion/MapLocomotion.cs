@@ -69,6 +69,7 @@ internal sealed class MapLocomotion : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("locomotion.observer", ex);
                 map.Logger.LogFault(
                     "map-locomotion",
                     ex,
@@ -102,6 +103,7 @@ internal sealed class MapLocomotion : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("locomotion.observer", ex);
             map.Logger.LogFault(
                 "map-locomotion",
                 ex,

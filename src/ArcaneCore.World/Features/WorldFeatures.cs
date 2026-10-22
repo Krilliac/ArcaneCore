@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Reflection;
@@ -81,6 +82,8 @@ public static class WorldFeatures
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("features.lifecycle", ex);
+                AnomalyLedger.Shared.Report("feature", "detach-fault", feature.GetType().Name, $"stop_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 failures.Add(ex);
             }
         }

@@ -5,6 +5,7 @@ using ArcaneCore.Data.Economy;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
@@ -119,12 +120,16 @@ public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
         }
         catch (Exception commitError)
         {
+            FaultLedger.Shared.Record("data.loot-store", commitError);
+            AnomalyLedger.Shared.Report("database", "loot-commit-failed", request.Key.ToString(), commitError.Message, AnomalySeverity.Warning);
             try
             {
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception rollbackError)
             {
+                FaultLedger.Shared.Record("data.loot-store", rollbackError);
+                AnomalyLedger.Shared.Report("database", "loot-rollback-failed", request.Key.ToString(), rollbackError.Message, AnomalySeverity.Error);
                 throw new AggregateException("Loot commit and rollback failed; discard the context.", commitError, rollbackError);
             }
 

@@ -54,6 +54,7 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.dungeon-script", ex);
                 LogFault("dungeon-script-attach", ex, "dungeon script hook attachment failed");
             }
         });
@@ -72,6 +73,7 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.dungeon-script", ex);
             LogFault("dungeon-script-quest-accept", ex, "dungeon script quest accept {QuestId} failed for {Player}", quest.Id, player.Guid);
         }
     }
@@ -89,6 +91,7 @@ public sealed class DungeonScriptFeature(IServiceProvider services, ILogger<Dung
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.dungeon-script", ex);
             LogFault("dungeon-script-areatrigger", ex, "dungeon script area trigger {TriggerId} failed for {Player}", triggerId, player.Guid);
         }
     }

@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ArcaneCore.Game.Maps;
@@ -198,6 +199,7 @@ public sealed class ReloadCoordinator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
             _logger.LogError(ex, "could not report the {Area} reload", swap.Area);
         }
     }
@@ -228,8 +230,10 @@ public sealed class ReloadCoordinator
         {
             candidate = await BuildAsync(reloadable, cancellationToken).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
+            AnomalyLedger.Shared.Report("reload", "quiesce-timeout", name, $"phase=build timeout_ms={_options.BuildTimeoutMs}", AnomalySeverity.Warning);
             return Finish(name, ReloadStatus.Failed, $"building timed out after {_options.BuildTimeoutMs} ms; nothing was changed", [], started);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -238,6 +242,8 @@ public sealed class ReloadCoordinator
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
+            AnomalyLedger.Shared.Report("reload", "apply-failed", name, $"phase=build error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "Building the {Name} reload failed", name);
             return Finish(name, ReloadStatus.Failed, $"building failed ({ex.Message}); nothing was changed", [], started);
         }
@@ -249,6 +255,8 @@ public sealed class ReloadCoordinator
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
+            AnomalyLedger.Shared.Report("reload", "apply-failed", name, $"phase=validate error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "Validating the {Name} reload failed", name);
             return Finish(name, ReloadStatus.Failed, $"validation failed ({ex.Message}); nothing was changed", [], started);
         }
@@ -282,12 +290,14 @@ public sealed class ReloadCoordinator
 
             return await build.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
             throw new TimeoutException();
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
             // The abandoned build may still finish; observe its outcome so it is never unobserved.
             _ = build.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
             timeout.Cancel();
@@ -319,10 +329,12 @@ public sealed class ReloadCoordinator
         {
             return await done.Task.WaitAsync(TimeSpan.FromMilliseconds(_options.CommitTimeoutMs)).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
             if (Interlocked.CompareExchange(ref state, 2, 0) == 0)
             {
+                AnomalyLedger.Shared.Report("reload", "quiesce-timeout", name, $"phase=commit timeout_ms={_options.CommitTimeoutMs}", AnomalySeverity.Warning);
                 return Finish(name, ReloadStatus.Failed, $"the world thread did not run the swap within {_options.CommitTimeoutMs} ms; it was cancelled and nothing was changed", [], started);
             }
 
@@ -346,10 +358,14 @@ public sealed class ReloadCoordinator
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("reload.coordinator", ex);
+            AnomalyLedger.Shared.Report("reload", "apply-failed", name, $"phase=swap error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             IReadOnlyList<Exception> undoFailures = transaction.Rollback();
             _logger.LogError(ex, "Swapping in {Name} failed; rolled back", name);
             foreach (Exception undo in undoFailures)
             {
+                FaultLedger.Shared.Record("reload.coordinator", undo);
+                AnomalyLedger.Shared.Report("reload", "rollback-failed", name, $"error={undo.GetType().Name}: {undo.Message}", AnomalySeverity.Error);
                 _logger.LogError(undo, "Rolling back a {Name} reload step failed", name);
             }
 

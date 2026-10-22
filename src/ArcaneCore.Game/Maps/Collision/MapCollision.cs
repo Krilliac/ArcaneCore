@@ -500,6 +500,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("collision.tile-load", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {Map.MapId} grid {grid.Coord}", ex.Message);
             Map.Logger.LogFault(
                 "map-collision",
                 ex,
@@ -520,6 +522,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("collision.tile-prefetch", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {Map.MapId} tile ({tx}, {ty})", ex.Message);
                 Map.Logger.LogFault(
                     "map-collision",
                     ex,
@@ -538,6 +542,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("collision.tile-prefetch", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {Map.MapId} tile ({tx}, {ty})", ex.Message);
                 Map.Logger.LogFault(
                     "map-collision",
                     ex,
@@ -567,6 +573,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("collision.tile-unload", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {Map.MapId} grid {coord}", ex.Message);
             Map.Logger.LogFault(
                 "map-collision",
                 ex,
@@ -586,6 +594,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("collision.tile-lifecycle", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {Map.MapId}", ex.Message);
                 Map.Logger.LogFault(
                     "map-collision",
                     ex,
@@ -602,6 +612,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("collision.tile-lifecycle", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {Map.MapId}", ex.Message);
                 Map.Logger.LogFault(
                     "map-collision",
                     ex,

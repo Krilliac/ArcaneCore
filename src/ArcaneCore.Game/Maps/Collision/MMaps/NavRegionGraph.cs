@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Numerics;
 
 namespace ArcaneCore.Game.Maps.Collision.MMaps;
@@ -306,6 +307,8 @@ public sealed class NavRegionGraph
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
+                FaultLedger.Shared.Record("collision.mmap-regiongraph", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", file, ex.Message);
                 // left out of the graph and listed in SkippedTiles for the caller to report (this static builder has no logger)
                 string name = Path.GetFileName(file);
                 bool named = int.TryParse(name.AsSpan(3, 2), out int nameX) & int.TryParse(name.AsSpan(5, 2), out int nameY);

@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters.Pets;
@@ -353,6 +354,8 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("pets.stable", ex);
+            AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
             _logger.LogError(ex, "pet stable load failed for character {CharacterId}", id);
         }
 
@@ -396,6 +399,8 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("pets.stable", ex);
+            AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
             _logger.LogError(ex, "pet stable write failed for character {CharacterId}", id);
         }
 

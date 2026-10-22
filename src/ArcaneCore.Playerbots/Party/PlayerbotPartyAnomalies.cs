@@ -98,6 +98,9 @@ internal static class PlayerbotPartyAnomalies
     /// <summary>The bot is still in a group after its master left for good (it should have left it).</summary>
     internal const string LeaderGoneStillGrouped = "leader-gone-still-grouped";
 
+    /// <summary>A player chat or text-emote packet delivered to the party AI was truncated or malformed.</summary>
+    internal const string ChatCommandMalformed = "chat-command-malformed";
+
     /// <summary>A dead bot gets this long, after the wait for a resurrection, to be alive again (a corpse run across a continent is under ten minutes).</summary>
     internal const long DeathRecoveryBudgetMs = 15 * 60_000L;
 

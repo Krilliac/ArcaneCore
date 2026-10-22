@@ -285,6 +285,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("anticheat.finding", ex);
                 logger.LogFault("anticheat-finding", ex, "AntiCheat: FindingRecorded subscriber threw for player {Player}", player.Name);
             }
         }
@@ -474,6 +475,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("anticheat.autoban", ex);
             logger.LogFault("anticheat-autoban", ex, "AntiCheat: autoban of account {Account} failed", accountId);
             string failed = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}");
             StaffNotice(accountId, "autoban failure", $"{AlertPrefix}Could not autoban {failed}.");
@@ -535,6 +537,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("anticheat.tick", ex);
             logger.LogFault("anticheat-tick", ex, "AntiCheat: world tick faulted");
         }
     }

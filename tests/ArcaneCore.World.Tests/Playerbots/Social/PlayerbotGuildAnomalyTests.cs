@@ -198,4 +198,46 @@ public sealed class PlayerbotGuildAnomalyTests
         Assert.Contains("bot Orcannoy ", notice.Subject, StringComparison.Ordinal);
         Assert.Contains("guild invite acceptance for guild", notice.Detail, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task MalformedGuildInvitePacket_AndSocialPassFault_RecordFaultAndAnomaly()
+    {
+        static long SiteCount() => FaultLedger.Shared.Snapshot()
+            .Where(s => s.Site == "playerbot.social")
+            .Sum(s => s.Count);
+
+        long beforePacket = SiteCount();
+        using (AnomalyCapture packetCapture = AnomalyLedger.Shared.Capture(
+            n => n.Key == "bot-social/packet-decode-failed" && n.Subject == "guild-invite"))
+        {
+            Assert.False(PlayerbotSocialPackets.TryReadGuildInvite(
+                Enumerable.Repeat((byte)0x41, PacketReader.MaxCStringBytes + 1).ToArray(),
+                out _,
+                out _));
+            Assert.True(SiteCount() > beforePacket);
+            Assert.True(packetCapture.Count("bot-social/packet-decode-failed") >= 1);
+        }
+
+        await using SocialWorld world = await StartAsync(guilds => guilds.Creation = PlayerbotGuildCreation.ClientCreate);
+        await world.AddBotAsync("Faultbot");
+        await world.AddBotAsync("Faultally");
+        long beforeFeature = SiteCount();
+        using AnomalyCapture featureCapture = PlayerbotAnomalies.CaptureIn(
+            world.Host.World,
+            n => n.Key == "bot-social/feature-fault");
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            SocialTestSupport.Feature(world.Host).Random = null!;
+            world.Options.Social.Guilds.Enabled = true;
+        });
+
+        await WorldTestHost.WaitForAsync(
+            () => featureCapture.Count("bot-social/feature-fault") >= 1,
+            "social feature fault anomaly");
+        Assert.True(SiteCount() > beforeFeature);
+        AnomalyNotice notice = featureCapture.Notices.First();
+        Assert.Equal("social", notice.Subject);
+        Assert.Equal(world.Host.World.Identity, notice.Origin);
+    }
 }

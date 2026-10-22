@@ -43,6 +43,18 @@ internal static class PlayerbotGroupAnomalies
     /// <summary>A member released from a finished group is still in the server's group (the leave did not take).</summary>
     internal const string MemberStillGrouped = "member-still-grouped";
 
+    /// <summary>An unhandled exception escaped while advancing a bot-led group on the coordinator tick.</summary>
+    internal const string CoordinatorFault = "coordinator-fault";
+
+    /// <summary>An unhandled exception escaped during a player-to-bot leader handoff.</summary>
+    internal const string HandoffFault = "handoff-fault";
+
+    /// <summary>An unhandled exception escaped while loading run encounters or reporting a run failure.</summary>
+    internal const string RunFault = "run-fault";
+
+    /// <summary>An unhandled exception escaped while ticking an active siege.</summary>
+    internal const string SiegeFault = "siege-fault";
+
     /// <summary>The ledger key of <paramref name="code"/> (tests).</summary>
     internal static string Key(string code) => PlayerbotAnomalies.Key(Area, code);
 
@@ -57,6 +69,10 @@ internal static class PlayerbotGroupAnomalies
     internal static void ReportNamed(string name, ObjectGuid guid, string code, string detail, AnomalySeverity severity = AnomalySeverity.Warning, object? origin = null)
         => AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + Area, code,
             string.Create(CultureInfo.InvariantCulture, $"bot {name} (guid {guid.Value:X})"), detail, severity, origin);
+
+    /// <summary>Report a group-system anomaly without a single bot subject (or for a server group / siege).</summary>
+    internal static void ReportSystem(string code, string subject, string detail, object? origin = null, AnomalySeverity severity = AnomalySeverity.Warning)
+        => AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + Area, code, subject, detail, severity, origin);
 }
 
 /// <summary>What <see cref="PlayerbotGroupWatch.Observe"/> found this tick (flags: several can hold at once).</summary>

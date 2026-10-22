@@ -39,6 +39,9 @@ internal sealed class PlayerbotQaFaultFeed(
         "creature/under-map", "player/under-map",
     };
 
+    internal const int DefaultMinServerWarningCount = 5;
+    internal const int DefaultMinServerWarningSubjects = 3;
+
     private readonly object _gate = new();
     private Dictionary<string, long> _seen = new(StringComparer.Ordinal);
     private Dictionary<string, long> _seenInvariants = new(StringComparer.Ordinal);
@@ -153,7 +156,9 @@ internal sealed class PlayerbotQaFaultFeed(
         => !string.Equals(anomaly.Key, AnomalyLedger.OverflowKey, StringComparison.Ordinal)
             && !anomaly.Subsystem.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal)
             && !SpatialAnomalyKeys.Contains(anomaly.Key)
-            && anomaly.Severity >= AnomalySeverity.Error;
+            && (anomaly.Severity >= AnomalySeverity.Error
+                || (anomaly.Severity >= AnomalySeverity.Warning
+                    && (anomaly.Count >= DefaultMinServerWarningCount || anomaly.DistinctSubjects >= DefaultMinServerWarningSubjects)));
 
     /// <summary>
     /// Connection teardown at the session site (a peer that reset, a closed stream, a cancelled read) is the network, not a server bug: it is counted in
@@ -206,7 +211,7 @@ internal sealed class PlayerbotQaFaultFeed(
         ExceptionType = "Anomaly:" + anomaly.Key,
         Reason = "Anomaly:" + anomaly.Key,
         Detail = anomaly.Key,
-        Diag = anomaly.Key,
+        Diag = anomaly.LastDetail.Length > 0 ? $"{anomaly.Key}: {anomaly.LastDetail}" : anomaly.Key,
         Message = string.Empty,
         Occurrences = occurrences,
     };

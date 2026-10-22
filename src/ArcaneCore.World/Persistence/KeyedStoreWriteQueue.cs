@@ -246,6 +246,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.keyed-write-queue", ex);
             logger.LogFault("writequeue-keyed-timer", ex, "{Queue} retained-retry timer failed unexpectedly", name);
         }
     }
@@ -303,6 +304,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.keyed-write-queue", ex);
                 logger.LogFault("writequeue-keyed-consume", ex, "{Queue} queue item {Kind} for {Key} failed unexpectedly", name, work.Kind, work.Key);
                 work.Done?.TrySetException(ex);
             }

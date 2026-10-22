@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text;
@@ -171,9 +172,25 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (!_recordingFault)
+            {
+                _recordingFault = true;
+                try
+                {
+                    FaultLedger.Shared.Record("ops.announcer", ex);
+                }
+                finally
+                {
+                    _recordingFault = false;
+                }
+            }
+
             _logger.LogError(ex, "announcement ({Category}) failed", category);
         }
     }
+
+    [ThreadStatic]
+    private static bool _recordingFault;
 
     private void AnnounceCore(
         AnnounceCategory category,

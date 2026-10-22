@@ -150,6 +150,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("economy.delivery-timer", ex);
                     _logger.LogFault("economy-delivery-timer", ex, "economy mail delivery notification failed");
                 }
             }), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
@@ -343,6 +344,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("economy.read", ex);
                 _logger.LogFault("economy-read", ex, "economy read failed");
                 if (failed is not null)
                 {
@@ -450,6 +452,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("economy.gossip-auction", ex);
                         _logger.LogFault("economy-gossip-auction", ex, "auction hello from gossip failed for player {Player}", player.Guid);
                     }
                 }
@@ -471,6 +474,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.sweep-recover", ex);
             _logger.LogFault("economy-sweep-recover", ex, "auction recovery sweep failed");
         }
 
@@ -480,6 +484,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.sweep-auctions", ex);
             _logger.LogFault("economy-sweep-auctions", ex, "auction expiry sweep failed");
         }
 
@@ -489,6 +494,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.sweep-mails", ex);
             _logger.LogFault("economy-sweep-mails", ex, "mail expiry sweep failed");
         }
     }

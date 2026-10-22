@@ -75,6 +75,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             }
             catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("npc.services", stopEx);
                 logger.LogFault("npc-services.stop-application", stopEx, "Stopping application after fatal taxi flight write failure failed");
             }
         };

@@ -775,6 +775,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.character-save-queue", ex);
                 bool newEpisode;
                 lock (_gate)
                 {
@@ -865,7 +866,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 AnomalySeverity.Warning);
             try { FatalFailure?.Invoke(failure); }
             catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
-            { _logger.LogFault("writequeue-character-callback", callbackError, "character save queue fatal-failure callback failed"); }
+            {
+                FaultLedger.Shared.Record("persist.character-save-queue", callbackError);
+                AnomalyLedger.Shared.Report("persist", "callback-failed", "CharacterSaveQueue", $"callback=FatalFailure error={callbackError.GetType().Name}", AnomalySeverity.Error);
+                _logger.LogFault("writequeue-character-callback", callbackError, "character save queue fatal-failure callback failed");
+            }
         }
     }
 

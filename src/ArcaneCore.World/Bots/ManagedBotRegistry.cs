@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
@@ -218,8 +219,9 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
         {
             await Task.WhenAll(orphans.Select(b => b.Session.ManagedClosed)).WaitAsync(CloseTimeout).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
+            FaultLedger.Shared.Record("bots.registry", ex);
             _logger.LogWarning("Managed bot sessions did not all close within {Seconds} s at shutdown", CloseTimeout.TotalSeconds);
         }
 
@@ -235,6 +237,7 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("bots.registry", ex);
                 _logger.LogWarning(ex, "Managed bot {BotId}: the character save did not complete at shutdown", bot.BotId);
             }
             finally

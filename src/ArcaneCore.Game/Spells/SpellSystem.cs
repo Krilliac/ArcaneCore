@@ -296,6 +296,7 @@ public sealed partial class SpellSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("spells.script", ex);
                 RecordSpellScriptFault("UpdateAutoRepeat", ex, autoRepeat.Spell, autoRepeat.Caster, ResolveUnitTarget(autoRepeat.Caster, autoRepeat.Targets, autoRepeat.Spell));
                 CancelAutoRepeat(state.Unit);
             }
@@ -309,6 +310,7 @@ public sealed partial class SpellSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("spells.script", ex);
                 RecordSpellScriptFault("UpdateCast", ex, cast.Spell, cast.Caster, ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell));
                 Finish(cast);
             }
@@ -322,6 +324,7 @@ public sealed partial class SpellSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("spells.script", ex);
             SpellAuraHolder? activeHolder = state.Auras.FirstOrDefault(h => !h.IsRemoved);
             Unit? auraCaster = activeHolder is not null ? Units.Find(state.Unit, activeHolder.CasterGuid) : null;
             RecordSpellScriptFault("UpdateAuras", ex, activeHolder?.Spell, auraCaster ?? state.Unit, state.Unit);
@@ -508,6 +511,7 @@ public sealed partial class SpellSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("spells.script", ex);
             RecordSpellScriptFault("Prepare.CheckCast", ex, spell, caster, unitTarget);
             throw;
         }
@@ -553,6 +557,7 @@ public sealed partial class SpellSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("spells.script", ex);
             RecordSpellScriptFault("Prepare.NotifyPrepared", ex, spell, caster, unitTarget);
             throw;
         }
@@ -850,6 +855,7 @@ public sealed partial class SpellSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("spells.script", ex);
             RecordSpellScriptFault("Cast", ex, spell, caster, currentFaultTarget);
             Finish(cast);
             throw;

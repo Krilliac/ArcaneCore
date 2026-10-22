@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Text.Json;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
@@ -86,6 +87,8 @@ public static class WorldStateDefaults
         }
         catch (JsonException ex)
         {
+            FaultLedger.Shared.Record("worldstate.parse-defaults", ex);
+            AnomalyLedger.Shared.Report("worldstate", "corrupt-json", "world-state-defaults", ex.Message);
             throw new InvalidDataException("the world-state defaults are not valid JSON", ex);
         }
 

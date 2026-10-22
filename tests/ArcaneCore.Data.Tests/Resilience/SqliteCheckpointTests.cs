@@ -364,6 +364,22 @@ public sealed class SqliteCheckpointTests : IDisposable
     }
 
     [Fact]
+    public void CheckpointFailure_OnCorruptDatabaseFile_RecordsFaultAndDatabaseAnomaly()
+    {
+        string path = Path.Combine(_directory, "corrupt.db");
+        File.WriteAllText(path, "not a sqlite database file");
+        File.WriteAllBytes(path + "-wal", new byte[128]);
+        var checkpointer = new SqliteWalCheckpointer(Target(path), new SqliteCheckpointOptions(), new ListLogger(), TimeProvider.System);
+
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "database/checkpoint-failed");
+        SqliteCheckpointResult result = checkpointer.RunOnce();
+
+        Assert.False(result.Ran);
+        Assert.Contains(capture.Notices, n => n.Subject == Path.GetFullPath(path));
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "data.sqlite-checkpoint");
+    }
+
+    [Fact]
     public async Task AWriterCommittingInATightLoop_IsNeverHeldOffByTheCheckpointsRunningAlongsideIt()
     {
         string path = NewWalDb("writer.db");

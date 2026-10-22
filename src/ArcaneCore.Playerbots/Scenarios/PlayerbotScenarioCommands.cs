@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using Microsoft.Extensions.DependencyInjection;
@@ -75,6 +76,7 @@ internal static class PlayerbotScenarioCommands
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.scenarios", error);
                 bots.ReportCommandFault("scenario " + scenario.Name, error);
                 context.Reply($"Playerbot scenario {scenario.Name} failed: {error.GetType().Name}.");
             }

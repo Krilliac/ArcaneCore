@@ -382,6 +382,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             // Social life is never worth the world thread: log (the first few times in full) and carry on at the next pass.
+            FaultLedger.Shared.Record("playerbot.social", error);
+            AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
             if (_faults++ < 5) logger.LogWarning(error, "Playerbot social pass failed ({Type}: {Message})", error.GetType().Name, error.Message);
         }
     }
@@ -392,8 +394,10 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         {
             return (_socialFeature ??= services.GetService<SocialFeature>())?.Context;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException error)
         {
+            FaultLedger.Shared.Record("playerbot.social", error);
+            AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", error.Message, origin: _world?.Identity);
             return null; // not attached
         }
     }
@@ -534,6 +538,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.social", error);
+            AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
             logger.LogFault("playerbot-social", error, "Playerbot social: the bot registry could not be read ({Type}); the last one stays", error.GetType().Name);
         }
         finally

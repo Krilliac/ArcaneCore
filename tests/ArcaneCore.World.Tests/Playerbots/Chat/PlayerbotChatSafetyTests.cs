@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Chat;
@@ -927,5 +928,39 @@ public sealed class PlayerbotChatSafetyTests
         Assert.False(defaults.AutoMute || defaults.RequireOptIn || defaults.ReplaceDefaultTerms);
         Assert.Equal(PlayerbotChatSafetyCategories.All, defaults.Categories);
         Assert.Equal(PlayerbotChatModerationKind.None, new PlayerbotChatProviderOptions().Moderation);
+    }
+
+    [Fact]
+    public void SafetyFilter_RecordsFaultAndAnomaly_OnInvalidJsonAndRegexTimeout()
+    {
+        static long SiteCount() => FaultLedger.Shared.Snapshot()
+            .Where(s => s.Site == "playerbot.chat-safety")
+            .Sum(s => s.Count);
+
+        string path = Path.Combine(Path.GetTempPath(), $"safety-bad-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, "{ broken json");
+        try
+        {
+            long beforeFaults = SiteCount();
+            using AnomalyCapture faultCapture = AnomalyLedger.Shared.Capture(
+                n => n.Key == "bot-chat/safety-filter-fault" && n.Detail.Contains(path, StringComparison.Ordinal));
+            PlayerbotChatSafetyFilter filter = PlayerbotChatSafetyFilter.Load(path, replaceDefaults: false);
+
+            Assert.True(SiteCount() > beforeFaults);
+            Assert.Equal(1, faultCapture.Count("bot-chat/safety-filter-fault"));
+
+            long beforeTimeoutFaults = SiteCount();
+            using AnomalyCapture timeoutCapture = AnomalyLedger.Shared.Capture(
+                n => n.Key == "bot-chat/safety-regex-timeout" && n.Detail == "personal data (email)");
+            filter.TimeoutForTest = (_, _) => true;
+            Assert.Equal("[removed]", filter.StripPersonalData("hello@example.com", out string? timedOut));
+            Assert.Equal("personal data (email)", timedOut);
+            Assert.True(SiteCount() > beforeTimeoutFaults);
+            Assert.Equal(1, timeoutCapture.Count("bot-chat/safety-regex-timeout"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 
@@ -40,6 +41,7 @@ public static class ScenarioRunner
         catch (Exception error) when (error is not OutOfMemoryException && error is not OperationCanceledException)
         {
             // A failed step already recorded itself; anything thrown outside a step is recorded here.
+            FaultLedger.Shared.Record("playerbot.scenarios", error);
             report.Fail(context.CurrentStep, error is ScenarioAssertionException or ScenarioTimeoutException
                 ? error.Message : $"{error.GetType().Name}: {error.Message}");
         }

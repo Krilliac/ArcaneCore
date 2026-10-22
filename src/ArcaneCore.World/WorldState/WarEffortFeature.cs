@@ -97,6 +97,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"install-boss-ais error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.install-boss-ais", ex, "failed to install AQ boss AIs on world tick");
             }
 
@@ -106,6 +108,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"on-tick error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.on-tick", ex, "failed to tick AQ war effort on world tick");
             }
 
@@ -115,6 +119,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"apply-gates error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.apply-gates", ex, "failed to apply AQ gate states on world tick");
             }
 
@@ -126,6 +132,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world-event.war-effort", ex);
+                    AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"run-scenes error={ex.GetType().Name}: {ex.Message}");
                     logger.LogFault("war-effort.run-scenes", ex, "failed to run AQ war effort scenes on world tick");
                 }
             }
@@ -193,6 +201,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         {
             // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
+            FaultLedger.Shared.Record("world-event.war-effort", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"stop-inflight error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault(LogLevel.Warning, "war-effort.stop-inflight", ex, "the AQ war-effort store job in flight at shutdown failed");
         }
 
@@ -210,6 +220,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world-event.war-effort", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"stop-flush error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("war-effort.stop-flush", ex, "could not write the queued AQ war-effort state at shutdown");
         }
 
@@ -267,6 +279,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             {
                 if (_queuedPhase == phase) _queuedPhase = null;
                 foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"refresh-store error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.refresh-store", ex, "could not refresh AQ war-effort state");
             });
     }
@@ -288,7 +302,9 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         {
             // A storage outage must not interrupt CreatureMapSystem.OnCreatureDied before it sets corpse state.
             // Keep the idempotent flag in memory and retry on the next five-second refresh.
+            FaultLedger.Shared.Record("world-event.war-effort", ex);
             FaultLedger.Shared.Record("war-effort.mark-boss-killed", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"mark-boss-killed error={ex.GetType().Name}: {ex.Message}");
             result.BossDeathFailure = ex;
         }
         WarEffortSnapshot state = await store.LoadAsync().ConfigureAwait(false);
@@ -329,6 +345,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"sync-phase-event error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.sync-phase-event", ex, "could not sync AQ war-effort phase event");
             }
         }
@@ -341,6 +359,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"find-gates error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.find-gates", ex, "could not scan AQ war-effort gates");
             }
 
@@ -350,6 +370,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"announce-champion error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.announce-champion", ex, "could not announce AQ war-effort champion");
             }
 
@@ -359,6 +381,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"sync-piles error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.sync-piles", ex, "could not sync AQ war-effort resource piles");
             }
 
@@ -368,6 +392,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"publish-capital-states error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.publish-capital-states", ex, "could not publish AQ war-effort capital world states");
             }
         }

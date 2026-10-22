@@ -54,6 +54,8 @@ public sealed class RemoteWorldSession : IGatewayRemoteSession
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("cluster.remote-session", ex);
+            AnomalyLedger.Shared.Report("cluster", "gateway-fault", _session.RemoteEndpoint, $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _session.Logger.LogFault("session", ex, "[{Endpoint}] gateway session error", _session.RemoteEndpoint);
         }
         finally

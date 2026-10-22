@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.Game.Reload;
 
 /// <summary>
@@ -46,6 +47,7 @@ public sealed class ReloadTransaction
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("reload.undo", ex);
                 failures.Add(ex);
             }
         }

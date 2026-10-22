@@ -385,6 +385,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.rest-write-queue", ex);
                 logger.LogFault("writequeue-rest-consume", ex, "rest queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }

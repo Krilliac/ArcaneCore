@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -66,6 +67,8 @@ public sealed class WorldLifecycleHooks(ILogger<WorldLifecycleHooks>? logger = n
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("features.lifecycle", ex);
+                AnomalyLedger.Shared.Report("feature", "lifecycle-hook-fault", $"{stage}:{hook.Name}", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 _logger.LogError(ex, "World {Stage} hook {Hook} failed", stage, hook.Name);
                 failures.Add(ex);
             }

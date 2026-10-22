@@ -31,6 +31,7 @@ public sealed class PlayerbotBattlegroundAnomalyTests
     private static readonly string IdleInMatch = PlayerbotAnomalies.Key("bg", "idle-in-match");
     private static readonly string InviteNotAccepted = PlayerbotAnomalies.Key("bg", "invite-not-accepted");
     private static readonly string QueueStuck = PlayerbotAnomalies.Key("bg", "queue-stuck");
+    private static readonly string QueueActionFailed = PlayerbotAnomalies.Key("bg", "queue-action-failed");
 
     private static readonly TimeSpan StartWait = TimeSpan.FromMinutes(3);
 
@@ -486,6 +487,51 @@ public sealed class PlayerbotBattlegroundAnomalyTests
                 ScenarioContext.ExpectEqual(0, capture.Count(ObjectiveUnreachable), Dump(capture, ObjectiveUnreachable));
                 return true;
             });
+        });
+    }
+
+    [Fact]
+    public async Task QueueActionFailed_Fires_WhenBattlemasterHelloOrJoinCannotBeDispatched()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-anomaly-queue-action-failed", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bganomqact", 1, characterClass: 1);
+            using AnomalyCapture capture = await CaptureAsync(ally);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            BattlegroundFeature feature = context.Services.GetRequiredService<BattlegroundFeature>();
+
+            await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                // Cancel the session's kick token so TryManagedAction returns false without closing the test world.
+                var kickField = typeof(ArcaneCore.World.Net.WorldSession).GetField("_kick",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                ((CancellationTokenSource)kickField.GetValue(ally.Session!)!).Cancel();
+
+                Type trackedType = typeof(PlayerbotBattlegroundCoordinator).GetNestedType("Tracked",
+                    System.Reflection.BindingFlags.NonPublic)!;
+                object tracked = Activator.CreateInstance(trackedType, ally.BotId, player.Name)!;
+                trackedType.GetProperty("Type")!.SetValue(tracked, BattlegroundType.WarsongGulch);
+                trackedType.GetProperty("Team")!.SetValue(tracked, Team.Alliance);
+                trackedType.GetProperty("Battlemaster")!.SetValue(tracked,
+                    ObjectGuid.WithEntry(HighGuid.Unit, Content.AllianceWsgMaster, Content.AllianceWsgMaster));
+
+                Type botRecordType = typeof(PlayerbotBattlegroundCoordinator).GetNestedType("PlayerbotBattlegroundBot",
+                    System.Reflection.BindingFlags.NonPublic)!;
+                object botRecord = Activator.CreateInstance(botRecordType, ally.BotId, ally.Session!, null!, true)!;
+                var doMethod = typeof(PlayerbotBattlegroundCoordinator).GetMethod("Do",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                doMethod.Invoke(coordinator, [tracked, botRecord, player, feature,
+                    PlayerbotBattlegroundPhase.Travel, PlayerbotBattlegroundPhase.Join,
+                    PlayerbotBattlegroundAction.Hello, default(PlayerbotBattlegroundFacts)]);
+                doMethod.Invoke(coordinator, [tracked, botRecord, player, feature,
+                    PlayerbotBattlegroundPhase.Join, PlayerbotBattlegroundPhase.Join,
+                    PlayerbotBattlegroundAction.Join, default(PlayerbotBattlegroundFacts)]);
+                return true;
+            });
+
+            ScenarioContext.ExpectEqual(2, capture.Count(QueueActionFailed), Dump(capture, QueueActionFailed));
         });
     }
 }

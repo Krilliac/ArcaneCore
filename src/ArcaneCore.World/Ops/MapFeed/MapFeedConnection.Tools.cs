@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Threading.Channels;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
@@ -77,6 +78,7 @@ internal sealed partial class MapFeedConnection
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Like the console window: a command that throws fails that command, not the connection.
+                FaultLedger.Shared.Record("ops.map-feed", ex);
                 _logger.LogError(ex, "map feed console command could not be run ({Client})", Client);
                 console.Executor.WriteLine("The command failed; see the server log.");
             }

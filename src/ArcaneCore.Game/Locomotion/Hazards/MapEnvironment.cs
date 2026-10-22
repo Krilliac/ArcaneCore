@@ -75,6 +75,7 @@ internal sealed class MapEnvironment : IMapUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("locomotion.environment", ex);
                     map.Logger.LogFault(
                         "map-environment",
                         ex,
@@ -109,6 +110,7 @@ internal sealed class MapEnvironment : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("locomotion.environment", ex);
             map.Logger.LogFault(
                 "map-environment",
                 ex,

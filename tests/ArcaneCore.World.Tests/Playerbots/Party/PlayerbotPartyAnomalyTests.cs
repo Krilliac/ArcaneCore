@@ -687,4 +687,54 @@ public sealed class PlayerbotPartyAnomalyTests
             await Finish(orphan);
         }
     }
+
+    [Fact]
+    public async Task AMalformedChatPacket_FiresChatCommandMalformed_WhileMonsterChatAndValidChatDoNot()
+    {
+        await using WorldTestHost host = Host();
+        await using WorldTestClient master = await host.EnterWorldAsync("PARTYMCHM", "Partymchm");
+        WorldSession session = await PartyTestHost.EnterManagedAsync(host, "PARTYMCHB", "Partymchb");
+        try
+        {
+            var ai = new PlayerbotPartyAI(session, PartyTestHost.PlayerbotOptionsOf(host));
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(session.Player!);
+            await host.OnWorldAsync(() =>
+            {
+                (Player owner, Player follower) = Group(host, "Partymchm", session);
+                Assert.True(ai.Drives(follower));
+
+                // Monster chat has a different layout and must be ignored without an anomaly.
+                session.Send(WorldOpcode.SmsgMessagechat, new byte[] { (byte)ChatType.MonsterSay, 1, 2, 3 });
+                ai.Intake(follower);
+
+                // Valid party chat must not report malformed.
+                session.Send(WorldOpcode.SmsgMessagechat, ChatLine(ChatType.Party, owner.Guid, "follow"));
+                ai.Intake(follower);
+                return true;
+            });
+            Assert.False(cap.Any(Key(PlayerbotPartyAnomalies.ChatCommandMalformed)), cap.Describe());
+
+            await host.OnWorldAsync(() =>
+            {
+                Player follower = session.Player!;
+                // Truncated whisper packet (< 18 bytes).
+                session.Send(WorldOpcode.SmsgMessagechat, new byte[] { (byte)ChatType.Whisper, 1, 2, 3 });
+                ai.Intake(follower);
+
+                // Channel packet with an overlong CString channel name (throws ArgumentOutOfRangeException in PacketReader).
+                var badChannel = new byte[PacketReader.MaxCStringBytes + 16];
+                badChannel[0] = (byte)ChatType.Channel;
+                for (int i = 5; i < badChannel.Length; i++) badChannel[i] = (byte)'A';
+                session.Send(WorldOpcode.SmsgMessagechat, badChannel);
+                ai.Intake(follower);
+                return true;
+            });
+            Assert.Equal(2, cap.Count(Key(PlayerbotPartyAnomalies.ChatCommandMalformed)));
+            Assert.Contains(FaultLedger.Shared.Snapshot(), e => e.Site == "playerbot.party");
+        }
+        finally
+        {
+            await Finish(session);
+        }
+    }
 }

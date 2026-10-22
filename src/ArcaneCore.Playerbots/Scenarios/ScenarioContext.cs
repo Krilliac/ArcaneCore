@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Economy;
@@ -120,6 +121,7 @@ public sealed class ScenarioContext
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.scenarios", error);
             string message = error is ScenarioAssertionException or ScenarioTimeoutException
                 ? error.Message
                 : $"{error.GetType().Name}: {error.Message}";
@@ -152,6 +154,7 @@ public sealed class ScenarioContext
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             // Already recorded by StepAsync (a timeout of the cleanup's own bound as a cancellation).
+            FaultLedger.Shared.Record("playerbot.scenarios", error);
         }
         finally
         {

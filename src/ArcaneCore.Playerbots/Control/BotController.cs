@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -252,8 +253,10 @@ internal sealed class BotController : IPlayerbotController
                 {
                     LastLoot = Scenarios.ScenarioDecoders.LootResponse(packet.Payload);
                 }
-                catch (FormatException)
+                catch (FormatException ex)
                 {
+                    FaultLedger.Shared.Record("playerbot.control", ex);
+                    AnomalyLedger.Shared.Report("bot-control", "event-decode-failed", "loot-response", ex.Message);
                     LastLoot = null;
                 }
             }
@@ -455,6 +458,8 @@ internal sealed class BotControlSubscriber(string key, Action<string> write, Can
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or IOException)
         {
             // The invoker's sink closed; it is pruned at the next tick.
+            FaultLedger.Shared.Record("playerbot.control", ex);
+            AnomalyLedger.Shared.Report("bot-control", "command-fault", "bot-controller-sink", $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 }

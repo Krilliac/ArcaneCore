@@ -9,6 +9,7 @@ using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -171,8 +172,10 @@ internal sealed class PlayerbotConversations
         {
             return pass.Quests;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException error)
         {
+            FaultLedger.Shared.Record("playerbot.social", error);
+            AnomalyLedger.Shared.Report("bot-social", "conversation-fault", "social-conversations", error.Message);
             return null; // the quest feature is not attached yet
         }
     }

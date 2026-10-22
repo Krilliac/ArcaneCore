@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Numerics;
+using System.Reflection;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -112,6 +115,23 @@ public sealed class PlayerbotNavigationExecutorTests
             options.CancellationToken.ThrowIfCancellationRequested();
             throw new InvalidOperationException("a cancelled query must throw");
         }
+    }
+
+    [Fact]
+    public async Task SubmittingWhenQueueIsClosed_ReportsDroppedPlanAndRecordsFault()
+    {
+        await using var executor = new PlayerbotNavigationExecutor(() => new StraightPathfinder(), capacity: 2);
+        FieldInfo queueField = typeof(PlayerbotNavigationExecutor).GetField("_queue", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        object queue = queueField.GetValue(executor)!;
+        queue.GetType().GetMethod("CompleteAdding")!.Invoke(queue, null);
+
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
+            n => n.Subsystem == "bot-nav" && n.Code == "plan-dropped" && n.Subject == "navigation executor" && n.Detail.Contains("on map 777", StringComparison.Ordinal));
+        Assert.False(executor.TrySubmit(Request(777), out _));
+        Assert.Equal(0, executor.Outstanding);
+        AnomalyNotice notice = Assert.Single(capture.Notices);
+        Assert.Contains("executor queue closed", notice.Detail, StringComparison.Ordinal);
+        Assert.Contains(FaultLedger.Shared.Snapshot(), e => e.Site == "playerbot.nav-executor");
     }
 
     private sealed class StraightPathfinder : IPathfinder

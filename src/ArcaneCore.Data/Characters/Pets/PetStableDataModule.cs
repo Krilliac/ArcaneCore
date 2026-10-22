@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -123,8 +124,9 @@ public sealed class EfPetStableStore(CharacterDbContext db) : IPetStableStore
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.pet-stable", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -162,8 +164,9 @@ public sealed class EfPetStableStore(CharacterDbContext db) : IPetStableStore
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return taken;
         }
-        catch
+        catch (Exception ex)
         {
+            FaultLedger.Shared.Record("data.pet-stable", ex);
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }

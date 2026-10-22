@@ -142,6 +142,7 @@ public sealed class WorldConsoleExecutor
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.console-executor", ex);
             context.Fail("exception");
             _logger.LogError(ex, "console command failed: {Command}", ArcaneCore.Kernel.Ops.ServerConsole.ConsoleCommandRedactor.Redact(text));
             WriteLine("The command failed; see the server log.");

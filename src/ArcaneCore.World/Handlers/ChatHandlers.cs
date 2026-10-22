@@ -329,6 +329,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // A faulty command must not take the invoker's connection down with it.
+            FaultLedger.Shared.Record("handlers.chat-command", ex);
             session.Logger.LogFault("chat-command", ex, "[{Endpoint}] command '{Command}' by {Player} failed", session.RemoteEndpoint, commandText, player.Name);
             context.Reply("The command failed; see the server log.");
         }

@@ -475,6 +475,8 @@ public sealed class ModuleHost
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.modules", ex);
+            AnomalyLedger.Shared.Report("hotcode", "module-fault", name, $"verb={verb} report_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
             _logger.LogError(ex, "could not report the module {Verb} of '{Name}'", verb, name);
         }
     }
@@ -598,6 +600,8 @@ public sealed class ModuleHost
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.modules", ex);
+            AnomalyLedger.Shared.Report("hotcode", "module-fault", kind.ToString(), $"commit_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             IReadOnlyList<string> changed = undo.Slots;
             _logger.LogError(ex, "A hot module {Kind} failed after validation; rolling back {Slots}", kind, changed.Count == 0 ? "nothing" : string.Join(", ", changed));
             failedAfterValidation = true;
@@ -719,6 +723,8 @@ public sealed class ModuleHost
             }
             catch (ReflectionTypeLoadException ex)
             {
+                FaultLedger.Shared.Record("hotcode.modules", ex);
+                AnomalyLedger.Shared.Report("hotcode", "module-fault", name, $"type_load_error={ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message}", AnomalySeverity.Warning);
                 throw new ModuleRejectedException("the module's types could not be loaded: " + (ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message));
             }
 
@@ -800,6 +806,8 @@ public sealed class ModuleHost
             if (ex is not ModuleRejectedException)
             {
                 // A rejection is a refusal the operator is told about. Anything else (a module constructor or static initialiser that throws, a loader failure) is unexpected and keeps its stack.
+                FaultLedger.Shared.Record("hotcode.modules", ex);
+                AnomalyLedger.Shared.Report("hotcode", "module-fault", name, $"load_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 _logger.LogFault("hotmodule-load", ex, "Hot module {Name} could not be loaded", name);
             }
 
@@ -821,6 +829,8 @@ public sealed class ModuleHost
         }
         catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("hotcode.modules", ex);
+            AnomalyLedger.Shared.Report("hotcode", "module-fault", what, $"discover_error={ex.Message}", AnomalySeverity.Warning);
             throw new ModuleRejectedException($"the module's {what} are invalid: {ex.Message}");
         }
     }

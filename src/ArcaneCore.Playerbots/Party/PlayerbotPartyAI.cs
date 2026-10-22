@@ -370,7 +370,13 @@ internal sealed class PlayerbotPartyAI
 
     private void OnChat(Player player, byte[] payload)
     {
-        if (!PlayerbotChatCommands.TryRead(payload, out PlayerbotChatLine line)) return;
+        if (!PlayerbotChatCommands.TryRead(payload, out PlayerbotChatLine line, out bool malformed))
+        {
+            if (malformed)
+                PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.ChatCommandMalformed,
+                    string.Create(CultureInfo.InvariantCulture, $"malformed SMSG_MESSAGECHAT ({payload.Length} bytes)"));
+            return;
+        }
         Player? sender = _session.World.FindOnlinePlayer(line.Sender);
         bool senderIsBot = sender?.Session is WorldSession { IsManaged: true };
         bool isGm = sender is not null && IsGm(sender);
@@ -2028,8 +2034,9 @@ internal sealed class PlayerbotPartyAI
             {
                 return social.Context;
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex)
             {
+                FaultLedger.Shared.Record("playerbot.party", ex);
                 return null; // not attached
             }
         }

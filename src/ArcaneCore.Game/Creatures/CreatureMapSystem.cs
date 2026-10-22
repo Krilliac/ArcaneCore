@@ -1089,6 +1089,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("creatures.update", ex);
                     _logger.LogFault("CreatureMapSystem.SplinePass", ex, "Creature spline pass fault for {Guid} (entry={Entry}, map={MapId})",
                         creature.Guid, creature.Entry, Map.MapId);
                 }
@@ -1224,6 +1225,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("creatures.update", ex);
             _logger.LogFault(
                 "CreatureMapSystem.UpdateCreatureMotion",
                 ex,
@@ -1412,6 +1414,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("creatures.update", ex);
                 _logger.LogFault(
                     "CreatureMapSystem.UpdateCreature",
                     ex,

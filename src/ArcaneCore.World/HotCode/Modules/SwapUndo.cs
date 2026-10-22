@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.HotCode.Modules;
 
 /// <summary>The slots one module swap commits, in commit order (the names <see cref="ModuleHost"/>'s fault injection and the undo log use).</summary>
@@ -49,6 +50,8 @@ internal sealed class SwapUndo
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("hotcode.undo", ex);
+                AnomalyLedger.Shared.Report("hotcode", "undo-failed", slot, $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 onStepFailed(slot, ex);
                 (failed ??= []).Add($"{slot} ({ex.GetType().Name}: {ex.Message})");
             }

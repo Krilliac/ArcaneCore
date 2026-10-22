@@ -327,7 +327,12 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         await _stop.CancelAsync().ConfigureAwait(false);
         try { await _pass.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
         catch (Exception ex) when (ex is OperationCanceledException or TimeoutException) { /* a pass cut short by the shutdown */ }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { logger.LogWarning(ex, "Playerbot population pass ended with an error at shutdown"); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.population", ex);
+            AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"shutdown pass error: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
+            logger.LogWarning(ex, "Playerbot population pass ended with an error at shutdown");
+        }
     }
 
     // World thread, once per tick: one ring write (WorldTickWindow.Add), no allocation.
@@ -444,6 +449,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         try { input = Capture(rushCount, shedOnly); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.population", ex);
+            AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"capture failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
             logger.LogWarning(ex, "Playerbot population could not capture the world ({Type}: {Message})", ex.GetType().Name, ex.Message);
             _lastError = "capture: " + ex.Message;
             Publish(_status with { Enabled = true, State = "error", Reason = "capture failed: " + ex.Message, LastError = _lastError });
@@ -463,6 +470,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.population", ex);
+                AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass faulted: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot-population", ex, "Playerbot population pass faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
             }
         });
@@ -669,6 +678,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.population", ex);
+                AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"graveyard terrain lookup or creature survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot-population", ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
                 result = null;
             }
@@ -925,6 +936,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.population", ex);
+            AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
             logger.LogFault("playerbot-population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
             _lastError = $"{ex.GetType().Name}: {ex.Message}";
             decision = decision with { State = "error", Reason = "the pass failed: " + ex.Message };
@@ -1396,6 +1409,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
         catch (Exception ex) when ((ex is InvalidOperationException or ArgumentException) && ex is not ManagedPlayerbotFeature.PlayerbotSplitBrainException)
         {
+            FaultLedger.Shared.Record("playerbot.population", ex);
+            AnomalyLedger.Shared.Report("bot-population", "adoption-fault", "population", $"{place} for bot {botId:D}: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
             return $"{ex.GetType().Name}: {ex.Message}";
         }
     }
@@ -1881,6 +1896,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Backoff(botId);
+            FaultLedger.Shared.Record("playerbot.population", ex);
+            AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}: {ex.Message})", origin: _world?.Identity);
             logger.LogFault("playerbot-population", ex, "Playerbot population: deleting the unplaced bot {Bot} failed", name ?? botId.ToString());
             Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
             return false;

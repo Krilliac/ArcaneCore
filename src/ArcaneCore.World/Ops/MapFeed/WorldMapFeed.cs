@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Reflection;
@@ -330,6 +331,7 @@ public sealed class WorldMapFeed : IHostedService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("ops.map-feed", ex);
                 _logger.LogWarning(ex, "map feed: a connection ended with an error");
                 if (++failures >= 5)
                 {
@@ -470,6 +472,7 @@ public sealed class WorldMapFeed : IHostedService
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("ops.map-feed", ex);
                     long faults = Interlocked.Increment(ref _captureFaults);
                     if (faults == 1 || faults % 100 == 0)
                     {

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using ArcaneCore.Game;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots.Scenarios;
 
@@ -45,6 +46,8 @@ internal static class BotControlEvents
         }
         catch (Exception ex) when (ex is FormatException or ArgumentException or IndexOutOfRangeException or InvalidOperationException or EndOfStreamException)
         {
+            FaultLedger.Shared.Record("playerbot.control", ex);
+            AnomalyLedger.Shared.Report("bot-control", "event-decode-failed", Kind(opcode), $"{ex.GetType().Name}: {ex.Message}");
             return Generic(opcode, payload);
         }
     }

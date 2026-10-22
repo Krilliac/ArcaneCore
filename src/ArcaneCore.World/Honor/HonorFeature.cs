@@ -265,6 +265,8 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
                 }
                 catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("persist.honor", stopEx);
+                    AnomalyLedger.Shared.Report("persist", "callback-failed", "HonorFeature", $"callback=StopApplication error={stopEx.GetType().Name}", AnomalySeverity.Error);
                     _logger.LogFault("honor.stop-application", stopEx, "Stopping application after fatal honor write failure failed");
                 }
             };

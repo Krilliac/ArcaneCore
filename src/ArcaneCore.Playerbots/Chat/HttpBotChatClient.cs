@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 
@@ -76,6 +77,7 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-http", error);
             return BotChatResult.Fail(BotChatOutcome.NetworkError);
         }
     }
@@ -104,6 +106,7 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-http", error);
             return new BotChatModeration(BotChatModerationVerdict.Failed);
         }
     }
@@ -125,8 +128,10 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
                 category = categories.EnumerateObject().FirstOrDefault(pair => pair.Value.ValueKind == JsonValueKind.True).Name;
             return new BotChatModeration(BotChatModerationVerdict.Flagged, Category(category));
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-http", error);
+            AnomalyLedger.Shared.Report("bot-chat", "http-invalid-json", "http-chat-client", error.Message);
             return new BotChatModeration(BotChatModerationVerdict.Failed);
         }
     }
@@ -239,8 +244,10 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
                 ? new BotChatResult(BotChatOutcome.BadResponse, null, input, output, write, read)
                 : new BotChatResult(BotChatOutcome.Ok, text.ToString(), input, output, write, read);
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-http", error);
+            AnomalyLedger.Shared.Report("bot-chat", "http-invalid-json", "http-chat-client", error.Message);
             return BotChatResult.Fail(BotChatOutcome.BadResponse);
         }
     }
@@ -272,8 +279,10 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
             // Cached prompt tokens are part of prompt_tokens here; the estimate prices them as plain input (an upper bound).
             return new BotChatResult(BotChatOutcome.Ok, content.GetString(), input, output);
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-http", error);
+            AnomalyLedger.Shared.Report("bot-chat", "http-invalid-json", "http-chat-client", error.Message);
             return BotChatResult.Fail(BotChatOutcome.BadResponse);
         }
     }

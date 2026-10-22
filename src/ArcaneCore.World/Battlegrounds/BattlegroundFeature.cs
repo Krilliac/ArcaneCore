@@ -95,6 +95,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("battlegrounds.feature", ex);
+                    AnomalyLedger.Shared.Report("bg", "feature-fault", "content-load", $"error={ex.GetType().Name}: {ex.Message}");
                     _logger.LogFault(LogLevel.Warning, "battleground-content-load", ex, "battleground content could not be read; the built-in templates are used and no spawn is event-gated");
                 }
             }
@@ -262,6 +264,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("battlegrounds.feature", ex);
+            AnomalyLedger.Shared.Report("bg", "feature-fault", "manager-tick", $"error={ex.GetType().Name}: {ex.Message}");
             _logger.LogFault("battleground-manager-tick", ex, "battleground manager tick failed");
         }
 
@@ -273,6 +277,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("battlegrounds.feature", ex);
+                AnomalyLedger.Shared.Report("bg", "feature-fault", $"match {match.Type} instance {match.InstanceId}", $"error={ex.GetType().Name}: {ex.Message}");
                 _logger.LogFault("battleground-match-tick", ex, "battleground match {Type} instance {InstanceId} tick failed", match.Type, match.InstanceId);
             }
         }
@@ -526,6 +532,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("battlegrounds.feature", ex);
+                AnomalyLedger.Shared.Report("bg", "feature-fault", "write-loop", $"error={ex.GetType().Name}: {ex.Message}");
                 _logger.LogFault("battleground-write-loop", ex, "a character_battleground_data write failed");
             }
         }

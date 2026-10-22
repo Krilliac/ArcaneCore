@@ -335,4 +335,20 @@ public sealed class PlayerbotGroupAnomalyTests
         PlayerbotGroupAnomalies.ReportNamed("Gnamed", new ArcaneCore.Game.ObjectGuid(0xABC), PlayerbotGroupAnomalies.InviteUnanswered, "detail");
         Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.InviteUnanswered)));
     }
+
+    [Fact]
+    public void GroupSystemAnomalies_ReportWithOriginAndExpectedKeys()
+    {
+        var origin = new object();
+        using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Subsystem == "bot-group" && ReferenceEquals(n.Origin, origin));
+        PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.CoordinatorFault, "group 42", "coord fault", origin);
+        PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.HandoffFault, "server-group 7", "handoff fault", origin);
+        PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.RunFault, "instance_encounter", "run fault", origin);
+        PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.SiegeFault, "siege 1", "siege fault", origin);
+
+        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.CoordinatorFault)));
+        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.HandoffFault)));
+        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.RunFault)));
+        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.SiegeFault)));
+    }
 }

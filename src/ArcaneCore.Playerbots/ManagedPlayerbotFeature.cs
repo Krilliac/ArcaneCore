@@ -833,7 +833,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     session.Kick("playerbot spare account cleanup");
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
+                    catch (TimeoutException timeout)
+                    {
+                        FaultLedger.Shared.Record("playerbot.lifecycle", timeout);
+                        AnomalyLedger.Shared.Report("bot-lifecycle", "session-close-timeout",
+                            string.Create(CultureInfo.InvariantCulture, $"bot {held[0].Name} (guid {(uint)held[0].Id:X})"),
+                            string.Create(CultureInfo.InvariantCulture, $"spare account '{spare.Username}' cleanup session did not close within 10 s"),
+                            AnomalySeverity.Warning, _world?.Identity);
+                        logger.LogWarning(timeout, "Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username);
+                    }
                 }
 
                 if ((await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false)).Count != 0)
@@ -1502,15 +1510,28 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
 
             if (ex is not OperationCanceledException)
+            {
                 FaultLedger.Shared.Record("playerbot.feature", ex);
+                FaultLedger.Shared.Record("playerbot.lifecycle", ex);
+            }
             logger.LogWarning(ex, "Managed playerbot start failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            CharacterRecord? character = null;
             if (bot is not null)
             {
                 // An operator start that fails is reported and not retried; a quarantine retry that fails is one more fault.
                 (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message, session?.Player) : (false, "start-failed");
                 bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
-                CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                 PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
+            }
+            if (ex is not OperationCanceledException)
+            {
+                string subject = session?.Player is { } player ? PlayerbotAnomalies.SubjectOf(player)
+                    : bot is not null ? string.Create(CultureInfo.InvariantCulture, $"bot {character?.Name ?? idOrName} (guid {(uint)bot.CharacterId:X})")
+                    : $"bot {idOrName}";
+                AnomalyLedger.Shared.Report("bot-lifecycle", "operation-fault", subject,
+                    string.Create(CultureInfo.InvariantCulture, $"bot {bot?.BotId.ToString("D") ?? idOrName} start failed ({ex.GetType().Name}: {ex.Message})"),
+                    AnomalySeverity.Warning, _world?.Identity);
             }
             if (ex is OperationCanceledException) throw;
             return new(false, "start-failed", bot?.BotId);
@@ -1525,7 +1546,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     {
                         session.Kick("playerbot start aborted");
                         await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
-                        if (bot is not null) await FlushBoundedAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                        if (bot is not null) await FlushBoundedAsync(bot.CharacterId, CancellationToken.None, session.Player?.Name ?? idOrName).ConfigureAwait(false);
                     }
                     await scope.DisposeAsync().ConfigureAwait(false);
                 }
@@ -1538,7 +1559,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// Wait for a bot character's save barrier, but not forever: the caller holds <c>_operations</c>, and while another writer holds the database the
     /// save queue retains the snapshot and retries it, which would otherwise stall every bot operation. The snapshot is not lost on a timeout.
     /// </summary>
-    private async Task FlushBoundedAsync(int characterId, CancellationToken cancellationToken)
+    private async Task FlushBoundedAsync(int characterId, CancellationToken cancellationToken, string? botName = null)
     {
         try
         {
@@ -1546,6 +1567,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         catch (TimeoutException timeout)
         {
+            FaultLedger.Shared.Record("playerbot.lifecycle", timeout);
+            AnomalyLedger.Shared.Report("bot-lifecycle", "session-close-timeout",
+                string.Create(CultureInfo.InvariantCulture, $"bot {botName ?? characterId.ToString(CultureInfo.InvariantCulture)} (guid {(uint)characterId:X})"),
+                string.Create(CultureInfo.InvariantCulture, $"character {characterId} save barrier did not complete within 15 s"),
+                AnomalySeverity.Warning, _world?.Identity);
             logger.LogWarning(timeout, "Managed playerbot character {CharacterId}: the save barrier did not complete in 15 s (database busy?); continuing, the snapshot stays queued", characterId);
         }
     }
@@ -1597,7 +1623,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 return new(false, "owner-refused", bot.BotId);
 
             if (await scope.ServiceProvider.GetRequiredService<ICharacterStore>()
-                .GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false) is not null)
+                .GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false) is { } character)
             {
                 WorldSession session = await NewSessionAsync(owner, null, scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
                 try
@@ -1610,7 +1636,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     session.Kick("playerbot character deleted");
                     // A close that is slow after a committed deletion must not skip the cleanup below.
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
+                    catch (TimeoutException timeout)
+                    {
+                        FaultLedger.Shared.Record("playerbot.lifecycle", timeout);
+                        AnomalyLedger.Shared.Report("bot-lifecycle", "session-close-timeout",
+                            string.Create(CultureInfo.InvariantCulture, $"bot {character.Name} (guid {(uint)bot.CharacterId:X})"),
+                            string.Create(CultureInfo.InvariantCulture, $"bot {bot.BotId:D} deletion session did not close within 10 s"),
+                            AnomalySeverity.Warning, _world?.Identity);
+                        logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId);
+                    }
                 }
             }
 
@@ -1859,8 +1893,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 await DropFromActiveAsync(active, active.Record, writeSetAsides: false, announce: false).ConfigureAwait(false);
                 try { await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                catch (TimeoutException) { logger.LogWarning("Playerbot {BotId} session did not close within 10 s of the split-brain stop", bot.BotId); }
-                await FlushBoundedAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                catch (TimeoutException timeout)
+                {
+                    FaultLedger.Shared.Record("playerbot.lifecycle", timeout);
+                    AnomalyLedger.Shared.Report("bot-lifecycle", "session-close-timeout",
+                        string.Create(CultureInfo.InvariantCulture, $"bot {active.Name} (guid {(uint)bot.CharacterId:X})"),
+                        string.Create(CultureInfo.InvariantCulture, $"bot {bot.BotId:D} session did not close within 10 s of the split-brain stop"),
+                        AnomalySeverity.Warning, _world?.Identity);
+                    logger.LogWarning("Playerbot {BotId} session did not close within 10 s of the split-brain stop", bot.BotId);
+                }
+                await FlushBoundedAsync(bot.CharacterId, CancellationToken.None, active.Name).ConfigureAwait(false);
                 return;
             }
 
@@ -1891,7 +1933,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 // A reason, so the stop is no session/kick-no-reason (live: ~300 per restart and a steady trickle from the rotation).
                 active.Session.Kick(faultCode is null ? "playerbot stopped" : "playerbot faulted: " + faultCode);
                 await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-                await FlushBoundedAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                await FlushBoundedAsync(bot.CharacterId, cancellationToken, active.Name).ConfigureAwait(false);
                 // Read on the world thread, queued behind this bot's own Forget: other bots' Forgets mutate the coordinators' collections.
                 (PlayerbotGoalKind goal, uint targetEntry, uint questId) = await GoalOnWorldThreadAsync(active).ConfigureAwait(false);
                 bot = await PersistAsync(active.Scope.ServiceProvider, active.Record with
@@ -1924,7 +1966,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 if (!stoppingWritten) Quiesce();
                 if (ex is not OperationCanceledException)
+                {
                     FaultLedger.Shared.Record("playerbot.feature", ex);
+                    FaultLedger.Shared.Record("playerbot.lifecycle", ex);
+                    AnomalyLedger.Shared.Report("bot-lifecycle",
+                        ex is TimeoutException ? "session-close-timeout" : "operation-fault",
+                        string.Create(CultureInfo.InvariantCulture, $"bot {active.Name} (guid {(uint)bot.CharacterId:X})"),
+                        string.Create(CultureInfo.InvariantCulture, $"bot {bot.BotId:D} stop failed ({ex.GetType().Name}: {ex.Message})"),
+                        AnomalySeverity.Warning, _world?.Identity);
+                }
                 try
                 {
                     active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
@@ -2124,6 +2174,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("playerbot.feature", ex);
+                    FaultLedger.Shared.Record("playerbot.bg-coordinator", ex);
                     logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
                 }
             }

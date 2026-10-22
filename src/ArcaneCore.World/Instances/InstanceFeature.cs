@@ -54,6 +54,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.feature", ex);
             _logger.LogFault("instance-areatrigger", ex, "instance script area trigger {TriggerId} failed for {Player}", triggerId, player.Guid);
         }
     }
@@ -77,6 +78,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.feature", ex);
             _logger.LogFault("instance-areatrigger-gate", ex, "instance script area trigger gate {TriggerId} failed for {Player}", teleport.Id, player.Guid);
             return AreaTriggerVerdict.Refuse(null);
         }
@@ -218,6 +220,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("instances.feature", ex);
                         _logger.LogFault("instance-restore-group-binds", ex, "restoring group instance binds failed for group {GroupId}", group.Id);
                     }
                 }
@@ -231,6 +234,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.feature", ex);
                 _logger.LogFault("instance-schedule-update", ex, "instance reset schedule update failed");
             }
         }), null, ScheduleIntervalMs, ScheduleIntervalMs);
@@ -316,6 +320,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.feature", ex);
             _logger.LogFault("instance-player-login", ex, "sending raid instance info on login failed for {Player}", player.Guid);
         }
     }
@@ -337,6 +342,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.feature", ex);
             _logger.LogFault("instance-player-logout", ex, "retrying retained instance writes on logout failed for {Player}", player.Guid);
         }
     }

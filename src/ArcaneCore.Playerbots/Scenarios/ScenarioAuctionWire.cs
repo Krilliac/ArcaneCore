@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Economy;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
@@ -127,6 +128,7 @@ public static class ScenarioAuctionWire
         }
         catch (Exception e) when (e is ArgumentOutOfRangeException or IndexOutOfRangeException or InvalidOperationException)
         {
+            FaultLedger.Shared.Record("playerbot.scenarios", e);
             throw new FormatException($"malformed {what} payload ({payload.Length} bytes)", e);
         }
     }

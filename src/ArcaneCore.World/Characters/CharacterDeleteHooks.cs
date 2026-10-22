@@ -5,6 +5,7 @@ using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Characters;
 
 /// <summary>
@@ -165,6 +166,8 @@ public static class CharacterDeletion
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("characters.delete", ex);
+            AnomalyLedger.Shared.Report("character", "delete-hook-failed", $"character {id}", $"error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not delete character {Id}", session.RemoteEndpoint, id);
             return false;
         }
@@ -224,6 +227,8 @@ public static class CharacterDeletion
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("characters.delete-reconcile", ex);
+            AnomalyLedger.Shared.Report("character", "delete-hook-failed", $"account {session.AccountId}", $"reconcile error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not reconcile pending character deletions", session.RemoteEndpoint);
         }
     }
@@ -243,6 +248,8 @@ public static class CharacterDeletion
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("characters.delete-ledger", ex);
+            AnomalyLedger.Shared.Report("character", "delete-hook-failed", $"character {id}", $"ledger delete error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] deleting character {Id} failed; reading the outcome back",
                 session.RemoteEndpoint, id);
         }
@@ -260,6 +267,8 @@ public static class CharacterDeletion
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("characters.delete-readback", ex);
+            AnomalyLedger.Shared.Report("character", "delete-hook-failed", $"character {id}", $"readback error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not read back the outcome of deleting character {Id}",
                 session.RemoteEndpoint, id);
         }
@@ -297,6 +306,8 @@ public static class CharacterDeletion
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     clean = false;
+                    FaultLedger.Shared.Record("characters.delete-hook", ex);
+                    AnomalyLedger.Shared.Report("character", "delete-hook-failed", $"character {id}", $"hook={hook.GetType().Name} error={ex.GetType().Name}: {ex.Message}");
                     session.Logger.LogError(ex, "[{Endpoint}] {Hook} failed to clean up deleted character {Id}",
                         session.RemoteEndpoint, hook.GetType().Name, id);
                 }
@@ -322,6 +333,8 @@ public static class CharacterDeletion
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("characters.delete-complete", ex);
+                AnomalyLedger.Shared.Report("character", "delete-hook-failed", $"character {id}", $"complete operation={operation} error={ex.GetType().Name}: {ex.Message}");
                 session.Logger.LogError(ex, "[{Endpoint}] could not complete deletion {Operation} of character {Id}; it stays pending",
                     session.RemoteEndpoint, operation, id);
             }

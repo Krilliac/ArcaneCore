@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Runtime.CompilerServices;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -267,8 +268,10 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             wal.CommandText = "PRAGMA journal_mode=WAL;";
             return wal.ExecuteScalar() as string ?? journalMode;
         }
-        catch (SqliteException)
+        catch (SqliteException ex)
         {
+            FaultLedger.Shared.Record("data.sqlite-pragma", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", connection.DataSource ?? string.Empty, ex.Message, AnomalySeverity.Warning);
             return journalMode; // fail closed: ApplySynchronous keeps FULL and reports the mode it was given
         }
     }
@@ -312,8 +315,10 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             wal.CommandText = "PRAGMA journal_mode=WAL;";
             return await wal.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string ?? journalMode;
         }
-        catch (SqliteException)
+        catch (SqliteException ex)
         {
+            FaultLedger.Shared.Record("data.sqlite-pragma", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", connection.DataSource ?? string.Empty, ex.Message, AnomalySeverity.Warning);
             return journalMode; // fail closed: ApplySynchronous keeps FULL and reports the mode it was given
         }
     }

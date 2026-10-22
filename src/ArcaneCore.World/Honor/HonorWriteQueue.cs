@@ -471,6 +471,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // ExecuteAsync reports store failures itself; this is a queue bug and must not kill the consumer.
+                FaultLedger.Shared.Record("persist.honor-write-queue", ex);
                 logger.LogFault("writequeue-honor-consume", ex, "honor write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
@@ -562,6 +563,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.honor-write-queue", ex);
             bool newEpisode = true;
             lock (_gate)
             {

@@ -61,6 +61,9 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
         {
             // One report, then the ladder: a bad model file must never stop the server or the bots.
             ModelError = error.Message;
+            FaultLedger.Shared.Record("playerbot.policy-engine", error);
+            AnomalyLedger.Shared.Report("bot-policy", "evaluation-fault", "policy model " + Path.GetFileName(path),
+                $"{path}: {error.GetType().Name}: {error.Message}");
             AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + AnomalyArea, "model-load-failed", "policy model " + Path.GetFileName(path),
                 $"{path}: {error.GetType().Name}: {error.Message}; the rule ladder scores instead");
             _logger?.LogWarning("Playerbot goal policy model {Path} did not load ({Type}: {Message}); the rule ladder decides", path, error.GetType().Name, error.Message);
@@ -157,6 +160,8 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
             Interlocked.Increment(ref _errors);
             Interlocked.Add(ref _unscored, count - done);
             FaultLedger.Shared.Record("playerbot.policy", error);
+            FaultLedger.Shared.Record("playerbot.policy-engine", error);
+            AnomalyLedger.Shared.Report("bot-policy", "evaluation-fault", Policy.Name, $"{error.GetType().Name}: {error.Message}");
             _logger?.LogWarning(error, "Playerbot goal policy {Policy} failed scoring a batch of {Count} ({Type}); the ladder decides", Policy.Name, count, error.GetType().Name);
         }
         finally

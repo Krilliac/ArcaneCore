@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 
 namespace ArcaneCore.Game.Maps;
@@ -99,6 +100,7 @@ internal sealed class MapUpdateScheduler : IDisposable
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("map.parallel-scheduler", ex);
                 Interlocked.CompareExchange(ref _fault, ex, null);
             }
         }

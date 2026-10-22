@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using Microsoft.Extensions.Logging;
@@ -206,6 +207,11 @@ public sealed class TerrainManager
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
+            FaultLedger.Shared.Record("terrain.area-lookup", ex);
+            if (ex is InvalidDataException)
+            {
+                AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId}", ex.Message);
+            }
             _logger.LogWarning(ex, "Terrain: could not read {Path}", path);
             return (0, 0);
         }
@@ -237,11 +243,13 @@ public sealed class TerrainManager
         }
         catch (IOException ex)
         {
+            FaultLedger.Shared.Record("terrain.tile-read", ex);
             _logger.LogError(ex, "Terrain: could not read {Path}", path);
             return TerrainTile.Empty;
         }
         catch (UnauthorizedAccessException ex)
         {
+            FaultLedger.Shared.Record("terrain.tile-read", ex);
             _logger.LogError(ex, "Terrain: could not read {Path}", path);
             return TerrainTile.Empty;
         }
@@ -255,6 +263,8 @@ public sealed class TerrainManager
         catch (InvalidDataException ex)
         {
             // vmangos: "Map file '%s' is non-compatible version (outdated?)" — logged, tile left empty.
+            FaultLedger.Shared.Record("terrain.tile-parse", ex);
+            AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
             _logger.LogError(ex, "Terrain: {Path} is not a usable z1.4 .map file ({Reason}); re-extract the maps", path, ex.Message);
             return TerrainTile.Empty;
         }

@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Bans;
 
 /// <summary>
@@ -76,6 +77,8 @@ public sealed class BanRecheckFeature(IServiceProvider services, ILogger<BanRech
                 catch (Exception ex)
                 {
                     // fail open for live sessions; retry on the next tick
+                    FaultLedger.Shared.Record("bans.recheck", ex);
+                    AnomalyLedger.Shared.Report("bans", "recheck-failed", "ban-recheck", $"error={ex.GetType().Name}: {ex.Message}");
                     logger.LogWarning(ex, "Ban re-check failed; nobody was disconnected, retrying on the next tick");
                 }
             }

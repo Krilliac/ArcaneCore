@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using Microsoft.Extensions.Logging;
@@ -114,6 +115,8 @@ public sealed class WorldHandoffCoordinator(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("cluster.handoff", ex);
+            AnomalyLedger.Shared.Report("cluster", "handoff-failed", handoffId.ToString(), $"phase=prepare error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             throw await AbortAsync(handoffId, ex).ConfigureAwait(false);
         }
 
@@ -125,6 +128,8 @@ public sealed class WorldHandoffCoordinator(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("cluster.handoff", ex);
+            AnomalyLedger.Shared.Report("cluster", "handoff-failed", handoffId.ToString(), $"phase=commit-takeover error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             // The takeover is one transaction: either it committed (then only roll forward) or nothing changed (then abort). Ask the journal.
             WorldHandoffRecord? after = await store.GetAsync(handoffId, CancellationToken.None).ConfigureAwait(false);
             if (after is { IsCommittedOrBeyond: true })

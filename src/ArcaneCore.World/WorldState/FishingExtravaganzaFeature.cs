@@ -10,6 +10,7 @@ using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.WorldState;
 
 /// <summary>
@@ -80,6 +81,8 @@ public sealed class FishingExtravaganzaFeature(IServiceScopeFactory scopes, Game
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("world-event.fishing-extravaganza", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "fishing-extravaganza", $"load error={ex.GetType().Name}: {ex.Message}");
             logger?.LogError(ex, "could not load the Fishing Extravaganza state");
         }
     }

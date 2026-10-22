@@ -237,12 +237,14 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
                     return false;
                 }
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex)
             {
+                FaultLedger.Shared.Record("playerbot.nav-executor", ex);
                 _jobs.Remove(job);
                 _capacity.Release();
                 job.Dispose();
                 job = null!;
+                ReportExecutorPlanDropped("executor queue closed", request.MapId, request.Start, request.Destination);
                 return false;
             }
 

@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using System.Text;
 using ArcaneCore.Kernel.Ops.Watchdog;
@@ -263,6 +264,7 @@ internal sealed class PerfLogAggregator
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world.perf-verdict-probe", ex);
                 _verdict = HostLoadVerdict.Unknown;
             }
         }

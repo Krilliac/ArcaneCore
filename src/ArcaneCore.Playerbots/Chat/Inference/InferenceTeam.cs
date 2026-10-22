@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
 
@@ -72,6 +73,8 @@ internal sealed class InferenceTeam : IDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "inference-team", $"{error.GetType().Name}: {error.Message}");
             own = error;
         }
 
@@ -99,6 +102,8 @@ internal sealed class InferenceTeam : IDisposable
             }
             catch (Exception error)
             {
+                FaultLedger.Shared.Record("playerbot.chat-inference", error);
+                AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "inference-team", $"{error.GetType().Name}: {error.Message}");
                 Interlocked.CompareExchange(ref _error, error, null);
             }
             finally

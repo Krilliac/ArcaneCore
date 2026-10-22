@@ -281,7 +281,79 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         IReadOnlyList<QaSignal> signals = feed.Pull();
         Assert.Equal(2, signals.Count);
         Assert.Contains(signals, s => s.Goal == "invariant" && s.Occurrences == 2 && s.Diag == "Step(MoveSpline.cs:88)");
-        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1);
+        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1 && s.Diag == "persist/write-retry-exhausted: busy after 6 attempts");
         Assert.Empty(feed.Pull());
+    }
+
+    [Fact]
+    public void RecurringServerWarningAnomalies_QualifyAtFiveOccurrencesOrThreeDistinctSubjects_AndIncludeDiagDetail()
+    {
+        var ledger = new FaultLedger();
+        var anomalyLedger = new AnomalyLedger();
+        var feed = new PlayerbotQaFaultFeed(ledger, null, anomalyLedger);
+
+        // 4 Warning occurrences on 1 subject -> below both thresholds (5 occurrences or 3 subjects).
+        for (int i = 0; i < 4; i++)
+        {
+            anomalyLedger.Report("combat", "stale-threat-entry", "creature 400", "victim offline for 12s", AnomalySeverity.Warning);
+        }
+
+        // Info anomalies and bot-* anomalies never qualify in the server fault feed even above thresholds.
+        for (int i = 0; i < 10; i++)
+        {
+            anomalyLedger.Report("logon", "handshake-timeout", $"session {i}", "read timed out", AnomalySeverity.Info);
+            anomalyLedger.Report("bot-combat", "evade-loop", $"bot {i}", "evaded", AnomalySeverity.Warning);
+        }
+
+        Assert.Empty(feed.Pull());
+
+        // 5th occurrence on the same subject crosses DefaultMinServerWarningCount (5).
+        anomalyLedger.Report("combat", "stale-threat-entry", "creature 400", "victim offline for 12s", AnomalySeverity.Warning);
+        IReadOnlyList<QaSignal> byCount = feed.Pull();
+        Assert.Equal(5, byCount.Sum(s => s.Occurrences));
+        Assert.All(byCount, s =>
+        {
+            Assert.Equal(QaSignalKind.ServerFault, s.Kind);
+            Assert.Equal("combat", s.Goal);
+            Assert.Equal("Anomaly:combat/stale-threat-entry", s.ExceptionType);
+            Assert.Equal("combat/stale-threat-entry", s.Detail);
+            Assert.Equal("combat/stale-threat-entry: victim offline for 12s", s.Diag);
+            Assert.Equal(string.Empty, s.Message);
+        });
+
+        // 3 distinct subjects at Count == 3 crosses DefaultMinServerWarningSubjects (3).
+        anomalyLedger.Report("creature", "evade-loop", "spawn 10", "evaded 6 times", AnomalySeverity.Warning);
+        anomalyLedger.Report("creature", "evade-loop", "spawn 11", "evaded 6 times", AnomalySeverity.Warning);
+        Assert.Empty(feed.Pull());
+
+        anomalyLedger.Report("creature", "evade-loop", "spawn 12", string.Empty, AnomalySeverity.Warning);
+        IReadOnlyList<QaSignal> bySubjects = feed.Pull();
+        Assert.Equal(3, bySubjects.Sum(s => s.Occurrences));
+        Assert.All(bySubjects, s =>
+        {
+            Assert.Equal("creature", s.Goal);
+            Assert.Equal("Anomaly:creature/evade-loop", s.ExceptionType);
+            Assert.Equal("creature/evade-loop", s.Diag);
+        });
+    }
+
+    [Fact]
+    public void QaPipelineCatchSites_RecordToFaultLedgerAndAnomalyLedger_OnCorruptStoreAndCallbackException()
+    {
+        File.WriteAllText(Path.Combine(_directory, "findings.json"), "{not-valid-json");
+        var store = new PlayerbotQaStore(_directory, new ListLogger());
+
+        using AnomalyCapture storeCapture = AnomalyLedger.Shared.Capture(n => n.Key == "qa/store-corrupt");
+        Assert.Null(store.Load());
+        Assert.NotNull(store.DisabledReason);
+        Assert.Contains(storeCapture.Notices, n => n.Detail == "JsonException");
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "playerbot.qa");
+
+        var aggregator = new PlayerbotQaAggregator(100, 5);
+        aggregator.FindingCreated = _ => throw new InvalidOperationException("callback boom");
+        using AnomalyCapture callbackCapture = AnomalyLedger.Shared.Capture(n => n.Key == "qa/pass-fault");
+        string? id = aggregator.Ingest(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f), new FakeFacts(), QaData.T0);
+        Assert.NotNull(id);
+        Assert.Contains(callbackCapture.Notices, n => n.Subject == id && n.Detail == "InvalidOperationException");
     }
 }

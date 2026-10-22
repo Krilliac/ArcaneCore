@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Buffers.Binary;
 using ArcaneCore.Game.Maps.Grid;
 
@@ -292,6 +293,8 @@ public sealed class TerrainTile
         }
         catch (ArgumentOutOfRangeException ex)
         {
+            FaultLedger.Shared.Record("terrain.tile-parse", ex);
+            AnomalyLedger.Shared.Report("terrain", "tile-corrupt", "terrain-tile", ex.Message);
             throw new InvalidDataException("truncated .map file", ex);
         }
     }

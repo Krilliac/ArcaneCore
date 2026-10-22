@@ -255,6 +255,8 @@ public sealed class TransportSystem
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("transport.update", ex);
+                    AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"transport entry {ship.Entry}", ex.Message);
                     _logger.LogFault(
                         "map-transport",
                         ex,
@@ -295,6 +297,8 @@ public sealed class TransportSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("transport.player-added", ex);
+            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
             _logger.LogFault(
                 "map-transport",
                 ex,
@@ -326,6 +330,8 @@ public sealed class TransportSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("transport.self-block", ex);
+            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
             _logger.LogFault(
                 "map-transport",
                 ex,
@@ -348,6 +354,8 @@ public sealed class TransportSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("transport.player-removed", ex);
+            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
             _logger.LogFault(
                 "map-transport",
                 ex,
@@ -422,6 +430,8 @@ public sealed class TransportSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("transport.teleport-passenger", ex);
+                AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"transport entry {ship.Entry}", ex.Message);
                 _logger.LogFault(
                     "map-transport",
                     ex,
@@ -822,6 +832,8 @@ public sealed class TransportSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("transport.passenger-handler", ex);
+                AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"transport entry {ship.Entry}", ex.Message);
                 _logger.LogFault("map-transport", ex, "transport passenger handler failed");
             }
         }

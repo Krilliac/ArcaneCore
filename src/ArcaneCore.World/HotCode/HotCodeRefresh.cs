@@ -130,6 +130,8 @@ public sealed class HotCodeRefresh
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("hotcode.refresh", ex);
+                    AnomalyLedger.Shared.Report("hotcode", "refresh-fault", "code-edited-callback", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                     _logger.LogError(ex, "the code-edited callback failed");
                 }
             });
@@ -181,6 +183,8 @@ public sealed class HotCodeRefresh
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.refresh", ex);
+            AnomalyLedger.Shared.Report("hotcode", "refresh-fault", $"generation-{generation}", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "code hot reload refresh (generation {Generation}) failed unexpectedly", generation);
         }
     }
@@ -229,6 +233,8 @@ public sealed class HotCodeRefresh
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.refresh", ex);
+            AnomalyLedger.Shared.Report("hotcode", "refresh-fault", action, $"report_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
             _logger.LogError(ex, "could not report the code hot reload");
         }
     }
@@ -252,6 +258,8 @@ public sealed class HotCodeRefresh
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.refresh", ex);
+            AnomalyLedger.Shared.Report("hotcode", "refresh-fault", $"generation-{generation}", $"build_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
             _logger.LogFault("hotcode-build", ex, "code hot reload (generation {Generation}): building the candidate failed", generation);
             return Reject(generation, $"candidate rejected: {ex.Message}");
         }
@@ -392,6 +400,8 @@ public sealed class HotCodeRefresh
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.refresh", ex);
+            AnomalyLedger.Shared.Report("hotcode", "refresh-fault", "commit", $"commit_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             if (previous is not null)
             {
                 _opcodes.Replace(previous);

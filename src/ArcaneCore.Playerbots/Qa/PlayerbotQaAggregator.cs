@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -368,6 +369,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // The ingest path must never fail because a subscriber did.
+                FaultLedger.Shared.Record("playerbot.qa", ex);
+                AnomalyLedger.Shared.Report("qa", "pass-fault", created.Id, ex.GetType().Name, AnomalySeverity.Warning);
             }
         }
 

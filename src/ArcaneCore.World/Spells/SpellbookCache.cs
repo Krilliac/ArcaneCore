@@ -616,6 +616,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                 }
 
                 pending.Done?.TrySetException(ex);
+                FaultLedger.Shared.Record("spells.spellbook-save", ex);
                 _logger.LogFault("writequeue-spellbook", ex, "Saving a spellbook change failed");
             }
         }

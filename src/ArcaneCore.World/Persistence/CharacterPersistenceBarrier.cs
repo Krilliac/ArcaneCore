@@ -329,6 +329,7 @@ public sealed class CharacterPersistenceBarrier
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.barrier", ex);
             _logger?.LogWarning(ex, "Character {CharacterId} persistence barrier step {QueueName} failed", characterId, queueName);
             failures.Add(new CharacterPersistenceFailure(queueName, ex));
         }

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots.Chat.Inference.Scheduling;
 using ArcaneCore.World.Playerbots.Chat.Inference.Serving;
 
@@ -212,6 +213,8 @@ internal sealed class InProcessChatEngine : IDisposable
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             // The scheduler itself failed: every request fails over to the next provider (the templates), the engine stops taking work.
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat engine", $"{error.GetType().Name}: {error.Message}");
             _stopping = true;
             FailAll(error);
             return;
@@ -427,6 +430,8 @@ internal sealed class InProcessChatEngine : IDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat engine", $"{error.GetType().Name}: {error.Message}");
             r.Error = error;
         }
     }
@@ -469,6 +474,8 @@ internal sealed class InProcessChatEngine : IDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat engine", $"{error.GetType().Name}: {error.Message}");
             warm.Done.TrySetException(error);
         }
 

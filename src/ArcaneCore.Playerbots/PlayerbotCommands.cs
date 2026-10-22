@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using Microsoft.Extensions.DependencyInjection;
@@ -249,6 +250,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("playerbot.commands", error);
                     feature.ReportCommandFault("splitbrain-clear", error);
                     context.Reply($"Split brain clear failed: {error.GetType().Name}.");
                 }
@@ -410,6 +412,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} cleared before it."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("playerbot.commands", error);
                     service.ReportCommandFault("home clear", error);
                     context.Reply($"Playerbot home failed: {error.GetType().Name}.");
                 }
@@ -524,6 +527,7 @@ public sealed class PlayerbotCommands : ICommandGroup
             catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} set before it."); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.commands", error);
                 service.ReportCommandFault("home set", error);
                 context.Reply($"Playerbot home failed: {error.GetType().Name}.");
             }
@@ -560,6 +564,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.commands", error);
             service.ReportCommandFault("inspect", error);
             context.Reply("Playerbot inspection is temporarily unavailable.");
         }
@@ -637,6 +642,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.commands", error);
             if (service is ManagedPlayerbotFeature managed) managed.ReportCommandFault("operation", error);
             context.Reply($"Playerbot failed: {error.GetType().Name}.");
         }

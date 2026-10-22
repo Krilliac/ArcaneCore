@@ -8,6 +8,7 @@ using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Core;
@@ -674,6 +675,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.fleet-commands", error);
             context.Session.Logger.LogWarning(error, "Playerbot fleet reset preview failed ({Type}: {Message})", error.GetType().Name, error.Message);
             Say(context, $"Playerbot fleet reset preview failed: {error.GetType().Name}.");
         }
@@ -706,6 +708,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.fleet-commands", error);
             context.Session.Logger.LogError(error, "Playerbot fleet reset failed ({Type}: {Message})", error.GetType().Name, error.Message);
             Say(context, $"Playerbot fleet reset failed: {error.GetType().Name}: {error.Message}");
         }
@@ -764,6 +767,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.fleet-commands", error);
                 feature.ReportCommandFault(start ? "fleet start" : "fleet stop", error);
                 failed.Add(new Outcome(status.Name, error.GetType().Name));
             }

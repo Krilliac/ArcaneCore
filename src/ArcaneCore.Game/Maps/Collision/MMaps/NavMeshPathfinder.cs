@@ -234,6 +234,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             }
             catch (InvalidDataException ex)
             {
+                FaultLedger.Shared.Record("collision.mmap-params", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId}", ex.Message);
                 _logger.LogError(ex, "MMaps: {Path} is not usable navmesh parameters ({Reason}); map {MapId} paths are straight lines", path, ex.Message, mapId);
             }
         }
@@ -302,10 +304,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         }
         catch (InvalidDataException ex)
         {
+            FaultLedger.Shared.Record("collision.mmap-tile", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
             _logger.LogError(ex, "MMaps: {Path} is not a usable navmesh tile ({Reason}); ignored", path, ex.Message);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            FaultLedger.Shared.Record("collision.mmap-tile", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
             _logger.LogError(ex, "MMaps: could not read {Path}", path);
         }
 
@@ -462,6 +468,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("collision.mmap-prefetch", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
                 logger.LogFault("mmaps.prefetch", ex, "MMaps: prefetch of {Path} for map {MapId} tile ({TileX}, {TileY}) failed", path, mapId, tileX, tileY);
                 return null;
             }
@@ -531,6 +539,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("collision.mmap-regiongraph", ex);
+                    AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId}", ex.Message);
                     logger.LogFault("mmaps.regiongraph", ex, "MMaps: map {MapId} region graph could not be built; long routes there plan without it", mapId);
                     return null;
                 }
@@ -1100,6 +1110,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("collision.mmap-tile-read", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
                 return new TileRead(null, ex);
             }
             finally
@@ -1258,6 +1270,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            FaultLedger.Shared.Record("collision.mmap-read", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
             _logger.LogError(ex, "MMaps: could not read {Path}", path);
             return null;
         }

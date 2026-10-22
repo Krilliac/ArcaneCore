@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
@@ -200,6 +201,7 @@ public sealed class ProcessDumpService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.process-dump", ex);
             TimeSpan duration = Stopwatch.GetElapsedTime(start);
             _logger.LogError(ex, "process dump {Path} failed after {Seconds:F1} s", path, duration.TotalSeconds);
             DeletePartial(path);

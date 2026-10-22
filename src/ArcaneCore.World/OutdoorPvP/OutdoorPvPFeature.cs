@@ -112,6 +112,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _scripts.Remove(map);
+            FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+            AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"map {map.MapId}", $"setup error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("outdoorpvp-setup", ex, "outdoor PvP setup failed on map {Map}", map.MapId);
         }
     }
@@ -155,6 +157,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+            AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", "silithyst-load", $"error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("outdoorpvp-silithyst-load", ex, "could not load the Silithyst state");
         }
 
@@ -185,6 +189,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"script {script.GetType().Name}", $"tick error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-tick", ex, "outdoor PvP script {Script} tick failed", script.GetType().Name);
             }
         }
@@ -195,6 +201,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+            AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", "creature-groups", $"error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("outdoorpvp-creature-groups", ex, "outdoor PvP creature group update failed");
         }
     }
@@ -225,6 +233,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"player {player.Guid}", $"zone-leave error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-zone-leave", ex, "outdoor PvP leave failed for {Player}", player.Guid);
             }
         }
@@ -238,6 +248,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"player {player.Guid}", $"zone-enter error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-zone-enter", ex, "outdoor PvP enter failed for {Player}", player.Guid);
             }
         }
@@ -259,6 +271,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"player {player.Guid}", $"logout error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-logout", ex, "outdoor PvP logout leave failed for {Player}", player.Guid);
             }
         }
@@ -282,6 +296,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"zone {zoneId}", $"worldstates error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-worldstates", ex, "outdoor PvP FillInitialWorldStates failed for zone {Zone}", zoneId);
             }
         }
@@ -305,6 +321,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"player {player.Guid}", $"areatrigger={triggerId} error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-areatrigger", ex, "outdoor PvP area trigger {Trigger} failed for {Player}", triggerId, player.Guid);
             }
         }
@@ -340,6 +358,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("outdoor-pvp.feature", ex);
+                AnomalyLedger.Shared.Report("outdoor-pvp", "hook-fault", $"player {player.Guid}", $"drop-flag error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("outdoorpvp-drop-flag", ex, "outdoor PvP drop flag failed for {Player}", player.Guid);
             }
         }

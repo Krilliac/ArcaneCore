@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.Metrics;
@@ -550,6 +551,7 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
             new ArgumentOutOfRangeException("param", "unexpected bounds fault"),
         ];
 
+        using AnomalyCapture sessionAnomalies = AnomalyLedger.Shared.Capture(n => n.Key == "logon/session-fault");
         foreach (Exception fault in unexpected)
         {
             (NetworkStream client, Task serverTask) = await StartRawSessionWithTaskAsync(
@@ -566,6 +568,25 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
                 Assert.NotNull(thrown.Data["arcanecore.logon.stack"]);
             }
         }
+
+        Assert.True(sessionAnomalies.Notices.Count >= unexpected.Length);
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "logon.session");
+    }
+
+    [Fact]
+    public async Task RealmIpBanCache_RefreshFailure_RecordsFaultAndAnomaly_AndFallsBackToSingleRowLookup()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60));
+        var failingBanStore = new ThrowingListBanStore(new InvalidOperationException("ip_banned table locked"));
+
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "logon/ban-cache-refresh-failed");
+        bool banned = await cache.IsBannedAsync("203.0.113.5", failingBanStore);
+
+        Assert.False(banned);
+        Assert.Equal(1, cache.FailedReloads);
+        Assert.Equal(1, cache.RowReadFallbacks);
+        Assert.Contains(capture.Notices, n => n.Subject == "ip-ban-cache" && n.Detail.Contains("ip_banned table locked", StringComparison.Ordinal));
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "logon.ip-ban-cache");
     }
 
     // =================================================================================================
@@ -1379,5 +1400,47 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
     {
         public Task<IReadOnlyList<RealmEntry>> GetRealmsAsync(CancellationToken cancellationToken = default)
             => Task.FromCanceled<IReadOnlyList<RealmEntry>>(cancellationToken.IsCancellationRequested ? cancellationToken : new CancellationToken(canceled: true));
+    }
+
+    private sealed class ThrowingListBanStore(Exception listError) : IBanStore
+    {
+        public Task<AccountBanRecord?> GetActiveAccountBanAsync(int accountId, CancellationToken cancellationToken = default)
+            => Task.FromResult<AccountBanRecord?>(null);
+
+        public Task<IpBanRecord?> GetActiveIpBanAsync(string ip, CancellationToken cancellationToken = default)
+            => Task.FromResult<IpBanRecord?>(null);
+
+        public Task<IReadOnlySet<int>> FindBannedAccountsAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlySet<int>>(new HashSet<int>());
+
+        public Task<IReadOnlySet<string>> FindBannedIpsAsync(IReadOnlyCollection<string> ips, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlySet<string>>(new HashSet<string>());
+
+        public Task BanAccountAsync(BanRequest request, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<bool> BanIpAsync(IpBanRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(false);
+
+        public Task<bool> UnbanAccountAsync(int accountId, string source, string message, CancellationToken cancellationToken = default)
+            => Task.FromResult(false);
+
+        public Task<bool> UnbanIpAsync(string ip, CancellationToken cancellationToken = default)
+            => Task.FromResult(false);
+
+        public Task<IReadOnlyList<AccountBanRecord>> GetHistoryAsync(int accountId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<AccountBanRecord>>([]);
+
+        public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlySet<int>>(new HashSet<int>());
+
+        public Task<IReadOnlyList<AccountBanRecord>> ListActiveAccountBansAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<AccountBanRecord>>([]);
+
+        public Task<IReadOnlyList<IpBanRecord>> ListIpBansAsync(string prefix, CancellationToken cancellationToken = default)
+            => Task.FromException<IReadOnlyList<IpBanRecord>>(listError);
+
+        public Task<int> PurgeExpiredAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(0);
     }
 }

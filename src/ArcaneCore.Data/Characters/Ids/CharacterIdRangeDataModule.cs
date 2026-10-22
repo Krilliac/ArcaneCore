@@ -5,6 +5,7 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -144,9 +145,10 @@ public sealed class EfCharacterIdRangeStore(CharacterDbContext db) : IIdRangeRes
             });
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
             // Another concurrent caller inserted the row first; clear tracked state and retry CAS.
+            FaultLedger.Shared.Record("data.character-id-range", ex);
         }
         finally
         {

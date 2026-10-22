@@ -551,12 +551,14 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         {
             result = await _client.CompleteAsync(provider, key, prompt, deadline.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
+        catch (OperationCanceledException error) when (!_stop.IsCancellationRequested)
         {
+            FaultLedger.Shared.Record("playerbot.chat-delivery", error);
             result = BotChatResult.Fail(BotChatOutcome.Timeout);
         }
         catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-delivery", error);
             result = BotChatResult.Fail(BotChatOutcome.NetworkError);
         }
         finally
@@ -945,12 +947,15 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
             return result.Outcome == BotChatOutcome.Ok ? PlayerbotChatPrompts.ReadClassification(result.Text) : new BotChatModeration(BotChatModerationVerdict.Failed);
         }
-        catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
+        catch (OperationCanceledException error) when (!_stop.IsCancellationRequested)
         {
+            FaultLedger.Shared.Record("playerbot.chat-safety", error);
             return new BotChatModeration(BotChatModerationVerdict.Failed);
         }
         catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-safety", error);
+            AnomalyLedger.Shared.Report("bot-chat", "safety-filter-fault", "chat-moderation", $"{error.GetType().Name}: {error.Message}");
             return new BotChatModeration(BotChatModerationVerdict.Failed);
         }
     }

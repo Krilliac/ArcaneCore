@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Buffers;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -330,6 +331,7 @@ internal sealed partial class MapFeedConnection
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.map-feed", ex);
             _logger.LogWarning(ex, "map feed: a request failed inside the server ({Client})", Client);
             return (null, new FeedError(MapFeedProtocol.QueryFailed, "the request failed inside the server; see the server log"));
         }

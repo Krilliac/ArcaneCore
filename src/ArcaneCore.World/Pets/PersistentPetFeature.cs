@@ -10,6 +10,7 @@ using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Pets;
 
 public sealed class PersistentPetFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<PersistentPetFeature> logger)
@@ -112,6 +113,8 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("pets.reload", ex);
+            AnomalyLedger.Shared.Report("pet", "save-failed", $"character {player.Guid.Low}", $"reload error={ex.GetType().Name}: {ex.Message}");
             logger.LogError(ex, "rereading the persistent pet of {CharacterId} after a stored pet change failed", player.Guid.Low);
         }
     }
@@ -119,7 +122,12 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     private async Task SaveAsync(Player player, PetsFeature pets)
     {
         try { await pets.Service.SaveCurrentPetAsync(player).ConfigureAwait(false); }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { logger.LogError(ex, "persistent pet save failed for {CharacterId}", player.Guid.Low); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("pets.save", ex);
+            AnomalyLedger.Shared.Report("pet", "save-failed", $"character {player.Guid.Low}", $"save error={ex.GetType().Name}: {ex.Message}");
+            logger.LogError(ex, "persistent pet save failed for {CharacterId}", player.Guid.Low);
+        }
     }
 
     public async Task OnCharacterDeletingAsync(WorldSession session, CharacterRecord character)

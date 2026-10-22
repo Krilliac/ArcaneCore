@@ -242,6 +242,7 @@ public sealed class WorldHost(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world.host", ex);
             logger.LogError(ex, "The world stop after a failed start did not complete");
         }
     }
@@ -319,6 +320,7 @@ public sealed class WorldHost(
         }
         catch (AggregateException aggregate)
         {
+            FaultLedger.Shared.Record("world.host", aggregate);
             IReadOnlyList<Exception> inner = aggregate.InnerExceptions;
             if (cancellationToken.IsCancellationRequested && inner.All(e => e is OperationCanceledException))
                 throw new OperationCanceledException("the world start was cancelled", aggregate, cancellationToken);
@@ -510,6 +512,7 @@ public sealed class WorldHost(
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world.host", ex);
                     logger.LogFault(LogLevel.Warning, "world-host.claim-watch", ex, "Could not read the characters ownership row; will retry next interval");
                 }
 
@@ -523,6 +526,7 @@ public sealed class WorldHost(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world.host", ex);
             logger.LogFault("world-host.claim-watch", ex, "Characters ownership claim watch terminated unexpectedly");
         }
     }

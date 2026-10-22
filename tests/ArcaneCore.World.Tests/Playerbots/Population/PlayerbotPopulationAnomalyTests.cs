@@ -144,4 +144,27 @@ public sealed class PlayerbotPopulationAnomalyTests
         await world.WaitForSettledAsync(1);
         Assert.Empty(capture.Notices);
     }
+
+    [Fact]
+    public async Task FailingPass_RecordsFaultAndAnomaly_StampedWithWorldIdentity()
+    {
+        static long SiteCount() => FaultLedger.Shared.Snapshot()
+            .Where(s => s.Site == "playerbot.population")
+            .Sum(s => s.Count);
+
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        string marker = "pop-pass-fault-" + Guid.NewGuid().ToString("N");
+        world.Feature.Provisioner.AreaLevelSource = _ => throw new InvalidOperationException(marker);
+        long before = SiteCount();
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(
+            world.Host.World,
+            n => n.Key == "bot-population/pass-fault" && n.Detail.Contains(marker, StringComparison.Ordinal));
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Equal("error", status.State);
+        Assert.True(SiteCount() > before);
+        Assert.Equal(1, capture.Count("bot-population/pass-fault"));
+    }
 }

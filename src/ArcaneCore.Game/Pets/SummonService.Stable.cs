@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Characters.Pets;
 using Microsoft.Extensions.Logging;
 
@@ -37,6 +38,8 @@ public sealed partial class SummonService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("pets.stable", ex);
+                AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {characterId}", ex.Message);
                 _logger.LogWarning(ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
             }
 
@@ -46,6 +49,8 @@ public sealed partial class SummonService
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("pets.stable", ex);
+            AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {characterId}", ex.Message);
             done.SetException(ex);
             throw;
         }

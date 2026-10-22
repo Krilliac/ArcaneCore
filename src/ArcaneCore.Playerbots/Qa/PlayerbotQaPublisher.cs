@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -470,6 +471,8 @@ internal sealed class PlayerbotQaPublisher
         {
             // Type only, by policy (AnUnexpectedException_FailsTheFinding_WithItsTypeOnly): the exception text of a GitHub call may carry a
             // token or an issue body, and neither the log nor the fault ledger may hold it. The type is stored in the finding's publication state.
+            FaultLedger.Shared.Record("playerbot.qa", ex);
+            AnomalyLedger.Shared.Report("qa", "publish-fault", id, ex.GetType().Name, AnomalySeverity.Warning);
             Fail(id, current, ex.GetType().Name);
             return true;
         }

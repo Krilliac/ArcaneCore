@@ -372,8 +372,9 @@ internal static class PlayerbotMageService
         {
             return session.Services.GetService<SocialFeature>()?.Context.Groups;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.mage-service", ex);
             return null; // the social feature is not attached (a world without it)
         }
     }

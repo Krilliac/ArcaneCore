@@ -96,6 +96,8 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.nightmare-dragons", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "nightmare-dragons", $"tick error={ex.GetType().Name}: {ex.Message}");
                 _logger.LogFault("nightmare-dragons.tick", ex, "failed to update Dragons of Nightmare on world tick");
             }
         };
@@ -134,6 +136,8 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     ++alive;
+                    FaultLedger.Shared.Record("world-event.nightmare-dragons", ex);
+                    AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", $"nightmare-dragons portal {i}", $"portal-status error={ex.GetType().Name}: {ex.Message}");
                     _logger.LogFault("nightmare-dragons.portal-status", ex, "failed to update Dragons of Nightmare portal {Portal}", i);
                 }
             }
@@ -153,6 +157,8 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("world-event.nightmare-dragons", ex);
+                        AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", $"nightmare-dragons portal {i}", $"portal-despawn error={ex.GetType().Name}: {ex.Message}");
                         _logger.LogFault("nightmare-dragons.portal-despawn", ex, "failed to despawn Dragons of Nightmare portal {Portal}", i);
                     }
                 }
@@ -183,6 +189,8 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world-event.nightmare-dragons", ex);
+                    AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", $"nightmare-dragons portal {i}", $"portal-spawn error={ex.GetType().Name}: {ex.Message}");
                     _logger.LogFault("nightmare-dragons.portal-spawn", ex, "failed to spawn Dragons of Nightmare portal {Portal}", i);
                 }
             }
@@ -208,6 +216,8 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world-event.nightmare-dragons", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "nightmare-dragons", $"load error={ex.GetType().Name}: {ex.Message}");
             _logger.LogFault("nightmare-dragons.load", ex, "could not load the Dragons of Nightmare state");
         }
     }

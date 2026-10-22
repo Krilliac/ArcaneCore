@@ -926,8 +926,10 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
             value = decode();
             return true;
         }
-        catch (FormatException)
+        catch (FormatException e)
         {
+            FaultLedger.Shared.Record("playerbot.economy-wire", e);
+            AnomalyLedger.Shared.Report("bot-economy", "wire-decode-failed", "economy-wire", e.Message);
             value = default;
             return false;
         }

@@ -271,6 +271,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.qa", ex);
+            AnomalyLedger.Shared.Report("qa", "pass-fault", "save-final", ex.GetType().Name, AnomalySeverity.Error);
             _log.LogError(ex, "Bot QA could not save its findings at a stop or detach");
         }
     }
@@ -310,6 +312,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("playerbot.qa", ex);
+                    AnomalyLedger.Shared.Report("qa", "pass-fault", "drain", ex.GetType().Name, AnomalySeverity.Error);
                     if (Interlocked.Increment(ref _ingestFailures) == 1) _log.LogError(ex, "Bot QA could not fold a signal into its findings");
                 }
             }
@@ -337,6 +341,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.qa", ex);
+                AnomalyLedger.Shared.Report("qa", "pass-fault", "poll-server-faults", ex.GetType().Name, AnomalySeverity.Error);
                 if (Interlocked.Increment(ref _ingestFailures) == 1) _log.LogError(ex, "Bot QA could not fold a server fault into its findings");
             }
         }
@@ -361,6 +367,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.qa", ex);
+                AnomalyLedger.Shared.Report("qa", "pass-fault", "poll-anomalies", ex.GetType().Name, AnomalySeverity.Error);
                 if (Interlocked.Increment(ref _ingestFailures) == 1) _log.LogError(ex, "Bot QA could not fold a bot anomaly into its findings");
             }
         }
@@ -457,6 +465,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.qa", ex);
+            AnomalyLedger.Shared.Report("qa", "pass-fault", "spell-coverage", ex.GetType().Name, AnomalySeverity.Warning);
             if (!_coverageFailureLogged)
             {
                 _coverageFailureLogged = true;

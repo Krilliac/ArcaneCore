@@ -178,6 +178,8 @@ internal sealed class SqliteWalCheckpointer
         }
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
+            FaultLedger.Shared.Record("data.sqlite-checkpoint", ex);
+            AnomalyLedger.Shared.Report("database", "checkpoint-failed", _target.DatabasePath, ex.Message, AnomalySeverity.Warning);
             NoteStalled($"checkpoint failed: {ex.Message}");
             return new SqliteCheckpointResult(false, final, false, 0, 0, before, WalBytes());
         }

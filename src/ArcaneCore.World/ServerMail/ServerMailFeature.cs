@@ -16,6 +16,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.ServerMail;
 
 /// <summary>Configuration section "ServerMail".</summary>
@@ -79,6 +80,8 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("server-mail.load-templates", ex);
+            AnomalyLedger.Shared.Report("mail", "delivery-failed", "server-mail-templates", $"load error={ex.GetType().Name}: {ex.Message}");
             logger.LogError(ex, "could not load the server mail templates");
         }
     }
@@ -127,6 +130,8 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("server-mail.read-sent", ex);
+                AnomalyLedger.Shared.Report("mail", "delivery-failed", $"character {id}", $"read-sent error={ex.GetType().Name}: {ex.Message}");
                 logger.LogError(ex, "could not read the server mail sent to character {Id}", id);
             }
         });
@@ -150,6 +155,7 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
             {
                 if (!ok)
                 {
+                    AnomalyLedger.Shared.Report("mail", "delivery-failed", $"character {id}", $"template={template.Id} unconfirmed");
                     logger.LogWarning("server mail {Template} to character {Id} is not confirmed: refused (already sent), failed, or its outcome "
                         + "is unknown; the next login sends it only if its sent record did not commit", template.Id, id);
                 }

@@ -302,6 +302,7 @@ public sealed class WiringAudit
         }
         catch (ReflectionTypeLoadException ex)
         {
+            FaultLedger.Shared.Record("ops.wiring-audit", ex);
             return [.. ex.Types.OfType<Type>()];
         }
     }
@@ -369,6 +370,7 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
             catch (Exception inner) when (inner is not OutOfMemoryException)
             {
                 // A logger torn down by a concurrent shutdown: nothing left to tell, and this runs on a discarded task.
+                FaultLedger.Shared.Record("ops.wiring-audit", inner);
             }
         }
     }

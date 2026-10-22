@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Bans;
 
 /// <summary>
@@ -628,6 +629,7 @@ public sealed class BanCommands : ICommandGroup
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("bans.command", ex);
                 logger.LogError(ex, "A ban command failed");
                 context.Reply(DatabaseError);
             }
