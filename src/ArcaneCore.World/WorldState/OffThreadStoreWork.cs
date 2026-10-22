@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.WorldState;
 
 /// <summary>
@@ -48,6 +49,8 @@ internal sealed class OffThreadStoreWork(WorldRuntime world)
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("world-event.offload", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "offthread-store-work", $"offload error={ex.GetType().Name}: {ex.Message}");
             task = Task.FromException(ex);
         }
         InFlight = task;

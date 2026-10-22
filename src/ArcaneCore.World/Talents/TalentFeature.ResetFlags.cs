@@ -8,6 +8,7 @@ using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Talents;
 
 /// <summary>
@@ -170,6 +171,8 @@ public sealed partial class TalentFeature
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The character keeps the request: its next login resets the talents once more, for free.
+            FaultLedger.Shared.Record("talents.clear-reset-flag", ex);
+            AnomalyLedger.Shared.Report("talents", "persistence-failed", $"character {characterId}", $"clear-reset-flag player={name} error={ex.GetType().Name}: {ex.Message}");
             _logger.LogError(ex, "{Player}: clearing the talent reset request failed", name);
         }
     }

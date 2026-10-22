@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Bans;
 
 /// <summary>
@@ -124,6 +125,8 @@ public sealed class BanEnforcementFeature(IServiceProvider services, ILogger<Ban
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("bans.enforcement", ex);
+                AnomalyLedger.Shared.Report("bans", "enforcement-failed", $"account {accountId}", $"error={ex.GetType().Name}: {ex.Message}");
                 logger.LogError(ex, "Could not revoke the session key of banned account {AccountId}", accountId);
             }
         });

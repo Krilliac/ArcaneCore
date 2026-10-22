@@ -13,6 +13,7 @@ using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.AntiCheat;
 
 /// <summary>
@@ -144,6 +145,7 @@ public sealed class AntiCheatCommands : ICommandGroup
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("anticheat.report", ex);
                 logger.LogError(ex, ".anticheat report failed");
                 context.Reply("AntiCheat: the violation log is unavailable; see the server log.");
             }
@@ -178,6 +180,7 @@ public sealed class AntiCheatCommands : ICommandGroup
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("anticheat.delete", ex);
                 logger.LogError(ex, ".anticheat delete failed");
                 context.Reply("AntiCheat: the violation log is unavailable; see the server log.");
             }

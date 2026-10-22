@@ -10,6 +10,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Handlers;
 
 /// <summary>
@@ -125,6 +126,7 @@ public sealed class GmClientHandlers : IOpcodeHandlerGroup
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("handlers.whois", ex);
                 session.Logger.LogError(ex, "[{Endpoint}] whois '{Name}' failed", session.RemoteEndpoint, name);
             }
         });
@@ -186,6 +188,7 @@ public sealed class GmClientHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("handlers.teleport-to-unit", ex);
             session.Logger.LogError(ex, "[{Endpoint}] teleport-to-unit '{Name}' by {Player} failed", session.RemoteEndpoint, name, player.Name);
         }
     }

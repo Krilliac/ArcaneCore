@@ -214,6 +214,8 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _delayMs = 1_000;
+                FaultLedger.Shared.Record("world-event.game-events", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "game-events", $"initialize error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("game-events.initialize", ex, "failed to initialize game event service on world tick");
             }
             return;
@@ -230,6 +232,8 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _delayMs = 1_000;
+                FaultLedger.Shared.Record("world-event.game-events", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "game-events", $"update error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("game-events.update", ex, "failed to update game event service on world tick");
             }
         }
@@ -255,6 +259,8 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world-event.game-events", ex);
+                    AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", $"game-event {eventId}", $"persist-disabled error={ex.GetType().Name}: {ex.Message}");
                     logger.LogFault("game-events.persist-disabled", ex, "storing the disabled flag of game event {EventId} failed", eventId);
                 }
             }, TaskScheduler.Default).Unwrap();
@@ -376,6 +382,8 @@ internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger l
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world-event.game-events", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "game-events", $"status-write error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("game-events.status-write", ex, "storing the running game events failed; it is retried by the next change");
             return false;
         }

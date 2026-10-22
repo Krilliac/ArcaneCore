@@ -10,6 +10,7 @@ using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Characters.Rename;
 
 /// <summary>The decision on one CMSG_CHAR_RENAME.</summary>
@@ -92,6 +93,8 @@ public static class CharacterRename
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("characters.rename", ex);
+            AnomalyLedger.Shared.Report("character", "rename-failed", $"character {request.Value.Guid}", $"error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] rename of character {Guid} failed", session.RemoteEndpoint, request.Value.Guid);
             session.Send(WorldOpcode.SmsgCharRename, CharacterRenamePackets.BuildFailure(CharResult.CharCreateError));
             return;
@@ -154,6 +157,8 @@ public static class CharacterRename
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("characters.rename-flags", ex);
+            AnomalyLedger.Shared.Report("character", "rename-failed", $"account {session.AccountId}", $"at-login flags error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] the at-login flags of account '{Account}' could not be read; the character list shows none",
                 session.RemoteEndpoint, session.AccountName);
             return new Dictionary<int, uint>();

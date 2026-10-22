@@ -21,6 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Talents;
 
 /// <summary>
@@ -233,6 +234,7 @@ public sealed partial class TalentFeature : IWorldFeature, ICharacterHooks, IAsy
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or FormatException)
         {
+            FaultLedger.Shared.Record("talents.load-dbc", ex);
             // Fail closed, but name the settings: the reader's own message only says which file it could not read.
             throw new InvalidOperationException(
                 $"{TalentOptions.Section}:TalentDbcPath ('{Options.TalentDbcPath}') or {TalentOptions.Section}:TalentTabDbcPath " +

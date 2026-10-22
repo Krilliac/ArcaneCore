@@ -27,6 +27,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>
@@ -304,6 +305,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("gameobjects.loot", ex);
             logger.LogError(ex, "corpse loot for {Victim} failed", victim.Guid);
         }
     }

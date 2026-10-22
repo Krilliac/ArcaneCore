@@ -99,6 +99,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"install-gossip error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("scourge-invasion.install-gossip", ex, "failed to install Cultist Engineer gossip script");
             }
         });
@@ -112,6 +114,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"install-ais error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("scourge-invasion.install-ais", ex, "failed to install Scourge invasion AIs on world tick");
             }
 
@@ -121,6 +125,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"on-tick error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("scourge-invasion.on-tick", ex, "failed to tick Scourge invasion on world tick");
             }
         };
@@ -331,6 +337,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         {
             // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
+            FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"stop-inflight error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault(LogLevel.Warning, "scourge-invasion.stop-inflight", ex, "the Scourge invasion store job in flight at shutdown failed");
         }
 
@@ -349,6 +357,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"stop-flush error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("scourge-invasion.stop-flush", ex, "could not write the queued Scourge invasion state at shutdown");
         }
 
@@ -411,6 +421,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             ex =>
             {
                 foreach ((uint, uint) done in result.FlushedDeaths) _pendingDeaths.Remove(done);
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"refresh-store error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("scourge-invasion.refresh-store", ex, "could not refresh Scourge invasion state");
             });
     }
@@ -429,6 +441,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", $"scourge-invasion zone {op.Zone}", $"store-op error={ex.GetType().Name}: {ex.Message}");
 #pragma warning disable CA2254 // each StoreOp carries a constant template
                 logger.LogFault("scourge-invasion.store-op", ex, op.Failure, op.Zone);
 #pragma warning restore CA2254
@@ -445,7 +459,9 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // CreatureMapSystem's death transition already completed; the unsaved deaths stay pending for the next refresh.
+            FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
             FaultLedger.Shared.Record("scourge-invasion.necropolis-destroyed", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"necropolis-destroyed error={ex.GetType().Name}: {ex.Message}");
             result.DeathFailure = ex;
         }
         ScourgeInvasionSnapshot snapshot = await store.LoadAsync().ConfigureAwait(false);
@@ -495,6 +511,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"publish-world-states error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("scourge-invasion.publish-world-states", ex, "could not publish Scourge invasion world states");
             }
         }
@@ -510,6 +528,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                    AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"sync-events error={ex.GetType().Name}: {ex.Message}");
                     logger.LogFault("scourge-invasion.sync-events", ex, "could not sync Scourge invasion game events");
                 }
             }
@@ -522,6 +542,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                    AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"sync-choreography error={ex.GetType().Name}: {ex.Message}");
                     logger.LogFault("scourge-invasion.sync-choreography", ex, "could not sync Scourge invasion choreography");
                 }
             }

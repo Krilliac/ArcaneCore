@@ -367,6 +367,8 @@ public sealed class TalentPersistence : IAsyncDisposable
                 }
 
                 pending.Done?.TrySetException(ex);
+                FaultLedger.Shared.Record("talents.persistence", ex);
+                AnomalyLedger.Shared.Report("talents", "persistence-failed", pending.CharacterId is { } cid ? $"character {cid}" : "talent-write", $"error={ex.GetType().Name}: {ex.Message}");
                 _logger.LogFault("writequeue-talent", ex, "Saving talent state failed");
             }
         }

@@ -8,6 +8,7 @@ using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.WorldState;
 
 /// <summary>
@@ -83,6 +84,8 @@ public sealed class HolidayObjectsFeature(IServiceScopeFactory scopes, GameEvent
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("world-event.elemental-invasion", ex);
+            AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "elemental-invasion", $"load error={ex.GetType().Name}: {ex.Message}");
             logger?.LogError(ex, "could not load the elemental invasion state");
         }
     }

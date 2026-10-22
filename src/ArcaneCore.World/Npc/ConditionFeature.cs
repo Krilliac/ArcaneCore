@@ -67,6 +67,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("npc.conditions", ex);
             _logger.LogFault("conditions.evaluate", ex, "Condition {ConditionId} evaluation failed for player {PlayerGuid}", conditionId, player.Guid);
             return false;
         }
@@ -102,6 +103,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("npc.conditions", ex);
                 _logger.LogFault("conditions.world-tick", ex, "Installing spawn-group conditions on world tick failed");
             }
         };
@@ -130,6 +132,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("npc.conditions", ex);
                 _logger.LogFault("conditions.spawn-group-install", ex, "Failed to install spawn-group condition evaluator on map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
             }
         }
@@ -143,6 +146,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("npc.conditions", ex);
             _logger.LogFault("conditions.spawn-group-evaluate", ex, "Spawn-group condition {ConditionId} evaluation failed on map {MapId} instance {InstanceId}", conditionId, map.MapId, map.InstanceId);
             return false;
         }
@@ -171,6 +175,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("npc.conditions", ex);
             _logger.LogFault("conditions.refresh-collaborators", ex, "Failed to refresh condition evaluator collaborators");
         }
     }

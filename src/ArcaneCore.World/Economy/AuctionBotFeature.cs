@@ -170,6 +170,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.ahbot-tick-action", ex);
             logger.LogFault("ahbot-tick-action", ex, "AHBot tick action failed");
         }
 
@@ -180,6 +181,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.ahbot-tick-audit", ex);
             logger.LogFault("ahbot-tick-audit", ex, "AHBot custody audit failed");
         }
 
@@ -189,6 +191,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.ahbot-tick-flush", ex);
             logger.LogFault("ahbot-tick-flush", ex, "AHBot custody flush failed");
         }
     }
@@ -318,6 +321,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("economy.ahbot-save-item", ex);
                 logger.LogFault("ahbot-save-item", ex, "AHBot: saving ahbot_items row {Item} failed; the change holds until restart", entry);
             }
         });
@@ -401,6 +405,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("economy.ahbot-load-overrides", ex);
             logger.LogFault("ahbot-load-overrides", ex, "AHBot: loading ahbot_items failed; no item overrides");
             _overrides = [];
         }
@@ -552,6 +557,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("economy.ahbot-custody-flush", ex);
                 failure = ex;
             }
 
@@ -568,6 +574,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
                         }
                         catch (Exception ex) when (ex is not OutOfMemoryException)
                         {
+                            FaultLedger.Shared.Record("economy.ahbot-movement-start", ex);
                             logger.LogFault("ahbot-movement-start", ex, "AHBot: starting movement {Key} failed", row.IdemKey);
                             _inFlight.Remove(row.IdemKey);
                             Ledger.Resolve(row.IdemKey, committed: false, Now);
