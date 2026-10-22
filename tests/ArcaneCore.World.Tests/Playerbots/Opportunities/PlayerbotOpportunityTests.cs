@@ -1216,6 +1216,38 @@ public sealed class PlayerbotOpportunityTests
     }
 
     [Fact]
+    public async Task AChestBeyondTheNavMesh_IsRefusedInBegin_WithoutStartingAnEpisodeOrReportingUnreachable()
+    {
+        ChestSpawn islandChest = new(FreeChest, 11, 20f, 0f);
+        using var fixture = new NavMeshFixture();
+        (int detourX, int detourY) = ((int)MathF.Floor(StartY / 533.3333f), (int)MathF.Floor(StartX / 533.3333f));
+        (int fileX, int fileY) = TerrainTile.TileOf(StartX, StartY)!.Value;
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, fileX, fileY, new CellTile(detourX, detourY, StartX - 2f, StartY - 2f, 6, 6, 1f)
+        {
+            Height = (_, _) => StartZ,
+            Walkable = (_, _) => true,
+        });
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(0, fileX, fileY));
+        Task<NavRegionGraph?>? pending = nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        if (pending is not null) await pending;
+
+        await using Rig rig = await Rig.StartAsync([islandChest]);
+        await rig.World(() =>
+        {
+            WorldCollision.Of(rig.Host.World).Install(pathfinder: nav);
+            return true;
+        });
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        OpportunityStep step = await rig.World(() => rig.Bot.Step());
+        Assert.False(step.Busy);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(islandChest), rig.Clock));
+        Assert.Equal(0, capture.Count(Key("unreachable")));
+    }
+
+    [Fact]
     public void TryParseLoot_ReadsTheWindowTheServerSends()
     {
         var window = new PacketWriter();

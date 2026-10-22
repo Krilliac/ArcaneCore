@@ -630,6 +630,53 @@ public sealed class PlayerbotRecoveryTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task BattlegroundGhost_WithProductionGuide_ResurrectsOnWaveWithoutLateAnomaly()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(
+            configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Player player = session.Player!;
+            PlayerbotRecovery? recovery = null;
+            using var cap = PlayerbotAnomalies.CaptureFor(player);
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());
+                player.Health = 0;
+                player.Map!.Combat.KillPlayer(player);
+                Assert.True(player.Map!.Combat.RepopPlayer(player));
+                player.MapId = 489; // Warsong Gulch battleground map id
+
+                Creature guide = Dungeon.DungeonBotHost.AddCreature(player.Map!, 13116u, player.X - 2f, player.Y, player.Z,
+                    (uint)NpcFlags.SpiritGuide, host.World.NowMs, faction: 1);
+                player.VisibleObjects.Add(guide.Guid);
+
+                var graveyard = new WorldSafeLoc(769, player.MapId, player.X, player.Y, player.Z, 0f, "WSG Alliance graveyard");
+                recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 400, AllowedMaps = [0, 1, 489] })
+                {
+                    GraveyardLookup = (_, _) => graveyard,
+                };
+                session.ManagedBudget = new ManagedActionBudget(4);
+                recovery.Update(player, 500);
+                Assert.Equal(1, recovery.AreaQueueRequests);
+                return true;
+            });
+
+            await host.World.AdvanceClockAsync((uint)PlayerbotRecovery.AreaResurrectionIntervalMs + 1_000u);
+            await host.OnWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                recovery!.Update(player, 500);
+                Assert.True(player.IsAlive);
+                Assert.False(cap.Any(PlayerbotAnomalies.Key("recovery", "area-resurrection-late")), cap.Describe());
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     private sealed class FlatFloor : ILineOfSight
     {
         public bool Enabled => true;

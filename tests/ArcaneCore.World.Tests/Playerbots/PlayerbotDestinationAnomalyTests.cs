@@ -283,6 +283,50 @@ public sealed class PlayerbotDestinationAnomalyTests
         });
     }
 
+    [Fact]
+    public async Task AReturnDeferredAfterOneActiveStep_OrBlockedOnTownWalk_DoesNotReportAnomaly()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            WorldCollision.Of(world.Host.World).Install(pathfinder: new Canned((start, _) => PathResult.None(start)));
+            using var cap = PlayerbotAnomalies.CaptureFor(player);
+            var homeReturn = new PlayerbotHomeReturn();
+            var townArea = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + 2_000f, player.Y, player.Z), 100f, "town:goldshire")
+            {
+                WalkRangeYards = 20_000f,
+            };
+            var auto = new PlayerbotHomeOptions { ReturnMode = PlayerbotHomeReturnMode.Auto, TeleportDistanceYards = 1_500f };
+
+            // 1. One active step (Judge called) followed by 20 minutes of think-cadence Evaluate without Judge/Update
+            //    (bot doing errands/quests outside home) does not fire return-timeout.
+            uint now = 1_000;
+            Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, townArea, now));
+            homeReturn.Judge(player, townArea, auto);
+            for (uint step = 500; step <= PlayerbotHomeReturn.ReturnBudgetMs + 120_000; step += 500)
+            {
+                now = 1_000 + step;
+                Assert.Equal(PlayerbotHomeState.Returning, homeReturn.Evaluate(player, townArea, now));
+            }
+            Assert.False(cap.Any(HomeKey("return-timeout")), cap.Describe());
+
+            // 2. Three refused path plans on a town home (WalkRangeYards > 0) transition to Blocked + WalkBlocked
+            //    so Auto teleports home, without reporting bot-home/walk-blocked.
+            for (int i = 0; i < PlayerbotHomeReturn.MaxFailures; i++)
+            {
+                now += 500;
+                homeReturn.Evaluate(player, townArea, now);
+                homeReturn.Update(world.Session, player, townArea, world.Options, 500, now);
+            }
+            Assert.Equal(PlayerbotHomeState.Blocked, homeReturn.State);
+            Assert.True(homeReturn.WalkBlocked);
+            Assert.Equal(PlayerbotHomeTeleportReason.WalkBlocked, homeReturn.Judge(player, townArea, auto));
+            Assert.False(cap.Any(HomeKey("walk-blocked")), cap.Describe());
+            return true;
+        });
+    }
+
     private sealed class Canned(Func<Vector3, Vector3, PathResult> answer) : IPathfinder
     {
         public bool Enabled => true;

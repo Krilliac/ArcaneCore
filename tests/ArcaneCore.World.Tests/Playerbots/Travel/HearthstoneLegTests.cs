@@ -176,4 +176,28 @@ public sealed class HearthstoneLegTests
             Assert.Empty(MageTravelRig.Codes(cap, PlayerbotHearthstone.Area));
         }
     }
+
+    [Fact]
+    public async Task ShapeshiftedPlayer_CancelsShapeshiftBeforeUsingHearthstone_AndNeverReportsUseRefused()
+    {
+        (MageTravelRig rig, WorldSession session, Player player) = await StartAsync("Hearthshift");
+        await using (rig)
+        {
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
+            PlayerbotOptions options = MageTravelRig.Options();
+            await rig.OnWorld(() =>
+            {
+                player.SetByte(ArcaneCore.Game.UpdateFields.UnitFieldBytes1, 2, 1);
+                Assert.True(ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player));
+                Assert.True(PlayerbotHearthstone.TryBegin(session, player, options, out string? why), why);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                Assert.Equal(TravelLegStep.Traveling, PlayerbotHearthstone.Drive(session, player, options, 500, out string? failure));
+                Assert.Null(failure);
+                Assert.False(ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player));
+                Assert.True(PlayerbotTravelCast.IsCasting(rig.Spells.System, player, MageTravelFixture.HearthSpell));
+                return 0;
+            });
+            Assert.Empty(MageTravelRig.Codes(cap, PlayerbotHearthstone.Area));
+        }
+    }
 }

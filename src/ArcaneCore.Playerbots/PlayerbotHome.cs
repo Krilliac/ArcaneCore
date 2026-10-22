@@ -503,8 +503,11 @@ internal sealed class PlayerbotHomeReturn
         _failures = 0;
         _bestDistance = float.MaxValue;
         _routeStartDistance = float.MaxValue;
+        _routePlannedDistance = 0f;
         _blockedUntil = 0;
         _walkBlocked = false;
+        _walkBlockedReported = false;
+        _legProgressed = false;
         _highestAreaLevel = null;
         _teleportRetryPending = false;
         _returnTracked = false;
@@ -534,6 +537,9 @@ internal sealed class PlayerbotHomeReturn
     private bool _returnReported;
     private bool _returnOverdue;
     private bool _returnUpdated;
+    private bool _legProgressed;
+    private bool _walkBlockedReported;
+    private float _routePlannedDistance;
     private uint _returnSince;
     private uint _lastTrackMs;
     private float _returnBestDistance = float.MaxValue;
@@ -578,20 +584,26 @@ internal sealed class PlayerbotHomeReturn
 
         uint dt = unchecked(nowMs - _lastTrackMs);
         _lastTrackMs = nowMs;
-        if (!player.IsAlive || player.Combat.IsInCombat)
+        bool wasUpdated = _returnUpdated;
+        _returnUpdated = false;
+        if (!player.IsAlive || player.Combat.IsInCombat
+            || PlayerbotTaxi.IsFlying(player) || PlayerbotTaxi.IsActive(player)
+            || PlayerbotTram.IsTraveling(player) || PlayerbotElevator.IsTraveling(player)
+            || PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active })
         {
             _returnSince = unchecked(_returnSince + Math.Min(dt, ReturnBudgetMs));
             return;
         }
 
-        if (float.IsFinite(Distance) && Distance <= _returnBestDistance - 25f)
+        if (_legProgressed || (float.IsFinite(Distance) && Distance <= _returnBestDistance - 25f))
         {
-            _returnBestDistance = Distance;
+            _legProgressed = false;
+            if (float.IsFinite(Distance)) _returnBestDistance = MathF.Min(_returnBestDistance, Distance);
             _returnSince = nowMs;
             return;
         }
 
-        if (state == PlayerbotHomeState.Returning && !_returnUpdated && dt is > 100 and <= 15_000)
+        if (state == PlayerbotHomeState.Returning && !wasUpdated && dt is > 100 and <= 15_000)
         {
             _returnSince = unchecked(_returnSince + dt);
             return;
@@ -649,6 +661,9 @@ internal sealed class PlayerbotHomeReturn
         _route = null;
         _failures = 0;
         _walkBlocked = false;
+        _walkBlockedReported = false;
+        _legProgressed = false;
+        _routePlannedDistance = 0f;
         _bestDistance = float.MaxValue;
         _routeStartDistance = float.MaxValue;
         _highestAreaLevel = null;
@@ -745,7 +760,8 @@ internal sealed class PlayerbotHomeReturn
         // unsafe landing: the near teleport pending then is the resurrection's own, INTO the landing (the corpse's graveyard,
         // GraveyardRepopService.TeleportToCorpseGraveyard), and a near teleport is replaced by the next one (TeleportService.TeleportTo).
         if (teleports.IsBeingTeleported(player) && !(urgent && teleports.IsBeingTeleportedNear(player))) return !urgent;
-        if (!urgent && !CanTeleportNow(nowMs))
+        bool townFallback = area.WalkRangeYards > 0f && (reason == PlayerbotHomeTeleportReason.WalkBlocked || _returnOverdue);
+        if (!urgent && !townFallback && !CanTeleportNow(nowMs))
         {
             Refuse(player, area, reason, "teleported home less than 5 minutes ago", nowMs);
             return false;
@@ -859,27 +875,39 @@ internal sealed class PlayerbotHomeReturn
         Vector3 position = new(player.X, player.Y, player.Z);
         if (_route is { Complete: false })
         {
-            if (Vector3.DistanceSquared(position, _lastPosition) < 0.0025f) _stuckMs += elapsedMs;
+            if (Vector3.DistanceSquared(position, _lastPosition) < 0.0025f)
+            {
+                if (session.ManagedBudget is not { Remaining: <= 0 }
+                    && (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) == 0
+                    && !PlayerbotElevator.IsTraveling(player) && !PlayerbotTram.IsTraveling(player))
+                    _stuckMs += elapsedMs;
+            }
             else _stuckMs = 0;
             if (_stuckMs >= StuckMs)
             {
                 _route = null;
                 _stuckMs = 0;
-                if (Fail(player, nowMs)) return false;
+                if (Fail(player, area, nowMs, report: false)) return false;
             }
         }
         else if (_route is { Complete: true })
         {
             _route = null;
             bool arrived = distance <= area.ReturnRadius && (area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z));
-            if (!arrived && (distance > _routeStartDistance - ProgressYards || distance > _bestDistance + 2f))
-            {
-                if (Fail(player, nowMs)) return false;
-            }
-            else
+            if (arrived || distance <= _routeStartDistance - ProgressYards)
             {
                 _bestDistance = MathF.Min(_bestDistance, distance);
                 _failures = 0;
+                _legProgressed = true;
+            }
+            else if (_routePlannedDistance >= 20f)
+            {
+                _failures = 0;
+                _legProgressed = true;
+            }
+            else if (Fail(player, area, nowMs, report: false))
+            {
+                return false;
             }
         }
 
@@ -887,10 +915,13 @@ internal sealed class PlayerbotHomeReturn
         if (_route is null)
         {
             PlayerbotRoute? walk = null;
-            if (PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk))
+            if (PlayerbotTram.TryBegin(session, player, area.Centre)
+                || PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk))
             {
                 _routeStartDistance = MathF.Min(distance, _bestDistance);
+                _routePlannedDistance = walk?.Distance ?? 0f;
                 _stuckMs = 0;
+                _legProgressed = true;
                 return true;
             }
 
@@ -902,12 +933,21 @@ internal sealed class PlayerbotHomeReturn
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(session, player);
+                if (PlayerbotElevator.IsHeldOff(session, player, area.Centre) || PlayerbotTram.IsHeldOff(session, player, area.Centre))
+                    return false;
+                if (player.Map is { } map && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, area.Centre, options) == TaxiTravel.Traveling)
+                {
+                    _failures = 0;
+                    _legProgressed = true;
+                    return true;
+                }
                 // A tile still being read is no failure of the walk home: plan again next think, for TileWait.MaxMs (then it counts).
-                if (planned == PlanOutcome.Refused) Fail(player, nowMs);
+                if (planned == PlanOutcome.Refused) Fail(player, area, nowMs, report: area.WalkRangeYards <= 0f);
                 return false;
             }
 
             _routeStartDistance = MathF.Min(distance, _bestDistance);
+            _routePlannedDistance = walk?.Distance ?? 0f;
             _stuckMs = 0;
         }
 
@@ -919,15 +959,24 @@ internal sealed class PlayerbotHomeReturn
             {
                 _bestDistance = afterDistance;
                 _failures = 0;
+                _legProgressed = true;
             }
 
+            float finishedDistance = _routePlannedDistance;
             _route = null;
             bool arrived = afterDistance <= area.ReturnRadius && (area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z));
             if (!arrived && session.ManagedBudget is not { Remaining: <= 0 }
-                && (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) == 0
-                && (afterDistance > _routeStartDistance - ProgressYards || afterDistance > _bestDistance + 2f))
+                && (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) == 0)
             {
-                if (Fail(player, nowMs)) return false;
+                if (afterDistance <= _routeStartDistance - ProgressYards || finishedDistance >= 20f)
+                {
+                    _failures = 0;
+                    _legProgressed = true;
+                }
+                else if (Fail(player, area, nowMs, report: false))
+                {
+                    return false;
+                }
             }
         }
 
@@ -946,14 +995,17 @@ internal sealed class PlayerbotHomeReturn
         _blockedUntil = unchecked(nowMs + BlockedMs);
     }
 
-    private bool Fail(Player player, uint nowMs)
+    private bool Fail(Player player, PlayerbotHomeArea area, uint nowMs, bool report)
     {
         if (++_failures < MaxFailures) return false;
         MarkBlocked(nowMs);
-        if (!PlayerbotNavigationAnomalies.Silenced(player))
+        if (report && !_walkBlockedReported && !PlayerbotNavigationAnomalies.Silenced(player))
+        {
+            _walkBlockedReported = true;
             PlayerbotAnomalies.Report(player, "home", "walk-blocked",
-                string.Create(CultureInfo.InvariantCulture, $"the walk home failed {MaxFailures} times in a row ({Distance:F0} yd from the centre); set aside for {BlockedMs / 1000}s"),
+                string.Create(CultureInfo.InvariantCulture, $"the walk home to {area.Place ?? "its home"} failed {MaxFailures} times in a row ({Distance:F0} yd from the centre); set aside for {BlockedMs / 1000}s"),
                 AnomalySeverity.Info);
+        }
         return true;
     }
 

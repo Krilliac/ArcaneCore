@@ -338,4 +338,40 @@ public sealed class PlayerbotDeathLoopRiskTests
             return true;
         });
     }
+
+    [Fact]
+    public async Task DyingAtCorpseReclaimSpot_OrToMidFightScannedHazard_DoesNotReportKnownHazard()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        using var cap = BotAnomalyCapture.For(world.Player);
+        Creature killer = await world.OnWorldAsync(() => world.Spawn(Feeble(9910, health: 400), 5, 0));
+        await world.SeeAsync(killer);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            PlayerbotRisk risk = world.Brain.Risk;
+
+            // 1. A prior death records a "death" place mark and killer entry at the corpse spot.
+            risk.OnDeath(player, [(killer.Guid, killer.Entry)]);
+            Assert.True(risk.IsRemembered(killer));
+            return true;
+        });
+
+        await world.Host.World.AdvanceClockAsync(5_000);
+        await world.OnWorldAsync(() =>
+        {
+            // 2. Dying again right at the corpse spot after reclaiming the body (or after Track runs while dead)
+            //    does not falsely report died-in-known-hazard.
+            Player player = world.Player;
+            PlayerbotRisk risk = world.Brain.Risk;
+            world.Engage(killer);
+            risk.Track(player);
+            player.Health = 0;
+            player.Map!.Combat.KillPlayer(player);
+            risk.Track(player); // Track while dead must not clear _fightSinceMs before OnDeath
+            risk.OnDeath(player, [(killer.Guid, killer.Entry)]);
+            Assert.False(cap.Any("bot-risk/died-in-known-hazard"), cap.Describe());
+            return true;
+        });
+    }
 }

@@ -1970,6 +1970,37 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         StandStill(player);
         MarkProgress(now);
         if (_areaWaitSinceMs < 0) _areaWaitSinceMs = now;
+        ArcaneCore.Game.Spells.SpellSystem? spells = session.Services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System;
+        if (AreaSpiritGuides is null && spells is not null)
+        {
+            if (!spells.IsChanneling(guide) && !spells.HasAura(guide, BattlegroundConstants.SpellSpiritHealChannel))
+            {
+                ArcaneCore.Game.Spells.SpellCastResult ch = spells.CastSpell(
+                    guide,
+                    BattlegroundConstants.SpellSpiritHealChannel,
+                    ArcaneCore.Game.Spells.SpellCastTargets.ForSelf(),
+                    triggered: true);
+                if (ch != ArcaneCore.Game.Spells.SpellCastResult.CastOk && !spells.HasAura(guide, BattlegroundConstants.SpellSpiritHealChannel))
+                    spells.AddAura(guide, BattlegroundConstants.SpellSpiritHealChannel, permanent: false);
+            }
+            if ((WaitingToResurrect(player) || _areaQueueSentMs >= 0) && now - _areaWaitSinceMs >= AreaResurrectionIntervalMs)
+            {
+                spells.CastSpell(guide, SpiritGuideService.SpellSpiritHeal, ArcaneCore.Game.Spells.SpellCastTargets.ForSelf(), triggered: true);
+                if (!player.IsAlive)
+                {
+                    player.Map?.Combat.ResurrectBySpiritGuide(
+                        player,
+                        healed => spells.RemoveAuras(healed, BattlegroundConstants.SpellWaitingToResurrect));
+                }
+
+                if (player.IsAlive)
+                {
+                    _areaWaitSinceMs = -1;
+                    return true;
+                }
+            }
+        }
+
         if (!_areaWaitReported && now - _areaWaitSinceMs > 3 * AreaResurrectionIntervalMs)
         {
             _areaWaitReported = true;
@@ -1982,6 +2013,16 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _areaQueueSentMs = now;
         if (!session.TryManagedAction(WorldOpcode.CmsgAreaSpiritHealerQueue, PlayerbotNavigation.GuidPayload(guide.Guid.Value)))
             return false;
+        if (AreaSpiritGuides is null && spells is not null && !WaitingToResurrect(player))
+        {
+            ArcaneCore.Game.Spells.SpellCastResult q = spells.CastSpell(
+                player,
+                BattlegroundConstants.SpellWaitingToResurrect,
+                ArcaneCore.Game.Spells.SpellCastTargets.ForSelf(),
+                triggered: true);
+            if (q != ArcaneCore.Game.Spells.SpellCastResult.CastOk && !WaitingToResurrect(player))
+                spells.AddAura(player, BattlegroundConstants.SpellWaitingToResurrect, permanent: true);
+        }
         AreaQueueRequests++;
         return true;
     }
