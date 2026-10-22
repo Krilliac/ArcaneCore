@@ -242,12 +242,12 @@ public sealed class PlayerProgression : IQuestExperience
         if (stats is not null)
         {
             healthGain = (int)stats.BaseHealth - (int)player.GetUInt32(UpdateFields.UnitFieldBaseHealth)
-                + (int)ExperienceFormulas.HealthBonusFromStamina(stats.Stamina)
-                - (int)ExperienceFormulas.HealthBonusFromStamina(old?.Stamina ?? 0);
+                + (int)StatFormulas.HealthBonusFromStaminaPoints(stats.Stamina)
+                - (int)StatFormulas.HealthBonusFromStaminaPoints(old?.Stamina ?? 0);
             manaGain = player.PowerType != PowerType.Mana ? 0
                 : (int)stats.BaseMana - (int)player.GetUInt32(UpdateFields.UnitFieldBaseMana)
-                    + (int)ExperienceFormulas.ManaBonusFromIntellect(stats.Intellect)
-                    - (int)ExperienceFormulas.ManaBonusFromIntellect(old?.Intellect ?? 0);
+                    + (int)StatFormulas.ManaBonusFromIntellectPoints(stats.Intellect)
+                    - (int)StatFormulas.ManaBonusFromIntellectPoints(old?.Intellect ?? 0);
         }
 
         player.Session.Send(WorldOpcode.SmsgLevelupInfo, ProgressionPackets.LevelUpInfo(level, healthGain, manaGain, statGains).AsSpan());

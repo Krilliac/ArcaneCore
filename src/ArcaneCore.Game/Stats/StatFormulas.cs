@@ -103,6 +103,12 @@ public static class StatFormulas
         return baseInt + (moreInt * ManaPerIntellect);
     }
 
+    /// <summary>Whole-point health from a stamina stat value; <see cref="HealthBonusFromStamina(float)"/> truncated to uint.</summary>
+    public static uint HealthBonusFromStaminaPoints(uint stamina) => (uint)HealthBonusFromStamina(stamina);
+
+    /// <summary>Whole-point mana from an intellect stat value; <see cref="ManaBonusFromIntellect(float)"/> truncated to uint.</summary>
+    public static uint ManaBonusFromIntellectPoints(uint intellect) => (uint)ManaBonusFromIntellect(intellect);
+
     /// <summary>The agility part of the dynamic armor (StatSystem.cpp:130).</summary>
     public static float ArmorFromAgility(float agility) => agility * ArmorPerAgility;
 

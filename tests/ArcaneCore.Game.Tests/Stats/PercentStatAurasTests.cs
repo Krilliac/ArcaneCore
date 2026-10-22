@@ -1,7 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
-using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.Game.Tests.Spells;
@@ -261,7 +260,7 @@ public sealed class PercentStatAurasTests
         var system = new PlayerStatSystem();
         system.Attach(player);
         uint baseline = player.MaxHealth;
-        uint Expected(int stamina) => baseline - ExperienceFormulas.HealthBonusFromStamina(20) + ExperienceFormulas.HealthBonusFromStamina((uint)stamina);
+        uint Expected(int stamina) => baseline - StatFormulas.HealthBonusFromStaminaPoints(20) + StatFormulas.HealthBonusFromStaminaPoints((uint)stamina);
 
         CastOn(kit, player, TotalStamina100);
         Assert.Equal(Expected(40), player.MaxHealth);

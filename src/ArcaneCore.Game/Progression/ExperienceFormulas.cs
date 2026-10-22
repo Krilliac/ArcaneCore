@@ -98,20 +98,6 @@ public static class ExperienceFormulas
         5 => 1.4f,
         _ => Math.Max(1.0f - (count * 0.05f), 0.01f),
     };
-
-    /// <summary>Player::GetHealthBonusFromStamina: the first 20 stamina give 1 health, the rest 10.</summary>
-    public static uint HealthBonusFromStamina(uint stamina)
-    {
-        uint baseStamina = Math.Min(stamina, 20u);
-        return baseStamina + ((stamina - baseStamina) * 10);
-    }
-
-    /// <summary>Player::GetManaBonusFromIntellect: the first 20 intellect give 1 mana, the rest 15.</summary>
-    public static uint ManaBonusFromIntellect(uint intellect)
-    {
-        uint baseIntellect = Math.Min(intellect, 20u);
-        return baseIntellect + ((intellect - baseIntellect) * 15);
-    }
 }
 
 /// <summary>
