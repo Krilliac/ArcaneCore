@@ -312,8 +312,6 @@ public sealed class DurableIdBlockAllocator
     public uint Next()
     {
         uint allocated;
-        bool shouldPrefetch = false;
-
         lock (_gate)
         {
             if (!_hasActiveBlock)
@@ -369,12 +367,10 @@ public sealed class DurableIdBlockAllocator
                 && _remainingTotal <= LowWatermark
                 && (_prefetchTask is null || _prefetchTask.IsCompleted))
             {
-                shouldPrefetch = true;
                 _prefetchTask = Task.Run(PrefetchNextBlockAsync);
             }
         }
 
-        _ = shouldPrefetch;
         return allocated;
     }
 
