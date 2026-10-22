@@ -458,12 +458,20 @@ public sealed class Map
         }
 
         _players.Remove(player.Guid);
-        foreach (IMapUpdater updater in _updaters)
+        try
         {
-            updater.OnPlayerRemoved(this, player);
+            foreach (IMapUpdater updater in _updaters)
+            {
+                updater.OnPlayerRemoved(this, player);
+            }
         }
-        RemoveFromWorld(player);
-        player.NeedsVisibilityUpdate = false;
+        finally
+        {
+            // A throwing hook still propagates, but must not leave the player in _objects, the grid
+            // and every observer's visible set.
+            RemoveFromWorld(player);
+            player.NeedsVisibilityUpdate = false;
+        }
     }
 
     /// <summary>
