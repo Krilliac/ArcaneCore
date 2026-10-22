@@ -115,7 +115,15 @@ internal static class PlayerbotMoveCheck
             return false;
         }
 
-        drapedTo = to with { Z = ground + 0.05f };
+        Vector3 candidate = to with { Z = ground + 0.05f };
+        if (map.Collision.ClassifyUnderMap(candidate.X, candidate.Y, candidate.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind == UnderMapKind.UnderMap
+            && map.Collision.ClassifyUnderMap(from.X, from.Y, from.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind != UnderMapKind.UnderMap)
+        {
+            rejectReason = "NoGroundSupport";
+            return false;
+        }
+
+        drapedTo = candidate;
         rejectReason = null;
         return true;
     }

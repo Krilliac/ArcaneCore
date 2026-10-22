@@ -246,11 +246,17 @@ internal static class PlayerbotMotion
         // A stun, fear or confusion pauses the walk: nothing starts (no packet), and the caller keeps its route (TryAdvance answers true).
         if (ControlLost(player)) return false;
 
-        // A teleport under way (a stalled bot's teleport home, an elevator rescue) waits for its acknowledgement: the server takes no
-        // movement until then (MovementHandlers; vmangos MovementHandler.cpp:311-313), so a start sent now would go nowhere and read as a
-        // rejected move at the spot the bot is leaving (bot QA #792). Nothing is sent or reported; the route, planned from the spot the
-        // bot is leaving, is dropped by the caller and planned again from where the teleport puts it.
-        if (state.TeleportsOf(session)?.IsBeingTeleported(player) == true) return false;
+        // A teleport under way (a stalled bot's teleport home, an elevator rescue), a pending quest settlement, or standing aboard a
+        // transport takes no ground movement (MovementHandlers; vmangos MovementHandler.cpp:311-313), so a start sent now would be
+        // rejected (bot QA #792). Nothing is sent or reported; the caller replans once the transition settles.
+        if (state.TeleportsOf(session)?.IsBeingTeleported(player) == true
+            || player.IsQuestSettlementPending
+            || player.Transport is not null
+            || (player.Movement.Flags & MovementFlags.OnTransport) != 0)
+        {
+            state.Clear();
+            return false;
+        }
 
         if (!Speed(player, options.MoveSpeed, out float speed, out bool walk))
         {
@@ -280,7 +286,9 @@ internal static class PlayerbotMotion
         {
             for (int idx = route.NextPoint + 1; idx < route.Points.Count; idx++)
             {
-                if (route.LegsNavigated(idx, idx) && OnLeg(route, idx, current))
+                if (route.LegsNavigated(idx, idx)
+                    && OnLeg(route, idx, current)
+                    && PlayerbotMoveCheck.LineClear(map.Collision, current, route.Points[idx]))
                 {
                     route.NextPoint = idx;
                     break;
@@ -384,10 +392,13 @@ internal static class PlayerbotMotion
         state.World = session.World;
         if (!CanMove(player) || !player.IsInWorld || player.Map is not { } map || !ReferenceEquals(map, state.Map)
             || state.TeleportsOf(session)?.IsBeingTeleported(player) == true
+            || player.IsQuestSettlementPending
+            || player.Transport is not null
+            || (player.Movement.Flags & MovementFlags.OnTransport) != 0
             || player.Locomotion.ActiveSpline is not null
             || (player.Movement.Flags & MovementFlags.Forward) == 0)
         {
-            // Something else already moved or stopped the bot (death, teleport, charge spline, a root acknowledgement).
+            // Something else already moved or stopped the bot (death, teleport, quest settlement, transport, charge spline, a root acknowledgement).
             state.Clear();
             return;
         }
@@ -732,6 +743,11 @@ internal static class PlayerbotMotion
             movement.TransportZ = place.Offset.Z;
             movement.TransportOrientation = place.Orientation;
         }
+        else
+        {
+            movement.Flags &= ~MovementFlags.OnTransport;
+            movement.TransportGuid = 0;
+        }
         movement.X = position.X;
         movement.Y = position.Y;
         movement.Z = position.Z;
@@ -766,6 +782,9 @@ internal static class PlayerbotMotion
 
     /// <summary>How far a mesh route's straight leg may run from the floor under it before the motion keeps the mesh's own height.</summary>
     internal const float MeshFloorToleranceYards = 4f;
+
+    /// <summary>Extra raise above a mesh corner's Z used to probe stair lips and steep ramps.</summary>
+    internal const float MeshFloorProbeExtraYards = 4f;
 
     /// <summary>
     /// How far (flat) the start of a walk may lie from the route's leg before the walk is no longer that leg (<see cref="OnLeg"/>). A
@@ -855,16 +874,40 @@ internal static class PlayerbotMotion
             if (float.IsNaN(best) && !hasMeshSurface)
             {
                 float directFloor = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
-                if (ValidHeight(directFloor)
-                    && candidate.Z - directFloor > DirectStepDrapeMinYards
-                    && candidate.Z - directFloor <= PlayerbotMoveCheck.DirectStepMaxDrapeYards)
+                if (ValidHeight(directFloor))
                 {
-                    best = directFloor;
+                    if (candidate.Z - directFloor > DirectStepDrapeMinYards
+                        && candidate.Z - directFloor <= PlayerbotMoveCheck.DirectStepMaxDrapeYards)
+                    {
+                        best = directFloor;
+                    }
+                    else if (map.Collision.MeshPoints is not null
+                        && route.MeshPoints is not null
+                        && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
+                    {
+                        rejectReason = "NoGroundSupport";
+                        return null;
+                    }
                 }
             }
 
-            if (float.IsNaN(best)) return candidate;
-            return candidate with { Z = best + 0.05f };
+            Vector3 resolved = float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+            if (map.Collision.ClassifyUnderMap(resolved.X, resolved.Y, resolved.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind == UnderMapKind.UnderMap
+                && map.Collision.ClassifyUnderMap(from.X, from.Y, from.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind != UnderMapKind.UnderMap)
+            {
+                rejectReason = "NoGroundSupport";
+                return null;
+            }
+
+            if (map.Collision.MeshPoints is not null
+                && route.MeshPoints is not null
+                && PlayerbotMotionAnomalies.CrossesStaticWall(map, route, fromPoint, toPoint, from, resolved))
+            {
+                rejectReason = "LineBlocked";
+                return null;
+            }
+
+            return resolved;
         }
 
         // Non-navigated (DirectStep / stepped / trail) leg: validate and drape onto the walkable floor via PlayerbotMoveCheck.
@@ -1008,16 +1051,23 @@ internal static class PlayerbotMotion
 
     /// <summary>
     /// Resolve the walkable floor near <paramref name="z"/> without snapping onto overhead M2/WMO props (tree branches, bushes, fences,
-    /// roof eaves) that <see cref="MapCollision.GetHeight"/> prefers whenever <c>modelHeight &gt; mapHeight</c>.
+    /// roof eaves) that <see cref="MapCollision.GetHeight"/> prefers whenever <c>modelHeight &gt; mapHeight</c>, or snapping downward
+    /// onto an underground cave/mine WMO floor while walking on surface terrain.
     /// </summary>
     internal static float ResolveWalkFloor(Map map, float x, float y, float z, float raise, float maxCeilingZ)
     {
         float terrain = map.Terrain.GetHeight(x, y, z);
         float floor = map.Collision.GetHeight(x, y, z + raise);
-        if (ValidHeight(terrain) && ValidHeight(floor) && floor > terrain + 0.4f
-            && MathF.Abs(terrain - z) + 0.25f < MathF.Abs(floor - z))
+        if (ValidHeight(terrain) && ValidHeight(floor))
         {
-            floor = terrain;
+            if (floor > terrain + 0.4f && MathF.Abs(terrain - z) + 0.25f < MathF.Abs(floor - z))
+            {
+                floor = terrain;
+            }
+            else if (floor < terrain - 2.0f && z >= terrain - 1.5f)
+            {
+                floor = terrain;
+            }
         }
 
         if (ValidHeight(floor) && floor > maxCeilingZ)

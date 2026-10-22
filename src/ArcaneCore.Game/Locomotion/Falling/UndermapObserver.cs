@@ -28,8 +28,13 @@ public sealed class UndermapObserver : IClientMovementObserver
     /// <summary>Threshold below loaded terrain/WMO floor beyond which a player is considered under the map.</summary>
     public const float UnderTerrainThresholdYards = 50.0f;
 
+    /// <summary>Depth below loaded terrain/WMO floor beyond which an ungrounded player is snapped back to the surface.</summary>
+    public const float UnderTerrainRecoveryYards = 8.0f;
+
     /// <summary>Minimum interval (ms) between terrain-floor samples for <c>move/under-map</c>.</summary>
     public const uint TerrainSampleIntervalMs = 1000;
+
+    private const float SurfaceSnapOffset = 0.05f;
 
     public void BeforeApply(MovementObserverContext context, in MovementInfo previous, ref MovementInfo incoming)
     {
@@ -77,20 +82,35 @@ public sealed class UndermapObserver : IClientMovementObserver
                 {
                     state.LastUndermapSampleMs = nowMs;
                     // Terrain alone convicts a player in a cave or a city; the models decide (MapCollision.ClassifyUnderMap; Unknown never convicts).
-                    UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, UnderTerrainThresholdYards);
+                    UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, UnderTerrainRecoveryYards);
                     if (verdict.Kind == UnderMapKind.UnderMap
                         && !map.Collision.LevelWithAnyNearbyFloor(player.X, player.Y, player.Movement.Z))
                     {
-                        if (!state.UndermapReportedInEpisode)
+                        float floorZ = player.Movement.Z + verdict.DepthYards;
+                        if (verdict.DepthYards > UnderTerrainThresholdYards)
                         {
-                            state.UndermapReportedInEpisode = true;
-                            AnomalyLedger.Shared.Report(
-                                "move",
-                                "under-map",
-                                $"player {player.Name} (guid {player.Guid.Low})",
-                                $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={player.Movement.Z + verdict.DepthYards:F2}",
-                                AnomalySeverity.Error,
-                                map.WorldIdentity);
+                            if (!state.UndermapReportedInEpisode)
+                            {
+                                state.UndermapReportedInEpisode = true;
+                                AnomalyLedger.Shared.Report(
+                                    "move",
+                                    "under-map",
+                                    $"player {player.Name} (guid {player.Guid.Low})",
+                                    $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={floorZ:F2}",
+                                    AnomalySeverity.Error,
+                                    map.WorldIdentity);
+                            }
+                        }
+
+                        if (float.IsFinite(floorZ) && floorZ > VoidHeight)
+                        {
+                            MovementInfo recovered = player.Movement with
+                            {
+                                Z = floorZ + SurfaceSnapOffset,
+                                Flags = player.Movement.Flags & ~(MovementFlags.Jumping | MovementFlags.FallingFar),
+                                FallTime = 0,
+                            };
+                            player.ApplyClientMovement(recovered, nowMs);
                         }
                     }
                     else
