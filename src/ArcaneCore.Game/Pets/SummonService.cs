@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Pets;
@@ -318,6 +319,20 @@ public sealed partial class SummonService : ISpellSummonSink
     {
         float range = owner.BoundingRadius + distance + summonRadius;
         return (owner.X + (range * MathF.Cos(absoluteAngle)), owner.Y + (range * MathF.Sin(absoluteAngle)));
+    }
+
+    internal static (float X, float Y, float Z) SafeClosePoint(Unit owner, CreatureMapSystem creatures, float summonRadius, float distance, float absoluteAngle)
+    {
+        (float x, float y) = ClosePoint(owner, summonRadius, distance, absoluteAngle);
+        float z = creatures.GroundZ(x, y, owner.Z) is { } gz && MathF.Abs(gz - owner.Z) <= 4f ? gz : owner.Z;
+        if (owner.Map is { } map
+            && (!map.Collision.IsInLineOfSight(owner.X, owner.Y, owner.Z + 1.5f, x, y, z + 1.5f)
+                || map.Collision.ClassifyUnderMap(x, y, z, 8f).Kind == Maps.Collision.UnderMapKind.UnderMap))
+        {
+            return (owner.X, owner.Y, owner.Z);
+        }
+
+        return (x, y, z);
     }
 
     private bool TryGetSystems(Unit caster, uint spellId, out PetMapSystem pets, out CreatureMapSystem creatures)

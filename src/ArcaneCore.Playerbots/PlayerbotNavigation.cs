@@ -1178,7 +1178,6 @@ internal static class PlayerbotNavigation
 
                 if (Bounded([start, .. path.Points], options, reaches) is { } joined && joined.Points.Count <= options.MaxPathPoints + 1)
                 {
-                    joined.SetLegNavigated(0, false);
                     return joined;
                 }
             }

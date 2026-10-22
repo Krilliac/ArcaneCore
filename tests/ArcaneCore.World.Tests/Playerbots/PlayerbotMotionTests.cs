@@ -107,52 +107,36 @@ public sealed class PlayerbotMotionTests
     }
 
     [Fact]
-    public async Task Follow_AndPump_WhileOnTransportOrQuestSettlementPending_SuppressesMotionWithoutMoveRejectedAnomaly()
+    public async Task Follow_WhenBotDriftedOffNavigatedRouteEvenWithClearFirstTwoYards_RejectsRouteImmediatelyInsteadOfFailingInPump()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
             using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
-            var options = new PlayerbotOptions { Enabled = true, MoveSpeed = 7.0f };
-
-            (bool followOnTransport, bool followDuringSettlement, int rejections) = await host.OnWorldAsync(() =>
+            (bool started, bool complete, int consecutive) = await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
-                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(Floor));
-                player.Relocate(0f, 0f, Floor, 0f, host.World.NowMs);
-                player.ApplyClientMovement(
-                    player.Movement with { Flags = player.Movement.Flags | MovementFlags.OnTransport, TransportGuid = 777UL },
-                    host.World.NowMs);
-
-                var route1 = new PlayerbotRoute([new Vector3(0f, 0f, Floor), new Vector3(20f, 0f, Floor)], 20f, navigated: true);
+                // First 2 yards are flat/clear, cliff at X <= 11.0f would only be hit on the next heartbeat in Pump.
+                WorldCollision.Of(host.World).Install(lineOfSight: new CliffBelowX(Floor, 11.0f));
+                player.Relocate(15f, 10f, Floor, 0f, host.World.NowMs);
+                var route = new PlayerbotRoute([new Vector3(0f, 0f, Floor), new Vector3(0f, 50f, Floor)], 50f, navigated: true);
                 session.ManagedBudget = new ManagedActionBudget(4);
-                bool onTransportResult = PlayerbotMotion.Follow(session, player, route1, options, host.World.NowMs);
-
-                player.ApplyClientMovement(
-                    player.Movement with { Flags = player.Movement.Flags & ~MovementFlags.OnTransport, TransportGuid = 0UL },
-                    host.World.NowMs);
-
-                var opId = Guid.NewGuid();
-                player.BeginQuestSettlement(opId);
-                var route2 = new PlayerbotRoute([new Vector3(0f, 0f, Floor), new Vector3(20f, 0f, Floor)], 20f, navigated: true);
-                session.ManagedBudget = new ManagedActionBudget(4);
-                bool settlementResult = PlayerbotMotion.Follow(session, player, route2, options, host.World.NowMs);
-                player.EndQuestSettlement(opId);
-
-                return (onTransportResult, settlementResult, PlayerbotMotion.ConsecutiveRejections(player));
+                bool follow = PlayerbotMotion.Follow(session, player, route, new PlayerbotOptions { Enabled = true, MoveSpeed = 7.0f }, host.World.NowMs);
+                return (follow, route.Complete, PlayerbotMotion.ConsecutiveRejections(player));
             });
 
-            Assert.False(followOnTransport);
-            Assert.False(followDuringSettlement);
-            Assert.Equal(0, rejections);
-            Assert.Equal(0, capture.Count(Key(Code.MoveRejected)));
+            Assert.False(started);
+            Assert.True(complete);
+            Assert.Equal(0, consecutive);
+            Assert.Equal(0, capture.Count(Key(Code.StartBlocked)));
+            Assert.Equal(0, capture.Count(Key(Code.RouteBlocked)));
         }
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
     [Fact]
-    public async Task FromBeside_MarksJoiningLegUnnavigated_AndRejectsJoiningLegBlockedByM2Wall()
+    public async Task FromBeside_MarksJoiningLegNavigated_AndRejectsJoiningLegBlockedByM2Wall()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -170,7 +154,8 @@ public sealed class PlayerbotMotionTests
                     pathfinder: new FragmentAtOriginPathfinder(Floor));
                 bool blocked = PlayerbotNavigation.TryPlanToward(player, new Vector3(20f, 0f, Floor), options, out _);
 
-                // Second: Clear LOS -> FromBeside succeeds, joining leg 1 (start -> beside) must be non-navigated while leg 2 (beside -> goal) is navigated.
+                // Second: Clear LOS -> FromBeside succeeds; because FromBeside verified LineClear and floor height on start->beside,
+                // leg 1 is marked navigated so corner turns across Points[1] in Pump do not fail route.LegsNavigated(1, 2).
                 WorldCollision.Of(host.World).Install(
                     lineOfSight: new FlatFloor(Floor),
                     pathfinder: new FragmentAtOriginPathfinder(Floor));
@@ -179,14 +164,40 @@ public sealed class PlayerbotMotionTests
                 return (
                     blocked,
                     clear,
-                    clearRoute?.LegNavigatedAt(1) ?? true,
+                    clearRoute?.LegNavigatedAt(1) ?? false,
                     clearRoute?.LegNavigatedAt(2) ?? false);
             });
 
             Assert.False(blockedPlanned);
             Assert.True(clearPlanned);
-            Assert.False(clearLeg1Navigated);
+            Assert.True(clearLeg1Navigated);
             Assert.True(clearLeg2Navigated);
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task ObserveAfterStep_IntermediateCornerInDoorwayWithLintelFourYardsAbove_DoesNotSnapCornerOntoLintel()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Map map = player.Map!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new DoorwayWithLintelAtX(Floor, lintelX: 2f, lintelZ: Floor + 3.9f));
+
+                var from = new Vector3(0f, 0f, Floor);
+                var corner = new Vector3(2f, 0f, Floor);
+                var to = new Vector3(4f, 0f, Floor);
+                var route = new PlayerbotRoute([from, corner, to], 4f, navigated: true);
+                PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, PlayerbotMotion.Of(player), route, from, 1, 2, to, host.World.NowMs);
+            });
+
+            Assert.Equal(0, capture.Count(Key(Code.WallCrossed)));
         }
         finally { session.Kick(); await session.ManagedClosed; }
     }
@@ -343,6 +354,23 @@ public sealed class PlayerbotMotionTests
 
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
             => x <= dropBelowX ? floor - 30f : floor;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        { info = default; return false; }
+    }
+
+    private sealed class DoorwayWithLintelAtX(float floor, float lintelX, float lintelZ) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
+            => MathF.Max(from.Z, to.Z) < lintelZ + 0.5f;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        { hit = to; return false; }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+            => MathF.Abs(x - lintelX) < 0.5f && z >= lintelZ ? lintelZ : floor;
 
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
         { info = default; return false; }
