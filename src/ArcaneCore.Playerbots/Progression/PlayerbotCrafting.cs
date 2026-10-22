@@ -1071,13 +1071,16 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (_refusedUntil.ContainsKey(guid.Value)
-                || map.FindObject(guid) is not GameObject { IsSpawned: true, Type: GameObjectType.Chest } go
-                || (go.Flags & (GameObjectFlags.InUse | GameObjectFlags.NoInteract)) != 0
+                || map.FindObject(guid) is not GameObject { IsSpawned: true, Type: GameObjectType.Chest } go)
+                continue;
+
+            uint reqQuest = go.Template.GetData(8);
+            if ((go.Flags & (GameObjectFlags.InUse | GameObjectFlags.NoInteract)) != 0
                 || go.LootState is GameObjectLootState.JustDeactivated or GameObjectLootState.NotReady
                 || (!go.User.IsEmpty && go.User != player.Guid)
                 || go.Loot is { IsEmpty: true }
                 || go.Template.GetData(GameObjectMapSystem.ChestLevelData) > player.Level + GameObjectMapSystem.ChestLevelLeeway
-                || (go.Template.GetData(8) is not 0 and uint reqQuest
+                || (reqQuest != 0
                     && (goSystem?.Quests is { } goQuests
                         ? !goQuests.IsQuestIncomplete(player, reqQuest)
                         : !(_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } qState && qState.Quests.GetStatus(reqQuest) == ArcaneCore.Game.Quests.QuestStatus.Incomplete))))

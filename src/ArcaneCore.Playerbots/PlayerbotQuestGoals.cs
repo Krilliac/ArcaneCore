@@ -528,7 +528,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
             {
                 _route = null;
-                if (NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid, returning))
+                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid, returning))
                     return false;
             }
             else if (System.Numerics.Vector3.DistanceSquared(
