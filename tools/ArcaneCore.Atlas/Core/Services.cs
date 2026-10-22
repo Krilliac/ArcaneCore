@@ -67,7 +67,11 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
     private readonly Lock _lruGate = new();
     private long _bytes;
 
-    private sealed record Entry(LayerBuild Build, IReadOnlyList<byte[]> Wire, long Bytes);
+    private sealed record Entry(LayerBuild Build, IReadOnlyList<byte[]> Wire, long Bytes)
+    {
+        // Set under _lruGate by Touch once Bytes are in _bytes; Drop subtracts only counted entries.
+        public bool Counted { get; set; }
+    }
 
     public long Bytes => Interlocked.Read(ref _bytes);
 
@@ -122,7 +126,7 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
             try
             {
                 Entry entry = lazy.Value;
-                Touch(key);
+                Touch(key, lazy, entry);
                 return entry;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -144,23 +148,34 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
         LayerBuild build = source.Build(layerId, tile, cancellationToken);
         byte[][] wire = [.. build.Chunks.OrderBy(c => c.Part).Select(GeometryWire.Write)];
         long bytes = wire.Sum(w => (long)w.Length) + 256;
-        Interlocked.Add(ref _bytes, bytes);
         return new Entry(build, wire, bytes);
     }
 
-    private void Touch((string, TileKey) key)
+    private void Touch((string, TileKey) key, Lazy<Entry> lazy, Entry entry)
     {
         List<(string, TileKey)> evict = [];
         lock (_lruGate)
         {
+            // An Invalidate that ran while this build was in flight already dropped the entry; counting it now would leak bytes.
+            if (!_entries.TryGetValue(key, out Lazy<Entry>? current) || !ReferenceEquals(current, lazy))
+            {
+                return;
+            }
+
+            if (!entry.Counted)
+            {
+                entry.Counted = true;
+                Interlocked.Add(ref _bytes, entry.Bytes);
+            }
+
             _lru.Remove(key);
             _lru.AddFirst(key);
             long over = Interlocked.Read(ref _bytes) - maxBytes;
             for (LinkedListNode<(string, TileKey)>? node = _lru.Last; over > 0 && node is not null && node != _lru.First; node = node.Previous)
             {
-                if (_entries.TryGetValue(node.Value, out Lazy<Entry>? lazy) && lazy.IsValueCreated)
+                if (_entries.TryGetValue(node.Value, out Lazy<Entry>? candidate) && candidate.IsValueCreated && candidate.Value.Counted)
                 {
-                    over -= lazy.Value.Bytes;
+                    over -= candidate.Value.Bytes;
                     evict.Add(node.Value);
                 }
             }
@@ -174,22 +189,21 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
 
     private bool Drop((string, TileKey) key)
     {
-        if (!_entries.TryRemove(key, out Lazy<Entry>? lazy))
-        {
-            return false;
-        }
-
-        if (lazy.IsValueCreated)
-        {
-            Interlocked.Add(ref _bytes, -lazy.Value.Bytes);
-        }
-
         lock (_lruGate)
         {
-            _lru.Remove(key);
-        }
+            if (!_entries.TryRemove(key, out Lazy<Entry>? lazy))
+            {
+                return false;
+            }
 
-        return true;
+            if (lazy.IsValueCreated && lazy.Value.Counted)
+            {
+                Interlocked.Add(ref _bytes, -lazy.Value.Bytes);
+            }
+
+            _lru.Remove(key);
+            return true;
+        }
     }
 
     private ILayerSource Source(string layerId)
