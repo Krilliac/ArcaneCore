@@ -184,6 +184,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         // A previous completed cast can leave GO packets in the bounded capture queue.
         // Consume prior notifications before submitting this request so they cannot
         // make an ordinary cooldown/resource refusal appear accepted.
+        PlayerbotMount.CancelPendingCast(session);
         session.DrainManagedPackets(WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgSpellGo,
             WorldOpcode.SmsgSpellFailure, WorldOpcode.SmsgSpellFailedOther, WorldOpcode.SmsgCastResult);
 
@@ -234,6 +235,13 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         {
             PlayerbotMovementControl.Stop(session, player);
             return true;
+        }
+
+        if (MountService.IsMounted(player))
+        {
+            PlayerbotMount.CancelPendingCast(session);
+            if (PullTarget is null)
+                return false;
         }
 
         if (Rotation(player, feature) is { } rotation)
@@ -617,6 +625,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         var writer = new PacketWriter(24);
         writer.WriteUInt32(spell.Id);
         targets.Write(writer);
+        PlayerbotMount.CancelPendingCast(session);
         session.DrainManagedPackets(WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgSpellGo,
             WorldOpcode.SmsgSpellFailure, WorldOpcode.SmsgSpellFailedOther, WorldOpcode.SmsgCastResult);
         if (!session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray())) return false;

@@ -97,6 +97,21 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     internal bool HasCandidate(Player player)
         => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null || TripWanted(player) != NpcFlags.None;
 
+    internal static bool HasBrokenWornGear(Player player)
+    {
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (slot != InventorySlots.Tabard && slot != InventorySlots.Body
+                && player.Inventory.GetItem(InventorySlots.Bag0, slot) is { MaxDurability: > 0, Durability: 0 })
+                return true;
+        }
+
+        return false;
+    }
+
+    internal bool HasUrgentRepairOrSell(Player player)
+        => TripWanted(player) != NpcFlags.None || FindNpc(player, NpcFlags.Repair | NpcFlags.Vendor) is not null;
+
     internal bool Update(Player player, uint elapsedMs)
     {
         if (elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat)
@@ -151,7 +166,12 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return false;
         }
 
-        NpcInfo? npc = FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair);
+        NpcFlags wantedTrip = TripWanted(player);
+        NpcInfo? npc = _repairSpawn != 0 && wantedTrip == NpcFlags.Repair
+            ? FindNpc(player, NpcFlags.Repair)
+            : (wantedTrip == NpcFlags.Repair
+                ? FindNpc(player, NpcFlags.Repair) ?? FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer)
+                : FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair));
         if (npc is null)
             return TravelToRepair(player, services, elapsedMs);
         TargetEntry = npc.Entry;

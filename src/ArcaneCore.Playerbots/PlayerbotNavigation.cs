@@ -539,11 +539,14 @@ internal static class PlayerbotNavigation
     /// bot is on no region. A region lookup and an array read; allocation-free.
     /// </summary>
     internal static bool IsOnMeshFragment(Player player)
+        => player.Map is { } map && IsPointOnMeshFragment(map, PlayerbotMotion.CurrentPosition(player));
+
+    internal static bool IsPointOnMeshFragment(Map map, Vector3 point)
     {
-        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+        if (map.Collision.Pathfinder is not NavMeshPathfinder nav
             || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
             return false;
-        int region = nav.RegionAt(graph, PlayerbotMotion.CurrentPosition(player), WalkingLocate);
+        int region = nav.RegionAt(graph, point, WalkingLocate);
         return region >= 0 && IsFragment(graph, region);
     }
 
@@ -1370,8 +1373,12 @@ internal static class PlayerbotNavigation
     /// locates no polygon there otherwise). One more query on a refused plan; a plan that succeeds never makes it.
     /// </summary>
     internal static bool OnWalkableMesh(Map map, Vector3 point)
-        => (PlayerbotThinkProbe.Find(map.Collision, point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
-            ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 }).Type & PathType.NoPath) == 0;
+    {
+        PathResult res = PlayerbotThinkProbe.Find(map.Collision, point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
+            ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 });
+        return (res.Type & PathType.NoPath) == 0
+            && (res.Points.Count == 0 || MathF.Abs(res.End.Z - point.Z) <= NavMeshPathfinder.NearExtents.Y);
+    }
 
     /// <summary>
     /// The search budget of one query: vmangos' 2048 nodes (<see cref="PathOptions.DefaultMaxSearchNodes"/>) within

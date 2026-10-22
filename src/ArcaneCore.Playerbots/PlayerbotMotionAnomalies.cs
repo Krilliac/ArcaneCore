@@ -445,7 +445,9 @@ internal static class PlayerbotMotionAnomalies
                 // ignoreM2 false is the stricter query: a clear answer clears both, so a clean leg costs one query. A blocked line over a
                 // leg that stays on the walkable mesh is the line's fault, not the walk's: the chest-height line clips a step's edge, a
                 // stair's slab, a lintel or a ramp the mesh (built from the same models) walks over or under.
-                if (!los.IsInLineOfSight(map.MapId, a, b, ignoreM2: false) && !StaysOnMesh(map, previous, end))
+                if (!los.IsInLineOfSight(map.MapId, a, b, ignoreM2: false)
+                    && !StaysOnMesh(map, previous, end)
+                    && !(route.MeshPoints is not null && index >= 1 && StaysOnMeshFromCorner(map, route.Points[index - 1], previous, end)))
                 {
                     bool wall = !los.IsInLineOfSight(map.MapId, a, b, ignoreM2: true);
                     ReportCrossing(player, watch, wall, previous, end, now);
@@ -503,6 +505,11 @@ internal static class PlayerbotMotionAnomalies
 
         return end;
     }
+
+    private static bool StaysOnMeshFromCorner(Map map, Vector3 corner, Vector3 previous, Vector3 end)
+        => Vector2.Distance(new Vector2(previous.X, previous.Y), new Vector2(corner.X, corner.Y)) <= 3f
+            && MathF.Abs(previous.Z - corner.Z) <= PlayerbotMotion.MeshFloorToleranceYards
+            && StaysOnMesh(map, corner, end);
 
     /// <summary>
     /// Whether the segment from <paramref name="from"/> to <paramref name="to"/> is a walk over the bot's walkable mesh

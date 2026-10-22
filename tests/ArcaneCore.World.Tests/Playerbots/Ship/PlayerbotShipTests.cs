@@ -358,6 +358,45 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         Assert.Equal(0, capture.Count(ShipKey("dock-unreachable")));
     }
 
+    [Fact]
+    public async Task ResolveDockTarget_WhenPortKeyframeIsOnWaterPolygon_ResolvesDryPierFloorInsteadOfWater()
+    {
+        var waterAtPortMesh = new WaterAtPortMesh(ShipTestWorld.PortOnMap0.Position, radiusFromPortMin: 10f);
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: new PierFloor(ShipTestWorld.PortOnMap0.Position.Z),
+            pathfinder: waterAtPortMesh));
+        Vector3 toward = ShipTestWorld.PortOnMap0.Position + new Vector3(-40f, 0f, 0f);
+        Vector3 resolved = await world.OnWorldAsync(() =>
+            PlayerbotShip.ResolveDockTarget(world.Player.Map!, ShipTestWorld.PortOnMap0.Position, toward));
+
+        Assert.True(Vector2.Distance(new Vector2(resolved.X, resolved.Y), new Vector2(ShipTestWorld.PortOnMap0.Position.X, ShipTestWorld.PortOnMap0.Position.Y)) >= 10f,
+            $"expected dry pier >= 10 yd from water keyframe, got {resolved}");
+    }
+
+    private sealed class WaterAtPortMesh(Vector3 port, float radiusFromPortMin) : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            bool nearPort = Vector2.Distance(new Vector2(end.X, end.Y), new Vector2(port.X, port.Y)) < radiusFromPortMin;
+            bool allowsDeepWater = options is null || (options.EffectiveIncludeFlags & ArcaneCore.Game.Maps.Collision.NavTerrain.Water) != 0;
+            if (nearPort && !allowsDeepWater)
+                return ArcaneCore.Game.Maps.Collision.PathResult.None(start);
+            return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = port.Z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = port.Z });
+    }
+
     private sealed class PierFloor(float z) : ArcaneCore.Game.Maps.Collision.ILineOfSight
     {
         public bool Enabled => true;

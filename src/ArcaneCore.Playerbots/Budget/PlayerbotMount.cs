@@ -51,6 +51,16 @@ internal sealed class PlayerbotMount
     /// <summary>The mount state of one bot session.</summary>
     internal static PlayerbotMount For(WorldSession session) => States.GetValue(session, _ => new PlayerbotMount());
 
+    /// <summary>Clears any tracked in-flight mount cast when the bot is mounted or another spell supersedes the cast.</summary>
+    internal static void CancelPendingCast(WorldSession session)
+    {
+        if (!States.TryGetValue(session, out PlayerbotMount? state)) return;
+        state._casting = false;
+        state._activeSpellId = 0;
+        if (session.Player is { } player && MountService.IsMounted(player))
+            state._failures = 0;
+    }
+
     /// <summary>Consecutive failed mount attempts (tests, inspection).</summary>
     internal int Failures => _failures;
 

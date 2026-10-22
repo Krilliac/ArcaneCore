@@ -639,6 +639,14 @@ public sealed class PlayerbotEquipmentTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public void Essentials_NeverSpendIntoTheRepairReserve_WhenGearIsDamaged()
+    {
+        PlayerbotBudgetLine[] lines = [new(PlayerbotSpendKind.Repair, 25), new(PlayerbotSpendKind.Riding, 5000)];
+        Assert.Equal(16u, PlayerbotBudgetMath.Spendable(lines, PlayerbotSpendKind.Essentials, money: 41, essentialsAllowance: 500));
+        Assert.Equal(0u, PlayerbotBudgetMath.Spendable(lines, PlayerbotSpendKind.Essentials, money: 20, essentialsAllowance: 500));
+    }
+
     private sealed class ManualEquipmentClock : ArcaneCore.World.Features.IWorldFeature
     {
         public void Attach(ArcaneCore.Game.Maps.WorldRuntime world) => world.UseManualClock();

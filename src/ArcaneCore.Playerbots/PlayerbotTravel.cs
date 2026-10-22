@@ -558,6 +558,11 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true,
     };
 
+    private static readonly PathOptions DryWalkingLocate = new()
+    {
+        IncludeFlags = NavTerrain.Ground, ExcludeFlags = NavTerrain.SteepSlopes | NavTerrain.Water, LoadTiles = true, NonBlockingTiles = true,
+    };
+
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
     private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
     {
@@ -569,7 +574,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
             (int, bool) found = (-1, false);
             if (Finite(place.Position) && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
             {
-                int region = nav.RegionAt(graph, place.Position, WalkingLocate);
+                int region = nav.RegionAt(graph, place.Position, DryWalkingLocate);
                 if (region < 0 && player.Map is { } map && map.MapId == place.MapId)
                 {
                     Vector3 resolved = PlayerbotShip.ResolveDockTarget(map, place.Position, new Vector3(player.X, player.Y, player.Z));
@@ -1076,7 +1081,12 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
             return StepResult.Next;
         }
 
-        switch (journey.Walk.Step(session, player, options, leg.To.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
+        Vector3 walkTarget = handOff
+            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin
+            && player.Map is { } walkMap
+            ? PlayerbotShip.ResolveDockTarget(walkMap, leg.To.Position, new Vector3(player.X, player.Y, player.Z))
+            : leg.To.Position;
+        switch (journey.Walk.Step(session, player, options, walkTarget, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
         {
             case JourneyWalk.Outcome.Yield:
                 return StepResult.Yield;
