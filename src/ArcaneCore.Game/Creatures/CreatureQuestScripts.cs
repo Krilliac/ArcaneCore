@@ -136,6 +136,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("creatures.quest-script", ex);
                 LogHookFault(log, AcceptSite, ex, script.GetType().Name, aiCreature, quest.Id);
             }
         }
@@ -148,6 +149,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("creatures.quest-script", ex);
                 LogHookFault(log, AcceptSite, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
             }
         }
@@ -185,6 +187,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("creatures.quest-script", ex);
                     LogHookFault(log, RewardSite, ex, script.GetType().Name, creature, quest.Id);
                 }
             }
@@ -197,6 +200,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("creatures.quest-script", ex);
                     LogHookFault(log, RewardSite, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
                 }
             }

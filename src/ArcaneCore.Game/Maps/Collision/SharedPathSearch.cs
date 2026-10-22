@@ -278,6 +278,8 @@ public sealed class NavJobSystem : IDisposable
             long compute = Stopwatch.GetTimestamp() - taken;
             Account(compute);
             Interlocked.Increment(ref _faulted);
+            FaultLedger.Shared.Record("collision.path-search", ex);
+            AnomalyLedger.Shared.Report("collision", "query-fault", $"map {job.MapId}", ex.Message);
             _logger.LogFault("nav.job", ex, "Path job on map {MapId} from ({SX:F1},{SY:F1},{SZ:F1}) to ({DX:F1},{DY:F1},{DZ:F1}) failed",
                 job.MapId, job.Start.X, job.Start.Y, job.Start.Z, job.Destination.X, job.Destination.Y, job.Destination.Z);
             job.Finish(NavJobStatus.Faulted, null, PathSearchCounters.Current - before, compute, queueTicks);

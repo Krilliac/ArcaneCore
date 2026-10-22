@@ -461,6 +461,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.manager", ex);
                 _logger.LogFault("instances.script-player-enter", ex, "Instance script OnPlayerEnter failed on map {MapId} instance {InstanceId} for player {PlayerGuid}", map.MapId, map.InstanceId, player.Guid);
             }
         }
@@ -756,6 +757,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.manager", ex);
                 _logger.LogFault("instances.update-raid-schedule", ex, "Failed to update raid reset schedule for map {MapId}", mapId);
             }
         }
@@ -777,6 +779,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.manager", ex);
                 _logger.LogFault("instances.update-save-reset", ex, "Failed to process scheduled reset for map {MapId} instance {InstanceId}", save.MapId, save.InstanceId);
             }
         }
@@ -799,6 +802,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.manager", ex);
                 _logger.LogFault("instances.homebind-timer", ex, "Failed to update homebind timer for player {PlayerGuid} on map {MapId} instance {InstanceId}", player.Guid, map.MapId, map.InstanceId);
             }
         }
@@ -819,6 +823,7 @@ public sealed partial class InstanceManager : IMapResolver
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("instances.manager", ex);
                     _logger.LogFault("instances.unload-map", ex, "Failed to unload empty instance map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
                 }
             }
@@ -994,6 +999,7 @@ public sealed partial class InstanceManager : IMapResolver
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("instances.manager", ex);
             _logger.LogFault("instances.script-init", ex, "Instance script Initialize/Load failed on map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
         }
 
@@ -1006,6 +1012,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.manager", ex);
                 _logger.LogFault("instances.script-creature-create", ex, "Instance script OnCreatureCreate failed on map {MapId} instance {InstanceId} for creature {CreatureEntry}", map.MapId, map.InstanceId, creature.Entry);
             }
         }
@@ -1018,6 +1025,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.manager", ex);
                 _logger.LogFault("instances.script-object-create", ex, "Instance script OnObjectCreate failed on map {MapId} instance {InstanceId} for object {ObjectEntry}", map.MapId, map.InstanceId, go.Entry);
             }
         }

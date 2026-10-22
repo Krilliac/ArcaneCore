@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using System.Numerics;
 using Microsoft.Extensions.Logging;
@@ -115,6 +116,8 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
             }
             catch (InvalidDataException ex)
             {
+                FaultLedger.Shared.Record("collision.vmap-tile", ex);
+                AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
                 _logger.LogError(ex, "VMaps: {Path} is not a usable {Magic} tile ({Reason}); the tile is ignored", path, VMapFormat.Magic, ex.Message);
                 return false;
             }
@@ -263,6 +266,8 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
                 {
+                    FaultLedger.Shared.Record("collision.vmap-prefetch", ex);
+                    AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
                     // Left to the world thread, which reads it again and logs what it always logged.
                 }
             }
@@ -365,6 +370,8 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
         catch (InvalidDataException ex)
         {
+            FaultLedger.Shared.Record("collision.vmap-tree", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId}", ex.Message);
             _logger.LogError(ex, "VMaps: {Path} is not a usable {Magic} tree ({Reason}); map {MapId} has no line of sight data", path, VMapFormat.Magic, ex.Message, mapId);
             return null;
         }
@@ -420,6 +427,8 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
                 }
                 catch (InvalidDataException ex)
                 {
+                    FaultLedger.Shared.Record("collision.vmap-model", ex);
+                    AnomalyLedger.Shared.Report("collision", "tile-load-failed", name, ex.Message);
                     _logger.LogError(ex, "VMaps: {Path} is not a usable model ({Reason}); its spawns are skipped", path, ex.Message);
                 }
             }
@@ -450,6 +459,8 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            FaultLedger.Shared.Record("collision.vmap-read", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
             _logger.LogError(ex, "VMaps: could not read {Path}", path);
             return null;
         }

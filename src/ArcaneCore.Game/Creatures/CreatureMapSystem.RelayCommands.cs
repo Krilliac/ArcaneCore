@@ -38,6 +38,7 @@ public sealed partial class CreatureMapSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("creatures.relay-command", ex);
             LogRelayStepFault("CreatureMapSystem.ExecuteRelayStep", ex, pending.Step, Map.FindObject(pending.Source), Map.FindObject(pending.Target));
             return false;
         }
@@ -127,6 +128,7 @@ public sealed partial class CreatureMapSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("creatures.relay-command", ex);
             LogRelayStepFault("CreatureMapSystem.RelayTempSpawn", ex, step, source, null);
         }
     }
@@ -172,6 +174,7 @@ public sealed partial class CreatureMapSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("creatures.relay-command", ex);
             LogRelayStepFault("CreatureMapSystem.RelayActivateObject", ex, step, source, target);
         }
     }
@@ -290,6 +293,7 @@ public sealed partial class CreatureMapSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("creatures.relay-command", ex);
             if (source is Creature faultMover)
             {
                 RestoreMissingPathNpcFlags(faultMover, step, "the step faulted");
@@ -375,6 +379,7 @@ public sealed partial class CreatureMapSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("creatures.relay-command", ex);
             LogRelayStepFault("CreatureMapSystem.RelaySendAiEvent", ex, step, source, target);
         }
     }

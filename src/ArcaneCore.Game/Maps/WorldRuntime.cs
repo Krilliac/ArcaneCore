@@ -225,6 +225,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("world.manual-advance", ex);
                 _manualAdvances.RemoveAt(i);
                 advance.Done.TrySetException(ex);
                 continue;
@@ -467,6 +468,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("world.invoke", ex);
                 completion.TrySetException(ex);
             }
         });
@@ -682,6 +684,7 @@ public sealed partial class WorldRuntime : IDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world.script", ex);
             _logger.LogFault("world-script", ex, "world script {Hook} failed (diff={DiffMs} ms, online={Online}, maps={Maps})",
                 nameof(Scripting.IWorldHooks.OnUpdate), diffMs, _online.Count, _maps.Count);
         }
@@ -724,6 +727,7 @@ public sealed partial class WorldRuntime : IDisposable
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world.map-update", ex);
                     _logger.LogFault("map-update", ex,
                         "map {MapId} instance {InstanceId} update failed (diff={DiffMs} ms, players={Players}, objects={Objects})",
                         map.MapId, map.InstanceId, diffMs, map.PlayerCount, map.ObjectCount);
@@ -737,6 +741,7 @@ public sealed partial class WorldRuntime : IDisposable
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("world.map-observer", ex);
                         _logger.LogFault("map-observer", ex, "MapUpdated observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
                     }
                 }
@@ -751,6 +756,7 @@ public sealed partial class WorldRuntime : IDisposable
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("world.map-observer", ex);
                         _logger.LogFault("map-observer", ex, "map diagnostics observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
                     }
                 }
@@ -771,6 +777,7 @@ public sealed partial class WorldRuntime : IDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world.terrain-update", ex);
             _logger.LogFault("map-terrain", ex, "terrain cleanup failed (diff={DiffMs} ms, maps={Maps})", diffMs, _maps.Count);
         }
 
@@ -954,6 +961,7 @@ public sealed partial class WorldRuntime : IDisposable
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("world.host-load", ex);
             return $"; host load unavailable ({ex.GetType().Name})";
         }
     }
@@ -1007,6 +1015,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world.updated-handler", ex);
                 _logger.LogFault("updated-handler", ex, "{Event} handler {Handler} failed for {Subject}", nameof(Updated), name, diffMs);
             }
 
@@ -1022,6 +1031,7 @@ public sealed partial class WorldRuntime : IDisposable
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world.tick-observer", ex);
                     _logger.LogFault("tick-observer", ex, "FeatureObserver failed for feature {Feature}", name);
                 }
             }
@@ -1048,6 +1058,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world.tick", ex);
                 _logger.LogFault("worldtick", ex, "{Event} handler {Handler} failed for {Subject}", nameof(WorldTick), TickWorkNames.Of(handler), diffMs);
             }
 
@@ -1095,6 +1106,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world.event-handler", ex);
                 object? description = subject is Player player ? player.Name : subject;
                 _logger.LogFault("event-handler", ex, "{Event} handler {Handler} failed for {Subject}", name, TickWorkNames.Of(handler), description);
             }
@@ -1134,6 +1146,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("world.map-unload", ex);
                 _logger.LogFault("map-unload", ex, "unloading map {MapId} instance {InstanceId} failed", map.MapId, map.InstanceId);
             }
         }
@@ -1158,6 +1171,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world.command", ex);
                 _logger.LogFault("world-command", ex,
                     "world command {Command}.{Method} (#{Run}, pending={Pending}) failed",
                     TickWorkNames.Of(command), command.Method.Name, run, _commands.Count);
@@ -1193,6 +1207,7 @@ public sealed partial class WorldRuntime : IDisposable
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world.character-save", ex);
                     _logger.LogFault("character-save-snapshot", ex,
                         "failed to snapshot player {Player} ({Guid}) on map {MapId} at ({X:F1},{Y:F1},{Z:F1})",
                         player.Name, player.Guid, player.MapId, player.X, player.Y, player.Z);
@@ -1265,6 +1280,7 @@ public sealed partial class WorldRuntime : IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("world.character-save", ex);
                 _logger.LogFault("character-save-snapshot", ex,
                     "failed to snapshot player {Player} ({Guid}) on map {MapId} at ({X:F1},{Y:F1},{Z:F1})",
                     player.Name, player.Guid, player.MapId, player.X, player.Y, player.Z);
@@ -1301,6 +1317,7 @@ public sealed partial class WorldRuntime : IDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("world.script", ex);
             _logger.LogFault("world-script", ex, "world script {Hook} failed (diff={DiffMs} ms, online={Online}, maps={Maps})",
                 nameof(Scripting.IWorldHooks.OnStartup), 0u, _online.Count, _maps.Count);
         }
@@ -1361,6 +1378,7 @@ public sealed partial class WorldRuntime : IDisposable
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world.tick-observer", ex);
                     _logger.LogFault("tick-observer", ex, "TickObserver failed (duration={DurationMicros} us)", durationMicros);
                 }
             }
@@ -1373,6 +1391,7 @@ public sealed partial class WorldRuntime : IDisposable
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("world.tick-observer", ex);
                     _logger.LogFault("tick-observer", ex, "TickCompleted observer failed (duration={DurationMicros} us)", durationMicros);
                 }
             }
