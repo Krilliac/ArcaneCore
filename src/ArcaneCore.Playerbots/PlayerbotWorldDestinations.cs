@@ -421,7 +421,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _planningDeferred = false;
         uint now = _session.World.NowMs;
         if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) { DiagLog.W($"in-backoff now={now} until={_backoffUntil}"); return false; }
-        DiagLog.W($"update now={now} pref={preferredCreatureEntry} elapsed={elapsedMs} route={(_route is not null)} visited={_visited.Count} entries={_entries.Count}");
+        DiagLog.W($"update now={now} pref={preferredCreatureEntry} elapsed={elapsedMs} route={(_route is not null)} rspawn={_routeSpawnGuid} rtarget={_routeTarget} end={(_route is { Points.Count: > 0 } r ? $"{r.Points[^1].X:F1},{r.Points[^1].Y:F1}" : "-")} visited={_visited.Count} entries={_entries.Count}");
         if (_backoffUntil != 0) _backoffUntil = 0;
 
         if (_transitHeld.Count != 0) ReleaseTransitHeld(player);
@@ -751,6 +751,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _route = route;
             _routeTarget = entry.Entry;
             _routeSpawnGuid = entry.Spawn.Guid;
+            DiagLog.W($"chose spawn={entry.Spawn.Guid} at {entry.Spawn.X:F1},{entry.Spawn.Y:F1} rank={rank}");
             TargetEntry = entry.Entry;
             QuestId = questId;
             ArmTrip(entry.Entry, questId, returnQuestId, preferredCreatureEntry);
