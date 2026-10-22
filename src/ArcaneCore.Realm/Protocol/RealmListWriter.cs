@@ -16,6 +16,8 @@ public static class RealmListWriter
     public static ReadOnlyMemory<byte> Build(IReadOnlyList<RealmEntry> realms, byte charactersPerRealm)
     {
         ArgumentNullException.ThrowIfNull(realms);
+        // The count is a u8 on the wire; a larger list would wrap into a corrupt reply, so fail closed.
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(realms.Count, byte.MaxValue);
         var body = new PacketWriter(64 + (realms.Count * 48));
         body.WriteUInt32(0);
         body.WriteByte((byte)realms.Count);
@@ -41,6 +43,8 @@ public static class RealmListWriter
 
         ReadOnlyMemory<byte> bodyBytes = body.AsMemory();
 
+        // The size field is a u16; an oversized body must not be truncated into it.
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(bodyBytes.Length, ushort.MaxValue);
         var packet = new PacketWriter(bodyBytes.Length + 3);
         packet.WriteByte((byte)AuthCommand.RealmList);
         packet.WriteUInt16((ushort)bodyBytes.Length);
