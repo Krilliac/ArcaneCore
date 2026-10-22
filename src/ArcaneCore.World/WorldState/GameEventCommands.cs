@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Text;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.Accounts;
@@ -292,35 +291,7 @@ public sealed class GameEventCommands : ICommandGroup
     }
 
     /// <summary>vmangos <c>secsToTimeString(secs)</c> in its long form (shared/Util.cpp:197-250): "1 Day 2 Hours 5 Minutes " and so on.</summary>
-    internal static string SecsToTimeString(long timeInSecs)
-    {
-        long secs = timeInSecs % 60;
-        long minutes = timeInSecs % 3600 / 60;
-        long hours = timeInSecs % 86400 / 3600;
-        long days = timeInSecs / 86400;
-        var text = new StringBuilder();
-        if (days != 0)
-        {
-            text.Append(CultureInfo.InvariantCulture, $"{days}").Append(days == 1 ? " Day " : " Days ");
-        }
-
-        if (hours != 0)
-        {
-            text.Append(CultureInfo.InvariantCulture, $"{hours}").Append(hours <= 1 ? " Hour " : " Hours ");
-        }
-
-        if (minutes != 0)
-        {
-            text.Append(CultureInfo.InvariantCulture, $"{minutes}").Append(minutes == 1 ? " Minute " : " Minutes ");
-        }
-
-        if (secs != 0 || (days == 0 && hours == 0 && minutes == 0))
-        {
-            text.Append(CultureInfo.InvariantCulture, $"{secs}").Append(secs <= 1 ? " Second." : " Seconds.");
-        }
-
-        return text.ToString();
-    }
+    internal static string SecsToTimeString(long timeInSecs) => BanTime.FormatDuration(timeInSecs);
 }
 
 /// <summary><c>.lookup event &lt;name&gt;</c> (vmangos LookupCommands.cpp:1480-1526; Chat.cpp:563 SEC_TICKETMASTER): events whose description contains the text, case-insensitively.</summary>
