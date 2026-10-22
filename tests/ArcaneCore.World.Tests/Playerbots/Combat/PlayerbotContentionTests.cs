@@ -321,6 +321,20 @@ public sealed class PlayerbotContentionTests
     }
 
     [Fact]
+    public void CreditedKillOfTrackedEntry_ResetsContestedClockEvenWhenRngDropProgressDoesNotIncrement()
+    {
+        var contention = new PlayerbotContention(Options());
+        Assert.False(contention.ObserveObjective(QuestEntry, 0, 1_000));
+        uint now = Contest(contention, 1_000, 100);
+        Assert.Equal(99_000u, contention.ContestedMs);
+
+        contention.NoteCreditedKill(QuestEntry);
+        Assert.Equal(0u, contention.ContestedMs);
+        Assert.False(contention.ObserveObjective(QuestEntry, 0, now + 1_000));
+        Assert.Equal(0u, contention.ContestedMs);
+    }
+
+    [Fact]
     public void ClaimsCountOtherBotsOnly_AndLapse()
     {
         var claims = new PlayerbotClaims(16);

@@ -114,12 +114,27 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         // Called on every brain update: gather the completed, unrewarded quests first (usually none), so the sort and the
         // ender search only run when there is something to return. Same answer as the former OrderBy chain (lowest id first).
         List<uint>? candidates = null;
+        bool anyBlockedForBagSpace = false;
         foreach (KeyValuePair<uint, QuestStatusData> row in state.Quests.Statuses)
         {
             if (row.Value is { Status: QuestStatus.Complete, Rewarded: false })
             {
+                if (services.Quests.Get(row.Key) is { } quest && !RewardItemsFit(player, quest, services))
+                {
+                    NeedsBagSpaceForTurnIn = true;
+                    _awaitingBagSpace.Add(row.Key);
+                    anyBlockedForBagSpace = true;
+                    continue;
+                }
+
+                _awaitingBagSpace.Remove(row.Key);
                 (candidates ??= []).Add(row.Key);
             }
+        }
+
+        if (!anyBlockedForBagSpace)
+        {
+            NeedsBagSpaceForTurnIn = false;
         }
 
         if (candidates is null) return 0;
@@ -199,12 +214,26 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
             if (TryAbandonCompletedQuest(_session, player, id, out bool attempted))
             {
+                if (_stage != Stage.None && _stageQuest == id)
+                {
+                    ClearStage();
+                }
+
+                Refuse(id, _session.World.NowMs);
                 // A homed bot abandons on its own position and never gets a durable mark. An unhomed bot only abandons
                 // what static content proved infeasible and the bot cannot reach from where it stands.
                 if (Home is null) Suspensions?.MarkUnreachableQuest(id, _session.World.NowMs);
                 return true;
             }
-            if (attempted) Refuse(id, _session.World.NowMs);
+            if (attempted)
+            {
+                if (_stage != Stage.None && _stageQuest == id)
+                {
+                    ClearStage();
+                }
+
+                Refuse(id, _session.World.NowMs);
+            }
             return false;
         }
         return false;
@@ -300,6 +329,18 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     internal bool Update(Player player, uint elapsedMs)
     {
+        if (UpdateCore(player, elapsedMs))
+        {
+            return true;
+        }
+
+        QuestId = 0;
+        TargetEntry = 0;
+        return false;
+    }
+
+    private bool UpdateCore(Player player, uint elapsedMs)
+    {
         if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat)
             return false;
 
@@ -312,10 +353,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state)
             return false;
         RefreshObjectiveEntry(player, services, state);
-        if (NeedsBagSpaceForTurnIn && PlayerbotTownGoals.FreeBagSlots(player) > 0)
-            NeedsBagSpaceForTurnIn = false;
-        if (_awaitingBagSpace.Count > 0 && PlayerbotTownGoals.FreeBagSlots(player) > 0)
-            _awaitingBagSpace.Clear();
+        RefreshBagSpaceWait(player, services, state);
         if (_stage == Stage.AcceptConfirmation)
         {
             if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
@@ -482,12 +520,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
             if (planned == PlanOutcome.Refused)
             {
-                if (returning)
-                {
-                    NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid);
-                    return false;
-                }
-                Backoff(now);
+                NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid, returning);
                 return false;
             }
 
@@ -495,10 +528,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
             {
                 _route = null;
-                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid))
+                if (NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now, target.Npc.Guid, returning))
                     return false;
             }
-            else if (returning && System.Numerics.Vector3.DistanceSquared(
+            else if (System.Numerics.Vector3.DistanceSquared(
                 new System.Numerics.Vector3(player.X, player.Y, player.Z), _approachFailSpot) > ApproachSpotYards * ApproachSpotYards)
             {
                 _approachFailCount = 0;
@@ -543,7 +576,17 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return true;
             case QuestAction.Accept:
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, questRequest))
-                { _stage = Stage.AcceptConfirmation; ArmStage(target); }
+                {
+                    if (state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
+                    {
+                        ClearStage();
+                    }
+                    else
+                    {
+                        _stage = Stage.AcceptConfirmation;
+                        ArmStage(target);
+                    }
+                }
                 return true;
             case QuestAction.Complete:
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverCompleteQuest, questRequest))
@@ -591,6 +634,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state)
     {
+        RefreshBagSpaceWait(player, services, state);
         ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         bool returning = ReturnQuest != 0 && _stage == Stage.None;
@@ -609,7 +653,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             bool withinReach = WithinReach(player, npc);
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
-                if (!services.IsRewardable(id) || IsRefused(id) || IsGiverWait(id)) continue;
+                if (!services.IsRewardable(id) || IsGiverWait(id)) continue;
                 EndGiverWait(id, npc.Guid);
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
@@ -619,6 +663,20 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     continue;
                 if (status.Status == QuestStatus.Complete && !status.Rewarded)
                 {
+                    if (_stage == Stage.None && !RewardItemsFit(player, quest, services))
+                    {
+                        NeedsBagSpaceForTurnIn = true;
+                        _awaitingBagSpace.Add(id);
+                        continue;
+                    }
+
+                    if (RewardItemsFit(player, quest, services))
+                    {
+                        _awaitingBagSpace.Remove(id);
+                    }
+
+                    if (IsRefused(id)) continue;
+
                     QuestAction action = _stage switch
                     {
                         Stage.RewardRequest => QuestAction.RewardRequest,
@@ -763,10 +821,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
                 uint trackedProgress = Math.Max(chosen.Progress,
                     PlayerbotQuestObjectives.GetTotalProgressForCreature(player, services, state, loot, chosen.Entry));
-                if (contention.ObserveObjective(chosen.Entry, trackedProgress, now))
+                if (contention.ObserveObjective(chosen.Entry, trackedProgress, now, player))
                 {
                     (uint stalled, uint stalledQuest, uint stalledProgress) = (chosen.Entry, chosen.Quest, chosen.Progress);
-                    ReportObjectiveNoProgress(player, stalledQuest, stalled, stalledProgress, "no-credit-timeout");
+                    if (stalledProgress == 0)
+                    {
+                        ReportObjectiveNoProgress(player, stalledQuest, stalled, stalledProgress, "no-credit-timeout");
+                    }
                     chosen = Pick(player, services, state, now); // the stalled entry is set aside now
                     if (chosen.Entry == 0) OnContentionExhausted?.Invoke(stalled, stalledQuest);
                 }
@@ -1184,6 +1245,52 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// (bank included) towards <c>SrcItemCount</c> and needs room for the rest (vmangos <c>Player::CanGiveQuestSourceItemIfNeed</c>,
     /// Player.cpp:13643-13676), refusing the accept otherwise. A quest without a source item always fits.
     /// </summary>
+    internal static bool RewardItemsFit(Player player, Quest quest, QuestNpcServices? services = null) =>
+        QuestNpcServices.CanFitQuestRewards(player, quest, RewardChoice(player, quest), services);
+
+    private void RefreshBagSpaceWait(Player player, QuestNpcServices services, PlayerNpcState state)
+    {
+        if (_awaitingBagSpace.Count > 0)
+        {
+            uint[] waiting = [.. _awaitingBagSpace];
+            foreach (uint id in waiting)
+            {
+                if (state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
+                {
+                    if (services.Quests.Get(id) is not { } cq || RewardItemsFit(player, cq, services))
+                    {
+                        _awaitingBagSpace.Remove(id);
+                    }
+                }
+                else if (services.Quests.Get(id) is not { } sq
+                    || (sq.Template.SrcItemId != 0 ? SourceItemFits(player, sq) : PlayerbotTownGoals.FreeBagSlots(player) > 0))
+                {
+                    _awaitingBagSpace.Remove(id);
+                }
+            }
+        }
+
+        if (NeedsBagSpaceForTurnIn)
+        {
+            bool anyBlocked = false;
+            foreach (KeyValuePair<uint, QuestStatusData> row in state.Quests.Statuses)
+            {
+                if (row.Value is { Status: QuestStatus.Complete, Rewarded: false }
+                    && services.Quests.Get(row.Key) is { } cq
+                    && !RewardItemsFit(player, cq, services))
+                {
+                    anyBlocked = true;
+                    break;
+                }
+            }
+
+            if (!anyBlocked && (_awaitingBagSpace.Count == 0 || PlayerbotTownGoals.FreeBagSlots(player) > 0))
+            {
+                NeedsBagSpaceForTurnIn = false;
+            }
+        }
+    }
+
     internal static bool SourceItemFits(Player player, Quest quest)
     {
         uint entry = quest.Template.SrcItemId;
@@ -1212,7 +1319,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal void RecordTurnInRefusal(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
         => RefuseTurnIn(player, questId, enderEntry, reason, code, now, suspendEntry);
 
-    private bool NoteCloseApproachFailure(Player player, uint questId, uint enderEntry, uint now, ObjectGuid enderGuid = default)
+    private bool NoteCloseApproachFailure(Player player, uint questId, uint enderEntry, uint now, ObjectGuid enderGuid = default, bool returning = true)
     {
         var spot = new System.Numerics.Vector3(player.X, player.Y, player.Z);
         if (questId != _approachFailQuest || enderEntry != _approachFailEntry
@@ -1225,7 +1332,19 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
         if (++_approachFailCount < ApproachConfirmFailures) return false;
         _approachFailCount = 0;
-        RefuseTurnIn(player, questId, enderEntry, "no exact route to visible ender", "NoRouteToVisibleEnder", now, suspendEntry: true, enderGuid: enderGuid);
+        if (returning)
+        {
+            RefuseTurnIn(player, questId, enderEntry, "no exact route to visible ender", "NoRouteToVisibleEnder", now, suspendEntry: true, enderGuid: enderGuid);
+        }
+        else
+        {
+            Refuse(questId, now);
+            Suspensions?.SuspendQuest(questId, now);
+            if (enderEntry != 0) Suspensions?.SuspendEntry(enderEntry, now);
+            QuestId = 0;
+            TargetEntry = 0;
+            Backoff(now);
+        }
         return true;
     }
 
@@ -1237,7 +1356,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             || reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)
             || reason.Contains("InventoryFull", StringComparison.OrdinalIgnoreCase);
         if (inventoryFull)
+        {
             NeedsBagSpaceForTurnIn = true;
+            _awaitingBagSpace.Add(questId);
+            ClearStage();
+            if (ReturnQuest == questId) ReturnQuest = 0;
+            QuestId = 0;
+            TargetEntry = 0;
+            Backoff(now);
+            return;
+        }
 
         bool missingUnlistedReq = (code is "DontHaveReq" or "IncompleteAtEnder" or "MissingDeliveryItem"
                 || reason.Contains("DontHaveReq", StringComparison.OrdinalIgnoreCase)
@@ -1293,7 +1421,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             $"quest={questId} giver={giverEntry} guid=0x{giverGuid.Value:X} code={code} reason={reason}");
     }
 
-    private (string Code, string Reason) DiagnoseAcceptRefusal(Player player, QuestNpcServices services, PlayerNpcState state,
+    internal (string Code, string Reason) DiagnoseAcceptRefusal(Player player, QuestNpcServices services, PlayerNpcState state,
         ObjectGuid giverGuid, uint questId, string fallbackCode, string fallbackReason)
     {
         string? packetCode = DrainQuestFailureCode(questId);
@@ -1301,10 +1429,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             return ("QuestLogFull", "quest log is full");
         if (services.InteractableNpc(player, giverGuid, NpcFlags.QuestGiver, out string? interactErr) is null)
             return (TurnInRefusalCode(interactErr, packetCode ?? "GiverNotInteractable"), interactErr ?? "quest giver is not interactable");
-        if (services.Quests.Get(questId) is { Template.SrcItemId: > 0 } quest
-            && PlayerbotTownGoals.FreeBagSlots(player) <= 0
-            && player.Inventory.GetItemCount(quest.Template.SrcItemId) == 0)
-            return ("InventoryFull", $"inventory full for source item {quest.Template.SrcItemId}");
+        if (services.Quests.Get(questId) is { } quest)
+        {
+            if (!SourceItemFits(player, quest))
+                return ("InventoryFull", $"inventory full for source item {quest.Template.SrcItemId}");
+            if (services.DiagnoseAcceptRefusal(player, quest) is { } refusalReason)
+                return (packetCode ?? refusalReason, $"player cannot take quest ({packetCode ?? refusalReason})");
+        }
         if (services.CanTakeQuest(player, questId) == false)
             return (packetCode ?? "CannotTakeQuest", packetCode is not null ? $"player cannot take quest ({packetCode})" : "player does not meet quest requirements");
         if (packetCode is not null)

@@ -319,6 +319,42 @@ public sealed class PlayerbotQuestAnomalyTests
     }
 
     [Fact]
+    public async Task AnObjectiveWithPartialProgress_SuspendsOnContentionWithoutReportingNoProgressAnomaly()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        var contention = new PlayerbotContention(new PlayerbotOptions { Enabled = true });
+        goals.Contention = contention;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            quest.Feature.Services.ReplaceQuests(new QuestStore(new QuestContent(
+                [new QuestTemplate
+                {
+                    Entry = QuestInteractionFixture.QuestId, Method = 2, MinLevel = 1, QuestLevel = 1,
+                    Title = "Two kills", Details = "Kill two.", RequestItemsText = "Kill two.",
+                    ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 2u,
+                }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId }])));
+
+            Player player = session.Player!;
+            for (int think = 0; think < 4; think++) Think(session, goals);
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            Think(session, goals);
+
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            for (int i = 0; i < 10; i++) contention.NoteLostMob(90);
+            Think(session, goals);
+            Think(session, goals);
+
+            Assert.True(contention.IsEntrySuspended(90, quest.Host.World.NowMs));
+            Assert.False(capture.Any(NoProgress), capture.Describe());
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task AnObjectiveWhoseSpawnsAreAllVisited_FiresNoProgress_Once_AndAnUnvisitedOneIsSilent()
     {
         await using QuestHost quest = await QuestHost.StartAsync();

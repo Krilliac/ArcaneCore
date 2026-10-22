@@ -634,21 +634,26 @@ public sealed class PlayerbotQuestGoalsTests
                 if (opcode == WorldOpcode.CmsgQuestgiverChooseReward) chooseRewardSent++;
             };
 
+            Assert.Equal(0u, goals.CompletedReturnQuest(player));
+            Assert.True(goals.NeedsBagSpaceForTurnIn);
+
             for (int think = 0; think < 5; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                Assert.False(goals.Update(player, 500));
             }
 
-            Assert.Equal(1, chooseRewardSent);
+            Assert.Equal(0, chooseRewardSent);
             Assert.False(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded);
             Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
-            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
-            Assert.NotNull(goals.LastTurnInRefusal);
-            Assert.Equal(QuestInteractionFixture.QuestId, goals.LastTurnInRefusal!.Value.QuestId);
-            Assert.Equal("InventoryFull", goals.LastTurnInRefusal!.Value.Code);
-            Assert.Contains("inventory full", goals.LastTurnInRefusal!.Value.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.True(goals.NeedsBagSpaceForTurnIn);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
             Assert.Equal(0u, goals.CompletedReturnQuest(player));
+
+            Assert.Equal(1u, player.Inventory.DestroyItemCount(9502, 1));
+            Assert.Equal(QuestInteractionFixture.QuestId, goals.CompletedReturnQuest(player));
+            Assert.False(goals.NeedsBagSpaceForTurnIn);
+            Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId));
             return true;
         });
     }
@@ -863,13 +868,14 @@ public sealed class PlayerbotQuestGoalsTests
     }
 
     [Theory]
-    [InlineData("InventoryFull", "inventory full", ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info)]
-    [InlineData("RewardRefused", "reward refused by the server", ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Warning)]
-    public async Task TurnInRefusal_IsInfoForFullBags_AndWarningOtherwise(string code, string reason, ArcaneCore.Kernel.Diagnostics.AnomalySeverity expected)
+    [InlineData("InventoryFull", "inventory full", false)]
+    [InlineData("RewardRefused", "reward refused by the server", true)]
+    public async Task TurnInRefusal_IsSilentAndDeferredForFullBags_AndWarningOtherwise(string code, string reason, bool expectsAnomaly)
     {
         await using QuestHost quest = await QuestHost.StartAsync();
         WorldSession session = quest.Session;
-        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        var suspensions = new PlayerbotSuspensions();
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true }) { Suspensions = suspensions };
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
@@ -877,8 +883,95 @@ public sealed class PlayerbotQuestGoalsTests
 
             goals.RecordTurnInRefusal(player, QuestInteractionFixture.QuestId, QuestInteractionFixture.Entry, reason, code, quest.Host.World.NowMs);
 
-            var notice = Assert.Single(capture.Notices, n => n.Key == PlayerbotAnomalies.Key("quest", "turnin-refused"));
-            Assert.Equal(expected, notice.Severity);
+            if (!expectsAnomaly)
+            {
+                Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")));
+                Assert.True(goals.NeedsBagSpaceForTurnIn);
+                Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
+                Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+            }
+            else
+            {
+                var notice = Assert.Single(capture.Notices, n => n.Key == PlayerbotAnomalies.Key("quest", "turnin-refused"));
+                Assert.Equal(ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Warning, notice.Severity);
+                Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+            }
+
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task StarterQuestWithVisibleGiverAndBlockedCloseApproach_SuspendsQuestAndEntryAfterThreeFailedApproaches_AndClearsQuestId()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 40f, player.Y, player.Z, 0);
+            Assert.Contains(QuestInteractionFixture.Guid, player.VisibleObjects);
+            WorldCollision.Of(quest.Host.World).Install(lineOfSight: new BlockedFloor(player.Z), pathfinder: new BlockedPathfinder());
+
+            var suspensions = new PlayerbotSuspensions();
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true }) { Suspensions = suspensions };
+            for (int think = 0; think < 3; think++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.False(goals.Update(player, 500));
+                Assert.Equal(0u, goals.QuestId);
+                Assert.Equal(0u, goals.TargetEntry);
+            }
+
+            Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
+            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+            Assert.True(suspensions.IsEntrySuspended(QuestInteractionFixture.Entry, quest.Host.World.NowMs));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task InstantCompleteQuestAbandonedBeforeNextThink_ClearsStage_DoesNotFireAcceptRefusedTimeout_AndRefusesReaccept()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(
+            new QuestInteractionFixture { NoObjectives = true, DistantEnder = true }, manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true, MaxDeliveryYards = 0 });
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var c = PlayerbotAnomalies.CaptureFor(player);
+            for (int think = 0; think < 3 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId) is null; think++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(player, 500);
+            }
+
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(goals.Busy);
+
+            goals.Home = new PlayerbotHomeArea(0, new System.Numerics.Vector3(-8948.95f, -132.49f, 83.53f), 100, null);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.False(goals.Busy);
+            Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
+
+            quest.Feature.Services.ReplaceQuests(new QuestStore(new QuestContent(
+                [new QuestTemplate { Entry = 900099, Method = 2, MinLevel = 1, QuestLevel = 1, PrevQuestId = 900098, Title = "Chained" }],
+                [], [])));
+            Assert.Equal("PrevQuest", goals.DiagnoseAcceptRefusal(
+                player, quest.Feature.Services, quest.Feature.Services.StateOf(player)!, QuestInteractionFixture.Guid, 900099, "StageTimeout", "timeout").Code);
+            return c;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(20_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.False(goals.Update(player, 500));
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
             return true;
         });
     }

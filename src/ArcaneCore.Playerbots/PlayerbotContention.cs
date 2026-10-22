@@ -186,6 +186,7 @@ internal sealed class PlayerbotContention
     private uint _trackProgress;
     private uint _contestedMs;
     private uint _lastContestMs;
+    private ulong _lastCreditedTapGuid;
 
     internal PlayerbotContention(PlayerbotOptions options, PlayerbotClaims? claims = null)
     {
@@ -272,6 +273,13 @@ internal sealed class PlayerbotContention
     /// </summary>
     internal bool Blocks(Player player, Creature creature, ArcaneCore.Game.Groups.GroupManager? groups, uint nowMs)
     {
+        if (_trackEntry != 0 && creature.Entry == _trackEntry && !creature.LootTapper.IsEmpty
+            && creature.Guid.Value != _lastCreditedTapGuid && PlayerbotBrain.HasLootRights(player, creature))
+        {
+            _lastCreditedTapGuid = creature.Guid.Value;
+            NoteCreditedKill(_trackEntry);
+        }
+
         bool blocked = IsSetAside(creature.Guid.Value, nowMs) || PlayerbotBrain.IsSomeoneElses(player, creature, groups);
         if (blocked) BlockedSeen++;
         return blocked;
@@ -401,7 +409,7 @@ internal sealed class PlayerbotContention
     /// spent <see cref="NoCreditMs"/> of contested hunting (<see cref="NoteContested"/>, <see cref="NoteLostMob"/>) without credit.
     /// Dying, resting and town visits add nothing, and a gap of over <see cref="ContestGapMs"/> pauses the clock; a bot that walks around the spawns while every creature of the entry is taken does accrue time.
     /// </summary>
-    internal bool ObserveObjective(uint entry, uint progress, uint nowMs)
+    internal bool ObserveObjective(uint entry, uint progress, uint nowMs, Player? player = null)
     {
         if (entry != _trackEntry)
         {
@@ -409,7 +417,14 @@ internal sealed class PlayerbotContention
             _trackProgress = progress;
             _contestedMs = 0;
             _lastContestMs = 0;
+            _lastCreditedTapGuid = 0;
             return false;
+        }
+
+        if (player is not null && HasActiveOrTappedCreature(player, entry))
+        {
+            _contestedMs = 0;
+            _lastContestMs = 0;
         }
 
         if (progress > _trackProgress) { _contestedMs = 0; _lastContestMs = 0; }
@@ -419,6 +434,45 @@ internal sealed class PlayerbotContention
         _trackEntry = 0;
         _contestedMs = 0;
         return true;
+    }
+
+    /// <summary>Reset the contested hunting clock when the bot kills or loots a creature of <paramref name="entry"/>, even if an RNG drop did not roll.</summary>
+    public void NoteCreditedKill(uint entry)
+    {
+        if (entry != 0 && entry == _trackEntry)
+        {
+            _contestedMs = 0;
+            _lastContestMs = 0;
+        }
+    }
+
+    private bool HasActiveOrTappedCreature(Player player, uint entry)
+    {
+        if (player.Combat.Victim is Creature { Entry: var targetEntry } && targetEntry == entry)
+        {
+            return true;
+        }
+
+        if (player.Map is not { } map)
+        {
+            return false;
+        }
+
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (guid.High == HighGuid.Unit
+                && guid.Entry == entry
+                && map.FindObject(guid) is Creature creature
+                && !creature.LootTapper.IsEmpty
+                && creature.Guid.Value != _lastCreditedTapGuid
+                && PlayerbotBrain.HasLootRights(player, creature))
+            {
+                _lastCreditedTapGuid = creature.Guid.Value;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The longest gap between two contested observations that still counts as continuous hunting; a longer one adds nothing (the clock pauses).</summary>

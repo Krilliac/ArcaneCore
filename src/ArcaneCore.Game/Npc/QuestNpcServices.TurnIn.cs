@@ -17,6 +17,148 @@ namespace ArcaneCore.Game.Npc;
 public sealed partial class QuestNpcServices
 {
     /// <summary>
+    /// Whether turning in <paramref name="quest"/> with <paramref name="rewardChoiceIndex"/> has bag room for its reward items
+    /// after required delivery items are removed.
+    /// </summary>
+    public static bool CanFitQuestRewards(Player player, Quest quest, uint rewardChoiceIndex = 0, QuestNpcServices? services = null)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(quest);
+        if (!player.Inventory.IsLoaded)
+        {
+            return true;
+        }
+
+        if (!TryRewardGrants(quest, rewardChoiceIndex, out List<ArcaneCore.Game.Items.InventoryRewardGrant> grants, out _))
+        {
+            return false;
+        }
+
+        if (services is not null)
+        {
+            if (!services.TryRewardSpell(player, ObjectGuid.Empty, quest, out var spellGrant))
+            {
+                return false;
+            }
+
+            if (spellGrant.CreatedItems.Count > 0)
+            {
+                grants.AddRange(spellGrant.CreatedItems.Select(item => new ArcaneCore.Game.Items.InventoryRewardGrant(item.Entry, item.Count, Created: true)));
+            }
+        }
+
+        if (grants.Count == 0)
+        {
+            return true;
+        }
+
+        ArcaneCore.Game.Items.InventoryRewardGrant[] removals = RequiredItemRemovals(quest)
+            .Select(r => new ArcaneCore.Game.Items.InventoryRewardGrant(r.Entry, Math.Min(r.Count, player.Inventory.GetItemCount(r.Entry))))
+            .Where(r => r.Count > 0)
+            .ToArray();
+
+        ArcaneCore.Game.Items.ItemGuidAllocator? previousAllocator = player.Inventory.GuidAllocator;
+        player.Inventory.GuidAllocator = new ArcaneCore.Game.Items.ItemGuidAllocator(1_000_000);
+        try
+        {
+            ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, removals, out _, out _);
+            return result != ItemInventoryResult.InventoryFull;
+        }
+        finally
+        {
+            player.Inventory.GuidAllocator = previousAllocator;
+        }
+    }
+
+    /// <summary>
+    /// Diagnose why accepting <paramref name="quest"/> was refused for <paramref name="player"/>, or <c>null</c> when every accept gate passes.
+    /// </summary>
+    public string? DiagnoseAcceptRefusal(Player player, Quest quest)
+    {
+        if (StateOf(player) is not { } state)
+        {
+            return null;
+        }
+
+        QuestTemplate t = quest.Template;
+        if (t.SrcItemId != 0
+            && player.Inventory.IsLoaded
+            && player.Inventory.GetItemCount(t.SrcItemId, inBankAlso: true) < Math.Max((uint)1, t.SrcItemCount)
+            && player.Inventory.CanStoreNewItem(t.SrcItemId, Math.Max((uint)1, t.SrcItemCount), [], out _) != ItemInventoryResult.Ok)
+        {
+            return "InventoryFull";
+        }
+
+        if (state.Quests.FindSlot(0) == QuestConstants.MaxQuestLogSize)
+        {
+            return "QuestLogFull";
+        }
+
+        if (state.Quests.Get(quest.Id)?.Rewarded == true && !quest.IsRepeatable)
+        {
+            return "AlreadyDone";
+        }
+
+        if (state.Quests.GetStatus(quest.Id) != QuestStatus.None)
+        {
+            return "AlreadyOn";
+        }
+
+        if (t.MaxLevel != 0 && t.MaxLevel < player.Level)
+        {
+            return "MaxLevel";
+        }
+
+        if (player.Level < t.MinLevel)
+        {
+            return "LowLevel";
+        }
+
+        if (t.RequiredClasses != 0 && (t.RequiredClasses & Mask((byte)player.Class)) == 0)
+        {
+            return "WrongClass";
+        }
+
+        if (t.RequiredRaces != 0 && (t.RequiredRaces & Mask((byte)player.Race)) == 0)
+        {
+            return "WrongRace";
+        }
+
+        if ((quest.PrevQuests.Count > 0 && !AnyPreviousQuestSatisfied(state, quest.PrevQuests))
+            || (t.PrevQuestId > 0 && state.Quests.Get((uint)t.PrevQuestId)?.Rewarded != true)
+            || (t.PrevQuestId < 0 && !state.Quests.IsCurrent((uint)-t.PrevQuestId)))
+        {
+            return "PrevQuest";
+        }
+
+        if (t.ExclusiveGroup > 0 && ExclusiveSiblingStarted(state, quest))
+        {
+            return "ExclusiveGroup";
+        }
+
+        if (t.RequiredSkill != 0 && (Deps.Spells is not { } skills || skills.GetSkillValue(player, t.RequiredSkill) < t.RequiredSkillValue))
+        {
+            return "RequiredSkill";
+        }
+
+        if (t.RequiredCondition != 0 && !(Deps.Conditions?.IsSatisfied(t.RequiredCondition, player, null) ?? false))
+        {
+            return "RequiredCondition";
+        }
+
+        if (RefuseTakeQuest(state, quest, null) is { } refusal)
+        {
+            return refusal.Message?.ToString() ?? "CannotTakeQuest";
+        }
+
+        if (!AcceptableQuest(quest))
+        {
+            return "UnsupportedQuest";
+        }
+
+        return null;
+    }
+    /// <summary>
     /// The first half of vmangos <c>CanRewardQuest(quest, msg)</c>: an autocomplete quest must pass CanTakeQuest without
     /// its status check (prevents packet-editing exploits, Player.cpp:12684-12698; a game master bypasses it, 12688-12692, without the sysmessage); any other quest must be accepted and
     /// complete. In both cases a quest already rewarded cannot be rewarded again (12701-12703). Sends nothing.
