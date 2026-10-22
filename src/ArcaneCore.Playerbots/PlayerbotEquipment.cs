@@ -46,6 +46,8 @@ internal sealed class PlayerbotEquipment(WorldSession session)
 
     private const int EquipLogSize = 8;
 
+    internal Func<Player, bool>? RepairTripDue { get; set; }
+
     private uint _nextBrokenLookMs;
     private uint _brokenSinceMs;
     private ulong _brokenItemGuid;
@@ -350,7 +352,7 @@ internal sealed class PlayerbotEquipment(WorldSession session)
             if (slot != InventorySlots.Tabard && slot != InventorySlots.Body
                 && player.Inventory.GetItem(InventorySlots.Bag0, slot) is { MaxDurability: > 0, Durability: 0 } worn)
                 broken = worn;
-        if (broken is null)
+        if (broken is null || (RepairTripDue is not null && !RepairTripDue(player)))
         {
             _brokenSinceMs = 0;
             _brokenItemGuid = 0;

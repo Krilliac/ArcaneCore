@@ -67,15 +67,15 @@ internal sealed partial class PlayerbotBrain
         PlayerbotThinkProbe.Phase("policy snapshot");
         PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Explore);
         if (_quests.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Quest);
-        if (_town.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Town);
+        if (HasOptionalThinkBudget(15.0) && _town.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Town);
         Opportunities.Home = _quests.Home;
-        if (Opportunities.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Opportunity);
+        if (HasOptionalThinkBudget(15.0) && Opportunities.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Opportunity);
         Creature? seen = FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped);
         // The ladder's own guards, as of now: the verdict is applied on later thinks, where the promotion rechecks them.
         bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0 && seen is not null;
-        if (!visibleQuestTarget && _trainers.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Train);
-        if (!visibleQuestTarget && _riding.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Mount);
-        if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null && _destinations.HasQuestCandidate(player))
+        if (!visibleQuestTarget && HasOptionalThinkBudget(15.0) && _trainers.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Train);
+        if (!visibleQuestTarget && HasOptionalThinkBudget(15.0) && _riding.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Mount);
+        if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null && HasOptionalThinkBudget(15.0) && _destinations.HasQuestCandidate(player))
             open = open.With(PlayerbotPolicyGoal.QuestTravel);
         if (seen is not null) open = open.With(PlayerbotPolicyGoal.Grind);
 
@@ -114,9 +114,13 @@ internal sealed partial class PlayerbotBrain
     /// </summary>
     private bool TryPromotedGoal(Player player, PlayerbotPolicyGoal goal, uint interval)
     {
-        bool optionalBudget = PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true;
+        bool optionalBudget = HasOptionalThinkBudget(15.0);
         PlayerbotThinkProbe.Phase(PolicyPhase(goal));
-        if (goal != PlayerbotPolicyGoal.Town && PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 }) return false;
+        if (goal != PlayerbotPolicyGoal.Town
+            && (_quests.NeedsBagSpaceForTurnIn
+                || (PlayerbotTownGoals.HasBrokenWornGear(player) && _town.HasUrgentRepairOrSell(player))
+                || PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 }))
+            return false;
         switch (goal)
         {
             case PlayerbotPolicyGoal.Town:

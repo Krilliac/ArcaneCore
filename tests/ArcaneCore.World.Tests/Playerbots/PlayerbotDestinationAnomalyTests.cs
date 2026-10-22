@@ -455,4 +455,136 @@ public sealed class PlayerbotDestinationAnomalyTests
             Assert.False(cap.Any(NpcMissing), cap.Describe());
         });
     }
+
+    [Fact]
+    public async Task ArrivingAtARepairSpawn_WhenLiveCreatureExistsOnMap_DoesNotReportServiceNpcMissing()
+    {
+        await RepairTrip((player, _, think) =>
+        {
+            using var cap = PlayerbotAnomalies.CaptureFor(player);
+            think();
+            float spawnX = ScriptedPathfinder.SpawnX(0);
+            Creature live = Dungeon.DungeonBotHost.AddCreature(
+                player.Map!, 950u, spawnX, player.Y, player.Z,
+                (uint)ArcaneCore.Game.Npc.NpcFlags.Repair, 0, faction: 1);
+            player.VisibleObjects.Add(live.Guid);
+            player.Relocate(spawnX, player.Y, player.Z, player.Orientation, 0);
+            think();
+            think();
+            Assert.False(cap.Any(NpcMissing), cap.Describe());
+        });
+    }
+
+    [Fact]
+    public async Task BrokenGear_WhenRepairTripIsBackedOff_DoesNotReportBrokenUnrepaired()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 9213, Name = "sword", Class = (uint)ItemClass.Weapon, SubClass = 7,
+            InventoryType = (uint)InventoryType.Weapon, MaxDurability = 20, ItemLevel = 5, Quality = 1, Stackable = 1,
+            AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+        });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            bool tripDue = false;
+            var equipment = new PlayerbotEquipment(session) { RepairTripDue = _ => tripDue };
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                PlayerbotEquipmentTests.EquipFromBags(player, 9213);
+                player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand)!.Durability = 0;
+                equipment.Update(player);
+                return true;
+            });
+            await host.World.AdvanceClockAsync(PlayerbotEquipment.BrokenGearMs + 60_000);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                using var cap = PlayerbotAnomalies.CaptureFor(player);
+                equipment.Update(player);
+                Assert.False(cap.Any(PlayerbotAnomalies.Key("gear", "broken-unrepaired")), cap.Describe());
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task GiveUpStalledGoal_OnExploreAndCombatTargets_SuspendsEntryAndClearsTargetEntry()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            PlayerbotBrain brain = world.Brain;
+
+            // 1. Stall on Explore with TargetEntry = 1397
+            brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 1397, 0);
+            brain.GiveUpStalledGoal(player);
+            Assert.True(brain.IsEntrySetAside(1397));
+            Assert.Equal(0u, brain.TargetEntry);
+
+            // 2. Stall on Combat with TargetEntry = 199
+            brain.HoldGoalForTests(PlayerbotGoalKind.Combat, 199, 0);
+            brain.GiveUpStalledGoal(player);
+            Assert.True(brain.IsEntrySetAside(199));
+            Assert.Equal(0u, brain.TargetEntry);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task HuntTrip_WithFourSecondReplanGaps_MaintainsNotClosingClock_AndSuspendsSingleSpawnEntry()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 3100, Name = "boar", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 588, Entry = 3100, MapId = 0, X = startX + 200f, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new SingleSpawnContent(content));
+            services.AddSingleton<IWorldFeature, ManualClock>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var suspensions = new PlayerbotSuspensions();
+            var destinations = await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new FlatLos(),
+                    pathfinder: new Canned((start, _) => PathResult.StraightLine(start, start + new Vector3(0f, 1f, 0f), PathType.Normal)));
+                return new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true }) { Suspensions = suspensions };
+            });
+
+            // Step in 4,000 ms increments (> old 3,000 ms BackoffMs + 1,000 reset window)
+            const uint step = 4_000;
+            for (uint elapsed = 0; elapsed <= PlayerbotWorldDestinations.SpawnNotClosingMs + step; elapsed += step)
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    destinations.Update(player, 3100, step);
+                    PlayerbotMotion.ElapseForTests(player, step);
+                    return true;
+                });
+                await host.World.AdvanceClockAsync(step);
+            }
+
+            bool suspended = await host.OnWorldAsync(() => suspensions.IsEntrySuspended(3100, host.World.NowMs));
+            Assert.True(suspended, "Single-spawn hunt target that never closed across 4s replan gaps should be suspended");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    private sealed class SingleSpawnContent(CreatureContent content) : ICreatureDataStore
+    {
+        public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
+    }
 }
