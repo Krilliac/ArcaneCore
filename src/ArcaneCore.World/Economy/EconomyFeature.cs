@@ -318,7 +318,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         return checked((int)player!.Guid.Low);
     }
 
-    private static bool IsAlliance(byte race) => (Race)race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome;
+    private static bool IsAlliance(byte race) => TeamRules.TeamOf((Race)race) == Team.Alliance;
 
     /// <summary>
     /// Run a store read in a fresh scope off the world thread, then continue on the world thread.

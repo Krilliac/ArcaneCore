@@ -174,7 +174,7 @@ public sealed partial class Player : Unit
         }
     }
 
-    public Team Team => Race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome ? Team.Alliance : Team.Horde;
+    public Team Team => TeamRules.TeamOf(Race);
 
     public PlayerFlags Flags
     {

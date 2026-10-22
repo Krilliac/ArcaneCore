@@ -291,7 +291,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             throw new ArgumentException($"battleground template {template.Type} is not on its map ({template.MapId})", nameof(template));
         }
 
-        if (!Invariant.Check(IsFinite(template.AllianceStart) && IsFinite(template.HordeStart),
+        if (!Invariant.Check(template.IsFinite(),
             $"battleground template {template.Type} has non-finite start coordinates"))
         {
             return;
@@ -299,9 +299,6 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
 
         _templates[template.Type] = template;
     }
-
-    private static bool IsFinite(BattlegroundStartLocation loc)
-        => float.IsFinite(loc.X) && float.IsFinite(loc.Y) && float.IsFinite(loc.Z) && float.IsFinite(loc.Orientation);
 
     public BattlegroundTemplate? TemplateOf(BattlegroundType type) => _templates.GetValueOrDefault(type);
 

@@ -138,7 +138,7 @@ public sealed class WarsongGulch : Battleground
 
     // ------------------------------------------------------------------ queries
 
-    private static int Idx(Team team) => BattlegroundConstants.TeamIndex(team);
+    private static int Idx(Team team) => team.Index();
 
     /// <summary>The state of <paramref name="flagTeam"/>'s flag (vmangos <c>GetFlagState</c>).</summary>
     public WsgFlagState FlagState(Team flagTeam) => _flagState[Idx(flagTeam)];

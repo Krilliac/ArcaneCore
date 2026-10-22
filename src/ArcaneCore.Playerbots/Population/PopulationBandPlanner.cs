@@ -28,7 +28,7 @@ internal sealed class PopulationRaceClassCache
     public uint FactionTemplateOf(byte race) => _raceFactions.GetValueOrDefault(race);
 
     /// <summary>Alliance races are human, dwarf, night elf and gnome; the others are Horde (<see cref="Player.Team"/>).</summary>
-    public static Team TeamOf(byte race) => (Race)race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome ? Team.Alliance : Team.Horde;
+    public static Team TeamOf(byte race) => TeamRules.TeamOf((Race)race);
 
     public static string KeyOf(IEnumerable<uint> classes) => string.Join(',', classes);
 

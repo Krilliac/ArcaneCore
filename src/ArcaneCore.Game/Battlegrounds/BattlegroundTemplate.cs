@@ -1,7 +1,11 @@
 namespace ArcaneCore.Game.Battlegrounds;
 
 /// <summary>A team's start position inside a battleground (vmangos <c>SetTeamStartLoc</c>; the data lane resolves the WorldSafeLocs id).</summary>
-public readonly record struct BattlegroundStartLocation(float X, float Y, float Z, float Orientation);
+public readonly record struct BattlegroundStartLocation(float X, float Y, float Z, float Orientation)
+{
+    /// <summary>All four components are finite (not NaN or infinite).</summary>
+    public bool IsFinite() => float.IsFinite(X) && float.IsFinite(Y) && float.IsFinite(Z) && float.IsFinite(Orientation);
+}
 
 /// <summary>
 /// One row of <c>battleground_template</c> as vmangos loads it (BattleGroundMgr.cpp:1332-1399): the player limits, the level
@@ -41,4 +45,7 @@ public sealed record BattlegroundTemplate
 
     /// <summary>The queue the type is queued in.</summary>
     public BattlegroundQueueType QueueType => (BattlegroundQueueType)(byte)Type;
+
+    /// <summary>Both start locations are finite.</summary>
+    public bool IsFinite() => AllianceStart.IsFinite() && HordeStart.IsFinite();
 }
