@@ -1,4 +1,6 @@
 using ArcaneCore.Kernel.WorldData.Creatures;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -10,7 +12,7 @@ public sealed partial class CreatureMapSystem
     private readonly HashSet<uint> _activatingScriptSpawns = [];
 
     /// <summary>Whether the grid holding (<paramref name="x"/>, <paramref name="y"/>) is loaded (a script spawn placed there stays until it unloads).</summary>
-    public bool IsGridLoadedAt(float x, float y) => _grids.ContainsKey(ComputeGrid(x, y));
+    public bool IsGridLoadedAt(float x, float y) => _grids.ContainsKey(GridDefines.ComputeGridCoord(x, y));
 
     /// <summary>Keep these database GUIDs off ordinary grid loads until a dungeon script activates them.</summary>
     public void RegisterScriptOnlySpawns(IEnumerable<uint> guids)
@@ -50,7 +52,7 @@ public sealed partial class CreatureMapSystem
         _activatingScriptSpawns.Add(guid);
         try
         {
-            GridCoord coord = ComputeGrid(spawn.X, spawn.Y);
+            GridCoord coord = GridDefines.ComputeGridCoord(spawn.X, spawn.Y);
             LoadedGrid grid = LoadGrid(coord);
             if (!_bySpawnGuid.ContainsKey(guid))
             {

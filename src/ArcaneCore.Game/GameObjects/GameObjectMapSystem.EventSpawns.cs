@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.GameObjects;
 
@@ -69,7 +70,7 @@ public sealed partial class GameObjectMapSystem
                 continue;
             }
 
-            if (live is null && _grids.TryGetValue(CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y), out List<GameObject>? list))
+            if (live is null && _grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out List<GameObject>? list))
             {
                 _respawnAt.Remove(guid);
                 LoadSpawns(list, [spawn]);

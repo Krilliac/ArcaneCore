@@ -10,6 +10,8 @@ using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,18 +36,6 @@ namespace ArcaneCore.Game.Creatures;
 /// </summary>
 public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown, ICreatureMover
 {
-    /// <summary>vmangos MAX_NUMBER_OF_GRIDS.</summary>
-    public const int MaxNumberOfGrids = 64;
-
-    /// <summary>vmangos SIZE_OF_GRIDS.</summary>
-    public const float SizeOfGrids = 533.33333f;
-
-    /// <summary>vmangos CENTER_GRID_ID.</summary>
-    public const int CenterGridId = MaxNumberOfGrids / 2;
-
-    /// <summary>vmangos CENTER_GRID_OFFSET.</summary>
-    public const float CenterGridOffset = SizeOfGrids / 2;
-
     private readonly CreatureContent _content;
     private readonly CreatureOptions _options;
     private readonly ICreatureHeightProvider _height;
@@ -103,7 +93,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         uint maxGuid = 0;
         foreach (CreatureSpawn spawn in content.GetSpawns(map.MapId))
         {
-            GridCoord grid = ComputeGrid(spawn.X, spawn.Y);
+            GridCoord grid = GridDefines.ComputeGridCoord(spawn.X, spawn.Y);
             if (!_spawnsByGrid.TryGetValue(grid, out List<CreatureSpawn>? list))
             {
                 _spawnsByGrid[grid] = list = [];
@@ -141,27 +131,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     public Creature? FindCreature(ObjectGuid guid) => _creatures.GetValueOrDefault(guid);
 
-    public bool IsGridLoaded(float x, float y) => _grids.ContainsKey(ComputeGrid(x, y));
+    public bool IsGridLoaded(float x, float y) => _grids.ContainsKey(GridDefines.ComputeGridCoord(x, y));
 
     /// <summary>The respawn time (on <see cref="ClockMs"/>) kept for an unloaded dead spawn.</summary>
     public long? PendingRespawnAt(uint spawnGuid) => _respawnAt.TryGetValue(spawnGuid, out long at) ? at : null;
-
-    /// <summary>
-    /// vmangos GridDefines.h ComputeGridPair: <c>int((x - CENTER_GRID_OFFSET) / SIZE_OF_GRIDS +
-    /// CENTER_GRID_ID + 0.5)</c> per axis, computed in double "for the same result as MySQL".
-    /// Clamped to the grid range.
-    /// </summary>
-    public static GridCoord ComputeGrid(float x, float y)
-    {
-        static int Axis(float v)
-        {
-            double offset = (v - (double)CenterGridOffset) / SizeOfGrids;
-            int value = (int)(offset + CenterGridId + 0.5);
-            return Math.Clamp(value, 0, MaxNumberOfGrids - 1);
-        }
-
-        return new GridCoord(Axis(x), Axis(y));
-    }
 
     // --- IMapUpdater ------------------------------------------------------------------------
 
@@ -1652,6 +1625,3 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
 }
-
-/// <summary>A grid coordinate (vmangos GridPair).</summary>
-public readonly record struct GridCoord(int X, int Y);

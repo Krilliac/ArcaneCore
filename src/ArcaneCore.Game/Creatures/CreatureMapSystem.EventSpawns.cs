@@ -1,6 +1,7 @@
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -71,7 +72,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            if (live is null && _grids.TryGetValue(ComputeGrid(spawn.X, spawn.Y), out LoadedGrid? grid))
+            if (live is null && _grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out LoadedGrid? grid))
             {
                 _respawnAt.Remove(guid); // a stale death of an earlier run of the event
                 LoadSpawns(grid, [spawn]);

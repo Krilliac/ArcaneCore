@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -38,7 +40,7 @@ public sealed partial class CreatureMapSystem
         creature.ResetToHome(_serverTime());
         creature.IsNewObject = true;
 
-        GridCoord grid = ComputeGrid(home.X, home.Y);
+        GridCoord grid = GridDefines.ComputeGridCoord(home.X, home.Y);
         if (!_grids.TryGetValue(grid, out LoadedGrid? loaded))
         {
             loaded = LoadGrid(grid);

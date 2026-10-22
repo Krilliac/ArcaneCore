@@ -31,7 +31,7 @@ public sealed partial class GameObjectMapSystem
     }
 
     /// <summary>True when this system has loaded the grid under (<paramref name="x"/>, <paramref name="y"/>) and tracks the objects in it.</summary>
-    public bool IsGridLoaded(float x, float y) => _grids.ContainsKey(CreatureMapSystem.ComputeGrid(x, y));
+    public bool IsGridLoaded(float x, float y) => _grids.ContainsKey(GridDefines.ComputeGridCoord(x, y));
 
     /// <summary>
     /// Move and turn a runtime object (no database spawn: its row would still say the old place). Clients that saw it get it destroyed and

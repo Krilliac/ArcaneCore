@@ -4,6 +4,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Microsoft.Extensions.Logging;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -100,7 +101,7 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
     private void CreateGroupMember(SpawnGroupState state, CreatureSpawn spawn, uint entry)
     {
         ForgetGroupRespawn(spawn.Guid);
-        if (!_grids.TryGetValue(ComputeGrid(spawn.X, spawn.Y), out LoadedGrid? grid))
+        if (!_grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out LoadedGrid? grid))
         {
             return;
         }

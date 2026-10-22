@@ -10,6 +10,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
@@ -387,7 +388,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             Creature objective = system.Creatures.First(c => c.Entry == Objective && c.IsAlive);
             Assert.True(system.IsGridLoaded(objective.X, objective.Y));
             typeof(CreatureMapSystem).GetMethod("UnloadGrid", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(system, [CreatureMapSystem.ComputeGrid(objective.X, objective.Y)]);
+                .Invoke(system, [GridDefines.ComputeGridCoord(objective.X, objective.Y)]);
             Assert.False(system.IsGridLoaded(objective.X, objective.Y));
             Assert.DoesNotContain(system.Creatures, c => c.Entry == Objective && c.IsAlive);
             return true;
