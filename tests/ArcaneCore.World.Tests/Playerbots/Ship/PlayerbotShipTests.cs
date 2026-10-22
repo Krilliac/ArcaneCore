@@ -297,4 +297,98 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         Assert.Equal(-18f, offset.Z, 0.1f);
         Assert.Equal(dock.Z, seat.Z, 0.1f);
     }
+
+    [Fact]
+    public async Task Ride_WhenPlayerRepopsOrTeleportsFarFromShip_CancelsTripWithoutLeftShipAnomaly()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        var options = new PlayerbotOptions();
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, boat, fromA: true, options, out _)));
+
+        for (int i = 0; i < 600; i++)
+        {
+            bool aboard = await world.OnWorldAsync(() => PlayerbotShip.TripOf(world.Player)?.Stage == ShipStage.Ride && world.Player.Transport is not null);
+            if (aboard) break;
+            await world.Host.World.AdvanceClockAsync(100);
+            await world.OnWorldAsync(() => PlayerbotShip.Drive(world.Session, world.Player, options, 100, out _));
+        }
+
+        Assert.Equal(ShipStage.Ride, await world.OnWorldAsync(() => PlayerbotShip.TripOf(world.Player)?.Stage));
+
+        TravelLegStep step = await world.OnWorldAsync(() =>
+        {
+            Player p = world.Player;
+            p.Transport?.RemovePassenger(p);
+            var mov = p.Movement;
+            mov.Flags &= ~MovementFlags.OnTransport;
+            mov.TransportGuid = 0;
+            p.ApplyMovement(mov, world.Host.World.NowMs);
+            p.Relocate(ShipTestWorld.PortOnMap0.Position.X - 500f, ShipTestWorld.PortOnMap0.Position.Y - 500f, ShipTestWorld.PortOnMap0.Position.Z, 0, world.Host.World.NowMs);
+            return PlayerbotShip.Drive(world.Session, p, options, 100, out _);
+        });
+
+        Assert.Equal(TravelLegStep.Idle, step);
+        Assert.False(await world.OnWorldAsync(() => PlayerbotShip.IsActive(world.Player)));
+        Assert.Equal(0, capture.Count(ShipKey("left-ship")));
+    }
+
+    [Fact]
+    public async Task ToDock_WhenPortKeyframeIsInWaterOffMesh_ResolvesWalkablePierAndDoesNotFailDockUnreachable()
+    {
+        var pierMesh = new PierMeshOnly(ShipTestWorld.PortOnMap0.Position, radiusFromPortMin: 10f);
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: new PierFloor(ShipTestWorld.PortOnMap0.Position.Z),
+            pathfinder: pierMesh));
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, ShipTestWorld.PortOnMap0.Position + new Vector3(-55f, 0f, 0f));
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        var options = new PlayerbotOptions { MaxPathPoints = 128 };
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, boat, fromA: true, options, out _)));
+
+        (TravelLegStep step, string? failure) = await world.OnWorldAsync(() =>
+            (PlayerbotShip.Drive(world.Session, world.Player, options, 100, out string? why), why));
+
+        Assert.Equal(TravelLegStep.Traveling, step);
+        Assert.Null(failure);
+        Assert.NotNull(await world.OnWorldAsync(() => PlayerbotShip.TripOf(world.Player)?.Walk));
+        Assert.Equal(0, capture.Count(ShipKey("dock-unreachable")));
+    }
+
+    private sealed class PierFloor(float z) : ArcaneCore.Game.Maps.Collision.ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => z;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+    }
+
+    private sealed class PierMeshOnly(Vector3 port, float radiusFromPortMin) : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(end.X, end.Y), new Vector2(port.X, port.Y)) < radiusFromPortMin)
+                return ArcaneCore.Game.Maps.Collision.PathResult.None(start);
+            return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = port.Z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(start.X, start.Y), new Vector2(port.X, port.Y)) < radiusFromPortMin)
+                return ArcaneCore.Game.Maps.Collision.MeshRaycastResult.Unavailable(end);
+            return new ArcaneCore.Game.Maps.Collision.MeshRaycastResult(true, false, 1f, end with { Z = port.Z });
+        }
+    }
 }

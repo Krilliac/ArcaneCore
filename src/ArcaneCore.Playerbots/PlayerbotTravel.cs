@@ -570,6 +570,13 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
             if (Finite(place.Position) && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
             {
                 int region = nav.RegionAt(graph, place.Position, WalkingLocate);
+                if (region < 0 && player.Map is { } map && map.MapId == place.MapId)
+                {
+                    Vector3 resolved = PlayerbotShip.ResolveDockTarget(map, place.Position, new Vector3(player.X, player.Y, player.Z));
+                    if (resolved != place.Position)
+                        region = nav.RegionAt(graph, resolved, WalkingLocate);
+                }
+
                 if (region >= 0 && graph.ComponentPolygons(region) > PlayerbotNavigation.FragmentPolygons) found = (graph.ComponentOf(region), true);
             }
 

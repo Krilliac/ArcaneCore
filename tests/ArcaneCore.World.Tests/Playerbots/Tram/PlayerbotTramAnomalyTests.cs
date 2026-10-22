@@ -461,4 +461,20 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
             $"out at {at}, not at the Ironforge exit");
         Assert.Empty(capture.OfSubsystem(PlayerbotAnomalies.Subsystem("tram")));
     }
+
+    [Fact]
+    public async Task EnteringTramMap_AfterLongContinentWalkInToEntrance_TransitionsToPlatformBeforeSlowCheck()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        PlayerbotOptions options = Options();
+
+        await world.AdvanceAsync(PlayerbotTram.SlowTramMapMs + 30_000);
+        await world.PlaceAsync(TramTestData.Tram, TramTestData.StormwindPlatform);
+
+        TramStep step = await world.OnWorldAsync(() => Drive(world, options));
+        Assert.NotEqual(TramStep.Failed, step);
+        Assert.NotEqual(TramStage.ToEntrance, await world.OnWorldAsync(() => Stage(world)));
+        Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
+    }
 }
