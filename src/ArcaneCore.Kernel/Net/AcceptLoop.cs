@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using ArcaneCore.Kernel.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Kernel.Net;
@@ -23,8 +24,8 @@ public static class AcceptLoop
         TimeSpan? backoff = null)
     {
         TimeSpan delay = backoff ?? DefaultBackoff;
-        DateTime lastLog = DateTime.MinValue;
-        int suppressed = 0;
+        // per call: the logon and world daemons must not share one throttle
+        var logGate = new LogGate(LogInterval);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -45,13 +46,11 @@ public static class AcceptLoop
                     return;
                 }
 
-                suppressed++;
                 Diagnostics.FaultLedger.Shared.Record("net-accept-loop", ex);
-                if (DateTime.UtcNow - lastLog >= LogInterval)
+                if (logGate.TryEnter(out int suppressed))
                 {
-                    logger.LogWarning(ex, "accept failed ({Count} error(s) since the last report); retrying", suppressed);
-                    lastLog = DateTime.UtcNow;
-                    suppressed = 0;
+                    // the gate counts only refused calls; this error is reported too
+                    logger.LogWarning(ex, "accept failed ({Count} error(s) since the last report); retrying", suppressed + 1);
                 }
 
                 try
