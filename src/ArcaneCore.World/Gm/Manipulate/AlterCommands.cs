@@ -125,7 +125,7 @@ public sealed class AlterCommands : ICommandGroup
             return hex != 0 && (hex & (hex - 1)) == 0 ? hex : null;
         }
 
-        return CommandArgs.TryParseEnumName<UnitFlags, int>(text, requireDefined: false, out UnitFlags flag) && (uint)flag != 0 && ((uint)flag & ((uint)flag - 1)) == 0
+        return CommandArgs.TryParseEnumName<UnitFlags, uint>(text, requireDefined: false, out UnitFlags flag) && (uint)flag != 0 && ((uint)flag & ((uint)flag - 1)) == 0
             ? (uint)flag
             : null;
     }

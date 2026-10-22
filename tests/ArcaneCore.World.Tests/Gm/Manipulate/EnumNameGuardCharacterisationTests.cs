@@ -42,10 +42,10 @@ public sealed class EnumNameGuardCharacterisationTests
     [InlineData("4294967295")]
     public void UnitFlagRejectsCombinationsBadHexAndSmallIntegerText(string text) => Assert.Null(AlterCommands.ParseUnitFlag(text));
 
-    // Pins today's behaviour: decimal text above int.MaxValue slips past the int.TryParse guard and Enum.TryParse
-    // reads it as the uint value 0x80000000 (a single bit). Item 1j changes this in its own tested commit; update then.
+    // The guard parses as uint, so decimal text above int.MaxValue is numeric text too and is refused rather than
+    // reaching Enum.TryParse's numeric branch as the single bit 0x80000000.
     [Fact]
-    public void UnitFlagCurrentlyAcceptsDecimalTextAboveInt32Max() => Assert.Equal((uint)UnitFlags.Immune, AlterCommands.ParseUnitFlag("2147483648"));
+    public void UnitFlagRejectsDecimalTextAboveInt32Max() => Assert.Null(AlterCommands.ParseUnitFlag("2147483648"));
 
     [Fact]
     public async Task ReactRejectsNumbersAndUndefinedNamesAndAcceptsNamesCaseInsensitively()
