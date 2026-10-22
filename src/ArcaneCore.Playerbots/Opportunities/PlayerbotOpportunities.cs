@@ -307,7 +307,16 @@ internal sealed class PlayerbotOpportunities
 
             if (verdict.Decision != OpportunityDecision.Engage) continue;
             // The first guard to pull is one the brain would never take as a target (unreachable, someone else's, outside the home): leave the find.
-            if (pack.Count > 0 && Untakeable?.Invoke(player, pack[0]) == true)
+            if (pack.Count > 0 && (Untakeable?.Invoke(player, pack[0]) == true
+                || (map.Collision.Pathfinder is NavMeshPathfinder && pack.Any(g => Untakeable?.Invoke(player, g) == true))))
+            {
+                _ledger.SetAside(find.Key, now, RefusedRecheckMs);
+                ReportDecision(player, find, verdict with { Decision = OpportunityDecision.Refuse, Reason = "untakeable" }, guards, engaged: false, now);
+                continue;
+            }
+
+            if (find.Kind != OpportunityKind.Rare && find.Distance > InteractYards && map.Collision.Pathfinder is NavMeshPathfinder
+                && !CanPlanChestOnNavMesh(player, find.At, now))
             {
                 _ledger.SetAside(find.Key, now, RefusedRecheckMs);
                 ReportDecision(player, find, verdict with { Decision = OpportunityDecision.Refuse, Reason = "untakeable" }, guards, engaged: false, now);
@@ -725,7 +734,8 @@ internal sealed class PlayerbotOpportunities
         if (Untakeable?.Invoke(player, pull) == true)
         {
             if (PlayerbotBrain.IsSomeoneElses(player, pull, GroupsOf(player))) return Skip(episode, now);
-            if ((Home is { } home && pull.MapId == home.MapId && !home.Contains(pull)) || _risk().IsRemembered(pull))
+            if ((Home is { } home && pull.MapId == home.MapId && !home.Contains(pull)) || _risk().IsRemembered(pull)
+                || pull.IsInEvadeMode || _risk().CoversPullHazard(player, pull) || player.Map?.Collision.Pathfinder is NavMeshPathfinder)
                 return Fail(episode, now, "untakeable");
             return Unreachable(player, episode, now, $"the guard {pull.Entry} ({pull.Guid.Value:X}) cannot be taken as a target");
         }
@@ -800,10 +810,18 @@ internal sealed class PlayerbotOpportunities
                 {
                     planned = PlanChestTheGraphReaches(player, episode.At, now);
                 }
+                if ((planned == PlanOutcome.Refused || _route is null)
+                    && PlayerbotNavigation.PlanExact(player, episode.At, _options, ref _tileWait, now, out PlayerbotRoute? nearRoute, nearestEnd: true) == PlanOutcome.Route
+                    && nearRoute is { Points.Count: > 0 } && Vector3.Distance(nearRoute.Points[^1], episode.At) <= InteractYards)
+                {
+                    _route = nearRoute;
+                    planned = PlanOutcome.Route;
+                }
                 if (planned == PlanOutcome.Pending) return Busy(episode, PlayerbotGoalKind.Loot);
                 if (planned == PlanOutcome.Refused || _route is null)
                 {
                     _route = null;
+                    if (player.Map?.Collision.Pathfinder is NavMeshPathfinder) return Fail(episode, now, "unreachable");
                     return Unreachable(player, episode, now, "no route to the chest");
                 }
 
@@ -815,6 +833,7 @@ internal sealed class PlayerbotOpportunities
                 bool finishedLeg = _route.Complete;
                 _route = null;
                 if (finishedLeg) return Busy(episode, PlayerbotGoalKind.Loot);
+                if (player.Map?.Collision.Pathfinder is NavMeshPathfinder) return Fail(episode, now, "unreachable");
                 return Unreachable(player, episode, now, "the walk to the chest stopped");
             }
 
@@ -854,6 +873,28 @@ internal sealed class PlayerbotOpportunities
     /// toward the chest across a cliff, not a missing walk: one wide search inside the same region, otherwise a leg to a portal of the
     /// graph's way. Pending while the graph is still being built. Refused when the graph does not join them, so the caller reports it.
     /// </summary>
+    private bool CanPlanChestOnNavMesh(Player player, Vector3 goal, uint now)
+    {
+        if (!(PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)) return true;
+        TileWait wait = _tileWait;
+        PlanOutcome planned = PlayerbotNavigation.PlanExact(player, goal, _options, ref wait, now, out PlayerbotRoute? route, trial: true);
+        if (planned == PlanOutcome.Refused || route is null)
+        {
+            PlayerbotRoute? saved = _route;
+            planned = PlanChestTheGraphReaches(player, goal, now);
+            route = _route;
+            _route = saved;
+        }
+        if ((planned == PlanOutcome.Refused || route is null)
+            && PlayerbotNavigation.PlanExact(player, goal, _options, ref wait, now, out route, trial: true, nearestEnd: true) == PlanOutcome.Route
+            && route is { Points.Count: > 0 } && Vector3.Distance(route.Points[^1], goal) <= InteractYards)
+        {
+            planned = PlanOutcome.Route;
+        }
+
+        return planned != PlanOutcome.Refused;
+    }
+
     private PlanOutcome PlanChestTheGraphReaches(Player player, Vector3 goal, uint now)
     {
         _route = null;

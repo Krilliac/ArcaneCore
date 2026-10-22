@@ -550,6 +550,83 @@ public sealed class PlayerbotMotionAnomalyTests
         Assert.False(scenario.Capture.Any(Key(Code.StartBlocked)), scenario.Capture.Describe());
     }
 
+    [Fact]
+    public async Task ANavigatedMeshRoute_DoesNotDrapeDownAcrossAStaticFloorSlab_WhenTheLegStoreyIsClear()
+    {
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false);
+        // A lower floor (basement/tunnel) 3.5 yd below the leg whose static ceiling blocks any vertical drop through the slab.
+        scenario.Ground.Floor = Floor - 3.5f;
+        scenario.Ground.Blocked = (a, b, _) => MathF.Abs(a.Z - b.Z) > 1.5f;
+        await scenario.WalkAsync(600);
+        float z = await scenario.Host.OnWorldAsync(() => scenario.Session.Player!.Z);
+        Assert.InRange(z, Floor - 0.5f, Floor + 0.5f);
+        Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+    }
+
+    [Fact]
+    public async Task AnIntermediateCorner_ThatDipsBelowTheWalkFloor_SnapsUpToTheWalkFloor_NotWallCrossed()
+    {
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false);
+        scenario.Ground.Blocked = (a, b, _) => MathF.Min(a.Z, b.Z) < Floor + PlayerbotMoveCheck.ChestYards - 1.0f;
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var from = new Vector3(player.X, player.Y, Floor);
+            var dippedCorner = new Vector3(player.X + 2f, player.Y, Floor - 2.4f);
+            var to = new Vector3(player.X + 4f, player.Y, Floor);
+            var route = new PlayerbotRoute([from, dippedCorner, to], 4f, navigated: true) { MeshPoints = [from, dippedCorner, to] };
+            PlayerbotMotionAnomalies.CheckCrossing(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), route, 1, 2,
+                from, to, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+    }
+
+    [Fact]
+    public async Task AMeshLegStartingAtATileBoundary_WhereForwardRaycastClips_IsClearedByReverseWalkOnSameStorey()
+    {
+        var mesh = new ScriptedMesh
+        {
+            // Forward raycast (a.X < b.X) hits the tile/portal border; reverse raycast (b.X -> a.X) walks cleanly on the same storey.
+            Edge = static (a, b) => a.X < b.X,
+        };
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        scenario.Ground.Blocked = static (_, _, _) => true;
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var from = new Vector3(player.X, player.Y, Floor);
+            var to = new Vector3(player.X + 3f, player.Y, Floor);
+            PlayerbotMotionAnomalies.CheckCrossing(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), scenario.Route, 1, 1,
+                from, to, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+    }
+
+    [Fact]
+    public async Task AMeshLegMidwayAlongACornerSegment_BeyondThreeYards_IsClearedByCornerWalk()
+    {
+        var mesh = new ScriptedMesh();
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        scenario.Ground.Blocked = static (_, _, _) => true;
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var corner0 = new Vector3(player.X, player.Y, Floor);
+            var corner1 = new Vector3(player.X + 20f, player.Y, Floor);
+            var previous = new Vector3(player.X + 8f, player.Y, Floor);
+            var end = new Vector3(player.X + 12f, player.Y, Floor);
+            // Direct walk from previous to end clips an edge, while the walk from corner0 to end succeeds on the mesh.
+            mesh.Edge = (a, b) => MathF.Abs(a.X - previous.X) < 0.1f && MathF.Abs(b.X - end.X) < 0.1f;
+            var route = new PlayerbotRoute([corner0, corner1], 20f, navigated: true) { MeshPoints = [corner0, corner1] };
+            PlayerbotMotionAnomalies.CheckCrossing(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), route, 1, 1,
+                previous, end, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+    }
+
     // ---- fixture -----------------------------------------------------------------------------------------------------------------
 
     private static PlayerbotRoute LineRoute(Player player, float yards, bool navigated)

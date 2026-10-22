@@ -162,5 +162,11 @@ public sealed class DeathAnomalyTests
 
         Assert.Equal(1, r.Cap.Count(Durability));
         Assert.Equal(AnomalySeverity.Info, Assert.Single(r.Cap.Notices, n => n.Key == Durability).Severity);
+
+        using var channeled = new Rig(9208);
+        channeled.Killer.SetUInt32(UpdateFields.UnitChannelSpell, 689);
+        channeled.Killer.SetUInt64(UpdateFields.UnitFieldChannelObject, channeled.Victim.Guid.Value);
+        channeled.Combat.Kill(channeled.Killer, channeled.Victim, durabilityLoss: false);
+        Assert.False(channeled.Cap.Any(Durability));
     }
 }

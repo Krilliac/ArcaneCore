@@ -151,6 +151,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private Func<uint, bool>? _exploreThreatFilter;
     private Func<int, int, bool>? _exploreBlockedFilter;
     private uint _exploreSearchAfter;
+    private long _exploreSearchStartedAt;
+    private int _exploreCandidateChecks;
+    private long _thinkStartedAt;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
     private PlayerbotGoalKind? _planningGoal;
     private long _lootStartedMs;
@@ -572,6 +575,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _quests.OnContentionExhausted ??= RaiseContentionExhausted;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         _quests.AllSpawnsVisited ??= _destinations.HasAllSpawnsVisited;
+        _equipment.RepairTripDue ??= _town.HasUrgentRepairOrSell;
         _destinations.ValidatePlanning(player);
         if (!player.IsInWorld)
         {
@@ -585,12 +589,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         CheckThinkClock(player, _session.World.NowMs);
         ThinkCount++;
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        _thinkStartedAt = startedAt;
         try
         {
             UpdateCore(player, elapsedMs);
         }
         finally
         {
+            _thinkStartedAt = 0;
             // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
             // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
             if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
@@ -599,6 +605,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
         }
     }
+
+    internal bool HasOptionalThinkBudget(double maxElapsedMs = 15.0)
+        => (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
+            && PlayerbotThinkProbe.Active is not { ElapsedMs: >= 15.0 }
+            && (_thinkStartedAt == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(_thinkStartedAt).TotalMilliseconds < maxElapsedMs);
 
     private void UpdateCore(Player player, uint elapsedMs)
     {
@@ -1187,15 +1198,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (_home is { } home && TryReturnHome(player, home, interval)) return;
             PlayerbotThinkProbe.Phase("town");
             _town.BeginThink();
-            // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
-            PlayerbotThinkProbe.Phase("policy");
-            if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
             if (_quests.NeedsBagSpaceForTurnIn || (PlayerbotTownGoals.HasBrokenWornGear(player) && _town.HasUrgentRepairOrSell(player)))
             {
-                PlayerbotThinkProbe.Phase("town");
                 if (_town.Update(player, interval))
                 { RetireIdleCombatRoute(); _goal = _town.Goal; QuestId = 0; TargetEntry = _town.TargetEntry; return; }
             }
+            // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
+            PlayerbotThinkProbe.Phase("policy");
+            if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1315,12 +1325,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
             if (_target is not null || previousTarget is not null) AbandonRoute();
+            if (_target is not null && _destinations.TargetEntry == _target.Entry) _destinations.Stop();
             _attacking = false;
             _lootOpened = false;
             if (_target is null)
             {
                 uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
-                if ((PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true) && GrindPlanDue(huntEntry))
+                if (HasOptionalThinkBudget(15.0) && GrindPlanDue(huntEntry))
                 {
                     PlayerbotThinkProbe.Phase("grind destinations");
                     PlayerbotGoalKind huntGoal = huntEntry != 0 && _quests.PreferredItemUseId == 0
@@ -1761,11 +1772,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends. A camp that
                 // stalls the bot again once its set-aside is over is set aside for longer each time (SuspendEntryEscalating: 20, 40, 80
                 // minutes): with the same 10 minutes every time, the camp of #368 stalled 326 bots 5 085 times in four days.
-                if (deadEndPin && TargetEntry != 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
-                else if (_target is null && _goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0)
+                if (_goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0)
                 {
-                    if (_suspensions.EntryStrikeCount(TargetEntry) > 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
+                    if (deadEndPin || _suspensions.EntryStrikeCount(TargetEntry) > 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
                     else _suspensions.SuspendEntry(TargetEntry, now);
+                }
+                else if (deadEndPin && TargetEntry != 0)
+                {
+                    _suspensions.SuspendEntryEscalating(TargetEntry, now);
                 }
                 if (stalledChest) TargetEntry = 0;
                 break;
@@ -1774,7 +1788,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 break;
             case PlayerbotGoalKind.Explore:
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
-                else _exploreRefusals = 3;
+                _exploreRefusals = Math.Max(_exploreRefusals, 3);
+                if (TargetEntry != 0)
+                {
+                    if (deadEndPin || _suspensions.EntryStrikeCount(TargetEntry) > 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
+                    else _suspensions.SuspendEntry(TargetEntry, now);
+                }
                 if (_home is null && IsUnderLevelledForArea(player))
                     TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true); // among creatures too strong for it
                 break;
@@ -1798,10 +1817,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _suspensions.MarkUnreachableQuest(QuestId, now);
         }
 
+        if (_attacking || player.Combat.Victim is not null)
+            _session.TryManagedAction(WorldOpcode.CmsgAttackstop, []);
+        _destinations.AbandonStalledTarget(now);
         _target = null;
         AbandonRoute();
+        _exploreCandidate = null;
         _attacking = false;
         _lootOpened = false;
+        TargetEntry = 0;
         QuestId = 0;
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
@@ -3179,7 +3203,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
         else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
 
-        if (budget)
+        if (budget && HasOptionalThinkBudget(15.0))
         {
             PlayerbotThinkProbe.Phase("explore candidates");
             if (TryExploreSpawns(player, elapsedMs)) return;
@@ -3187,8 +3211,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after a refusal turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
-        System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
         PlayerbotThinkProbe.Phase("explore wander plan");
+        System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
         ExploreWanderPlans++;
         int strongRefusals = Risk.StrongRefusals;
         if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
@@ -3404,9 +3428,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 destination = InwardLeg(area, from, _exploreRefusals);
             }
-            else if (area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z))
+            else if (area.ZoneClipped && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
             {
-                destination = DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals);
+                destination = HasOptionalThinkBudget(15.0)
+                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals)
+                    : InwardLeg(area, from, _exploreRefusals);
             }
         }
         return destination;
@@ -3607,6 +3633,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;
             _exploreBlockedFilter ??= ExploreBlocked;
+            _exploreSearchStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            _exploreCandidateChecks = 0;
             PlayerbotThinkProbe.Phase("explore atlas find");
             _exploreCandidate = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
                 _exploreBlockedFilter, out _, _exploreFactionFilter);
@@ -3692,21 +3720,27 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || _exploreSearchAtlas is not { } atlas
             || _exploreThreatFilter is not { } threatFilter)
             return false;
+        if (++_exploreCandidateChecks > 24
+            && (!HasOptionalThinkBudget(15.0) || System.Diagnostics.Stopwatch.GetElapsedTime(_exploreSearchStartedAt).TotalMilliseconds >= 12.0))
+            return false;
         CreatureSpawn spawn = candidate.Spawn;
         uint now = _session.World.NowMs;
         if (_suspensions.IsEntrySuspended(spawn.Entry, now) || _destinations.IsVisited(spawn.Guid, now))
             return false;
         CreatureTemplate? template = content.FindTemplate(spawn.Entry);
         if (template is null || !PlayerbotWorldDestinations.IsPresent(player, spawn)
-            || _exploreSearchHome is { } home && (!home.Contains(spawn) || home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius))
+            || _exploreSearchHome is { } home && home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius)
             return false;
         var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
-        if (PlayerbotNavigation.IsDeadEndPin(player, point)
-            || PlayerbotNavigation.IsUnreachableOnFoot(player, point, out _, out _))
+        if (PlayerbotNavigation.IsDeadEndPin(player, point))
             return false;
         foreach (PlayerbotHazard hazard in _exploreSearchHazards)
             if (hazard.Covers(point)) return false;
-        return !atlas.HasStrongHazard(candidate, player.Level, threatFilter);
+        if (atlas.HasStrongHazard(candidate, player.Level, threatFilter))
+            return false;
+        if (_exploreSearchHome is { } clippedHome && !clippedHome.Contains(spawn))
+            return false;
+        return !PlayerbotNavigation.IsUnreachableOnFoot(player, point, out _, out _);
     }
 
     /// <summary>

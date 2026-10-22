@@ -866,7 +866,15 @@ internal static class PlayerbotTaxi
         if (player.Map is { } map && map.Collision.MeshPoints is not null)
         {
             TileWait retry = default;
-            if (PlayerbotNavigation.PlanToward(player, masterPos, options, ref retry, 0, out _) == PlanOutcome.Refused)
+            PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, masterPos, options, ref retry, 0, out PlayerbotRoute? route);
+            if (outcome == PlanOutcome.Pending)
+                return true;
+            if (outcome != PlanOutcome.Route || route is null)
+                return false;
+            bool reachesMaster = route.Points.Count > 0
+                && Vector2.Distance(new Vector2(route.Points[^1].X, route.Points[^1].Y), new Vector2(masterPos.X, masterPos.Y)) <= AtSpawnYards
+                && MathF.Abs(route.Points[^1].Z - masterPos.Z) <= PlayerbotNavigation.ProjectedEndYards;
+            if (!reachesMaster && (route.PartialToGoal || route.MeshEndedShort) && route.Distance < 50f)
                 return false;
         }
 

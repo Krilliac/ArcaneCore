@@ -352,6 +352,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
 
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
         SpellInfo? bestSpell = null;
         float bestPriority = 0f;
 
@@ -362,7 +363,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 || (spell.RequiresSpellFocus != 0 && _refusedUntil.ContainsKey(FocusKey(spell.RequiresSpellFocus))))
                 continue;
 
-            if (!HasReagentsAndTools(player, spell))
+            if (!HasReagentsAndTools(player, spell, spellSystem)
+                || spellSystem?.IsSpellReadyIgnoringGlobalCooldown(player, spell) == false)
                 continue;
 
             float priority = CraftPriority(player, spell, weights, store, spellbook);
@@ -448,7 +450,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                         && player.Map?.FindObject(distantFocus.Guid) is not null)
                     {
                         var focusAt = new Vector3(distantFocus.X, distantFocus.Y, distantFocus.Z);
-                        float priorRemaining = Vector3.Distance(_route.Points[^1], focusAt);
+                        float priorRemaining = Vector3.Distance(PlayerbotMotion.CurrentPosition(player), focusAt);
                         PlanOutcome onward = PlanToSpellFocus(player, distantFocus, _options, ref _tileWait, now, out PlayerbotRoute? onwardRoute);
                         if (onward == PlanOutcome.Pending)
                             return true;
@@ -465,8 +467,22 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
 
                     if (!HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, null, out _))
                     {
+                        if (bestSpell.RequiresSpellFocus == CookingFireFocus
+                            && TryLightCampfire(player, store, spellbook, now, out bool fallbackHandled))
+                        {
+                            _route = null;
+                            _routeTarget = default;
+                            if (_refusedUntil.ContainsKey(SpellKey(BasicCampfireSpell)))
+                                SetFocusAside(bestSpell, distantFocus, now);
+                            else
+                                _refusedUntil[distantFocus.Guid.Value] = unchecked(now + FocusBackoffMs);
+                            return fallbackHandled;
+                        }
+
                         bool focusStillPresent = distantFocus.IsSpawned && player.Map?.FindObject(distantFocus.Guid) is not null;
-                        bool walkedToTheEnd = _route?.Complete == true && focusStillPresent;
+                        bool walkedToTheEnd = _route is { Complete: true, Points.Count: > 0 }
+                            && focusStillPresent
+                            && Vector3.Distance(PlayerbotMotion.CurrentPosition(player), _route.Points[^1]) <= 1.5f;
                         _route = null;
                         _routeTarget = default;
                         SetFocusAside(bestSpell, distantFocus, now);
@@ -490,6 +506,17 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
         EnsureReadyForCraftCast(player, bestSpell);
+        if (ShouldDeferCraftCast(player, bestSpell, spellSystem))
+        {
+            Goal = PlayerbotGoalKind.Vendor;
+            TargetEntry = 0;
+            return true;
+        }
+        if (spellSystem is not null && spellSystem.CheckCasterState(player, bestSpell) != SpellCastResult.CastOk)
+        {
+            _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            return false;
+        }
 
         uint reagentId = 0, reagentBefore = 0;
         for (int r = 0; r < bestSpell.Reagents.Count; r++)
@@ -604,6 +631,18 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return false;
     }
 
+    private static bool ShouldDeferCraftCast(Player player, SpellInfo spell, SpellSystem? spellSystem)
+    {
+        if (player.IsQuestSettlementPending)
+            return true;
+        if (spellSystem is null)
+            return false;
+        if (!spellSystem.IsSpellReady(player, spell))
+            return true;
+        return spellSystem.GetState(player.Guid)?.CurrentCast is
+            { State: SpellCastState.Preparing or SpellCastState.Casting };
+    }
+
     private void EnsureReadyForCraftCast(Player player, SpellInfo spell)
     {
         if (player.StandState != StandState.Stand)
@@ -611,25 +650,46 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             player.StandState = StandState.Stand;
         }
 
+        SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
+        if (spellSystem is not null
+            && ArcaneCore.Game.Locomotion.MountService.IsMounted(player)
+            && (player.UnitFlags & UnitFlags.TaxiFlight) == 0)
+        {
+            ArcaneCore.Game.Locomotion.MountService.Unmount(spellSystem, player);
+            spellSystem.RemoveSpellsCausingAura(player, AuraType.Mounted);
+        }
+
         byte form = player.GetByte(UpdateFields.UnitFieldBytes1, 2);
         if (form != 0)
         {
-            SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
-            if (spell.GetErrorAtShapeshiftedCast(form, null) != SpellCastResult.CastOk
+            var stanceService = _session.Services.GetService<StanceFeature>()?.Service;
+            uint? formFlags = stanceService is not null
+                ? stanceService.GetFormFlags((ShapeshiftForm)form)
+                : (ArcaneCore.Kernel.WorldData.ShapeshiftFormCatalog.Retail.TryGet(form, out ArcaneCore.Kernel.WorldData.ShapeshiftFormInfo info) ? info.Flags1 : null);
+            if (spell.GetErrorAtShapeshiftedCast(form, formFlags) != SpellCastResult.CastOk
+                || (stanceService is not null && stanceService.CheckCast(player, spell) != SpellCastResult.CastOk)
                 || spellSystem?.CheckCasterState(player, spell) == SpellCastResult.NotShapeshift)
             {
                 spellSystem?.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
+                spellSystem?.RemoveSpellsCausingAura(player, AuraType.ModStealth);
                 player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
             }
         }
     }
 
-    private static bool HasReagentsAndTools(Player player, SpellInfo spell)
+    private static bool HasReagentsAndTools(Player player, SpellInfo spell, SpellSystem? spellSystem = null)
     {
         for (int t = 0; t < spell.Totems.Count; t++)
         {
             uint totem = spell.Totems[t];
             if (totem != 0 && player.Inventory.GetItemCount(totem) < 1)
+                return false;
+        }
+
+        if (spell.EquippedItemClass >= 0 && spellSystem is not null)
+        {
+            var ctx = new SpellCastCheckContext(spellSystem, player, spell, SpellCastTargets.ForSelf(), player, false, true);
+            if (new EquippedItemCastCheck().Check(ctx) != SpellCastResult.CastOk)
                 return false;
         }
 
@@ -647,12 +707,25 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!anyReagent)
             return false;
 
+        if (spellSystem is not null)
+        {
+            var ctx = new SpellCastCheckContext(spellSystem, player, spell, SpellCastTargets.ForSelf(), player, false, true);
+            for (int i = 0; i < spellSystem.CastChecks.Count; i++)
+            {
+                ISpellCastCheck check = spellSystem.CastChecks[i];
+                if (check is ArcaneCore.Game.Crafting.ReagentCastCheck or CombatRestrictionCastCheck or LocationCastCheck
+                    && check.Check(ctx) != SpellCastResult.CastOk)
+                    return false;
+            }
+        }
+
         for (int i = 0; i < spell.Effects.Count; i++)
         {
             SpellEffectInfo eff = spell.Effects[i];
             if (eff.Effect == SpellEffectName.CreateItem && eff.ItemType != 0)
             {
-                if (player.Inventory.CanStoreNewItem(eff.ItemType, 1, [], out _) != InventoryResult.Ok)
+                uint maxCount = (uint)Math.Max(1, eff.BasePoints + 1 + eff.DieSides);
+                if (player.Inventory.CanStoreNewItem(eff.ItemType, maxCount, [], out _) != InventoryResult.Ok)
                     return false;
             }
         }
@@ -743,6 +816,18 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
         EnsureReadyForCraftCast(player, bestSpell);
+        SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
+        if (ShouldDeferCraftCast(player, bestSpell, spellSystem))
+        {
+            Goal = PlayerbotGoalKind.Vendor;
+            TargetEntry = 0;
+            return true;
+        }
+        if (spellSystem is not null && spellSystem.CheckCasterState(player, bestSpell) != SpellCastResult.CastOk)
+        {
+            _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            return false;
+        }
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -819,6 +904,18 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
         EnsureReadyForCraftCast(player, disenchantSpell);
+        SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
+        if (ShouldDeferCraftCast(player, disenchantSpell, spellSystem))
+        {
+            Goal = PlayerbotGoalKind.Vendor;
+            TargetEntry = 0;
+            return true;
+        }
+        if (spellSystem is not null && spellSystem.CheckCasterState(player, disenchantSpell) != SpellCastResult.CastOk)
+        {
+            _refusedUntil[SpellKey(disenchantSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            return false;
+        }
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -886,6 +983,18 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
         EnsureReadyForCraftCast(player, pickLockSpell);
+        SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
+        if (ShouldDeferCraftCast(player, pickLockSpell, spellSystem))
+        {
+            Goal = PlayerbotGoalKind.Vendor;
+            TargetEntry = 0;
+            return true;
+        }
+        if (spellSystem is not null && spellSystem.CheckCasterState(player, pickLockSpell) != SpellCastResult.CastOk)
+        {
+            _refusedUntil[SpellKey(pickLockSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            return false;
+        }
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -934,25 +1043,29 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         float focusReach = MathF.Max(focus.Template.GetData(1), 1f) + focus.BoundingRadius + player.BoundingRadius;
 
         PlanOutcome exact = PlayerbotNavigation.PlanExact(player, focusPos, options, ref tileWait, now, out route);
-        if (exact is PlanOutcome.Route or PlanOutcome.Pending)
-            return exact;
-
-        if (focusReach > PlayerbotNavigationAnomalies.PathEndShortYards)
+        if (exact == PlanOutcome.Pending)
+            return PlanOutcome.Pending;
+        if (exact == PlanOutcome.Route)
         {
-            PlanOutcome nearOutcome = PlayerbotNavigation.PlanExact(
-                player, focusPos, options, ref tileWait, now, out PlayerbotRoute? nearRoute, trial: false, nearestEnd: true);
-            if (nearOutcome == PlanOutcome.Pending)
-            {
-                route = null;
-                return PlanOutcome.Pending;
-            }
-            if (nearOutcome == PlanOutcome.Route
-                && nearRoute is { Points.Count: > 0 }
-                && Vector3.Distance(nearRoute.Points[^1], focusPos) <= focusReach - 0.25f)
-            {
-                route = nearRoute;
+            if (route is { Points.Count: > 0 } && Vector3.Distance(route.Points[^1], focusPos) <= focusReach - 0.25f)
                 return PlanOutcome.Route;
-            }
+            route = null;
+            exact = PlanOutcome.Refused;
+        }
+
+        PlanOutcome nearOutcome = PlayerbotNavigation.PlanExact(
+            player, focusPos, options, ref tileWait, now, out PlayerbotRoute? nearRoute, trial: false, nearestEnd: true);
+        if (nearOutcome == PlanOutcome.Pending)
+        {
+            route = null;
+            return PlanOutcome.Pending;
+        }
+        if (nearOutcome == PlanOutcome.Route
+            && nearRoute is { Points.Count: > 0 }
+            && Vector3.Distance(nearRoute.Points[^1], focusPos) <= focusReach - 0.25f)
+        {
+            route = nearRoute;
+            return PlanOutcome.Route;
         }
 
         float ringRadius = MathF.Min(focusReach * 0.65f, focusReach - 0.5f);
@@ -1062,6 +1175,14 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return true;
         }
         EnsureReadyForCraftCast(player, campfire);
+        SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
+        if (ShouldDeferCraftCast(player, campfire, spellSystem))
+        {
+            Goal = PlayerbotGoalKind.Vendor;
+            TargetEntry = 0;
+            handled = true;
+            return true;
+        }
 
         uint woodBefore = player.Inventory.GetItemCount(SimpleWoodItem);
         Goal = PlayerbotGoalKind.Vendor;

@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
@@ -587,8 +588,9 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             && PlayerbotWorldDestinations.TryResolveSpawnPosition(player, current.Spawn, requireLivePatroller: true, out Vector3 at))
         {
             float left = Vector3.Distance(here, at);
-            // Arrived at the repair NPC's own spawn point with nothing of use in sight (this method runs only then): the NPC is not there.
+            // Arrived at the repair NPC's own spawn point with no live creature of that entry there: the NPC is not there.
             if (left <= RepairArrivedYards && current.Spawn.MovementType != 2 && _repairMissReported != _repairSpawn
+                && !HasVisibleEntry(player, current.Entry)
                 && Suspensions?.IsEntrySuspended(current.Entry, now) != true && !PlayerbotNavigationAnomalies.Silenced(player))
             {
                 _repairMissReported = _repairSpawn;
@@ -712,6 +714,16 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _repairRestFrom = here;
         _repairRestMap = map.MapId;
         _repairTripBackoffUntil = Math.Max(1u, unchecked(now + rest));
+        return false;
+    }
+
+    private static bool HasVisibleEntry(Player player, uint entry)
+    {
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (player.Map?.FindObject(guid) is Creature creature && creature.Entry == entry && creature.IsInWorld)
+                return true;
+        }
         return false;
     }
 

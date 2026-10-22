@@ -177,13 +177,34 @@ internal static class PlayerbotMotion
         state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(destination)) <= SamePlaceYards);
     }
 
+    /// <summary>
+    /// Refuses <paramref name="places"/> for <see cref="LoopBlacklistMs"/> from <paramref name="now"/> and marks a loop pending so the
+    /// brain drops its current target and intent on the next think.
+    /// </summary>
+    internal static void Blacklist(Player player, ReadOnlySpan<Vector3> places, uint now)
+    {
+        MotionState state = Of(player);
+        foreach (Vector3 place in places)
+        {
+            if (!Finite(place)) continue;
+            state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(place)) <= SamePlaceYards);
+            state.Blacklist.Add((place, unchecked(now + LoopBlacklistMs)));
+        }
+
+        state.LoopPending = true;
+    }
+
     /// <summary>Whether <paramref name="destination"/> was given up after a loop and is still refused.</summary>
     internal static bool IsBlacklisted(Player player, Vector3 destination)
     {
-        if (!States.TryGetValue(player, out MotionState? state) || state.World is not { } world || state.Blacklist.Count == 0)
+        if (!States.TryGetValue(player, out MotionState? state) || state.Blacklist.Count == 0)
             return false;
-        uint now = world.NowMs;
-        state.Blacklist.RemoveAll(entry => unchecked((int)(entry.UntilMs - now)) <= 0);
+        if (state.World is { } world)
+        {
+            uint now = world.NowMs;
+            state.Blacklist.RemoveAll(entry => unchecked((int)(entry.UntilMs - now)) <= 0);
+        }
+
         foreach ((Vector3 blocked, _) in state.Blacklist)
             if (Vector2.Distance(Flat(blocked), Flat(destination)) <= SamePlaceYards) return true;
         return false;
@@ -855,6 +876,7 @@ internal static class PlayerbotMotion
         // walls at its own height (live: bot-motion/under-map 10-36 yd under the Valley of Trials mesa, 92-94% of the under-map
         // samples on routed bots more than 10 yd off their leg).
         bool navigated = route.LegsNavigated(fromPoint, toPoint) && OnLeg(route, fromPoint, from);
+        Vector3 rawCandidate = candidate;
         bool hasMeshSurface = false;
         if (navigated && MeshSurface(map.Collision, route, fromPoint, toPoint, from, candidate) is { } surface)
         {
@@ -899,6 +921,32 @@ internal static class PlayerbotMotion
             }
 
             Vector3 resolved = float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+            if (map.Collision.LineOfSight is { Enabled: true } los
+                && (resolved.Z != rawCandidate.Z || MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards))
+            {
+                Vector3 fromChest = new(from.X, from.Y, from.Z + PlayerbotMoveCheck.ChestYards);
+                Vector3 resolvedChest = resolved with { Z = resolved.Z + PlayerbotMoveCheck.ChestYards };
+                if (!los.IsInLineOfSight(map.MapId, fromChest, resolvedChest, ignoreM2: true)
+                    && !PlayerbotMotionAnomalies.StaysOnMesh(map, from, resolved))
+                {
+                    if (candidate.Z != resolved.Z
+                        && los.IsInLineOfSight(map.MapId, fromChest, candidate with { Z = candidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
+                    {
+                        resolved = candidate;
+                    }
+                    else if (rawCandidate.Z != resolved.Z
+                        && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = rawCandidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
+                    {
+                        resolved = rawCandidate;
+                    }
+                    else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
+                        && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = from.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
+                    {
+                        resolved = rawCandidate with { Z = from.Z };
+                    }
+                }
+            }
+
             if (map.Collision.ClassifyUnderMap(resolved.X, resolved.Y, resolved.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind == UnderMapKind.UnderMap
                 && map.Collision.ClassifyUnderMap(from.X, from.Y, from.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind != UnderMapKind.UnderMap)
             {

@@ -222,6 +222,7 @@ internal sealed class PlayerbotRisk
             return;
         }
 
+        if (!player.IsAlive) return;
         _fightSinceMs = 0;
         _cornered = false;
         _refusalCounted = false;
@@ -265,9 +266,16 @@ internal sealed class PlayerbotRisk
         Detour = null;
         _waitUntilMs = 0;
         _fightSinceMs = 0;
+        _retreatEndedMs = 0;
+        _pulledTargetSinceRetreat = true;
+        _recentRetreatEntries.Clear();
         _lastRetreat = default;
         _retreatLoop.Reset();
     }
+
+    private uint _retreatEndedMs;
+    private bool _pulledTargetSinceRetreat = true;
+    private readonly HashSet<uint> _recentRetreatEntries = [];
 
     /// <summary>
     /// <c>risk/died-in-known-hazard</c>: the bot died to a creature it had fled from or died to before (the danger memory), or inside the
@@ -280,27 +288,42 @@ internal sealed class PlayerbotRisk
         uint now = _session.World.NowMs;
         // A retreat that ended in this death remembers its enemies first (NoteRetreatEnd): that memory is not older knowledge.
         if (!Enabled || Retreat.Active || _cornered || _session.IsInChaosProbe
-            || (_retreatDiedMs != 0 && unchecked(now - _retreatDiedMs) < 30_000)) return;
-        // Only what the bot knew before this fight began: a retreat that ended cornered remembers the very creatures the bot then fights
-        // on against, and a death in that fight is no death to a known danger (live 2026-10-16: 509 of 1218 reports came within two
-        // minutes of the same bot's risk/retreat-cornered).
-        foreach ((ObjectGuid guid, uint entry) in killers)
-            if (Memory.RememberedBefore(guid, _fightSinceMs, now))
+            || (_retreatDiedMs != 0 && unchecked(now - _retreatDiedMs) < 30_000)
+            || (_retreatEndedMs != 0 && unchecked(now - _retreatEndedMs) < 120_000)) return;
+        var here = new Vector3(player.X, player.Y, player.Z);
+        bool atDeathSpot = false;
+        foreach (PlayerbotHazard active in Hazards.Active(player.MapId, now))
+            if (active.Kind == "death" && active.Covers(here))
             {
-                PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
-                    $"killed by creature {entry} that the danger memory already held (fled from or died to before)");
-                return;
+                atDeathSpot = true;
+                break;
             }
 
-        var here = new Vector3(player.X, player.Y, player.Z);
+        // Only what the bot knew before this fight began: a retreat that ended cornered remembers the very creatures the bot then fights
+        // on against, and a death in that fight is no death to a known danger (live 2026-10-16: 509 of 1218 reports came within two
+        // minutes of the same bot's risk/retreat-cornered). A death at the corpse reclaim spot ("death" place mark) is also by design.
+        if (!atDeathSpot)
+        {
+            foreach ((ObjectGuid guid, uint entry) in killers)
+                if (Memory.RememberedBefore(guid, _fightSinceMs, now))
+                {
+                    PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
+                        $"killed by creature {entry} that the danger memory already held (fled from or died to before)");
+                    return;
+                }
+        }
+
+        uint memoryMs = (uint)(_options.Risk.DangerMemorySeconds * 1000);
         foreach (PlayerbotHazard hazard in Hazards.Active(player.MapId, now))
-            if (!hazard.Creature.IsEmpty && hazard.Kind != PlayerbotHazards.StrongKind && hazard.Covers(here)
-                && (hazard.Kind != "fled" || Memory.RememberedBefore(hazard.Creature, _fightSinceMs, now)))
-            {
-                PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
-                    $"died inside a '{hazard.Kind}' hazard of creature {hazard.Creature.Value:X} (radius {hazard.Radius:F1})");
-                return;
-            }
+        {
+            if (hazard.Creature.IsEmpty || hazard.Kind == PlayerbotHazards.StrongKind || !hazard.Covers(here)) continue;
+            if (hazard.Kind == "fled" && (atDeathSpot || !Memory.RememberedBefore(hazard.Creature, _fightSinceMs, now))) continue;
+            uint createdMs = unchecked(hazard.UntilMs - memoryMs);
+            if (_fightSinceMs > 0 && unchecked((int)(createdMs - _fightSinceMs)) >= 0) continue;
+            PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
+                $"died inside a '{hazard.Kind}' hazard of creature {hazard.Creature.Value:X} (radius {hazard.Radius:F1})");
+            return;
+        }
     }
 
     internal bool IsRemembered(Creature creature) => Enabled && Memory.IsRemembered(creature.Guid, _session.World.NowMs);
@@ -308,6 +331,7 @@ internal sealed class PlayerbotRisk
     internal bool CoversPullHazard(Player player, Creature creature)
     {
         if (!Enabled) return false;
+        if (SpellThreat(creature).IsLethalTo(player.MaxHealth)) return true;
         uint now = _session.World.NowMs;
         var pos = new Vector3(creature.X, creature.Y, creature.Z);
         if (Hazards.CoversDeathLoop(creature.MapId, pos, now)) return true;
@@ -317,7 +341,7 @@ internal sealed class PlayerbotRisk
         Vector3 spot = dist <= range || dist < 0.01f ? here : pos + ((here - pos) * (range / dist));
         foreach (PlayerbotHazard hazard in Hazards.Active(creature.MapId, now))
         {
-            if (hazard.Creature.IsEmpty || hazard.Kind == PlayerbotHazards.StrongKind) continue;
+            if (hazard.Kind is PlayerbotHazards.StrongKind or "death") continue;
             if (hazard.Covers(pos) || hazard.Covers(spot)) return true;
         }
         return false;
@@ -359,10 +383,12 @@ internal sealed class PlayerbotRisk
                 {
                     case PlayerbotEngageDecision.Engage:
                         LastEngagement = verdict;
+                        _pulledTargetSinceRetreat = true;
                         return candidate;
                     case PlayerbotEngageDecision.Detour when detour is not null:
                         LastEngagement = verdict;
                         Detour = detour;
+                        _pulledTargetSinceRetreat = true;
                         return candidate;
                     case PlayerbotEngageDecision.Rest:
                         rest ??= verdict;
@@ -1211,6 +1237,7 @@ internal sealed class PlayerbotRisk
     private void NoteRetreatEnd(Player player, string? outcome)
     {
         if (!Enabled) return;
+        _retreatEndedMs = Math.Max(1u, _session.World.NowMs);
         if (outcome == "died")
         {
             _retreatDiedMs = Math.Max(1u, _session.World.NowMs);
@@ -1275,14 +1302,22 @@ internal sealed class PlayerbotRisk
     private void RememberFlight(Player player)
     {
         uint now = _session.World.NowMs;
-        bool repeatCamp = _lastRetreat.Valid && _lastRetreat.MapId == _fledAt.MapId
-            && unchecked(now - _lastRetreat.AtMs) <= PlayerbotRetreatLoopWatch.WindowMs
+        bool inWindow = _lastRetreat.Valid && unchecked(now - _lastRetreat.AtMs) <= PlayerbotRetreatLoopWatch.WindowMs;
+        if (!inWindow) _recentRetreatEntries.Clear();
+        bool repeatCamp = inWindow && _lastRetreat.MapId == _fledAt.MapId
             && Vector3.Distance(_lastRetreat.At, _fledAt.Where) <= RetreatCampYards;
         _lastRetreat = (true, _fledAt.MapId, _fledAt.Where, now);
         // A retreat from one creature is the estimate proved wrong about its kind (a death alone is not: one death to a kind still
         // leaves it a target, the stall watch sets it aside at the second, PlayerbotStallWatch.RecordDeath).
         Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, now, _options.Risk.DangerMemorySeconds,
             alone: _fledFrom.Length == 1);
+        if (inWindow && _fledFrom.Length > 1)
+        {
+            foreach ((ObjectGuid guid, uint entry) in _fledFrom)
+                if (_recentRetreatEntries.Contains(entry))
+                    Memory.Remember(_fledAt.MapId, _fledAt.Where, [(guid, entry)], now, _options.Risk.DangerMemorySeconds, alone: true);
+        }
+        foreach ((_, uint entry) in _fledFrom) _recentRetreatEntries.Add(entry);
         _verdicts.Clear(); // weighed before the loss: the memory now says more about every candidate near it or of its kind
         Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, now, _options.Risk.DangerMemorySeconds, "retreat");
         if (repeatCamp)
@@ -1318,7 +1353,10 @@ internal sealed class PlayerbotRisk
         CreatureMapSystem? system = player.Map?.FindUpdater<CreatureMapSystem>();
         float reach = (system?.GetAttackDistance(creature, player) ?? CreatureTemplate.DefaultDetectionRange)
             + creature.BoundingRadius + player.BoundingRadius;
-        Hazards.Add(player.MapId, new Vector3(creature.Home.X, creature.Home.Y, creature.Home.Z), reach + PlayerbotHazards.FledMarginYards,
+        float radius = reach + PlayerbotHazards.FledMarginYards;
+        Hazards.Add(player.MapId, new Vector3(creature.X, creature.Y, creature.Z), radius,
+            now, _options.Risk.DangerMemorySeconds, "fled", creature.Guid);
+        Hazards.Add(player.MapId, new Vector3(creature.Home.X, creature.Home.Y, creature.Home.Z), radius,
             now, _options.Risk.DangerMemorySeconds, "fled", creature.Guid);
     }
 
@@ -1398,7 +1436,11 @@ internal sealed class PlayerbotRisk
         _retreatPlan = null;
         _retreatFrom = new Vector3(player.X, player.Y, player.Z);
         Retreat.Start(player, enemies, Tracker.Anchors, Breadcrumbs.Points, reason);
-        _retreatLoop.Started(player, _session.World.NowMs, reason);
+        bool sameFightSpot = !_lastRetreat.Valid || (_lastRetreat.MapId == _fledAt.MapId
+            && Vector3.Distance(_lastRetreat.At, _fledAt.Where) <= PlayerbotHazards.RetreatYards);
+        if (_pulledTargetSinceRetreat && sameFightSpot)
+            _retreatLoop.Started(player, _session.World.NowMs, reason);
+        _pulledTargetSinceRetreat = false;
     }
 
     /// <summary>One think of a running retreat; true while it owns the bot. A retreat that got away starts the recovery wait.</summary>

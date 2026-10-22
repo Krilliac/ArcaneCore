@@ -620,6 +620,11 @@ public sealed partial class CreatureMapSystem
     /// <summary>Whether the evading creature's victim, or else the last unit it attacked, is dead (the creature won the fight).</summary>
     private bool LastFightWasWon(Creature creature, string? reason = null)
     {
+        if (reason == nameof(UpdateUnreachableTarget))
+        {
+            return true;
+        }
+
         UnitCombat combat = creature.Combat;
         Unit? last = combat.Victim
             ?? (combat.LastVictimGuid.IsEmpty ? null : Map.FindPlayer(combat.LastVictimGuid) as Unit ?? Map.FindObject(combat.LastVictimGuid) as Unit);
@@ -630,7 +635,7 @@ public sealed partial class CreatureMapSystem
 
         if (last is null)
         {
-            return false;
+            return !combat.LastVictimGuid.IsEmpty;
         }
 
         if (!last.IsAlive)

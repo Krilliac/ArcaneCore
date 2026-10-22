@@ -119,6 +119,14 @@ internal static class PlayerbotTravelCast
         if (player.Movement.HasFlag(MovementFlags.MaskMoving)
             && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
             return ++leg.Attempts > MaxSendAttempts ? Sent.NotStill : Sent.Retry;
+        // Bag items (CMSG_USE_ITEM, such as the hearthstone) and spells with SPELL_ATTR_NOT_SHAPESHIFT cannot be used while shapeshifted
+        // (ItemUseService.IsShapeShifted / SpellSystem.CanStartItemUse -> NoItemsWhileShapeshifted): cancel the shapeshift form first.
+        if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+        {
+            spells.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
+            if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+                player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
+        }
         session.DrainManagedPackets(
             WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgSpellGo, WorldOpcode.SmsgSpellFailure, WorldOpcode.SmsgSpellFailedOther, WorldOpcode.SmsgCastResult);
         if (!session.TryManagedAction(opcode, payload))
@@ -440,6 +448,14 @@ internal static class PlayerbotHearthstone
                 return Fail(player, leg, "use-refused", "the session refused the hearthstone use (closed, settling a quest reward, or not in the world)",
                     AnomalySeverity.Warning, out failure);
             default:
+                if (reason is SpellCastResult.NoItemsWhileShapeshifted or SpellCastResult.NotShapeshift)
+                {
+                    spells.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
+                    if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+                        player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
+                    if (++leg.Attempts <= PlayerbotTravelCast.MaxSendAttempts)
+                        return TravelLegStep.Traveling;
+                }
                 return Fail(player, leg, "use-refused", $"the server refused the hearthstone use{(reason is { } r ? ": " + r : string.Empty)}",
                     AnomalySeverity.Warning, out failure);
         }

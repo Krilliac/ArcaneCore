@@ -248,6 +248,7 @@ public sealed partial class CreatureMapSystem
     private void ForgetAi(Creature creature)
     {
         ResetAiState(creature);
+        ForgetUnreachableTarget(creature);
         for (int i = _summons.Count - 1; i >= 0; i--)
         {
             if (ReferenceEquals(_summons[i].Creature, creature))

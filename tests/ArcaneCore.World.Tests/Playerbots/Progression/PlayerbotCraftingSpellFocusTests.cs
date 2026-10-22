@@ -635,6 +635,54 @@ public sealed class PlayerbotCraftingSpellFocusTests
         }, manualClock: true);
     }
 
+    /// <summary>
+    /// Simulates a fire whose exact center query returns an <see cref="PathType.Incomplete"/> path stopping 11.7 yards short
+    /// (inside <c>PathEndShortYards = 12</c>, so <c>PlanExact</c> accepts it, but outside the fire's ~11.39-yard focus reach),
+    /// while a ring point 7 yards from the fire's center is reachable by a normal path.
+    /// </summary>
+    private sealed class ShortIncompleteCenterButReachableRingPathfinder(float meshEdgeX) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (end.X > meshEdgeX + 3f)
+            {
+                Vector3 shortStop = new(end.X - 11.7f, end.Y, end.Z);
+                return PathResult.StraightLine(start, shortStop, PathType.Incomplete);
+            }
+
+            Vector3 clamped = new(MathF.Min(end.X, meshEdgeX), end.Y, end.Z);
+            PathType type = end.X > meshEdgeX ? PathType.Incomplete : PathType.Normal;
+            return PathResult.StraightLine(start, clamped, type);
+        }
+    }
+
+    [Fact]
+    public async Task AnIncompleteExactRouteEndingOutsideFocusReach_FallsBackToRingWithinReach_WithoutWalkedButOutOfRangeAnomaly()
+    {
+        await RunAsync(knowsCampfire: false, woodCount: 0, async (host, session, crafting, player) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(pathfinder: new ShortIncompleteCenterButReachableRingPathfinder(player.X + 4.5f));
+                return true;
+            });
+            await SummonVisibleAsync(host, player, 12f, 0f);
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+
+            for (int i = 0; i < 6 && await CountAsync(host, player, Product) == 0; i++)
+            {
+                Assert.True(await StepAsync(host, session, crafting, player));
+                await host.World.AdvanceClockAsync(500);
+            }
+
+            Assert.Equal(2u, await CountAsync(host, player, Reagent));
+            Assert.Equal(1u, await CountAsync(host, player, Product));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+        }, manualClock: true);
+    }
+
     private sealed class OptionalDbcFactAttribute : FactAttribute
     {
         public const string Variable = "ARCANECORE_TEST_DBC_DIR";

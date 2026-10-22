@@ -427,9 +427,29 @@ internal static class PlayerbotTram
         uint goalZone = zoneAt is null ? map.GetZoneAndAreaId(goal.X, goal.Y, goal.Z).ZoneId : zoneAt(goal);
         if (found.Choose(map.MapId, at, goal, sourceZone, goalZone) is not { } leg) return null;
         if (PlayerbotNavigation.IsUnreachableOnFoot(player, leg.From.Approach, out _, out _)) return null;
+        if (map.Collision.MeshPoints is not null && !CanReachEntranceApproach(player, leg.From.Approach)) return null;
         network = found;
         return leg;
     }
+
+    private static bool CanReachEntranceApproach(Player player, Vector3 approach)
+    {
+        Vector3 at = new(player.X, player.Y, player.Z);
+        if (Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(approach)) > 150f)
+            return true;
+        var options = new PlayerbotOptions();
+        if (!PlayerbotNavigation.TryPlanToward(player, approach, options, out PlayerbotRoute? route) || route is null)
+            return false;
+        if (!route.MeshEndedShort)
+            return true;
+        bool reachesApproach = route.Points.Count > 0
+            && Vector2.Distance(TramNetwork.Flat(route.Points[^1]), TramNetwork.Flat(approach)) <= PlayerbotNavigation.ProjectedEndYards
+            && MathF.Abs(route.Points[^1].Z - approach.Z) <= PlayerbotNavigation.ProjectedEndYards;
+        return reachesApproach || route.Points.Count >= options.MaxPathPoints || route.Distance >= 50f;
+    }
+
+    private static bool IsBesideDock(Vector3 bot, Vector3 dock)
+        => Vector2.Distance(TramNetwork.Flat(bot), TramNetwork.Flat(dock)) <= BesideYards + CarHalfLength;
 
     /// <summary>Drop the trip without a packet (death, a controller taking the bot over); the entrance consent goes with it.</summary>
     internal static void Cancel(Player player)
@@ -475,6 +495,8 @@ internal static class PlayerbotTram
             {
                 if (trip.Car is not { IsInWorld: true } || !ReferenceEquals(trip.Car.Map, map)) return;
                 if (trip.Route is { Complete: false }) return;
+                Vector3 bot = new(player.X, player.Y, player.Z);
+                if (!IsBesideDock(bot, trip.Dock.Position)) return;
                 if (!PlayerbotMovementControl.Stop(session, player)) return;
                 Enter(trip, TramStage.Waiting, now);
                 goto case TramStage.Waiting;
@@ -716,6 +738,8 @@ internal static class PlayerbotTram
         TramPlatform here = trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
         trip.To = trip.Network.Other(here);
         trip.IntendedTo = trip.To;
+        trip.Car = null;
+        trip.Route = null;
         Enter(trip, TramStage.ToPlatform, now);
         if (trip.PlatformSinceMs == 0) trip.PlatformSinceMs = now;
     }
@@ -792,8 +816,40 @@ internal static class PlayerbotTram
         {
             if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now))
                 return TramStep.Traveling;
+            if (!IsBesideDock(bot, trip.Dock.Position))
+            {
+                if (trip.Route is { Complete: false })
+                    return TramStep.Traveling;
+                trip.Route = null;
+                if (unchecked((int)(trip.NextPlanMs - now)) > 0) return TramStep.Traveling;
+                if (Beside(player, map, trip.Car!, trip.Dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? nextRoute, out bool pending) is not null)
+                {
+                    if (nextRoute is not null)
+                    {
+                        trip.RefusedPlans = 0;
+                        trip.Route = nextRoute;
+                        PlayerbotNavigation.TryAdvance(session, nextRoute, options, elapsedMs, now);
+                        return TramStep.Traveling;
+                    }
+                }
+                else if (!pending)
+                {
+                    trip.Car = null;
+                }
+
+                trip.NextPlanMs = unchecked(now + PlanRetryMs);
+                return TramStep.Traveling;
+            }
+
             PlayerbotMovementControl.Stop(session, player);
             Enter(trip, TramStage.Waiting, now);
+        }
+        else if (trip.Stage == TramStage.Waiting && !IsBesideDock(bot, trip.Dock.Position))
+        {
+            trip.Car = null;
+            trip.Route = null;
+            Enter(trip, TramStage.ToPlatform, now);
+            return TramStep.Traveling;
         }
 
         GameObject car = trip.Car!;

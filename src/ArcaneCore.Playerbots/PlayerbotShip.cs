@@ -420,8 +420,9 @@ internal static class PlayerbotShip
             return;
         }
 
+        long pendingMark = PathSearchCounters.TilesPending;
         Vector3 dockTarget = ResolveDockTarget(map, trip.From.Position, Position(player));
-        if (!Walk(session, player, trip, dockTarget, options, elapsedMs, now, out string? why))
+        if (!Walk(session, player, trip, dockTarget, options, elapsedMs, now, out string? why, pendingMark))
             Fail(session, player, trip, now, "dock-unreachable", why!, backoff: true);
     }
 
@@ -720,7 +721,7 @@ internal static class PlayerbotShip
     /// <see cref="MaxRefusedPlans"/> refused plans in a row, or no <see cref="ProgressYards"/> gained within <see cref="NoProgressMs"/>.
     /// </summary>
     private static bool Walk(WorldSession session, Player player, ShipTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs, uint now,
-        out string? why)
+        out string? why, long pendingMark = -1)
     {
         why = null;
         float left = Vector3.Distance(Position(player), target);
@@ -739,6 +740,16 @@ internal static class PlayerbotShip
         trip.Walk = null;
         if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
         PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, target, options, ref trip.Tiles, now, out PlayerbotRoute? next);
+        if (outcome == PlanOutcome.Refused && left > BoardReachYards && player.Map is { } map && map.Collision.MeshPoints is not null)
+        {
+            outcome = TryPlanApproachStep(player, map, target, options, ref trip.Tiles, now, out next);
+        }
+
+        if (outcome == PlanOutcome.Refused && pendingMark >= 0 && PathSearchCounters.TilesPending != pendingMark && trip.Tiles.Hold(now))
+        {
+            outcome = PlanOutcome.Pending;
+        }
+
         if (outcome == PlanOutcome.Pending)
         {
             trip.NextPlanMs = unchecked(now + PlanRetryMs);
@@ -757,6 +768,51 @@ internal static class PlayerbotShip
         trip.Walk = next;
         PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
         return true;
+    }
+
+    private static PlanOutcome TryPlanApproachStep(Player player, Map map, Vector3 target, PlayerbotOptions options, ref TileWait tiles,
+        uint now, out PlayerbotRoute? route)
+    {
+        route = null;
+        Vector3 bot = Position(player);
+        Vector2 delta = new(target.X - bot.X, target.Y - bot.Y);
+        float flatDist = delta.Length();
+        if (flatDist < 1f) return PlanOutcome.Refused;
+        Vector2 dir = delta / flatDist;
+        float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(24f, options.MaxPathPoints - 4));
+        ReadOnlySpan<float> stepRadii = [MathF.Min(chunk, flatDist * 0.5f), MathF.Min(chunk * 0.5f, flatDist * 0.25f)];
+        ReadOnlySpan<float> angles = [0f, 0.45f, -0.45f];
+        bool anyPending = false;
+        foreach (float radius in stepRadii)
+        {
+            if (radius < ProgressYards * 2f) continue;
+            foreach (float angle in angles)
+            {
+                float c = MathF.Cos(angle), s = MathF.Sin(angle);
+                Vector2 rot = new((dir.X * c) - (dir.Y * s), (dir.X * s) + (dir.Y * c));
+                float x = bot.X + (rot.X * radius);
+                float y = bot.Y + (rot.Y * radius);
+                float z = map.Collision.GetHeight(x, y, bot.Z + 20f);
+                if (!ValidHeight(z)) z = map.Terrain.GetHeight(x, y, bot.Z);
+                if (!ValidHeight(z)) z = bot.Z;
+                var stepTarget = new Vector3(x, y, z);
+                PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, stepTarget, options, ref tiles, now, out PlayerbotRoute? candidate);
+                if (outcome == PlanOutcome.Pending)
+                {
+                    anyPending = true;
+                    continue;
+                }
+
+                if (outcome == PlanOutcome.Route && candidate is { Points.Count: >= 2 }
+                    && Flat(candidate.Points[^1], target) + ProgressYards <= flatDist)
+                {
+                    route = candidate;
+                    return PlanOutcome.Route;
+                }
+            }
+        }
+
+        return anyPending ? PlanOutcome.Pending : PlanOutcome.Refused;
     }
 
     private static void Fail(WorldSession session, Player player, ShipTrip trip, uint now, string code, string why, bool backoff)
@@ -921,11 +977,11 @@ internal static class PlayerbotShip
     }
 
     private static readonly float[] DockSearchRadiiYards = [4f, 8f, 12f, 16f, 20f, 25f, 30f, 35f, 38f];
-    private static readonly float[] DockSearchZOffsets = [0f, -8f, -16f, 6f];
+    private static readonly float[] DockSearchZOffsets = [0f, -8f, -16f, -22f, 6f];
 
     /// <summary>
     /// Resolve a walkable dock floor near <paramref name="portPos"/> when the ship's port keyframe is over water or in mid-air
-    /// (boat hull origin at z=0 in the harbour water or zeppelin hull origin ~18 yards above the tower platform).
+    /// (boat hull origin at z=0 in the harbour water or zeppelin hull origin ~18-24 yards above the tower platform).
     /// </summary>
     internal static Vector3 ResolveDockTarget(Map map, Vector3 portPos, Vector3 toward)
     {
@@ -942,7 +998,7 @@ internal static class PlayerbotShip
                 float angle = i * MathF.Tau / StepOffDirections;
                 float x = portPos.X + (MathF.Cos(angle) * radius);
                 float y = portPos.Y + (MathF.Sin(angle) * radius);
-                if (!TryResolveDockPoint(map, x, y, portPos.Z, out Vector3 candidate))
+                if (!TryResolveDockPoint(map, x, y, portPos, out Vector3 candidate))
                     continue;
                 float dist = Flat(candidate, toward);
                 if (dist < bestDist)
@@ -959,8 +1015,9 @@ internal static class PlayerbotShip
         return portPos;
     }
 
-    private static bool TryResolveDockPoint(Map map, float x, float y, float portZ, out Vector3 point)
+    private static bool TryResolveDockPoint(Map map, float x, float y, Vector3 portPos, out Vector3 point)
     {
+        float portZ = portPos.Z;
         float floor = map.Collision.GetHeight(x, y, portZ + DockHeightYards);
         if (ValidHeight(floor) && MathF.Abs(floor - portZ) <= DockHeightYards)
         {
@@ -988,8 +1045,12 @@ internal static class PlayerbotShip
                 && MathF.Abs(res.End.Z - portZ) <= DockHeightYards
                 && (res.Points.Count == 0 || MathF.Abs(res.End.Z - probe.Z) <= 5f))
             {
-                var candidate = new Vector3(x, y, res.End.Z + 0.05f);
-                if (!InDockWater(map, candidate) && !PlayerbotNavigation.IsPointOnMeshFragment(map, candidate))
+                Vector3 end = res.Points.Count > 0 ? res.End : probe;
+                var candidate = new Vector3(end.X, end.Y, end.Z + 0.05f);
+                if (Flat(candidate, portPos) <= BoardReachYards - 0.5f
+                    && !InDockWater(map, candidate)
+                    && !PlayerbotNavigation.IsPointOnMeshFragment(map, candidate)
+                    && OnDryDockMesh(map, candidate))
                 {
                     point = candidate;
                     return true;

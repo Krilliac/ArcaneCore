@@ -158,4 +158,60 @@ public sealed class PlayerbotCraftingAnomalyTests
             return true;
         }));
     }
+
+    [Fact]
+    public async Task CraftFailed_Silent_WhenSpellOnCooldown_OrInStealthWithStanceRestriction_OrMissingEquippedTool()
+    {
+        SpellInfo stealthBlockedRecipe = new()
+        {
+            Id = Recipe,
+            Name = "Stealth-Blocked Elixir Recipe",
+            StancesNot = 1u << ((int)ShapeshiftForm.Stealth - 1),
+            RecoveryTime = 5_000,
+            Reagents = [new SpellReagent(Reagent, 1)],
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = Product, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+        };
+
+        await RunAsync(stealthBlockedRecipe, (host, session, crafting, player) => host.OnWorldAsync(() =>
+        {
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            SpellSystem spellSystem = host.WorldServices.GetRequiredService<SpellFeature>().System;
+
+            // 1. When the bot is in Stealth and the recipe forbids Stealth via StancesNot, EnsureReadyForCraftCast clears the form
+            // (using real SpellShapeshiftForm flags so GetErrorAtShapeshiftedCast detects the restriction) and crafts cleanly.
+            player.SetByte(UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Stealth);
+            Assert.True(Step(session, crafting, player));
+            Assert.Equal(0, player.GetByte(UpdateFields.UnitFieldBytes1, 2));
+            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+
+            // 2. While the recipe's 5s cooldown is active after the first craft, TryCraft skips it without casting or reporting craft-failed.
+            Assert.False(spellSystem.IsSpellReady(player, stealthBlockedRecipe));
+            Assert.False(Step(session, crafting, player));
+            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+            return true;
+        }));
+
+        SpellInfo equippedWeaponRecipe = new()
+        {
+            Id = Recipe,
+            Name = "Fishing Pole Recipe",
+            EquippedItemClass = 2,
+            EquippedItemSubClassMask = 1 << 20,
+            Reagents = [new SpellReagent(Reagent, 1)],
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = Product, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+        };
+
+        await RunAsync(equippedWeaponRecipe, (host, session, crafting, player) => host.OnWorldAsync(() =>
+        {
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            Assert.False(Step(session, crafting, player));
+            Assert.Equal(3u, player.Inventory.GetItemCount(Reagent));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+            return true;
+        }));
+    }
 }

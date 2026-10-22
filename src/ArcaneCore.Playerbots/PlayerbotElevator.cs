@@ -629,9 +629,22 @@ internal static class PlayerbotElevator
 
         // A lift that failed lately (its own backoff) is not ridden again yet; another lift and the mesh walk above are never held back.
         if (IsHeldOff(session, player, choice.Lift)) return false;
+        if (map.Collision.MeshPoints is not null && !HasReachableLanding(player, map, choice.Lift, choice.From, bot, options))
+            return false;
         ElevatorTrip begun = Begin(session, player, choice.Lift, choice.From, goal);
         begun.Options = options;
         return true;
+    }
+
+    private static bool HasReachableLanding(Player player, Map map, ElevatorLift lift, ElevatorLevel from, Vector3 bot, PlayerbotOptions options)
+    {
+        foreach (ElevatorCar car in lift.Cars)
+        {
+            if (LandingBesideReachable(player, map, car.At(from), bot, options) is not null)
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsHeldOff(WorldSession session, Player player, ElevatorLift lift)
@@ -747,9 +760,11 @@ internal static class PlayerbotElevator
         }
         if (map.MapId != trip.Lift.MapId) return;
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
+        if (trip.PendingStep is not null) return; // completed: the step-off is sent, the next Drive reports it (no second step-off)
+        if (trip.Stage is ElevatorStage.ToStop or ElevatorStage.Waiting)
+            GuardPlatformShaft(session, player, map, trip);
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
-        if (trip.PendingStep is not null) return; // completed: the step-off is sent, the next Drive reports it (no second step-off)
 
         switch (trip.Stage)
         {
@@ -1695,19 +1710,10 @@ internal static class PlayerbotElevator
         Vector3 bot = new(player.X, player.Y, player.Z);
         ElevatorCar car = trip.Car ?? ClosestCar(trip.Lift, trip.From, bot);
         Vector3 stop = car.At(trip.From);
-        GameObjectMapSystem? system = map.FindUpdater<GameObjectMapSystem>();
-
-        bool landingCarStanding = false;
-        if (system is not null)
-        {
-            GameObject? live = trip.CarObject is { IsInWorld: true } co && ReferenceEquals(co.Map, map) ? co : FindCar(system, car);
-            landingCarStanding = live is not null && StandingAt(system, live, stop.Z, 0) is not null;
-        }
-
         bool vault = ElevatorRegions.IsVaultLift(map.MapId, stop);
         float guardRadius = vault ? VaultDoorOuterYards : CarHalfYards;
 
-        if (!landingCarStanding && trip.Landing != default)
+        if (trip.Landing != default)
         {
             float landingFlat = Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(stop));
             if (landingFlat < guardRadius)
@@ -1721,11 +1727,6 @@ internal static class PlayerbotElevator
 
         ElevatorCar nearestShaftCar = ClosestCar(trip.Lift, trip.From, bot);
         Vector3 nearestStop = nearestShaftCar.At(trip.From);
-        if (system is not null && FindCar(system, nearestShaftCar) is { } nearestLive && StandingAt(system, nearestLive, nearestStop.Z, 0) is not null)
-        {
-            return false;
-        }
-
         bool nearestVault = ElevatorRegions.IsVaultLift(map.MapId, nearestStop);
         float nearestGuardRadius = nearestVault ? VaultDoorOuterYards : CarHalfYards;
         float botFlat = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(nearestStop));
@@ -1818,6 +1819,13 @@ internal static class PlayerbotElevator
         // A plan refused for want of a tile still being read is no verdict (a query per PlanRetryMs, TileWait.MaxMs, then it is one);
         // MaxRefusedPlans refusals in a row end the walk, a route resets the count.
         PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, options, ref trip.Tiles, now, out PlayerbotRoute? next);
+        if (planned == PlanOutcome.Route && next is not null && player.Map is { } walkMap && walkMap.Collision.MeshPoints is not null
+            && !IsRouteReachableToLanding(next, target, options))
+        {
+            planned = PlanOutcome.Refused;
+            next = null;
+        }
+
         if (planned != PlanOutcome.Route || next is null)
         {
             trip.NextPlanMs = unchecked(now + PlanRetryMs);
@@ -2082,7 +2090,9 @@ internal static class PlayerbotElevator
             float speed = MathF.Max(1f, options.MoveSpeed);
             float walkDist = Vector2.Distance(ElevatorNetwork.Flat(trip.StartPosition), trip.Lift.Centre);
             uint walkMs = (uint)(walkDist / speed * 1000f);
-            uint expectedMaxMs = (3 * cycleMs) + walkMs + 30_000u;
+            uint effectiveCycleMs = Math.Max(cycleMs, 30_000u);
+            uint walkBudgetMs = walkMs * 2;
+            uint expectedMaxMs = (3 * effectiveCycleMs) + walkBudgetMs + 45_000u;
             uint durationMs = unchecked(now - trip.BeganMs);
             if (durationMs > expectedMaxMs)
             {
@@ -2216,33 +2226,39 @@ internal static class PlayerbotElevator
         }
     }
 
+    private static bool IsRouteReachableToLanding(PlayerbotRoute? route, Vector3 candidate, PlayerbotOptions options)
+    {
+        if (route is null || route.Points.Count == 0) return false;
+        if (!route.MeshEndedShort) return true;
+        if (Vector2.Distance(ElevatorNetwork.Flat(route.Points[^1]), ElevatorNetwork.Flat(candidate)) <= 10f
+            && MathF.Abs(route.Points[^1].Z - candidate.Z) <= LandingFloorYards + 2f)
+        {
+            return true;
+        }
+
+        return route.Points.Count >= options.MaxPathPoints || route.Distance >= 50f;
+    }
+
     internal static Vector3? LandingBesideReachable(Player player, Map map, Vector3 stop, Vector3 toward, PlayerbotOptions options)
     {
         if (LandingBeside(map, stop, toward) is not { } primary) return null;
         if (map.Collision.MeshPoints is null) return primary;
-        Vector3? shortFallback = null;
-        if (PlayerbotNavigation.TryPlanToward(player, primary, options, out PlayerbotRoute? primaryRoute))
+        if (PlayerbotNavigation.TryPlanToward(player, primary, options, out PlayerbotRoute? primaryRoute)
+            && IsRouteReachableToLanding(primaryRoute, primary, options))
         {
-            if (primaryRoute is { MeshEndedShort: false })
-                return primary;
-            shortFallback = primary;
+            return primary;
         }
 
         if (ElevatorRegions.IsVaultLift(map.MapId, stop))
         {
-            return FindReachableOnRings(player, map, stop, toward, options, VaultLandingRadii, out Vector3? vaultShort)
-                ?? shortFallback
-                ?? vaultShort;
+            return FindReachableOnRings(player, map, stop, toward, options, VaultLandingRadii);
         }
 
-        return FindReachableOnRings(player, map, stop, toward, options, LandingRadii, out Vector3? ringShort)
-            ?? shortFallback
-            ?? ringShort;
+        return FindReachableOnRings(player, map, stop, toward, options, LandingRadii);
 
         static Vector3? FindReachableOnRings(Player player, Map map, Vector3 stop, Vector3 toward, PlayerbotOptions options,
-            ReadOnlySpan<float> radii, out Vector3? fallbackShort)
+            ReadOnlySpan<float> radii)
         {
-            fallbackShort = null;
             foreach (float radius in radii)
             {
                 var candidates = new List<(Vector3 Point, bool Fragment, float Distance)>();
@@ -2263,11 +2279,10 @@ internal static class PlayerbotElevator
                 candidates.Sort((a, b) => a.Fragment != b.Fragment ? a.Fragment.CompareTo(b.Fragment) : a.Distance.CompareTo(b.Distance));
                 foreach ((Vector3 candidate, _, _) in candidates)
                 {
-                    if (PlayerbotNavigation.TryPlanToward(player, candidate, options, out PlayerbotRoute? route))
+                    if (PlayerbotNavigation.TryPlanToward(player, candidate, options, out PlayerbotRoute? route)
+                        && IsRouteReachableToLanding(route, candidate, options))
                     {
-                        if (route is { MeshEndedShort: false })
-                            return candidate;
-                        fallbackShort ??= candidate;
+                        return candidate;
                     }
                 }
             }
