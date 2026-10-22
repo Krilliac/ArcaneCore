@@ -327,7 +327,7 @@ internal sealed class ElevatorNetwork
             if (lift.MapId != mapId || RegionsOf(lift) is not { } regions) continue;
             if (LevelOf(lift, regions, survey, bot) is not { } from || LevelOf(lift, regions, survey, goal) is not { } to || from == to) continue;
             float toLift = Vector2.Distance(Flat(bot), lift.Centre);
-            float via = regions.VaultLow && from == ElevatorLevel.High && toLift <= NearLiftYards
+            float via = regions.VaultLow && (from == ElevatorLevel.High ? toLift <= NearLiftYards : toLift <= PlayerbotElevator.ApproachYards)
                 ? toLift
                 : toLift + Vector2.Distance(lift.Centre, Flat(goal));
             if (via < bestVia)
@@ -2174,7 +2174,8 @@ internal static class PlayerbotElevator
                     float x = stop.X + (radius * MathF.Cos(angle)), y = stop.Y + (radius * MathF.Sin(angle));
                     if (!TryLandingFloor(map, stop, x, y, out float floor)) continue;
                     var candidate = new Vector3(x, y, floor);
-                    if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
+                    if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)
+                        || !PlayerbotMoveCheck.LineClear(map.Collision, stop, candidate)) continue;
                     float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
                     if (distance < bestAnyDistance)
                     {
@@ -2219,19 +2220,29 @@ internal static class PlayerbotElevator
     {
         if (LandingBeside(map, stop, toward) is not { } primary) return null;
         if (map.Collision.MeshPoints is null) return primary;
-        if (PlayerbotNavigation.TryPlanToward(player, primary, options, out _))
-            return primary;
+        Vector3? shortFallback = null;
+        if (PlayerbotNavigation.TryPlanToward(player, primary, options, out PlayerbotRoute? primaryRoute))
+        {
+            if (primaryRoute is { MeshEndedShort: false })
+                return primary;
+            shortFallback = primary;
+        }
 
         if (ElevatorRegions.IsVaultLift(map.MapId, stop))
         {
-            return FindReachableOnRings(player, map, stop, toward, options, VaultLandingRadii);
+            return FindReachableOnRings(player, map, stop, toward, options, VaultLandingRadii, out Vector3? vaultShort)
+                ?? shortFallback
+                ?? vaultShort;
         }
 
-        return FindReachableOnRings(player, map, stop, toward, options, LandingRadii);
+        return FindReachableOnRings(player, map, stop, toward, options, LandingRadii, out Vector3? ringShort)
+            ?? shortFallback
+            ?? ringShort;
 
         static Vector3? FindReachableOnRings(Player player, Map map, Vector3 stop, Vector3 toward, PlayerbotOptions options,
-            ReadOnlySpan<float> radii)
+            ReadOnlySpan<float> radii, out Vector3? fallbackShort)
         {
+            fallbackShort = null;
             foreach (float radius in radii)
             {
                 var candidates = new List<(Vector3 Point, bool Fragment, float Distance)>();
@@ -2241,7 +2252,8 @@ internal static class PlayerbotElevator
                     float x = stop.X + (radius * MathF.Cos(angle)), y = stop.Y + (radius * MathF.Sin(angle));
                     if (!TryLandingFloor(map, stop, x, y, out float floor)) continue;
                     var candidate = new Vector3(x, y, floor);
-                    if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
+                    if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)
+                        || !PlayerbotMoveCheck.LineClear(map.Collision, stop, candidate)) continue;
                     if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)) continue;
                     bool onFragment = PlayerbotNavigation.IsPointOnMeshFragment(map, candidate);
                     float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
@@ -2251,8 +2263,12 @@ internal static class PlayerbotElevator
                 candidates.Sort((a, b) => a.Fragment != b.Fragment ? a.Fragment.CompareTo(b.Fragment) : a.Distance.CompareTo(b.Distance));
                 foreach ((Vector3 candidate, _, _) in candidates)
                 {
-                    if (PlayerbotNavigation.TryPlanToward(player, candidate, options, out _))
-                        return candidate;
+                    if (PlayerbotNavigation.TryPlanToward(player, candidate, options, out PlayerbotRoute? route))
+                    {
+                        if (route is { MeshEndedShort: false })
+                            return candidate;
+                        fallbackShort ??= candidate;
+                    }
                 }
             }
 

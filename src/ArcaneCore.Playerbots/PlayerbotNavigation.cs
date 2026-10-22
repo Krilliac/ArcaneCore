@@ -236,7 +236,7 @@ internal struct TileWait
 
 internal static class PlayerbotNavigation
 {
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
+    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotStallWatch> StallWatches = [];
 
     /// <summary>
@@ -637,8 +637,8 @@ internal static class PlayerbotNavigation
         // graph's, so the answer costs no path search.
         return fromComponent != toComponent && !IsFragment(graph, from)
             && !(graph.ComponentPolygons(to) > FragmentPolygons && (long)graph.ComponentPolygons(from) * 16 < graph.ComponentPolygons(to))
-            && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f)
-            && map.Collision.IsOutdoors(here.X, here.Y, here.Z + 1f);
+            && IsOutdoorsOnSurface(map, goal)
+            && IsOutdoorsOnSurface(map, here);
     }
 
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>
@@ -885,7 +885,7 @@ internal static class PlayerbotNavigation
         }
 
         if (partial && from is null && !noFallbacks && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
-            && !map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f)
+            && IsIndoorsOrInWmo(map, destination)
             && Vector2.Distance(Flat(path.End), Flat(destination)) <= ClimbReachYards
             && MathF.Abs(path.End.Z - destination.Z) > ProjectedEndYards)
         {
@@ -1352,13 +1352,39 @@ internal static class PlayerbotNavigation
     /// nearly every place is indoors, so the indoor test would not tell stairs from slopes, and no stall there is known to need it.
     /// </para>
     /// </summary>
+    internal static bool IsOutdoorsOnSurface(Map map, Vector3 point)
+    {
+        if (!map.Collision.IsOutdoors(point.X, point.Y, point.Z + 1f))
+        {
+            return false;
+        }
+
+        float terrain = map.Terrain.GetHeight(point.X, point.Y, point.Z);
+        if (PlayerbotMotion.ValidHeight(terrain) && point.Z < terrain - 8f)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    internal static bool IsIndoorsOrInWmo(Map map, Vector3 point)
+    {
+        if (!IsOutdoorsOnSurface(map, point))
+        {
+            return true;
+        }
+
+        return map.Collision.LineOfSight.TryGetAreaInfo(map.MapId, point.X, point.Y, point.Z + 1f, out _);
+    }
+
     private static bool TryClimbIndoors(Map map, Vector3 start, Vector3 destination, PlayerbotOptions options, PathResult? walk,
         out PlayerbotRoute? route)
     {
         route = null;
         if (map.Template is { IsDungeon: true } or { IsBattleground: true }) return false;
-        bool destIndoors = !map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f);
-        bool startIndoors = !map.Collision.IsOutdoors(start.X, start.Y, start.Z + 1f);
+        bool destIndoors = IsIndoorsOrInWmo(map, destination);
+        bool startIndoors = IsIndoorsOrInWmo(map, start);
         if (!destIndoors && !startIndoors) return false;
         PathResult reach = walk ?? Query(map, start, destination, options, partial: true, steep: false);
         if (!reach.HasPath || (reach.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0 || Reaches(reach) || EndsAt(reach, destination)

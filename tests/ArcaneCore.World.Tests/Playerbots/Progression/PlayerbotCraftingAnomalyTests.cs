@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
@@ -135,6 +136,24 @@ public sealed class PlayerbotCraftingAnomalyTests
         {
             using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
             Assert.True(Step(session, crafting, player));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+            return true;
+        }));
+    }
+
+    [Fact]
+    public async Task CraftFailed_Silent_WhenBotIsSittingOrInDisallowedShapeshiftForm()
+    {
+        await RunAsync(CraftSpell(), (host, session, crafting, player) => host.OnWorldAsync(() =>
+        {
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            player.StandState = StandState.Sit;
+            player.SetByte(UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Cat);
+
+            Assert.True(Step(session, crafting, player));
+            Assert.Equal(StandState.Stand, player.StandState);
+            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
             Assert.False(capture.Any(CraftFailed), capture.Describe());
             return true;
         }));

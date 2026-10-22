@@ -446,4 +446,30 @@ public sealed class PlayerbotCadenceTests
 
         public void Detached(Guid botId) { }
     }
+
+    [Fact]
+    public async Task SettleAfterThink_WhenThinkKeepsActiveRouteWithoutCallingFollow_RenewsMotionLeaseSoPumpDoesNotExpireMidroute()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                StartWalk(host, session, 1000, 4);
+                Assert.Equal(4000u, PlayerbotMotion.LeaseMsOf(player));
+
+                Assert.True(Walking(session, 3000));
+                uint renewals = PlayerbotMotion.RenewalsOf(player);
+                PlayerbotMotion.NoteThinkGap(player, 3000);
+                Assert.False(PlayerbotMotion.SettleAfterThink(session, player, gaveUp: false, renewals, 3000));
+
+                // Another 3000 ms elapses (6000 ms since StartWalk, past the initial 4000 ms lease, but only 3000 ms since the think that kept the route).
+                Assert.True(Walking(session, 3000), "motion lease expired midroute even though a think ran and kept the route 3000 ms ago");
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
 }
