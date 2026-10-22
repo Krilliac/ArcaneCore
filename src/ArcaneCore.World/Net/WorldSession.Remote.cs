@@ -94,7 +94,7 @@ public sealed partial class WorldSession
         }
 
         IBanStore? bans = Services.GetService<IBanStore>();
-        if (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false))
+        if (bans is not null && await IsBannedAsync(bans, stored.Id, cancellationToken).ConfigureAwait(false))
         {
             _logger.LogInformation("[{Endpoint}] refused gateway login for banned account or address", RemoteEndpoint);
             return AuthResponseCode.Banned;
@@ -113,7 +113,7 @@ public sealed partial class WorldSession
 
         Account? recheck = await accounts.FindByUsernameAsync(accountName, cancellationToken).ConfigureAwait(false);
         if ((recheck is not null && recheck.Status != AccountStatus.Active)
-            || (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false)))
+            || (bans is not null && await IsBannedAsync(bans, stored.Id, cancellationToken).ConfigureAwait(false)))
         {
             _logger.LogInformation("[{Endpoint}] '{Account}' was banned while authenticating through the gateway; refusing", RemoteEndpoint, accountName);
             return AuthResponseCode.Banned;

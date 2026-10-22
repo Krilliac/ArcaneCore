@@ -115,7 +115,7 @@ public sealed partial class WorldSession
             _managed = true, AccountId = owner.Id, AccountName = owner.Username, Security = AccountSecurity.Player,
         };
         IBanStore? bans = services.GetService<IBanStore>();
-        if (bans is not null && await session.IsBannedAsync(bans, owner.Id).ConfigureAwait(false))
+        if (bans is not null && await session.IsBannedAsync(bans, owner.Id, cancellationToken).ConfigureAwait(false))
             throw new InvalidOperationException("managed-owner-banned");
         session.Settings = await services.GetRequiredService<IAccountDataStore>().GetAsync(owner.Id).ConfigureAwait(false);
         session._state = SessionState.CharacterSelect;
