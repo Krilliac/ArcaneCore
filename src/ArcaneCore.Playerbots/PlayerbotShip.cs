@@ -231,9 +231,22 @@ internal static class PlayerbotShip
         if (!PlayerbotShipNetwork.Admits(route.Access, alliance))
             return Refuse(out why, $"ship: the {route.Access} ship {route.Entry} does not take a {(alliance ? "Alliance" : "Horde")} bot");
         if (!player.IsAlive || !player.IsInWorld || player.Map is null) return Refuse(out why, "ship: the bot is not alive in the world");
-        if (player.Transport is not null) return Refuse(out why, "ship: the bot is aboard another transport");
         TravelPlace from = fromA ? route.PortA : route.PortB, to = fromA ? route.PortB : route.PortA;
-        if (player.MapId != from.MapId) return Refuse(out why, $"ship: the bot is on map {player.MapId}, the port on map {from.MapId}");
+        if (player.Transport is { } activeTransport && activeTransport.Entry != route.Entry)
+        {
+            if (player.MapId == from.MapId && PlayerbotNavigation.OnWalkableMesh(player.Map, Position(player)))
+            {
+                Vector3 dockFloor = StepOffPoint(player.Map, Position(player));
+                PlayerbotMotion.SendStepOff(session, player, dockFloor, player.Orientation);
+            }
+
+            if (player.Transport is not null)
+                return Refuse(out why, "ship: the bot is aboard another transport");
+        }
+
+        bool alreadyAboardTargetShip = player.Transport is { } aboardTarget && aboardTarget.Entry == route.Entry;
+        if (!alreadyAboardTargetShip && player.MapId != from.MapId)
+            return Refuse(out why, $"ship: the bot is on map {player.MapId}, the port on map {from.MapId}");
         if (!PlayerbotMapPolicy.Allows(options.AllowedMaps, to.MapId, null, current: false))
             return Refuse(out why, $"ship: bots may not walk map {to.MapId}");
         uint now = session.World.NowMs;
@@ -241,7 +254,7 @@ internal static class PlayerbotShip
         if (memo.Failures > 0 && unchecked((int)(memo.UntilMs - now)) > 0)
             return Refuse(out why, string.Create(CultureInfo.InvariantCulture,
                 $"ship: the dock of ship {route.Entry} failed {memo.Failures} time(s); backed off for {unchecked(memo.UntilMs - now) / 1000} s"));
-        if (TransportSystem.Of(session.World)?.FindByEntry(route.Entry) is null)
+        if (TransportSystem.Of(session.World)?.FindByEntry(route.Entry) is not { } liveShip)
         {
             if (!memo.ShipMissingReported && CanReport(session, player))
             {
@@ -254,6 +267,13 @@ internal static class PlayerbotShip
         }
 
         var trip = new ShipTrip(route, fromA, now, options);
+        if (ReferenceEquals(player.Transport, liveShip))
+        {
+            trip.DockSpot = Position(player);
+            trip.Offset = DeckOffset(liveShip, trip.DockSpot);
+            Boarded(trip, now);
+        }
+
         Trips.AddOrUpdate(player, trip);
         PlayerbotMotion.Of(player).ShipTrip = trip;
         return true;

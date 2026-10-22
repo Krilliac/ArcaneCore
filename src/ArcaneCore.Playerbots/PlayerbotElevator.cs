@@ -1797,9 +1797,9 @@ internal static class PlayerbotElevator
             trip.BestMs = now;
         }
         else if (trip.Route is { Complete: false } activeRoute && activeRoute.Points.Count > 0
-            && Vector3.Distance(bot, activeRoute.Points[^1]) + ProgressYards <= trip.LegBest)
+            && activeRoute.RemainingDistanceFrom(bot) + ProgressYards <= trip.LegBest)
         {
-            trip.LegBest = Vector3.Distance(bot, activeRoute.Points[^1]);
+            trip.LegBest = activeRoute.RemainingDistanceFrom(bot);
             trip.BestMs = now;
         }
         else if (unchecked(now - trip.BestMs) > NoProgressMs)
@@ -1833,7 +1833,7 @@ internal static class PlayerbotElevator
         trip.RefusedPlans = 0;
         trip.HadRoute = true;
         trip.Route = next;
-        trip.LegBest = next.Points.Count > 0 ? Vector3.Distance(bot, next.Points[^1]) : float.PositiveInfinity;
+        trip.LegBest = next.Points.Count > 0 ? next.RemainingDistanceFrom(bot) : float.PositiveInfinity;
         return true;
     }
 
@@ -2155,11 +2155,17 @@ internal static class PlayerbotElevator
         static Vector3? FindOnRings(Map map, Vector3 stop, Vector3 toward, ReadOnlySpan<float> radii)
         {
             bool hasMesh = map.Collision.MeshPoints is not null;
+            Vector3? fallbackWalkableMesh = null;
+            Vector3? fallbackNonFragmentAny = null;
             Vector3? fallbackAny = null;
             foreach (float radius in radii)
             {
                 Vector3? bestMesh = null;
                 float bestMeshDistance = float.PositiveInfinity;
+                Vector3? bestWalkableMesh = null;
+                float bestWalkableMeshDistance = float.PositiveInfinity;
+                Vector3? bestNonFragmentAny = null;
+                float bestNonFragmentAnyDistance = float.PositiveInfinity;
                 Vector3? bestAny = null;
                 float bestAnyDistance = float.PositiveInfinity;
                 for (int i = 0; i < 16; i++)
@@ -2170,26 +2176,42 @@ internal static class PlayerbotElevator
                     var candidate = new Vector3(x, y, floor);
                     if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
                     float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
-                    bool onFragment = hasMesh && PlayerbotNavigation.IsPointOnMeshFragment(map, candidate);
-                    if (!onFragment && distance < bestAnyDistance)
+                    if (distance < bestAnyDistance)
                     {
                         bestAnyDistance = distance;
                         bestAny = candidate;
                     }
 
-                    if (hasMesh && !onFragment && distance < bestMeshDistance
-                        && PlayerbotNavigation.OnWalkableMesh(map, candidate))
+                    bool onFragment = hasMesh && PlayerbotNavigation.IsPointOnMeshFragment(map, candidate);
+                    if (!onFragment && distance < bestNonFragmentAnyDistance)
                     {
-                        bestMeshDistance = distance;
-                        bestMesh = candidate;
+                        bestNonFragmentAnyDistance = distance;
+                        bestNonFragmentAny = candidate;
+                    }
+
+                    if (hasMesh && PlayerbotNavigation.OnWalkableMesh(map, candidate))
+                    {
+                        if (distance < bestWalkableMeshDistance)
+                        {
+                            bestWalkableMeshDistance = distance;
+                            bestWalkableMesh = candidate;
+                        }
+
+                        if (!onFragment && distance < bestMeshDistance)
+                        {
+                            bestMeshDistance = distance;
+                            bestMesh = candidate;
+                        }
                     }
                 }
 
                 if (bestMesh is not null) return bestMesh;
-                fallbackAny ??= bestAny; // remember the nearest ring with a floor if no ring hits the walkable mesh
+                fallbackWalkableMesh ??= bestWalkableMesh;
+                fallbackNonFragmentAny ??= bestNonFragmentAny;
+                fallbackAny ??= bestAny;
             }
 
-            return fallbackAny;
+            return fallbackWalkableMesh ?? fallbackNonFragmentAny ?? fallbackAny;
         }
     }
 
@@ -2212,7 +2234,7 @@ internal static class PlayerbotElevator
         {
             foreach (float radius in radii)
             {
-                var candidates = new List<(Vector3 Point, float Distance)>();
+                var candidates = new List<(Vector3 Point, bool Fragment, float Distance)>();
                 for (int i = 0; i < 16; i++)
                 {
                     float angle = i * MathF.PI / 8f;
@@ -2220,14 +2242,14 @@ internal static class PlayerbotElevator
                     if (!TryLandingFloor(map, stop, x, y, out float floor)) continue;
                     var candidate = new Vector3(x, y, floor);
                     if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
-                    if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)
-                        || PlayerbotNavigation.IsPointOnMeshFragment(map, candidate)) continue;
+                    if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)) continue;
+                    bool onFragment = PlayerbotNavigation.IsPointOnMeshFragment(map, candidate);
                     float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
-                    candidates.Add((candidate, distance));
+                    candidates.Add((candidate, onFragment, distance));
                 }
 
-                candidates.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-                foreach ((Vector3 candidate, _) in candidates)
+                candidates.Sort((a, b) => a.Fragment != b.Fragment ? a.Fragment.CompareTo(b.Fragment) : a.Distance.CompareTo(b.Distance));
+                foreach ((Vector3 candidate, _, _) in candidates)
                 {
                     if (PlayerbotNavigation.TryPlanToward(player, candidate, options, out _))
                         return candidate;

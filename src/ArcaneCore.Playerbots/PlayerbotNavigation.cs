@@ -115,6 +115,16 @@ internal sealed class PlayerbotRoute
     internal int NextPoint { get; set; } = 1;
     internal bool Complete => NextPoint >= Points.Count;
 
+    internal float RemainingDistanceFrom(Vector3 position)
+    {
+        if (Complete || Points.Count == 0) return 0f;
+        int next = Math.Clamp(NextPoint, 0, Points.Count - 1);
+        float remaining = Vector3.Distance(position, Points[next]);
+        for (int i = next; i + 1 < Points.Count; i++)
+            remaining += Vector3.Distance(Points[i], Points[i + 1]);
+        return remaining;
+    }
+
     /// <summary>Whether the leg ending at point <paramref name="point"/> (1-based) came from the navigation mesh.</summary>
     internal bool LegNavigatedAt(int point) => _legs is null || _legs.Length == 0 ? Navigated : _legs[Math.Clamp(point, 1, _legs.Length) - 1];
 

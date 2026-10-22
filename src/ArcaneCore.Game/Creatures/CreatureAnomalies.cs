@@ -761,6 +761,11 @@ public sealed partial class CreatureMapSystem
         {
             if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
             {
+                if (TryRecoverClippedUnderTerrain(creature, validLocal))
+                {
+                    return;
+                }
+
                 CreatureAnomalies.ReportUnderMap(
                     creature,
                     validLocal,
@@ -780,6 +785,11 @@ public sealed partial class CreatureMapSystem
             && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
             && ConfirmUnderMap(creature))
         {
+            if (TryRecoverClippedUnderTerrain(creature, validUpper))
+            {
+                return;
+            }
+
             CreatureAnomalies.ReportUnderMap(
                 creature,
                 validUpper,
@@ -789,6 +799,38 @@ public sealed partial class CreatureMapSystem
         {
             creature.ClearUnderMapEpisode();
         }
+    }
+
+    private bool TryRecoverClippedUnderTerrain(Creature creature, float surface)
+    {
+        if (Map.Collision.MeshPoints is null)
+        {
+            return false;
+        }
+
+        float depth = surface - creature.Z;
+        if (depth <= 0f || Map.Collision.LineOfSight.GetModelHeight(Map.MapId, creature.X, creature.Y, surface, MathF.Max(1f, depth)) is not null)
+        {
+            return false;
+        }
+
+        float? lowerFloor = _height.GetHeight(Map.MapId, creature.X, creature.Y, creature.Z + 2.0f);
+        if (lowerFloor is { } validLower && float.IsFinite(validLower) && validLower > Maps.Terrain.TerrainTile.InvalidHeight
+            && MathF.Abs(validLower - surface) > 1.0f
+            && validLower <= creature.Z + 2.5f)
+        {
+            return false;
+        }
+
+        float standZ = surface + GroundHeight.StandOffset;
+        if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
+        {
+            creature.SetHome(creature.Home with { Z = standZ });
+        }
+
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
+        creature.ClearUnderMapEpisode();
+        return true;
     }
 
     private void CheckMovementStuck(Creature creature, uint diffMs)

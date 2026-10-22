@@ -679,4 +679,45 @@ public sealed class CreatureOutcomeAnomalyTests
         Assert.Equal(2, capture.Notices.Count);
         Assert.All(capture.Notices, n => Assert.Contains("has 0 points", n.Detail));
     }
+
+    [Fact]
+    public void AnOpenWorldSpawnClippedBelowTerrainWithMeshPointsAndNoLowerFloor_RecoversToSurfaceWithoutReportingUnderMap()
+    {
+        const uint entry = 949099;
+        var mesh = new SurfaceOnlyMesh(100f);
+        CreatureContent content = Content([Template(entry)], [Spawn(1, entry, WolfX, 0, 75f)]);
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        WorldCollision.Of(world).Install(lineOfSight: mesh, pathfinder: mesh);
+        var system = new CreatureMapSystem(map, content, height: new SurfaceOnlyHeight(100f), random: new Random(1), underMap: new FixedUnderMap(UnderMapVerdict.Under(25f)));
+        map.AddUpdater(system);
+        using AnomalyCapture capture = CaptureFor("creature/under-map", entry);
+        AddPlayer(world, 1, 20, 0);
+
+        for (int i = 0; i < 30; i++)
+            world.RunTick(100);
+
+        Creature wolf = Assert.Single(system.Creatures);
+        Assert.Empty(capture.Notices);
+        Assert.True(wolf.Z >= 100f, $"expected clipped open-world spawn to recover to surface >= 100, got {wolf.Z}");
+    }
+
+    private sealed class SurfaceOnlyHeight(float surfaceZ) : ICreatureHeightProvider
+    {
+        public float? GetHeight(uint mapId, float x, float y, float z) => z >= surfaceZ - 1f ? surfaceZ : null;
+        public float? GetTerrainHeight(uint mapId, float x, float y, float z) => z >= surfaceZ - 1f ? surfaceZ : null;
+    }
+
+    private sealed class SurfaceOnlyMesh(float surfaceZ) : ILineOfSight, IPathfinder, IMeshPointQuery
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => null;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ModelAreaInfo info) { info = default; return false; }
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null) => new(PathType.NoPath, []);
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point) { point = center; return false; }
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => MathF.Abs(start.Z - surfaceZ) <= 5f ? new MeshRaycastResult(true, false, 1f, end with { Z = surfaceZ }) : MeshRaycastResult.Unavailable(end);
+    }
 }

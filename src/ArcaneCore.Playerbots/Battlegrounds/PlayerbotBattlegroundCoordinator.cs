@@ -803,24 +803,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         Vector3 ownRoom = new(room.X, room.Y, room.Z);
         Vector3 enemyStand = enemy == Team.Alliance ? allianceStand : hordeStand;
         Vector3 ownStand = team == Team.Alliance ? allianceStand : hordeStand;
-        Vector3 middle = (ownStand + enemyStand) / 2f;
-        float probeZ = MathF.Max(ownStand.Z, enemyStand.Z) + 5f;
-        float terrain = map.Terrain.GetHeight(middle.X, middle.Y, middle.Z);
-        float ground = terrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(terrain)
-            ? map.Collision.GetHeight(middle.X, middle.Y, terrain + 2f, maxSearchDistance: 6f)
-            : map.Collision.GetHeight(middle.X, middle.Y, probeZ);
-        if (terrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(terrain)
-            && (ground <= Game.Maps.Terrain.TerrainTile.InvalidHeight || !float.IsFinite(ground) || ground > terrain + Game.Maps.Collision.GroundHeight.PropHeightYards))
-        {
-            ground = terrain;
-        }
-
-        if (ground > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(ground))
-        {
-            if (map.Collision.TryGetMeshFloor(middle.X, middle.Y, ground, 20f, 4f, out float meshZ) && float.IsFinite(meshZ) && meshZ < ground - 1.0f)
-                ground = meshZ;
-            middle.Z = ground;
-        }
+        Vector3 middle = ResolveWarsongMidfield(map, ownStand, enemyStand);
 
 
         var bots = new List<PlayerbotWsgMember>();
@@ -882,6 +865,56 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             EnemyStand = enemyStand,
             Midfield = middle,
         };
+    }
+
+    internal static Vector3 ResolveWarsongMidfield(Map map, Vector3 ownStand, Vector3 enemyStand)
+    {
+        Vector3 middle = (ownStand + enemyStand) / 2f;
+        float probeZ = MathF.Max(ownStand.Z, enemyStand.Z) + 5f;
+        float terrain = map.Terrain.GetHeight(middle.X, middle.Y, middle.Z);
+        float ground = terrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(terrain)
+            ? map.Collision.GetHeight(middle.X, middle.Y, terrain + 2f, maxSearchDistance: 6f)
+            : map.Collision.GetHeight(middle.X, middle.Y, probeZ);
+        if (terrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(terrain)
+            && (ground <= Game.Maps.Terrain.TerrainTile.InvalidHeight || !float.IsFinite(ground) || ground > terrain + Game.Maps.Collision.GroundHeight.PropHeightYards))
+        {
+            ground = terrain;
+        }
+
+        if (ground > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(ground))
+        {
+            if (map.Collision.TryGetMeshFloor(middle.X, middle.Y, ground, 20f, 4f, out float meshZ) && float.IsFinite(meshZ) && meshZ < ground - 1.0f)
+                ground = meshZ;
+            middle.Z = ground;
+        }
+
+        if (map.Collision.MeshPoints is not null && !PlayerbotNavigation.OnWalkableMesh(map, middle))
+        {
+            ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f];
+            foreach (float radius in radii)
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    float angle = i * MathF.PI / 4f;
+                    float x = middle.X + (radius * MathF.Cos(angle));
+                    float y = middle.Y + (radius * MathF.Sin(angle));
+                    float candZ = middle.Z;
+                    float candTerrain = map.Terrain.GetHeight(x, y, candZ);
+                    float candGround = candTerrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candTerrain)
+                        ? map.Collision.GetHeight(x, y, candTerrain + 2f, maxSearchDistance: 6f)
+                        : map.Collision.GetHeight(x, y, candZ + 6f, maxSearchDistance: 12f);
+                    if (candGround > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candGround))
+                        candZ = candGround;
+                    if (map.Collision.TryGetMeshFloor(x, y, candZ, 12f, 4f, out float candMeshZ) && float.IsFinite(candMeshZ))
+                        candZ = candMeshZ;
+                    var candidate = new Vector3(x, y, candZ);
+                    if (PlayerbotNavigation.OnWalkableMesh(map, candidate))
+                        return candidate;
+                }
+            }
+        }
+
+        return middle;
     }
 
     /// <summary>Where the two Warsong Gulch flag stands are spawned (cached per object content).</summary>
