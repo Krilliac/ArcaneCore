@@ -449,11 +449,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
             if (NotClosing(player, _routeSpawnGuid, elapsedMs, now))
             {
-                if (!hunting)
-                {
-                    uint activeQuest = returnQuestId != 0 ? returnQuestId : QuestId;
-                    if (activeQuest != 0) Suspensions?.SuspendQuest(activeQuest, now);
-                }
+                if (!hunting && returnQuestId == 0 && QuestId != 0)
+                    Suspensions?.SuspendQuest(QuestId, now);
                 ClearRoute();
                 Backoff(now);
                 LastPlanRefused = true;
@@ -682,7 +679,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // dead end afresh every think is no progress. One that does not come nearer for SpawnNotClosingMs is passed over.
             if (NotClosing(player, entry.Spawn.Guid, elapsedMs, now))
             {
-                if (!hunting && questId != 0) Suspensions?.SuspendQuest(questId, now);
+                if (!hunting && returnQuestId == 0 && questId != 0)
+                    Suspensions?.SuspendQuest(questId, now);
                 ClearRoute();
                 Backoff(now);
                 LastPlanRefused = true;
@@ -733,7 +731,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (entry.Spawn.Guid == spawnGuid) { spawn = entry; break; }
         if (spawn is null) return false;
         float distance = MathF.Sqrt(DistanceSquared(player, spawn.Spawn));
-        if (spawnGuid != _closingSpawn)
+        if (spawnGuid != _closingSpawn || unchecked(now - _closingClockedAt) > BackoffMs + 1_000)
         {
             (_closingSpawn, _closingBest, _closingMs, _closingClockedAt) = (spawnGuid, distance, 0, now);
             return false;
