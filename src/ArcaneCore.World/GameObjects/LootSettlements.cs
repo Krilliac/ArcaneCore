@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
@@ -11,7 +12,6 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>

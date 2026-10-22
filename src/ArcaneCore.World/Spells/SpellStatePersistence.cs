@@ -2,11 +2,11 @@ using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Spells;
 
 /// <summary>

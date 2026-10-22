@@ -3,6 +3,7 @@ using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Game.Characters;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters.Creation;
 using ArcaneCore.World.Names;
@@ -10,7 +11,6 @@ using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Characters.Rename;
 
 /// <summary>The decision on one CMSG_CHAR_RENAME.</summary>

@@ -2,13 +2,13 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Talents;
 
 /// <summary>

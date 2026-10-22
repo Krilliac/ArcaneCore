@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -10,7 +11,6 @@ using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Pets;
 
 public sealed class PersistentPetFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<PersistentPetFeature> logger)

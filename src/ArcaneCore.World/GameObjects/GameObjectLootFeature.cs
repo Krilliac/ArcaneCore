@@ -8,6 +8,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -27,7 +28,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>

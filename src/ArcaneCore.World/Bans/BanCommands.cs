@@ -1,6 +1,7 @@
 using System.Net;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
@@ -8,7 +9,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Bans;
 
 /// <summary>

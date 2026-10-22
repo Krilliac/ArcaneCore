@@ -1,9 +1,9 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Persistence;
 
 /// <summary>

@@ -2,12 +2,12 @@ using System.Threading.Channels;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Progression;
 
 /// <summary>
