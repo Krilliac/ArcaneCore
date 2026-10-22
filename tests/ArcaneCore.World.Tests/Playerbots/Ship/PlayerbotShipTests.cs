@@ -374,6 +374,48 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
             $"expected dry pier >= 10 yd from water keyframe, got {resolved}");
     }
 
+    [Fact]
+    public async Task TryBegin_WhenBotIsAlreadyAboardTheSameShip_StartsInRideStageInsteadOfRefusing()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        var options = new PlayerbotOptions();
+
+        (bool begun, string? why, ShipStage? stage) = await world.OnWorldAsync(() =>
+        {
+            ShipTransport ship = world.System.FindByEntry(boat.Entry)!;
+            ship.AddPassenger(world.Player);
+            bool ok = PlayerbotShip.TryBegin(world.Session, world.Player, boat, fromA: true, options, out string? w);
+            return (ok, w, PlayerbotShip.TripOf(world.Player)?.Stage);
+        });
+
+        Assert.True(begun, why);
+        Assert.Null(why);
+        Assert.Equal(ShipStage.Ride, stage);
+    }
+
+    [Fact]
+    public async Task TryBegin_WhenBotHasStaleOtherTransportAttachmentOnWalkableDock_StepsOffAndBeginsLeg()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        var options = new PlayerbotOptions();
+
+        (bool begun, string? why, bool stillAboardOther) = await world.OnWorldAsync(() =>
+        {
+            ShipTransport ferry = world.System.FindByEntry(TransportWorldContent.Ferry)!;
+            ferry.AddPassenger(world.Player);
+            bool ok = PlayerbotShip.TryBegin(world.Session, world.Player, boat, fromA: true, options, out string? w);
+            return (ok, w, world.Player.Transport is not null);
+        });
+
+        Assert.True(begun, why);
+        Assert.Null(why);
+        Assert.False(stillAboardOther);
+    }
+
     private sealed class WaterAtPortMesh(Vector3 port, float radiusFromPortMin) : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
     {
         public bool Enabled => true;

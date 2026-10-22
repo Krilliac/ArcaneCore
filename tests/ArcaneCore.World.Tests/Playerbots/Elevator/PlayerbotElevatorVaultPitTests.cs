@@ -149,4 +149,98 @@ public sealed class PlayerbotElevatorVaultPitTests
             return new ArcaneCore.Game.Maps.Collision.MeshRaycastResult(true, false, 1f, end with { Z = stop.Z });
         }
     }
+
+    [Fact]
+    public async Task LandingBeside_WhenAllRingsAreInSteepVestibuleFragment_FallsBackToWalkableMeshInsteadOfReturningNull()
+    {
+        using var fixture = new ArcaneCore.Game.Tests.Collision.NavMeshFixture();
+        (int X, int Y, ArcaneCore.Game.Tests.Collision.CellTile Tile)[] vestibule =
+        [
+            (10, 10, new ArcaneCore.Game.Tests.Collision.CellTile(0, 0, 0, 0, 8, 8, Size: 5)),
+        ];
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(fixture, vestibule, new FloorLineOfSight());
+        var stop = new Vector3(20f, 20f, 0f);
+        var toward = new Vector3(5f, 20f, 0f);
+        await world.PlaceAsync(stop);
+        _ = await world.Nav.RegionGraphTask(0, ArcaneCore.Game.Maps.Collision.PathMover.Player.IncludeFlags, ArcaneCore.Game.Maps.Collision.NavTerrain.SteepSlopes)!;
+
+        Vector3? chosen = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.IsPointOnMeshFragment(world.Player.Map!, new Vector3(14f, 20f, 0f)));
+            return PlayerbotElevator.LandingBeside(world.Player.Map!, stop, toward);
+        });
+
+        Assert.NotNull(chosen);
+        Assert.Equal(0f, chosen.Value.Z, 0.2f);
+    }
+
+    [Fact]
+    public async Task JourneyWalk_WhenDetourRouteMovesAwayFromTargetForOver60Seconds_StillCountsPolylineProgressAndDoesNotFail()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        var detourPathfinder = new DetourPathfinder();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: detourPathfinder,
+            pathfinder: detourPathfinder));
+        await world.PlaceAsync(new Vector3(0f, 0f, ElevatorTestWorld.BottomFloor));
+        var options = new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100 };
+        var walk = new JourneyWalk();
+        var target = new Vector3(100f, 100f, ElevatorTestWorld.BottomFloor);
+
+        JourneyWalk.Outcome lastOutcome = JourneyWalk.Outcome.Walking;
+        string? lastWhy = null;
+        for (int i = 0; i < 650; i++)
+        {
+            await world.Host.World.AdvanceClockAsync(100);
+            (lastOutcome, lastWhy) = await world.OnWorldAsync(() =>
+            {
+                world.Session.ManagedBudget = new ArcaneCore.World.Net.ManagedActionBudget(8);
+                uint now = world.Host.World.NowMs;
+                PlayerbotMotion.Pump(world.Session, world.Player, now);
+                JourneyWalk.Outcome o = walk.Step(world.Session, world.Player, options, target, 100, now, maxFare: 0, out string? w);
+                return (o, w);
+            });
+            if (lastOutcome == JourneyWalk.Outcome.Failed) break;
+        }
+
+        Assert.True(lastOutcome != JourneyWalk.Outcome.Failed, $"expected detour walk to stay active past 60s while advancing along route, got {lastOutcome}: {lastWhy}");
+    }
+
+    private sealed class AllFragmentVestibuleMesh(Vector3 stop) : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => stop.Z;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, start + new Vector3(0.5f, 0f, 0f)]);
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = stop.Z });
+    }
+
+    private sealed class DetourPathfinder : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => ElevatorTestWorld.BottomFloor;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            float z = ElevatorTestWorld.BottomFloor;
+            return new ArcaneCore.Game.Maps.Collision.PathResult(
+                ArcaneCore.Game.Maps.Collision.PathType.Normal,
+                [start with { Z = z }, new Vector3(-600f, 0f, z), new Vector3(-600f, 100f, z), end with { Z = z }]);
+        }
+    }
 }

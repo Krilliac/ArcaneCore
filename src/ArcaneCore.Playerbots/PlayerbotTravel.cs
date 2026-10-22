@@ -191,6 +191,7 @@ internal sealed class JourneyWalk
     private int _refused;
     private uint _nextPlanMs;
     private float _best = float.PositiveInfinity;
+    private float _legBest = float.PositiveInfinity;
     private uint _bestMs;
     private uint _startedMs;
     private bool _started;
@@ -224,6 +225,7 @@ internal sealed class JourneyWalk
         _tiles.Reset();
         _refused = 0;
         _best = float.PositiveInfinity;
+        _legBest = float.PositiveInfinity;
         _started = false;
     }
 
@@ -242,6 +244,7 @@ internal sealed class JourneyWalk
             _route = null;
             _bestMs = now;
             _best = float.PositiveInfinity;
+            _legBest = float.PositiveInfinity;
             return Outcome.Yield;
         }
 
@@ -254,10 +257,17 @@ internal sealed class JourneyWalk
             PlayerbotAreaTriggers.ClearTeleportRefusal(player);
         }
 
-        float left = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), target);
+        var bot = new Vector3(player.X, player.Y, player.Z);
+        float left = Vector3.Distance(bot, target);
         if (left + ProgressYards <= _best)
         {
             _best = left;
+            _bestMs = now;
+        }
+        else if (_route is { Complete: false } activeRoute && activeRoute.Points.Count > 0
+            && activeRoute.RemainingDistanceFrom(bot) + ProgressYards <= _legBest)
+        {
+            _legBest = activeRoute.RemainingDistanceFrom(bot);
             _bestMs = now;
         }
         else if (unchecked(now - _bestMs) > NoProgressMs)
@@ -304,6 +314,7 @@ internal sealed class JourneyWalk
         {
             _refused = 0;
             _route = walk;
+            _legBest = walk.Points.Count > 0 ? walk.RemainingDistanceFrom(bot) : float.PositiveInfinity;
             PlayerbotNavigation.TryAdvance(session, walk, options, Math.Max(1u, elapsedMs), now);
             return Outcome.Walking;
         }
