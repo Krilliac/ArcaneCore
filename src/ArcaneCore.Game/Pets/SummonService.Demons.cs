@@ -66,8 +66,7 @@ public sealed partial class SummonService
             return null;
         }
 
-        (float x, float y) = ClosePoint(caster, 0.0f, PetConstants.FollowDistance, caster.Orientation + PetConstants.FollowAngle);
-        float z = caster.Z;
+        (float x, float y, float z) = SafeClosePoint(caster, creatures, 0.0f, PetConstants.FollowDistance, caster.Orientation + PetConstants.FollowAngle);
         uint petNumber = NextPetNumber();
         Creature pet = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
         {

@@ -294,6 +294,13 @@ internal static class PlayerbotMotion
                     break;
                 }
             }
+
+            if (route.LegsNavigated(route.NextPoint, route.NextPoint) && !OnLeg(route, route.NextPoint, current))
+            {
+                route.NextPoint = route.Points.Count;
+                if (!keepMotion) Stop(session, player);
+                return false;
+            }
         }
         // The first stretch must be walkable before anything is announced.
         float probeStep = MathF.Max(speed * (HeartbeatIntervalMs / 1000f), 2f);

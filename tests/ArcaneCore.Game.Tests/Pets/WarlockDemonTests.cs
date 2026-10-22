@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
@@ -279,6 +280,35 @@ public sealed class WarlockDemonTests : IDisposable
         InstallDemons();
 
         Assert.Throws<InvalidOperationException>(InstallDemons);
+    }
+
+    [Fact]
+    public void SummonImp_WhenClosePointCrossesInteriorWall_SpawnsAtCasterInsteadOfThroughWall()
+    {
+        InstallDemons();
+        (Player warlock, _) = _spells.AddPlayer(1);
+        warlock.Level = 10;
+        warlock.Relocate(100f, 100f, -33.3f, 0f, 0);
+        WorldCollision.Of(_spells.World).Install(lineOfSight: new WallAtFollowPoint(101f));
+
+        Assert.Equal(SpellCastResult.CastOk, Cast(warlock, SummonImp));
+
+        Creature pet = Assert.Single(Pets());
+        Assert.Equal(warlock.X, pet.X, 2);
+        Assert.Equal(warlock.Y, pet.Y, 2);
+        Assert.Equal(warlock.Z, pet.Z, 2);
+    }
+
+    private sealed class WallAtFollowPoint(float wallY) : ArcaneCore.Game.Maps.Collision.ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true)
+            => !((from.Y <= wallY && to.Y > wallY) || (from.Y > wallY && to.Y <= wallY));
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance, out System.Numerics.Vector3 hit)
+        { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => -33.3f;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info)
+        { info = default; return false; }
     }
 
     private Creature SpawnDemon(Player warlock, uint entry)

@@ -192,8 +192,7 @@ public sealed partial class SummonService
             else if (radius > 0.0f)
             {
                 // not using bounding radius of caster here
-                (x, y) = ClosePoint(caster, 0.0f, radius, caster.Orientation);
-                z = creatures.GroundZ(x, y, caster.Z) ?? caster.Z;
+                (x, y, z) = SafeClosePoint(caster, creatures, 0.0f, radius, caster.Orientation);
             }
             else
             {
@@ -273,8 +272,7 @@ public sealed partial class SummonService
             float z = player.Z;
             if (hasDest)
             {
-                (x, y) = ClosePoint(player, creature.BoundingRadius, PetConstants.FollowDistance, player.Orientation + PetConstants.MiniPetSummonAngle);
-                z = creatures.GroundZ(x, y, player.Z) ?? player.Z;
+                (x, y, z) = SafeClosePoint(player, creatures, creature.BoundingRadius, PetConstants.FollowDistance, player.Orientation + PetConstants.MiniPetSummonAngle);
             }
 
             // SetFacingToObject(player)

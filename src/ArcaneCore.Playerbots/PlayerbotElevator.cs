@@ -2170,15 +2170,15 @@ internal static class PlayerbotElevator
                     var candidate = new Vector3(x, y, floor);
                     if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
                     float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
-                    if (distance < bestAnyDistance)
+                    bool onFragment = hasMesh && PlayerbotNavigation.IsPointOnMeshFragment(map, candidate);
+                    if (!onFragment && distance < bestAnyDistance)
                     {
                         bestAnyDistance = distance;
                         bestAny = candidate;
                     }
 
-                    if (hasMesh && distance < bestMeshDistance
-                        && PlayerbotNavigation.OnWalkableMesh(map, candidate)
-                        && !PlayerbotNavigation.IsPointOnMeshFragment(map, candidate))
+                    if (hasMesh && !onFragment && distance < bestMeshDistance
+                        && PlayerbotNavigation.OnWalkableMesh(map, candidate))
                     {
                         bestMeshDistance = distance;
                         bestMesh = candidate;
@@ -2220,7 +2220,8 @@ internal static class PlayerbotElevator
                     if (!TryLandingFloor(map, stop, x, y, out float floor)) continue;
                     var candidate = new Vector3(x, y, floor);
                     if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
-                    if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)) continue;
+                    if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)
+                        || PlayerbotNavigation.IsPointOnMeshFragment(map, candidate)) continue;
                     float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
                     candidates.Add((candidate, distance));
                 }
@@ -2239,11 +2240,13 @@ internal static class PlayerbotElevator
 
     private static bool TryLandingFloor(Map map, Vector3 stop, float x, float y, out float floor)
     {
+        bool vault = ElevatorRegions.IsVaultLift(map.MapId, stop);
+        float maxBelow = vault ? 4.5f : LandingFloorYards;
         floor = map.Collision.GetHeight(x, y, stop.Z + 3f);
-        if (float.IsFinite(floor) && floor > TerrainTile.InvalidHeight && MathF.Abs(floor - stop.Z) <= LandingFloorYards)
+        if (float.IsFinite(floor) && floor > TerrainTile.InvalidHeight && floor <= stop.Z + LandingFloorYards && floor >= stop.Z - maxBelow)
             return true;
-        return map.Collision.TryGetMeshFloor(x, y, stop.Z, LandingFloorYards, LandingFloorYards, out floor)
-            && float.IsFinite(floor) && MathF.Abs(floor - stop.Z) <= LandingFloorYards;
+        return map.Collision.TryGetMeshFloor(x, y, stop.Z, maxBelow, LandingFloorYards, out floor)
+            && float.IsFinite(floor) && floor <= stop.Z + LandingFloorYards && floor >= stop.Z - maxBelow;
     }
 
     private static Vector3? Position(GameObjectMapSystem system, GameObject car, uint aheadMs)

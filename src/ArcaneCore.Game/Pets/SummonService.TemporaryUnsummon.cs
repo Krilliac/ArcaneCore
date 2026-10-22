@@ -116,7 +116,7 @@ public sealed partial class SummonService
         }
 
         ReservePetNumber(remembered.PetNumber);
-        (float x, float y) = ClosePoint(owner, 0.0f, PetConstants.FollowDistance, owner.Orientation + PetConstants.FollowAngle);
+        (float x, float y, float z) = SafeClosePoint(owner, creatures, 0.0f, PetConstants.FollowDistance, owner.Orientation + PetConstants.FollowAngle);
         Creature pet = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
         {
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, remembered.SpellId, TotemSlots.None, 0);
@@ -134,7 +134,7 @@ public sealed partial class SummonService
                 creature.Summon.Charm.Name = remembered.Name;
             }
 
-            return new CreatureHome(x, y, owner.Z, Creature.NormalizeOrientation(-owner.Orientation));
+            return new CreatureHome(x, y, z, Creature.NormalizeOrientation(-owner.Orientation));
         }, remembered.PetNumber);
 
         pets.Options = _options;

@@ -490,17 +490,24 @@ internal static class PlayerbotMotionAnomalies
 
     internal static Vector3 ResolveIntermediateCorner(Map map, Vector3 from, Vector3 to, Vector3 end)
     {
-        float minZ = MathF.Min(from.Z, to.Z) - PlayerbotMotion.MeshFloorToleranceYards;
-        float maxZ = MathF.Max(from.Z, to.Z) + PlayerbotMotion.MeshFloorToleranceYards;
+        float low = MathF.Min(from.Z, to.Z);
+        float high = MathF.Max(from.Z, to.Z);
+        if (end.Z >= low - 1.0f && end.Z <= high + 1.0f)
+        {
+            return end;
+        }
+
+        float minZ = low - PlayerbotMotion.MeshFloorToleranceYards;
+        float maxZ = high + PlayerbotMotion.MeshFloorToleranceYards;
         float probeZ = Math.Clamp(end.Z, minZ, maxZ);
-        float floor = PlayerbotMotion.ResolveWalkFloor(map, end.X, end.Y, probeZ, PlayerbotMotion.MeshFloorProbeExtraYards, maxZ + 1.25f);
+        float floor = PlayerbotMotion.ResolveWalkFloor(map, end.X, end.Y, probeZ, 0f, high + 0.5f);
         if (ValidHeight(floor) && floor >= minZ && floor <= maxZ)
         {
             end.Z = floor + 0.05f;
         }
         else if (end.Z < minZ || end.Z > maxZ)
         {
-            end.Z = Math.Clamp(end.Z, MathF.Min(from.Z, to.Z), MathF.Max(from.Z, to.Z));
+            end.Z = Math.Clamp(end.Z, low, high);
         }
 
         return end;

@@ -62,6 +62,65 @@ public sealed class PlayerbotElevatorVaultPitTests
         Assert.True(chosen.Value.Y > stop.Y + 4f, $"expected reachable North-side candidate, got {chosen.Value}");
     }
 
+    [Fact]
+    public async Task LandingBeside_OnVaultLiftWithSlopingCorridorAndIsolatedFragment_SelectsSlopingCorridorInsteadOfFragment()
+    {
+        var stop = new Vector3(1595.0f, 189.0f, -40.76f);
+        var toward = new Vector3(1580.0f, 180.0f, -43.9f);
+        var mesh = new SlopingCorridorAndSouthFragmentMesh(stop);
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: mesh,
+            pathfinder: mesh));
+
+        Vector3? chosen = await world.OnWorldAsync(() =>
+        {
+            var ek = world.Host.World.GetMap(0);
+            return PlayerbotElevator.LandingBeside(ek, stop, toward);
+        });
+
+        Assert.NotNull(chosen);
+        // The south candidate (Y < stop.Y - 8f) is an isolated mesh fragment; the northwest sloping corridor (X < stop.X - 6f) is the real corridor.
+        Assert.True(chosen.Value.X < stop.X - 6f, $"expected non-fragment sloping corridor landing west of shaft, got {chosen.Value}");
+    }
+
+    private sealed class SlopingCorridorAndSouthFragmentMesh(Vector3 stop) : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance)
+        {
+            // South wall fragment is at -43.1f (2.34 yd below stop.Z); NW sloping corridor is at -43.9f (3.14 yd below stop.Z).
+            if (x < stop.X - 6f) return stop.Z - 3.14f;
+            if (y < stop.Y - 8f) return stop.Z - 2.34f;
+            return null;
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            // South candidate (Y < stop.Y - 8f) is an isolated 1-yard fragment that cannot reach 12-yard probe targets.
+            if (start.Y < stop.Y - 8f)
+                return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, start + new Vector3(0.5f, 0f, 0f)]);
+            return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            float z = start.X < stop.X - 6f ? stop.Z - 3.14f : stop.Z - 2.34f;
+            return new ArcaneCore.Game.Maps.Collision.MeshRaycastResult(true, false, 1f, end with { Z = z });
+        }
+    }
+
     private sealed class NorthSideOnlyMesh(Vector3 stop) : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
     {
         public bool Enabled => true;
