@@ -53,6 +53,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import deploy_log_lines  # noqa: E402
 import opsenv  # noqa: E402
 
 
@@ -112,6 +113,9 @@ def main() -> int:
     terrain_arg = str(opsenv.data_root() / "terrain-5875") if args.terrain is None else args.terrain
     dbc_dir = Path(args.dbc_dir) if args.dbc_dir else (opsenv.data_root() / "client-dbc-5875")
     dump_path = Path(args.dump) if args.dump else (opsenv.refs_root() / "classic-db" / "Full_DB" / "ClassicDB_1_12_1_z2815.sql.gz")
+
+    for item in args.set or []:
+        require(item.partition("=")[0] and "=" in item, f"--set expects Section:Key=value, got {item!r}")
 
     binr = art / "bin"
     world_dll = binr / "ArcaneCore.World/release/ArcaneCore.World.dll"
@@ -357,8 +361,6 @@ def main() -> int:
         changed["Ops:Watchdog:TickMonitor:ActionHangMs/Action"] = f"{tm_cfg['ActionHangMs']}/{tm_cfg['Action']}"
         for item in args.set or []:
             key, _, raw = item.partition("=")
-            if not key or not _:
-                sys.exit(f"--set expects Section:Key=value, got {item!r}")
             try:
                 value = json.loads(raw)
             except ValueError:
@@ -449,16 +451,12 @@ def main() -> int:
         flipped = [b for b in report["bots_stopped"] if b[0] not in pop and now_bots[tuple(b[:4])] != b[4]]
         require(not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}")
         text = log_text("world")
-        expected_lines = ["Terrain: reading .map files from", "Collision: vmaps from", "Collision: navmeshes from", "elevators and trams:",
-                          "Started managed playerbot", "loaded 44 maps, 1081 areas", "loaded 122 graveyards and 191 graveyard-zone links"]
-        if not args.no_transports:
-            expected_lines.append("Transports: 9 routes, 9 ships sailing")
-        if not args.no_optional_data:
-            expected_lines += ["Loaded 172 item sets", "Loaded 2012 random properties and 772 item_enchantment_template entries",
-                               "Loaded 1427 page texts", "Enchanting: 1460 enchantments",
-                               "appearance is checked against 3603 CharSections and 136 CharacterFacialHairStyles rows"]
-        report["world_log_checks"] = {k: (k in text) for k in expected_lines}
+        report["world_log_checks"] = deploy_log_lines.check_log(text, args.no_transports, args.no_optional_data, args.no_elevators)
         report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
+        missing_lines = [k for k, ok in report["world_log_checks"].items() if not ok]
+        if missing_lines:
+            save()
+            require(False, f"the World started but its log lacks expected lines {missing_lines}; not marked healthy, standard-processes.json not updated; see world.log")
         report.update(healthy=True, finished=datetime.datetime.now(datetime.timezone.utc).isoformat())
         save()
         meta_path = profile / "standard-processes.json"
@@ -481,7 +479,6 @@ def main() -> int:
             save()
     finally:
         deploy_lock.unlink(missing_ok=True)
-    missing_lines = [k for k, ok in report["world_log_checks"].items() if not ok]
     print(json.dumps(dict(healthy=True, world=world.pid, realm=realm.pid, characters=len(characters()),
                           bots=len(bots()), enabled_bots=enabled, missing_log_lines=missing_lines,
                           log_counts=report["world_log_counts"], config_changed=changed)))
