@@ -79,7 +79,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
     {
         if (Volatile.Read(ref _disposed) != 0) return Fallback("disposed", BotChatResult.Fail(BotChatOutcome.Unavailable));
         InProcessChatEngine? engine = await EnsureLoaded().WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (engine is null)
+        if (engine is null || Volatile.Read(ref _disposed) != 0)
         {
             Interlocked.Increment(ref _unloaded);
             return Fallback("unloaded", BotChatResult.Fail(BotChatOutcome.Rejected));
@@ -247,8 +247,14 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
     {
         lock (_gate)
         {
+            if (_load is null && Volatile.Read(ref _disposed) != 0) return Task.FromResult<InProcessChatEngine?>(null);
             return _load ??= Task.Run(Load);
         }
+    }
+
+    private bool IsDisposed()
+    {
+        lock (_gate) return Volatile.Read(ref _disposed) != 0;
     }
 
     private InProcessChatEngine? Load()
@@ -270,7 +276,10 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
                 "Bot chat in-process model {Path}: {Layers} layers, {Dim} wide, vocabulary {Vocab}, context {Context} tokens x {Slots} slot(s), {FileMb} MB mapped, {CacheMb} MB of cache and buffers, pre-tokenizer {Pre}{Exact}",
                 path, model.Config.Layers, model.Config.Dim, model.Config.Vocabulary, engine.ContextTokens, engine.Slots,
                 model.File.FileLength / (1024 * 1024), engine.AllocatedBytes / (1024 * 1024), model.Tokenizer.Pre, model.Tokenizer.PreExact ? string.Empty : " (unknown: the gpt2 split stands in)");
+            if (IsDisposed()) { engine.Dispose(); return null; } // disposed while loading: nobody else owns this engine
             LogServing(engine, options, WarmSharedPrefix(engine));
+            // Dispose sets _disposed before it waits on this load, so a result that lands after its 30 s timeout is caught here too.
+            if (IsDisposed()) { engine.Dispose(); return null; }
             return engine;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
