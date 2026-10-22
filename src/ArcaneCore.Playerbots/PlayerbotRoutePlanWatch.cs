@@ -32,8 +32,12 @@ internal static class PlayerbotRoutePlanWatch
     /// <summary>Maximum unproductive successful plans allowed from one spot toward one goal before suppression.</summary>
     internal const int MaxUnproductivePlans = 3;
 
-    /// <summary>Minimum elapsed time (ms) across unproductive plans before a replan loop is suppressed.</summary>
-    internal const uint MinLoopSpanMs = 15_000;
+    /// <summary>
+    /// Minimum elapsed time (ms) across unproductive plans before a replan loop is suppressed. It is longer than the destination walk's own
+    /// not-closing clock (<see cref="PlayerbotWorldDestinations.SpawnNotClosingMs"/>), so a quest or hunt trip that never closes on its spawn is
+    /// given up by that clock first, which also suspends the quest and passes the spawn over; this watch is the fallback for the other goals.
+    /// </summary>
+    internal const uint MinLoopSpanMs = PlayerbotWorldDestinations.SpawnNotClosingMs + 5_000;
 
     /// <summary>Maximum consecutive definitive refusals for one origin/goal pair before negative-cache suppression.</summary>
     internal const int MaxConsecutiveRefusals = 4;

@@ -297,6 +297,9 @@ public sealed class PlayerbotGrindCampTests
             {
                 var player = camp.Session.Player!;
                 PlayerbotMovementControl.Stop(camp.Session, player); // the walk the last think began would carry the bot off again
+                // The bot is put on the next spot by hand, not walked there: drop the route the last think planned (towards whichever of the
+                // equally near spots it chose), which the bot is no longer on.
+                camp.Destinations.Stop();
                 player.Relocate(camp.Origin.X - 12f * (i % 16), camp.Origin.Y - 12f * (i / 16), camp.Origin.Z, 0, camp.Host.World.NowMs);
                 return true;
             });
