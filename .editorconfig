@@ -36,3 +36,37 @@ dotnet_naming_symbols.private_fields.applicable_kinds = field
 dotnet_naming_symbols.private_fields.applicable_accessibilities = private
 dotnet_naming_style.underscore_prefix.capitalization = camel_case
 dotnet_naming_style.underscore_prefix.required_prefix = _
+
+# Naming: private static fields (docs/conventions.md). Rule order in this file does not matter: the
+# analyzer applies the most specific symbol group, so a group with more required modifiers wins over private_fields above.
+# Everything here is suggestion (or none) on purpose: TreatWarningsAsErrors turns anything stronger into a build break for
+# every file that does not comply yet. Raise a severity only after the tree is clean for that rule.
+# - private static readonly: PascalCase (the measured majority over s_camelCase).
+dotnet_naming_rule.private_static_readonly_pascal.severity = suggestion
+dotnet_naming_rule.private_static_readonly_pascal.symbols = private_static_readonly_fields
+dotnet_naming_rule.private_static_readonly_pascal.style = pascal_case
+dotnet_naming_symbols.private_static_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.private_static_readonly_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_static_readonly_fields.required_modifiers = static, readonly
+# - private const: PascalCase. A const is implicitly static and readonly, so it is named here explicitly rather than left to
+#   whichever static group the analyzer ranks first; both give PascalCase.
+dotnet_naming_rule.private_constants_pascal.severity = suggestion
+dotnet_naming_rule.private_constants_pascal.symbols = private_constant_fields
+dotnet_naming_rule.private_constants_pascal.style = pascal_case
+dotnet_naming_symbols.private_constant_fields.applicable_kinds = field
+dotnet_naming_symbols.private_constant_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_constant_fields.required_modifiers = const
+# - private static, not readonly: not checked. [ThreadStatic] fields use t_camelCase and other mutable statics s_camelCase,
+#   and an attribute cannot be selected by a naming rule, so no single style fits; without this group they would fall to
+#   private_fields above and be asked for _camelCase.
+dotnet_naming_rule.private_static_fields_unchecked.severity = none
+dotnet_naming_rule.private_static_fields_unchecked.symbols = private_static_fields
+dotnet_naming_rule.private_static_fields_unchecked.style = pascal_case
+dotnet_naming_symbols.private_static_fields.applicable_kinds = field
+dotnet_naming_symbols.private_static_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_static_fields.required_modifiers = static
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+# Braces on every if/else/for/foreach/while/using body (IDE0011). Suggestion only, matching csharp_prefer_braces above:
+# about 160 brace-less bodies remain (audit finding #28).
+dotnet_diagnostic.IDE0011.severity = suggestion

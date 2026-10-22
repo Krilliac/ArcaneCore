@@ -42,3 +42,6 @@ refs/
 
 # dotnet test --logger trx output
 TestResults/
+
+# Python bytecode from tools/ops scripts run by tests
+__pycache__/
