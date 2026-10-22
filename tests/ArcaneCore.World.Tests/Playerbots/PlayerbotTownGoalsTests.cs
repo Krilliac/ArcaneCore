@@ -955,6 +955,72 @@ public sealed class PlayerbotTownGoalsTests
         }
         finally { session.Kick(); await session.ManagedClosed; }
     }
+
+    /// <summary>
+    /// Regression for #778/broken-unrepaired: when a visible vendor's exact route is refused (<c>_visitRefused</c>),
+    /// <c>FindNpc</c> skips that refused vendor during its 10-second backoff so a bot with broken gear can still
+    /// travel to a reachable repair NPC instead of aborting its repair trip on every think.
+    /// </summary>
+    [Fact]
+    public async Task RefusedVisibleVendor_IsSkippedDuringBackoff_AndDoesNotBlockFarRepairTrip()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9211, durability: 20));
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1,
+        });
+        using IDisposable itemScope = items.Use();
+        FarRepairServices.Current.Value = new FarRepairFixture
+        {
+            IncludeNearbyVendor = true,
+            VendorItems = [new VendorItem { Entry = 9901, Item = 117, Slot = 0 }],
+        };
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton(RepairPrices()));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(
+                    () => session.Player!.VisibleObjects.Contains(ObjectGuid.WithEntry(HighGuid.Unit, 9901, 990101)),
+                    "nearby vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    float startX = player.X;
+
+                    WorldCollision.Of(host.World).Install(
+                        lineOfSight: new FlatFloor(),
+                        pathfinder: new BlockWestPathfinder(startX - 5f));
+
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9211);
+                    player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
+                    player.Money = 100;
+
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    goals.BeginThink();
+                    bool first = goals.Update(player, 500);
+                    goals.BeginThink();
+                    bool second = goals.Update(player, 500);
+                    Assert.True(first || second, "the refused visible vendor blocked the bot from starting its far repair trip");
+                    Assert.Equal(FarRepairFixture.Entry, goals.TargetEntry);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { FarRepairServices.Current.Value = null; }
+    }
+
+    private sealed class BlockWestPathfinder(float minX) : IPathfinder
+    {
+        public bool Enabled => true;
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => end.X < minX ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
+    }
 }
 
 internal sealed class TownVendorServices : IWorldTestServices
@@ -1030,14 +1096,21 @@ internal sealed class FarRepairFixture : ICreatureDataStore, INpcContentStore
     public const float X = -8819.95f;
     public static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 94501);
     public NpcFlags Flags { get; init; } = NpcFlags.Repair;
+    public bool IncludeNearbyVendor { get; init; }
     public IReadOnlyList<VendorItem> VendorItems { get; init; } = [];
 
     Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken)
         => Task.FromResult(VendorItems.Count == 0 ? NpcContent.Empty : NpcContent.Empty with { VendorItems = VendorItems });
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
-        [new CreatureTemplate { Entry = Entry, Name = "far armorer", Faction = 900011, NpcFlags = (uint)Flags, DisplayIds = [49] }],
-        [new CreatureSpawn { Guid = 94501, Entry = Entry, MapId = 0, X = X, Y = -132.49f, Z = 83.53f }], [], [], []));
+        IncludeNearbyVendor
+            ? [new CreatureTemplate { Entry = Entry, Name = "far armorer", Faction = 900011, NpcFlags = (uint)Flags, DisplayIds = [49] },
+               new CreatureTemplate { Entry = 9901, Name = "blocked vendor", Faction = 900011, NpcFlags = (uint)NpcFlags.Vendor, DisplayIds = [49] }]
+            : [new CreatureTemplate { Entry = Entry, Name = "far armorer", Faction = 900011, NpcFlags = (uint)Flags, DisplayIds = [49] }],
+        IncludeNearbyVendor
+            ? [new CreatureSpawn { Guid = 94501, Entry = Entry, MapId = 0, X = X, Y = -132.49f, Z = 83.53f },
+               new CreatureSpawn { Guid = 990101, Entry = 9901, MapId = 0, X = -8969.95f, Y = -132.49f, Z = 83.53f }]
+            : [new CreatureSpawn { Guid = 94501, Entry = Entry, MapId = 0, X = X, Y = -132.49f, Z = 83.53f }], [], [], []));
 }
 
 internal sealed class FarRepairServices : IWorldTestServices

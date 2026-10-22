@@ -1032,7 +1032,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
                 // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
                 _destinations.Update(player, 0, interval, completedReturn);
-                if (_quests.IsRefused(completedReturn))
+                if (_quests.IsRefused(completedReturn) || _suspensions.IsQuestSuspended(completedReturn, _session.World.NowMs))
                 {
                     _quests.ReturnQuest = 0;
                     QuestId = 0;
@@ -1180,7 +1180,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
-            QuestId = _quests.QuestId;
+            QuestId = 0;
             PlayerbotThinkProbe.Phase("town");
             if (_town.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
@@ -1772,10 +1772,18 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 break;
         }
 
+        if (_goal != PlayerbotGoalKind.Quest && QuestId != 0)
+        {
+            _suspensions.SuspendQuest(QuestId, now);
+            if (deadEndPin && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
+                _suspensions.MarkUnreachableQuest(QuestId, now);
+        }
+
         _target = null;
         AbandonRoute();
         _attacking = false;
         _lootOpened = false;
+        QuestId = 0;
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
@@ -1864,12 +1872,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (!island && !deadEndPin) return false;
         onIsland = island;
         uint now = _session.World.NowMs;
-        // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
-        // aside as blocked (PlayerbotHomeReturn.Refuse), and the bind point is the way out then, as from an unsafe landing.
+        var playerPos = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        // Home first, but only when the teleport home would be made and actually moves the bot beyond ProgressYards: a refused
+        // TryTeleport would set the walk of a bot inside its home aside as blocked (PlayerbotHomeReturn.Refuse), and a Home.Centre
+        // at the stall spot is a no-op that leaves the bot pinned; the bind point is the way out then, as from an unsafe landing.
         if (_home is { } home)
         {
             _homeReturn.Evaluate(player, home, now);
-            if (_homeReturn.TeleportRefusal(_session, player, home, _options, now) is null
+            bool homeEscapes = home.MapId != player.MapId
+                || System.Numerics.Vector3.Distance(playerPos, home.Centre) > PlayerbotStallWatch.ProgressYards;
+            if (homeEscapes
+                && _homeReturn.TeleportRefusal(_session, player, home, _options, now) is null
                 && _homeReturn.TryTeleport(_session, player, home, _options, PlayerbotHomeTeleportReason.Island, now))
             {
                 DropIntent();
@@ -1878,9 +1891,23 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
-        return TryTeleportToBindPoint(player,
-            deadEndPin && !island ? "stalled repeatedly at a dead-end pin" : "stalled on ground no route leaves",
-            urgent: false, safety: true);
+        bool bindEscapes = player.Home != default && (player.Home.MapId != player.MapId
+            || System.Numerics.Vector3.Distance(playerPos, new System.Numerics.Vector3(player.Home.X, player.Home.Y, player.Home.Z)) > PlayerbotStallWatch.ProgressYards);
+        if (bindEscapes && TryTeleportToBindPoint(player,
+                deadEndPin && !island ? "stalled repeatedly at a dead-end pin" : "stalled on ground no route leaves",
+                urgent: deadEndPin, safety: true))
+            return true;
+
+        if (_home is { } urgentHome && (urgentHome.MapId != player.MapId
+                || System.Numerics.Vector3.Distance(playerPos, urgentHome.Centre) > PlayerbotStallWatch.ProgressYards)
+            && _homeReturn.TryTeleport(_session, player, urgentHome, _options, PlayerbotHomeTeleportReason.Island, now, urgent: true))
+        {
+            DropIntent();
+            _goal = PlayerbotGoalKind.Home;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
@@ -2052,6 +2079,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _attacking = false;
         _lootOpened = false;
         TargetEntry = 0;
+        QuestId = 0;
     }
 
     private void EscapeWater(Player player, uint elapsedMs)
@@ -3077,6 +3105,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private void Explore(Player player, uint elapsedMs)
     {
         _goal = PlayerbotGoalKind.Explore;
+        QuestId = 0;
         if (EscapeConfinedExplore(player)) return; // the island check was this think's work
         if (_exploreCandidate is not null && _exploreHasPosition
             && (_exploreLastMap != player.MapId || System.Numerics.Vector3.DistanceSquared(

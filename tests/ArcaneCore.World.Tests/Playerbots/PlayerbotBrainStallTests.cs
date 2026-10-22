@@ -250,6 +250,93 @@ public sealed class PlayerbotBrainStallTests
         while (Stopwatch.GetTimestamp() < until) Thread.SpinWait(50);
     }
 
+    /// <summary>
+    /// Regression for #778/#779/#782: when a quest goal fails and the brain falls through to <see cref="PlayerbotGoalKind.Explore"/>,
+    /// <see cref="PlayerbotBrain.QuestId"/> is cleared instead of leaking a stale quest id into Explore; and if a non-Quest goal stalls
+    /// while holding a non-zero <see cref="PlayerbotBrain.QuestId"/>, <c>GiveUpStalledGoal</c> suspends that quest and clears <c>QuestId</c>.
+    /// </summary>
+    [Fact]
+    public async Task FailedQuestGoal_DoesNotLeakQuestIdIntoExplore_AndGiveUpSuspendsHeldQuestOnAnyGoal()
+    {
+        await using QuestWorld quest = await QuestWorld.StartAsync(new QuestInteractionFixture(), manualClock: true);
+        var pathfinder = new RefuseFarEastPathfinder();
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Bot.Player!;
+            var giver = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 25f, player.Y, player.Z, 0);
+            pathfinder.LimitX = player.X + 5f;
+            WorldCollision.Of(quest.Host.World).Install(lineOfSight: new FlatFloor(player.Z), pathfinder: pathfinder);
+            quest.Bot.Services.GetRequiredService<SpellFeature>().System.Store = new SpellStore([], [], []);
+            return true;
+        });
+        var brain = new PlayerbotBrain(quest.Bot, new PlayerbotOptions { Enabled = true, StallSeconds = 30, Risk = { Enabled = false } });
+        try
+        {
+            await quest.Host.OnWorldAsync(() =>
+            {
+                Player player = quest.Bot.Player!;
+                quest.Bot.ManagedBudget = new ManagedActionBudget(8);
+                brain.Update(500);
+                Assert.Equal(PlayerbotGoalKind.Explore, brain.Goal);
+                Assert.Equal(0u, brain.QuestId);
+
+                brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 0, QuestInteractionFixture.QuestId);
+                brain.GiveUpStalledGoal(player);
+                Assert.Equal(0u, brain.QuestId);
+                Assert.True(brain.Suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+                return true;
+            });
+        }
+        finally { brain.Stop(); }
+    }
+
+    /// <summary>
+    /// Regression for #778: when a dead-end pin triggers <c>EscapeIsland</c> and <c>Home.Centre</c> is within <see cref="PlayerbotStallWatch.ProgressYards"/>
+    /// of the stalled position, the brain skips the no-op home teleport and escapes to the bind point farther away.
+    /// </summary>
+    [Fact]
+    public async Task DeadEndPin_WhenHomeCentreIsAtStallSpot_SkipsNoOpHomeTeleport_AndEscapesToFarBindPoint()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IWorldFeature, ManualStallClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            float startX = await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                var pathfinder = new RefuseFarEastPathfinder { LimitX = player.X + 500f };
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(player.Z), pathfinder: pathfinder);
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X, player.Y, player.Z), 750f, "PinnedHome");
+                player.Home = new HomeBind(player.MapId, player.ZoneId, player.X - 200f, player.Y, player.Z);
+                return player.X;
+            });
+            for (int stall = 0; stall < PlayerbotStallWatch.PinStallsToEscalate; stall++)
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 922, 0);
+                    brain.GiveUpStalledGoal(player);
+                    return true;
+                });
+                await host.World.AdvanceClockAsync(1_000);
+            }
+            for (int tick = 0; tick < 40; tick++)
+            {
+                await host.OnWorldAsync(() => PlayerbotMovementControl.Update(session, session.Player!));
+                await host.World.AdvanceClockAsync(50);
+            }
+
+            float finalX = await host.OnWorldAsync(() => session.Player!.X);
+            Assert.Equal(startX - 200f, finalX, 1);
+            Assert.Equal(0u, brain.QuestId);
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
     private sealed class FlatFloor(float z) : ILineOfSight
     {
         public bool Enabled => true;
@@ -296,7 +383,7 @@ public sealed class PlayerbotBrainStallTests
             Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
         }
 
-        public static async Task<QuestWorld> StartAsync(QuestInteractionFixture fixture)
+        public static async Task<QuestWorld> StartAsync(QuestInteractionFixture fixture, bool manualClock = false)
         {
             string databasePath = Path.Combine(Path.GetTempPath(), "arcane-playerbot-stall-" + Guid.NewGuid().ToString("N") + ".db");
             IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -307,7 +394,14 @@ public sealed class PlayerbotBrainStallTests
                 await bootstrap.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
             QuestInteractionTestServices.Current.Value = fixture;
             WorldTestHost host;
-            try { host = WorldTestHost.Start(configureServices: services => services.AddCharacterDatabase(configuration)); }
+            try
+            {
+                host = WorldTestHost.Start(configureServices: services =>
+                {
+                    services.AddCharacterDatabase(configuration);
+                    if (manualClock) services.AddSingleton<IWorldFeature, ManualStallClock>();
+                });
+            }
             finally { QuestInteractionTestServices.Current.Value = null; }
             WorldSession bot = await PlayerbotMovementControlTests.EnterAsync(host);
             await host.WaitForWorldAsync(() => bot.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid), "questgiver visibility");
@@ -320,5 +414,10 @@ public sealed class PlayerbotBrainStallTests
             await Bot.ManagedClosed;
             await Host.DisposeAsync();
         }
+    }
+
+    private sealed class ManualStallClock : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
     }
 }

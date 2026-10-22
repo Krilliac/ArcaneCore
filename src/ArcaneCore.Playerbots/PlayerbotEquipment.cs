@@ -48,6 +48,7 @@ internal sealed class PlayerbotEquipment(WorldSession session)
 
     private uint _nextBrokenLookMs;
     private uint _brokenSinceMs;
+    private ulong _brokenItemGuid;
     private bool _brokenReported;
     private readonly (ulong Guid, uint AtMs)[] _equipLog = new (ulong, uint)[EquipLogSize];
     private int _equipLogCount;
@@ -332,9 +333,12 @@ internal sealed class PlayerbotEquipment(WorldSession session)
     private void LookForBrokenGear(Player player)
     {
         uint now = session.World.NowMs;
-        if (!player.IsInWorld || !player.IsAlive)
+        if (!player.IsInWorld || !player.IsAlive
+            || player.Map is not { InstanceId: 0 }
+            || player.Map.Template is { IsBattleground: true } or { IsDungeon: true })
         {
             _brokenSinceMs = 0;
+            _brokenItemGuid = 0;
             _brokenReported = false;
             return;
         }
@@ -349,13 +353,16 @@ internal sealed class PlayerbotEquipment(WorldSession session)
         if (broken is null)
         {
             _brokenSinceMs = 0;
+            _brokenItemGuid = 0;
             _brokenReported = false;
             return;
         }
 
-        if (_brokenSinceMs == 0)
+        if (_brokenSinceMs == 0 || broken.Guid.Value != _brokenItemGuid)
         {
+            _brokenItemGuid = broken.Guid.Value;
             _brokenSinceMs = Math.Max(1u, now);
+            _brokenReported = false;
             return;
         }
 
