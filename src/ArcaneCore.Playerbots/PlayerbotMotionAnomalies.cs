@@ -460,7 +460,7 @@ internal static class PlayerbotMotionAnomalies
     internal static bool CrossesStaticWall(Map map, PlayerbotRoute route, int fromNext, int nextPoint, Vector3 from, Vector3 to)
     {
         ILineOfSight los = map.Collision.LineOfSight;
-        if (!los.Enabled || !Finite(from) || !Finite(to) || !route.LegsNavigated(fromNext, nextPoint)) return false;
+        if (!los.Enabled || map.Collision.MeshPoints is null || !Finite(from) || !Finite(to) || !route.LegsNavigated(fromNext, nextPoint)) return false;
         int first = Math.Max(1, fromNext);
         int last = Math.Min(nextPoint, route.Points.Count);
         Vector3 previous = from;

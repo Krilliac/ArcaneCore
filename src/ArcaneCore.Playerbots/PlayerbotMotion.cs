@@ -881,7 +881,8 @@ internal static class PlayerbotMotion
                     {
                         best = directFloor;
                     }
-                    else if (route.MeshPoints is not null
+                    else if (map.Collision.MeshPoints is not null
+                        && route.MeshPoints is not null
                         && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
                     {
                         rejectReason = "NoGroundSupport";
@@ -898,7 +899,8 @@ internal static class PlayerbotMotion
                 return null;
             }
 
-            if (route.MeshPoints is not null
+            if (map.Collision.MeshPoints is not null
+                && route.MeshPoints is not null
                 && PlayerbotMotionAnomalies.CrossesStaticWall(map, route, fromPoint, toPoint, from, resolved))
             {
                 rejectReason = "LineBlocked";
