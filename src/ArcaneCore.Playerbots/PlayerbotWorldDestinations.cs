@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -419,7 +420,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (!_options.Enabled || !player.IsInWorld || player.Map is not { } map || elapsedMs == 0) return false;
         _planningDeferred = false;
         uint now = _session.World.NowMs;
-        if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) return false;
+        if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) { DiagLog.W($"in-backoff now={now} until={_backoffUntil}"); return false; }
+        DiagLog.W($"update now={now} pref={preferredCreatureEntry} elapsed={elapsedMs} route={(_route is not null)} visited={_visited.Count} entries={_entries.Count}");
         if (_backoffUntil != 0) _backoffUntil = 0;
 
         if (_transitHeld.Count != 0) ReleaseTransitHeld(player);
@@ -471,6 +473,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
             if (NotClosing(player, _routeSpawnGuid, elapsedMs, now))
             {
+                DiagLog.W($"notclosing-fired route hunting={hunting} ret={returnQuestId} QuestId={QuestId}");
                 if (!hunting && returnQuestId == 0 && QuestId != 0)
                     Suspensions?.SuspendQuest(QuestId, now);
                 else if (hunting && !_entries.Any(other => other.Entry == _routeTarget && !IsBlocked(other.Spawn.Guid, now) && !IsVisited(other.Spawn.Guid, now) && IsPresent(player, other.Spawn)))
@@ -541,7 +544,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (++scanned > MaxEntryScan
                 || PlayerbotThinkProbe.Active is { ElapsedMs: >= 25.0 }
                 || (rank > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 20.0))
+            {
+                DiagLog.W($"select-break rank={rank} scanned={scanned} ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} probe={(PlayerbotThinkProbe.Active is not null)}");
                 break;
+            }
             if (Suspended(entry.Entry)) continue;
             bool inHome = GiverInHome(entry.Spawn);
             if (ineligible.Contains((entry.Entry, inHome))) continue;
@@ -717,6 +723,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // dead end afresh every think is no progress. One that does not come nearer for SpawnNotClosingMs is passed over.
             if (NotClosing(player, entry.Spawn.Guid, elapsedMs, now))
             {
+                DiagLog.W($"notclosing-fired plan hunting={hunting} ret={returnQuestId} questId={questId}");
                 if (!hunting && returnQuestId == 0 && questId != 0)
                     Suspensions?.SuspendQuest(questId, now);
                 else if (hunting && !_entries.Any(other => other.Entry == entry.Entry && !IsBlocked(other.Spawn.Guid, now) && !IsVisited(other.Spawn.Guid, now) && IsPresent(player, other.Spawn)))
@@ -802,6 +809,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (_closingClockedAt == now) return false; // a second look in one think does not run the clock twice
         uint gapMs = unchecked(now - _closingClockedAt);
+        DiagLog.W($"notclosing now={now} gap={gapMs} elapsed={elapsedMs} closing={_closingMs} dist={distance} best={_closingBest}");
         _closingClockedAt = now;
         _closingMs += gapMs > elapsedMs && gapMs <= 15_000u ? gapMs : elapsedMs;
         if (_closingMs < SpawnNotClosingMs) return false;
@@ -850,6 +858,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             break;
         }
 
+        DiagLog.W($"arrival reached={reached?.Guid} takeable={(reached is null ? false : TakeableInSight(player, preferred))}");
         if (reached is null || TakeableInSight(player, preferred)) return;
         Vector3 center = new(reached.X, reached.Y, reached.Z);
         foreach (DestinationEntry entry in _entries)
@@ -1941,8 +1950,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint PreferredEntry, uint ReturnQuestId, uint QuestId, Vector3 Start, NavRegionGraph? RegionGraph,
         float MaxRouteYards, int MaxPathPoints);
 
-    private void Backoff(uint now)
+    private void Backoff(uint now, [CallerLineNumber] int line = 0)
     {
+        DiagLog.W($"backoff line={line} now={now} failed={_failedPlans}");
         _travelEntry = 0;
         _travelQuest = 0;
         _tripWatch.Clear();
@@ -2058,5 +2068,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _owner._rankScratch = _ranked;
             _owner._ineligibleScratch = Ineligible;
         }
+    }
+}
+
+internal static class DiagLog
+{
+    private static readonly bool On = Environment.GetEnvironmentVariable("ARCANE_DIAG") == "1";
+    private static readonly object Gate = new();
+    internal static void W(string text)
+    {
+        if (!On) return;
+        lock (Gate) File.AppendAllText("/tmp/arcane-diag.log", text + "\n");
     }
 }

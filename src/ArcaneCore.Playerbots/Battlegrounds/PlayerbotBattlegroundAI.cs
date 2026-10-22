@@ -106,6 +106,12 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// <summary>The enemy the bot fights (inspection and tests).</summary>
     internal Unit? Target => _pvp.Target;
 
+    /// <summary>
+    /// The enemy this think chose and engaged, kept even when the engagement was given up within the same think (the chase was refused) and the bot
+    /// went on to its objectives; null when the think engaged no enemy (inspection and tests).
+    /// </summary>
+    internal Unit? EngagedThisThink { get; private set; }
+
     /// <summary>A short word for the status line: what the bot does in the match now.</summary>
     internal string Activity { get; private set; } = "idle";
 
@@ -220,6 +226,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// </summary>
     internal void Play(Player player, Battleground match, Team team, PlayerbotBattlegroundRole role, uint elapsedMs, PlayerbotWsgOrder? order = null)
     {
+        EngagedThisThink = null;
         if (!player.IsInWorld)
         {
             PlayerbotMovementControl.Update(_session, player);
@@ -324,6 +331,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             EndRest(player);
             Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
+            EngagedThisThink = enemy;
             Fight(player, enemy, interval, mustPursue: MustPursue(match, team, enemy));
             if (_pvp.Target is not null)
             {
