@@ -601,7 +601,7 @@ public sealed class RemoteAdminServer : IHostedService
                 if (_start == _end)
                 {
                     int read = await stream.ReadAsync(_buffer, token).ConfigureAwait(false);
-                    if (read == 0) return _line.Length > 0 ? (Take(), false) : (null, false);
+                    if (read == 0) return _line.Length > 0 ? (ContentLength() > maxBytes ? (null, true) : (Take(), false)) : (null, false);
                     _start = 0;
                     _end = read;
                 }
@@ -609,7 +609,7 @@ public sealed class RemoteAdminServer : IHostedService
                 while (_start < _end)
                 {
                     byte b = _buffer[_start++];
-                    if (b == (byte)'\n') return (Take(), false);
+                    if (b == (byte)'\n') return ContentLength() > maxBytes ? (null, true) : (Take(), false);
                     if (b == 0xFF)
                     {
                         // Telnet IAC: skip the command byte and its option (good enough for the negotiation a telnet client sends).
@@ -619,14 +619,18 @@ public sealed class RemoteAdminServer : IHostedService
 
                     if (b == 0) continue;
                     _line.WriteByte(b);
-                    if (_line.Length > maxBytes) return (null, true);
+                    // One pending byte beyond the limit is allowed: it may be the carriage return of a CRLF line of exactly maxBytes.
+                    if (_line.Length > maxBytes + 1L) return (null, true);
                 }
             }
         }
 
+        /// <summary>The pending line's length without the single '\r' that precedes the '\n'.</summary>
+        private long ContentLength() => _line.Length > 0 && _line.GetBuffer()[_line.Length - 1] == (byte)'\r' ? _line.Length - 1 : _line.Length;
+
         private string Take()
         {
-            string text = Encoding.UTF8.GetString(_line.GetBuffer(), 0, (int)_line.Length).TrimEnd('\r');
+            string text = Encoding.UTF8.GetString(_line.GetBuffer(), 0, (int)ContentLength());
             _line.SetLength(0);
             return text;
         }
