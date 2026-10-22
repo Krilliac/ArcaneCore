@@ -41,9 +41,10 @@ accessibility modifiers, LF line endings and 4-space indent. Nullable is enabled
 
 The namespace follows the folder, with two documented exceptions.
 
-1. **Feature leaf folders may collapse into the feature namespace.** For example, `Spells/Auras`, `Spells/Effects`,
-   `Spells/Stances` and `Spells/Procs` are in `ArcaneCore.Game.Spells`. `Creatures/AI`, `Movement`, `Guards`, `Respawn`, `EventAi` and
-   `SmartAi` are in `ArcaneCore.Game.Creatures`. The Combat subfolders, `Maps/Parallel` and the Locomotion subfolders work the same way. Reasons:
+1. **Feature leaf folders may collapse into the feature namespace.** For example, `Spells/Auras`, `Spells/Stances` and
+   most of `Spells/Effects` are in `ArcaneCore.Game.Spells`. In `Spells/Procs`, only the five `SpellSystem` partials collapse.
+   `Creatures/AI`, `Movement`, `Guards`, `Respawn`, `EventAi` and
+   `SmartAi` are in `ArcaneCore.Game.Creatures`. `Maps/Parallel` and the Locomotion subfolders work the same way. Reasons:
    - `SpellSystem` is one `partial` class spread over about 89 files in several folders. Every partial must declare the same
      namespace, so those folders cannot each get their own.
    - Module, handler, EventAI and script discovery is ordered by type `FullName` (for example `DefaultMapUpdaters.cs`,
@@ -51,6 +52,10 @@ The namespace follows the folder, with two documented exceptions.
      changes registration and execution order.
    - Playerbots QA matches logger categories by string (`QaCategoryPrefix` and `CreatureCategory` in
      `src/ArcaneCore.Playerbots/Qa/PlayerbotQaLogTap.cs`). A namespace move there stops matching without failing anything.
+
+   Some folders already have their own namespace and must keep it: `ArcaneCore.Game.Spells.Procs` and
+   `ArcaneCore.Game.Spells.Procs.Talents` (the non-partial files in `Spells/Procs`), `ArcaneCore.Game.Spells.Effects`
+   (`ExtraAttackEffects.cs`) and `ArcaneCore.Game.Combat.Threat`. Do not "fix" them to match the collapsed folders.
 
    A **new** subfolder should get its own namespace unless it holds partials of a type that lives elsewhere.
 2. **`Console` folders use the namespace `ServerConsole`** (`src/ArcaneCore.Kernel/Ops/Console` declares
