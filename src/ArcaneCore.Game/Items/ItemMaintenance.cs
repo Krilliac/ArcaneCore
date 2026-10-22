@@ -124,9 +124,9 @@ public static class ItemMaintenance
         }
     }
 
-    /// <summary>Every stored item, the contents of a bag before the bag (a destroyed bag takes its contents with it).</summary>
     [ThreadStatic] private static List<Item>? t_timed;
 
+    /// <summary>Every stored item, the contents of a bag before the bag (a destroyed bag takes its contents with it).</summary>
     private static IEnumerable<Item> ContentsFirst(PlayerInventory inventory)
         => inventory.AllItems.OrderBy(item => item is Container ? 1 : 0);
 
@@ -149,106 +149,113 @@ public static class ItemMaintenance
         // used to do (an Item[] and an int[] per player per pass on live), in ContentsFirst's order (contents, then bags).
         List<Item> timed = t_timed ??= [];
         timed.Clear();
-        int bags = 0;
-        foreach (Item item in inventory.AllItems)
+        try
         {
-            if (item.Duration == 0)
-            {
-                continue;
-            }
-
-            if (item is Container)
-            {
-                bags++;
-            }
-            else
-            {
-                timed.Add(item);
-            }
-        }
-
-        if (bags > 0)
-        {
+            int bags = 0;
             foreach (Item item in inventory.AllItems)
             {
-                if (item.Duration != 0 && item is Container)
+                if (item.Duration == 0)
+                {
+                    continue;
+                }
+
+                if (item is Container)
+                {
+                    bags++;
+                }
+                else
                 {
                     timed.Add(item);
                 }
             }
-        }
 
-        if (state.Tracked.Count > 0)
-        {
+            if (bags > 0)
+            {
+                foreach (Item item in inventory.AllItems)
+                {
+                    if (item.Duration != 0 && item is Container)
+                    {
+                        timed.Add(item);
+                    }
+                }
+            }
+
+            if (state.Tracked.Count > 0)
+            {
+                if (timed.Count == 0)
+                {
+                    state.Tracked.Clear();
+                }
+                else
+                {
+                    List<Item>? gone = null;
+                    foreach (Item item in state.Tracked)
+                    {
+                        if (!timed.Contains(item))
+                        {
+                            (gone ??= []).Add(item);
+                        }
+                    }
+
+                    if (gone is not null)
+                    {
+                        foreach (Item item in gone)
+                        {
+                            state.Tracked.Remove(item);
+                        }
+                    }
+                }
+            }
+
             if (timed.Count == 0)
             {
-                state.Tracked.Clear();
+                if (state.LastTick == 0 || nowSeconds > state.LastTick)
+                {
+                    state.LastTick = nowSeconds;
+                }
+
+                return;
             }
-            else
+
+            foreach (Item item in timed)
             {
-                List<Item>? gone = null;
-                foreach (Item item in state.Tracked)
+                if (state.Tracked.Add(item))
                 {
-                    if (!timed.Contains(item))
-                    {
-                        (gone ??= []).Add(item);
-                    }
-                }
-
-                if (gone is not null)
-                {
-                    foreach (Item item in gone)
-                    {
-                        state.Tracked.Remove(item);
-                    }
+                    SendTimeUpdate(player, item);
                 }
             }
-        }
 
-        if (timed.Count == 0)
-        {
-            if (state.LastTick == 0 || nowSeconds > state.LastTick)
+            if (state.LastTick == 0)
             {
                 state.LastTick = nowSeconds;
+                return;
             }
 
-            return;
-        }
-
-        foreach (Item item in timed)
-        {
-            if (state.Tracked.Add(item))
+            if (nowSeconds <= state.LastTick)
             {
-                SendTimeUpdate(player, item);
+                return;
             }
-        }
 
-        if (state.LastTick == 0)
-        {
+            uint elapsed = (uint)Math.Min(nowSeconds - state.LastTick, uint.MaxValue);
             state.LastTick = nowSeconds;
-            return;
-        }
-
-        if (nowSeconds <= state.LastTick)
-        {
-            return;
-        }
-
-        uint elapsed = (uint)Math.Min(nowSeconds - state.LastTick, uint.MaxValue);
-        state.LastTick = nowSeconds;
-        // A copy: destroying an item can run code that ticks another player's maintenance on this thread and reuses t_timed.
-        Item[] ticking = timed.ToArray();
-        foreach (Item item in ticking)
-        {
-            if (item.Duration <= elapsed)
+            // A copy: destroying an item can run code that ticks another player's maintenance on this thread and reuses t_timed.
+            Item[] ticking = timed.ToArray();
+            foreach (Item item in ticking)
             {
-                state.Tracked.Remove(item);
-                DestroyIfStillHeld(inventory, item);
+                if (item.Duration <= elapsed)
+                {
+                    state.Tracked.Remove(item);
+                    DestroyIfStillHeld(inventory, item);
+                }
+                else
+                {
+                    item.Duration -= elapsed;
+                }
             }
-            else
-            {
-                item.Duration -= elapsed;
-            }
+        }
+        finally
+        {
+            timed.Clear();
         }
     }
 
