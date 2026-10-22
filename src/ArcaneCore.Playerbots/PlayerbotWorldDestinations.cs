@@ -991,8 +991,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return true;
     }
 
-    internal static bool IsFiniteDestination(CreatureSpawn spawn)
-        => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
+    internal static bool IsFiniteDestination(CreatureSpawn spawn) => spawn.IsFinite();
 
     /// <summary>How near its ender (yards, same map) the bot's bind point must be for a completed quest it cannot walk to to be reached by teleporting there.</summary>
     internal const float BindNearEnderYards = 250f;

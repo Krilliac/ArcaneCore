@@ -535,8 +535,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         {
             System.IO.Directory.CreateDirectory(_directory);
             QaSpellCoverageReport? coverage = SpellCoverage;
-            WriteAtomic(Path.Combine(_directory, "report.md"), PlayerbotQaReport.RenderMarkdown(findings, now, build, Redactor, coverage, StartedUtc));
-            WriteAtomic(Path.Combine(_directory, "report.json"), PlayerbotQaReport.RenderJson(findings, now, build, Redactor, coverage, StartedUtc));
+            QaFiles.WriteAtomic(Path.Combine(_directory, "report.md"), PlayerbotQaReport.RenderMarkdown(findings, now, build, Redactor, coverage, StartedUtc));
+            QaFiles.WriteAtomic(Path.Combine(_directory, "report.json"), PlayerbotQaReport.RenderJson(findings, now, build, Redactor, coverage, StartedUtc));
             _exportFailureLogged = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -547,13 +547,6 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
                 _log.LogError(ex, "Bot QA could not write its report to {Folder} ({Type}); it retries on the next pass", _directory, ex.GetType().Name);
             }
         }
-    }
-
-    private static void WriteAtomic(string path, string text)
-    {
-        string temp = path + ".tmp";
-        File.WriteAllText(temp, text);
-        File.Move(temp, path, overwrite: true);
     }
 
     /// <summary>The tick watchdog's hang seam over the QA sink (watchdog thread; never throws past the sink's own contract).</summary>

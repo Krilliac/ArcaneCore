@@ -4,6 +4,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Party;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
 
@@ -140,6 +141,4 @@ internal sealed class PlayerbotSocialEmotes
             Smile = 163, Wink = 363;
     }
 
-    private static float Distance(WorldObject a, WorldObject b)
-        => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 }

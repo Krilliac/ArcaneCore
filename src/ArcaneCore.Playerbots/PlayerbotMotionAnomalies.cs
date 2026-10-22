@@ -201,9 +201,6 @@ internal static class PlayerbotMotionAnomalies
         return age <= int.MaxValue ? age : 0;
     }
 
-    private static bool Finite(Vector3 value)
-        => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
-
     private static string Describe(Vector3 value)
         => string.Create(CultureInfo.InvariantCulture, $"{value.X:F1},{value.Y:F1},{value.Z:F1}");
 
@@ -393,7 +390,7 @@ internal static class PlayerbotMotionAnomalies
     /// <summary>One sampled ground check at <paramref name="at"/>, where a heartbeat just put the bot.</summary>
     internal static void CheckGround(Player player, Map map, MotionWatch watch, Vector3 at, uint now)
     {
-        if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !Finite(at)) return;
+        if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !at.IsFinite()) return;
         float floor = FloorUnder(map.Collision, at);
         GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
         if (verdict == GroundVerdict.Ok)
@@ -428,7 +425,7 @@ internal static class PlayerbotMotionAnomalies
         Vector3 from, Vector3 to, uint now)
     {
         ILineOfSight los = map.Collision.LineOfSight;
-        if (!los.Enabled || !Finite(from) || !Finite(to) || !route.LegsNavigated(fromNext, nextPoint)) return;
+        if (!los.Enabled || !from.IsFinite() || !to.IsFinite() || !route.LegsNavigated(fromNext, nextPoint)) return;
         int first = Math.Max(1, fromNext);
         int last = Math.Min(nextPoint, route.Points.Count);
         Vector3 previous = from;
@@ -436,7 +433,7 @@ internal static class PlayerbotMotionAnomalies
         for (int index = first; index <= last && tested < MaxCrossingSegments; index++)
         {
             Vector3 end = index < last ? ResolveIntermediateCorner(map, from, to, route.Points[index]) : to;
-            if (!Finite(end)) return;
+            if (!end.IsFinite()) return;
             if (Vector2.Distance(new Vector2(previous.X, previous.Y), new Vector2(end.X, end.Y)) >= MinSegmentYards)
             {
                 tested++;
@@ -463,7 +460,7 @@ internal static class PlayerbotMotionAnomalies
     internal static bool CrossesStaticWall(Map map, PlayerbotRoute route, int fromNext, int nextPoint, Vector3 from, Vector3 to)
     {
         ILineOfSight los = map.Collision.LineOfSight;
-        if (!los.Enabled || map.Collision.MeshPoints is null || !Finite(from) || !Finite(to) || !route.LegsNavigated(fromNext, nextPoint)) return false;
+        if (!los.Enabled || map.Collision.MeshPoints is null || !from.IsFinite() || !to.IsFinite() || !route.LegsNavigated(fromNext, nextPoint)) return false;
         int first = Math.Max(1, fromNext);
         int last = Math.Min(nextPoint, route.Points.Count);
         Vector3 previous = from;
@@ -471,7 +468,7 @@ internal static class PlayerbotMotionAnomalies
         for (int index = first; index <= last && tested < MaxCrossingSegments; index++)
         {
             Vector3 end = index < last ? ResolveIntermediateCorner(map, from, to, route.Points[index]) : to;
-            if (!Finite(end)) return false;
+            if (!end.IsFinite()) return false;
             if (Vector2.Distance(new Vector2(previous.X, previous.Y), new Vector2(end.X, end.Y)) >= MinSegmentYards)
             {
                 tested++;

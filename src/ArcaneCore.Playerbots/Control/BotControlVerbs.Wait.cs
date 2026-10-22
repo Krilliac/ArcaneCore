@@ -182,8 +182,8 @@ internal static partial class BotControlVerbs
                 string spec = Arg(1);
                 used = 2;
                 if (words.Length > 2 && TryFloat(words[2], out float ur)) { radius = ur; used = 3; }
-                condition = new(I($"near {spec} {radius}"), (v, m) => BotControlUnits.Resolve(call.World, v.Player!, spec, out _) is { } u && ReferenceEquals(u.Map, v.Player!.Map) && BotControlUnits.Distance(v.Player, u) <= radius,
-                    v => BotControlUnits.Resolve(call.World, v.Player!, spec, out _) is { } u ? I($"{BotControlUnits.Distance(v.Player!, u):F1} yd from {spec}") : spec + " is not in sight");
+                condition = new(I($"near {spec} {radius}"), (v, m) => BotControlUnits.Resolve(call.World, v.Player!, spec, out _) is { } u && ReferenceEquals(u.Map, v.Player!.Map) && PlayerbotGeometry.Distance(v.Player, u) <= radius,
+                    v => BotControlUnits.Resolve(call.World, v.Player!, spec, out _) is { } u ? I($"{PlayerbotGeometry.Distance(v.Player!, u):F1} yd from {spec}") : spec + " is not in sight");
                 return null;
             }
 

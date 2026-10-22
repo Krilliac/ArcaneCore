@@ -628,7 +628,7 @@ internal static class PlayerbotTaxi
     {
         if (content is null || session.Services.GetService<QuestNpcFeature>()?.FactionTemplates is not { } factions || player.Map is not { } map) return;
         Vector3 here = new(player.X, player.Y, player.Z);
-        if (!IsFinite(here)) return;
+        if (!here.IsFinite()) return;
         bool alliance = player.Team == Team.Alliance;
         float bestSq = DetourYards * DetourYards;
         CreatureSpawn? best = null;
@@ -715,7 +715,7 @@ internal static class PlayerbotTaxi
             return false;
         uint now = session.World.NowMs;
         Vector3 here = new(player.X, player.Y, player.Z);
-        if (!IsFinite(here) || !IsFinite(destination)) return false;
+        if (!here.IsFinite() || !destination.IsFinite()) return false;
         float straight = Vector3.Distance(here, destination);
         if (straight < taxi.MinRouteYards) return false;
         if (session.Services.GetService<QuestNpcFeature>()?.Services is not { } services || services.StateOf(player) is not { Loaded: true } state)
@@ -1080,7 +1080,7 @@ internal static class PlayerbotTaxi
         trip.NextWatchMs = unchecked(now + WatchIntervalMs);
         if (session.IsInChaosProbe) trip.Interrupted = true;
         Vector3 here = new(player.X, player.Y, player.Z);
-        if (!IsFinite(here))
+        if (!here.IsFinite())
         {
             if (!trip.NonFiniteReported)
             {
@@ -1130,7 +1130,7 @@ internal static class PlayerbotTaxi
             PlayerbotAnomalies.Report(player, Area, "flight-state-residue", $"the flight ended but the bot is still without client control or held by the flight system (route {string.Join('>', trip.Nodes)})");
         if (trip.Interrupted) return;
         Vector3 here = new(player.X, player.Y, player.Z);
-        if (!IsFinite(here))
+        if (!here.IsFinite())
         {
             PlayerbotAnomalies.Report(player, Area, "landed-nonfinite", $"the bot landed at a non-finite position (route {string.Join('>', trip.Nodes)})", AnomalySeverity.Error);
             return;
@@ -1332,5 +1332,4 @@ internal static class PlayerbotTaxi
         return writer.ToArray();
     }
 
-    private static bool IsFinite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 }

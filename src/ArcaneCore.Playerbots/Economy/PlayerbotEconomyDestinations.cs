@@ -188,7 +188,7 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
             AuctionHouseEntry? house = AuctionHouseRules.HouseFor(economy.Options, faction.Faction, player.Team);
             if (house is null || house.Id == AuctionHouseRules.NeutralHouse
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
-            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry).Where(IsFinite)
+            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry).Where(static s => s.IsFinite())
                          .Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn)))
             {
                 if (!PlayerbotWorldDestinations.IsPresent(player, spawn)) continue;
@@ -201,8 +201,6 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
         _hints.Sort((a, b) => Vector3.DistanceSquared(here, a.Position).CompareTo(Vector3.DistanceSquared(here, b.Position)));
         if (_hints.Count > MaxSpawns) _hints.RemoveRange(MaxSpawns, _hints.Count - MaxSpawns);
     }
-
-    private static bool IsFinite(CreatureSpawn spawn) => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
 
     private sealed record Hint(uint Entry, CreatureSpawn Spawn, Vector3 Position);
 }

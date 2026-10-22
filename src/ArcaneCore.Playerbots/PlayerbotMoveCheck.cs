@@ -80,7 +80,7 @@ internal static class PlayerbotMoveCheck
     internal static bool TryValidateStep(Map map, Vector3 from, Vector3 to, out Vector3 drapedTo, out string? rejectReason)
     {
         drapedTo = to;
-        if (!IsFinite(from) || !IsFinite(to))
+        if (!from.IsFinite() || !to.IsFinite())
         {
             rejectReason = "NonFiniteCoordinate";
             return false;
@@ -140,7 +140,7 @@ internal static class PlayerbotMoveCheck
     internal static bool TryClip(Map map, Vector3 from, Vector3 to, out Vector3 reach)
     {
         reach = from;
-        if (!IsFinite(from) || !IsFinite(to)) return false;
+        if (!from.IsFinite() || !to.IsFinite()) return false;
         MapCollision collision = map.Collision;
         Vector3 end = to;
         bool cut = false;
@@ -261,6 +261,4 @@ internal static class PlayerbotMoveCheck
         return Vector3.Lerp(point, from, yards / length);
     }
 
-    private static bool IsFinite(Vector3 value)
-        => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 }

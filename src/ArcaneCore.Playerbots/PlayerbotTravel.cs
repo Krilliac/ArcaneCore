@@ -382,7 +382,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
-        if (!_options.Travel.Enabled || !player.IsInWorld || player.Map is null || !Finite(to)) return false;
+        if (!_options.Travel.Enabled || !player.IsInWorld || player.Map is null || !to.IsFinite()) return false;
         TravelFacts facts = BuildFacts(session, player, _options, ShipRoutes(session.World), null);
         return PlayerbotTravelPlanner.Plan(facts, TravelPlace.Of(player), new TravelPlace(toMap, to)) is not null;
     }
@@ -404,7 +404,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         var goal = new TravelPlace(toMap, to);
         if (!_options.Travel.Enabled) return Refuse(out why, "travel is switched off");
         if (!player.IsInWorld || player.Map is null || !player.IsAlive) return Refuse(out why, "the bot is not alive in the world");
-        if (!Finite(to)) return Refuse(out why, "the goal is not a finite place");
+        if (!to.IsFinite()) return Refuse(out why, "the goal is not a finite place");
         if (!PlayerbotMapPolicy.Allows(_options.AllowedMaps, toMap, null, current: false)) return Refuse(out why, $"bots may not walk map {toMap}");
         if (Journeys.TryGetValue(player, out TravelJourney? current) && current.State == JourneyState.Active)
         {
@@ -584,7 +584,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         {
             if (components.TryGetValue(place, out (int, bool) known)) return known;
             (int, bool) found = (-1, false);
-            if (Finite(place.Position) && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
+            if (place.Position.IsFinite() && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
             {
                 int region = nav.RegionAt(graph, place.Position, DryWalkingLocate);
                 if (region < 0 && player.Map is { } map && map.MapId == place.MapId)
@@ -627,7 +627,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
             if (memo.TryGetValue((a, b), out (float, uint)? known)) return known;
             (float, uint)? found = null;
             float straight = Vector3.Distance(a.Position, b.Position);
-            if (straight >= minRoute && Finite(a.Position) && Finite(b.Position))
+            if (straight >= minRoute && a.Position.IsFinite() && b.Position.IsFinite())
             {
                 TaxiNode? source = null;
                 float nearest = maxWalk;
@@ -1204,8 +1204,6 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         why = "travel: " + reason;
         return false;
     }
-
-    private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
     internal static string Describe(TravelPlace place)
         => string.Create(CultureInfo.InvariantCulture, $"map {place.MapId} ({place.Position.X:F0},{place.Position.Y:F0},{place.Position.Z:F0})");

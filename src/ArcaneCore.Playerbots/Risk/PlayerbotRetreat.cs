@@ -10,6 +10,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -514,6 +515,4 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         return ready;
     }
 
-    private static float Distance(WorldObject a, WorldObject b)
-        => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 }

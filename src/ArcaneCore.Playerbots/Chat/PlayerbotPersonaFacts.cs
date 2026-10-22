@@ -24,6 +24,7 @@ using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Group = ArcaneCore.Game.Groups.Group;
 using ArcaneCore.World.Bots.Progression;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 
@@ -333,9 +334,6 @@ internal static partial class PlayerbotPersonaFacts
         lower = Spaces().Replace(lower, " ").Trim();
         return lower.StartsWith("the ", StringComparison.Ordinal) ? lower[4..] : lower;
     }
-
-    internal static float Distance(WorldObject a, WorldObject b)
-        => MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)) + ((a.Z - b.Z) * (a.Z - b.Z)));
 
     /// <summary>A service read that fails soft (a minimal host without the feature, or one not attached yet).</summary>
     private static T? Try<T>(Func<T?> read) where T : class

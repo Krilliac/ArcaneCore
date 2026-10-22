@@ -22,6 +22,7 @@ using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Groups;
 
@@ -1536,8 +1537,6 @@ internal sealed class PlayerbotGroupAI
     private bool Act(WorldOpcode opcode, byte[] payload, bool budgeted = true)
         => PlayerbotGroupCoordinator.Act(_session, opcode, payload, budgeted);
 
-    private static float Distance(WorldObject a, WorldObject b)
-        => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 }
 
 /// <summary>
