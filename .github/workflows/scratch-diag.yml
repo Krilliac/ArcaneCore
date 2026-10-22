@@ -1,4 +1,7 @@
 name: scratch-diag
+concurrency:
+  group: scratch-diag
+  cancel-in-progress: true
 on:
   push:
     branches: ["scratch/diag-1324"]
@@ -27,7 +30,7 @@ jobs:
           ARCANE_DIAG: "1"
         run: |
           dotnet test tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj -c Release --no-build \
-            --filter "FullyQualifiedName~PlayerbotGrindCampTests|FullyQualifiedName~PlayerbotWorldDestinationsTests|FullyQualifiedName~PlayerbotPvpUnreachableTests" \
+            --filter "FullyQualifiedName~PlayerbotGrindCampTests|FullyQualifiedName~PlayerbotWorldDestinationsTests|FullyQualifiedName~PlayerbotPvpUnreachableTests|FullyQualifiedName~PlayerbotRoutePlanWatchTests|FullyQualifiedName~PlayerbotDestinationAnomalyTests|FullyQualifiedName~PlayerbotNavigationAnomalyTests" \
             --logger "console;verbosity=normal" > test.log 2>&1 || true
           tail -5 test.log
       - name: Publish logs
