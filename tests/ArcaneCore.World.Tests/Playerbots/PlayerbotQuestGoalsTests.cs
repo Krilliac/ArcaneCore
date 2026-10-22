@@ -1388,6 +1388,182 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    [Fact]
+    public async Task CompletedAutoCompleteQuest_WhosePrevQuestRequirementWasInvalidated_IsSkippedAndAbandonedWithoutDontHaveReqRefusal()
+    {
+        const uint ExclusiveFollowUpQuestId = 1462;
+        const uint InvalidatedBreadcrumbQuestId = 1463;
+        var extraTemplates = new QuestTemplate[]
+        {
+            new()
+            {
+                Entry = ExclusiveFollowUpQuestId,
+                Title = "Earth Sapta",
+                Method = 2,
+                ZoneOrSort = 14,
+                MinLevel = 1,
+                QuestLevel = 1,
+            },
+            new()
+            {
+                Entry = InvalidatedBreadcrumbQuestId,
+                Title = "Earth Sapta Breadcrumb",
+                Method = 0, // IsAutoComplete
+                ZoneOrSort = 14,
+                MinLevel = 1,
+                QuestLevel = 1,
+                PrevQuestId = -(int)ExclusiveFollowUpQuestId, // only valid while 1462 is active and unrewarded
+            },
+        };
+
+        await using QuestHost quest = await QuestHost.StartAsync(quests: fixture =>
+            new ExtraQuestStore(fixture, extraTemplates, starterEntries: [], enderEntries: [(QuestInteractionFixture.Entry, InvalidatedBreadcrumbQuestId)]));
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            state.Quests.Load(
+            [
+                new CharacterQuestStatus((int)player.Guid.Low, QuestInteractionFixture.QuestId, (byte)QuestStatus.Complete, true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                new CharacterQuestStatus((int)player.Guid.Low, ExclusiveFollowUpQuestId, (byte)QuestStatus.Complete, true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                new CharacterQuestStatus((int)player.Guid.Low, InvalidatedBreadcrumbQuestId, (byte)QuestStatus.Complete, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            ], quest.Feature.Services.Quests);
+
+            Quest breadcrumb = quest.Feature.Services.Quests.Get(InvalidatedBreadcrumbQuestId)!;
+            Assert.False(quest.Feature.Services.MeetsTurnInRequirements(player, breadcrumb));
+
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+
+            Assert.Equal(0u, goals.CompletedReturnQuest(player));
+            session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.False(goals.Update(player, 500));
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
+
+            session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.NotEqual(QuestStatus.Complete, state.Quests.Get(InvalidatedBreadcrumbQuestId)?.Status);
+            return true;
+        });
+    }
+
+    private sealed class BlockedCenterOpenRingPathfinder(System.Numerics.Vector3 npcCenter) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, PathOptions? options = null)
+        {
+            float distToCenter = System.Numerics.Vector2.Distance(new(end.X, end.Y), new(npcCenter.X, npcCenter.Y));
+            if (distToCenter < 2.0f)
+                return new PathResult(PathType.NoPath, []);
+            return PathResult.StraightLine(start, end, PathType.Normal);
+        }
+    }
+
+    [Fact]
+    public async Task VisibleEnder_WithBlockedCenterButReachableInteractionRing_WalksToRingAndTurnsInWithoutNoRouteRefusal()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            var npcPos = new System.Numerics.Vector3(player.X + 12f, player.Y, player.Z);
+            giver.SetPosition(npcPos.X, npcPos.Y, npcPos.Z, 0);
+            WorldCollision.Of(quest.Host.World).Install(pathfinder: new BlockedCenterOpenRingPathfinder(npcPos));
+
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true })
+            {
+                ReturnQuest = QuestInteractionFixture.QuestId,
+            };
+
+            Assert.True(goals.Update(player, 500));
+            Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
+            return true;
+        });
+    }
+
+    private sealed class ProbeBudgetInspectingPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+        public long ObservedProbeNodeBudget { get; private set; }
+
+        public PathResult FindPath(uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, PathOptions? options = null)
+        {
+            if (PlayerbotThinkProbe.Active is { } active)
+                ObservedProbeNodeBudget = active.NodeBudget;
+            return new PathResult(PathType.NoPath, []);
+        }
+    }
+
+    [Fact]
+    public async Task QuestPhase_CapsFallbackNavigationNodeBudgetTo8192()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 40f, player.Y, player.Z, 0);
+            var pathfinder = new ProbeBudgetInspectingPathfinder();
+            WorldCollision.Of(quest.Host.World).Install(lineOfSight: new BlockedFloor(player.Z), pathfinder: pathfinder);
+
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true })
+            {
+                ReturnQuest = QuestInteractionFixture.QuestId,
+            };
+            var probe = new PlayerbotThinkProbe { NodeBudget = 32_768 };
+            probe.Begin();
+            try
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(player, 500);
+            }
+            finally
+            {
+                probe.End();
+            }
+
+            Assert.Equal(32_768L, probe.NodeBudget);
+            Assert.Equal(8_192L, pathfinder.ObservedProbeNodeBudget);
+            return true;
+        });
+    }
+
+    private sealed class ExtraQuestStore(
+        QuestInteractionFixture inner,
+        IReadOnlyList<QuestTemplate> extraTemplates,
+        IReadOnlyList<(uint Entry, uint QuestId)> starterEntries,
+        IReadOnlyList<(uint Entry, uint QuestId)> enderEntries) : IQuestContentStore
+    {
+        public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            QuestContent content = await ((IQuestContentStore)inner).LoadAsync(cancellationToken);
+            var templates = content.Templates.Concat(extraTemplates).ToArray();
+            var starters = content.Starters.Concat(starterEntries.Select(x => new CreatureQuestRelation { Id = x.Entry, Quest = x.QuestId })).ToArray();
+            var enders = content.Enders.Concat(enderEntries.Select(x => new CreatureQuestRelation { Id = x.Entry, Quest = x.QuestId })).ToArray();
+            return new QuestContent(templates, starters, enders);
+        }
+    }
+
     /// <summary>A world with the synthetic quest giver beside a managed player and a SQLite character database.</summary>
     private sealed class QuestHost : IAsyncDisposable
     {

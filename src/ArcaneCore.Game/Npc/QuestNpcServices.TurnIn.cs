@@ -218,6 +218,17 @@ public sealed partial class QuestNpcServices
         => RewardBase(state, quest) && RewardRequirements(state.Quests.Player, quest, msg);
 
     /// <summary>
+    /// Whether <paramref name="player"/> currently satisfies the non-mutating turn-in requirements (<see cref="RewardBase"/> and
+    /// <see cref="RewardRequirements"/>) for <paramref name="quest"/> without sending error packets.
+    /// </summary>
+    public bool MeetsTurnInRequirements(Player player, Quest quest)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(quest);
+        return StateOf(player) is { Loaded: true } state && CanRewardQuest(state, quest, msg: false);
+    }
+
+    /// <summary>
     /// vmangos <c>CanCompleteRepeatableQuest</c> (Player.cpp:12663-12680): a repeatable quest may be completed from the
     /// ender's list without being in the log: takeable, its delivery items in the bags, and rewardable.
     /// </summary>
