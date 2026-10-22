@@ -552,4 +552,130 @@ public sealed class PlayerbotWorldDestinationsTests
         Assert.Equal(spawn, Assert.Single(content.GetSpawns(0, 42)));
         Assert.Empty(content.GetSpawns(1, 42));
     }
+
+    /// <summary>
+    /// Regression for #790: when a quest giver / ender trip takes sideways steps that never close 5 yards on the spawn within
+    /// <see cref="PlayerbotWorldDestinations.SpawnNotClosingMs"/>, <c>NotClosing</c> abandons the non-closing route, suspends the quest,
+    /// and clears <c>_tripWatch</c> before the 180s <c>bot-destination/not-reached</c> anomaly window.
+    /// </summary>
+    [Fact]
+    public async Task QuestGiverTrip_ThatNeverClosesOnSpawn_AbandonsRouteWithinNotClosingWindow_AndSuspendsQuest()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 42, Name = "giver", NpcFlags = 2, DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 24001, Entry = 42, MapId = 0, X = startX + 200f, Y = -132.49f, Z = 83.53f }], [], [], []);
+        var quests = new QuestContent(
+            [new QuestTemplate { Entry = 9, Method = 2, MinLevel = 1, QuestLevel = 1 }],
+            [new CreatureQuestRelation { Id = 42, Quest = 9 }], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IQuestContentStore>(new QuestDestinationContent(quests));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var pathfinder = new SidestepEastPathfinder();
+            var suspensions = new PlayerbotSuspensions();
+            var destinations = await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                return new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true }) { Suspensions = suspensions };
+            });
+            const uint think = 500;
+            bool stopped = false;
+            for (uint elapsed = 0; elapsed < 25_000 && !stopped; elapsed += think)
+            {
+                stopped = await host.OnWorldAsync(() =>
+                {
+                    var player = session.Player!;
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    bool active = destinations.Update(player, 0, think);
+                    PlayerbotMotion.ElapseForTests(player, think);
+                    return !active;
+                });
+                await host.World.AdvanceClockAsync(think);
+            }
+
+            Assert.True(stopped, "the non-closing quest giver trip never gave up within 25s");
+            bool suspended = await host.OnWorldAsync(() => suspensions.IsQuestSuspended(9, host.World.NowMs));
+            Assert.True(suspended, "the non-closing quest was not suspended when NotClosing triggered");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Regression for #775: when many quest entries are in disconnected region-graph components, <see cref="PlayerbotWorldDestinations"/> caps
+    /// unreachable entry skips at <see cref="PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink"/> per think and arms its backoff instead of
+    /// resetting <c>attempted</c> to false on every skip.
+    /// </summary>
+    [Fact]
+    public async Task ManyUnreachableQuestEntries_AreCappedPerThink_AndArmBackoff()
+    {
+        using var navFixture = new ArcaneCore.Game.Tests.Collision.NavMeshFixture();
+        (int X, int Y, ArcaneCore.Game.Tests.Collision.CellTile Tile)[] unjoined =
+        [
+            (10, 10, new ArcaneCore.Game.Tests.Collision.CellTile(0, 0, 0, 0, 8, 8, Size: 5) { LinkedSides = [0, 2] }),
+            (10, 11, new ArcaneCore.Game.Tests.Collision.CellTile(0, 1, 40, 0, 8, 8, Size: 5) { LinkedSides = [0, 6], Walkable = (i, _) => i >= 6 }),
+            (11, 10, new ArcaneCore.Game.Tests.Collision.CellTile(1, 0, 0, 40, 8, 8, Size: 5) { LinkedSides = [0, 4, 2] }),
+            (12, 10, new ArcaneCore.Game.Tests.Collision.CellTile(2, 0, 0, 80, 8, 8, Size: 5) { LinkedSides = [0, 4, 2] }),
+            (13, 10, new ArcaneCore.Game.Tests.Collision.CellTile(3, 0, 0, 120, 8, 8, Size: 5) { LinkedSides = [4] }),
+        ];
+        var templates = Enumerable.Range(0, 40)
+            .Select(i => new CreatureTemplate { Entry = (uint)(500 + i), Name = $"giver-{i}", NpcFlags = 2, DisplayIds = [49] })
+            .ToArray();
+        var spawns = Enumerable.Range(0, 40)
+            .Select(i => new CreatureSpawn { Guid = (uint)(25000 + i), Entry = (uint)(500 + i), MapId = 0, X = 75f, Y = 5f, Z = 0f })
+            .ToArray();
+        var questTemplates = Enumerable.Range(0, 40)
+            .Select(i => new QuestTemplate { Entry = (uint)(900 + i), Method = 2, MinLevel = 1, QuestLevel = 1 })
+            .ToArray();
+        var starters = Enumerable.Range(0, 40)
+            .Select(i => new CreatureQuestRelation { Id = (uint)(500 + i), Quest = (uint)(900 + i) })
+            .ToArray();
+        var content = new CreatureContent(templates, spawns, [], [], []);
+        var quests = new QuestContent(questTemplates, starters, []);
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(navFixture, unjoined, new FloorLineOfSight(),
+            configureServices: services =>
+            {
+                services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+                services.AddSingleton<IQuestContentStore>(new QuestDestinationContent(quests));
+            });
+        await world.PlaceAsync(new Vector3(5, 130, 0));
+        await world.Host.WaitForWorldAsync(() => world.Player.VisibleObjects.Count == 0, "offscreen unreachable givers");
+        for (int think = 0; think < 80; think++)
+        {
+            if (await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, new Vector3(75, 5, 0), out _, out _)))
+                break;
+            await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            var suspensions = new PlayerbotSuspensions();
+            var destinations = new PlayerbotWorldDestinations(world.Session, new PlayerbotOptions { Enabled = true })
+            {
+                Suspensions = suspensions,
+                Untakeable = (_, _) => true,
+            };
+            Assert.False(destinations.Update(world.Player, 0, 500));
+            int suspendedAfterFirstThink = Enumerable.Range(0, 40)
+                .Count(i => suspensions.IsEntrySuspended((uint)(500 + i), world.Host.World.NowMs));
+            Assert.Equal(PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink, suspendedAfterFirstThink);
+
+            // Immediate second Update at the same timestamp hits the backoff armed by the unreachable skips.
+            Assert.False(destinations.Update(world.Player, 0, 500));
+            int suspendedAfterSecondCall = Enumerable.Range(0, 40)
+                .Count(i => suspensions.IsEntrySuspended((uint)(500 + i), world.Host.World.NowMs));
+            Assert.Equal(PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink, suspendedAfterSecondCall);
+            return true;
+        });
+    }
+
+    private sealed class QuestDestinationContent(QuestContent content) : IQuestContentStore
+    {
+        public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
+    }
 }

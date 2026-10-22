@@ -585,6 +585,66 @@ public sealed class PlayerbotEquipmentTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// Regression for <c>bot-gear/broken-unrepaired</c>: when a broken worn item is replaced or repaired before <see cref="PlayerbotEquipment.BrokenGearMs"/>
+    /// and a different worn item breaks later, the broken-gear clock resets for the new item instead of attributing the old item's elapsed time to it.
+    /// </summary>
+    [Fact]
+    public async Task BrokenGear_WhenReplacedByAnotherBrokenItemBeforeTwentyMinutes_ResetsBrokenClock()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Template(3501, InventoryType.Chest, 20) with { MaxDurability = 30 });
+        items.Templates.Templates.Add(Template(3502, InventoryType.Feet, 15) with { MaxDurability = 25 });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<ArcaneCore.World.Features.IWorldFeature, ManualEquipmentClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var equipment = new PlayerbotEquipment(session);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                foreach ((byte slot, _) in player.Inventory.Equipped.ToArray())
+                    player.Inventory.DestroyItem(InventorySlots.Bag0, slot);
+                EquipFromBags(player, 3501);
+                EquipFromBags(player, 3502);
+                player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Chest)!.Durability = 0;
+                equipment.Update(player);
+                return true;
+            });
+
+            // 15 minutes later (< 20 min), the chest is repaired/replaced and the boots break.
+            await host.World.AdvanceClockAsync(15 * 60_000);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Chest)!.Durability = 30;
+                player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
+                equipment.Update(player);
+                return true;
+            });
+
+            // 10 minutes after the boots broke (25 minutes total, but only 10 minutes for the boots): must not report broken-unrepaired yet.
+            await host.World.AdvanceClockAsync(10 * 60_000);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                using var cap = PlayerbotAnomalies.CaptureFor(player);
+                equipment.Update(player);
+                Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("gear", "broken-unrepaired")));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    private sealed class ManualEquipmentClock : ArcaneCore.World.Features.IWorldFeature
+    {
+        public void Attach(ArcaneCore.Game.Maps.WorldRuntime world) => world.UseManualClock();
+    }
+
+
     internal static void EquipFromBags(Player player, uint entry)
     {
         Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(entry, 1, out _));

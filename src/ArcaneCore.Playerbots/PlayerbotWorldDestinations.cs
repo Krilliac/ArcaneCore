@@ -27,6 +27,7 @@ namespace ArcaneCore.World.Playerbots;
 internal sealed class PlayerbotWorldDestinations(WorldSession session, PlayerbotOptions options, PlayerbotNavigationExecutor? executor = null)
 {
     internal const int MaxEntryScan = 128;
+    internal const int MaxUnreachableSkipsPerThink = 16;
     private const uint BackoffMs = 2_000;
     private const uint FarSpawnBlockMs = 30_000;
 
@@ -446,8 +447,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 LastPlanRefused = true;
                 return false;
             }
-            if (hunting && NotClosing(player, _routeSpawnGuid, elapsedMs, now))
+            if (NotClosing(player, _routeSpawnGuid, elapsedMs, now))
             {
+                if (!hunting)
+                {
+                    uint activeQuest = returnQuestId != 0 ? returnQuestId : QuestId;
+                    if (activeQuest != 0) Suspensions?.SuspendQuest(activeQuest, now);
+                }
                 ClearRoute();
                 Backoff(now);
                 LastPlanRefused = true;
@@ -492,6 +498,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             && TryJourneyOffMap(player, map.MapId, preferredCreatureEntry, preferredQuestId, now)) return true;
 
         int scanned = 0;
+        int unreachableSkips = 0;
         bool attempted = false;
         bool waterJourneys = WaterJourneysAllowed(player);
         (uint Entry, uint Quest, Vector3 To)? waterGoal = null;
@@ -500,7 +507,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         for (int rank = 0; rank < ranked.Count; rank++)
         {
             DestinationEntry entry = ranked[rank];
-            if (++scanned > MaxEntryScan) break;
+            if (++scanned > MaxEntryScan || PlayerbotThinkProbe.Active is { ElapsedMs: >= 25.0 }) break;
             if (Suspended(entry.Entry)) continue;
             bool inHome = GiverInHome(entry.Spawn);
             if (ineligible.Contains((entry.Entry, inHome))) continue;
@@ -598,7 +605,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             {
                 // Only when every objective of the quest is set aside too is the quest: another creature of it may still be reachable.
                 if (entrySetAside) SetAsideQuestsOfUnreachable(entry.Entry, questId, now, player, services, state, loot);
-                attempted = attemptedBefore;
+                if (++unreachableSkips >= MaxUnreachableSkipsPerThink) break;
                 continue;
             }
 
@@ -673,8 +680,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _tileWait.Reset();
             // A leg planned again to the spawn the last leg walked to keeps that walk's not-closing clock (NotClosing): planning the same
             // dead end afresh every think is no progress. One that does not come nearer for SpawnNotClosingMs is passed over.
-            if (hunting && NotClosing(player, entry.Spawn.Guid, elapsedMs, now))
+            if (NotClosing(player, entry.Spawn.Guid, elapsedMs, now))
             {
+                if (!hunting && questId != 0) Suspensions?.SuspendQuest(questId, now);
                 ClearRoute();
                 Backoff(now);
                 LastPlanRefused = true;

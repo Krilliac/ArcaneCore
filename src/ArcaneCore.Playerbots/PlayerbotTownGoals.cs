@@ -154,7 +154,6 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         NpcInfo? npc = FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair);
         if (npc is null)
             return TravelToRepair(player, services, elapsedMs);
-        ClearRepairTrip();
         TargetEntry = npc.Entry;
         Goal = (npc.NpcFlags & NpcFlags.Trainer) != 0
             ? PlayerbotGoalKind.Train : PlayerbotGoalKind.Vendor;
@@ -165,7 +164,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (_route is null || _routeTarget != npc.Guid)
             {
                 // A plan to this NPC was refused a moment ago (after its fallbacks, 30 to 40 queries): not asked again every think.
-                if (_visitRefused == npc.Guid && unchecked((int)(_visitRefusedUntil - session.World.NowMs)) > 0) return false;
+                if (_visitRefused == npc.Guid && unchecked((int)(_visitRefusedUntil - session.World.NowMs)) > 0)
+                    return TravelToRepair(player, services, elapsedMs);
                 PlanOutcome visit = PlayerbotNavigation.PlanExact(player, new(npc.X, npc.Y, npc.Z), options, ref _tileWait,
                     session.World.NowMs, out _route);
                 if (visit == PlanOutcome.Pending) return true; // a tile of the way is being read: keep the visit, plan again next think
@@ -173,12 +173,15 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 {
                     _visitRefused = npc.Guid;
                     _visitRefusedUntil = unchecked(session.World.NowMs + VisitRefusedMs);
-                    return false;
+                    return TravelToRepair(player, services, elapsedMs);
                 }
                 _routeTarget = npc.Guid;
             }
+            ClearRepairTrip();
             return PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
         }
+
+        ClearRepairTrip();
 
         _route = null;
         _routeTarget = default;
@@ -278,7 +281,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return false;
         Goal = PlayerbotGoalKind.Vendor;
         uint before = EquippedDurability(player);
-        if (!session.TryManagedAction(WorldOpcode.CmsgRepairItem, RepairPayload(npc.Guid)))
+        ObjectGuid targetItem = TotalWornRepair(player, services) is { } total && total > player.Money
+            && CheapestBrokenWornItem(player, services) is { } broken && broken.Cost <= player.Money
+            ? broken.Guid : default;
+        if (!session.TryManagedAction(WorldOpcode.CmsgRepairItem, RepairPayload(npc.Guid, targetItem)))
             return false;
         if (EquippedDurability(player) <= before)
             _repairBackoffUntil = unchecked(session.World.NowMs + RepairBackoffMs);
@@ -414,8 +420,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 || probe.QueryTicks - _queryTicksAtThinkStart >= RepairQueryTicksLimit);
 
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
+    private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairServiceSpawns = [];
+    private readonly List<(uint Entry, CreatureSpawn Spawn)> _vendorServiceSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
-    private (uint MapId, CreatureContent? Content, int Version, NpcFlags Service, int Events) _repairIndex;
+    private (uint MapId, CreatureContent? Content, int Version, int Events, uint Faction) _repairIndex;
     private PlayerbotRoute? _repairRoute;
     private uint _repairSpawn;
     private uint _repairMissReported;
@@ -493,6 +501,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// </summary>
     internal static uint? CheapestWornRepair(Player player, QuestNpcServices services)
     {
+        if (CheapestBrokenWornItem(player, services) is { } broken)
+            return broken.Cost;
         if (services.Deps.Items is not { } items) return null;
         uint? cheapest = null;
         for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
@@ -507,6 +517,25 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         }
 
         return cheapest;
+    }
+
+    private static (ObjectGuid Guid, uint Cost)? CheapestBrokenWornItem(Player player, QuestNpcServices services)
+    {
+        if (services.Deps.Items is not { } items) return null;
+        (ObjectGuid Guid, uint Cost)? best = null;
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is not { MaxDurability: > 0, Durability: 0 } item)
+                continue;
+            items.Repair(player, item.Guid, 1f, cost =>
+            {
+                if (best is null || cost < best.Value.Cost)
+                    best = (item.Guid, cost);
+                return false;
+            });
+        }
+
+        return best;
     }
 
     /// <summary>
@@ -606,7 +635,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         foreach ((uint entry, CreatureSpawn spawn, Vector3 target) in candidates)
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
-            if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && RepairQueryBudgetSpent()) return false;
+            if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && (RepairQueryBudgetSpent() || PlayerbotThinkProbe.Active is { ElapsedMs: >= 20.0 })) return false;
             _repairPlansThisThink++;
             PlayerbotRoute? walk = null;
             if (PlayerbotElevator.TryBegin(session, player, target, options, out walk))
@@ -703,34 +732,55 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services, NpcFlags service)
     {
         CreatureContent? content = session.Services.GetService<CreatureWorldFeature>()?.Content;
-        if (content is null) { _repairSpawns.Clear(); return; }
-        int events = ActiveEventStamp(session.Services);
-        if (_repairIndex.MapId == mapId && ReferenceEquals(_repairIndex.Content, content) && _repairIndex.Version == content.DefinitionsVersion
-            && _repairIndex.Service == service && _repairIndex.Events == events)
-            return;
-        _repairIndex = (mapId, content, content.DefinitionsVersion, service, events);
-        _repairSpawns.Clear();
-        _blockedRepairSpawns.Clear();
-        ClearRepairTrip();
-        FactionTemplateCatalog? factions = session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
-        Vector3 here = new(player.X, player.Y, player.Z);
-        foreach (CreatureTemplate template in content.Templates)
+        if (content is null)
         {
-            if (((NpcFlags)template.NpcFlags & service) == 0
-                || service == NpcFlags.Vendor && services.Npcs.VendorItems(template.Entry).Count == 0
-                || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
-            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
-                if (float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z) && SpawnPresent(player, spawn))
-                    _repairSpawns.Add((template.Entry, spawn));
+            _repairSpawns.Clear();
+            _repairServiceSpawns.Clear();
+            _vendorServiceSpawns.Clear();
+            return;
+        }
+        int events = ActiveEventStamp(session.Services);
+        var key = (mapId, content, content.DefinitionsVersion, events, player.FactionTemplate);
+        if (_repairIndex != key)
+        {
+            _repairIndex = key;
+            _repairServiceSpawns.Clear();
+            _vendorServiceSpawns.Clear();
+            _blockedRepairSpawns.Clear();
+            ClearRepairTrip();
+            FactionTemplateCatalog? factions = session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
+            Vector3 here = new(player.X, player.Y, player.Z);
+            foreach (CreatureTemplate template in content.Templates)
+            {
+                NpcFlags flags = (NpcFlags)template.NpcFlags;
+                bool isRepair = (flags & NpcFlags.Repair) != 0;
+                bool isVendor = (flags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(template.Entry).Count > 0;
+                if ((!isRepair && !isVendor) || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction))
+                    continue;
+                foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
+                {
+                    if (!float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z) || !SpawnPresent(player, spawn))
+                        continue;
+                    if (isRepair) _repairServiceSpawns.Add((template.Entry, spawn));
+                    if (isVendor) _vendorServiceSpawns.Add((template.Entry, spawn));
+                }
+            }
+
+            TrimServiceSpawns(_repairServiceSpawns, here);
+            TrimServiceSpawns(_vendorServiceSpawns, here);
         }
 
-        // Bounded: the nearest of the map's repair NPCs from where the bot was when the index was built.
-        if (_repairSpawns.Count > MaxRepairSpawns)
-        {
-            _repairSpawns.Sort((a, b) => Vector3.DistanceSquared(here, new Vector3(a.Spawn.X, a.Spawn.Y, a.Spawn.Z))
-                .CompareTo(Vector3.DistanceSquared(here, new Vector3(b.Spawn.X, b.Spawn.Y, b.Spawn.Z))));
-            _repairSpawns.RemoveRange(MaxRepairSpawns, _repairSpawns.Count - MaxRepairSpawns);
-        }
+        List<(uint Entry, CreatureSpawn Spawn)> source = service == NpcFlags.Repair ? _repairServiceSpawns : _vendorServiceSpawns;
+        _repairSpawns.Clear();
+        _repairSpawns.AddRange(source);
+    }
+
+    private static void TrimServiceSpawns(List<(uint Entry, CreatureSpawn Spawn)> list, Vector3 here)
+    {
+        if (list.Count <= MaxRepairSpawns) return;
+        list.Sort((a, b) => Vector3.DistanceSquared(here, new Vector3(a.Spawn.X, a.Spawn.Y, a.Spawn.Z))
+            .CompareTo(Vector3.DistanceSquared(here, new Vector3(b.Spawn.X, b.Spawn.Y, b.Spawn.Z))));
+        list.RemoveRange(MaxRepairSpawns, list.Count - MaxRepairSpawns);
     }
 
     /// <summary>
@@ -962,15 +1012,21 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _serviceNpcs.Sort(static (a, b) => a.Distance.CompareTo(b.Distance) is var order and not 0 ? order : a.Order.CompareTo(b.Order));
         var needs = new ServiceNeeds();
         NpcInfo? found = null;
+        NpcInfo? refusedFallback = null;
         foreach ((_, _, NpcInfo info) in _serviceNpcs)
         {
             if (!HasUsefulService(player, services, info, ref needs)) continue;
+            if (_visitRefused == info.Guid && unchecked((int)(_visitRefusedUntil - now)) > 0)
+            {
+                refusedFallback ??= info;
+                continue;
+            }
             found = info;
             break;
         }
 
         _serviceNpcs.Clear();
-        return found;
+        return found ?? refusedFallback;
     }
 
     /// <summary>
@@ -1345,10 +1401,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     }
 
     /// <summary>cmsg_repair_item: u64 npc, u64 item (0: everything, vmangos HandleRepairItemOpcode).</summary>
-    private static byte[] RepairPayload(ObjectGuid npc)
+    private static byte[] RepairPayload(ObjectGuid npc, ObjectGuid item = default)
     {
         var writer = new PacketWriter(16);
-        writer.WriteUInt64(npc.Value); writer.WriteUInt64(0);
+        writer.WriteUInt64(npc.Value); writer.WriteUInt64(item.Value);
         return writer.ToArray();
     }
 
