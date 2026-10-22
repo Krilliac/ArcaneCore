@@ -2299,6 +2299,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             driver = "battleground";
                             PlayerbotThinkProbe.Phase("battleground");
                             battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
+                            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
                         }
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
@@ -2327,6 +2328,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             driver = "group";
                             PlayerbotThinkProbe.Phase("group");
                             coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
+                            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
                         }
                     }
                     else
@@ -2439,6 +2441,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             PlayerbotThinkProbe.Phase("party");
             active.Party.Update(driven, sinceLast);
+            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
             return "party AI";
         }
         else

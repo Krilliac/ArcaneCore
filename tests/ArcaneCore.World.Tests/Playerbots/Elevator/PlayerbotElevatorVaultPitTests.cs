@@ -243,4 +243,145 @@ public sealed class PlayerbotElevatorVaultPitTests
                 [start with { Z = z }, new Vector3(-600f, 0f, z), new Vector3(-600f, 100f, z), end with { Z = z }]);
         }
     }
+
+    [Fact]
+    public async Task LandingBeside_WhenCandidateLiesBelowStopFloor_RequiresLineOfSightFromStopAsWellAsFloor()
+    {
+        var stop = new Vector3(1595.24f, 189.65f, -40.76f);
+        var toward = new Vector3(1599.7f, 178.0f, -43.1f);
+        var mesh = new StopHeightWallBlockedSouthMesh(stop);
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: mesh,
+            pathfinder: mesh));
+
+        Vector3? chosen = await world.OnWorldAsync(() =>
+        {
+            var ek = world.Host.World.GetMap(0);
+            return PlayerbotElevator.LandingBeside(ek, stop, toward);
+        });
+
+        Assert.NotNull(chosen);
+        Assert.True(chosen.Value.Y > stop.Y, $"expected north doorway candidate with clear LOS from stop height, got {chosen.Value}");
+    }
+
+    [Fact]
+    public async Task LandingBesideReachable_WhenNearestCandidateRouteEndsShortOutsideWall_PrefersCompleteRoute()
+    {
+        var stop = new Vector3(1596.2f, 291.8f, 55.65f);
+        var start = new Vector3(1574.9f, 308.5f, 61.7f);
+        var mesh = new ShortOuterWallVsCompleteDoorwayMesh(stop);
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: mesh,
+            pathfinder: mesh));
+        await world.PlaceAsync(start);
+        var options = new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100 };
+
+        Vector3? chosen = await world.OnWorldAsync(() =>
+            PlayerbotElevator.LandingBesideReachable(world.Player, world.Player.Map!, stop, start, options));
+
+        Assert.NotNull(chosen);
+        Assert.True(chosen.Value.X > stop.X + 4f, $"expected east doorway candidate with complete route, got {chosen.Value}");
+    }
+
+    [Fact]
+    public void ElevatorNetworkChoose_WhenBotIsInVaultLowerLobbyWithin60Yards_SelectsCurrentVaultLiftInsteadOfOtherVaultLift()
+    {
+        var northLift = new ElevatorLift(0, [new ElevatorCar(0, 1, 20657, new Vector3(1596.2f, 291.8f, -40.76f), new Vector3(1596.2f, 291.8f, 55.65f), 30000)]);
+        var southLift = new ElevatorLift(0, [new ElevatorCar(0, 2, 20656, new Vector3(1595.24f, 189.65f, -40.76f), new Vector3(1595.24f, 189.65f, 55.65f), 30000)]);
+        var network = new ElevatorNetwork([northLift, southLift]);
+        var survey = new ElevatorSurvey(at => (85u, 1497u));
+        var fromSouthLowerLobby = new Vector3(1598.7f, 196.0f, -41.3f);
+        var toUpperNearNorthLift = new Vector3(1596.0f, 310.0f, 60.0f);
+
+        (ElevatorLift Lift, ElevatorLevel From)? chosen = network.Choose(0, fromSouthLowerLobby, toUpperNearNorthLift, survey);
+
+        Assert.NotNull(chosen);
+        Assert.Equal(ElevatorLevel.Low, chosen.Value.From);
+        Assert.True(Vector2.Distance(chosen.Value.Lift.Centre, new Vector2(1595.24f, 189.65f)) < 5f,
+            $"expected South Lift (1595,189) where bot already stands in lower lobby, got {chosen.Value.Lift.Centre}");
+    }
+
+    [Fact]
+    public async Task IsIndoorsOrUnderground_WhenDeepBelowTerrainInOutdoorsFlaggedWmo_AllowsSteepIndoorClimb()
+    {
+        var mesh = new DeepUndergroundOutdoorsFlaggedSteepMesh();
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: mesh,
+            pathfinder: mesh));
+        var start = new Vector3(1629.3f, 171.5f, -43.0f);
+        var goal = new Vector3(1645.0f, 171.5f, -36.0f);
+        await world.PlaceAsync(start);
+        var options = new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100 };
+
+        bool planned = await world.OnWorldAsync(() =>
+            PlayerbotNavigation.TryPlan(world.Player, goal, options, out PlayerbotRoute? route) && route is not null);
+
+        Assert.True(planned, "expected TryClimbIndoors to climb steep ramp in deep-underground Undercity WMO even when IsOutdoors is true");
+    }
+
+    private sealed class StopHeightWallBlockedSouthMesh(Vector3 stop) : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
+        {
+            if (to.Y <= stop.Y + 4f && from.Z > stop.Z - 0.5f)
+                return false;
+            return true;
+        }
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => stop.Z - 2.34f;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, start + new Vector3(0.5f, 0f, 0f)]);
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        { point = center; return false; }
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = stop.Z - 2.34f });
+    }
+
+    private sealed class ShortOuterWallVsCompleteDoorwayMesh(Vector3 stop) : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => stop.Z;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(start.X, start.Y), new Vector2(end.X, end.Y)) < 1f)
+                return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+            if (end.X <= stop.X + 4f)
+            {
+                Vector3 wallStop = Vector3.Lerp(start, end, 0.5f) with { Z = stop.Z };
+                return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, wallStop]);
+            }
+            return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = stop.Z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        { point = center; return false; }
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = stop.Z });
+    }
+
+    private sealed class DeepUndergroundOutdoorsFlaggedSteepMesh : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => zSearch - 1f;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info)
+        {
+            info = new ArcaneCore.Game.Maps.Collision.ModelAreaInfo(MogpFlags: 0x8000u, AdtId: 0, RootId: 1, GroupId: 1, GroundZ: zSearch - 1f);
+            return true;
+        }
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (options is { ExcludeFlags: var ex } && (ex & ArcaneCore.Game.Maps.Collision.NavTerrain.SteepSlopes) != 0)
+                return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, start + new Vector3(1f, 0f, 0f)]);
+            return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+    }
 }

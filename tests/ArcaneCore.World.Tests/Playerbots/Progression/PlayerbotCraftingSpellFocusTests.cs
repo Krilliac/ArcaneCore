@@ -598,6 +598,43 @@ public sealed class PlayerbotCraftingSpellFocusTests
         }, manualClock: true, campfire: real);
     }
 
+    [Fact]
+    public async Task AFireReachedAfterSteepEscapeLeg_ContinuesWalkingOnwardLegUntilInReach_WithoutFalseOutOfRangeAnomaly()
+    {
+        await RunAsync(knowsCampfire: false, woodCount: 0, async (host, session, crafting, player) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(pathfinder: new OffMeshFireCenterPathfinder(player.X + 4.5f));
+                return true;
+            });
+            ObjectGuid fire = await host.OnWorldAsync(() => Objs(host, player).Summon(FireEntry, player.X + 12f, player.Y, player.Z, 0)!.Guid);
+            Assert.True(await host.World.AdvanceClockUntilAsync(10_000, () => player.VisibleObjects.Contains(fire)), "the fire never became visible");
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                // The first leg was a 4-yard steep-escape route (TryLeaveSteepGround) that ran to completion,
+                // leaving the bot at player.X (still 12 yards from the fire, outside its 11.39-yard focus reach).
+                var here = new Vector3(player.X, player.Y, player.Z);
+                var start = here - new Vector3(4f, 0f, 0f);
+                var escapeLeg = new PlayerbotRoute([start, here], 4f, navigated: true) { NextPoint = 2 };
+                Assert.True(escapeLeg.Complete);
+                InjectRoute(crafting, escapeLeg, fire);
+                return true;
+            });
+
+            for (int i = 0; i < 6 && await CountAsync(host, player, Product) == 0; i++)
+            {
+                Assert.True(await StepAsync(host, session, crafting, player));
+                await host.World.AdvanceClockAsync(500);
+            }
+
+            Assert.Equal(2u, await CountAsync(host, player, Reagent));
+            Assert.Equal(1u, await CountAsync(host, player, Product));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
+        }, manualClock: true);
+    }
+
     private sealed class OptionalDbcFactAttribute : FactAttribute
     {
         public const string Variable = "ARCANECORE_TEST_DBC_DIR";

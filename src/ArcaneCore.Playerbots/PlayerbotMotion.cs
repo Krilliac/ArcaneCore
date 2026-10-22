@@ -1122,6 +1122,10 @@ internal static class PlayerbotMotion
         uint sample = Math.Min(sinceLast, MaxGapLeaseMs);
         if (combatLane && state.GapMs != 0 && sample <= state.GapMs) return;
         state.GapMs = state.GapMs == 0 ? sample : (uint)((state.GapMs * 3L + sample + 2) / 4);
+        if (state.Active && state.Options is { } opts)
+        {
+            state.LeaseMs = Math.Max(state.LeaseMs, Math.Max(Lease(opts, state), Math.Min(sample * 3u, MaxGapLeaseMs)));
+        }
     }
 
     /// <summary>
@@ -1134,8 +1138,19 @@ internal static class PlayerbotMotion
     /// </summary>
     internal static bool SettleAfterThink(WorldSession session, Player player, bool gaveUp, uint renewalsBefore, uint sinceLast)
     {
-        if (!gaveUp || sinceLast == 0 || !IsActive(player)) return false;
-        if (RenewalsOf(player) != renewalsBefore) return false;
+        if (sinceLast == 0 || !States.TryGetValue(player, out MotionState? state) || !state.Active) return false;
+        if (state.Renewals != renewalsBefore) return false;
+        if (!gaveUp)
+        {
+            state.RenewedMs = session.World.NowMs;
+            if (state.Options is { } opts)
+            {
+                state.LeaseMs = Math.Max(state.LeaseMs, Lease(opts, state));
+            }
+
+            return false;
+        }
+
         Stop(session, player);
         return true;
     }

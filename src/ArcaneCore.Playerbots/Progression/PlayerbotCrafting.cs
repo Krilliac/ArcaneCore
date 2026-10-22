@@ -420,7 +420,14 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                                 return fallbackHandled;
                             }
                             SetFocusAside(bestSpell, distantFocus, now);
-                            if (!_session.IsInChaosProbe)
+                            Vector3 focusCoords = new(distantFocus.X, distantFocus.Y, distantFocus.Z);
+                            bool terrainBlocked = player.Map is { } focusMap && focusMap.Collision.Pathfinder.Enabled
+                                && (!PlayerbotNavigation.OnWalkableMesh(focusMap, focusCoords)
+                                    || !PlayerbotNavigation.OnWalkableMesh(focusMap, PlayerbotMotion.CurrentPosition(player))
+                                    || PlayerbotNavigation.RequiresSteepAscent(player, focusCoords, _options, out _)
+                                    || PlayerbotNavigation.IsOnMeshFragment(player)
+                                    || PlayerbotNavigation.IsOnMeshIsland(player, _options));
+                            if (!_session.IsInChaosProbe && !terrainBlocked)
                                 PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} spell focus {bestSpell.RequiresSpellFocus} unreachable");
                             return false;
                         }
@@ -436,21 +443,41 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 // The walk is over: when it ended in reach of the focus the recipe is cast now, else the bot gives up on it for a while.
                 if (!HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, null, out _))
                 {
-                    // A route that ran to its end and still leaves the bot outside the focus's reach is a planner or range fault; a hazard
-                    // abort or a stale route ends the walk early and says nothing about the fire.
-                    bool walkedToTheEnd = _route?.Complete == true;
-                    _route = null;
-                    _routeTarget = default;
-                    SetFocusAside(bestSpell, distantFocus, now);
-                    if (walkedToTheEnd && !_session.IsInChaosProbe)
-                        PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} walked to spell focus {bestSpell.RequiresSpellFocus} but is still out of its range");
-                    return false;
+                    if (_route?.Complete == true
+                        && distantFocus.IsSpawned
+                        && player.Map?.FindObject(distantFocus.Guid) is not null)
+                    {
+                        var focusAt = new Vector3(distantFocus.X, distantFocus.Y, distantFocus.Z);
+                        float priorRemaining = Vector3.Distance(_route.Points[^1], focusAt);
+                        PlanOutcome onward = PlanToSpellFocus(player, distantFocus, _options, ref _tileWait, now, out PlayerbotRoute? onwardRoute);
+                        if (onward == PlanOutcome.Pending)
+                            return true;
+                        if (onward == PlanOutcome.Route
+                            && onwardRoute is { Points.Count: > 0 }
+                            && Vector3.Distance(onwardRoute.Points[^1], focusAt) < priorRemaining - 0.5f)
+                        {
+                            _route = onwardRoute;
+                            if (PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, now)
+                                && !HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, null, out _))
+                                return true;
+                        }
+                    }
+
+                    if (!HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, null, out _))
+                    {
+                        bool focusStillPresent = distantFocus.IsSpawned && player.Map?.FindObject(distantFocus.Guid) is not null;
+                        bool walkedToTheEnd = _route?.Complete == true && focusStillPresent;
+                        _route = null;
+                        _routeTarget = default;
+                        SetFocusAside(bestSpell, distantFocus, now);
+                        if (walkedToTheEnd && !_session.IsInChaosProbe)
+                            PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} walked to spell focus {bestSpell.RequiresSpellFocus} but is still out of its range");
+                        return false;
+                    }
                 }
             }
             else
             {
-                // No focus object around (and no campfire to light): a retail player simply cannot cook here, which is no anomaly. The
-                // recipe is set aside for the backoff and the bot carries on with something else.
                 _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + FocusBackoffMs);
                 return false;
             }
@@ -462,6 +489,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _routeTarget = default;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+        EnsureReadyForCraftCast(player, bestSpell);
 
         uint reagentId = 0, reagentBefore = 0;
         for (int r = 0; r < bestSpell.Reagents.Count; r++)
@@ -576,6 +604,26 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return false;
     }
 
+    private void EnsureReadyForCraftCast(Player player, SpellInfo spell)
+    {
+        if (player.StandState != StandState.Stand)
+        {
+            player.StandState = StandState.Stand;
+        }
+
+        byte form = player.GetByte(UpdateFields.UnitFieldBytes1, 2);
+        if (form != 0)
+        {
+            SpellSystem? spellSystem = _session.Services.GetService<SpellFeature>()?.System;
+            if (spell.GetErrorAtShapeshiftedCast(form, null) != SpellCastResult.CastOk
+                || spellSystem?.CheckCasterState(player, spell) == SpellCastResult.NotShapeshift)
+            {
+                spellSystem?.RemoveSpellsCausingAura(player, AuraType.ModShapeshift);
+                player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
+            }
+        }
+    }
+
     private static bool HasReagentsAndTools(Player player, SpellInfo spell)
     {
         for (int t = 0; t < spell.Totems.Count; t++)
@@ -596,7 +644,20 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 return false;
         }
 
-        return anyReagent;
+        if (!anyReagent)
+            return false;
+
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            SpellEffectInfo eff = spell.Effects[i];
+            if (eff.Effect == SpellEffectName.CreateItem && eff.ItemType != 0)
+            {
+                if (player.Inventory.CanStoreNewItem(eff.ItemType, 1, [], out _) != InventoryResult.Ok)
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     internal static bool WantsToEnchantSpell(Player player, SpellInfo spell)
@@ -681,6 +742,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _routeTarget = default;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+        EnsureReadyForCraftCast(player, bestSpell);
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -756,6 +818,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _routeTarget = default;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+        EnsureReadyForCraftCast(player, disenchantSpell);
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -822,6 +885,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _routeTarget = default;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+        EnsureReadyForCraftCast(player, pickLockSpell);
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -876,7 +940,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (focusReach > PlayerbotNavigationAnomalies.PathEndShortYards)
         {
             PlanOutcome nearOutcome = PlayerbotNavigation.PlanExact(
-                player, focusPos, options, ref tileWait, now, out PlayerbotRoute? nearRoute, trial: true, nearestEnd: true);
+                player, focusPos, options, ref tileWait, now, out PlayerbotRoute? nearRoute, trial: false, nearestEnd: true);
             if (nearOutcome == PlanOutcome.Pending)
             {
                 route = null;
@@ -895,33 +959,38 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (ringRadius > 0.5f)
         {
             var collision = player.Map?.Collision;
-            for (int i = 0; i < 8; i++)
+            ReadOnlySpan<float> ringRadii = [MathF.Min(3.5f, focusReach - 0.5f), ringRadius, MathF.Max(ringRadius, focusReach - 1.0f)];
+            foreach (float radius in ringRadii)
             {
-                float angle = i * (MathF.Tau / 8f);
-                float rx = focusPos.X + (MathF.Cos(angle) * ringRadius);
-                float ry = focusPos.Y + (MathF.Sin(angle) * ringRadius);
-                float rz = focusPos.Z;
-                if (collision is not null)
+                if (radius <= 0.5f) continue;
+                for (int i = 0; i < 8; i++)
                 {
-                    float h = collision.GetHeight(rx, ry, focusPos.Z);
-                    if (!PlayerbotNavigation.InvalidHeight(h))
-                        rz = h;
-                }
+                    float angle = i * (MathF.Tau / 8f);
+                    float rx = focusPos.X + (MathF.Cos(angle) * radius);
+                    float ry = focusPos.Y + (MathF.Sin(angle) * radius);
+                    float rz = focusPos.Z;
+                    if (collision is not null)
+                    {
+                        float h = collision.GetHeight(rx, ry, focusPos.Z);
+                        if (!PlayerbotNavigation.InvalidHeight(h))
+                            rz = h;
+                    }
 
-                var ringPoint = new Vector3(rx, ry, rz);
-                PlanOutcome ringOutcome = PlayerbotNavigation.PlanExact(
-                    player, ringPoint, options, ref tileWait, now, out PlayerbotRoute? ringRoute, trial: true);
-                if (ringOutcome == PlanOutcome.Pending)
-                {
-                    route = null;
-                    return PlanOutcome.Pending;
-                }
-                if (ringOutcome == PlanOutcome.Route
-                    && ringRoute is { Points.Count: > 0 }
-                    && Vector3.Distance(ringRoute.Points[^1], focusPos) <= focusReach - 0.25f)
-                {
-                    route = ringRoute;
-                    return PlanOutcome.Route;
+                    var ringPoint = new Vector3(rx, ry, rz);
+                    PlanOutcome ringOutcome = PlayerbotNavigation.PlanExact(
+                        player, ringPoint, options, ref tileWait, now, out PlayerbotRoute? ringRoute, trial: false);
+                    if (ringOutcome == PlanOutcome.Pending)
+                    {
+                        route = null;
+                        return PlanOutcome.Pending;
+                    }
+                    if (ringOutcome == PlanOutcome.Route
+                        && ringRoute is { Points.Count: > 0 }
+                        && Vector3.Distance(ringRoute.Points[^1], focusPos) <= focusReach - 0.25f)
+                    {
+                        route = ringRoute;
+                        return PlanOutcome.Route;
+                    }
                 }
             }
         }
@@ -942,11 +1011,19 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return true;
 
         float bestDistSq = MaxSpellFocusRangeYards * MaxSpellFocusRangeYards;
+        PlayerbotNavigation.Guards.TryGetValue(player, out PlayerbotRisk? risk);
+        var playerPos = new Vector3(player.X, player.Y, player.Z);
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not GameObject { IsSpawned: true, Type: GameObjectType.SpellFocus } go
                 || go.Template.GetData(0) != spellFocusType
                 || refused?.ContainsKey(go.Guid.Value) == true)
+                continue;
+
+            var goPos = new Vector3(go.X, go.Y, go.Z);
+            if (MathF.Abs(go.Z - player.Z) > 12f
+                || PlayerbotNavigation.IsUnreachableOnFoot(player, goPos, out _, out _)
+                || risk?.Blocking(player, [playerPos, goPos], completedReturn: false) is not null)
                 continue;
 
             float dist = go.DistanceTo(player);
@@ -984,6 +1061,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             handled = true;
             return true;
         }
+        EnsureReadyForCraftCast(player, campfire);
 
         uint woodBefore = player.Inventory.GetItemCount(SimpleWoodItem);
         Goal = PlayerbotGoalKind.Vendor;
