@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
@@ -140,6 +141,8 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("persist.social-petitions", ex);
+            AnomalyLedger.Shared.Report("persist", "read-failed", "petitions", $"feature=SocialPetitionFeature error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "loading petitions failed; petitions are unavailable until restart");
         }
     }

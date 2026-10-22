@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -347,6 +348,7 @@ internal static class MapFeedCapture
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.map-feed", ex);
             frame.Counters.PathsOmitted++;
             onRouteFault?.Invoke(ex);
             return;

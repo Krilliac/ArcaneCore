@@ -206,6 +206,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                             }
                             catch (ArgumentException ex)
                             {
+                                FaultLedger.Shared.Record("cluster.gateway-host", ex);
+                                AnomalyLedger.Shared.Report("cluster", "gateway-fault", link.Remote, $"phase=hello-register error={ex.Message}", AnomalySeverity.Warning);
                                 throw new InvalidDataException("malformed HelloRegister manifest", ex);
                             }
 
@@ -311,6 +313,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("cluster.gateway-host", ex);
+            AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"account-{request.AccountId}", $"phase=session-open error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogFault("cluster-transport", ex, "Gateway session open for account {Account} failed", request.AccountId);
             result = GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "the worker failed to open the session");
         }

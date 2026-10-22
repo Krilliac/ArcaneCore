@@ -13,6 +13,7 @@ namespace ArcaneCore.World.Ops.Diagnostics;
 /// logs one <see cref="LogLevel.Information"/> line every 5 minutes (configurable) with the top 10 anomaly keys
 /// by count delta since the previous summary (skipping when the total delta is 0), and logs a
 /// <see cref="LogLevel.Warning"/> the first time any anomaly key is observed with <see cref="AnomalySeverity.Error"/>.
+/// Also tracks per-subsystem deltas, newly observed subsystems, and active error-severity anomaly keys.
 /// </summary>
 public sealed class AnomalySummaryFeature : IWorldFeature
 {
@@ -25,7 +26,11 @@ public sealed class AnomalySummaryFeature : IWorldFeature
     private readonly ILogger<AnomalySummaryFeature> _logger;
     private readonly Dictionary<string, long> _lastCounts = new(StringComparer.Ordinal);
     private readonly HashSet<string> _errorWarnedKeys = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _knownSubsystems = new(StringComparer.Ordinal);
     private readonly object _gate = new();
+    private IReadOnlyList<string> _lastNewSubsystems = [];
+    private IReadOnlyList<string> _lastErrorKeys = [];
+    private IReadOnlyDictionary<string, long> _lastSubsystemDeltas = new Dictionary<string, long>(StringComparer.Ordinal);
     private ulong _elapsedMs;
 
     [ActivatorUtilitiesConstructor]
@@ -58,6 +63,42 @@ public sealed class AnomalySummaryFeature : IWorldFeature
 
     /// <summary>Maximum keys listed in the periodic summary line (defaults to <see cref="DefaultTopKeys"/>).</summary>
     public int TopKeys { get; set; } = DefaultTopKeys;
+
+    /// <summary>Subsystems observed for the first time during the most recent summary pass.</summary>
+    public IReadOnlyList<string> LastNewSubsystems
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastNewSubsystems;
+            }
+        }
+    }
+
+    /// <summary>Error-severity anomaly keys that had positive count deltas or were active during the most recent summary pass.</summary>
+    public IReadOnlyList<string> LastErrorKeys
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastErrorKeys;
+            }
+        }
+    }
+
+    /// <summary>Per-subsystem count deltas observed during the most recent summary pass.</summary>
+    public IReadOnlyDictionary<string, long> LastSubsystemDeltas
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastSubsystemDeltas;
+            }
+        }
+    }
 
     public static void ConfigureServices(IServiceCollection services)
     {
@@ -102,6 +143,9 @@ public sealed class AnomalySummaryFeature : IWorldFeature
         IReadOnlyList<AnomalySnapshot> snapshots = Ledger.Snapshot();
         var newErrors = new List<AnomalySnapshot>();
         var deltas = new List<(AnomalySnapshot Snapshot, long Delta)>();
+        var newSubsystems = new List<string>();
+        var activeErrorKeys = new List<string>();
+        var subsystemDeltas = new Dictionary<string, long>(StringComparer.Ordinal);
         long totalDelta = 0;
 
         lock (_gate)
@@ -110,6 +154,7 @@ public sealed class AnomalySummaryFeature : IWorldFeature
             {
                 _lastCounts.Clear();
                 _errorWarnedKeys.Clear();
+                _knownSubsystems.Clear();
             }
 
             var currentKeys = new HashSet<string>(snapshots.Count, StringComparer.Ordinal);
@@ -117,9 +162,19 @@ public sealed class AnomalySummaryFeature : IWorldFeature
             {
                 currentKeys.Add(snap.Key);
 
-                if (snap.Severity == AnomalySeverity.Error && _errorWarnedKeys.Add(snap.Key))
+                string subsystem = ExtractSubsystem(snap.Key);
+                if (subsystem.Length > 0 && _knownSubsystems.Add(subsystem))
                 {
-                    newErrors.Add(snap);
+                    newSubsystems.Add(subsystem);
+                }
+
+                if (snap.Severity == AnomalySeverity.Error)
+                {
+                    activeErrorKeys.Add(snap.Key);
+                    if (_errorWarnedKeys.Add(snap.Key))
+                    {
+                        newErrors.Add(snap);
+                    }
                 }
 
                 long prev = 0;
@@ -134,6 +189,10 @@ public sealed class AnomalySummaryFeature : IWorldFeature
                 {
                     deltas.Add((snap, delta));
                     totalDelta += delta;
+                    if (subsystem.Length > 0)
+                    {
+                        subsystemDeltas[subsystem] = subsystemDeltas.GetValueOrDefault(subsystem) + delta;
+                    }
                 }
             }
 
@@ -146,6 +205,12 @@ public sealed class AnomalySummaryFeature : IWorldFeature
                     _errorWarnedKeys.Remove(key);
                 }
             }
+
+            newSubsystems.Sort(StringComparer.Ordinal);
+            activeErrorKeys.Sort(StringComparer.Ordinal);
+            _lastNewSubsystems = [.. newSubsystems];
+            _lastErrorKeys = [.. activeErrorKeys];
+            _lastSubsystemDeltas = subsystemDeltas;
         }
 
         foreach (AnomalySnapshot err in newErrors)
@@ -175,17 +240,44 @@ public sealed class AnomalySummaryFeature : IWorldFeature
                 $"{d.Snapshot.Key}=+{d.Delta} (total={d.Snapshot.Count}, subjects={d.Snapshot.DistinctSubjects}, severity={d.Snapshot.Severity}, rate={d.Snapshot.Timing.RatePerHour15Min:F1}/h 15 min {d.Snapshot.Timing.RatePerHour1Hour:F1}/h 1 h)"))
             .ToArray();
 
+        string subsystemSummary = subsystemDeltas.Count == 0
+            ? "none"
+            : string.Join(
+                ", ",
+                subsystemDeltas
+                    .OrderByDescending(kv => kv.Value)
+                    .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                    .Select(kv => string.Create(CultureInfo.InvariantCulture, $"{kv.Key}=+{kv.Value}")));
+
+        string newSubsystemSummary = newSubsystems.Count == 0
+            ? "none"
+            : string.Join(", ", newSubsystems);
+
         LedgerTiming ledgerTiming = Ledger.Timing();
         _logger.LogInformation(
-            "Anomaly summary (+{TotalDelta} new across {ActiveKeys} keys; ledger total={LedgerTotal}, distinct={LedgerDistinct}): {TopKeys}; ledger rate {LedgerRate15m:F1}/h last 15 min, {LedgerRate1h:F1}/h last 1 h",
+            "Anomaly summary (+{TotalDelta} new across {ActiveKeys} keys; ledger total={LedgerTotal}, distinct={LedgerDistinct}): {TopKeys}; subsystems=[{SubsystemDeltas}] (new=[{NewSubsystems}]); error_keys={ErrorKeyCount}; ledger rate {LedgerRate15m:F1}/h last 15 min, {LedgerRate1h:F1}/h last 1 h",
             totalDelta,
             deltas.Count,
             Ledger.Total,
             Ledger.Distinct,
             string.Join(", ", topItems),
+            subsystemSummary,
+            newSubsystemSummary,
+            activeErrorKeys.Count,
             ledgerTiming.RatePerHour15Min,
             ledgerTiming.RatePerHour1Hour);
 
         return totalDelta;
+    }
+
+    private static string ExtractSubsystem(string key)
+    {
+        if (string.IsNullOrEmpty(key))
+        {
+            return string.Empty;
+        }
+
+        int slash = key.IndexOf('/');
+        return slash > 0 ? key[..slash] : key;
     }
 }

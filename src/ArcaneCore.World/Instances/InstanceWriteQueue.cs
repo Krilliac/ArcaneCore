@@ -672,6 +672,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("instances.writequeue", ex);
                 logger.LogFault("writequeue-instance-consume", ex, "instance write queue item {Kind} failed unexpectedly", work.Kind);
                 work.Done?.TrySetException(ex);
             }

@@ -81,6 +81,37 @@ public sealed class AnomalySummaryFeatureTests
     }
 
     [Fact]
+    public void RunSummaryPass_TracksSubsystemDeltasAndNewSubsystemsAndErrorKeys()
+    {
+        var ledger = new AnomalyLedger();
+        var logger = new CapturingLogger<AnomalySummaryFeature>();
+        var feature = new AnomalySummaryFeature(logger, ledger);
+
+        ledger.Report("feature", "attach-fault", "SocialFeature", "error=InvalidOperationException", AnomalySeverity.Error);
+        ledger.Report("reload", "quiesce-timeout", "spell_template", "phase=build", AnomalySeverity.Warning);
+        ledger.Report("reload", "apply-failed", "item_template", "phase=swap", AnomalySeverity.Error);
+
+        long delta = feature.RunSummaryPass();
+        Assert.Equal(3, delta);
+        Assert.Equal(["feature", "reload"], feature.LastNewSubsystems);
+        Assert.Equal(["feature/attach-fault", "reload/apply-failed"], feature.LastErrorKeys);
+        Assert.Equal(1, feature.LastSubsystemDeltas["feature"]);
+        Assert.Equal(2, feature.LastSubsystemDeltas["reload"]);
+
+        LogEntry summary = logger.Entries.Single(e => e.Level == LogLevel.Information);
+        Assert.Contains("subsystems=[reload=+2, feature=+1]", summary.Message, StringComparison.Ordinal);
+        Assert.Contains("(new=[feature, reload])", summary.Message, StringComparison.Ordinal);
+        Assert.Contains("error_keys=2", summary.Message, StringComparison.Ordinal);
+
+        // Next pass with existing subsystem and one new subsystem ("cluster"):
+        logger.Entries.Clear();
+        ledger.Report("reload", "quiesce-timeout", "spell_template", "phase=build", AnomalySeverity.Warning);
+        ledger.Report("cluster", "handoff-failed", "handoff-1", "phase=prepare", AnomalySeverity.Error);
+        Assert.Equal(2, feature.RunSummaryPass());
+        Assert.Equal(["cluster"], feature.LastNewSubsystems);
+    }
+
+    [Fact]
     public void OnTick_AccumulatesFiveMinuteWindowBeforeRunningSummaryPass()
     {
         var ledger = new AnomalyLedger();

@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Runtime.Loader;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
@@ -376,6 +377,8 @@ public sealed class ModuleGameSeams
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("hotcode.seams", ex);
+                AnomalyLedger.Shared.Report("hotcode", "seam-fault", "eventai-queue", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                 _logger.LogError(ex, "queuing the EventAI respawns for changed event handlers failed; those creatures pick the new handlers up at their next respawn");
             }
         }
@@ -406,6 +409,8 @@ public sealed class ModuleGameSeams
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.seams", ex);
+            AnomalyLedger.Shared.Report("hotcode", "seam-fault", "creature-ai-refresh", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "giving live creatures the swapped module AI failed; creatures not yet switched keep their previous AI until rebuilt");
             return new ModuleGameCommit(0, 0, old.Hooks.Count + added.Hooks.Count);
         }
@@ -525,6 +530,8 @@ public sealed class ModuleGameSeams
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("hotcode.seams", ex);
+                    AnomalyLedger.Shared.Report("hotcode", "seam-fault", $"eventai-respawn:{creature.Template.Entry}", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                     _logger.LogError(ex, "respawning EventAI creature {Entry} for a changed event handler failed; it keeps its handler until it respawns", creature.Template.Entry);
                 }
             }
@@ -580,6 +587,8 @@ public sealed class ModuleGameSeams
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("hotcode.seams", ex);
+                        AnomalyLedger.Shared.Report("hotcode", "seam-fault", "eventai-respawn-batch", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                         _logger.LogError(ex, "the EventAI respawn batch failed");
                         EndEventAiSweep();
                         done.SetResult((0, 0, 0));
@@ -613,6 +622,8 @@ public sealed class ModuleGameSeams
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.seams", ex);
+            AnomalyLedger.Shared.Report("hotcode", "seam-fault", "eventai-respawn-sweep", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "the EventAI respawn sweep stopped");
             EndEventAiSweep();
         }
@@ -714,6 +725,8 @@ public sealed class ModuleGameSeams
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
+                        FaultLedger.Shared.Record("hotcode.seams", ex);
+                        AnomalyLedger.Shared.Report("hotcode", "seam-fault", "creature-ai-retry", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                         _logger.LogError(ex, "retrying the creature AI swap failed");
                         done.SetResult(0);
                     }
@@ -738,6 +751,8 @@ public sealed class ModuleGameSeams
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("hotcode.seams", ex);
+            AnomalyLedger.Shared.Report("hotcode", "seam-fault", "creature-ai-retry-sweep", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "the creature AI retry sweep stopped");
         }
     }

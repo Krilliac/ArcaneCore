@@ -129,6 +129,8 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.skills", ex);
+                AnomalyLedger.Shared.Report("persist", "save-failed", "SkillSaveCoordinator", $"phase=dispose error={ex.GetType().Name}", AnomalySeverity.Warning);
                 _logger.LogFault("writequeue-skill-dispose", ex, "Skill save coordinator failed while draining on dispose");
             }
         }
@@ -333,6 +335,8 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.skills", ex);
+            AnomalyLedger.Shared.Report("persist", "save-failed", $"character {characterId}", $"queue=SkillSaveCoordinator error={ex.GetType().Name}", AnomalySeverity.Warning);
             lock (_waitersLock)
             {
                 _lastFailure[characterId] = ex;

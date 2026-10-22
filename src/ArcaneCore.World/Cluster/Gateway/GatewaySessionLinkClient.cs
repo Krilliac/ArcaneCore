@@ -329,6 +329,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("cluster.gateway-client", ex);
+                AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"session-{session.Generation}", $"phase=open error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 _logger.LogFault("cluster-transport", ex, "Gateway session {Generation}: the open handler failed", session.Generation);
                 CloseSession(session.Generation, ClusterSessionDetachReason.LinkLost);
             }
@@ -386,6 +388,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("cluster.gateway-client", ex);
+                AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"session-{session.Generation}", $"phase=close error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                 _logger.LogFault("cluster-transport", ex, "Gateway session {Generation}: the close handler failed", session.Generation);
             }
         }

@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
@@ -206,6 +207,7 @@ public sealed partial class WorldControlPipe : IHostedService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("ops.control-pipe", ex);
                 _logger.LogWarning(ex, "control pipe session ended with an error");
                 if (++failures >= 5)
                 {
@@ -333,6 +335,7 @@ public sealed partial class WorldControlPipe : IHostedService
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     // Like the console window: a command that throws fails that command, not the connection.
+                    FaultLedger.Shared.Record("ops.control-pipe", ex);
                     _logger.LogError(ex, "control pipe command could not be run ({Client})", client);
                     executor.WriteLine("The command failed; see the server log.");
                 }

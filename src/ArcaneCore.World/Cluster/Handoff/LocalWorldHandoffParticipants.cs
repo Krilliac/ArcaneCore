@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
@@ -169,6 +170,8 @@ public sealed class LocalWorldHandoffSource(
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("cluster.handoff", ex);
+            AnomalyLedger.Shared.Report("cluster", "handoff-failed", "local-freeze", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             lock (_gate)
             {
                 foreach (int id in _heldHere)

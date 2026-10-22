@@ -375,6 +375,8 @@ public sealed class SpellStatePersistence
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.spellstate", ex);
+            AnomalyLedger.Shared.Report("persist", "save-failed", $"character {characterId}", $"queue=SpellStatePersistence operation=Save error={ex.GetType().Name}", AnomalySeverity.Warning);
             lock (_lock)
             {
                 _lastFailure[characterId] = ex;
@@ -421,6 +423,8 @@ public sealed class SpellStatePersistence
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.spellstate", ex);
+            AnomalyLedger.Shared.Report("persist", "save-failed", $"character {characterId}", $"queue=SpellStatePersistence operation=Delete error={ex.GetType().Name}", AnomalySeverity.Warning);
             _logger.LogFault("writequeue-spellstate-delete", ex, "Deleting the cooldowns and auras of character {Character} failed", characterId);
         }
     }

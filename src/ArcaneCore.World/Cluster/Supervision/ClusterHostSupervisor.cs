@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -727,6 +728,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 }
                 catch (Exception ex)
                 {
+                    FaultLedger.Shared.Record("cluster.supervisor", ex);
+                    AnomalyLedger.Shared.Report("cluster", "gateway-fault", entry.Config.Name, $"phase=relaunch error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                     entry.State = SupervisedProcessState.Faulted;
                     _multiplexer.RouteLine(
                         entry.Config,

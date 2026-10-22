@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics.Metrics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Ops.ServerConsole;
@@ -184,6 +185,7 @@ internal sealed class PacketTools : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.packet-tools", ex);
             _logger.LogWarning(ex, "Map feed: a console failed to dispose");
         }
     }

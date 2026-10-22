@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
@@ -252,6 +253,7 @@ public sealed class RemoteAdminServer : IHostedService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.remote-admin", ex);
             _logger.LogWarning(ex, "remote admin connection {Id} ({Endpoint}) ended with an error", id, endpoint);
         }
         finally

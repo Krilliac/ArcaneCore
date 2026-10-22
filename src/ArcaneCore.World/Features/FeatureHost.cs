@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.World.HotCode;
@@ -307,12 +308,16 @@ public sealed class FeatureHost
             await entry.Detachable!.QuiesceAsync(cancel.Token).WaitAsync(_quiesceTimeout).ConfigureAwait(false);
             return null;
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
+            FaultLedger.Shared.Record("features.host", ex);
+            AnomalyLedger.Shared.Report("feature", "quiesce-timeout", entry.Name, $"timeout={_quiesceTimeout.TotalSeconds:0.#}s", AnomalySeverity.Warning);
             return $"it did not quiesce within {_quiesceTimeout.TotalSeconds:0.#}s";
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("features.host", ex);
+            AnomalyLedger.Shared.Report("feature", "quiesce-timeout", entry.Name, $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "Feature {Feature} failed to quiesce", entry.Name);
             return $"quiesce threw {ex.GetType().Name}: {ex.Message}";
         }
@@ -377,6 +382,8 @@ public sealed class FeatureHost
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("features.host", ex);
+            AnomalyLedger.Shared.Report("feature", "detach-fault", entry.Name, $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             failure = ex;
         }
 
@@ -394,6 +401,8 @@ public sealed class FeatureHost
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("features.host", ex);
+            AnomalyLedger.Shared.Report("feature", "detach-fault", entry.Name, $"dispose_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             failure = failure is null ? ex : new AggregateException(failure, ex);
         }
 
@@ -443,6 +452,8 @@ public sealed class FeatureHost
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("features.host", ex);
+            AnomalyLedger.Shared.Report("feature", "attach-fault", entry.Name, $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "Feature {Feature} failed to attach", entry.Name);
             DisposeQuietly(bag, entry.Name);
             return $"{ex.GetType().Name}: {ex.Message}";
@@ -526,6 +537,8 @@ public sealed class FeatureHost
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("features.host", ex);
+            AnomalyLedger.Shared.Report("feature", "detach-fault", name, $"undo_subscriptions_error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
             _logger.LogError(ex, "Undoing the subscriptions of {Feature} failed", name);
         }
     }

@@ -385,6 +385,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.explored-zones", ex);
                 logger.LogFault("writequeue-exploredzones-consume", ex, "explored-zones queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }

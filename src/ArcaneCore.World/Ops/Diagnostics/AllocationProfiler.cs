@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Diagnostics.Tracing;
@@ -264,6 +265,7 @@ public sealed class AllocationProfiler : IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("ops.allocation-profiler", ex);
                 _logger?.LogError(ex, "allocation sampling could not subscribe to the runtime event source");
                 message = "The runtime event source could not be enabled: " + ex.GetType().Name + ": " + ex.Message;
                 return false;
@@ -353,6 +355,7 @@ public sealed class AllocationProfiler : IDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("ops.allocation-profiler", ex);
             _logger?.LogError(ex, "allocation sampling listener could not be detached cleanly");
         }
 

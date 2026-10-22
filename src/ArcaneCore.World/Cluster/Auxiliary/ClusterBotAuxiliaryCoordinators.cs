@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
 
@@ -165,6 +166,8 @@ public sealed class LocalOrRemoteBotChatCoordinator
             }
             catch (Exception ex) when (ex is IOException or TimeoutException or InvalidOperationException)
             {
+                FaultLedger.Shared.Record("cluster.bot-auxiliary", ex);
+                AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"bot-chat:{ask.BotId}", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                 // Service is down: send nothing to external providers and fall back to built-in template replies.
                 admission = new ClusterBotChatAdmission(
                     ask.AskId,
@@ -282,6 +285,8 @@ public sealed class ClusterBotPlannerClient
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("cluster.bot-auxiliary", ex);
+            AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"bot-planner:{request.BotId}", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
             return (_deterministicBrainFallback(request), false, $"planner service error: {ex.Message}");
         }
 

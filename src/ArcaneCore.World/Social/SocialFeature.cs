@@ -148,6 +148,8 @@ public sealed class SocialFeature(
             }
             catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.social", stopEx);
+                AnomalyLedger.Shared.Report("persist", "callback-failed", "SocialFeature", $"callback=StopApplication error={stopEx.GetType().Name}", AnomalySeverity.Error);
                 _logger.LogFault("social.stop-application", stopEx, "Failed to request host application stop after fatal social write failure.");
             }
         };
@@ -199,6 +201,7 @@ public sealed class SocialFeature(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("social.stats", ex);
             _logger.LogFault("social.periodic-stats", ex, "Periodic group stats update pass failed.");
         }
     }
@@ -367,6 +370,7 @@ public sealed class SocialFeature(
                 }
                 catch (InvalidOperationException ex)
                 {
+                    FaultLedger.Shared.Record("persist.social", ex);
                     _logger.LogFault(LogLevel.Warning, "social.flush-retained-writes", ex, "social writes of character {Id} are retained; its list is loaded with them applied", characterId);
                 }
             }
@@ -385,6 +389,8 @@ public sealed class SocialFeature(
         {
             // An empty list is not a safe stand-in: ignored players could invite and be heard, and the player's later
             // social writes would start from nothing. The player is never marked ready and is disconnected instead.
+            FaultLedger.Shared.Record("persist.social", ex);
+            AnomalyLedger.Shared.Report("persist", "read-failed", $"character {characterId}", $"feature=SocialFeature operation=ReadSocialAsync error={ex.GetType().Name}", AnomalySeverity.Error);
             _logger.LogFault("social.load-character", ex, "loading the social list of character {Id} failed; disconnecting", characterId);
             if (!_stopping)
             {
@@ -478,6 +484,8 @@ public sealed class SocialFeature(
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("persist.social", ex);
+                    AnomalyLedger.Shared.Report("persist", "callback-failed", player.Name, $"feature=SocialFeature callback=deferred-command error={ex.GetType().Name}", AnomalySeverity.Warning);
                     _logger.LogFault("social.deferred-command", ex, "deferred social command failed for {Player}", player.Name);
                 }
             }
@@ -563,6 +571,8 @@ public sealed class SocialFeature(
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Guild creation stays disabled (GuildManager.IsLoaded) so stored ids are never reused.
+                FaultLedger.Shared.Record("persist.social", ex);
+                AnomalyLedger.Shared.Report("persist", "read-failed", "guilds", $"feature=SocialFeature operation=LoadGuilds error={ex.GetType().Name}", AnomalySeverity.Error);
                 _logger.LogFault("social.load-guilds-fatal", ex, "loading guilds failed; guilds are unavailable until restart");
                 return;
             }
@@ -588,6 +598,8 @@ public sealed class SocialFeature(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.social", ex);
+            AnomalyLedger.Shared.Report("persist", "read-failed", "guilds-install", $"feature=SocialFeature operation=InstallGuilds error={ex.GetType().Name}", AnomalySeverity.Error);
             _logger.LogFault("social.install-guilds", ex, "installing loaded guilds on world thread failed; guilds are unavailable until restart");
         }
     }

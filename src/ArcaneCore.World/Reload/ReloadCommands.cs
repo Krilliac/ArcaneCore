@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Reload;
@@ -116,6 +117,8 @@ public sealed class ReloadCommands : ICommandGroup
             }
             catch (Exception ex)
             {
+                FaultLedger.Shared.Record("reload.commands", ex);
+                AnomalyLedger.Shared.Report("reload", "apply-failed", "reload-command", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
                 CommandFaultLogging.Log(context, "reload-command", ex, "reload");
                 results = [new ReloadResult("reload", ReloadStatus.Failed, ex.Message, [], TimeSpan.Zero, DateTimeOffset.UtcNow)];
             }

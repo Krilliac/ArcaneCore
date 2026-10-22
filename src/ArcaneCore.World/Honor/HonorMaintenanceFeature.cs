@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Features;
@@ -46,6 +47,8 @@ public sealed class HonorMaintenanceFeature(IServiceProvider services, IServiceS
         }
         catch (Exception ex)
         {
+            FaultLedger.Shared.Record("persist.honor-maintenance", ex);
+            AnomalyLedger.Shared.Report("persist", "save-failed", "HonorMaintenanceFeature", $"phase=startup error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
             _logger.LogError(ex, "Honor maintenance catch-up failed at startup; it is retried while the world runs");
         }
 
@@ -90,6 +93,8 @@ public sealed class HonorMaintenanceFeature(IServiceProvider services, IServiceS
                 }
                 catch (Exception ex)
                 {
+                    FaultLedger.Shared.Record("persist.honor-maintenance", ex);
+                    AnomalyLedger.Shared.Report("persist", "save-failed", "HonorMaintenanceFeature", $"phase=live error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                     _logger.LogError(ex, "Honor maintenance failed; nothing was applied, retrying on the next tick");
                 }
             }

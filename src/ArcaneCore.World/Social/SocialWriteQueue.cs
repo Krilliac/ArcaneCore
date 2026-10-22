@@ -753,6 +753,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Store failures are handled where they happen; this is a queue bug and must not kill the consumer.
+                FaultLedger.Shared.Record("persist.social-write-queue", ex);
                 _logger.LogFault("writequeue-social-consume", ex, "social write queue item {Kind} failed unexpectedly", work.Kind);
                 work.Done?.TrySetException(ex);
             }

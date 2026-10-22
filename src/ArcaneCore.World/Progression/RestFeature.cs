@@ -62,6 +62,8 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
             }
             catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("persist.rest", stopEx);
+                AnomalyLedger.Shared.Report("persist", "callback-failed", "RestFeature", $"callback=StopApplication error={stopEx.GetType().Name}", AnomalySeverity.Error);
                 _logger.LogFault("rest.stop-application", stopEx, "Stopping application after fatal rest write failure failed");
             }
         };
@@ -118,6 +120,8 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("persist.rest", ex);
+                    AnomalyLedger.Shared.Report("persist", "save-failed", $"character {player.Guid.Low}", $"feature=RestFeature phase=stop error={ex.GetType().Name}", AnomalySeverity.Warning);
                     _logger.LogFault("rest.stop-save", ex, "Capturing rest state on shutdown failed for player {PlayerGuid}", player.Guid);
                 }
             }
@@ -247,6 +251,7 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("persist.rest", ex);
             _logger.LogFault("rest.update", ex, "Rest accrual update failed at {NowMs} ms", now);
         }
 
@@ -270,6 +275,8 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("persist.rest", ex);
+                    AnomalyLedger.Shared.Report("persist", "save-failed", $"character {player.Guid.Low}", $"feature=RestFeature phase=periodic error={ex.GetType().Name}", AnomalySeverity.Warning);
                     _logger.LogFault("rest.periodic-save", ex, "Periodic rest save failed for player {PlayerGuid}", player.Guid);
                 }
             }
