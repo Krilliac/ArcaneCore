@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
@@ -43,6 +44,7 @@ public static class ScenarioClassDecoders
         }
         catch (Exception ex) when (ex is not FormatException)
         {
+            FaultLedger.Shared.Record("playerbot.scenarios", ex);
             throw new FormatException($"SpellDamage: malformed {payload.Length}-byte body", ex);
         }
     }
@@ -72,6 +74,7 @@ public static class ScenarioClassDecoders
         }
         catch (Exception ex) when (ex is not FormatException)
         {
+            FaultLedger.Shared.Record("playerbot.scenarios", ex);
             throw new FormatException($"PeriodicAura: malformed {payload.Length}-byte body", ex);
         }
     }

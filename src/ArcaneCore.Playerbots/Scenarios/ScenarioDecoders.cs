@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
@@ -298,6 +299,7 @@ public static class ScenarioDecoders
         }
         catch (Exception error) when (error is IndexOutOfRangeException or ArgumentOutOfRangeException or InvalidOperationException)
         {
+            FaultLedger.Shared.Record("playerbot.scenarios", error);
             throw new FormatException($"{what}: malformed {payload.Length}-byte body", error);
         }
     }

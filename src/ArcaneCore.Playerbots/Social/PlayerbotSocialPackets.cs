@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 
@@ -91,8 +92,10 @@ internal static class PlayerbotSocialPackets
             guild = reader.ReadCString();
             return inviter.Length > 0;
         }
-        catch (ArgumentOutOfRangeException)
+        catch (ArgumentOutOfRangeException error)
         {
+            FaultLedger.Shared.Record("playerbot.social", error);
+            AnomalyLedger.Shared.Report("bot-social", "packet-decode-failed", "guild-invite", error.Message);
             return false; // no terminator (PacketReader's malformed-packet exception)
         }
     }

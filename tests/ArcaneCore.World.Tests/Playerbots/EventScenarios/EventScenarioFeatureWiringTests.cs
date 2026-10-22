@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Game.WorldState;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -176,5 +178,36 @@ public sealed class EventScenarioFeatureWiringTests
             SqliteConnection.ClearAllPools();
             File.Delete(path);
         }
+    }
+
+    private sealed class ThrowingStore(string message) : IGameEventPlayerbotStore
+    {
+        public Task<GameEventPlayerbotContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<GameEventPlayerbotContent>(new InvalidOperationException(message));
+    }
+
+    [Fact]
+    public async Task FailingStore_RecordsFaultAndAnomaly_AndSubscribesToNothing()
+    {
+        static long SiteCount() => FaultLedger.Shared.Snapshot()
+            .Where(s => s.Site == "playerbot.event-scenarios")
+            .Sum(s => s.Count);
+
+        string marker = "evscenario-store-fault-" + Guid.NewGuid().ToString("N");
+        long before = SiteCount();
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
+            n => n.Key == "bot-event/scenario-fault" && n.Detail.Contains(marker, StringComparison.Ordinal));
+
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(
+            new InMemoryAccountStore(),
+            new InMemoryCharacterStore(),
+            new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore(),
+            manualClock: true,
+            extraServices: services => services.AddScoped<IGameEventPlayerbotStore>(_ => new ThrowingStore(marker)));
+
+        PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
+        Assert.False(feature.Listening);
+        Assert.True(SiteCount() > before);
+        Assert.Equal(1, capture.Count("bot-event/scenario-fault"));
     }
 }

@@ -120,6 +120,8 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
             {
                 Interlocked.Increment(ref _errors);
                 FaultLedger.Shared.Record("playerbot-chat-inprocess", error);
+                FaultLedger.Shared.Record("playerbot.chat-inference", error);
+                AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat model", $"{error.GetType().Name}: {error.Message}");
                 _logger?.LogWarning("Bot chat in-process generation failed ({Type}: {Message}); the next provider answers", error.GetType().Name, error.Message);
                 return Fallback("error", BotChatResult.Fail(BotChatOutcome.BadResponse));
             }
@@ -275,6 +277,8 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         {
             // One report, then the templates: a bad model file must never stop the server or the bots.
             Volatile.Write(ref _loadError, error.Message);
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "chat model " + Path.GetFileName(path), $"{error.GetType().Name}: {error.Message}");
             AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "chat", "model-load-failed", "chat model " + Path.GetFileName(path),
                 $"{path}: {error.GetType().Name}: {error.Message}; the built-in templates answer instead");
             _logger?.LogWarning("Bot chat in-process model {Path} did not load ({Type}: {Message}); the built-in templates answer instead",
@@ -298,6 +302,8 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat model", $"prefix warm: {error.GetType().Name}: {error.Message}");
             _logger?.LogWarning("Bot chat in-process model: the shared prompt prefix was not cached ({Type}: {Message}); every reply computes it", error.GetType().Name, error.Message);
             return (0, 0);
         }
@@ -363,6 +369,8 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         }
         catch (AggregateException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-inference", error);
+            AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat model", $"{error.GetType().Name}: {error.Message}");
             _logger?.LogDebug(error, "Bot chat in-process model load faulted at shutdown");
         }
     }

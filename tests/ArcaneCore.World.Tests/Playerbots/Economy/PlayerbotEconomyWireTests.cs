@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
@@ -260,5 +261,23 @@ public sealed class PlayerbotEconomyWireTests
         Assert.Equal(0xCCul, mailList.ReadUInt64());
         var command = new PacketReader(PlayerbotEconomyWire.MailCommand(0xCC, 31));
         Assert.Equal((0xCCul, 31u), (command.ReadUInt64(), command.ReadUInt32()));
+    }
+
+    [Fact]
+    public void Decode_RecordsFaultAndAnomaly_WhenPayloadIsMalformed()
+    {
+        static long SiteCount() => FaultLedger.Shared.Snapshot()
+            .Where(s => s.Site == "playerbot.economy-wire")
+            .Sum(s => s.Count);
+
+        long before = SiteCount();
+        byte[] truncated = new byte[7];
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
+            n => n.Key == "bot-economy/wire-decode-failed" && n.Subject == nameof(PlayerbotEconomyWire.DecodeCommandResult)
+                && n.Detail.Contains("(7 bytes)", StringComparison.Ordinal));
+
+        Assert.Throws<FormatException>(() => PlayerbotEconomyWire.DecodeCommandResult(truncated));
+        Assert.True(SiteCount() > before);
+        Assert.Equal(1, capture.Count("bot-economy/wire-decode-failed"));
     }
 }

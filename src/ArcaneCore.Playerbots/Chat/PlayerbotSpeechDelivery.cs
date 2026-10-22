@@ -8,6 +8,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Party;
@@ -197,8 +198,10 @@ internal static class PlayerbotSpeechDelivery
         {
             return session.Services.GetService<SocialFeature>()?.Context;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-delivery", error);
+            AnomalyLedger.Shared.Report("bot-chat", "speech-delivery-fault", "speech-delivery", error.Message);
             return null; // not attached
         }
     }

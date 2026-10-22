@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Character.Boost;
@@ -55,8 +56,9 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
         {
             return services.GetService<SocialFeature>()?.Context.Groups.GetInvite(player.Guid) is not null;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.event-scenarios", ex);
             return false; // the social feature is not attached: no invitation can hold the bot
         }
     }
@@ -67,8 +69,9 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
         {
             return services.GetService<SocialFeature>()?.Context.Groups.GetGroup(player.Guid) is not null;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.event-scenarios", ex);
             return false; // the social feature is not attached: no group can hold the bot
         }
     }
@@ -114,6 +117,8 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.event-scenarios", ex);
+            AnomalyLedger.Shared.Report("bot-event", "scenario-fault", "event-scenario-host", $"{ex.GetType().Name}: {ex.Message}");
             result = new PlayerbotOperationResult(false, "failed: " + ex.GetType().Name);
         }
 
@@ -128,6 +133,8 @@ internal sealed class ManagedEventScenarioHost(IServiceProvider services, WorldR
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The world is stopping, or the engine was dropped by a detach: nothing is waiting for the answer.
+            FaultLedger.Shared.Record("playerbot.event-scenarios", ex);
+            AnomalyLedger.Shared.Report("bot-event", "scenario-fault", "event-scenario-host", $"{ex.GetType().Name}: {ex.Message}");
             logger.LogDebug(ex, "Bot event scenario: the answer to a bot operation could not be delivered ({Type})", ex.GetType().Name);
         }
     }

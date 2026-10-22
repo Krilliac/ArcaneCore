@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
@@ -132,12 +133,16 @@ internal static class BotControlDispatch
         {
             return new BotControlResult(call.Verb.Name).Fail("cancelled", "the invoker went away");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
+            FaultLedger.Shared.Record("playerbot.control", ex);
+            AnomalyLedger.Shared.Report("bot-control", "command-fault", "botctl " + call.Verb.Name, "the world stopped before the command ran");
             return new BotControlResult(call.Verb.Name).Fail("world-stopping", "the world stopped before the command ran");
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.control", error);
+            AnomalyLedger.Shared.Report("bot-control", "command-fault", "botctl " + call.Verb.Name, $"{error.GetType().Name}: {error.Message}");
             call.Feature.ReportCommandFault("botctl " + call.Verb.Name, error);
             return new BotControlResult(call.Verb.Name).Fail("exception", error.GetType().Name + ": " + error.Message);
         }
@@ -382,6 +387,8 @@ internal static class BotControlDispatch
                 }
                 catch (Exception error2) when (error2 is not OutOfMemoryException)
                 {
+                    FaultLedger.Shared.Record("playerbot.control", error2);
+                    AnomalyLedger.Shared.Report("bot-control", "command-fault", "botctl " + call.Verb.Name, $"{error2.GetType().Name}: {error2.Message}");
                     call.Feature.ReportCommandFault("botctl " + call.Verb.Name, error2);
                     outcome.Failure("exception", error2.GetType().Name + ": " + error2.Message);
                 }

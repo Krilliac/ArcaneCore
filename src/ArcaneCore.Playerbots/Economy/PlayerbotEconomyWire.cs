@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Economy;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Protocol;
 
@@ -219,8 +220,16 @@ internal static class PlayerbotEconomyWire
         {
             return decode(payload);
         }
+        catch (FormatException e)
+        {
+            FaultLedger.Shared.Record("playerbot.economy-wire", e);
+            AnomalyLedger.Shared.Report("bot-economy", "wire-decode-failed", what, e.Message);
+            throw;
+        }
         catch (Exception e) when (e is ArgumentOutOfRangeException or IndexOutOfRangeException or InvalidOperationException)
         {
+            FaultLedger.Shared.Record("playerbot.economy-wire", e);
+            AnomalyLedger.Shared.Report("bot-economy", "wire-decode-failed", what, $"malformed {what} payload ({payload.Length} bytes)");
             throw new FormatException($"malformed {what} payload ({payload.Length} bytes)", e);
         }
     }

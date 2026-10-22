@@ -10,6 +10,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData;
@@ -343,8 +344,9 @@ internal static partial class PlayerbotPersonaFacts
         {
             return read();
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-prompts", error);
             return null;
         }
     }

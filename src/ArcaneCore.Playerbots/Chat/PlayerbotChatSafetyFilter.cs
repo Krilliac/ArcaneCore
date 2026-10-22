@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 
@@ -114,6 +115,8 @@ internal sealed class PlayerbotChatSafetyFilter
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
+                FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                AnomalyLedger.Shared.Report("bot-chat", "safety-filter-fault", "safety-filter", $"terms file {operatorFile}: {error.GetType().Name}: {error.Message}");
                 problems.Add($"terms file {operatorFile} could not be read ({error.GetType().Name}); the shipped list is used");
             }
         }
@@ -170,6 +173,8 @@ internal sealed class PlayerbotChatSafetyFilter
                     }
                     catch (Exception error) when (error is ArgumentException or NotSupportedException)
                     {
+                        FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                        AnomalyLedger.Shared.Report("bot-chat", "safety-filter-fault", "safety-filter", $"{source}: {category.Name} pattern skipped ({error.GetType().Name})");
                         problems.Add($"{source}: {category.Name} pattern skipped ({error.GetType().Name}: back-references and lookarounds are not supported)");
                     }
                 }
@@ -177,6 +182,8 @@ internal sealed class PlayerbotChatSafetyFilter
         }
         catch (JsonException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-safety", error);
+            AnomalyLedger.Shared.Report("bot-chat", "safety-filter-fault", "safety-filter", $"{source}: not valid JSON (line {error.LineNumber + 1})");
             problems.Add($"{source}: not valid JSON (line {error.LineNumber + 1})");
         }
     }
@@ -213,8 +220,10 @@ internal sealed class PlayerbotChatSafetyFilter
                 {
                     if (IsMatch(pattern, forms.Plain) || IsMatch(pattern, forms.Leet)) return new SafetyVerdict(category, timedOutOn);
                 }
-                catch (RegexMatchTimeoutException)
+                catch (RegexMatchTimeoutException error)
                 {
+                    FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                    AnomalyLedger.Shared.Report("bot-chat", "safety-regex-timeout", "safety-filter", $"{category} pattern #{index + 1}");
                     timedOutOn ??= $"{category} pattern #{index + 1}";
                 }
             }
@@ -299,6 +308,8 @@ internal sealed class PlayerbotChatSafetyFilter
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.chat-safety", error);
+            AnomalyLedger.Shared.Report("bot-chat", "safety-filter-fault", "safety-filter", $"warmup normalize: {error.GetType().Name}: {error.Message}");
             Interlocked.CompareExchange(ref _warmUpError, error.GetType().Name, null);
         }
 
@@ -311,12 +322,16 @@ internal sealed class PlayerbotChatSafetyFilter
                 pattern.IsMatch(plain);
                 pattern.IsMatch(leet);
             }
-            catch (RegexMatchTimeoutException)
+            catch (RegexMatchTimeoutException error)
             {
                 // A cold match ran out of time here instead of on a player's line: the next one is warm.
+                FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                AnomalyLedger.Shared.Report("bot-chat", "safety-regex-timeout", "safety-filter", "warmup pattern timeout");
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                AnomalyLedger.Shared.Report("bot-chat", "safety-filter-fault", "safety-filter", $"warmup pattern: {error.GetType().Name}: {error.Message}");
                 Interlocked.CompareExchange(ref _warmUpError, error.GetType().Name, null);
             }
 
@@ -421,8 +436,10 @@ internal sealed class PlayerbotChatSafetyFilter
             {
                 if (IsMatch(pattern, text)) return true;
             }
-            catch (RegexMatchTimeoutException)
+            catch (RegexMatchTimeoutException error)
             {
+                FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                AnomalyLedger.Shared.Report("bot-chat", "safety-regex-timeout", "safety-filter", $"personal data ({name})");
                 timedOutOn = $"personal data ({name})";
                 return true;
             }
@@ -450,8 +467,10 @@ internal sealed class PlayerbotChatSafetyFilter
                 ThrowIfForcedTimeout(pattern, result);
                 result = pattern.Replace(result, placeholder);
             }
-            catch (RegexMatchTimeoutException)
+            catch (RegexMatchTimeoutException error)
             {
+                FaultLedger.Shared.Record("playerbot.chat-safety", error);
+                AnomalyLedger.Shared.Report("bot-chat", "safety-regex-timeout", "safety-filter", $"personal data ({name})");
                 timedOutOn = $"personal data ({name})";
                 return "[removed]";
             }

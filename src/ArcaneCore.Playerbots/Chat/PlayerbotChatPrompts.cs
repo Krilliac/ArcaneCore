@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots.Party;
 
@@ -157,8 +158,10 @@ internal static class PlayerbotChatPrompts
             return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("intent", out JsonElement intent)
                 && intent.ValueKind == JsonValueKind.String ? Action(intent.GetString()) : BotChatAction.None;
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
+            FaultLedger.Shared.Record("playerbot.chat-prompts", error);
+            AnomalyLedger.Shared.Report("bot-chat", "prompt-json-invalid", "chat-prompts", error.Message);
             return BotChatAction.None; // not the JSON asked for: no action
         }
     }
@@ -233,9 +236,11 @@ internal static class PlayerbotChatPrompts
                 : null;
             return (reply, command);
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
             // the model's answer was not the JSON asked for: no reply and no command, the bot says nothing
+            FaultLedger.Shared.Record("playerbot.chat-prompts", error);
+            AnomalyLedger.Shared.Report("bot-chat", "prompt-json-invalid", "chat-prompts", error.Message);
             return (null, null);
         }
     }

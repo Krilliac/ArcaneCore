@@ -1,5 +1,6 @@
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.WorldState;
@@ -139,6 +140,8 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.event-scenarios", ex);
+            AnomalyLedger.Shared.Report("bot-event", "scenario-fault", "event-scenarios", $"{ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
             logger.LogWarning(ex, "Bot event scenarios: the game_event_playerbot tables could not be read ({Type}: {Message}); no scenario will run", ex.GetType().Name, ex.Message);
             return GameEventPlayerbotContent.Empty;
         }
@@ -166,6 +169,8 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             // A scenario is never worth the world thread: log (the first few times in full) and try again at the next pass.
+            FaultLedger.Shared.Record("playerbot.event-scenarios", error);
+            AnomalyLedger.Shared.Report("bot-event", "scenario-fault", "event-scenarios", $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
             if (_faults++ < 5) logger.LogWarning(error, "Bot event scenario pass failed ({Type}: {Message})", error.GetType().Name, error.Message);
         }
     }
