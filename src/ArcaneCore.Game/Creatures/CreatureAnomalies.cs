@@ -584,7 +584,7 @@ public sealed partial class CreatureMapSystem
         // A fight the creature won (its victim, or the last unit it attacked, is dead) ends in an evade by design (vmangos
         // SelectHostileTarget with an empty threat list) and is no loop: live 2026-10-18 the six Stockade guards at -8784,830 killed the
         // four RP Defias Rioters of spawn group 19981 one by one every 10 min respawn, three evades in 5 s each time, ~36 reports an hour.
-        bool won = LastFightWasWon(creature);
+        bool won = LastFightWasWon(creature, reason);
         string? described = string.IsNullOrEmpty(reason) || won ? null : DescribeEvade(creature, reason);
         creature.Combat.LastVictimGuid = default; // the next fight starts without this one's victim
         if (won)
@@ -618,12 +618,29 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>Whether the evading creature's victim, or else the last unit it attacked, is dead (the creature won the fight).</summary>
-    private bool LastFightWasWon(Creature creature)
+    private bool LastFightWasWon(Creature creature, string? reason = null)
     {
         UnitCombat combat = creature.Combat;
         Unit? last = combat.Victim
             ?? (combat.LastVictimGuid.IsEmpty ? null : Map.FindPlayer(combat.LastVictimGuid) as Unit ?? Map.FindObject(combat.LastVictimGuid) as Unit);
-        return last is not null && !last.IsAlive;
+        if (reason == "Execute" && combat.Victim is not Player && combat.LastVictimGuid.High != HighGuid.Player)
+        {
+            return true;
+        }
+
+        if (last is null)
+        {
+            return false;
+        }
+
+        if (!last.IsAlive)
+        {
+            return true;
+        }
+
+        return combat.Victim is null
+            && last is Creature lastNpc
+            && (lastNpc.IsInEvadeMode || !Map.Combat.Hooks.CanAttack(creature, lastNpc));
     }
 
     private static string DescribeEvadeTarget(Creature creature, Unit v)

@@ -315,7 +315,7 @@ internal sealed partial class PlayerbotBattlegroundAI
             StillMs = 0;
             IdleNow = false;
             TargetEntry = buff.Entry;
-            if (!WalkTo(player, buff.Position, interval, toward: false)) _buffs.GiveUp(player.Guid, Now);
+            if (!WalkTo(player, buff.Position, interval, toward: false, what: "buff")) _buffs.GiveUp(player.Guid, Now);
             return;
         }
 
@@ -796,7 +796,7 @@ internal sealed partial class PlayerbotBattlegroundAI
                 _route = null;
                 PlayerbotMovementControl.Stop(_session, player);
                 // A tile of the way is still being read: the goal is kept and planned to again next think, not reported unreachable.
-                if (planned != PlanOutcome.Pending)
+                if (planned != PlanOutcome.Pending && !chase && what is not ("buff" or "battlemaster") && Activity != "taking-buff")
                     ReportObjectiveUnreachable(player, $"route to {what} at {goal} was refused");
                 return planned == PlanOutcome.Pending;
             }

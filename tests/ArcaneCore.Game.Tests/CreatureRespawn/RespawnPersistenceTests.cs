@@ -368,4 +368,55 @@ public sealed class RespawnPersistenceTests
         Assert.True(options.Respawn.Persist);
         Assert.True(options.Respawn.SaveImmediately); // vmangos SaveRespawnTimeImmediately = 1 (mangosd.conf.dist.in:397, World.cpp:729)
     }
+
+    [Fact]
+    public void ADeadWanderingCreature_WhoseForeignGridUnloadsWhileHomeGridStaysLoaded_RespawnsOnScheduleWithoutRespawnStuck()
+    {
+        var options = new CreatureOptions { CorpseDecayNormalSeconds = 90 };
+        var persistence = new FakePersistence();
+        CreatureContent content = Content([Template()], [Spawn(77, WolfEntry, 30, 0, respawnSeconds: 80)]);
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        Assert.True(map.UpdatesActiveCellsOnly);
+        var system = new CreatureMapSystem(map, content, options, random: new Random(1), respawnPersistence: persistence, respawnClock: new FakeClock());
+        map.AddUpdater(system);
+        map.Grids.Options.GridCleanUpDelayMs = 60_000;
+
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture =
+            ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(n => n.Key == "respawn/stuck");
+
+        // Player 1 keeps the home grid (30, 0 -> grid 32, 32) loaded from an inactive cell at (400, 400);
+        // Player 2 loads a distant foreign grid at (2000, 0 -> grid 35, 32).
+        (ArcaneCore.Game.Entities.Player homeAnchor, _) = AddPlayer(world, 1, 30, 0);
+        (ArcaneCore.Game.Entities.Player foreignVisitor, _) = AddPlayer(world, 2, 2000, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+
+        // Creature wanders into the foreign grid and dies there while still a corpse.
+        wolf.Relocate(2000, 0, 83.5f, 0, 0);
+        system.KillCreature(wolf);
+        Assert.Equal(CreatureDeathState.Corpse, wolf.DeathState);
+
+        // Move homeAnchor to (400, 400) so the home cell (30, 0) is inactive while home grid (32, 32) stays loaded,
+        // and move foreignVisitor far away so foreign grid (35, 32) unloads.
+        homeAnchor.Relocate(400, 400, 83.5f, 0, 0);
+        foreignVisitor.Relocate(5000, 5000, 83.5f, 0, 0);
+        world.RunTick(6_000);
+        world.RunTick(1);
+        world.RunTick(60_000);
+
+        Assert.True(system.IsGridLoaded(30, 0));
+        Assert.False(system.IsGridLoaded(2000, 0));
+
+        // Advance well past RespawnAtMs (80 s) + 60 s dormant-stuck threshold while home cell (30, 0) remains inactive;
+        // then reactivate the home cell and verify the creature respawns cleanly.
+        Run(world, 80_000, 1_000);
+        Assert.Empty(capture.Notices);
+
+        homeAnchor.Relocate(30, 0, 83.5f, 0, 0);
+        world.RunTick(500);
+
+        Assert.Empty(capture.Notices);
+        Creature respawned = Assert.Single(system.Creatures);
+        Assert.Equal(CreatureDeathState.Alive, respawned.DeathState);
+    }
 }

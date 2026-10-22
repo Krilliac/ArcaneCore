@@ -218,4 +218,46 @@ public sealed class CreatureFlowAnomalyTests
             Assert.Empty(capture.Notices);
         }
     }
+
+    [Fact]
+    public void SparringCreaturesAndScriptedExecuteEvades_ClearHostileReferencesAndReportNoEvadeLoop()
+    {
+        const uint GuardEntry = 948090;
+        const uint DummyEntry = 948091;
+        using AnomalyCapture guardCapture = Capture("creature/evade-loop", GuardEntry);
+        using AnomalyCapture dummyCapture = Capture("creature/evade-loop", DummyEntry);
+        CreatureContent content = Content(
+            [Template(GuardEntry), Template(DummyEntry)],
+            [Spawn(1, GuardEntry, 5, 0), Spawn(2, DummyEntry, 8, 0)]);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        using (world)
+        {
+            AddPlayer(world, 1, 0, 0);
+            Run(world, 100);
+            Creature guard = system.Creatures.Single(c => c.Entry == GuardEntry);
+            Creature dummy = system.Creatures.Single(c => c.Entry == DummyEntry);
+
+            for (int i = 0; i < 4; i++)
+            {
+                map.Combat.Attack(guard, dummy, melee: true);
+                dummy.Combat.Threat.AddThreat(guard, 10f);
+                Assert.True(dummy.Combat.HasThreatList);
+
+                // Guard executes scripted ACTION_T_EVADE ("Execute") while sparring with the dummy (no player involved).
+                system.EnterEvadeMode(guard, "Execute");
+                Assert.False(dummy.Combat.HasThreatList);
+
+                // Even if the dummy evades via SelectHostileTarget after its NPC opponent evaded:
+                dummy.Combat.LastVictimGuid = guard.Guid;
+                system.EnterEvadeMode(dummy, "SelectHostileTarget");
+                Run(world, 2_000);
+            }
+
+            Assert.Empty(guardCapture.Notices);
+            Assert.Empty(dummyCapture.Notices);
+            AnomalyCapture capture = dummyCapture;
+            Assert.Equal(MovementGeneratorType.Idle, dummy.Motion.CurrentType);
+            Assert.Empty(capture.Notices);
+        }
+    }
 }
