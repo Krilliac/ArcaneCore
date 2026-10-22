@@ -49,7 +49,7 @@ public static class DrainAuras
         uint rolled = damage;
         uint resisted = spells.ApplyResist(caster, target, spell, ref damage, periodic: true);
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
-            CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, spell.Id, resisted > 0 ? rolled : damage, spell.School, absorbed: 0, resisted), includeSelf: true);
+            SpellPackets.BuildSpellNonMeleeDamageLog(target.Guid, caster.Guid, spell.Id, resisted > 0 ? rolled : damage, spell.School, absorbed: 0, resisted, periodic: true), includeSelf: true);
 
         damage = Math.Min(damage, target.Health);
 
@@ -144,7 +144,7 @@ public static class DrainAuras
         uint rolled = damage;
         uint resisted = spells.ApplyResist(caster, target, talent, ref damage, periodic: true); // a PERIODIC_DAMAGE tick: the signed DOT resist
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
-            CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, talent.Id, resisted > 0 ? rolled : damage, talent.School, absorbed: 0, resisted), includeSelf: true);
+            SpellPackets.BuildSpellNonMeleeDamageLog(target.Guid, caster.Guid, talent.Id, resisted > 0 ? rolled : damage, talent.School, absorbed: 0, resisted, periodic: true), includeSelf: true);
         spells.FirePeriodicDamageProcs(caster, target, talent, damage, rolled);
         uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage, periodic: true, startsCombat: talent.IsChanneled, critical: false, durabilityLoss: true, // DOT (Unit.cpp:696-714)
             reflected: reflected);
