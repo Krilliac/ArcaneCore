@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ArcaneCore.Game;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Playerbots.Party;
@@ -234,31 +235,47 @@ internal static partial class PlayerbotChatCommands
     /// u8 tag (ChannelPackets.BuildChannelMessage). False for monster lines (their layout differs) and for a body that does not fit.
     /// </summary>
     internal static bool TryRead(byte[] payload, out PlayerbotChatLine line)
+        => TryRead(payload, out line, out _);
+
+    internal static bool TryRead(byte[] payload, out PlayerbotChatLine line, out bool malformed)
     {
         line = default;
-        if (payload.Length < 18) return false;
+        if (payload.Length > 0 && (ChatType)payload[0] is ChatType.MonsterSay or ChatType.MonsterYell or ChatType.MonsterEmote
+            or ChatType.MonsterWhisper or ChatType.RaidBossEmote or ChatType.RaidBossWhisper)
+        {
+            malformed = false;
+            return false;
+        }
+
+        if (payload.Length < 18)
+        {
+            malformed = true;
+            return false;
+        }
+
         var type = (ChatType)payload[0];
-        if (type is ChatType.MonsterSay or ChatType.MonsterYell or ChatType.MonsterEmote
-            or ChatType.MonsterWhisper or ChatType.RaidBossEmote or ChatType.RaidBossWhisper) return false;
         var reader = new PacketReader(payload.AsSpan(1));
         try
         {
-            if (!reader.TryReadUInt32(out uint language)) return false;
+            if (!reader.TryReadUInt32(out uint language)) { malformed = true; return false; }
             string? channel = null;
             if (type == ChatType.Channel)
             {
                 channel = reader.ReadCString();
-                if (channel.Length == 0 || !reader.TryReadUInt32(out _)) return false;
+                if (channel.Length == 0 || !reader.TryReadUInt32(out _)) { malformed = true; return false; }
             }
 
-            if (!reader.TryReadUInt64(out ulong sender)) return false;
-            if ((type is ChatType.Say or ChatType.Party or ChatType.Yell) && !reader.TryReadUInt64(out _)) return false;
-            if (!reader.TryReadUInt32(out uint size) || size == 0 || size > reader.Remaining) return false;
+            if (!reader.TryReadUInt64(out ulong sender)) { malformed = true; return false; }
+            if ((type is ChatType.Say or ChatType.Party or ChatType.Yell) && !reader.TryReadUInt64(out _)) { malformed = true; return false; }
+            if (!reader.TryReadUInt32(out uint size) || size == 0 || size > reader.Remaining) { malformed = true; return false; }
             line = new PlayerbotChatLine(type, (Language)language, new ObjectGuid(sender), reader.ReadCString(), channel);
+            malformed = false;
             return true;
         }
-        catch (ArgumentOutOfRangeException)
+        catch (ArgumentOutOfRangeException ex)
         {
+            FaultLedger.Shared.Record("playerbot.party", ex);
+            malformed = true;
             return false; // no terminator (PacketReader's malformed-packet exception)
         }
     }
@@ -279,8 +296,9 @@ internal static partial class PlayerbotChatCommands
             emote = new PlayerbotTextEmote(new ObjectGuid(emoter), textEmote, reader.ReadCString());
             return true;
         }
-        catch (ArgumentOutOfRangeException)
+        catch (ArgumentOutOfRangeException ex)
         {
+            FaultLedger.Shared.Record("playerbot.party", ex);
             return false;
         }
     }

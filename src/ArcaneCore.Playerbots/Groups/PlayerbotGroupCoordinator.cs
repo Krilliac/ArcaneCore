@@ -308,6 +308,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.groups", ex);
+                PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.CoordinatorFault,
+                    string.Create(CultureInfo.InvariantCulture, $"group {group.Id} (leader {group.LeaderGuid.Value:X})"),
+                    string.Create(CultureInfo.InvariantCulture, $"group {group.Id} coordinator update failed ({ex.GetType().Name}: {ex.Message})"),
+                    _world?.Identity);
                 logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
             }
         }
@@ -1857,8 +1862,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             return services.GetService<SocialFeature>()?.Context.Groups;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
             return null;
         }
     }

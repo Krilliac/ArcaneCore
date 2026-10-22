@@ -21,6 +21,7 @@ public sealed class ManagedPlayerbotLifecycleAnomalyTests
     private static readonly string ThinkFault = PlayerbotAnomalies.Key("lifecycle", "think-fault");
     private static readonly string Quarantined = PlayerbotAnomalies.Key("lifecycle", "quarantined");
     private static readonly string Disabled = PlayerbotAnomalies.Key("lifecycle", "disabled");
+    private static readonly string OperationFault = PlayerbotAnomalies.Key("lifecycle", "operation-fault");
 
     private static AnomalyCapture CaptureOf(string name)
         => AnomalyLedger.Shared.Capture(n => n.Subsystem == "bot-lifecycle" && n.Subject.Contains($"bot {name} ", StringComparison.Ordinal));
@@ -157,9 +158,36 @@ public sealed class ManagedPlayerbotLifecycleAnomalyTests
 
         Assert.Equal(ManagedPlayerbotState.Faulted, (await owners.FindAsync(bot.BotId))!.State);
         Assert.Equal(1, capture.Count(Quarantined));
+        Assert.Equal(1, capture.Count(OperationFault));
         Assert.False(capture.Any(Disabled) || capture.Any(ThinkFault) || capture.Any(SessionLost), capture.Describe());
-        AnomalyNotice notice = capture.Notices.Single();
+        AnomalyNotice notice = capture.Notices.Single(n => n.Key == Quarantined);
         Assert.Contains("start-failed: login-refused", notice.Detail, StringComparison.Ordinal);
         Assert.Contains("fault 1 of 3", notice.Detail, StringComparison.Ordinal);
+        AnomalyNotice opFault = capture.Notices.Single(n => n.Key == OperationFault);
+        Assert.Contains("start failed", opFault.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnOperatorStartFailure_FiresOperationFault_AndRecordsLifecycleFault()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        Account owner = await accounts.CreateAsync(new Account { Username = "PBLIFEOPF", Salt = new byte[32], Verifier = new byte[32], Security = AccountSecurity.Player });
+        CharacterRecord character = await characters.CreateAsync(new CharacterRecord { AccountId = owner.Id, Name = "Lifeopflt", Race = 1, Class = 1, Level = 10 });
+        var bot = new ManagedPlayerbot(Guid.NewGuid(), owner.Id, character.Id, owner.Username, false,
+            ManagedPlayerbotState.Stopped, PlayerbotGoalKind.Explore, 0, 0, 0, 1, 1);
+        await owners.CreateAsync(bot);
+        using AnomalyCapture capture = CaptureOf("Lifeopflt");
+
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.AllowedMaps = [1]);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+
+        var result = await feature.StartAsync(bot.BotId.ToString());
+        Assert.False(result.Success);
+        Assert.Equal("start-failed", result.Code);
+        Assert.Equal(1, capture.Count(OperationFault));
+        Assert.Contains(FaultLedger.Shared.Snapshot(), e => e.Site == "playerbot.lifecycle");
     }
 }

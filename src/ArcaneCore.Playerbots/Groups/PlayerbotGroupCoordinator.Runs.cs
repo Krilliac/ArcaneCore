@@ -8,6 +8,7 @@ using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -114,6 +115,11 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
+            PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.RunFault,
+                "instance_encounter",
+                string.Create(CultureInfo.InvariantCulture, $"instance_encounter table could not be read ({ex.GetType().Name}: {ex.Message})"),
+                _world?.Identity);
             logger.LogWarning(ex, "Playerbot runs: the instance_encounter table could not be read ({Type}: {Message}); no dungeon or raid runs", ex.GetType().Name, ex.Message);
         }
     }
@@ -559,6 +565,11 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
+            PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.RunFault,
+                string.Create(CultureInfo.InvariantCulture, $"group {group.Id} (leader {group.LeaderGuid.Value:X})"),
+                string.Create(CultureInfo.InvariantCulture, $"group {group.Id} run failure report failed ({ex.GetType().Name}: {ex.Message})"),
+                _world?.Identity);
             logger.LogDebug(ex, "Playerbot group {Group}: the run failure could not be reported to bot QA", group.Id);
         }
     }

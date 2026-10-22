@@ -9,6 +9,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
@@ -431,9 +432,14 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         switch (action)
         {
             case PlayerbotBattlegroundAction.Hello:
-                Act(bot.Session, WorldOpcode.CmsgBattlemasterHello, PlayerbotNavigation.GuidPayload(t.Battlemaster.Value));
+            {
+                bool sent = Act(bot.Session, WorldOpcode.CmsgBattlemasterHello, PlayerbotNavigation.GuidPayload(t.Battlemaster.Value));
                 t.HelloSent = true;
+                if (!sent && !bot.Session.IsInChaosProbe)
+                    PlayerbotAnomalies.Report(player, "bg", "queue-action-failed",
+                        string.Create(CultureInfo.InvariantCulture, $"battlemaster hello for {t.Type} ({t.Battlemaster}) was not dispatched"));
                 break;
+            }
 
             case PlayerbotBattlegroundAction.Join:
             {
@@ -443,8 +449,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 writer.WriteUInt32(map);
                 writer.WriteUInt32(0);
                 writer.WriteByte(0);
-                Act(bot.Session, WorldOpcode.CmsgBattlemasterJoin, writer.ToArray());
+                bool sent = Act(bot.Session, WorldOpcode.CmsgBattlemasterJoin, writer.ToArray());
                 t.JoinSent = true;
+                if (!sent && !bot.Session.IsInChaosProbe)
+                    PlayerbotAnomalies.Report(player, "bg", "queue-action-failed",
+                        string.Create(CultureInfo.InvariantCulture, $"battlemaster join for {t.Type} ({t.Battlemaster}) was not dispatched"));
                 break;
             }
 
@@ -563,8 +572,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     private void Leave(Tracked t, PlayerbotBattlegroundBot bot, Player player)
     {
-        Act(bot.Session, WorldOpcode.CmsgLeaveBattlefield, BitConverter.GetBytes(player.MapId));
+        bool sent = Act(bot.Session, WorldOpcode.CmsgLeaveBattlefield, BitConverter.GetBytes(player.MapId));
         t.LeaveSentMs = Now;
+        if (!sent && !bot.Session.IsInChaosProbe)
+            PlayerbotAnomalies.Report(player, "bg", "queue-action-failed",
+                string.Create(CultureInfo.InvariantCulture, $"leave-battlefield for {t.Type} match {t.InstanceId} was not dispatched"));
     }
 
     /// <summary>CMSG_BATTLEFIELD_PORT: u32 map, u8 action (1 enter, 0 leave the queue or decline).</summary>
@@ -1105,8 +1117,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             _ = feature.Manager;
             return feature;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.bg-coordinator", ex);
             return null;
         }
     }
@@ -1117,8 +1130,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         {
             return services.GetService<SocialFeature>()?.Context.Groups;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.bg-coordinator", ex);
             return null;
         }
     }

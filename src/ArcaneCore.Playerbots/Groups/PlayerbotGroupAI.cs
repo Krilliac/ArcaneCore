@@ -11,6 +11,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
@@ -762,8 +763,9 @@ internal sealed class PlayerbotGroupAI
         {
             teleports = _session.Services.GetService<TeleportFeature>()?.Teleports;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
             return PlayerbotCatchUpResult.Unable;
         }
 
@@ -1506,8 +1508,9 @@ internal sealed class PlayerbotGroupAI
         {
             return _session.Services.GetService<SocialFeature>()?.Context.Groups;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
             return null;
         }
     }

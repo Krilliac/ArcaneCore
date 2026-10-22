@@ -243,9 +243,10 @@ internal static class PlayerbotTravelCast
             _ = reader.ReadPackedGuid();
             return reader.ReadUInt32();
         }
-        catch (ArgumentOutOfRangeException)
+        catch (ArgumentOutOfRangeException ex)
         {
             // PacketReader's one malformed-packet exception (MalformedPacket.Throw): a short packet names no spell.
+            FaultLedger.Shared.Record("playerbot.hearthstone", ex);
             return 0;
         }
     }

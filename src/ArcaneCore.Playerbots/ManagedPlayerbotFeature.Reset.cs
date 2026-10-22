@@ -4,6 +4,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Net;
@@ -316,6 +317,14 @@ public sealed partial class ManagedPlayerbotFeature
                 {
                     failed++;
                     Exception? cause = stop.Exception?.GetBaseException();
+                    if (cause is not null and not OperationCanceledException)
+                    {
+                        FaultLedger.Shared.Record("playerbot.reset", cause);
+                        AnomalyLedger.Shared.Report("bot-lifecycle", "reset-fault",
+                            string.Create(CultureInfo.InvariantCulture, $"bot {active.Name} (guid {(uint)active.Record.CharacterId:X})"),
+                            string.Create(CultureInfo.InvariantCulture, $"bot {active.Record.BotId:D} stop during fleet reset failed ({cause.GetType().Name}: {cause.Message})"),
+                            AnomalySeverity.Warning, _world?.Identity);
+                    }
                     logger.LogWarning(cause, "Playerbot fleet reset: bot {BotId} did not stop cleanly ({Type})", active.Record.BotId,
                         cause?.GetType().Name ?? "canceled");
                 }
@@ -335,6 +344,7 @@ public sealed partial class ManagedPlayerbotFeature
     /// </summary>
     private async Task DeleteBotForResetAsync(FleetResetBot bot, ResetCounts counts, CancellationToken cancellationToken)
     {
+        string? botName = null;
         try
         {
             if (_active.ContainsKey(bot.BotId))
@@ -356,6 +366,7 @@ public sealed partial class ManagedPlayerbotFeature
 
             ICharacterStore characters = provider.GetRequiredService<ICharacterStore>();
             IReadOnlyList<CharacterRecord> held = await characters.GetByAccountAsync(bot.AccountId, cancellationToken).ConfigureAwait(false);
+            botName = held.FirstOrDefault()?.Name;
             bool allGone = true;
             // The census vetted exactly these characters. One that was not in it has appeared on the account since (or the account
             // changed hands): that is not a bot's character, so nothing on this account is deleted.
@@ -389,7 +400,15 @@ public sealed partial class ManagedPlayerbotFeature
                 {
                     session.Kick("playerbot fleet reset character deleted");
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
+                    catch (TimeoutException timeout)
+                    {
+                        FaultLedger.Shared.Record("playerbot.reset", timeout);
+                        AnomalyLedger.Shared.Report("bot-lifecycle", "session-close-timeout",
+                            string.Create(CultureInfo.InvariantCulture, $"bot {held[0].Name} (guid {(uint)held[0].Id:X})"),
+                            string.Create(CultureInfo.InvariantCulture, $"bot {bot.BotId:D} fleet-reset deletion session did not close within 10 s"),
+                            AnomalySeverity.Warning, _world?.Identity);
+                        logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId);
+                    }
                 }
             }
 
@@ -413,6 +432,11 @@ public sealed partial class ManagedPlayerbotFeature
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
         {
+            FaultLedger.Shared.Record("playerbot.reset", ex);
+            AnomalyLedger.Shared.Report("bot-lifecycle", "reset-fault",
+                string.Create(CultureInfo.InvariantCulture, $"bot {botName ?? bot.AccountName} (guid {(uint)(bot.CharacterIds.Count > 0 ? bot.CharacterIds[0] : 0):X})"),
+                string.Create(CultureInfo.InvariantCulture, $"bot {bot.BotId:D} fleet reset failed ({ex.GetType().Name}: {ex.Message})"),
+                AnomalySeverity.Warning, _world?.Identity);
             counts.CharactersFailed += bot.CharacterIds.Count;
             logger.LogWarning(ex, "Playerbot fleet reset: bot {BotId} failed ({Type}: {Message})", bot.BotId, ex.GetType().Name, ex.Message);
         }
