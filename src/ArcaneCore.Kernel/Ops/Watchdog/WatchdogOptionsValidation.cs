@@ -1,4 +1,3 @@
-using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Validation;
 using Microsoft.Extensions.Configuration;
@@ -152,71 +151,15 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
         return issues;
     }
 
-    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
+    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback) =>
+        ConfigChecks.IntOr(issues, $"{Root}:{key}", section[key], fallback, "use a whole number");
 
-        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
-        {
-            return value;
-        }
+    private static long Long(List<ConfigIssue> issues, IConfigurationSection section, string key, long fallback) =>
+        ConfigChecks.LongOr(issues, $"{Root}:{key}", section[key], fallback, "use a whole number of bytes");
 
-        issues.Add(ConfigChecks.Error($"{Root}:{key}", $"'{text}' is not a whole number.", "use a whole number"));
-        return fallback;
-    }
+    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback) =>
+        ConfigChecks.BoolOr(issues, $"{Root}:{key}", section[key], fallback);
 
-    private static long Long(List<ConfigIssue> issues, IConfigurationSection section, string key, long fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
-        {
-            return value;
-        }
-
-        issues.Add(ConfigChecks.Error($"{Root}:{key}", $"'{text}' is not a whole number.", "use a whole number of bytes"));
-        return fallback;
-    }
-
-    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(text, out bool value))
-        {
-            return value;
-        }
-
-        issues.Add(ConfigChecks.Error($"{Root}:{key}", $"'{text}' is not true or false.", "use true or false"));
-        return fallback;
-    }
-
-    private static T EnumValue<T>(List<ConfigIssue> issues, IConfigurationSection section, string key, T fallback) where T : struct, Enum
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (Enum.TryParse(text, ignoreCase: true, out T value) && Enum.IsDefined(value))
-        {
-            return value;
-        }
-
-        issues.Add(ConfigChecks.Error($"{Root}:{key}", $"'{text}' is not one of the allowed values.", "use " + string.Join(", ", Enum.GetNames<T>())));
-        return fallback;
-    }
+    private static T EnumValue<T>(List<ConfigIssue> issues, IConfigurationSection section, string key, T fallback) where T : struct, Enum =>
+        ConfigChecks.EnumOr(issues, $"{Root}:{key}", section[key], fallback);
 }

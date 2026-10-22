@@ -51,6 +51,78 @@ internal static class ConfigChecks
         return value;
     }
 
+    /// <summary>
+    /// The parsed boolean, or <paramref name="fallback"/> when <paramref name="text"/> is blank; a non-blank text that is not
+    /// <c>true</c> or <c>false</c> is reported and also yields <paramref name="fallback"/>.
+    /// </summary>
+    public static bool BoolOr(List<ConfigIssue> issues, string key, string? text, bool fallback)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return fallback;
+        }
+
+        if (bool.TryParse(text, out bool value))
+        {
+            return value;
+        }
+
+        issues.Add(Error(key, $"'{text}' is not true or false.", "use true or false"));
+        return fallback;
+    }
+
+    /// <summary>As <see cref="BoolOr"/> for an <see cref="int"/>; the fix text of a non-numeric value is the caller's.</summary>
+    public static int IntOr(List<ConfigIssue> issues, string key, string? text, int fallback, string fix)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return fallback;
+        }
+
+        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+        {
+            return value;
+        }
+
+        issues.Add(Error(key, $"'{text}' is not a whole number.", fix));
+        return fallback;
+    }
+
+    /// <summary>As <see cref="IntOr"/> for a <see cref="long"/>.</summary>
+    public static long LongOr(List<ConfigIssue> issues, string key, string? text, long fallback, string fix)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return fallback;
+        }
+
+        if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
+        {
+            return value;
+        }
+
+        issues.Add(Error(key, $"'{text}' is not a whole number.", fix));
+        return fallback;
+    }
+
+    /// <summary>As <see cref="BoolOr"/> for an enum name (case-insensitive, a defined member); the fix lists the member names.</summary>
+    public static T EnumOr<T>(List<ConfigIssue> issues, string key, string? text, T fallback)
+        where T : struct, Enum
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return fallback;
+        }
+
+        if (Enum.TryParse(text, ignoreCase: true, out T value) && Enum.IsDefined(value))
+        {
+            return value;
+        }
+
+        issues.Add(Error(key, $"'{text}' is not one of the allowed values.", "use " + string.Join(", ", Enum.GetNames<T>())));
+        return fallback;
+    }
+
     /// <summary>Reports <c>value is out of range.</c> with the fix <c>use {expected}</c>.</summary>
     public static void Range(List<ConfigIssue> issues, string key, long value, long min, long max, string expected)
     {

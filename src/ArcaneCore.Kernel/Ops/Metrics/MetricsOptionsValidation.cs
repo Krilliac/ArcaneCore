@@ -1,4 +1,3 @@
-using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Validation;
 using Microsoft.Extensions.Configuration;
@@ -71,18 +70,7 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         o.RealmPrometheusPrefix = section["RealmPrometheusPrefix"] ?? o.RealmPrometheusPrefix;
         o.OtlpEndpoint = section["OtlpEndpoint"] ?? o.OtlpEndpoint;
         o.Realm = section["Realm"] ?? o.Realm;
-        string? exporter = section["Exporter"];
-        if (!string.IsNullOrWhiteSpace(exporter))
-        {
-            if (Enum.TryParse(exporter, ignoreCase: true, out MetricsExporter value) && Enum.IsDefined(value))
-            {
-                o.Exporter = value;
-            }
-            else
-            {
-                issues.Add(ConfigChecks.Error($"{Root}:Exporter", $"'{exporter}' is not one of the allowed values.", "use " + string.Join(", ", Enum.GetNames<MetricsExporter>())));
-            }
-        }
+        o.Exporter = ConfigChecks.EnumOr(issues, $"{Root}:Exporter", section["Exporter"], o.Exporter);
 
         if (issues.Count == 0)
         {
@@ -92,39 +80,11 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         return issues;
     }
 
-    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
+    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback) =>
+        ConfigChecks.IntOr(issues, $"{Root}:{key}", section[key], fallback, "use a whole number");
 
-        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
-        {
-            return value;
-        }
-
-        issues.Add(ConfigChecks.Error($"{Root}:{key}", $"'{text}' is not a whole number.", "use a whole number"));
-        return fallback;
-    }
-
-    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(text, out bool value))
-        {
-            return value;
-        }
-
-        issues.Add(ConfigChecks.Error($"{Root}:{key}", $"'{text}' is not true or false.", "use true or false"));
-        return fallback;
-    }
+    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback) =>
+        ConfigChecks.BoolOr(issues, $"{Root}:{key}", section[key], fallback);
 
     private static void Prefix(List<ConfigIssue> issues, string key, string value, string example)
     {
