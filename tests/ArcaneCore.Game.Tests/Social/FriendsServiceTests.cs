@@ -219,8 +219,8 @@ public sealed class FriendsServiceTests
         Assert.Empty(f.Sent(a, WorldOpcode.SmsgFriendStatus));
     }
 
-    private static SocialFlags StoredFlags(SocialFixture f, int character, int other)
-        => f.Persistence.Social.LastOrDefault(w => w.CharacterId == character && w.OtherId == other).Flags;
+    private static void AssertWritten(SocialFixture f, int character, int other, SocialFlags flags)
+        => Assert.Contains(f.Persistence.Social, w => w.CharacterId == character && w.OtherId == other && w.Flags == flags);
 
     /// <summary>The rows of a player arrive after it is in the world: a change made on its list before they do is a delta over the stored row, in memory and in the store.</summary>
     [Fact]
@@ -248,9 +248,9 @@ public sealed class FriendsServiceTests
         Assert.True(loaded.Has(4, SocialFlags.Friend));
         Assert.True(loaded.Has(4, SocialFlags.Ignored)); // Friend|Ignored: the stored friend stays
         Assert.True(f.Context.Friends.HasIgnore(a, ObjectGuid.Player(2)));
-        Assert.Equal(SocialFlags.Ignored, StoredFlags(f, 1, 2));
-        Assert.Equal(SocialFlags.None, StoredFlags(f, 1, 3));
-        Assert.Equal(SocialFlags.Friend | SocialFlags.Ignored, StoredFlags(f, 1, 4));
+        AssertWritten(f, 1, 2, SocialFlags.Ignored);
+        AssertWritten(f, 1, 3, SocialFlags.None);
+        AssertWritten(f, 1, 4, SocialFlags.Friend | SocialFlags.Ignored);
     }
 
     [Fact]
@@ -266,8 +266,15 @@ public sealed class FriendsServiceTests
         f.Context.Friends.Load(a, [new SocialEntry(3, SocialFlags.Friend), new SocialEntry(4, SocialFlags.Friend)]);
         Assert.False(f.Context.Friends.Get(a).Has(3, SocialFlags.Friend));
 
-        // The second load reads what the store now holds: the removal was written by the first.
-        SocialEntry[] rows = [.. new[] { 3, 4 }.Select(other => new SocialEntry(other, StoredFlags(f, 1, other) == SocialFlags.None && other == 3 ? SocialFlags.None : SocialFlags.Friend))];
+        // The second load reads what the store now holds: the stored rows with every write applied in order.
+        AssertWritten(f, 1, 3, SocialFlags.None);
+        var store = new Dictionary<int, SocialFlags> { [3] = SocialFlags.Friend, [4] = SocialFlags.Friend };
+        foreach ((int character, int other, SocialFlags flags) in f.Persistence.Social)
+        {
+            if (character == 1) store[other] = flags;
+        }
+
+        SocialEntry[] rows = [.. store.Where(e => e.Value != SocialFlags.None).Select(e => new SocialEntry(e.Key, e.Value))];
         f.Context.Friends.Load(a, rows);
         Assert.False(f.Context.Friends.Get(a).Has(3, SocialFlags.Friend));
         Assert.True(f.Context.Friends.Get(a).Has(4, SocialFlags.Friend));
@@ -292,8 +299,8 @@ public sealed class FriendsServiceTests
         PlayerSocial loaded = f.Context.Friends.Get(a);
         Assert.Equal(PlayerSocial.IgnoreLimit, loaded.Count(SocialFlags.Ignored));
         Assert.False(loaded.Has(100 + PlayerSocial.IgnoreLimit, SocialFlags.Ignored)); // the 26th, in order, is the one dropped
-        Assert.Equal(SocialFlags.None, StoredFlags(f, 1, 100 + (int)PlayerSocial.IgnoreLimit));
-        Assert.Equal(SocialFlags.Ignored, StoredFlags(f, 1, 100));
+        AssertWritten(f, 1, 100 + (int)PlayerSocial.IgnoreLimit, SocialFlags.None);
+        AssertWritten(f, 1, 100, SocialFlags.Ignored);
     }
 
     [Fact]
