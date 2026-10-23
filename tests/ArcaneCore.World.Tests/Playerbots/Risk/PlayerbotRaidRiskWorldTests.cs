@@ -26,9 +26,9 @@ public sealed class PlayerbotRaidRiskWorldTests
     }
 
     [Fact]
-    public async Task AWorldEliteNeedingEight_RaisesASignalForEight_InAboutSixEstimates()
+    public async Task ARareEliteNeedingEight_RaisesASignalForEight_InAboutSixEstimates()
     {
-        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992001, rank: 1, health: 1700);
+        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992001, rank: 2, health: 1700);
         Assert.NotNull(signal);
         Assert.Equal(8, signal.Value.Size);
         Assert.InRange(probes, 1, 8); // bisection over 2..40, not 39 estimates
@@ -52,10 +52,18 @@ public sealed class PlayerbotRaidRiskWorldTests
     }
 
     [Fact]
-    public async Task ACreatureThatIsNoElite_NeverAsksForMoreThanAParty()
+    public async Task ACreatureThatIsNoRareEliteOrBoss_NeverAsksForMoreThanAParty()
     {
         (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992003, rank: 0, health: 2000);
-        Assert.Null(signal); // it would need nine: only an elite may ask for a raid
+        Assert.Null(signal); // it would need nine: only a rare elite or a boss may ask for a raid
+        Assert.InRange(probes, 1, 4);
+    }
+
+    [Fact]
+    public async Task APlainEliteNeedingEight_RaisesNoRaidSignal()
+    {
+        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992005, rank: 1, health: 1700);
+        Assert.Null(signal); // the same creature as a rare elite needs eight: a plain elite is passed over
         Assert.InRange(probes, 1, 4);
     }
 }
