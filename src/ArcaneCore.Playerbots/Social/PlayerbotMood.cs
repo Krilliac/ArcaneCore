@@ -59,7 +59,6 @@ internal sealed class PlayerbotMood
         PlayerbotSocialEvent.Kicked => -0.4f,
         PlayerbotSocialEvent.RudeEmote => -0.15f,
         PlayerbotSocialEvent.ChatStrike => -0.3f,
-        PlayerbotSocialEvent.KilledBy => -0.3f,
         _ => 0f,
     };
 

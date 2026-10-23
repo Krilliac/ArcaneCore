@@ -797,7 +797,7 @@ internal sealed class PlayerbotPartyAI
         response.WriteUInt64(caster.Value);
         response.WriteByte(member ? (byte)1 : (byte)0);
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
-        if (member) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks the caster once alive ("ty")
+        if (groupMember) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks a group member once alive ("ty"); a stranger is thanked by the gratitude lane instead
         // A stranger's resurrection is help: remembered, and thanked by the social pass (BotSocial.PlayerbotGratitudeLane).
         if (stranger && _session.World.FindOnlinePlayer(caster) is { } raiser) Social?.NoteHelp(raiser, player, BotSocial.PlayerbotThanksKind.Resurrect);
     }

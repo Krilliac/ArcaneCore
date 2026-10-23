@@ -1,5 +1,6 @@
 using System.Text;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -51,6 +52,8 @@ public sealed class PlayerbotMoodTests
         foreach (PlayerbotSocialEvent down in new[] { PlayerbotSocialEvent.GroupWiped, PlayerbotSocialEvent.Kicked, PlayerbotSocialEvent.RudeEmote, PlayerbotSocialEvent.ChatStrike })
             Assert.True(PlayerbotMood.DeltaOf(down) < 0, down.ToString());
         Assert.Equal(0f, PlayerbotMood.DeltaOf(PlayerbotSocialEvent.ChatExchange));
+        // A PvP death is the mood lane's Death nudge alone: KilledBy must not move the mood a second time.
+        Assert.Equal(0f, PlayerbotMood.DeltaOf(PlayerbotSocialEvent.KilledBy));
         Assert.True(PlayerbotMood.DeltaOf(PlayerbotMoodEvent.LevelUp) > 0 && PlayerbotMood.DeltaOf(PlayerbotMoodEvent.LootUpgrade) > 0 && PlayerbotMood.DeltaOf(PlayerbotMoodEvent.Death) < 0);
     }
 
@@ -142,5 +145,34 @@ public sealed class PlayerbotMoodTests
             SocialTestKit.Feature(world.Host).MoodLane.Run(SocialTestKit.BotPass(world.Host, 2_000));
         });
         Assert.True(mood.Get(bot) > before + 0.2f);
+    }
+
+    [Fact]
+    public async Task WearingABetterItem_RaisesTheMoodOfARunningBot_ByTheLootUpgradeDelta()
+    {
+        var items = new ArcaneCore.World.Tests.Items.ItemTestContent();
+        items.Templates.Templates.Add(new ArcaneCore.Kernel.Items.ItemTemplate { Entry = 41101, Class = 2, SubClass = 7, Name = "Mood Test Sword", DisplayId = 1542, Quality = 2, InventoryType = 21, Stackable = 1, ItemLevel = 20, MaxDurability = 20 });
+        SocialWorld world;
+        using (items.Use()) world = await SocialWorld.StartAsync(frozen: true);
+        await using (world)
+        {
+            Guid bot = await world.AddBotAsync("Moodloot");
+            PlayerbotMood mood = HelpTestKit.RecorderOf(world).Mood;
+            await world.Host.OnWorldAsync(() =>
+            {
+                HelpTestKit.Online(world, "Moodloot").Inventory.Load([]);
+                SocialTestKit.Feature(world.Host).MoodLane.Run(SocialTestKit.BotPass(world.Host, 1_000)); // the baseline: nothing worn
+            });
+            float before = mood.Get(bot);
+            await world.Host.OnWorldAsync(() =>
+            {
+                Player player = HelpTestKit.Online(world, "Moodloot");
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(41101, 1, out ArcaneCore.Game.Items.Item? sword));
+                player.Inventory.AutoEquipItem(sword!.BagSlot, sword.Slot); // true only when the item went into a bag slot
+                Assert.Contains(player.Inventory.Equipped, e => e.Item2.Template.Entry == 41101);
+                SocialTestKit.Feature(world.Host).MoodLane.Run(SocialTestKit.BotPass(world.Host, 12_000)); // past the ten-second item check
+            });
+            Assert.Equal(before + PlayerbotMood.DeltaOf(PlayerbotMoodEvent.LootUpgrade), mood.Get(bot), 2);
+        }
     }
 }

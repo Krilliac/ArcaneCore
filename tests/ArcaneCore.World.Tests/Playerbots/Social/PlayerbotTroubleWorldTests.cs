@@ -92,7 +92,9 @@ public sealed class PlayerbotTroubleWorldTests
         });
         Assert.True(HelpTestKit.RecorderOf(world).Memory.TryGet(scene.Bot, scene.VictimGuid.Value, out PlayerbotRelation relation));
         Assert.True(HelpTestKit.RecorderOf(world).Memory.IsRival(relation));
-        long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
+        // The roll is taken with the rival's real affinity, so only the rival guard (not a low roll) can be what stops the help.
+        int rivalAffinity = HelpTestKit.RecorderOf(world).Memory.EffectiveAffinity(relation);
+        long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), rivalAffinity));
 
         await ScanAsync(world, now);
 

@@ -182,4 +182,33 @@ public sealed class PlayerbotHelpCastWorldTests
         await ScanAsync(world, after);
         Assert.Equal(2, lane.Buffs);
     }
+
+    [Fact]
+    public async Task APriest_HelpingAWoundedPlayerInAFight_HealsThemFirst_WithAHealThatLandsOnAFriend()
+    {
+        await using SocialWorld world = await StartWorldAsync();
+        await using WorldTestClient victim = await world.AddPlayerAsync("Helphealvic");
+        SpellInfo template = await world.Host.OnWorldAsync(() => world.Host.WorldServices.GetRequiredService<SpellFeature>().System.Store.Get(ArcaneCore.World.Tests.Spells.SpellTestServices.Heal)!);
+        SpellInfo friendHeal = template with
+        {
+            Id = 990_810, Name = "Help Test Friend Heal",
+            Effects = [.. template.Effects.Select(e => e with { TargetA = SpellImplicitTarget.UnitFriend, BasePoints = 100_000 })],
+        };
+        (Guid bot, ObjectGuid botGuid, ObjectGuid victimGuid) = await SetUpAsync(world, "Helphealvic", [friendHeal]);
+        uint wounded = 0;
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player player = HelpTestKit.Online(world, "Helphealvic");
+            HelpTestKit.Engage(HelpTestKit.SpawnMob(player, 4f), player);
+            player.Health = Math.Max(1u, player.MaxHealth / 4);
+            wounded = player.Health;
+        });
+        float helpfulness = PlayerbotTraits.For(botGuid.Value).Helpfulness;
+        long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(botGuid.Value, victimGuid.Value, (uint)t, helpfulness, 0));
+
+        await ScanAsync(world, now);
+
+        Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helphealvic").Health).Result > wounded, "the priest's heal to land on the victim");
+    }
 }
