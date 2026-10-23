@@ -84,7 +84,8 @@ for again meanwhile) and the hold ends: the brain may try the objective alone, w
 
 **Real players** (`InvitePlayers`, on by default): a group one member or role short may take a nearby real player (100 yards, same
 team, ungrouped, of a fitting level) through the same ordinary invitation, but only one who is on the group's goal (holds its quest
-unfinished, or stands on its dungeon's map) and who either opted in to AI chat (`ai on`) or is liked: affinity of at least
+unfinished, or is inside its dungeon, or stands at its entrance: on the meeting map within `SameGoalMeetingRadiusYards` (150) of the
+entrance and in level range) and who either opted in to AI chat (`ai on`) or is liked: affinity of at least
 `InvitePlayerAffinity` (20) toward one of the waiting bots, read through `EffectiveAffinity`. A rival of any of them, or a player a bot
 flagged `NoWhispers`, is never asked, and a player is asked at most once per `InvitePlayerCooldownMinutes` (30). A player whose
 remembered role (the P1 `PrefersTank` / `PrefersHealer` flags) fills the missing tank or healer comes first, then one whose class can.
@@ -230,6 +231,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
 | `MentorAffinity` | 30 | affinity a mentor needs toward the friend (-100..100) |
 | `RaidEscalation` | true | risk signals above five become raid goals |
 | `MaxRaidSize` | 40 | largest raid goal (6..40) |
+| `SameGoalMeetingRadiusYards` | 150 | how near a dungeon's entrance a player on the continent still counts as on its goal (10..1500) |
 
 ## Few bots and stray cases
 

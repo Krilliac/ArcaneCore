@@ -311,6 +311,7 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Groups:Cooperation:MentorAffinity", o => o.Groups.Cooperation.MentorAffinity, (o, v) => o.Groups.Cooperation.MentorAffinity = v, v => v is >= -100 and <= 100 ? null : "must be -100..100"),
         LivePlayerbots("Groups:Cooperation:RaidEscalation", o => o.Groups.Cooperation.RaidEscalation, (o, v) => o.Groups.Cooperation.RaidEscalation = v),
         LivePlayerbotsValue("Groups:Cooperation:MaxRaidSize", o => o.Groups.Cooperation.MaxRaidSize, (o, v) => o.Groups.Cooperation.MaxRaidSize = v, v => v is >= 6 and <= 40 ? null : "must be 6..40"),
+        LivePlayerbotsValue("Groups:Cooperation:SameGoalMeetingRadiusYards", o => o.Groups.Cooperation.SameGoalMeetingRadiusYards, (o, v) => o.Groups.Cooperation.SameGoalMeetingRadiusYards = v, v => v is >= 10 and <= 1500 ? null : "must be 10..1500"),
 
         // Dungeon and raid runs (docs/areas/playbots-groups.md): every key live, the coordinator reads them at each decision.
         LivePlayerbots("Groups:DungeonRuns:Enabled", o => o.Groups.DungeonRuns.Enabled, (o, v) => o.Groups.DungeonRuns.Enabled = v),

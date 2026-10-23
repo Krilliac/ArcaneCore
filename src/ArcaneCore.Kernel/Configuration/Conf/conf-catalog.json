@@ -16753,6 +16753,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Groups:Cooperation:SameGoalMeetingRadiusYards",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "150",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "How far from a dungeon's entrance (the group's meeting point), in yards, a player on the same continent still counts as on the dungeon goal of a bot that waits for a group (10..1500). A player inside the dungeon's instance always counts. Quest goals are unaffected.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Groups:DungeonRuns:BandAboveBoss",
       "section": "World:Playerbots",
       "type": "int",

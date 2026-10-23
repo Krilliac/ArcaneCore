@@ -66,6 +66,12 @@ public sealed class PlayerbotCooperationOptions
     /// <summary>The most members a raid made from a risk signal recruits (6..40).</summary>
     public int MaxRaidSize { get; set; } = 40;
 
+    /// <summary>
+    /// How far from a dungeon's entrance (the group's meeting point), in yards, a player on the same continent still counts as on the
+    /// dungeon goal of a bot that waits for a group (10..1500). A player inside the dungeon's instance always counts. Quest goals are unaffected.
+    /// </summary>
+    public int SameGoalMeetingRadiusYards { get; set; } = 150;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Groups:Cooperation";
@@ -80,6 +86,7 @@ public sealed class PlayerbotCooperationOptions
         Check(MentorLevelGap, 1, 60, nameof(MentorLevelGap));
         Check(MentorAffinity, -100, 100, nameof(MentorAffinity));
         Check(MaxRaidSize, 6, 40, nameof(MaxRaidSize));
+        Check(SameGoalMeetingRadiusYards, 10, 1500, nameof(SameGoalMeetingRadiusYards));
 
         static void CheckUnit(float value, string name)
         {

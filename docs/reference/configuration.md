@@ -1525,6 +1525,7 @@ How to read the tables:
 | `World:Playerbots:Groups:Cooperation:RecruitRadiusYards` | `int` | `300` | live | The farthest from the waiting bot, in yards, a recruit may stand (10..1500). |
 | `World:Playerbots:Groups:Cooperation:RecruitWaitSeconds` | `int` | `20` | live | Seconds a group of waiting bots stays short before it recruits (1..3600). |
 | `World:Playerbots:Groups:Cooperation:RefuseAffinity` | `int` | `-40` | live | A candidate whose affinity toward the group's caller is at or below this never joins (-100..0). |
+| `World:Playerbots:Groups:Cooperation:SameGoalMeetingRadiusYards` | `int` | `150` | live | How far from a dungeon's entrance (the group's meeting point), in yards, a player on the same continent still counts as on the dungeon goal of a bot that waits for a group (10..1500). A player inside the dungeon's instance always counts. Quest goals are unaffected. |
 | `World:Playerbots:Groups:DungeonRuns:BandAboveBoss` | `int` | `3` | live | Levels above the strongest boss the level band ends (0..20). |
 | `World:Playerbots:Groups:DungeonRuns:BandBelowBoss` | `int` | `3` | live | Levels below the weakest boss the level band starts (0..20): the band's lower end is the higher of the entrance level and the weakest boss's level minus this. |
 | `World:Playerbots:Groups:DungeonRuns:Enabled` | `bool` | `true` | live | Let free bots start dungeon runs (on by default). Off: no new run starts; running ones finish. Raid runs also need `PlayerbotRaidRunOptions.Enabled`. |

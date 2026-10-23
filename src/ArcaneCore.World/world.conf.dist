@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       706 keys
+#   WORLD                       707 keys
 #
 ###############################################################################
 
@@ -13565,6 +13565,20 @@ World.Playerbots.Groups.Cooperation.RecruitWaitSeconds = 20
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Groups.Cooperation.RefuseAffinity = -40
+
+#
+#    World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards
+#        Description: How far from a dungeon's entrance (the group's meeting point), in yards, a
+#                     player on the same continent still counts as on the dungeon goal of a bot that
+#                     waits for a group (10..1500). A player inside the dungeon's instance always
+#                     counts. Quest goals are unaffected.
+#        Type: int
+#        Default: 150
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards = 150
 
 #
 #    World.Playerbots.Groups.DungeonRuns.BandAboveBoss
