@@ -208,6 +208,47 @@ public sealed class TickWatchdogFeatureTests
             s.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PlayerbotQaOptions { TickHangWarmupMinutes = warmupMinutes }));
         });
 
+    private static TickWatchdogFeature.HungFrame Hung(long frameMicros, long bodyMicros, TickPhases phases, params (string, long)[] top)
+        => new(frameMicros, bodyMicros, phases, top);
+
+    [Fact]
+    public void ACommandsPhaseHang_NamesTheCommandsAndTheRunCount()
+    {
+        TickWatchdogFeature.HungFrame frame = Hung(4_050_000, 4_005_000, new TickPhases(4_000_000, 1_000, 4_000) { CommandsRun = 1 });
+
+        string text = TickWatchdogFeature.FormatHungFrame(frame, 1, out TickWatchdogFeature.HangFacts facts);
+
+        Assert.StartsWith("hung frame 4050 ms: tick body 4005 ms: commands 4000 ms (1 run)", text);
+        Assert.Contains("45 ms outside tick code", text);
+        Assert.DoesNotContain("hung frames since", text);
+        Assert.Equal(("Commands", "commands"), (facts.Phase, facts.Item));
+    }
+
+    [Fact]
+    public void AGcLikePause_BetweenTicks_IsOutsideTickCode()
+    {
+        TickWatchdogFeature.HungFrame frame = Hung(4_000_000, 800, new TickPhases(100, 100, 600));
+
+        string text = TickWatchdogFeature.FormatHungFrame(frame, 1, out TickWatchdogFeature.HangFacts facts);
+
+        Assert.Contains("tick body 0 ms", text);
+        Assert.Contains("3999 ms outside tick code", text);
+        Assert.Equal(("OutsideTick", "none"), (facts.Phase, facts.Item));
+    }
+
+    [Fact]
+    public void AFeaturePhaseHang_NamesTheTopFeaturesAndTheCount()
+    {
+        TickWatchdogFeature.HungFrame frame = Hung(3_100_000, 3_000_000, new TickPhases(1_000, 1_000, 2_990_000), ("SpellFeature", 2_900_000), ("OtherFeature", 50_000));
+
+        string text = TickWatchdogFeature.FormatHungFrame(frame, 3, out TickWatchdogFeature.HangFacts facts);
+
+        Assert.Contains("top features: SpellFeature 2900.0 ms, OtherFeature 50.0 ms", text);
+        Assert.Contains("100 ms outside tick code", text);
+        Assert.EndsWith("; 3 hung frames since the last report, worst shown", text);
+        Assert.Equal(("Features", "SpellFeature"), (facts.Phase, facts.Item));
+    }
+
     [Fact]
     public void ACompletedHang_NamesTheWorkOfItsDominantPhase_NotTheTopFeature()
     {
@@ -277,6 +318,7 @@ public sealed class TickWatchdogFeatureTests
     [Theory]
     [InlineData(HostLoadVerdict.HostStarved, false)]
     [InlineData(HostLoadVerdict.GcPauses, false)]
+    [InlineData(HostLoadVerdict.GcPaging, false)]
     [InlineData(HostLoadVerdict.ProcessStalled, false)]
     [InlineData(HostLoadVerdict.ProcessBusy, true)]
     [InlineData(HostLoadVerdict.Quiet, true)]

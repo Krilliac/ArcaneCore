@@ -151,4 +151,64 @@ public sealed class HostLoadSamplerTests
         Assert.True(r.PoolThreads > 0);
         Assert.True(r.Cpus > 0);
     }
+
+    private const long GiB = 1024L * 1024 * 1024;
+
+    // A 4.2 s window on 24 cpus (100.8 cpu-seconds) with a 4158 ms GC pause, on a 32 GiB machine whose GC high-memory threshold is 90%.
+    private static HostLoadReport Pause(long processCpuSeconds, double memoryLoad, long highThresholdBytes = 29 * GiB)
+    {
+        HostLoadReading start = Reading(0, 0, 0);
+        HostLoadReading end = Reading(processCpuSeconds, 9, 100, pauseMs: 4158, g2: 1) with
+        {
+            MemoryLoadBytes = (long)(32 * GiB * memoryLoad / 100),
+            HighMemoryLoadThresholdBytes = highThresholdBytes,
+            TotalAvailableMemoryBytes = 32 * GiB,
+        };
+        return HostLoadSampler.Compute(0, start, 4_200_000, end);
+    }
+
+    [Fact]
+    public void GcPauseCoveringTheStall_WithAnIdleProcessAndAShortMachine_IsGcPaging()
+    {
+        HostLoadReport r = Pause(processCpuSeconds: 1, memoryLoad: 95);
+
+        Assert.Equal(HostLoadVerdict.GcPaging, r.Verdict);
+        Assert.InRange(r.MemoryLoadPercent, 94.9, 95.1);
+        string text = r.Format();
+        Assert.Contains("verdict gc-paging", text);
+        Assert.Contains("free host memory; the GC is compacting paged-out heap", text);
+        Assert.Contains("machine memory 95%", text);
+    }
+
+    [Fact]
+    public void GcPause_WithABusyProcessOrAnUnpressuredMachine_StaysGcPauses()
+    {
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 60, memoryLoad: 50).Verdict);
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 1, memoryLoad: 50).Verdict);
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 60, memoryLoad: 95).Verdict);
+    }
+
+    [Fact]
+    public void GcPaging_WithoutARuntimeThreshold_UsesNinetyPercent()
+    {
+        Assert.Equal(HostLoadVerdict.GcPaging, Pause(1, 95, highThresholdBytes: 0).Verdict);
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(1, 85, highThresholdBytes: 0).Verdict);
+    }
+
+    [Fact]
+    public void GcPause_WithNoMemoryReading_StaysGcPauses_AndPrintsNoMemory()
+    {
+        HostLoadReport r = HostLoadSampler.Compute(0, Reading(0, 0, 0), 4_200_000, Reading(1, 9, 100, pauseMs: 4158));
+        Assert.Equal(HostLoadVerdict.GcPauses, r.Verdict);
+        Assert.DoesNotContain("machine memory", r.Format());
+    }
+
+    [Fact]
+    public void GcPause_WithOneBusyCoreOnABigMachine_IsNotPaging()
+    {
+        // 4.2 cpu-seconds in a 4.2 s window on 24 cpus is 4% of the machine but a whole core: a cpu-bound compaction, not a wait for paged-out memory.
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 4, memoryLoad: 95).Verdict);
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 3, memoryLoad: 95).Verdict); // 0.7 cores
+        Assert.Equal(HostLoadVerdict.GcPaging, Pause(processCpuSeconds: 2, memoryLoad: 95).Verdict); // 0.48 cores: under half a core
+    }
 }

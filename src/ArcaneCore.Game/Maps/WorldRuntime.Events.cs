@@ -63,6 +63,13 @@ public sealed partial class WorldRuntime
     /// </summary>
     public event Action<uint>? WorldTick;
 
+    /// <summary>
+    /// Raised on the world thread as the very first step of every tick, before the posted commands run and while the previous tick's phases
+    /// (<see cref="LastTickPhases"/>), duration (<see cref="LastTickDurationMicros"/>) and slowest features (<see cref="CopyLastTickTopFeatures"/>)
+    /// are still readable. Untimed: a handler must be a few stores (the tick watchdog's frame boundary). A failing handler is logged; it stops the handlers after it.
+    /// </summary>
+    public event Action<uint>? TickStarting;
+
     /// <summary>Raise <see cref="Updated"/>, timing each world feature for the tick statistics.</summary>
     private void RaiseTimed(Action<uint>? handlers, uint diffMs)
     {
@@ -102,6 +109,25 @@ public sealed partial class WorldRuntime
                     _logger.LogFault("world.tick-observer", ex, "FeatureObserver failed for feature {Feature}", name);
                 }
             }
+        }
+    }
+
+    private void RaiseTickStarting(uint diffMs)
+    {
+        Action<uint>? handlers = TickStarting;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handlers(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world.tick-starting", ex);
+            _logger.LogFault("world.tick-starting", ex, "{Event} handler failed for {Subject}", nameof(TickStarting), diffMs);
         }
     }
 
