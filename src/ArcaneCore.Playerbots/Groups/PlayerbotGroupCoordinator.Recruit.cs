@@ -59,6 +59,11 @@ public sealed partial class PlayerbotGroupCoordinator
     private readonly Dictionary<((PlayerbotGroupGoalKind, uint) Key, Team Team), uint> _recruitTried = [];
     private readonly Dictionary<(int Guild, (PlayerbotGroupGoalKind, uint) Key), uint> _guildCalls = [];
     private readonly List<(Guid BotId, PlayerbotGroupRole Role)> _recruitSays = [];
+
+    /// <summary>The candidates that refused a waiting group (its <see cref="Waiting.GroupId"/>), remembered for that group's life: a refusal is never asked again.</summary>
+    private readonly HashSet<(int GroupId, Guid BotId)> _recruitRefused = [];
+
+    private const int MaxRefusals = 16_384;
     private uint _capLoggedMs;
     private bool _capEverLogged;
 
@@ -69,6 +74,17 @@ public sealed partial class PlayerbotGroupCoordinator
 
     private bool IsPledged(Guid botId, (PlayerbotGroupGoalKind, uint) key, uint now)
         => _pledges.TryGetValue(botId, out var pledge) && pledge.Key == key && unchecked((int)(pledge.Until - now)) > 0;
+
+    /// <summary>The stable id of the waiting group <paramref name="botId"/> is in (0: it waits for none; tests and status).</summary>
+    internal int WaitingGroupIdOf(Guid botId) => _waiting.TryGetValue(botId, out Waiting? waiting) ? waiting.GroupId : 0;
+
+    /// <summary>The waiting group a bot that starts waiting for <paramref name="goal"/> joins: the id of the bots already waiting for it on its team, else a new one.</summary>
+    private int WaitingGroupIdFor(PlayerbotGroupGoal goal, Team team)
+    {
+        foreach (Waiting other in _waiting.Values)
+            if (other.Team == team && other.Goal.Key == goal.Key) return other.GroupId;
+        return _nextWaitingGroupId++;
+    }
 
     private bool HasPledge((PlayerbotGroupGoalKind, uint) key, uint now)
     {
@@ -149,6 +165,14 @@ public sealed partial class PlayerbotGroupCoordinator
         if (_recruitTried.Count > 0)
             foreach (var (triedKey, at) in _recruitTried)
                 if (unchecked(now - at) >= RecruitRetryMs * 10) _recruitTried.Remove(triedKey);
+        if (_recruitRefused.Count > 0)
+        {
+            // A refusal lives as long as its waiting group: once no bot waits in that group any more it is forgotten.
+            var live = new HashSet<int>();
+            foreach (Waiting waiting in _waiting.Values) live.Add(waiting.GroupId);
+            _recruitRefused.RemoveWhere(refusal => !live.Contains(refusal.GroupId));
+            if (_recruitRefused.Count > MaxRefusals) _recruitRefused.Clear();
+        }
     }
 
     private void ResetRecruiting()
@@ -157,6 +181,7 @@ public sealed partial class PlayerbotGroupCoordinator
         ResetMentoring();
         _invitedPlayers.Clear();
         _recruitTried.Clear();
+        _recruitRefused.Clear();
         _guildCalls.Clear();
         _recruitSays.Clear();
         _capLoggedMs = 0;
@@ -295,7 +320,7 @@ public sealed partial class PlayerbotGroupCoordinator
         float radius = coop.RecruitRadiusYards;
         float radiusSq = radius * radius;
         var anchorAt = new Vector3(anchor.X, anchor.Y, anchor.Z);
-        int groupId = _nextId;
+        int groupId = _waiting.TryGetValue(anchorCandidate.BotId, out Waiting? anchorWaiting) ? anchorWaiting.GroupId : 0; // stable while the group waits
         var ranked = new List<PlayerbotRecruitment.Ranked>();
         for (int i = 0; i < _orderedBots.Count; i++)
         {
@@ -313,7 +338,7 @@ public sealed partial class PlayerbotGroupCoordinator
             bool called = guildId != 0 && callGuilds is not null && callGuilds.Contains(guildId);
             if (!offer && !waited && !pledged && !called) continue;
             if (PlayerbotMageService.IsServing(player) || PlayerbotMageService.IsActive(player)) continue;
-            if (IsSetAside(bot.BotId, goal.Key)) continue;
+            if (IsSetAside(bot.BotId, goal.Key) || (!offer && _recruitRefused.Contains((groupId, bot.BotId)))) continue;
             if (!PlayerbotRecruitment.GoalYields(bot.Brain.Goal, bot.Brain.Goal == PlayerbotGoalKind.Quest ? RemainingObjectives(player, bot.Brain.QuestId) : 0)) continue;
             if (groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null) continue;
 
@@ -346,7 +371,12 @@ public sealed partial class PlayerbotGroupCoordinator
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, affinityToAnchor, worst, rival, fillsRole, guildmate,
                 AnsweredCall: offer || pledged || called);
             if (PlayerbotRecruitment.Refuses(coop, facts)) continue;
-            if (!pledged && !PlayerbotRecruitment.Accepts(coop, player.Guid.Value, groupId, facts)) continue;
+            if (!pledged && !PlayerbotRecruitment.Accepts(coop, player.Guid.Value, groupId, facts))
+            {
+                if (!offer) _recruitRefused.Add((groupId, bot.BotId)); // decided: not asked again for this group
+                continue;
+            }
+
             int preference = PlayerbotRecruitment.Preference(affinitySum, trustSum, guildmate, coop) + (pledged ? 1000 : 0);
             ranked.Add(new PlayerbotRecruitment.Ranked(Candidate(bot.BotId, player, now), preference, distSq,
                 PlayerbotGroupContent.CanTank(player.Class), PlayerbotGroupContent.CanHeal(player.Class)));

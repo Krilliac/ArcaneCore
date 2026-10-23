@@ -169,6 +169,54 @@ public sealed class PlayerbotRecruitWorldTests
     }
 
     [Fact]
+    public async Task AWaitingGroupsId_IsOneForItsMembers_AndStaysWhileItWaits()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], Still);
+        var (tank, mage) = await WaitingPairAsync(world);
+        (int tankId, int mageId) = await world.OnWorldAsync(() => (world.Coordinator.WaitingGroupIdOf(tank.Id), world.Coordinator.WaitingGroupIdOf(mage.Id)));
+        Assert.NotEqual(0, tankId);
+        Assert.Equal(tankId, mageId);
+        await world.RunAsync(60_000);
+        Assert.Equal(tankId, await world.OnWorldAsync(() => world.Coordinator.WaitingGroupIdOf(tank.Id)));
+    }
+
+    /// <summary>The refusal is decided once for the group: raising the chance afterwards (or any other change of the facts) does not ask the candidate again.</summary>
+    [Fact]
+    public async Task ACandidateThatRefusedAGroup_IsNotAskedAgain_WhileTheGroupWaits()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Still(options);
+            options.Groups.Cooperation.RecruitWaitSeconds = 600; // no recruiting until the chance is set below
+            options.Groups.Cooperation.RecruitRadiusYards = 1500;
+        });
+        var (tank, _) = await WaitingPairAsync(world);
+        var healer = await world.AddBotAsync("Refusepr", Human, Priest, 10, [LesserHeal, Smite], FarSouth);
+
+        // Pick a base chance that puts this healer's own roll for this group just above its chance: it refuses.
+        double roll = await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player(healer.Id);
+            double other = (0.4 * PlayerbotTraits.For(player.Guid.Value).Sociability) + 0.2; // sociability weight and the missing-role bonus
+            double r = PlayerbotRecruitment.Roll(player.Guid.Value, world.Coordinator.WaitingGroupIdOf(tank.Id));
+            Assert.InRange(r, other + 0.02, 0.9); // feasible: refuses at (r - other - 0.01), accepts at the 0.95 clamp
+            world.Options.Groups.Cooperation.RecruitBaseChance = (float)(r - other - 0.01);
+            world.Options.Groups.Cooperation.RecruitWaitSeconds = 1;
+            return r;
+        });
+        await world.RunAsync(40_000);
+        Assert.False(world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null), $"roll {roll}: " + await world.TraceAsync());
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Options.Groups.Cooperation.RecruitBaseChance = 1f; // everybody would come now: but this one refused this group
+            return true;
+        });
+        await world.RunAsync(60_000);
+        Assert.False(world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null), await world.TraceAsync());
+    }
+
+    [Fact]
     public async Task TheAnswer_IsTheRuleOfTheCandidateAndTheGroup_NothingElse()
     {
         // Default chance: whether the healer comes is exactly the pure rule's answer for (healer, first group), whichever way it falls.
@@ -177,13 +225,15 @@ public sealed class PlayerbotRecruitWorldTests
             Still(options);
             options.Groups.Cooperation.RecruitWaitSeconds = 5;
         });
-        await WaitingPairAsync(world);
+        var (tank, _) = await WaitingPairAsync(world);
         var healer = await world.AddBotAsync("Detheal", Human, Priest, 10, [LesserHeal, Smite], South);
         bool expected = await world.OnWorldAsync(() =>
         {
             Player player = world.Player(healer.Id);
+            int groupId = world.Coordinator.WaitingGroupIdOf(tank.Id); // the waiting group's own id, whatever other groups there are
+            Assert.NotEqual(0, groupId);
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, 0, 0, false, FillsRole: true, false, false);
-            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value, groupId: 1, facts);
+            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value, groupId, facts);
         });
 
         bool formed = await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Count > 0);

@@ -230,6 +230,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private WorldRuntime? _world;
     private uint _scanElapsed = ScanMs;
     private int _nextId = 1;
+    private int _nextWaitingGroupId = 1;
 
     /// <summary>The groups formed so far, completed so far and given up so far (status and tests).</summary>
     internal (int Formed, int Completed, int Failed) Totals { get; private set; }
@@ -553,9 +554,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     // --- needs and matching ---------------------------------------------------------------------------------------------
 
-    private sealed class Waiting(string name, PlayerbotGroupGoal goal, uint since)
+    /// <param name="name">The bot's name.</param>
+    /// <param name="goal">What it waits for.</param>
+    /// <param name="since">Since when (world ms).</param>
+    /// <param name="groupId">The id of the waiting group (the bots that wait for the same goal and team): stable from the first member's wait to the last one's end
+    /// (<see cref="WaitingGroupIdOf"/>), the identity recruiting rolls on, unlike <see cref="BotGroup.Id"/> which only exists once the group has formed.</param>
+    private sealed class Waiting(string name, PlayerbotGroupGoal goal, uint since, int groupId)
     {
         public string Name { get; } = name;
+        public int GroupId { get; } = groupId;
+        public Team Team { get; init; }
         public PlayerbotGroupGoal Goal { get; set; } = goal;
         public uint SinceMs { get; } = since;
         private PlayerbotGroupGoal? _descGoal;
@@ -654,7 +662,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
             if (FindNeed(bot, player, quests, creatures, maps) is { } goal)
             {
-                _waiting[bot.BotId] = new Waiting(player.Name, goal, now);
+                _waiting[bot.BotId] = new Waiting(player.Name, goal, now, WaitingGroupIdFor(goal, player.Team)) { Team = player.Team };
                 bot.Brain.GroupHeld.Add((goal.QuestId, goal.ObjectiveEntry));
                 bot.Brain.Risk.ClearGroupSignal();
                 Note($"{player.Name} needs a group: {goal}");
