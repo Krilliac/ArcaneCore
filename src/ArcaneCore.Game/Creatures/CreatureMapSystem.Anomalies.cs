@@ -91,7 +91,8 @@ public sealed partial class CreatureMapSystem
         // hunter's pet): a loop of those is a real defect.
         if (reason == CreatureAnomalies.ScriptedEvadeReason
             && combat.Victim is not Player
-            && combat.LastVictimGuid.High is not (HighGuid.Player or HighGuid.Pet)
+            && !combat.LastVictimGuid.IsPlayer // HighGuid.Player is 0: an empty GUID (cleared after each evade) must not read as a player
+            && combat.LastVictimGuid.High != HighGuid.Pet
             && !(last?.CharmerOrOwnerGuid.IsPlayer ?? false))
         {
             return true;

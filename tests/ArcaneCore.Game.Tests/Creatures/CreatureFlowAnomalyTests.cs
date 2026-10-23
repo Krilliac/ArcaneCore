@@ -30,6 +30,7 @@ public sealed class CreatureFlowAnomalyTests
     private const uint FlaggedEvadeEntry = 950010;
     private const uint VictimEvadeEntry = 950011;
     private const uint LongEvadeEntry = 950012;
+    private const uint ClearedGuidEvadeEntry = 950013;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -252,6 +253,30 @@ public sealed class CreatureFlowAnomalyTests
             Assert.Equal(MovementGeneratorType.Waypoint, Assert.Single(system.Creatures).Motion.CurrentType);
             Assert.Empty(capture.Notices);
         }
+    }
+
+    /// <summary>
+    /// HighGuid.Player is 0, so an empty GUID read as a player: a scripted evade with no victim and the last-victim GUID already cleared (the
+    /// previous evade clears it) was no longer exempt and looped into a report.
+    /// </summary>
+    [Fact]
+    public void ScriptedEvadesWithNoVictimAndAClearedLastVictim_AreNoEvadeLoop()
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", ClearedGuidEvadeEntry);
+        using Fight f = Start(ClearedGuidEvadeEntry);
+
+        for (int i = 0; i < 4; i++)
+        {
+            f.Wolf.Relocate(25, 0, 83.5f, 0, 0);
+            f.Map.Combat.AttackStop(f.Wolf); // the wolf had re-aggroed the player on its way home
+            f.Wolf.Combat.LastVictimGuid = default; // as after an evade
+            Assert.Null(f.Wolf.Combat.Victim);
+            f.System.EnterEvadeMode(f.Wolf, CreatureAnomalies.ScriptedEvadeReason);
+            Assert.True(f.Wolf.IsEvading);
+            Run(f.World, 6_000);
+        }
+
+        Assert.Empty(capture.Notices);
     }
 
     /// <summary>An evade that ended a fight with a victim names no flagging member: it is no "re-flagged without threat" case.</summary>
