@@ -180,21 +180,15 @@ public sealed class ViscidusAI : RaidBossAI
         ResetThreat();
     }
 
-    private static bool Due(ref uint timer, uint diff)
-    {
-        timer = timer > diff ? timer - diff : 0;
-        return timer == 0;
-    }
-
     protected override void UpdateCombat(uint diffMs)
     {
-        if (_stage == Stage.Exploded && _explodeMs != 0 && Due(ref _explodeMs, diffMs))
+        if (_stage == Stage.Exploded && _explodeMs != 0 && ScriptTimers.Due(ref _explodeMs, diffMs))
             Me.UnitFlags |= ExplodedFlags;
         if (_stage != Stage.Normal) return;
 
-        if (Due(ref _shockMs, diffMs) && Cast(25993, Victim)) _shockMs = RandomDelay(7000, 12_000);
-        if (Due(ref _volleyMs, diffMs) && Cast(25991, Me)) _volleyMs = RandomDelay(10_000, 15_000);
-        if (Due(ref _toxinMs, diffMs) && RandomTarget() is { } target)
+        if (ScriptTimers.Due(ref _shockMs, diffMs) && Cast(25993, Victim)) _shockMs = RandomDelay(7000, 12_000);
+        if (ScriptTimers.Due(ref _volleyMs, diffMs) && Cast(25991, Me)) _volleyMs = RandomDelay(10_000, 15_000);
+        if (ScriptTimers.Due(ref _toxinMs, diffMs) && RandomTarget() is { } target)
         {
             System?.SummonAt(Me, 15922, target.X, target.Y, target.Z, target.Orientation, null, 180_000);
             _toxinMs = RandomDelay(30_000, 40_000);

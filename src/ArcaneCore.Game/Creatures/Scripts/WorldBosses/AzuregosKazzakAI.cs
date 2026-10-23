@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Raids;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
@@ -164,13 +165,6 @@ public sealed class KazzakAI : RaidBossAI
         System?.SayText(Me, SayDeath);
     }
 
-    private static bool Tick(ref uint remaining, uint diffMs)
-    {
-        if (remaining <= diffMs) { remaining = 0; return true; }
-        remaining -= diffMs;
-        return false;
-    }
-
     private Unit? RandomTargetWhere(Func<Unit, bool> filter)
     {
         Unit[] targets = [.. Me.Combat.Threat.Entries.Select(e => e.Target)
@@ -205,7 +199,7 @@ public sealed class KazzakAI : RaidBossAI
     {
         CheckMarks();
 
-        if (_supremeMs != 0 && Tick(ref _supremeMs, diffMs))
+        if (_supremeMs != 0 && ScriptTimers.DueRetry(ref _supremeMs, diffMs))
         {
             if (Cast(SpellBerserk, Me))
             {
@@ -216,26 +210,26 @@ public sealed class KazzakAI : RaidBossAI
             // "a small amount of time will be lost, but this is acceptable": no retry
         }
 
-        if (Tick(ref _shadowVolleyMs, diffMs) && Cast(SpellShadowVolley, Me))
+        if (ScriptTimers.DueRetry(ref _shadowVolleyMs, diffMs) && Cast(SpellShadowVolley, Me))
             _shadowVolleyMs = Berserk ? RandomDelay(1000, 3000) : RandomDelay(5000, 30000);
 
-        if (Tick(ref _cleaveMs, diffMs) && Victim is { } cleaveTarget && Cast(SpellCleave, cleaveTarget))
+        if (ScriptTimers.DueRetry(ref _cleaveMs, diffMs) && Victim is { } cleaveTarget && Cast(SpellCleave, cleaveTarget))
             _cleaveMs = RandomDelay(8000, 12000);
 
-        if (Tick(ref _thunderclapMs, diffMs) && Cast(SpellThunderclap, null))
+        if (ScriptTimers.DueRetry(ref _thunderclapMs, diffMs) && Cast(SpellThunderclap, null))
             _thunderclapMs = RandomDelay(10000, 14000);
 
-        if (Tick(ref _voidBoltMs, diffMs) && Victim is { } boltTarget && Cast(SpellVoidBolt, boltTarget))
+        if (ScriptTimers.DueRetry(ref _voidBoltMs, diffMs) && Victim is { } boltTarget && Cast(SpellVoidBolt, boltTarget))
             _voidBoltMs = RandomDelay(15000, 28000);
 
         // SelectAttackingTarget(RANDOM, 0, SPELL_MARK_OF_KAZZAK, SELECT_FLAG_POWER_MANA)
-        if (Tick(ref _markMs, diffMs) && RandomTargetWhere(UsesMana) is { } markTarget && Cast(SpellMarkOfKazzak, markTarget))
+        if (ScriptTimers.DueRetry(ref _markMs, diffMs) && RandomTargetWhere(UsesMana) is { } markTarget && Cast(SpellMarkOfKazzak, markTarget))
         {
             _marked.Add(markTarget);
             _markMs = 20000;
         }
 
-        if (Tick(ref _reflectionMs, diffMs) && RandomTargetWhere(static t => t is Player) is { } reflectTarget &&
+        if (ScriptTimers.DueRetry(ref _reflectionMs, diffMs) && RandomTargetWhere(static t => t is Player) is { } reflectTarget &&
             Cast(SpellTwistedReflection, reflectTarget))
             _reflectionMs = 15000;
 

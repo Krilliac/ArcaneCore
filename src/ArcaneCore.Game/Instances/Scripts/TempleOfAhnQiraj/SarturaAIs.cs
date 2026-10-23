@@ -29,12 +29,6 @@ public abstract class SarturaWhirlwindAI(Creature creature, uint? encounter, uin
         SetMeleeEnabled(true);
     }
 
-    protected static bool Due(ref uint timer, uint diffMs)
-    {
-        timer = timer > diffMs ? timer - diffMs : 0;
-        return timer == 0;
-    }
-
     protected virtual bool CanRetarget(Unit target) => true;
 
     private void AssignRandomThreat()
@@ -49,13 +43,13 @@ public abstract class SarturaWhirlwindAI(Creature creature, uint? encounter, uin
     {
         if (_phase != 0)
         {
-            if (Due(ref _retarget, diffMs))
+            if (ScriptTimers.Due(ref _retarget, diffMs))
             {
                 AssignRandomThreat();
                 _retarget = RandomDelay(1000, 2000);
             }
 
-            if (Due(ref _phase, diffMs))
+            if (ScriptTimers.Due(ref _phase, diffMs))
             {
                 _phase = 0;
                 _whirlwind = RandomDelay(repeatMin, repeatMax);
@@ -66,7 +60,7 @@ public abstract class SarturaWhirlwindAI(Creature creature, uint? encounter, uin
             return _phase != 0;
         }
 
-        if (Due(ref _whirlwind, diffMs) && Cast(whirlwindSpell, Me))
+        if (ScriptTimers.Due(ref _whirlwind, diffMs) && Cast(whirlwindSpell, Me))
         {
             AssignRandomThreat();
             _phase = phaseLength;
@@ -74,7 +68,7 @@ public abstract class SarturaWhirlwindAI(Creature creature, uint? encounter, uin
             SetMeleeEnabled(false);
         }
 
-        if (_phase == 0 && Due(ref _retarget, diffMs))
+        if (_phase == 0 && ScriptTimers.Due(ref _retarget, diffMs))
         {
             AssignRandomThreat();
             _retarget = RandomDelay(3000, 7000);
@@ -154,7 +148,7 @@ public sealed class SarturaAI
     protected override void UpdateCombat(uint diffMs)
     {
         bool whirling = UpdateWhirlwind(diffMs);
-        if (!whirling && Due(ref _cleave, diffMs) && Cast(25174, Victim))
+        if (!whirling && ScriptTimers.Due(ref _cleave, diffMs) && Cast(25174, Victim))
             _cleave = RandomDelay(3000, 4000);
 
         if (!_softEnraged && Below(20) && Cast(26527, Me, triggered: whirling))
@@ -163,13 +157,13 @@ public sealed class SarturaAI
             System?.SayText(Me, 2384);
         }
 
-        if (!_hardEnraged && Due(ref _hardEnrage, diffMs) && Cast(27680, Me, triggered: whirling))
+        if (!_hardEnraged && ScriptTimers.Due(ref _hardEnrage, diffMs) && Cast(27680, Me, triggered: whirling))
         {
             _hardEnraged = true;
             System?.SayText(Me, 4428);
         }
 
-        if (Due(ref _leash, diffMs))
+        if (ScriptTimers.Due(ref _leash, diffMs))
         {
             _leash = 2500;
             if (Me.Y > 1780) EnterEvadeMode();
@@ -224,11 +218,11 @@ public sealed class SarturaRoyalGuardAI
     protected override void UpdateCombat(uint diffMs)
     {
         bool whirling = UpdateWhirlwind(diffMs);
-        if (!whirling && Due(ref _knockback, diffMs) && Victim is { } victim
+        if (!whirling && ScriptTimers.Due(ref _knockback, diffMs) && Victim is { } victim
             && MapCombat.CanReachWithMeleeAutoAttack(Me, victim) && Cast(19813, victim))
             _knockback = RandomDelay(8000, 14000);
 
-        if (Due(ref _leash, diffMs))
+        if (ScriptTimers.Due(ref _leash, diffMs))
         {
             _leash = 2500;
             if (Me.Y > 1780) EnterEvadeMode();

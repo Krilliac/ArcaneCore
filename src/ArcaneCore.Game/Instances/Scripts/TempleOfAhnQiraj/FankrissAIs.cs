@@ -60,12 +60,6 @@ public sealed class FankrissAI : RaidBossAI
         _webRotation = 45_000 + addedMs;
     }
 
-    private static bool Due(ref uint timer, uint diffMs)
-    {
-        timer = timer > diffMs ? timer - diffMs : 0;
-        return timer == 0;
-    }
-
     private Player? RandomPlayer()
     {
         Player[] candidates = [.. Me.Combat.Threat.Entries.Select(e => e.Target).OfType<Player>()
@@ -132,7 +126,7 @@ public sealed class FankrissAI : RaidBossAI
         {
             if (_webs[i].Fired) continue;
             uint timer = _webs[i].Timer;
-            if (Due(ref timer, diffMs) && RandomPlayer() is { } target && Cast(WebSites[_webOrder[i]].Spell, target))
+            if (ScriptTimers.Due(ref timer, diffMs) && RandomPlayer() is { } target && Cast(WebSites[_webOrder[i]].Spell, target))
             {
                 _webs[i] = (0, true);
                 SpawnHatchlings();
@@ -140,7 +134,7 @@ public sealed class FankrissAI : RaidBossAI
             else _webs[i].Timer = timer;
         }
 
-        if (Due(ref _webRotation, diffMs) && _webs.All(w => w.Fired)) ResetWebs(0);
+        if (ScriptTimers.Due(ref _webRotation, diffMs) && _webs.All(w => w.Fired)) ResetWebs(0);
     }
 
     private void SpawnWorm(int slot)
@@ -158,7 +152,7 @@ public sealed class FankrissAI : RaidBossAI
         {
             if (!_worms[i].Enabled || _worms[i].Spawned) continue;
             uint timer = _worms[i].Timer;
-            if (Due(ref timer, diffMs))
+            if (ScriptTimers.Due(ref timer, diffMs))
             {
                 _worms[i].Spawned = true;
                 SpawnWorm(i);
@@ -185,10 +179,10 @@ public sealed class FankrissAI : RaidBossAI
 
     protected override void UpdateCombat(uint diffMs)
     {
-        if (Due(ref _mortalWound, diffMs) && Cast(25646, Victim)) _mortalWound = RandomDelay(4000, 8000);
+        if (ScriptTimers.Due(ref _mortalWound, diffMs) && Cast(25646, Victim)) _mortalWound = RandomDelay(4000, 8000);
         UpdateWorms(diffMs);
         UpdateWebs(diffMs);
-        if (Due(ref _leash, diffMs))
+        if (ScriptTimers.Due(ref _leash, diffMs))
         {
             _leash = 2500;
             if (Me.Y > 1400) EnterEvadeMode();

@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Instances.Scripts.Raids;
 using ArcaneCore.Game.Spells;
@@ -73,19 +74,6 @@ public abstract class DragonOfNightmareAI : RaidBossAI
         base.OnEvade();
     }
 
-    /// <summary>A timer tick: true when it ran out (the caller re-arms it after a successful cast).</summary>
-    protected static bool Tick(ref uint remaining, uint diffMs)
-    {
-        if (remaining <= diffMs)
-        {
-            remaining = 0;
-            return true;
-        }
-
-        remaining -= diffMs;
-        return false;
-    }
-
     /// <summary>A random living, non-GM player on the threat list (SelectAttackingTarget RANDOM, SELECT_FLAG_PLAYER_NOT_GM).</summary>
     protected Player? RandomPlayerTarget(Func<Player, bool>? filter = null)
     {
@@ -97,7 +85,7 @@ public abstract class DragonOfNightmareAI : RaidBossAI
     /// <summary>boss_dragon_of_nightmareAI::UpdateAI, in the reference order.</summary>
     protected override void UpdateCombat(uint diffMs)
     {
-        if (Tick(ref _auraOfNatureMs, diffMs) && Cast(SpellAuraOfNature, Me))
+        if (ScriptTimers.DueRetry(ref _auraOfNatureMs, diffMs) && Cast(SpellAuraOfNature, Me))
             _auraOfNatureMs = RandomDelay(3000, 5000);
 
         // GetHealthPercent() < 100 - counter * 25
@@ -118,17 +106,17 @@ public abstract class DragonOfNightmareAI : RaidBossAI
             _summonPlayerMs = 0;
         }
 
-        if (Tick(ref _seepingFogMs, diffMs))
+        if (ScriptTimers.DueRetry(ref _seepingFogMs, diffMs))
         {
             Cast(SpellSeepingFogRight, Me, triggered: true);
             Cast(SpellSeepingFogLeft, Me, triggered: true);
             _seepingFogMs = (2 * 60 * 1000) + 300;
         }
 
-        if (Tick(ref _noxiousBreathMs, diffMs) && Cast(SpellNoxiousBreath, victim))
+        if (ScriptTimers.DueRetry(ref _noxiousBreathMs, diffMs) && Cast(SpellNoxiousBreath, victim))
             _noxiousBreathMs = RandomDelay(9000, 11000);
 
-        if (Tick(ref _tailSweepMs, diffMs) && Cast(SpellTailSweep, Me))
+        if (ScriptTimers.DueRetry(ref _tailSweepMs, diffMs) && Cast(SpellTailSweep, Me))
             _tailSweepMs = RandomDelay(6000, 8000);
 
         base.UpdateCombat(diffMs);
@@ -186,7 +174,7 @@ public sealed class YsondreAI(Creature creature) : DragonOfNightmareAI(creature)
 
     protected override bool UpdateDragon(uint diffMs)
     {
-        if (Tick(ref _lightningWaveMs, diffMs) && RandomPlayerTarget() is { } target && Cast(SpellLightningWave, target))
+        if (ScriptTimers.DueRetry(ref _lightningWaveMs, diffMs) && RandomPlayerTarget() is { } target && Cast(SpellLightningWave, target))
             _lightningWaveMs = RandomDelay(8000, 12000);
         return true;
     }
@@ -228,11 +216,11 @@ public sealed class EmerissAI(Creature creature) : DragonOfNightmareAI(creature)
 
     protected override bool UpdateDragon(uint diffMs)
     {
-        if (Tick(ref _auraMs, diffMs) && Cast(SpellEmerissAura, Me))
+        if (ScriptTimers.DueRetry(ref _auraMs, diffMs) && Cast(SpellEmerissAura, Me))
             _auraMs = 10000;
 
         // CF_AURA_NOT_PRESENT
-        if (Tick(ref _volatileInfectionMs, diffMs) &&
+        if (ScriptTimers.DueRetry(ref _volatileInfectionMs, diffMs) &&
             RandomPlayerTarget() is { } target && System?.HasAura(target, SpellVolatileInfection) != true && Cast(SpellVolatileInfection, target))
             _volatileInfectionMs = RandomDelay(10000, 16000);
         return true;
@@ -414,14 +402,14 @@ public sealed class TaerarAI(Creature creature) : DragonOfNightmareAI(creature)
         if (_shadesTimeoutMs != 0)
         {
             System?.ExtendLeash(Me); // UpdateLeashExtensionTime
-            if (Tick(ref _shadesTimeoutMs, diffMs)) Unbanish();
+            if (ScriptTimers.DueRetry(ref _shadesTimeoutMs, diffMs)) Unbanish();
             return false;
         }
 
-        if (Tick(ref _arcaneBlastMs, diffMs) && RandomPlayerTarget() is { } target && Cast(SpellArcaneBlast, target))
+        if (ScriptTimers.DueRetry(ref _arcaneBlastMs, diffMs) && RandomPlayerTarget() is { } target && Cast(SpellArcaneBlast, target))
             _arcaneBlastMs = RandomDelay(10000, 16000);
 
-        if (Tick(ref _bellowingRoarMs, diffMs) && Cast(SpellBellowingRoar, Me))
+        if (ScriptTimers.DueRetry(ref _bellowingRoarMs, diffMs) && Cast(SpellBellowingRoar, Me))
             _bellowingRoarMs = RandomDelay(25000, 28000);
         return true;
     }
