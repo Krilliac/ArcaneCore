@@ -21,14 +21,21 @@ public sealed class PlayerbotSocialMemoryPersistenceTests
         public bool ThrowOnReplace { get; set; }
         public int Replaces { get; private set; }
 
+        // The checkpoint writes on a pool thread while tests poll LoadAllAsync, so the rows are guarded.
         public Task<IReadOnlyList<PlayerbotRelation>> LoadAllAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<PlayerbotRelation>>([.. _rows.Values.SelectMany(rows => rows)]);
+        {
+            lock (_rows) return Task.FromResult<IReadOnlyList<PlayerbotRelation>>([.. _rows.Values.SelectMany(rows => rows)]);
+        }
 
         public Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
         {
             if (ThrowOnReplace) throw new InvalidOperationException("relation-storage-refused");
-            Replaces++;
-            _rows[botId] = [.. rows];
+            lock (_rows)
+            {
+                Replaces++;
+                _rows[botId] = [.. rows];
+            }
+
             return Task.CompletedTask;
         }
     }

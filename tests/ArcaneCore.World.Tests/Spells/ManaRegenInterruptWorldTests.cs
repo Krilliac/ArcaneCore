@@ -64,9 +64,14 @@ public sealed class ManaRegenInterruptWorldTests
         Assert.Equal(50f, await host.PlayerStateAsync("Manaint", player =>
             Math.Min(100f, (float)new SpellSystemPowerAuras(host.WorldServices.GetRequiredService<SpellFeature>().System)
                 .GetTotalAuraModifier(player, AuraType.ModManaRegenInterrupt))));
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Manaint")!
-            .GetUInt32(UpdateFields.UnitFieldPower1) >= 48, "interrupted mana tick");
-        Assert.Equal(48u, await host.PlayerStateAsync("Manaint", player => player.GetUInt32(UpdateFields.UnitFieldPower1)));
+        // Capture the mana inside the wait predicate: re-reading it afterwards raced the next regen tick (48 -> 86).
+        uint manaAtFirstTick = 0;
+        await host.WaitForWorldAsync(() =>
+        {
+            manaAtFirstTick = host.World.FindOnlinePlayer("Manaint")!.GetUInt32(UpdateFields.UnitFieldPower1);
+            return manaAtFirstTick >= 48;
+        }, "interrupted mana tick");
+        Assert.Equal(48u, manaAtFirstTick);
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Manaint")!
             .Combat.LastManaUseTimer == 0, "five-second mana interruption window");
         await host.OnWorldAsync(() =>
@@ -74,9 +79,13 @@ public sealed class ManaRegenInterruptWorldTests
             Player player = host.World.FindOnlinePlayer("Manaint")!;
             player.SetUInt32(UpdateFields.UnitFieldPower1, 0);
         });
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Manaint")!
-            .GetUInt32(UpdateFields.UnitFieldPower1) >= 66, "normal mana tick");
-        Assert.Equal(66u, await host.PlayerStateAsync("Manaint", player => player.GetUInt32(UpdateFields.UnitFieldPower1)));
+        uint manaAtNormalTick = 0;
+        await host.WaitForWorldAsync(() =>
+        {
+            manaAtNormalTick = host.World.FindOnlinePlayer("Manaint")!.GetUInt32(UpdateFields.UnitFieldPower1);
+            return manaAtNormalTick >= 66;
+        }, "normal mana tick");
+        Assert.Equal(66u, manaAtNormalTick);
         await client.CollectAsync();
     }
 
