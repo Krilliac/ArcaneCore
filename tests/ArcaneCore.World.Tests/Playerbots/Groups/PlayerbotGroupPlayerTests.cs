@@ -144,6 +144,37 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.Contains(world.Coordinator.Events, e => e.Contains("player-gone", StringComparison.Ordinal));
     }
 
+    /// <summary>A run that already succeeded is not failed because the player logs out while the bots walk out: it ends as completed.</summary>
+    [Fact]
+    public async Task APairWhosePlayerLogsOutWhileLeaving_AfterASuccess_EndsAsCompleted_NotPlayerGone()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await FormPairAsync(world, "GROUPLEAVING", "Groupleaving", "Askerleaving");
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+
+        await player.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+        // The group has succeeded and is walking out (held in Leaving, as a bot still inside an instance would hold it) until the logout completes.
+        Assert.True(await world.RunUntilAsync(40_000, () =>
+        {
+            bool online = world.World.Host.World.FindOnlinePlayer("Groupleaving") is not null;
+            if (online && world.Coordinator.Groups.Contains(group))
+            {
+                group.Succeeded = true;
+                group.Reason = null;
+                group.State = PlayerbotGroupState.Leaving;
+                group.StateSinceMs = world.World.Host.World.NowMs;
+            }
+
+            return !online;
+        }), await world.TraceAsync());
+
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(group.Succeeded);
+        Assert.Equal("completed", group.Reason);
+        Assert.Equal(0, world.Coordinator.Totals.Failed);
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("player-gone", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task APairWhosePlayerLeavesTheGroup_Ends()
     {
