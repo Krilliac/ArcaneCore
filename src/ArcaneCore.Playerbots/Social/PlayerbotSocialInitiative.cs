@@ -197,6 +197,8 @@ internal sealed class PlayerbotInitiativeLane
     internal int Comments { get; private set; }
 
     /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
+    internal int PendingCount => _pending.Count;
+
     internal bool PendingFor(Guid bot, ObjectGuid player) => _pending.ContainsKey((bot, player.Value));
 
     /// <summary>How many openings in a row the player has ignored or turned down (the cooldown doubles with each, tests).</summary>
@@ -483,17 +485,18 @@ internal sealed class PlayerbotInitiativeLane
                 break;
         }
 
-        Action? sent = null;
         // Everything that follows the line happens once it was really said (speech path, world thread): an opening the limiter or the place refused costs the player nothing.
         Guid botId = bot.Id;
         ObjectGuid botGuid = self.Guid, otherGuid = other.Guid;
         PlayerbotSocialBot? answerer = null;
         if (!real && kind == PlayerbotOpeningKind.Objective && entry != 0 && pass.ByCharacter.TryGetValue(otherGuid.Low, out PlayerbotSocialBot? found) && found.Brain is not null) answerer = found;
-        sent = () =>
+        Action sent = () =>
         {
             long said = _passNowMs;
             if (real)
             {
+                if (pass.World.FindOnlinePlayer(otherGuid) is null) return; // gone since the line was queued
+                _playerNext[otherGuid.Value] = said + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, _ignored.GetValueOrDefault(otherGuid.Value));
                 Expect(recorder, botId, botGuid, otherGuid, kind, entry, quest, said);
             }
             else if (answerer is not null)
@@ -508,7 +511,7 @@ internal sealed class PlayerbotInitiativeLane
                 }
             }
         };
-        var speech = new BotSpeech(channel, string.Empty, "initiative-" + kind.ToString().ToLowerInvariant(), BotSpeechPriority.Low) { TargetGuid = other.Guid, Sent = () => sent?.Invoke() };
+        var speech = new BotSpeech(channel, string.Empty, "initiative-" + kind.ToString().ToLowerInvariant(), BotSpeechPriority.Low) { TargetGuid = other.Guid, Sent = sent };
         var ask = new BotChatAsk(bot.Id, self.Guid, bot.Party.PersonaFor(self), other.Guid, other.Name, ChatType.Say, string.Empty, FromMaster: false, InviteAllowed: false,
             SenderAccountId: 0, Topic: new BotChatTopic(key, instruction, values, string.Empty), Speech: speech);
         if (chat.TryAnnounce(ask) != BotChatAdmission.Queued) return false;
@@ -517,7 +520,8 @@ internal sealed class PlayerbotInitiativeLane
         ByKind[(int)kind]++;
         if (channel == BotSpeechChannel.Whisper) Whispers++;
         _pairNext[(bot.Id, other.Guid.Value, kind)] = pass.NowMs + PairGapMs;
-        if (real) _playerNext[other.Guid.Value] = pass.NowMs + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, _ignored.GetValueOrDefault(other.Guid.Value));
+        // Until the line is said (or found never to be) a second bot must not pile on: a short hold; saying the line sets the real cooldown.
+        if (real) _playerNext[other.Guid.Value] = Math.Max(_playerNext.GetValueOrDefault(other.Guid.Value), pass.NowMs + BotGapMs);
 
         return true;
     }

@@ -100,6 +100,7 @@ public sealed class PlayerbotInitiativeTests
         Assert.Equal(1, Lane(world).Openings);
         Assert.Equal(1, Lane(world).ByKind[(int)PlayerbotOpeningKind.Greeting]);
         Assert.Equal(0, Lane(world).Whispers); // not opted in, not liked enough: a public say
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).PendingCount).Result == 1, "the greeting to be said"); // the cooldown starts when the line is said
         long until = Lane(world).NextOpeningFor(pair.PlayerGuid);
         Assert.True(until >= now + 30 * 60_000L);
 
@@ -152,7 +153,13 @@ public sealed class PlayerbotInitiativeTests
     [Fact]
     public async Task OneOpeningPerPlayerPerCooldown_AndTheGlobalCapPerPass()
     {
-        await using SocialWorld world = await StartAsync(options => options.Social.Initiative.MaxOpeningsPerPass = 1);
+        await using SocialWorld world = await StartAsync(options =>
+        {
+            options.Social.Initiative.MaxOpeningsPerPass = 1;
+            options.Chat.Speech.BotGapSeconds = 0; // the speech limiter works in real time: two lines said within a moment of each other would be refused
+            options.Chat.Speech.TargetGapSeconds = 0;
+            options.Chat.Speech.DedupeSeconds = 0; // the fake model phrases every opening alike: the speech dedupe would drop the second line
+        });
         await using WorldTestClient p1 = await world.AddPlayerAsync("Capone");
         await using WorldTestClient p2 = await world.AddPlayerAsync("Captwo");
         Pair a1 = await FamiliarAsync(world, "Capbota", "Capone");
@@ -171,9 +178,11 @@ public sealed class PlayerbotInitiativeTests
 
         await PassAsync(world, now);
         Assert.Equal(1, Lane(world).Openings); // two bots could open, the cap is one per pass
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).PendingCount).Result == 1, "the first opening to be said");
 
         await PassAsync(world, now + 25_000); // the next pass (the first bot rests for 20 seconds): the other player, the other bot
         Assert.Equal(2, Lane(world).Openings);
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).PendingCount).Result == 2, "the second opening to be said");
         await PassAsync(world, now + 50_000);
         Assert.Equal(2, Lane(world).Openings); // both players have been spoken to: one opening per player per cooldown
     }
@@ -406,6 +415,8 @@ public sealed class PlayerbotInitiativeTests
         await PassAsync(world, now);
         Assert.Equal(1, Lane(world).Openings);
         await Task.Delay(1500); // long enough for the queued line to reach the speech path and be refused there
+        // Nothing was said, so the player's cooldown is only the short hold that keeps a second bot from piling on, not the 30 minutes of a real opening.
+        Assert.True(Lane(world).NextOpeningFor(pair.PlayerGuid) <= now + PlayerbotInitiativeLane.BotGapMs, "the cooldown of an unsaid opening");
 
         // The player says something: it is not the answer to a line nobody heard.
         await player.SendChatAsync(ChatType.Say, Language.Common, "no thanks");
