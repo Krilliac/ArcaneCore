@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       723 keys
+#   WORLD                       725 keys
 #
 ###############################################################################
 
@@ -15654,6 +15654,31 @@ World.Playerbots.Social.Helping.BuffStrangers = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Helping.Enabled = true
+
+#
+#    World.Playerbots.Social.Helping.MaxAnswersPerCall
+#        Description: The most bots that answer one call for help (1..16, 2 by default): a call is
+#                     heard by every free bot in earshot, but a crowd is not what the asker needs.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.MaxAnswersPerCall = 2
+
+#
+#    World.Playerbots.Social.Helping.ResurrectMaxCorpseMinutes
+#        Description: The longest (minutes) a body may have lain dead for a stranger's resurrection
+#                     to be offered (1..60, 10 by default), counted from the death when the server
+#                     knows it, else from the scan's first sight of it.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.ResurrectMaxCorpseMinutes = 10
 
 #
 #    World.Playerbots.Social.Helping.ResurrectStrangers

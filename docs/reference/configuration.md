@@ -1684,6 +1684,8 @@ How to read the tables:
 | `World:Playerbots:Social:Helping:BuffCooldownMinutes` | `int` | `30` | live | The least minutes between two buffs a bot gives the same stranger (0..1440). |
 | `World:Playerbots:Social:Helping:BuffStrangers` | `bool` | `true` | live | Let a bot occasionally cast one of its class buffs (the ones it casts on groupmates) on a same-faction stranger (on by default). |
 | `World:Playerbots:Social:Helping:Enabled` | `bool` | `true` | live | Let bots look for strangers in trouble and help them (on by default). Off: no scan, and no call for help is answered either. |
+| `World:Playerbots:Social:Helping:MaxAnswersPerCall` | `int` | `2` | live | The most bots that answer one call for help (1..16, 2 by default): a call is heard by every free bot in earshot, but a crowd is not what the asker needs. |
+| `World:Playerbots:Social:Helping:ResurrectMaxCorpseMinutes` | `int` | `10` | live | The longest (minutes) a body may have lain dead for a stranger's resurrection to be offered (1..60, 10 by default), counted from the death when the server knows it, else from the scan's first sight of it. |
 | `World:Playerbots:Social:Helping:ResurrectStrangers` | `bool` | `true` | live | Let a bot whose class can resurrect resurrect a dead same-faction stranger with a recent corpse, once per corpse (on by default). |
 | `World:Playerbots:Social:Helping:TroubleRadiusYards` | `float` | `30` | live | How far (yards) from an idle bot a unit in trouble may be and still be noticed (1..100). |
 | `World:Playerbots:Social:Initiative:CommentBotGapMinutes` | `int` | `10` | live | The minutes between two comments of the same bot (1..1440, default 10). |

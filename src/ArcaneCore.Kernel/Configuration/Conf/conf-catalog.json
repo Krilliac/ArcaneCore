@@ -19463,6 +19463,38 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Social:Helping:MaxAnswersPerCall",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most bots that answer one call for help (1..16, 2 by default): a call is heard by every free bot in earshot, but a crowd is not what the asker needs.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Social:Helping:ResurrectMaxCorpseMinutes",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The longest (minutes) a body may have lain dead for a stranger's resurrection to be offered (1..60, 10 by default), counted from the death when the server knows it, else from the scan's first sight of it.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Social:Helping:ResurrectStrangers",
       "section": "World:Playerbots",
       "type": "bool",
