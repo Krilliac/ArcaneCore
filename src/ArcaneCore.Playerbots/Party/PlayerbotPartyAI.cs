@@ -198,6 +198,12 @@ internal sealed class PlayerbotPartyAI
     internal Func<Player, Player, bool>? AcceptsBotGroup { get; set; }
 
     /// <summary>
+    /// What the bot's memory and goal say about an inviter (bot, inviter), for <see cref="PlayerbotInvitePolicy.Affinity"/> (set by
+    /// <see cref="ManagedPlayerbotFeature"/>). Null: every inviter is a stranger.
+    /// </summary>
+    internal Func<Player, Player, PlayerbotGroupInvites.Standing>? InviteStanding { get; set; }
+
+    /// <summary>
     /// The vote of a bot in a bot-led group on a group loot roll (bot, item): need what it would wear, greed the rest. Null, or a null
     /// answer: <see cref="PlayerbotPartyOptions.LootRoll"/>.
     /// </summary>
@@ -367,7 +373,8 @@ internal sealed class PlayerbotPartyAI
         Player? inviter = (name is null ? null : _session.World.FindOnlinePlayer(name)) ?? _session.World.FindOnlinePlayer(group.LeaderGuid);
         PlayerbotPartyOptions party = _options.Party;
         bool accept = inviter is not null && (AcceptsBotGroup?.Invoke(player, inviter) == true || PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, inviter.Name,
-            PlayerbotGroupInvites.SameGuild(social, player, inviter), PlayerbotGroupInvites.OnBotsFriendList(social, player, inviter)));
+            PlayerbotGroupInvites.SameGuild(social, player, inviter), PlayerbotGroupInvites.OnBotsFriendList(social, player, inviter),
+            InviteStanding?.Invoke(player, inviter)));
         bool sent = Act(accept ? WorldOpcode.CmsgGroupAccept : WorldOpcode.CmsgGroupDecline, [], budgeted: false);
         // Outcome: the answer clears the invitation (Accept and Decline both do). One still pending after it, tick after tick, was never answered.
         if (social.Groups.GetInvite(player.Guid) is null) _inviteEpisode.Reset();
@@ -685,7 +692,8 @@ internal sealed class PlayerbotPartyAI
         if (Services.Social is not { } social) return false;
         PlayerbotPartyOptions party = _options.Party;
         return PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, sender.Name,
-            PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender));
+            PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender),
+            InviteStanding?.Invoke(player, sender));
     }
 
     /// <summary>

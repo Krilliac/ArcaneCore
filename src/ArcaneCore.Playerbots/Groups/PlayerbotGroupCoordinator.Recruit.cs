@@ -154,6 +154,7 @@ public sealed partial class PlayerbotGroupCoordinator
     private void ResetRecruiting()
     {
         _pledges.Clear();
+        _invitedPlayers.Clear();
         _recruitTried.Clear();
         _guildCalls.Clear();
         _recruitSays.Clear();

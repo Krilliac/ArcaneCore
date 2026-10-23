@@ -12,14 +12,22 @@ namespace ArcaneCore.World.Playerbots.Party;
 /// </summary>
 internal static class PlayerbotGroupInvites
 {
+    /// <summary>What the bot's memory and goal say about an inviter, for <see cref="PlayerbotInvitePolicy.Affinity"/>.</summary>
+    /// <param name="Rival">The bot treats the inviter as a rival (<c>PlayerbotSocialMemory.IsRival</c>): always declined.</param>
+    /// <param name="WellKnown">The effective affinity toward the inviter reaches <see cref="PlayerbotPartyOptions.AcceptInviteAffinity"/>.</param>
+    /// <param name="SharesGoal">The inviter is on the same quest or dungeon goal as the bot.</param>
+    internal readonly record struct Standing(bool Rival, bool WellKnown, bool SharesGoal);
+
     /// <summary>
     /// Whether a bot accepts <paramref name="inviter"/>'s invitation: an allowlisted name always; otherwise
     /// <see cref="PlayerbotInvitePolicy.None"/> nobody, <see cref="PlayerbotInvitePolicy.GuildOrFriends"/> a guild mate or a player on the
     /// BOT's friend list (<paramref name="onBotsFriendList"/>; the inviter's own list does not count: anyone can befriend any bot with
-    /// CMSG_ADD_FRIEND, so it shows no consent), <see cref="PlayerbotInvitePolicy.Anyone"/> everybody.
+    /// CMSG_ADD_FRIEND, so it shows no consent), <see cref="PlayerbotInvitePolicy.Anyone"/> everybody,
+    /// <see cref="PlayerbotInvitePolicy.Affinity"/> never a rival, otherwise a guild mate, a friend, a well-known player or one on the same goal
+    /// (<paramref name="standing"/>; null reads as a stranger).
     /// </summary>
     internal static bool Allows(PlayerbotInvitePolicy policy, IReadOnlyCollection<string> allowlist, string inviter,
-        bool sameGuild, bool onBotsFriendList)
+        bool sameGuild, bool onBotsFriendList, Standing? standing = null)
     {
         ArgumentNullException.ThrowIfNull(allowlist);
         if (string.IsNullOrEmpty(inviter)) return false;
@@ -28,6 +36,8 @@ internal static class PlayerbotGroupInvites
         {
             PlayerbotInvitePolicy.Anyone => true,
             PlayerbotInvitePolicy.GuildOrFriends => sameGuild || onBotsFriendList,
+            PlayerbotInvitePolicy.Affinity => standing is not { Rival: true }
+                && (sameGuild || onBotsFriendList || standing is { WellKnown: true } || standing is { SharesGoal: true }),
             _ => false,
         };
     }

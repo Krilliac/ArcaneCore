@@ -1060,34 +1060,6 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return total;
     }
 
-    /// <summary>
-    /// <see cref="PlayerbotGroupOptions.InvitePlayers"/>: a group one short (a role or a member) may take a nearby real player of the
-    /// same team, ungrouped, of a fitting level, who has not declined lately.
-    /// </summary>
-    private PlayerbotGroupPlan? MatchWithPlayer(List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, GroupManager groupManager)
-    {
-        PlayerbotGroupCandidate oldest = candidates.OrderBy(c => c.NeedSinceMs).First();
-        if (_bots[oldest.BotId].Session.Player is not { Map: { } map } anchor) return null;
-        foreach (ObjectGuid guid in anchor.VisibleObjects)
-        {
-            if (map.FindObject(guid) is not Player { IsAlive: true } real || real.Session is not WorldSession { IsManaged: false }) continue;
-            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
-            if (_declinedPlayers.ContainsKey(real.Guid) || real.Level < goal.MinLevel) continue;
-            if (Vector3.Distance(new Vector3(real.X, real.Y, real.Z), new Vector3(anchor.X, anchor.Y, anchor.Z)) > InvitePlayerYards) continue;
-            var withPlayer = new List<PlayerbotGroupCandidate>(candidates)
-            {
-                new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
-                    new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue),
-            };
-            // A real player never leads a bot group: the bots keep their goal.
-            if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups) is { } plan && plan.Leader.BotId != Guid.Empty
-                && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
-                return plan;
-        }
-
-        return null;
-    }
-
     private BotGroup Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null)
     {
         var group = new BotGroup(_nextId++, goal, plan.Leader.BotId, new ObjectGuid(plan.Leader.Guid), Now) { Run = run };
