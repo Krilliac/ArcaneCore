@@ -109,6 +109,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
     private readonly PlayerbotCadenceStats _cadence = new();
+    /// <summary>The main lane's measured full-pass time (<see cref="PlayerbotMainPass"/>): sizes the motion lease cap and the think-starved bound.</summary>
+    private readonly PlayerbotMainPass _mainPass = new();
+
+    /// <summary>The main lane's measured full-pass time in ms, 0 before the first main-lane gap (tests).</summary>
+    internal uint MainPassMs => _mainPass.Ms;
     private readonly PlayerbotThinkBudget _thinkBudget = new();
     private double _lastOwnMs;
     private double _lastBudgetMs = PlayerbotThinkRotation.TickBudgetMs;
@@ -2407,12 +2412,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             uint sinceLast = unchecked(world.NowMs - active.LastUpdateMs);
             active.LastUpdateMs = world.NowMs;
+            // The motion lease follows the scheduler's pass, also for a bot with no gap of its own yet (its first think skips the gap below).
+            Player? measured = active.Session.Player;
+            if (measured is not null) PlayerbotMotion.NoteSchedulerPass(measured, _mainPass.Ms);
             // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
             if (active.GapPrimed)
             {
                 bool combatLane = IsCombatLane(active);
                 _cadence.RecordGap(sinceLast, combatLane);
-                if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast, combatLane);
+                if (!combatLane) _mainPass.Note(sinceLast);
+                if (measured is not null) PlayerbotMotion.NoteThinkGap(measured, sinceLast, combatLane);
             }
 
             active.GapPrimed = true;

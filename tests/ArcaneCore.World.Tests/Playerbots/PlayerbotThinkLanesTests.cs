@@ -628,6 +628,56 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    public void TheMainPass_IsTheRunningMeanOfTheMainLaneGaps_AndIgnoresNoise()
+    {
+        var pass = new PlayerbotMainPass();
+        Assert.Equal(0u, pass.Ms);
+        pass.Note(0);
+        pass.Note(PlayerbotMainPass.MaxSampleMs + 1);
+        Assert.Equal(0u, pass.Ms);
+        pass.Note(8000);
+        Assert.Equal(8000u, pass.Ms);
+        for (int i = 0; i < 1000; i++) pass.Note(12_000);
+        Assert.InRange(pass.Ms, 11_900u, 12_000u);
+        pass.Note(PlayerbotMainPass.MaxSampleMs + 1);
+        Assert.InRange(pass.Ms, 11_900u, 12_000u);
+    }
+
+    [Fact]
+    public async Task TheFeature_MeasuresTheMainLanePass_AndHandsItToTheBotsMotion()
+    {
+        // A zero budget thinks one bot per tick and each think takes 100 ms: a bot waits about 300 ms between thinks.
+        var (host, feature, capture, _) = await StartAsync(budgetMs: 0, boundMs: 0, burnMs: 100, "Passbot");
+        try
+        {
+            Guid first = Guid.Empty;
+            Action<Guid, PlayerbotThinkProbe>? inner = feature.ThinkObserver;
+            feature.ThinkObserver = (id, probe) =>
+            {
+                if (first == Guid.Empty) first = id; // world thread only
+                inner?.Invoke(id, probe);
+            };
+            (uint pass, uint seen) = (0, 0);
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && (pass == 0 || seen == 0))
+            {
+                await Task.Delay(50);
+                (pass, seen) = await host.World.InvokeAsync(() => (feature.MainPassMs,
+                    first != Guid.Empty && feature.FindSession(first)?.Player is { } player ? PlayerbotMotion.SchedulerPassMsOf(player) : 0u));
+            }
+
+            Assert.InRange(pass, 100u, 5000u);
+            Assert.True(seen > 0, "the bot's motion never saw the scheduler's pass");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task AHealthyServer_ReportsNoStarvedBot()
     {
         var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 1000, burnMs: 0, "Okbot");

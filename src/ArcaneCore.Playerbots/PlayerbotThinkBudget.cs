@@ -150,6 +150,32 @@ internal sealed class PlayerbotThinkBudget
 }
 
 /// <summary>
+/// The time the main think lane needs for a full pass over the bots, measured: a running average of the gaps between two main-lane thinks of
+/// one bot (every bot is visited once a pass, so the mean gap is the pass). It sizes the motion lease cap (<see cref="PlayerbotMotion.LeaseCapMs"/>)
+/// and, with it, the fairness bound of the think-starved report; neither may feed back into the think budget. World thread only.
+/// </summary>
+internal sealed class PlayerbotMainPass
+{
+    /// <summary>Weight of one sample in the average is 1/this: a pass of a thousand bots is a thousand samples.</summary>
+    internal const int Window = 64;
+
+    /// <summary>A sample over this is no pass of a live rotation (a stalled world or a long pause) and is ignored.</summary>
+    internal const uint MaxSampleMs = PlayerbotMotion.HardMaxGapLeaseMs;
+
+    private uint _ms;
+
+    /// <summary>The measured full-pass time in ms; 0 until the first sample.</summary>
+    internal uint Ms => _ms;
+
+    /// <summary>One bot's main-lane think came <paramref name="gapMs"/> ms after its previous one. The first sample is taken as is.</summary>
+    internal void Note(uint gapMs)
+    {
+        if (gapMs == 0 || gapMs > MaxSampleMs) return;
+        _ms = _ms == 0 ? gapMs : (uint)(((long)_ms * (Window - 1) + gapMs + Window / 2) / Window);
+    }
+}
+
+/// <summary>
 /// The "a bot went too long without a think" check (<see cref="PlayerbotOptions.ThinkStarvedGapMs"/>), one episode per bot: the report is
 /// made once when the silence passes the bound and not again until the bot has thought and gone quiet again. Pure; the feature owns the flag.
 /// </summary>

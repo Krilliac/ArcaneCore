@@ -125,6 +125,54 @@ public sealed class PlayerbotCadenceTests
     }
 
     [Fact]
+    public async Task ABotWithNoMeasuredGap_SeedsItsLeaseFromTheSchedulersPass_NotTheFourSecondFloor()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                // A fresh login: GapMs 0 (the first think skips NoteThinkGap) while the main lane needs 8 s for a full pass.
+                PlayerbotMotion.NoteSchedulerPass(session.Player!, 8000);
+                StartWalk(host, session, 0, 0);
+                Assert.Equal(0u, PlayerbotMotion.ThinkGapMs(session.Player!));
+                Assert.True(Walking(session, 6000), $"stopped before its next think; lease {PlayerbotMotion.LeaseMsOf(session.Player!)} ms");
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task TheLeaseCap_FollowsTheSchedulersPass_UpToAHardMaximum()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                // A measured gap of 20 s with a 20 s pass: more than the old 15 s cap, 1.5 x the pass.
+                PlayerbotMotion.NoteSchedulerPass(session.Player!, 20_000);
+                StartWalk(host, session, 20_000, 4);
+                Assert.True(PlayerbotMotion.LeaseMsOf(session.Player!) > PlayerbotMotion.MaxGapLeaseMs, $"lease {PlayerbotMotion.LeaseMsOf(session.Player!)} ms");
+                Assert.Equal(30_000u, PlayerbotMotion.LeaseMsOf(session.Player!));
+                Assert.True(Walking(session, 16_000), "stopped at the old 15 s cap");
+                return true;
+            });
+            await host.World.InvokeAsync(() =>
+            {
+                PlayerbotMotion.NoteSchedulerPass(session.Player!, 1_000_000);
+                StartWalk(host, session, 100_000, 8);
+                Assert.Equal(PlayerbotMotion.HardMaxGapLeaseMs, PlayerbotMotion.LeaseMsOf(session.Player!));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task ARouteTheBrainGaveUp_StopsTheBot_UnlessAThinkKeptOrStartedOne()
     {
         await using WorldTestHost host = WorldTestHost.Start();
