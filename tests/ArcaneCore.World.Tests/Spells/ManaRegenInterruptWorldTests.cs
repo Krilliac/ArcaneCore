@@ -64,12 +64,13 @@ public sealed class ManaRegenInterruptWorldTests
         Assert.Equal(50f, await host.PlayerStateAsync("Manaint", player =>
             Math.Min(100f, (float)new SpellSystemPowerAuras(host.WorldServices.GetRequiredService<SpellFeature>().System)
                 .GetTotalAuraModifier(player, AuraType.ModManaRegenInterrupt))));
-        // Capture the mana inside the wait predicate: re-reading it afterwards raced the next regen tick (48 -> 86).
+        // Wait for the mana to change (10 after the cast) and capture it inside the predicate: re-reading it afterwards raced the next
+        // regen tick (48 -> 86), and a ">= 48" wait could not tell a halved per-tick amount (10, 29, 48) from the right one.
         uint manaAtFirstTick = 0;
         await host.WaitForWorldAsync(() =>
         {
             manaAtFirstTick = host.World.FindOnlinePlayer("Manaint")!.GetUInt32(UpdateFields.UnitFieldPower1);
-            return manaAtFirstTick >= 48;
+            return manaAtFirstTick != 10;
         }, "interrupted mana tick");
         Assert.Equal(48u, manaAtFirstTick);
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Manaint")!
@@ -83,7 +84,7 @@ public sealed class ManaRegenInterruptWorldTests
         await host.WaitForWorldAsync(() =>
         {
             manaAtNormalTick = host.World.FindOnlinePlayer("Manaint")!.GetUInt32(UpdateFields.UnitFieldPower1);
-            return manaAtNormalTick >= 66;
+            return manaAtNormalTick != 0;
         }, "normal mana tick");
         Assert.Equal(66u, manaAtNormalTick);
         await client.CollectAsync();
