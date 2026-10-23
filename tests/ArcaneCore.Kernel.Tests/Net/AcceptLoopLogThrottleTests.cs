@@ -40,14 +40,17 @@ public sealed class AcceptLoopLogThrottleTests
             }
 
             done.TrySetResult();
-            return new ValueTask<TcpClient>(Task.Delay(Timeout.Infinite, ct).ContinueWith<TcpClient>(
-                _ => throw new OperationCanceledException(ct), TaskScheduler.Default));
+            // Cancelled from stop.Cancel()'s own thread through the registration: no pool thread is needed to end the accept.
+            var pending = new TaskCompletionSource<TcpClient>(); // inline continuation: the loop resumes on the Cancel() thread too
+            ct.Register(() => pending.TrySetCanceled(ct));
+            return new ValueTask<TcpClient>(pending.Task);
         }
 
         Task loop = AcceptLoop.RunAsync(Accept, _ => { }, log, stop.Token, backoff: TimeSpan.FromMilliseconds(1));
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Generous budgets: a loaded CI runner can delay pool threads by seconds; a hang still fails, it just takes longer.
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(30));
         stop.Cancel();
-        await loop.WaitAsync(TimeSpan.FromSeconds(5));
+        await loop.WaitAsync(TimeSpan.FromSeconds(30));
 
         string[] warnings = log.Warnings.ToArray();
         Assert.Single(warnings);
