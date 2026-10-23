@@ -8,11 +8,13 @@ using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Tests.Playerbots.Chat;
 using ArcaneCore.World.Tests.Playerbots.Groups;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
+using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
 
@@ -138,5 +140,36 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         Assert.Equal(1, lane.BackoffOf(playerGuid));
         await world.RunAsync(20_000);
         Assert.False(PlayerInvited(world));
+    }
+
+    /// <summary>
+    /// Review I10: another bot's yes to a bot's team-up line is followed through by the coordinator (the answering bot pledges to the group the asking
+    /// bot waits in), instead of dying as a signal. The yes is staged (the opening needs a chat model to be spoken); the follow-through is the lane's own.
+    /// </summary>
+    [Fact]
+    public async Task AnotherBotsYes_IsFollowedThrough_AsAPledgeToTheAskersGroup()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            options.MoveSpeed = 0.1f;
+            options.Social.Guilds.Enabled = false;
+        });
+        var tank = await world.AddBotAsync("Teamtank", Human, Warrior, 10, [Taunt]);
+        var mage = await world.AddBotAsync("Teammage", Human, 8, 10, [133]);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Count() == 2), await world.TraceAsync());
+        var healer = await world.AddBotAsync("Teamheal", Human, 5, 10, [2050, 585], new System.Numerics.Vector3(StartX, StartY - 150f, StartZ));
+        PlayerbotInitiativeLane lane = SocialTestKit.Feature(world.World.Host).Initiative;
+        ObjectGuid healerGuid = await world.OnWorldAsync(() => world.Player(healer.Id).Guid);
+        Assert.False(world.Coordinator.IsPledged(healer.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry)));
+
+        await world.OnWorldAsync(() =>
+        {
+            lane.FollowBot(tank.Id, healer.Id, healerGuid, world.World.Host.World.NowMs);
+            lane.Run(SocialTestKit.BotPass(world.World.Host, world.World.Host.World.NowMs));
+            return true;
+        });
+
+        Assert.Equal(1, lane.BotOffers);
+        Assert.True(world.Coordinator.IsPledged(healer.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry)));
     }
 }
