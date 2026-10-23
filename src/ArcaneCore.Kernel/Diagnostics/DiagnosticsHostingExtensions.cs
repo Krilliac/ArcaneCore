@@ -91,11 +91,11 @@ internal sealed class DiagnosticsHostedService(
         {
             if (lifetime is { } appLifetime && !appLifetime.ApplicationStarted.IsCancellationRequested)
             {
-                appLifetime.ApplicationStarted.Register(static () => ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(bypassCooldown: true));
+                appLifetime.ApplicationStarted.Register(static () => CrashAlert.TryBeep(bypassCooldown: true));
             }
             else
             {
-                ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(bypassCooldown: true);
+                CrashAlert.TryBeep(bypassCooldown: true);
             }
         }
 

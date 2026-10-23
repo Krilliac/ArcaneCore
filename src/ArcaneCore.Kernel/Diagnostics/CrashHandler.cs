@@ -277,7 +277,7 @@ public sealed class CrashHandler : IDisposable
         {
             if (_options.BeepOnException)
             {
-                ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(checkErrorStream: true);
+                CrashAlert.TryBeep(checkErrorStream: true);
             }
 
             string report = CrashReport.Render(kind, exception, _providers, DateTime.UtcNow);

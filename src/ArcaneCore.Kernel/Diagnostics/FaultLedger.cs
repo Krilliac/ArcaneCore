@@ -634,7 +634,7 @@ public sealed class FaultLedger
         FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
         if (recording.ShouldLog && _beepOnException)
         {
-            ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(checkErrorStream: true);
+            CrashAlert.TryBeep(checkErrorStream: true);
         }
 
         if (recording.ShouldLog && FaultNoticed is { } noticed)
