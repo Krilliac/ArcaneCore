@@ -475,8 +475,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         EnsureSubscribed(pass.Social);
         MaintainRegistry(pass);
         Intake(pass);
-        for (int lane = 0; lane < LaneNames.Length; lane++) RunLane(lane, pass);
         for (int i = 0; i < InjectedLanes.Count; i++) RunInjected(InjectedLanes[i], pass);
+        for (int lane = 0; lane < LaneNames.Length; lane++) RunLane(lane, pass);
         Passes++;
     }
 
@@ -486,7 +486,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "prune",
     ];
 
-    /// <summary>Extra lanes run after the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
+    /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
     internal List<(string Name, Action<PlayerbotSocialPass> Run)> InjectedLanes { get; } = [];
 
     /// <summary>
@@ -536,8 +536,20 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         }
     }
 
+    /// <summary>Every lane fault so far, reported or not (a lane that fails every pass is reported once a minute, see <see cref="LaneFaulted"/>).</summary>
+    internal long LaneFaultCount { get; private set; }
+
+    private readonly Dictionary<string, long> _laneReportedAt = [];
+
+    private const long LaneReportGapMs = 60_000;
+
     private void LaneFaulted(string lane, Exception error)
     {
+        LaneFaultCount++;
+        // A lane that throws on every pass would flood the ledgers and the log: one report per lane per minute; the count above keeps the rest.
+        long now = Environment.TickCount64;
+        if (_laneReportedAt.TryGetValue(lane, out long last) && now - last < LaneReportGapMs) return;
+        _laneReportedAt[lane] = now;
         error.Data["playerbot.social.lane"] = lane;
         FaultLedger.Shared.Record("playerbot.social", error);
         AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"lane {lane}: {error.GetType().Name}: {error.Message}", origin: _world?.Identity);
