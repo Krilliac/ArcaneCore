@@ -16,24 +16,26 @@ internal sealed class PlayerbotKillObserver(MapCombat combat)
 {
     private static readonly ConditionalWeakTable<MapCombat, PlayerbotKillObserver> ByCombat = new();
     private static readonly Unit[] NoPack = [];
-    private readonly Dictionary<Player, Action<Unit?, IReadOnlyList<Unit>>> _bots = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Player, Watch> _bots = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Player, Unit[]> _lethalPack = new(ReferenceEqualityComparer.Instance);
     private readonly object _gate = new();
 
-    /// <summary>
-    /// A player died (killer null for the environment). Raised once per kill on the map's combat while any bot is on that map, which holds whenever a bot
-    /// is the victim or the killer (the bot social memory's PvP rivalry); world thread. A handler must not throw.
-    /// </summary>
-    internal static event Action<Unit?, Unit>? PlayerKilled;
+    /// <summary>A watched bot's callbacks: its own death (killer and pack), and a player's death it took part in as victim or killer.</summary>
+    private readonly record struct Watch(Action<Unit?, IReadOnlyList<Unit>> OnKilled, Action<Unit?, Player>? OnPlayerKilled);
 
     internal static PlayerbotKillObserver For(MapCombat combat) => ByCombat.GetValue(combat, static key => new PlayerbotKillObserver(key));
 
-    internal void Add(Player player, Action<Unit?, IReadOnlyList<Unit>> onKilled)
+    /// <summary>
+    /// Watches <paramref name="player"/>, a bot on this map. <paramref name="onKilled"/> runs at its own death with the killer and the pack.
+    /// <paramref name="onPlayerKilled"/> (the bot social memory's PvP rivalry) runs once per player death on this map that the bot took part in as
+    /// victim or as killer (a pet or totem counts as its owner); when two watched bots took part, only the victim's runs. World thread; must not throw.
+    /// </summary>
+    internal void Add(Player player, Action<Unit?, IReadOnlyList<Unit>> onKilled, Action<Unit?, Player>? onPlayerKilled = null)
     {
         lock (_gate)
         {
             bool first = _bots.Count == 0;
-            _bots[player] = onKilled;
+            _bots[player] = new Watch(onKilled, onPlayerKilled);
             if (!first) return;
             combat.DamageTaken += OnDamageTaken;
             combat.UnitKilled += OnUnitKilled;
@@ -71,19 +73,26 @@ internal sealed class PlayerbotKillObserver(MapCombat combat)
 
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
+        if (victim is not Player player) return;
         Action<Unit?, IReadOnlyList<Unit>>? onKilled = null;
+        Action<Unit?, Player>? onPlayerKilled = null;
         IReadOnlyList<Unit> pack = NoPack;
-        if (victim is Player) PlayerKilled?.Invoke(killer, victim);
-        if (victim is Player player)
+        Player? slayer = killer is null ? null : DuelRules.ControllingPlayer(killer);
+        lock (_gate)
         {
-            lock (_gate)
+            if (_bots.TryGetValue(player, out Watch watch))
             {
-                _bots.TryGetValue(player, out onKilled);
-                // A self kill (a fall, drowning) is not this pack, even if an earlier hit had snapped one.
-                if (_lethalPack.Remove(player, out Unit[]? snapped) && !ReferenceEquals(killer, player)) pack = snapped;
+                onKilled = watch.OnKilled;
+                onPlayerKilled = watch.OnPlayerKilled;
             }
+
+            // The killing bot hears of the death only when the victim is not a watched bot: one record per death, and it notes both sides.
+            if (onPlayerKilled is null && slayer is not null && _bots.TryGetValue(slayer, out Watch killerWatch)) onPlayerKilled = killerWatch.OnPlayerKilled;
+            // A self kill (a fall, drowning) is not this pack, even if an earlier hit had snapped one.
+            if (_lethalPack.Remove(player, out Unit[]? snapped) && !ReferenceEquals(killer, player)) pack = snapped;
         }
 
+        onPlayerKilled?.Invoke(killer, player);
         onKilled?.Invoke(killer, pack);
     }
 

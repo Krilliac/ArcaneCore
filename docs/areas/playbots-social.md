@@ -111,7 +111,8 @@ affinity of 50 or more either way unless every one is like that.
 **Where each event comes from**: chat lines heard by a bot and addressed to it (`PlayerbotChat.LineHeard`); the group coordinator (forming,
 wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from the begin-trade packet or the bot's own
 request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
-brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.PlayerKilled` for PvP kills. All of them go through
+brain's assist and heal-the-tagger paths for help; the kill observer of the bot's own map for PvP kills (each brain registers its PvP callback there; there is no process-wide
+event, which kept every disposed world reachable). All of them go through
 `PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).
 
 **Help, bystanders and the call for help** (`PlayerbotFightSocial`, one per bot, read once a second while the bot is in combat):

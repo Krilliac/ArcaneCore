@@ -2904,8 +2904,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (_killObserver is { } previous && _observedPlayer is { } oldPlayer) previous.Remove(oldPlayer);
             _killObserver = observer;
             _observedPlayer = player;
-            observer?.Add(player, RememberKiller);
+            observer?.Add(player, RememberKiller, NotePlayerKilled);
         }
+    }
+
+    // A player killed by another player (or its pet) is rivalry for the managed bot on either side; the observer of this bot's map raises it once per
+    // death, for the victim's watch or, when the victim is no watched bot, for the killer's.
+    private void NotePlayerKilled(Unit? killer, Player victim)
+    {
+        if (Volatile.Read(ref _stopped) == 0) Social?.NotePvpKill(killer, victim);
     }
 
     private void RememberKiller(Unit? killer, IReadOnlyList<Unit> engaged)
