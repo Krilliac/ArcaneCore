@@ -848,7 +848,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             uint questId = signal.QuestId != 0 ? signal.QuestId : QuestFor(player, signal.Entry, quests);
             var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Quest, questId, signal.Entry, player.MapId, player.MapId,
-                signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotGroupContent.PartySize), player.Level, signal.Source);
+                signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotRecruitment.SignalLimit(_options.Groups)), player.Level, signal.Source);
             if (!IsSetAside(bot.BotId, goal.Key)) return goal;
         }
 

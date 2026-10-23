@@ -55,6 +55,19 @@ internal static class PlayerbotRecruitment
         return (float)Math.Clamp(chance, 0d, MaxChance);
     }
 
+    /// <summary>
+    /// The largest group a risk signal may ask for: a party (five), or with <see cref="PlayerbotCooperationOptions.RaidEscalation"/> and
+    /// <see cref="PlayerbotGroupOptions.RaidsEnabled"/> up to <see cref="PlayerbotCooperationOptions.MaxRaidSize"/> (a raid the coordinator
+    /// converts the group to once it forms).
+    /// </summary>
+    internal static int SignalLimit(PlayerbotGroupOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.RaidsEnabled && options.Cooperation.RaidEscalation
+            ? Math.Clamp(options.Cooperation.MaxRaidSize, PlayerbotGroupContent.PartySize, ArcaneCore.Game.Groups.Group.MaxRaidSize)
+            : PlayerbotGroupContent.PartySize;
+    }
+
     /// <summary>The candidate's roll for the group: a fixed number in [0, 1) for the pair, whoever asks and whenever.</summary>
     internal static double Roll(ulong candidateGuid, int groupId)
         => (PlayerbotContention.Mix(PlayerbotContention.Mix(candidateGuid, 0x5EC8017AUL), (ulong)(uint)groupId) >> 11) * (1.0 / 9007199254740992.0);

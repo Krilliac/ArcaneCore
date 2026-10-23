@@ -163,7 +163,7 @@ internal sealed class PlayerbotRisk
     /// </summary>
     internal PlayerbotGroupSignal? GroupSignal { get; private set; }
 
-    /// <summary>The largest group a pull is weighed for (a party; raids come from the content's own flags).</summary>
+    /// <summary>The largest group a pull is weighed for by default (a party; <see cref="Groups.PlayerbotRecruitment.SignalLimit"/> raises it for a raid escalation).</summary>
     internal const int MaxSignalGroupSize = 5;
 
     /// <summary>Forget the group signal (the coordinator took it).</summary>
@@ -487,7 +487,7 @@ internal sealed class PlayerbotRisk
         PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
         // Too strong alone, but a few players would take it: a "needs a group of N" goal instead of abandoning the objective.
         if (verdict.Decision == PlayerbotEngageDecision.Avoid && questObjective && _options.Groups.Enabled
-            && PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, MaxSignalGroupSize) is var size and > 1)
+            && PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, Groups.PlayerbotRecruitment.SignalLimit(_options.Groups)) is var size and > 1)
         {
             verdict = verdict with { Reason = $"group-of-{size}" };
             GroupSignal = new PlayerbotGroupSignal(target.Entry, size, player.MapId, new Vector3(target.X, target.Y, target.Z), now);
