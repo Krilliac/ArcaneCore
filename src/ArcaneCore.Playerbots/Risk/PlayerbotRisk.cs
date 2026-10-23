@@ -169,6 +169,9 @@ internal sealed class PlayerbotRisk
     /// <summary>Forget the group signal (the coordinator took it).</summary>
     internal void ClearGroupSignal() => GroupSignal = null;
 
+    /// <summary>The group-size estimates the last <see cref="Assess(Player, Creature, bool, out PlayerbotRoute?)"/> made for a group signal (tests bound their cost).</summary>
+    internal int LastGroupProbes { get; private set; }
+
     /// <summary>The line BOTINSPECT and <c>.playerbot status</c> show: the retreat, else the fight, else the last pull verdict.</summary>
     internal string Report
     {
@@ -487,9 +490,16 @@ internal sealed class PlayerbotRisk
         PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
         // Too strong alone, but a few players would take it: a "needs a group of N" goal instead of abandoning the objective.
         // Only a rare elite or a boss (rank 2 or 3) may ask for more than a party: a plain elite or any other creature needs five or fewer or is passed over.
-        if (verdict.Decision == PlayerbotEngageDecision.Avoid && questObjective && _options.Groups.Enabled
-            && PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, target.Template.Rank is 2 or 3
-                ? Groups.PlayerbotRecruitment.SignalLimit(_options.Groups) : Groups.PlayerbotRecruitment.PartyLimit) is var size and > 1)
+        LastGroupProbes = 0;
+        int size = 0;
+        if (verdict.Decision == PlayerbotEngageDecision.Avoid && questObjective && _options.Groups.Enabled)
+        {
+            size = PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, target.Template.Rank is 2 or 3
+                ? Groups.PlayerbotRecruitment.SignalLimit(_options.Groups) : Groups.PlayerbotRecruitment.PartyLimit, out int probes);
+            LastGroupProbes = probes;
+        }
+
+        if (size > 1)
         {
             verdict = verdict with { Reason = $"group-of-{size}" };
             GroupSignal = new PlayerbotGroupSignal(target.Entry, size, player.MapId, new Vector3(target.X, target.Y, target.Z), now);

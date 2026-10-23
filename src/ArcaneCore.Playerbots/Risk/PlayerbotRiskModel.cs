@@ -240,9 +240,14 @@ internal static class PlayerbotRiskModel
     /// when the reason is not strength (a creature that kills outright, one the bot remembers fleeing from).
     /// </summary>
     internal static int NeededGroupSize(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options, int maxSize)
+        => NeededGroupSize(facts, options, maxSize, out _);
+
+    /// <summary><see cref="NeededGroupSize(PlayerbotEngagementFacts, PlayerbotRiskOptions, int)"/>, with the number of group-size estimates this call made.</summary>
+    internal static int NeededGroupSize(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options, int maxSize, out int probes)
     {
         ArgumentNullException.ThrowIfNull(facts);
         ArgumentNullException.ThrowIfNull(options);
+        probes = 0;
         if (facts.Enemies.Count == 0 || facts.Remembered
             || facts.Enemies.Any(enemy => enemy.Lethal || (enemy.Remembered && enemy.Join != RiskJoin.Path))) return 0;
         PlayerbotEngagementFacts alone = facts with { GroupSize = 1 };
@@ -251,11 +256,14 @@ internal static class PlayerbotRiskModel
         // A bigger group is never weaker, so the smallest size that takes the fight is found by bisection: about log2(limit) estimates
         // (6 for a raid of 40), not one per size.
         int limit = Math.Min(maxSize, 40);
-        if (limit < 2 || !GroupTakes(facts, options, limit)) return 0;
+        if (limit < 2) return 0;
+        probes++;
+        if (!GroupTakes(facts, options, limit)) return 0;
         int low = 2, high = limit;
         while (low < high)
         {
             int mid = low + ((high - low) / 2);
+            probes++;
             if (GroupTakes(facts, options, mid)) high = mid;
             else low = mid + 1;
         }
@@ -263,15 +271,9 @@ internal static class PlayerbotRiskModel
         return low;
     }
 
-    private static long _groupProbes;
-
-    /// <summary>How many group-size estimates <see cref="NeededGroupSize"/> has made (tests bound the cost of a raid-sized search).</summary>
-    internal static long GroupProbes => Interlocked.Read(ref _groupProbes);
-
     /// <summary>Whether a group of <paramref name="size"/> would take the fight, judged at full health and mana: a group rests before it pulls.</summary>
     private static bool GroupTakes(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options, int size)
     {
-        Interlocked.Increment(ref _groupProbes);
         PlayerbotEngagementFacts group = facts with
         {
             GroupSize = size, BotHealth = facts.BotMaxHealth, BotManaPct = facts.BotManaPct is null ? null : 100f,

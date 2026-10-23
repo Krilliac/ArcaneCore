@@ -11,24 +11,23 @@ namespace ArcaneCore.World.Tests.Playerbots.Risk;
 /// </summary>
 public sealed class PlayerbotRaidRiskWorldTests
 {
-    private static async Task<(PlayerbotGroupSignal? Signal, long Probes)> SignalAsync(uint entry, uint rank, uint health, float maxDamage = 14)
+    private static async Task<(PlayerbotGroupSignal? Signal, int Probes)> SignalAsync(uint entry, uint rank, uint health, float maxDamage = 14)
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(entry, level: 4, health: health, minDamage: 10, maxDamage: maxDamage, rank: rank), 25, 0));
         await world.SeeAsync(mob);
-        long before = PlayerbotRiskModel.GroupProbes;
-        PlayerbotGroupSignal? signal = await world.OnWorldAsync(() =>
+                (PlayerbotGroupSignal? signal, int probes) = await world.OnWorldAsync(() =>
         {
             world.Brain.Risk.Assess(world.Player, mob, true, out _);
-            return world.Brain.Risk.GroupSignal;
+            return (world.Brain.Risk.GroupSignal, world.Brain.Risk.LastGroupProbes);
         });
-        return (signal, PlayerbotRiskModel.GroupProbes - before);
+        return (signal, probes);
     }
 
     [Fact]
     public async Task ARareEliteNeedingEight_RaisesASignalForEight_InAboutSixEstimates()
     {
-        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992001, rank: 2, health: 1700);
+        (PlayerbotGroupSignal? signal, int probes) = await SignalAsync(992001, rank: 2, health: 1700);
         Assert.NotNull(signal);
         Assert.Equal(8, signal.Value.Size);
         Assert.InRange(probes, 1, 8); // bisection over 2..40, not 39 estimates
@@ -37,7 +36,7 @@ public sealed class PlayerbotRaidRiskWorldTests
     [Fact]
     public async Task ABossNeedingThirtyThree_IsFoundInAtMostEightEstimates_NotThirtyTwo()
     {
-        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992004, rank: 3, health: 32000);
+        (PlayerbotGroupSignal? signal, int probes) = await SignalAsync(992004, rank: 3, health: 32000);
         Assert.NotNull(signal);
         Assert.Equal(33, signal.Value.Size);
         Assert.InRange(probes, 1, 8);
@@ -54,15 +53,23 @@ public sealed class PlayerbotRaidRiskWorldTests
     [Fact]
     public async Task ACreatureThatIsNoRareEliteOrBoss_NeverAsksForMoreThanAParty()
     {
-        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992003, rank: 0, health: 2000);
+        (PlayerbotGroupSignal? signal, int probes) = await SignalAsync(992003, rank: 0, health: 2000);
         Assert.Null(signal); // it would need nine: only a rare elite or a boss may ask for a raid
         Assert.InRange(probes, 1, 4);
+    }
+
+    /// <summary>With the default configuration (groups and raid escalation on) a plain elite far beyond a party is avoided as ever: no group, no raid.</summary>
+    [Fact]
+    public async Task APlainEliteBeyondAnyParty_WithTheDefaultConfig_IsAvoided_NotARaid()
+    {
+        (PlayerbotGroupSignal? signal, _) = await SignalAsync(992006, rank: 1, health: 32000);
+        Assert.Null(signal);
     }
 
     [Fact]
     public async Task APlainEliteNeedingEight_RaisesNoRaidSignal()
     {
-        (PlayerbotGroupSignal? signal, long probes) = await SignalAsync(992005, rank: 1, health: 1700);
+        (PlayerbotGroupSignal? signal, int probes) = await SignalAsync(992005, rank: 1, health: 1700);
         Assert.Null(signal); // the same creature as a rare elite needs eight: a plain elite is passed over
         Assert.InRange(probes, 1, 4);
     }
