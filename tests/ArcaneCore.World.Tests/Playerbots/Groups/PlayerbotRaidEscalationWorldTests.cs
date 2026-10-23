@@ -24,6 +24,8 @@ public sealed class PlayerbotRaidEscalationWorldTests
         options.Groups.Cooperation.RecruitRadiusYards = 1500;
         options.Groups.Cooperation.RecruitBaseChance = 1f;
         options.Groups.FormationTimeoutSeconds = 60;
+        options.MaxBots = 24;
+        options.MaxRegisteredBots = 40;
     }
 
     /// <summary>The world elite's bot asks for a group of eight (the risk estimate's signal, raised as the pull verdict would).</summary>
@@ -40,9 +42,73 @@ public sealed class PlayerbotRaidEscalationWorldTests
         return tank;
     }
 
-    private static async Task AddRaidersAsync(GroupTestWorld world, int mages)
+    /// <summary>
+    /// A rare elite (rank 2) beside the tank, too strong for a party: the tank's real risk estimate (PlayerbotRisk.Assess for a quest
+    /// objective) raises the group signal, as it does when the brain pulls. Returns the signal's size.
+    /// </summary>
+    private static async Task<(Guid Id, string Name)> TankAssessesAsync(GroupTestWorld world, uint health, Action<int>? size = null)
     {
-        await world.AddBotAsync("Raidpriest", Human, Priest, 10, [LesserHeal, Smite]);
+        var tank = await world.AddBotAsync("Raidtank", Human, Warrior, 10, [Taunt]);
+        int needed = await world.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player player = world.Player(tank.Id);
+            var system = player.Map!.FindUpdater<ArcaneCore.Game.Creatures.CreatureMapSystem>()!;
+            var template = new ArcaneCore.Kernel.WorldData.Creatures.CreatureTemplate
+            {
+                Entry = 992100, Name = "Group Warlord", Faction = 14, CreatureType = 7, MinLevel = 10, MaxLevel = 10, DisplayIds = [903],
+                MinLevelHealth = health, MaxLevelHealth = health, MinMeleeDamage = 10, MaxMeleeDamage = 14, MeleeBaseAttackTime = 2000, Rank = 2,
+            };
+            ArcaneCore.Game.Creatures.Creature mob = system.SpawnTemporary(template, player.X + 25f, player.Y, player.Z, 0);
+            PlayerbotRisk risk = world.Bots.FindBrain(tank.Id)!.Risk;
+            risk.Assess(player, mob, true, out _);
+            return risk.GroupSignal?.Size ?? 0;
+        });
+        size?.Invoke(needed);
+        return tank;
+    }
+
+    /// <summary>A rare elite that needs eight (found through the tank's own risk estimate) becomes a raid goal, converts, and recruits enough bots.</summary>
+    [Fact]
+    public async Task ARareEliteNeedingEight_ThroughTheRealRiskEstimate_BecomesARaid()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
+        int needed = 0;
+        await TankAssessesAsync(world, 10_000, n => needed = n);
+        Assert.Equal(8, needed);
+        await AddRaidersAsync(world, Plenty, priests: 3);
+
+        Assert.True(await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Goal.Size == 8);
+        Assert.True(await world.RunUntilAsync(60_000, () => group.Raid), await world.TraceAsync());
+    }
+
+    /// <summary>The same raid goal with too few bots nearby gives up after FormationTimeoutSeconds, as a party goal does.</summary>
+    [Fact]
+    public async Task ARaidGoalFromTheRealRiskEstimate_WithTooFewBots_GivesUpAfterTheFormationTimeout()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
+        await TankAssessesAsync(world, 10_000);
+        long assessedAt = world.World.Host.World.NowMs;
+        await AddRaidersAsync(world, 1);
+
+        // Not before the formation timeout (the goal exists from the assessment on, so counting from it is the earliest it can run out), then soon after it.
+        long timeoutMs = world.Options.Groups.FormationTimeoutSeconds * 1000L;
+        await world.RunAsync((uint)Math.Max(0, assessedAt + timeoutMs - 5_000 - world.World.Host.World.NowMs));
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("found no partners", StringComparison.Ordinal));
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Events.Any(e => e.Contains("found no partners", StringComparison.Ordinal))), await world.TraceAsync());
+        Assert.DoesNotContain(world.Coordinator.Groups, g => g.Goal.Size == 8);
+    }
+
+    /// <summary>
+    /// Every recruit rolls once for the group and a roll above the 0.95 ceiling refuses for the whole refusal memory, and a raid of eight with
+    /// exactly seven candidates needs every one of them to come, so a single refusal ends it. Tests that expect the raid to form therefore offer
+    /// <see cref="Plenty"/> candidates, so that a few refusals leave enough; the give-up tests offer few on purpose.
+    /// </summary>
+    private const int Plenty = 10;
+
+    private static async Task AddRaidersAsync(GroupTestWorld world, int mages, int priests = 1)
+    {
+        for (int i = 0; i < priests; i++) await world.AddBotAsync("Raidpriest" + (char)('a' + i), Human, Priest, 10, [LesserHeal, Smite]);
         for (int i = 0; i < mages; i++) await world.AddBotAsync("Raidmage" + (char)('a' + i), Human, Mage, 10, [Fireball]);
     }
 
@@ -51,7 +117,7 @@ public sealed class PlayerbotRaidEscalationWorldTests
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
         await TankSignalsAsync(world, 8);
-        await AddRaidersAsync(world, 6);
+        await AddRaidersAsync(world, Plenty, priests: 3);
 
         Assert.True(await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Goal.Size == 8);

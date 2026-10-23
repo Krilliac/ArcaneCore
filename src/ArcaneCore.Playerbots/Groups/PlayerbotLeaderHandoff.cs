@@ -207,6 +207,7 @@ internal static class PlayerbotLeaderHandoff
         "wiped" => "we wiped too often",
         "stalled" => "we are stuck",
         "too-few" => "too few of us are left",
+        "player-gone" => "our partner logged out",
         "no-path-to-boss" => "I can't find a way to the next boss",
         "no-entrance" => "I don't know the way in and out of here",
         "groups-disabled" => "bot groups are switched off",

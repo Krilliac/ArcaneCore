@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       725 keys
+#   WORLD                       728 keys
 #
 ###############################################################################
 
@@ -13425,6 +13425,19 @@ World.Playerbots.Groups.Cooperation.GuildCalls = true
 World.Playerbots.Groups.Cooperation.LfgAnswerBonus = 0.15
 
 #
+#    World.Playerbots.Groups.Cooperation.MaxLfgAnswersPerLine
+#        Description: The most bots that may answer one LFG or LFM line of another bot (1..64,
+#                     default 4): once that many hold a place in the group, the rest of the hearers
+#                     of the line are not weighed at all.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MaxLfgAnswersPerLine = 4
+
+#
 #    World.Playerbots.Groups.Cooperation.MaxRaidSize
 #        Description: The most members a raid made from a risk signal recruits (6..40).
 #        Type: int
@@ -13555,6 +13568,22 @@ World.Playerbots.Groups.Cooperation.RecruitRadiusYards = 300
 World.Playerbots.Groups.Cooperation.RecruitWaitSeconds = 20
 
 #
+#    World.Playerbots.Groups.Cooperation.RefusalMemoryMinutes
+#        Description: How long a candidate's refusal of a waiting group is remembered, in minutes
+#                     (1..1440, default 10). The refusal is stored with its time: the candidate is
+#                     not asked again until this long after it, and then rolls afresh (when the
+#                     group is still waiting). The roll is made once per window of this length, with
+#                     windows shifted by a phase hashed from the (candidate, group) pair, so
+#                     different pairs do not all turn over together.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RefusalMemoryMinutes = 10
+
+#
 #    World.Playerbots.Groups.Cooperation.RefuseAffinity
 #        Description: A candidate whose affinity toward the group's caller is at or below this never
 #                     joins (-100..0).
@@ -13565,6 +13594,20 @@ World.Playerbots.Groups.Cooperation.RecruitWaitSeconds = 20
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Groups.Cooperation.RefuseAffinity = -40
+
+#
+#    World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards
+#        Description: How far from a dungeon's entrance (the group's meeting point), in yards, a
+#                     player on the same continent still counts as on the dungeon goal of a bot that
+#                     waits for a group (10..1500). A player inside the dungeon's instance always
+#                     counts. Quest goals are unaffected.
+#        Type: int
+#        Default: 150
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards = 150
 
 #
 #    World.Playerbots.Groups.DungeonRuns.BandAboveBoss

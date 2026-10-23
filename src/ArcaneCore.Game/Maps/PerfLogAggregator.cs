@@ -278,6 +278,7 @@ internal sealed class PerfLogAggregator
                 _quiet++;
                 break;
             case HostLoadVerdict.GcPauses:
+            case HostLoadVerdict.GcPaging:
                 _gc++;
                 break;
             case HostLoadVerdict.ProcessBusy:

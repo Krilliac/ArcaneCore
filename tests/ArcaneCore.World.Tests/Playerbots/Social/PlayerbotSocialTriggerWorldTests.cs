@@ -282,8 +282,11 @@ public sealed class PlayerbotSocialTriggerWorldTests
         await EmoteAtAsync(world, player, "Checkplayer", "Checkbot", PlayerbotSocialEmotes.TextEmotes.Wave);
 
         // The feature checkpoints every five seconds; the bot keeps running.
-        await UntilAsync(() => store.Replaces > 0, "the checkpoint to write the relation", seconds: 30);
-        PlayerbotRelation saved = Assert.Single(await store.LoadAllAsync());
+        // Wait for the stored relation itself, not for Replaces: the test double used to bump Replaces before it stored the rows,
+        // without a lock, so a poll could see Replaces > 0 with nothing stored yet.
+        IReadOnlyList<PlayerbotRelation> stored = [];
+        await UntilAsync(() => (stored = store.LoadAllAsync().GetAwaiter().GetResult()).Count > 0, "the checkpoint to write the relation", seconds: 30);
+        PlayerbotRelation saved = Assert.Single(stored);
         Assert.Equal(bot, saved.BotId);
         Assert.Equal(playerGuid.Value, saved.OtherGuid);
         Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerFriendlyEmote, saved.Affinity);

@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Playerbots;
 /// think and ends it after; the brain and the navigation mark phases and route their queries without a reference to it (the probe
 /// of the running think is thread-static). Off a think, <see cref="Phase"/> does nothing and <see cref="Find"/> only queries.
 /// <para>
-/// Cost: two <see cref="Stopwatch.GetTimestamp"/> calls per mark and per query and no allocation (except a clamped fallback query's
+/// Cost: two clock reads (<see cref="Stopwatch.GetTimestamp"/> by default) per mark and per query and no allocation (except a clamped fallback query's
 /// options copy, <see cref="Find"/>); the description is built only for a think the caller judges slow. Before (live-w24-r1, 2026-10-11 13:01:27) a 2 139 ms ManagedPlayerbotFeature tick named no bot,
 /// goal or phase.
 /// </para>
@@ -23,6 +23,24 @@ internal sealed class PlayerbotThinkProbe
 {
     [ThreadStatic] private static PlayerbotThinkProbe? t_active;
     [ThreadStatic] private static bool t_lastCachedCapped;
+
+    private readonly TimeProvider _time;
+
+    /// <summary>A probe timed by the system clock (<see cref="Stopwatch.GetTimestamp"/>).</summary>
+    internal PlayerbotThinkProbe() : this(TimeProvider.System) { }
+
+    /// <summary>
+    /// A probe timed by <paramref name="time"/> (tests drive a manual clock so phase attribution does not depend on how the OS schedules
+    /// the test thread). Its timestamps must be Stopwatch ticks: <see cref="ElapsedTicks"/>, <see cref="QueryTicks"/> and
+    /// <see cref="Largest"/> are read as such by the goals and the benchmarks.
+    /// </summary>
+    internal PlayerbotThinkProbe(TimeProvider time)
+    {
+        ArgumentNullException.ThrowIfNull(time);
+        if (time.TimestampFrequency != Stopwatch.Frequency)
+            throw new ArgumentException($"The probe's clock must tick at Stopwatch.Frequency ({Stopwatch.Frequency}), not {time.TimestampFrequency}.", nameof(time));
+        _time = time;
+    }
 
     private const int MaxPhases = 32;
     private readonly string[] _names = new string[MaxPhases];
@@ -135,14 +153,14 @@ internal sealed class PlayerbotThinkProbe
         _elapsed = 0;
         _searchBefore = PathSearchCounters.Current;
         PathSearchCounters.BeginTileCapture();
-        _started = _phaseStarted = Stopwatch.GetTimestamp();
+        _started = _phaseStarted = _time.GetTimestamp();
         t_active = this;
     }
 
     /// <summary>End the think: close its last phase and take its search work. Returns its time in Stopwatch ticks.</summary>
     internal long End()
     {
-        long now = Stopwatch.GetTimestamp();
+        long now = _time.GetTimestamp();
         Close(now);
         _elapsed = now - _started;
         Search = PathSearchCounters.Current - _searchBefore;
@@ -164,7 +182,7 @@ internal sealed class PlayerbotThinkProbe
     private void Mark(string name)
     {
         if (ReferenceEquals(name, _phase)) return;
-        Close(Stopwatch.GetTimestamp());
+        Close(_time.GetTimestamp());
         _phase = name;
     }
 
@@ -253,9 +271,9 @@ internal sealed class PlayerbotThinkProbe
             return PathResult.None(from);
         }
 
-        long started = Stopwatch.GetTimestamp();
+        long started = probe._time.GetTimestamp();
         PathResult path = collision.FindPath(from, to, options);
-        long ticks = Stopwatch.GetTimestamp() - started;
+        long ticks = probe._time.GetTimestamp() - started;
         probe.Queries++;
         probe.QueryTicks += ticks;
         long nodes = PathSearchCounters.NodesCreated - nodesBefore;
@@ -312,7 +330,7 @@ internal sealed class PlayerbotThinkProbe
     {
         get
         {
-            long current = Stopwatch.GetTimestamp() - _phaseStarted;
+            long current = _time.GetTimestamp() - _phaseStarted;
             for (int i = 0; i < _phases; i++)
                 if (ReferenceEquals(_names[i], _phase)) current += _ticks[i];
             string best = _phase;

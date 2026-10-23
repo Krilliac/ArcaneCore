@@ -42,12 +42,15 @@ the day from a template (`CMSG_GUILD_MOTD`), screened like every other line.
   (`CMSG_GUILD_DECLINE`); one from a real player is accepted by `World:Playerbots:Social:Guilds:InvitePolicy` (`None`,
   `GuildOrFriends` (default), `Anyone`, `Affinity`; the same rules as `World:Playerbots:Party:InvitePolicy`) and always for the names in
   `World:Playerbots:Party:Allowlist`. The same policy decides whether a bot signs a real player's charter.
-* **Invitations by affinity** (`World:Playerbots:Social:Guilds:AffinityInvites`, on). A guild's master or an officer also invites a
+* **Invitations by affinity** (`World:Playerbots:Social:Guilds:AffinityInvites`, on). A bot-led guild's master or an officer (a guild whose
+  master is a real player is never recruited for by the bots) also invites a
   guildless same-team character, player or bot, that it knows and likes: affinity at least `GuildInviteAffinity` (60) and familiarity at
   least `GuildInviteMinFamiliarity` (8), never a rival or a game master, and at most one invitation per character per
   `GuildInviteCooldownDays` (7), within `TargetSize` as above. A guildless bot accepts an invitation, from a player or a bot, whose sender it
   likes: affinity at least `GuildAcceptAffinity` (30) and no rival (affinity read through `EffectiveAffinity`); otherwise the rules above
-  decide. With the switch off bots invite and accept as before.
+  decide. The operator's `InvitePolicy` comes first: with `None` a bot declines every guild invitation of a player or bot it was not
+  expecting, however much it likes the inviter (only the `World:Playerbots:Party:Allowlist` names still get in); the affinity acceptance
+  widens `GuildOrFriends`, `Anyone` and `Affinity`, never `None`. With the switch off bots invite and accept as before.
 * **Fail-closed declines.** With no invitation packet seen (the bounded capture queue may have dropped it) and no expectation, the
   answer is a decline; so it is when the inviter is offline, the guild name differs from the packet's, or the policy refuses.
 
@@ -133,7 +136,8 @@ affinity of 50 or more either way unless every one is like that.
 **Where each event comes from**: chat lines heard by a bot and addressed to it (`PlayerbotChat.LineHeard`); the group coordinator (forming,
 wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from the begin-trade packet or the bot's own
 request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
-brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.PlayerKilled` for PvP kills. All of them go through
+brain's assist and heal-the-tagger paths for help; `PlayerbotPvpKillFeed` for PvP kills (the feature hears `MapCombat.UnitKilled` of every map of its own world, so a kill is
+recorded exactly once even right after a teleport or a brain replacement; no process-wide event, which kept every disposed world reachable). All of them go through
 `PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).
 
 **Help, bystanders and the call for help** (`PlayerbotFightSocial`, one per bot, read once a second while the bot is in combat):

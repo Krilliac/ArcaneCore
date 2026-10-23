@@ -29,22 +29,40 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>
     /// Whether <paramref name="other"/> is on the goal the bot has: the one it waits for or its group works on, else its own quest.
     /// A quest goal is shared when the player holds that quest unfinished (or one asking for the goal's creature); a dungeon goal when the
-    /// player is on the goal's map.
+    /// player is inside that dungeon's instance, or on the meeting map within
+    /// <see cref="PlayerbotCooperationOptions.SameGoalMeetingRadiusYards"/> of the meeting point (the entrance) and in level range of the bot
+    /// (a stranger elsewhere on the continent is not on the goal).
     /// </summary>
     internal bool SharesGoal(Guid botId, Player other)
     {
-        if (_waiting.TryGetValue(botId, out Waiting? waiting)) return SharesGoal(waiting.Goal, other);
-        if (_memberOf.TryGetValue(botId, out BotGroup? group)) return SharesGoal(group.Goal, other);
+        Player? self = _bots.TryGetValue(botId, out PlayerbotGroupBot found) ? found.Session.Player : null;
+        if (_waiting.TryGetValue(botId, out Waiting? waiting)) return SharesGoal(waiting.Goal, other, self);
+        if (_memberOf.TryGetValue(botId, out BotGroup? group)) return SharesGoal(group.Goal, other, self);
         if (_bots.TryGetValue(botId, out PlayerbotGroupBot bot) && bot.Brain.QuestId != 0 && QuestState(other) is { } state)
             return state.Quests.Get(bot.Brain.QuestId) is { Status: QuestStatus.Incomplete };
         return false;
     }
 
-    private bool SharesGoal(PlayerbotGroupGoal goal, Player other)
+    /// <param name="goal">The goal.</param>
+    /// <param name="other">The player asked about.</param>
+    /// <param name="anchor">The bot whose goal it is (the level range of a dungeon's entrance is measured from it); null reads as the goal's minimum level alone.</param>
+    private bool SharesGoal(PlayerbotGroupGoal goal, Player other, Player? anchor)
     {
-        if (goal.InInstance) return other.MapId == goal.MeetingMap;
+        if (goal.InInstance) return other.MapId == goal.MapId || AtEntrance(goal, other, anchor);
         if (goal.QuestId != 0 && QuestState(other) is { } state && state.Quests.Get(goal.QuestId) is { Status: QuestStatus.Incomplete }) return true;
         return goal.ObjectiveEntry != 0 && QuestFor(other, goal.ObjectiveEntry) != 0;
+    }
+
+    /// <summary>
+    /// A dungeon goal's meeting point is on the continent: a player there, within <see cref="PlayerbotCooperationOptions.SameGoalMeetingRadiusYards"/>
+    /// of the entrance, at least the goal's minimum level and within <see cref="PlayerbotGroupOptions.LevelRange"/> of <paramref name="anchor"/>.
+    /// </summary>
+    private bool AtEntrance(PlayerbotGroupGoal goal, Player other, Player? anchor)
+    {
+        if (other.MapId != goal.MeetingMap || other.Level < goal.MinLevel) return false;
+        if (anchor is not null && Math.Abs(other.Level - anchor.Level) > _options.Groups.LevelRange) return false;
+        float radius = Coop.SameGoalMeetingRadiusYards;
+        return Vector3.DistanceSquared(new Vector3(other.X, other.Y, other.Z), goal.Meeting) <= radius * radius;
     }
 
     /// <summary>
@@ -73,7 +91,7 @@ public sealed partial class PlayerbotGroupCoordinator
             if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
             if (_declinedPlayers.ContainsKey(real.Guid) || _invitedPlayers.ContainsKey(real.Guid) || real.Level < goal.MinLevel) continue;
             float distanceSq = Vector3.DistanceSquared(new Vector3(real.X, real.Y, real.Z), new Vector3(anchor.X, anchor.Y, anchor.Z));
-            if (distanceSq > InvitePlayerYards * InvitePlayerYards || !SharesGoal(goal, real)) continue;
+            if (distanceSq > InvitePlayerYards * InvitePlayerYards || !SharesGoal(goal, real, anchor)) continue;
             if (!PlayerWelcome(candidates, real, groups, out PlayerbotRelationFlags role)) continue;
             bool remembered = (role.HasFlag(PlayerbotRelationFlags.PrefersTank) && missingTanks > 0 && PlayerbotGroupContent.CanTank(real.Class))
                 || (role.HasFlag(PlayerbotRelationFlags.PrefersHealer) && missingHealers > 0 && PlayerbotGroupContent.CanHeal(real.Class));
@@ -113,6 +131,8 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (PlayerbotGroupCandidate bot in bots)
         {
             if (!memory.TryGet(bot.BotId, real.Guid.Value, out PlayerbotRelation relation)) continue;
+            // NoWhispers is a normal-layer flag on purpose: a player the bot has muted ("stop whispering me") is not invited into its group
+            // either; it is the player's own say over contact, not a War Mode or rival state.
             if (memory.IsRival(relation) || relation.Flags.HasFlag(PlayerbotRelationFlags.NoWhispers)) return false;
             if (memory.EffectiveAffinity(relation) >= groups.InvitePlayerAffinity) liked = true;
             role |= relation.Flags & roles;

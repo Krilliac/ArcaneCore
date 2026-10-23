@@ -303,6 +303,8 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Groups:Cooperation:LfgAnswerBonus", o => o.Groups.Cooperation.LfgAnswerBonus, (o, v) => o.Groups.Cooperation.LfgAnswerBonus = v, v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Groups:Cooperation:RefuseAffinity", o => o.Groups.Cooperation.RefuseAffinity, (o, v) => o.Groups.Cooperation.RefuseAffinity = v, v => v is >= -100 and <= 0 ? null : "must be -100..0"),
         LivePlayerbots("Groups:Cooperation:AnswerBotCalls", o => o.Groups.Cooperation.AnswerBotCalls, (o, v) => o.Groups.Cooperation.AnswerBotCalls = v),
+        LivePlayerbotsValue("Groups:Cooperation:RefusalMemoryMinutes", o => o.Groups.Cooperation.RefusalMemoryMinutes, (o, v) => o.Groups.Cooperation.RefusalMemoryMinutes = v, v => v is >= 1 and <= 1440 ? null : "must be 1..1440"),
+        LivePlayerbotsValue("Groups:Cooperation:MaxLfgAnswersPerLine", o => o.Groups.Cooperation.MaxLfgAnswersPerLine, (o, v) => o.Groups.Cooperation.MaxLfgAnswersPerLine = v, v => v is >= 1 and <= 64 ? null : "must be 1..64"),
         LivePlayerbots("Groups:Cooperation:GuildCalls", o => o.Groups.Cooperation.GuildCalls, (o, v) => o.Groups.Cooperation.GuildCalls = v),
         LivePlayerbots("Groups:Cooperation:Mentoring", o => o.Groups.Cooperation.Mentoring, (o, v) => o.Groups.Cooperation.Mentoring = v),
         LivePlayerbotsValue("Groups:Cooperation:MentorChance", o => o.Groups.Cooperation.MentorChance, (o, v) => o.Groups.Cooperation.MentorChance = v, v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
@@ -311,6 +313,7 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Groups:Cooperation:MentorAffinity", o => o.Groups.Cooperation.MentorAffinity, (o, v) => o.Groups.Cooperation.MentorAffinity = v, v => v is >= -100 and <= 100 ? null : "must be -100..100"),
         LivePlayerbots("Groups:Cooperation:RaidEscalation", o => o.Groups.Cooperation.RaidEscalation, (o, v) => o.Groups.Cooperation.RaidEscalation = v),
         LivePlayerbotsValue("Groups:Cooperation:MaxRaidSize", o => o.Groups.Cooperation.MaxRaidSize, (o, v) => o.Groups.Cooperation.MaxRaidSize = v, v => v is >= 6 and <= 40 ? null : "must be 6..40"),
+        LivePlayerbotsValue("Groups:Cooperation:SameGoalMeetingRadiusYards", o => o.Groups.Cooperation.SameGoalMeetingRadiusYards, (o, v) => o.Groups.Cooperation.SameGoalMeetingRadiusYards = v, v => v is >= 10 and <= 1500 ? null : "must be 10..1500"),
 
         // Dungeon and raid runs (docs/areas/playbots-groups.md): every key live, the coordinator reads them at each decision.
         LivePlayerbots("Groups:DungeonRuns:Enabled", o => o.Groups.DungeonRuns.Enabled, (o, v) => o.Groups.DungeonRuns.Enabled = v),

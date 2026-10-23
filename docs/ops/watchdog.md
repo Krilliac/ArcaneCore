@@ -29,9 +29,9 @@ lane was written, and the realm test project is the lightest one that references
   every monitor's `Check` once per `CheckIntervalMs`. It is a plain thread so that it keeps running when the thread pool is starved
   (the thing the probe measures) and when the world thread hangs (the thing the tick monitor measures). A monitor that throws is logged
   (rate-limited per monitor, counted in `watchdog.monitor_faults`) and the round goes on.
-- **The world thread** touches the watchdog in exactly one place: the `WorldRuntime.WorldTick` handler of `TickWatchdogFeature`, which calls
+- **The world thread** touches the watchdog in exactly one place: the `WorldRuntime.TickStarting` handler of `TickWatchdogFeature`, which calls
   `TickMonitor.OnTick`. That is one clock read and two to five plain stores (a ring slot, the ring count, the last-start stamp, the overrun
-  and hang counters): no allocation, no lock, no interlocked instruction, no log. `TickMonitorTests.OnTick_DoesNotAllocate` asserts a zero
+  and hang counters): no allocation, no lock (a frame over `HangMs` also takes the feature's `_hungGate` lock and allocates one small record, see below), no interlocked instruction, no log. `TickMonitorTests.OnTick_DoesNotAllocate` asserts a zero
   `GC.GetAllocatedBytesForCurrentThread` delta over 100 000 ticks. The one-writer rule is what makes the plain stores correct: only the world
   thread writes those fields, the watchdog thread reads them with volatile loads.
 - **The ring** (`TickRing`) is lock-free for its one writer and any number of readers. A writer publishes a slot with a release store of the
@@ -57,8 +57,8 @@ fits its budget shows as the tick interval (sleep included), one that does not s
 exactly. The sub-budget distribution does not floor at the interval: the drift-compensated loop (`WorldTickScheduler`) follows an
 oversleeping wait with a shorter one, and when the wait overslept a whole interval or more it starts the tick due now at once (as vmangos'
 WorldRunnable skips the sleep after an overrun). A tick interval below the OS wait granularity (the 5 ms test hosts on the ~15.6 ms Windows
-timer) therefore gives an even split of ~15.6 ms and ~0 ms frames, whose p50 can land on either side; the mean frame is the tick rate. The existing `WorldRuntime.WorldTick` event is raised at the start of each
-tick, which is why the frame, not the body, is what the feed can see without editing `Game/`; the body percentiles of the runtime's own
+timer) therefore gives an even split of ~15.6 ms and ~0 ms frames, whose p50 can land on either side; the mean frame is the tick rate. `WorldRuntime.TickStarting` is raised as the first step of each
+tick, so a frame is the previous tick's body plus the wait after it; the body percentiles of the runtime's own
 recorder are appended to each line so both views are on one line.
 
 - **Overrun**: a frame longer than `BudgetMs` (0 = twice the tick interval, 100 ms at the retail 50 ms tick, which tolerates sleep jitter).
@@ -76,13 +76,23 @@ recorder are appended to each line so both views are on one line.
     Between ticks it says `world thread is between ticks (not inside a tick body)`, which means the stall is outside the tick body
     (the sleep, the GC, a suspended process). The three values are read separately, so a read taken as the thread moves on may pair a
     phase with the next item.
-  - **After the fact** (the completion hang line and the overrun line): `slowest tick body <N> ms: commands <a> ms (<n> run), world-tick
+  - **After the fact** (the overrun line; the completion hang line below describes its own frame): `slowest tick body <N> ms: commands <a> ms (<n> run), world-tick
     handlers <b> ms, features <c> ms, maps <d> ms, autosave <e> ms (<k> snapshots); top features: <Name> <ms> ms, ...`, the phase split of the
     slowest tick body recorded in the **60 s slow-tick window** (`TickStats.SlowTickRetention`) and its five slowest features, named
     `WorldTick:<Type>` for world-tick handlers. `TickStats` keeps the eight slowest tick bodies that ran over the tick interval, each for
     60 s, recorded by the world thread without allocating once its ring is full. When none was recorded the suffix says `no tick body over the
     interval was recorded in the last 60 s (the stall was outside the tick body)`: a frame can be long while the body is short, for example
     when the OS did not schedule the world thread or a collection paused it.
+  - **The completion hang line** describes the hung frame itself, not the window. The frame boundary is the start of a tick (`WorldRuntime.TickStarting`,
+    raised before the commands run), so when `TickMonitor.OnTick` closes a frame over `HangMs` the world thread still holds that tick's finished phases, length and
+    slowest features and snapshots them (`TickMonitor.HangClosed`, one small record per hang). The line reads `hung frame <F> ms: tick body <B> ms: <phase split>;
+    top features: ...; <X> ms outside tick code`, where `X = F - B` is the wait after the tick or a pause outside tick code (a GC pause, paging, a suspended process).
+    Several hangs between two checks are reported once, the worst frame shown, with `; <N> hung frames since the last report, worst shown`. When the time outside
+    the tick body is more than the body, bot QA's hang stage is `OutsideTick`, else the body's dominant phase and work. The overrun line keeps the window-wide
+    `slowest tick body` text above. No timestamps are matched across threads. The record and the number of hangs it stands for are taken together under `_hungGate`,
+    and the report counts the hangs it consumed, so a hang that closes while the check runs is reported once with its own record; with no record left the line says
+    `hung frame described in the previous report` and nothing goes to bot QA. World-thread work after `RunTick` returns (the tick observer, the tick-completed event, the
+    performance log) is not in the tick body, so it counts as outside tick code.
   Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
   (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own
   `Slow world update` performance-log line. Cost on the world thread: a few stores per phase change and per handler, a top-five insertion
@@ -94,7 +104,7 @@ recorder are appended to each line so both views are on one line.
   tick (database load, feature attach) and after the world stopped on purpose (`StopAsync`, so a long final save drain is not killed) the
   source reports alive.
 - **Terminal hang action** (opt-in): when a single tick remains wedged for `ActionHangMs` (0 = never, whatever `Action` says; must be at least
-  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`), GC pauses (`GcPauses`) or a stopped process (`ProcessStalled`),
+  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`), GC pauses (`GcPauses`, `GcPaging`) or a stopped process (`ProcessStalled`),
   the configured `Action` fires at most once for that hung tick, always with a `Critical` line (event `TickAction`, 7104) carrying the
   in-progress hang detail (`phase=<Phase>, running=<work>`): `Log` only logs; `Stop` sets `ExitCodes.Current = 1` and signals
   `IHostApplicationLifetime.StopApplication()`; `FailFast` writes a synchronous crash report to `Console.Error` and calls

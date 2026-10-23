@@ -533,13 +533,30 @@ public sealed class ConfigReloadTests : IDisposable
         File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
         Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
         Assert.True(groups.Enabled);
-        Assert.Equal(4, groups.MaxGroups);
+        Assert.Equal(16, groups.MaxGroups);
         Assert.Equal(5, groups.LevelRange);
         Assert.Equal(1, groups.MinTank);
         Assert.Equal(1, groups.MinHealer);
         Assert.Equal(300, groups.FormationTimeoutSeconds);
         Assert.True(groups.RaidsEnabled);
-        Assert.False(groups.InvitePlayers);
+        Assert.True(groups.InvitePlayers);
+    }
+
+    [Fact]
+    public async Task PlayerbotSocialLists_ARuleThatTiesTwoValuesTogether_IsEnforcedOnAReload()
+    {
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Lists": { "FriendAffinity": 40, "UnfriendAffinity": 10 } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(40, playerbots.Social.Lists.FriendAffinity);
+
+        // Each value alone is in range; together UnfriendAffinity (50) is above FriendAffinity (40).
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Lists": { "FriendAffinity": 40, "UnfriendAffinity": 50 } } } } }""");
+        ReloadResult refused = await coordinator.ReloadAsync("config");
+        Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+        Assert.Equal(10, playerbots.Social.Lists.UnfriendAffinity);
+        Assert.Equal(40, playerbots.Social.Lists.FriendAffinity);
     }
 
     [Fact]
@@ -666,9 +683,19 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Voice:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
-            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions)))
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:Cooperation:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialListsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Lists:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
@@ -750,6 +777,22 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotWarModeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:WarMode:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialHelpingOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Helping:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialGratitudeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Gratitude:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialMoodOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Mood:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialInitiativeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Initiative:{property.Name}");
         }
 
         // The bot economy section is live key by key (docs/areas/playbots-economy.md).

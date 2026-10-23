@@ -162,6 +162,9 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
     /// <summary>A packet of SMSG_GUILD_INVITE drained from a bot (the inviter's name and the guild's).</summary>
     internal void NoteInvite(Guid botId, string inviter, string guild) => _seenInvites[botId] = (inviter, guild);
 
+    /// <summary>Whether an invitation packet of <paramref name="botId"/> was noted and not yet answered (tests wait on it instead of a delay).</summary>
+    internal bool HasSeenInvite(Guid botId) => _seenInvites.ContainsKey(botId);
+
     // --- the world thread ---------------------------------------------------------------------------------------------
 
     /// <summary>Answer every pending invitation of the running bots (always, whatever <see cref="PlayerbotSocialGuildOptions.Enabled"/> says).</summary>
@@ -199,7 +202,8 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         if (!_seenInvites.TryGetValue(bot.Id, out (string Inviter, string Guild) seen)) return false; // no packet, no expectation: decline
         if (pass.Social.Guilds.Get(guildId) is not { } guild || !string.Equals(guild.Name, seen.Guild, StringComparison.OrdinalIgnoreCase)) return false;
         if (pass.World.FindOnlinePlayer(seen.Inviter) is not { } inviter) return false;
-        if (pass.Options.Guilds.AffinityInvites && pass.Recorder is { Enabled: true } recorder
+        // The operator's policy comes first: None declines everyone (the allowlist apart); affinity only widens a policy that allows something.
+        if (pass.Options.Guilds.InvitePolicy != PlayerbotInvitePolicy.None && pass.Options.Guilds.AffinityInvites && pass.Recorder is { Enabled: true } recorder
             && AcceptsByAffinity(recorder.Memory, bot.Id, inviter.Guid.Value, pass.Options.Guilds.GuildAcceptAffinity)) return true;
         if (inviter.Session is WorldSession { IsManaged: true }) return false; // another managed bot that no founding of ours expected
         return AcceptsRealPlayer(pass.Options.Guilds.InvitePolicy, pass.Bot.Party.Allowlist, inviter.Name,
@@ -249,7 +253,7 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
     }
 
     /// <summary>
-    /// A guild's master or officer invites a guildless same-team character (player or bot) it likes (<see cref="WorthInviting"/>), at most
+    /// A bot-led guild's master or officer (a guild whose leader is no registered bot is left alone, as in <see cref="Recruit"/>) invites a guildless same-team character (player or bot) it likes (<see cref="WorthInviting"/>), at most
     /// one invitation per character per <see cref="PlayerbotSocialGuildOptions.GuildInviteCooldownDays"/> and one per guild per
     /// <see cref="PlayerbotSocialTimings.RecruitSpacingMs"/>, while the guild has room. The guild invite goes through CMSG_GUILD_INVITE, so the
     /// server's rights check applies; the invited bot answers it by <see cref="AcceptsByAffinity"/>.
@@ -269,6 +273,7 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         long cooldownMs = options.GuildInviteCooldownDays * 86_400_000L;
         foreach (Guild guild in guilds.All.ToArray())
         {
+            if (!pass.Registered.Contains(guild.LeaderId)) continue; // a guild led by a real player is theirs to recruit for (as in Recruit)
             if (_lastAffinityInvite.TryGetValue(guild.Id, out long last) && pass.NowMs - last < pass.Timings.RecruitSpacingMs) continue;
             if (InviteRoom(guild.MemberCount, PendingFor(guild.Id), options.TargetSize) <= 0) continue;
             if (InviterOf(pass, guild) is not { } inviter) continue;
@@ -291,8 +296,8 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
             if (target is null) continue;
             _lastAffinityInvite[guild.Id] = pass.NowMs;
             PlayerbotSocialPackets.Send(inviter.Session, WorldOpcode.CmsgGuildInvite, PlayerbotSocialPackets.GuildInvite(target.Name));
+            _offeredAt[target.Guid.Low] = pass.NowMs; // the target's week starts when it was asked, whether or not the server took the invitation
             if (guilds.InvitedTo(target) != guild.Id) continue;
-            _offeredAt[target.Guid.Low] = pass.NowMs;
             _offered[target.Guid.Low] = (guild.Id, pass.NowMs);
         }
 

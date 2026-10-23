@@ -79,6 +79,12 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     public const uint EntranceOgreEntry = 990722;
     public const uint EntranceOgreSpawn = 990722;
 
+    /// <summary>An ordinary quest (Type 0, no suggested group) for one harmless rat, <see cref="RatEntry"/>, 70 yards south: a quest a bot soloes.</summary>
+    public const uint SoloQuest = 990708;
+
+    public const uint RatEntry = 990723;
+    public const uint RatSpawn = 990723;
+
     public const uint BossTrophy = 990750;
     public const uint BossLootReference = 990760;
 
@@ -273,6 +279,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Hostile(WarlordEntry, "Group Warlord", level: 10, health: 1500, minDamage: 6, maxDamage: 9, rank: 1),
                 Hostile(BruteEntry, "Group Brute", level: 1, health: 150, minDamage: 1, maxDamage: 1, rank: 0),
                 Hostile(BossEntry, "Deadmines Boss", level: 12, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
+                .. quests.Contains(SoloQuest) ? [Hostile(RatEntry, "Group Rat", level: 1, health: 20, minDamage: 1, maxDamage: 1, rank: 0)] : Array.Empty<CreatureTemplate>(),
                 Hostile(EntranceOgreEntry, "Entrance Ogre", level: 10, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
                 .. extra.Select(e => e.Template).DistinctBy(t => t.Entry),
             ],
@@ -283,6 +290,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 new CreatureSpawn { Guid = BruteSpawn, Entry = BruteEntry, MapId = 0, X = StartX, Y = StartY + 70f, Z = StartZ, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
                 new CreatureSpawn { Guid = BossSpawn, Entry = BossEntry, MapId = 36, X = -16.4f, Y = -343.07f, Z = DeadminesTestContent.InsideFloor, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
                 .. dungeon && quests.Contains(EntranceEliteQuest) ? [new CreatureSpawn { Guid = EntranceOgreSpawn, Entry = EntranceOgreEntry, MapId = 0, X = EntranceArea.X, Y = EntranceArea.Y + 60f, Z = EntranceArea.Z, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 }] : Array.Empty<CreatureSpawn>(),
+                .. quests.Contains(SoloQuest) ? [new CreatureSpawn { Guid = RatSpawn, Entry = RatEntry, MapId = 0, X = StartX, Y = StartY - 70f, Z = StartZ, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 }] : Array.Empty<CreatureSpawn>(),
                 .. extra.Select(e => e.Spawn),
             ], [], [], []));
 
@@ -297,6 +305,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Quest(DuoQuest, "Group: the ogre for two", type: 1, suggested: 2, OgreEntry),
                 Quest(DungeonItemQuest, "Dungeon: the boss's trophy", type: 81, suggested: 3, 0, minLevel: 10, item: BossTrophy),
                 Quest(EntranceEliteQuest, "Group: the entrance ogre", type: 1, suggested: 2, EntranceOgreEntry, minLevel: 13),
+                Quest(SoloQuest, "Solo: the rat", type: 0, suggested: 0, RatEntry),
             ];
             QuestTemplate[] offered = [.. all.Where(q => quests.Contains(q.Entry))];
             return Task.FromResult(new QuestContent(offered,

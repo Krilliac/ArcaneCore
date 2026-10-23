@@ -207,7 +207,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
         foreach (PlayerbotRelation r in top)
         {
-            string who = nameOf(r.OtherGuid) ?? "guid " + r.OtherGuid.ToString("X", c);
+            string who = nameOf(r.OtherGuid) ?? ("guid " + r.OtherGuid.ToString("X", c));
             long ageMs = Math.Max(0, nowMs - r.LastSeenUnixMs);
             string age = ageMs >= 86_400_000 ? string.Create(c, $"{ageMs / 86_400_000}d") : ageMs >= 3_600_000 ? string.Create(c, $"{ageMs / 3_600_000}h") : string.Create(c, $"{ageMs / 60_000}m");
             yield return string.Create(c,

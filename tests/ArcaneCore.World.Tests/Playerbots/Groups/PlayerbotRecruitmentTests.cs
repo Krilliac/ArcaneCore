@@ -54,6 +54,32 @@ public sealed class PlayerbotRecruitmentTests
             Assert.False(PlayerbotRecruitment.Accepts(Defaults, guid, 1, new PlayerbotRecruitFacts(1f, 0, -50, false, true, true, true)));
     }
 
+    /// <summary>Refusal windows are phase-shifted per (candidate, group): the pairs' windows turn over at different instants, and each one every period exactly.</summary>
+    [Fact]
+    public void TheRefusalWindows_AreShiftedPerPair_AndTurnOverExactlyEveryPeriod()
+    {
+        const uint period = 60_000;
+        var first = Guid.Parse("11111111-2222-3333-4444-555555555555");
+        var second = Guid.Parse("66666666-7777-8888-9999-000000000001");
+        Assert.NotEqual(PlayerbotRecruitment.RefusalPhase(period, first, 7), PlayerbotRecruitment.RefusalPhase(period, second, 7));
+        Assert.NotEqual(PlayerbotRecruitment.RefusalPhase(period, first, 7), PlayerbotRecruitment.RefusalPhase(period, first, 8)); // the group is part of the pair
+
+        List<uint> Boundaries(Guid bot)
+        {
+            var found = new List<uint>();
+            for (uint t = 1; t < 4 * period; t++)
+                if (PlayerbotRecruitment.RefusalWindow(t, period, bot, 7) != PlayerbotRecruitment.RefusalWindow(t - 1, period, bot, 7)) found.Add(t);
+            return found;
+        }
+
+        List<uint> b1 = Boundaries(first), b2 = Boundaries(second);
+        Assert.InRange(b1.Count, 3, 4);
+        Assert.InRange(b2.Count, 3, 4);
+        for (int i = 1; i < b1.Count; i++) Assert.Equal(period, b1[i] - b1[i - 1]);
+        for (int i = 1; i < b2.Count; i++) Assert.Equal(period, b2[i] - b2[i - 1]);
+        Assert.NotEqual(b1[0] % period, b2[0] % period);
+    }
+
     [Fact]
     public void TheRoll_IsAHashOfTheCandidateAndTheGroup_SoTheAnswerNeverChanges()
     {

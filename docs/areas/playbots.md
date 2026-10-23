@@ -1188,8 +1188,10 @@ where the master goes.
 - **Invitations** are accepted (CMSG_GROUP_ACCEPT) or declined (CMSG_GROUP_DECLINE, which tells the inviter) by
   `World:Playerbots:Party:InvitePolicy`: `None` (only the `Allowlist`), `GuildOrFriends` (the allowlist, the bot's guild
   mates and players on the bot's own friend list), `Anyone` or `Affinity` (default: the allowlist, guild mates and friends, a player the
-  bot likes (affinity at least `AcceptInviteAffinity`, 10) or one on the bot's own quest or dungeon goal; a rival is always declined). A player's own friend list does not count: anyone can put any bot
-  on it with one CMSG_ADD_FRIEND, so it shows no consent. `.playerbot invite <bot>` (GameMaster; the
+  bot likes (affinity at least `AcceptInviteAffinity`, 10) or one on the bot's own goal: the same unfinished quest, or for a dungeon goal a player inside that dungeon or at its entrance (the meeting map, within `World:Playerbots:Groups:Cooperation:SameGoalMeetingRadiusYards`, 150, of it, and in level range); a rival is always declined). A player's own friend list does not count: anyone can put any bot
+  on it with one CMSG_ADD_FRIEND, so it shows no consent. The same-goal ground is for grouping only (a group invitation, the help-quest
+  invite): a trade a bot opens on a player's chat request ("trade me") needs the allowlist, a guild mate, a friend on the bot's list or
+  affinity of at least `AcceptInviteAffinity`, and is never opened for a rival; being on the bot's quest is not enough. `.playerbot invite <bot>` (GameMaster; the
   vmangos `.partybot add` analogue) invites a running autonomous bot into the GM's group through the ordinary invite and makes it
   accept whatever its policy says; the invite keeps every ordinary rule (faction, full group, leader or assistant).
 - **Filling a party or raid.** `.bot party fill` (GameMaster) invites online autonomous bots of the caller's team that are alive,

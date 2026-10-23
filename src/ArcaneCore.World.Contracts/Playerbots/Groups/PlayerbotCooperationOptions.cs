@@ -40,6 +40,19 @@ public sealed class PlayerbotCooperationOptions
     public bool AnswerBotCalls { get; set; } = true;
 
     /// <summary>
+    /// The most bots that may answer one LFG or LFM line of another bot (1..64, default 4): once that many hold a place in the group, the
+    /// rest of the hearers of the line are not weighed at all.
+    /// </summary>
+    public int MaxLfgAnswersPerLine { get; set; } = 4;
+
+    /// <summary>
+    /// How long a candidate's refusal of a waiting group is remembered, in minutes (1..1440, default 10). The refusal is stored with its time: the
+    /// candidate is not asked again until this long after it, and then rolls afresh (when the group is still waiting). The roll is made once per
+    /// window of this length, with windows shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over together.
+    /// </summary>
+    public int RefusalMemoryMinutes { get; set; } = 10;
+
+    /// <summary>
     /// Let a guild's bot say "anyone for the dungeon?" in guild chat while a group of the guild's members is forming for it, and let the
     /// guildmates who hear it join at once (on by default). The line is said only when such a group exists.
     /// </summary>
@@ -66,6 +79,12 @@ public sealed class PlayerbotCooperationOptions
     /// <summary>The most members a raid made from a risk signal recruits (6..40).</summary>
     public int MaxRaidSize { get; set; } = 40;
 
+    /// <summary>
+    /// How far from a dungeon's entrance (the group's meeting point), in yards, a player on the same continent still counts as on the
+    /// dungeon goal of a bot that waits for a group (10..1500). A player inside the dungeon's instance always counts. Quest goals are unaffected.
+    /// </summary>
+    public int SameGoalMeetingRadiusYards { get; set; } = 150;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Groups:Cooperation";
@@ -75,11 +94,14 @@ public sealed class PlayerbotCooperationOptions
         CheckUnit(GuildBonus, nameof(GuildBonus));
         CheckUnit(LfgAnswerBonus, nameof(LfgAnswerBonus));
         Check(RefuseAffinity, -100, 0, nameof(RefuseAffinity));
+        Check(MaxLfgAnswersPerLine, 1, 64, nameof(MaxLfgAnswersPerLine));
+        Check(RefusalMemoryMinutes, 1, 1440, nameof(RefusalMemoryMinutes));
         CheckUnit(MentorChance, nameof(MentorChance));
         Check(MentorMaxMinutes, 1, 240, nameof(MentorMaxMinutes));
         Check(MentorLevelGap, 1, 60, nameof(MentorLevelGap));
         Check(MentorAffinity, -100, 100, nameof(MentorAffinity));
         Check(MaxRaidSize, 6, 40, nameof(MaxRaidSize));
+        Check(SameGoalMeetingRadiusYards, 10, 1500, nameof(SameGoalMeetingRadiusYards));
 
         static void CheckUnit(float value, string name)
         {

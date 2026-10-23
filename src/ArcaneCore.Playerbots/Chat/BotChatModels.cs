@@ -241,7 +241,8 @@ internal sealed record BotChatAsk(
     bool FromGm = false,
     BotSpeech? Speech = null,
     bool SenderIsBot = false,
-    bool Addressed = true);
+    bool Addressed = true,
+    bool TradeAllowed = false);
 
 /// <summary>
 /// A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.

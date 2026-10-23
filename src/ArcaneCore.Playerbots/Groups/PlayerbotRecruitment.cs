@@ -55,6 +55,9 @@ internal static class PlayerbotRecruitment
         return (float)Math.Clamp(chance, 0d, MaxChance);
     }
 
+    /// <summary>The largest group a creature that is no elite may ask for: a party.</summary>
+    internal const int PartyLimit = PlayerbotGroupContent.PartySize;
+
     /// <summary>
     /// The largest group a risk signal may ask for: a party (five), or with <see cref="PlayerbotCooperationOptions.RaidEscalation"/> and
     /// <see cref="PlayerbotGroupOptions.RaidsEnabled"/> up to <see cref="PlayerbotCooperationOptions.MaxRaidSize"/> (a raid the coordinator
@@ -67,6 +70,24 @@ internal static class PlayerbotRecruitment
             ? Math.Clamp(options.Cooperation.MaxRaidSize, PlayerbotGroupContent.PartySize, ArcaneCore.Game.Groups.Group.MaxRaidSize)
             : PlayerbotGroupContent.PartySize;
     }
+
+    /// <summary>
+    /// The seed a candidate rolls on for a waiting group in one refusal window (<paramref name="window"/>: see <see cref="RefusalWindow"/>):
+    /// window 0 rolls on the group's id, every other window on a different seed. The pair's windows are phase-shifted ("RefusalPhase"), so
+    /// the window number is not the same for every pair at one instant.
+    /// </summary>
+    internal static int RollGroup(int groupId, uint window) => unchecked(groupId ^ (int)(window * 0x9E3779B1u));
+
+    /// <summary>
+    /// The offset of one (candidate, group) pair's refusal windows, in [0, <paramref name="periodMs"/>): a hash of the pair, so the windows of
+    /// different pairs do not all start at the same instant.
+    /// </summary>
+    internal static uint RefusalPhase(uint periodMs, Guid botId, int groupId)
+        => (uint)(PlayerbotContention.Mix((ulong)(uint)botId.GetHashCode(), (ulong)(uint)groupId) % periodMs);
+
+    /// <summary>The refusal window of the pair at <paramref name="nowMs"/>: time plus the pair's phase, divided by the period (<see cref="RollGroup"/>'s <c>window</c>).</summary>
+    internal static uint RefusalWindow(uint nowMs, uint periodMs, Guid botId, int groupId)
+        => unchecked(nowMs + RefusalPhase(periodMs, botId, groupId)) / periodMs;
 
     /// <summary>The candidate's roll for the group: a fixed number in [0, 1) for the pair, whoever asks and whenever.</summary>
     internal static double Roll(ulong candidateGuid, int groupId)

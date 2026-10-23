@@ -851,7 +851,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (line.Type != ChatType.Channel || line.ChannelName is null || services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return false;
         if (!bots.Social.TryBot(line.SenderGuid, out Guid posterId, out _)) return false;
         if (chat.Voice.Find(posterId, chat.NowMs, options.PostLifeSeconds * 1000L) is not { Kind: PlayerbotVoicePostKind.LookingForGroup } post) return false;
-        PlayerbotLfgOffer offer = coordinator.OfferLfg(line.BotId, posterId);
+        PlayerbotLfgOffer offer = coordinator.OfferLfg(line.BotId, posterId, post.PostedMs);
         if (offer.Outcome != PlayerbotLfgOfferOutcome.Pledged) return false;
         int turn = chat.NextBotTurn(line.SenderGuid, line.BotGuid);
         if (turn <= 0) return false;
