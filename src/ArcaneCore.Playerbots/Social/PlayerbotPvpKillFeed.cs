@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
 
@@ -54,12 +55,18 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
             _disposed = true;
             _world.MapCreated -= _onMapCreated;
             _world.MapUnloading -= _onMapUnloading;
-            foreach (Map map in _maps) map.Combat.UnitKilled -= _onKilled;
+            // Every map is detached even if one throws (a map torn down meanwhile): try per map, then clear.
+            foreach (Map map in _maps)
+            {
+                try { map.Combat.UnitKilled -= _onKilled; }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.pvp-feed", ex); }
+            }
+
             _maps.Clear();
         }
     }
 
-    private void Add(Map map)
+    internal void Add(Map map)
     {
         lock (_gate)
         {
@@ -68,11 +75,13 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
         }
     }
 
-    private void Remove(Map map)
+    internal void Remove(Map map)
     {
         lock (_gate)
         {
-            if (_maps.Remove(map)) map.Combat.UnitKilled -= _onKilled;
+            if (!_maps.Remove(map)) return;
+            try { map.Combat.UnitKilled -= _onKilled; }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.pvp-feed", ex); } // the unload goes on
         }
     }
 

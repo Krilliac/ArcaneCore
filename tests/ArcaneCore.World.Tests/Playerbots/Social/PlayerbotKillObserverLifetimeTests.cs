@@ -17,7 +17,7 @@ public sealed class PlayerbotKillObserverLifetimeTests
     public async Task ADisposedWorldWithARunningBot_IsCollectable() => await AssertCollectedAsync(shutDownFirst: true);
 
     [Fact]
-    public async Task AWorldDisposedWithoutTheFeaturesShutdown_WhileABotIsStillWatched_IsCollectable() => await AssertCollectedAsync(shutDownFirst: false);
+    public async Task AWorldDisposedWithoutTheBeforeWorldStopShutdown_WhileABotIsStillRunning_IsCollectable() => await AssertCollectedAsync(shutDownFirst: false);
 
     private static async Task AssertCollectedAsync(bool shutDownFirst)
     {
@@ -45,8 +45,9 @@ public sealed class PlayerbotKillObserverLifetimeTests
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Killwatch", 1, 1)).BotId);
         Assert.True((await feature.StartAsync(id.ToString())).Success);
-        // The brain's update puts the bot on its map's kill observer (PlayerbotBrain.WatchKills); the bot is still on it at the dispose below
-        // when the feature's own shutdown is skipped.
+        // The feed (PlayerbotPvpKillFeed) is on every map of the world and the bot is still running at the dispose below when the feature's
+        // BeforeWorldStop shutdown is skipped. The host's dispose still runs StopWorldFeaturesAsync (WorldTestHost has no way to skip it, and a
+        // world whose features are never stopped stays reachable through other things than the feed), so this is not a no-stop test.
         await WorldTestHost.WaitForAsync(() => feature.FindBrain(id) is not null && feature.FindSession(id)?.Player is { IsInWorld: true }, "the bot in the world");
         await host.World.InvokeAsync(() => true);
         await host.World.InvokeAsync(() => true);
