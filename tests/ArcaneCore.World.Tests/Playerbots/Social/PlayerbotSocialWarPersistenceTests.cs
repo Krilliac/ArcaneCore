@@ -117,4 +117,35 @@ public sealed class PlayerbotSocialWarPersistenceTests
         Assert.Equal(noted.TrustPermille, cleared.TrustPermille);
         Assert.Equal(noted.Familiarity, cleared.Familiarity);
     }
+
+    [Fact]
+    public async Task ClearOnDisable_AlsoWipesAndWritesTheBotsThatAreNotRunning_OnceEach()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var store = new PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, store, war: true);
+        var feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid running = Assert.IsType<Guid>((await feature.CreateAsync("Warrunner", 1, 1)).BotId);
+        Guid idle = Assert.IsType<Guid>((await feature.CreateAsync("Waridler", 1, 1)).BotId);
+        Assert.True((await feature.StartAsync(running.ToString())).Success);
+        NoteBoth(feature, running, (await owners.FindAsync(running))!.CharacterId);
+        NoteBoth(feature, idle, (await owners.FindAsync(idle))!.CharacterId);
+        await store.ReplaceAsync(idle, feature.Social.Memory.Snapshot(idle)); // as an earlier run left it: war layer stored, bot not running
+        await PlayerbotSocialTriggerWorldTests.UntilAsync(() => store.Replaces > 1, "the checkpoint to write the running bot", seconds: 30);
+        Assert.NotEqual((short)0, Assert.Single(await store.LoadAllAsync(), r => r.BotId == idle).WarAffinity);
+
+        PlayerbotWarModeOptions war = PartyTestHost.PlayerbotOptionsOf(host).Social.WarMode;
+        war.ClearOnDisable = true;
+        war.Enabled = false;
+        await PlayerbotSocialTriggerWorldTests.UntilAsync(
+            () => store.LoadAllAsync().GetAwaiter().GetResult().Where(r => r.BotId == idle).All(r => r.WarAffinity == 0), "the idle bot's war layer to be wiped in the store", seconds: 30);
+
+        Assert.Equal((short)0, Assert.Single(await store.LoadAllAsync(), r => r.BotId == idle).WarAffinity);
+        Assert.Equal((short)0, Assert.Single(await store.LoadAllAsync(), r => r.BotId == running).WarAffinity);
+        Assert.Equal((short)0, feature.Social.Memory.Snapshot(idle).Single().WarAffinity);
+        Assert.Equal(feature.Social.Memory.Version(running), feature.SavedRelationVersionOf(running)); // written with the wipe: its own checkpoint has nothing left to write
+    }
 }

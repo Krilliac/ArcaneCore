@@ -15674,9 +15674,9 @@ World.Playerbots.Social.Memory.TrustPerGroupSuccess = 30
 
 #
 #    World.Playerbots.Social.WarMode.ClearOnDisable
-#        Description: Wipe the war layer at the next checkpoint after War Mode is switched off (off
-#                     by default: the layer stays dormant and comes back when War Mode is switched
-#                     on again).
+#        Description: Wipe the war layer of every bot, running or not, at the first checkpoint after
+#                     War Mode is switched off, and write every bot it changed once (off by default:
+#                     the layer stays dormant and comes back when War Mode is switched on again).
 #        Type: bool
 #        Default: false
 #        Allowed: true | false

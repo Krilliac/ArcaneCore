@@ -3188,35 +3188,82 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private int _warLayerLive = 1;
 
     // War Mode on marks the war layer live; once it is off and ClearOnDisable is set, the next checkpoint wipes the layer (once).
-    private void ClearWarLayerIfSwitchedOff(BotSocial.PlayerbotSocialMemory memory)
+    // The wipe is memory-wide, so it also reaches the bots that are not running: every bot it changed is written once, here, through its gate (a running
+    // bot's saved version moves with it, so its own checkpoint does not write it again).
+    private async Task ClearWarLayerIfSwitchedOffAsync(BotSocial.PlayerbotSocialMemory memory)
     {
         BotSocial.PlayerbotWarModeOptions war = _options.Social.WarMode;
         if (war.Enabled) Volatile.Write(ref _warLayerLive, 1);
-        else if (war.ClearOnDisable && Interlocked.Exchange(ref _warLayerLive, 0) == 1) memory.ClearWarLayers();
+        else if (war.ClearOnDisable && Interlocked.Exchange(ref _warLayerLive, 0) == 1)
+        {
+            List<Guid> changed = [];
+            memory.ClearWarLayers(changed);
+            if (changed.Count == 0) return;
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store) return;
+            foreach (Guid botId in changed)
+            {
+                try { await WriteBotRelationsAsync(store, memory, botId).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+                    logger.LogWarning(ex, "Playerbot {BotId} social memory could not be written after the war layer was cleared ({Type})", botId, ex.GetType().Name);
+                }
+            }
+        }
     }
+
+    // One bot's rows written through its gate; a running bot's saved version is recorded with the write (taken before the snapshot, so it never runs ahead of the rows).
+    private Task WriteBotRelationsAsync(IPlayerbotRelationStore store, BotSocial.PlayerbotSocialMemory memory, Guid botId)
+    {
+        long version = 0;
+        return WriteRelationsAsync(store, botId, () =>
+        {
+            version = memory.Version(botId);
+            return memory.Snapshot(botId);
+        }, () =>
+        {
+            if (_active.TryGetValue(botId, out ActiveBot? active)) Volatile.Write(ref active.SavedRelationVersion, version);
+        });
+    }
+
+    /// <summary>The saved relation version of a running bot, or -2 when it is not running (tests).</summary>
+    internal long SavedRelationVersionOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? Volatile.Read(ref active.SavedRelationVersion) : -2;
+
+    /// <summary>Whether the bot has a write gate (tests).</summary>
+    internal bool HasRelationGate(Guid botId) => _relationGates.ContainsKey(botId);
 
     // One writer per bot at a time: a forget and a checkpoint (or two forgets) never replace the same bot's rows concurrently, and each takes its
     // snapshot inside the gate, so the last writer holds the newest rows.
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _relationGates = new();
 
-    internal async Task WriteRelationsAsync(IPlayerbotRelationStore store, Guid botId, Func<IReadOnlyList<PlayerbotRelation>> rows, Action? written = null)
+    // A deleted bot's gate is retired by its last write (retire: true): taken out of the map while held, so no later write finds it. A write that was already
+    // waiting on it gets it after the release, sees it is no longer the bot's gate and starts over on a fresh one. The retired semaphore is never disposed:
+    // a queued waiter would then be released onto a disposed object, and a SemaphoreSlim whose wait handle was never asked for holds nothing to free.
+    internal async Task WriteRelationsAsync(IPlayerbotRelationStore store, Guid botId, Func<IReadOnlyList<PlayerbotRelation>> rows, Action? written = null, bool retire = false)
     {
-        SemaphoreSlim gate = _relationGates.GetOrAdd(botId, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync().ConfigureAwait(false);
-        try
+        while (true)
         {
-            IReadOnlyList<PlayerbotRelation> snapshot = rows();
-            await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, snapshot), CancellationToken.None).ConfigureAwait(false);
-            written?.Invoke();
+            SemaphoreSlim gate = _relationGates.GetOrAdd(botId, static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!_relationGates.TryGetValue(botId, out SemaphoreSlim? current) || !ReferenceEquals(current, gate)) continue; // retired while this write waited
+                IReadOnlyList<PlayerbotRelation> snapshot = rows();
+                await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, snapshot), CancellationToken.None).ConfigureAwait(false);
+                written?.Invoke();
+                if (retire) _relationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(botId, gate));
+                return;
+            }
+            finally { gate.Release(); }
         }
-        finally { gate.Release(); }
     }
 
     /// <summary>
     /// A bot was deleted (or its character was already gone): forget its relations in memory and in the store, and the other bots' relations
     /// toward its character, which are written again without it. Never throws: a failure is recorded at <c>playerbot.social-memory</c>.
     /// </summary>
-    private Task ForgetRelationsAsync(IServiceProvider provider, Guid botId, int characterId)
+    internal Task ForgetRelationsAsync(IServiceProvider provider, Guid botId, int characterId)
         => ForgetRelationsAsync(provider, [(botId, characterId > 0 ? new[] { characterId } : [])]);
 
     /// <summary>
@@ -3236,9 +3283,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     if (characterId > 0) survivors.UnionWith(memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
             if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
             foreach ((Guid botId, _) in removed)
-                await WriteRelationsAsync(store, botId, static () => []).ConfigureAwait(false);
+                await WriteRelationsAsync(store, botId, static () => [], retire: true).ConfigureAwait(false);
             foreach (Guid other in survivors)
-                await WriteRelationsAsync(store, other, () => memory.Snapshot(other)).ConfigureAwait(false);
+                await WriteBotRelationsAsync(store, memory, other).ConfigureAwait(false); // and its saved version moves, so the next checkpoint does not write it again
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -3258,7 +3305,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
-            ClearWarLayerIfSwitchedOff(memory);
+            await ClearWarLayerIfSwitchedOffAsync(memory).ConfigureAwait(false);
             if (Volatile.Read(ref active.SavedRelationVersion) == memory.Version(botId)) return;
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is { } store)

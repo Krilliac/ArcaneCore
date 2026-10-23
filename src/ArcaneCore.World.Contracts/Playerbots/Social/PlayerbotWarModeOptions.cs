@@ -21,7 +21,7 @@ public sealed class PlayerbotWarModeOptions
     /// <summary>In the war layer the daily affinity gain cap and the one-apology-a-day limit are lifted, and a relation a full memory drops from the normal layer stays for the war layer when the war layer holds a grudge against it (a war-only entry: the normal layer, and War Mode while it is off, never see it).</summary>
     public bool RemoveCaps { get; set; } = true;
 
-    /// <summary>Wipe the war layer at the next checkpoint after War Mode is switched off (off by default: the layer stays dormant and comes back when War Mode is switched on again).</summary>
+    /// <summary>Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again).</summary>
     public bool ClearOnDisable { get; set; }
 
     public void Validate()

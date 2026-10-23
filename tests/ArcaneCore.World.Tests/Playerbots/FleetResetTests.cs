@@ -141,6 +141,8 @@ public sealed class FleetResetTests
 
         Assert.True(result.Success, result.Code + ": " + result.Message);
         Assert.Equal(ids.Length + 1, store.Replaces - before); // one delete per removed bot and one write of the survivor, not one per bot-pair
+        foreach (Guid id in ids) Assert.False(world.Bots.HasRelationGate(id), "a deleted bot's write gate was kept"); // the survivor's stays: it can still be written
+        Assert.True(world.Bots.HasRelationGate(survivor));
         foreach (Guid id in ids) Assert.Empty(memory.Snapshot(id));
         PlayerbotRelation left = Assert.Single(memory.Snapshot(survivor));
         Assert.Equal(4242UL, left.OtherGuid);
@@ -154,22 +156,105 @@ public sealed class FleetResetTests
         await using PopulationTestHost world = await StartAsync();
         Guid one = Guid.NewGuid(), two = Guid.NewGuid();
 
-        await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => world.Bots.WriteRelationsAsync(store, one, () => [])));
+        // Every write is held inside the store until the test lets it go, so what overlaps is decided by the gate alone, not by timing.
+        Task[] ones = [.. Enumerable.Range(0, 6).Select(_ => world.Bots.WriteRelationsAsync(store, one, () => []))];
+        await store.WaitEnteredAsync();
+        Task other = world.Bots.WriteRelationsAsync(store, two, () => []);
+        await store.WaitEnteredAsync(); // the other bot's write is inside the store while the first bot's is held: different bots are not serialized
+        Assert.Equal(2, store.MaxActiveOverall);
         Assert.Equal(1, store.MaxActive(one));
+        store.Release();
+        await Task.WhenAll(ones.Append(other));
+        Assert.Equal(1, store.MaxActive(one)); // the six writes of one bot went through one at a time
         Assert.Equal(6, store.Calls(one));
+        Assert.Equal(2, store.MaxActiveOverall);
+    }
 
-        await Task.WhenAll(world.Bots.WriteRelationsAsync(store, one, () => []), world.Bots.WriteRelationsAsync(store, two, () => []));
-        Assert.Equal(2, store.MaxActiveOverall); // different bots are not serialized with each other
+    [Fact]
+    public async Task ACancelledReset_StillForgetsTheBotsItDeleted_InMemoryAndInTheStore()
+    {
+        var store = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        Guid[] ids = await CreateBotsAsync(world, 4, started: 0);
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        var memory = world.Bots.Social.Memory;
+        int[] characters = [.. ids.Select(id => registry.Single(b => b.BotId == id).CharacterId)];
+        ulong[] guids = [.. characters.Select(c => ArcaneCore.Game.ObjectGuid.Player((uint)c).Value)];
+        Guid survivor = Guid.NewGuid(); // a bot outside the registry that knows all four
+        for (int j = 0; j < ids.Length; j++)
+            memory.Note(survivor, 9001, guids[j], true, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        foreach (Guid id in ids.Append(survivor)) await store.ReplaceAsync(id, memory.Snapshot(id));
+
+        // The reset is cancelled while the third bot is being deleted (a store that observes the token, as the real ones do): the first two bots are fully deleted.
+        using var cancel = new CancellationTokenSource();
+        var order = new List<Guid>();
+        world.Members.OnDelete = id =>
+        {
+            order.Add(id);
+            if (order.Count != 3) return;
+            cancel.Cancel();
+            throw new OperationCanceledException(cancel.Token);
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => world.Bots.ResetFleetAsync(new FleetResetPromise(4, 4), _ => { }, cancel.Token));
+
+        Assert.Equal(3, order.Count);
+        HashSet<ulong> deletedGuids = [.. order.Take(2).Select(id => guids[Array.IndexOf(ids, id)])];
+        HashSet<ulong> keptGuids = [.. guids.Where(g => !deletedGuids.Contains(g))];
+        IReadOnlyList<PlayerbotRelation> stored = await store.LoadAllAsync();
+        Assert.Equal(keptGuids.OrderBy(g => g), memory.Snapshot(survivor).Select(r => r.OtherGuid).OrderBy(g => g)); // exactly the two deleted bots were forgotten
+        Assert.Equal(keptGuids.OrderBy(g => g), stored.Where(r => r.BotId == survivor).Select(r => r.OtherGuid).OrderBy(g => g));
+        foreach (Guid id in order.Take(2))
+        {
+            Assert.Empty(memory.Snapshot(id));
+            Assert.DoesNotContain(stored, r => r.BotId == id);
+        }
+    }
+
+    [Fact]
+    public async Task ASurvivorWrittenByAForget_HasItsSavedVersionMovedWithTheWrite_SoTheNextCheckpointSkipsIt()
+    {
+        var store = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        Guid[] ids = await CreateBotsAsync(world, 2, started: 1); // ids[0] runs, ids[1] is deleted
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        var memory = world.Bots.Social.Memory;
+        int deletedCharacter = registry.Single(b => b.BotId == ids[1]).CharacterId;
+        memory.Note(ids[0], registry.Single(b => b.BotId == ids[0]).CharacterId, ArcaneCore.Game.ObjectGuid.Player((uint)deletedCharacter).Value, true,
+            ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        memory.Note(ids[0], registry.Single(b => b.BotId == ids[0]).CharacterId, 4242, false, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        Assert.NotEqual(memory.Version(ids[0]), world.Bots.SavedRelationVersionOf(ids[0]));
+
+        await using AsyncServiceScope scope = world.Host.WorldServices.CreateAsyncScope();
+        await world.Bots.ForgetRelationsAsync(scope.ServiceProvider, ids[1], deletedCharacter);
+
+        Assert.Equal(memory.Version(ids[0]), world.Bots.SavedRelationVersionOf(ids[0])); // written, and known to be: the checkpoint finds nothing to do
+        Assert.Equal(4242UL, Assert.Single(await store.LoadAllAsync(), r => r.BotId == ids[0]).OtherGuid);
     }
 
     private sealed class OverlapStore : IPlayerbotRelationStore
     {
         private readonly object _gate = new();
         private readonly Dictionary<Guid, int> _active = [], _max = [], _calls = [];
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly SemaphoreSlim _entered = new(0);
         private int _activeAll;
         public int MaxActiveOverall { get; private set; }
         public int MaxActive(Guid bot) { lock (_gate) return _max.GetValueOrDefault(bot); }
         public int Calls(Guid bot) { lock (_gate) return _calls.GetValueOrDefault(bot); }
+
+        /// <summary>Let every held write finish (and every later one pass straight through).</summary>
+        public void Release() => _release.TrySetResult();
+
+        /// <summary>Completes once one more write has entered the store (each call consumes one entry).</summary>
+        public Task WaitEnteredAsync() => _entered.WaitAsync(TimeSpan.FromSeconds(30)).ContinueWith(t => Assert.True(t.Result, "no write entered the store"), TaskScheduler.Default);
 
         public Task<IReadOnlyList<PlayerbotRelation>> LoadAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PlayerbotRelation>>([]);
 
@@ -183,7 +268,8 @@ public sealed class FleetResetTests
                 MaxActiveOverall = Math.Max(MaxActiveOverall, ++_activeAll);
             }
 
-            await Task.Delay(60, cancellationToken);
+            _entered.Release();
+            await _release.Task.WaitAsync(cancellationToken);
             lock (_gate)
             {
                 _active[botId]--;

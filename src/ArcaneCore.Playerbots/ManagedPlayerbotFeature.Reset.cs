@@ -228,27 +228,34 @@ public sealed partial class ManagedPlayerbotFeature
                 logger.LogInformation("Playerbot fleet reset: stopped {Stopped} bots ({Failed} failed to stop)", stopped, stopFailed);
 
                 var counts = new ResetCounts();
-                int position = 0;
-                foreach (FleetResetBot bot in census.Bots)
+                try
                 {
-                    position++;
-                    await DeleteBotForResetAsync(bot, counts, cancellationToken).ConfigureAwait(false);
-                    if (position % 25 == 0 || position == census.Bots.Count)
-                        progress(string.Create(CultureInfo.InvariantCulture,
-                            $"Fleet reset: {position}/{census.Bots.Count} bot accounts processed, {counts.CharactersDeleted} characters deleted, {counts.CharactersFailed} failed."));
+                    int position = 0;
+                    foreach (FleetResetBot bot in census.Bots)
+                    {
+                        position++;
+                        await DeleteBotForResetAsync(bot, counts, cancellationToken).ConfigureAwait(false);
+                        if (position % 25 == 0 || position == census.Bots.Count)
+                            progress(string.Create(CultureInfo.InvariantCulture,
+                                $"Fleet reset: {position}/{census.Bots.Count} bot accounts processed, {counts.CharactersDeleted} characters deleted, {counts.CharactersFailed} failed."));
+                    }
                 }
-
-                if (counts.Forgotten.Count > 0)
+                finally
                 {
-                    await using AsyncServiceScope relationScope = scopes.CreateAsyncScope();
-                    await ForgetRelationsAsync(relationScope.ServiceProvider, counts.Forgotten).ConfigureAwait(false);
-                }
+                    // A cancelled reset has still deleted some bots: forget exactly those (counts.Forgotten holds the bots deleted so far), so the survivors
+                    // keep no relation toward a character that is gone.
+                    if (counts.Forgotten.Count > 0)
+                    {
+                        await using AsyncServiceScope relationScope = scopes.CreateAsyncScope();
+                        await ForgetRelationsAsync(relationScope.ServiceProvider, counts.Forgotten).ConfigureAwait(false);
+                    }
 
-                lock (_snapshotGate)
-                {
-                    HashSet<Guid> gone = [.. census.Bots.Where(b => counts.Removed.Contains(b.BotId)).Select(b => b.BotId)];
-                    Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => !gone.Contains(s.BotId)).ToArray());
-                    _snapshotEpoch++;
+                    lock (_snapshotGate)
+                    {
+                        HashSet<Guid> gone = [.. census.Bots.Where(b => counts.Removed.Contains(b.BotId)).Select(b => b.BotId)];
+                        Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => !gone.Contains(s.BotId)).ToArray());
+                        _snapshotEpoch++;
+                    }
                 }
 
                 logger.LogInformation(

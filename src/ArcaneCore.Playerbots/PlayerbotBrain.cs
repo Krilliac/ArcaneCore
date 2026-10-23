@@ -619,7 +619,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         PlayerbotNavigation.SetStallWatch(player, _stall);
         WatchKills(player);
-        if (_engagedMob != 0 && (!player.IsAlive || _target is not { IsAlive: true } engagedTarget || engagedTarget.Guid.Value != _engagedMob)) _engagedMob = 0;
+        // The engagement ends with the bot's death, a change of target, the mob's death, or the bot leaving combat (not in combat and not on the mob's threat list).
+        if (_engagedMob != 0 && (!player.IsAlive || _target is not { IsAlive: true } engagedTarget || engagedTarget.Guid.Value != _engagedMob
+            || !player.Combat.IsInCombat && !player.Combat.ThreatenedBy.Contains(engagedTarget))) ClearEngagement();
         SyncHomeFilters(player);
         _recovery.UnsafeBody ??= JudgeBody;
         _recovery.LandingUnsafe ??= (bot, at) => Risk.TooStrongAt(bot, at) is not null;
@@ -2522,7 +2524,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (!onThreatList)
         {
             // Not (or no longer) on its threat list: the bot was walking up, or the mob evaded or reset. Whatever tags it next took nothing from the bot.
-            if (_engagedMob == mob) _engagedMob = 0;
+            if (_engagedMob == mob) ClearEngagement();
             return;
         }
 
@@ -2530,14 +2532,18 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         Player? tapper = tap.IsEmpty || held.Map is not { } map ? null : TapperOf(map, tap);
         if (tap.IsEmpty || tapper is not null && !IsStranger(player, tapper, groups))
         {
-            _engagedMob = mob; // untagged, or tagged by the bot or its group: the bot has it
+            // Untagged, or tagged by the bot or its group: the bot has it. The tapper is stored as it is now: a tap that is unchanged when the group
+            // changes under it (the player leaves, kicks the bot, the group disbands) turns that tapper into a stranger, but takes nothing from the bot.
+            _engagedMob = mob;
+            _engagedTapper = tapper?.Guid.Value ?? 0;
             return;
         }
 
-        // An outsider took the tag while the bot was on the mob's threat list: the bot engaged first and the other side started second.
-        if (tapper is not null && _engagedMob == mob)
+        // An outsider holds the tag. It is a steal only if the tag CHANGED to them since the bot engaged (from untagged or from the own side):
+        // the bot engaged first and the other side started second.
+        if (tapper is not null && _engagedMob == mob && tapper.Guid.Value != _engagedTapper)
         {
-            _engagedMob = 0; // once per engagement
+            ClearEngagement(); // once per engagement
             Social?.Note(player.Guid, tapper.Guid, BotSocial.PlayerbotSocialEvent.KillSteal, tapper.Team != player.Team);
         }
     }
@@ -2678,6 +2684,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     // Cleared when the bot's target changes or dies (UpdateCore), and when the bot is off the mob's threat list (evade, reset, walking up).
     private ulong _engagedMob;
 
+    // The player behind the tap of _engagedMob when the engagement was last noted (pets resolved to their owner), 0 when the mob was untagged.
+    // A KillSteal needs the current tapper to be a stranger who differs from it.
+    private ulong _engagedTapper;
+
+    private void ClearEngagement()
+    {
+        _engagedMob = 0;
+        _engagedTapper = 0;
+    }
+
     private void MarkFruitless(Creature creature)
     {
         uint now = _session.World.NowMs;
@@ -2724,9 +2740,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         uint now = _session.World.NowMs;
         ulong mob = held.Guid.Value;
         bool mine = player.Combat.ThreatenedBy.Contains(held) || ReferenceEquals(held.Combat.Victim, player);
+        GroupManager? groups = GroupsOf(player);
         // Before the early exit below: a bot still on the threat list is "mine", and that is exactly when a tag taken from it is a steal.
         // (_attacking says only that a swing was sent; it can be stale.)
-        NoteEngagement(player, held, mine, GroupsOf(player));
+        NoteEngagement(player, held, mine, groups);
 
         if (_contention.IsAssisting(held.Guid))
         {
@@ -2740,7 +2757,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (mine) return;
         if (_contention.IsSetAside(mob, now)) { LeaveSomeoneElses(player, held, now); return; }
-        GroupManager? groups = GroupsOf(player);
         if (!IsSomeoneElses(player, held, groups)) return;
 
         // Only a tagged mob has a tagger to help: an untagged one that merely fights a stranger is left alone (helping would take its tag).

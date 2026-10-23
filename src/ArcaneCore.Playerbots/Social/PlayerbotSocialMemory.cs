@@ -167,14 +167,18 @@ internal sealed class PlayerbotSocialMemory
         lock (_gate) BotFor(botId).SelfGuid = botGuid;
     }
 
-    /// <summary>Replace the preference and etiquette flags of an existing relation (the Grouped, OtherFaction and Rival flags are kept as they are).</summary>
+    // SetFlags, SetRole and SetTopic act on the relations a reader can see (Visible): a war-only row is one only while War Mode is on, exactly as TryGet and Top
+    // show it, so what is set can be read back. The normal layer stays pure: these fields are reset on a war-only row when it is made (BecomeWarOnly) and when a
+    // normal event revives it (Revive), so nothing set on a war-only row ever reaches the normal view.
+
+    /// <summary>Replace the preference and etiquette flags of an existing relation (the Grouped, OtherFaction and Rival flags are kept as they are). A war-only relation takes it only while War Mode is on.</summary>
     public void SetFlags(Guid botId, ulong other, PlayerbotRelationFlags flags)
     {
         if (!_options.Enabled) return;
         const PlayerbotRelationFlags managed = PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival;
         lock (_gate)
         {
-            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || entry.WarOnly) return;
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || !Visible(entry)) return;
             PlayerbotRelationFlags next = (entry.Flags & managed) | (flags & ~managed);
             if (next == entry.Flags) return;
             entry.Flags = next;
@@ -189,18 +193,21 @@ internal sealed class PlayerbotSocialMemory
     public bool IsRival(PlayerbotRelation relation)
         => ((_war.Enabled ? relation.WarFlags : relation.Flags) & PlayerbotRelationFlags.Rival) != 0;
 
-    /// <summary>Wipe every war layer and delete the war-only relations (the checkpoint does it after War Mode is switched off with <c>ClearOnDisable</c>); the normal layer is untouched. True if anything changed.</summary>
-    public bool ClearWarLayers()
+    /// <summary>
+    /// Wipe every war layer and delete the war-only relations of every bot in memory, running or not (the checkpoint does it after War Mode is switched off
+    /// with <c>ClearOnDisable</c>); the normal layer is untouched. True if anything changed; <paramref name="changed"/> receives each bot it changed.
+    /// </summary>
+    public bool ClearWarLayers(ICollection<Guid>? changed = null)
     {
         bool any = false;
         lock (_gate)
-            foreach (BotMemory bot in _bots.Values)
+            foreach ((Guid botId, BotMemory bot) in _bots)
             {
-                bool changed = false;
+                bool botChanged = false;
                 foreach (Entry warOnly in bot.Relations.Values.Where(entry => entry.WarOnly).ToArray())
                 {
                     bot.Relations.Remove(warOnly.OtherGuid);
-                    changed = true;
+                    botChanged = true;
                 }
 
                 foreach (Entry entry in bot.Relations.Values)
@@ -210,11 +217,12 @@ internal sealed class PlayerbotSocialMemory
                     entry.WarFlags = PlayerbotRelationFlags.None;
                     entry.WarApologyDay = entry.WarGainDay = long.MinValue;
                     entry.WarGained = 0;
-                    changed = true;
+                    botChanged = true;
                 }
 
-                if (!changed) continue;
+                if (!botChanged) continue;
                 bot.Version = ++_versionSeq;
+                changed?.Add(botId);
                 any = true;
             }
 
@@ -228,7 +236,7 @@ internal sealed class PlayerbotSocialMemory
         const PlayerbotRelationFlags roles = PlayerbotRelationFlags.PrefersTank | PlayerbotRelationFlags.PrefersHealer | PlayerbotRelationFlags.PrefersDamage;
         lock (_gate)
         {
-            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || entry.WarOnly) return;
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || !Visible(entry)) return;
             PlayerbotRelationFlags next = (entry.Flags & ~roles) | (role & roles);
             if (next == entry.Flags) return;
             entry.Flags = next;
@@ -244,7 +252,7 @@ internal sealed class PlayerbotSocialMemory
         string text = Cut(summary, PlayerbotRelation.MaxSummaryLength);
         lock (_gate)
         {
-            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || entry.WarOnly) return;
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || !Visible(entry)) return;
             if (entry.LastTopic == topic && entry.Summary == text) return;
             entry.LastTopic = topic;
             entry.Summary = text;

@@ -1686,7 +1686,7 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:RivalHalfLifeDays` | `int` | `45` | live | The same half-life for a relation flagged Rival: a grudge fades slower (1..3650). |
 | `World:Playerbots:Social:Memory:TrustPerFirstDeathInWipe` | `int` | `-30` | live | Trust (permille) change toward the member who died first in a wipe (-500..500). |
 | `World:Playerbots:Social:Memory:TrustPerGroupSuccess` | `int` | `30` | live | Trust (permille) gained toward every member of a group that finished its run (-500..500). |
-| `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer at the next checkpoint after War Mode is switched off (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
+| `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
 | `World:Playerbots:Social:WarMode:Enabled` | `bool` | `false` | live | Hold grudges harder and longer (off by default). |
 | `World:Playerbots:Social:WarMode:NegativeMultiplier` | `float` | `3` | live | While enabled, every negative affinity change is multiplied by this (1..10); positive changes are untouched. |
 | `World:Playerbots:Social:WarMode:NeverForget` | `bool` | `true` | live | In the war layer negative affinity never drifts back toward 0 and the war Rival flag is never cleared by drift, only by positive events that lift the war affinity back over the threshold. |

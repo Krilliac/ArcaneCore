@@ -355,6 +355,7 @@ public sealed class PlayerbotSocialForgivenessTests
         (PlayerbotSocialMemory warred, PlayerbotSocialMemoryOptions warOptions, PlayerbotWarModeOptions war, Clock warClock) = Make();
         plainOptions.MaxRelationsPerBot = warOptions.MaxRelationsPerBot = 16; // far fewer places than characters: the eviction runs all the time
         var random = new Random(seed);
+        bool warOnlyCreated = false;
         for (int step = 0; step < 400; step++)
         {
             // Both runs see the same events at the same times; only the war run has War Mode, switched on and off at random.
@@ -367,8 +368,10 @@ public sealed class PlayerbotSocialForgivenessTests
             plain.Note(Bot, 1, other, false, e);
             warred.Note(Bot, 1, other, false, e);
             Assert.Equal(NormalView(plain), NormalView(warred));
+            warOnlyCreated |= warred.Snapshot(Bot).Any(r => r.Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
         }
 
+        Assert.True(warOnlyCreated, "the war run never kept a war-only row: the comparison above did not exercise the shadow");
         war.Enabled = false;
         Assert.Equal(16, plain.Snapshot(Bot).Count); // the eviction really ran
         foreach (PlayerbotRelation r in plain.Snapshot(Bot))
@@ -680,6 +683,51 @@ public sealed class PlayerbotSocialForgivenessTests
         Assert.Equal(options.AffinityPerTrade, fresh.Affinity);
         Assert.False(fresh.Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
         Assert.True(fresh.WarAffinity < 0 || fresh.WarFlags.HasFlag(PlayerbotRelationFlags.WarSeeded));
+    }
+
+    [Fact]
+    public void WithWarModeOn_SetFlagsSetRoleAndSetTopic_ActOnAWarOnlyRelationAsTryGetShowsIt_AndNeverReachTheNormalLayer()
+    {
+        (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, PlayerbotWarModeOptions war, Clock clock) = Make();
+        war.Enabled = true;
+        options.MaxRelationsPerBot = 16;
+        memory.Note(Bot, 1, 1000, false, PlayerbotSocialEvent.Kicked);
+        for (ulong guid = 10; guid <= 25; guid++)
+        {
+            clock.Now += 60_000;
+            Repeat(memory, PlayerbotSocialEvent.Grouped, 2, guid);
+        }
+
+        Assert.True(memory.Snapshot(Bot).Single(r => r.OtherGuid == 1000).Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
+        long version = memory.Version(Bot);
+
+        // War Mode on: the row TryGet returns takes the setters, and they can be read back.
+        memory.SetFlags(Bot, 1000, PlayerbotRelationFlags.WantsInvites);
+        memory.SetRole(Bot, 1000, PlayerbotRelationFlags.PrefersTank);
+        memory.SetTopic(Bot, 1000, "topic", "summary");
+        Assert.NotEqual(version, memory.Version(Bot));
+        Assert.True(memory.TryGet(Bot, 1000, out PlayerbotRelation seen));
+        Assert.True(seen.Flags.HasFlag(PlayerbotRelationFlags.WantsInvites));
+        Assert.True(seen.Flags.HasFlag(PlayerbotRelationFlags.PrefersTank));
+        Assert.Equal("topic", seen.LastTopic);
+        Assert.Equal("summary", seen.Summary);
+
+        // War Mode off: invisible, and the setters leave it alone again.
+        war.Enabled = false;
+        Assert.False(memory.TryGet(Bot, 1000, out _));
+        long before = memory.Version(Bot);
+        memory.SetFlags(Bot, 1000, PlayerbotRelationFlags.None);
+        memory.SetTopic(Bot, 1000, "other", "other");
+        Assert.Equal(before, memory.Version(Bot));
+
+        // A normal event starts the relation fresh: nothing set while it was war-only is part of the normal layer.
+        clock.Now += 60_000;
+        memory.Note(Bot, 1, 1000, false, PlayerbotSocialEvent.TradeCompleted);
+        Assert.True(memory.TryGet(Bot, 1000, out PlayerbotRelation fresh));
+        Assert.False(fresh.Flags.HasFlag(PlayerbotRelationFlags.WantsInvites));
+        Assert.False(fresh.Flags.HasFlag(PlayerbotRelationFlags.PrefersTank));
+        Assert.Equal(string.Empty, fresh.LastTopic);
+        Assert.Equal(string.Empty, fresh.Summary);
     }
 
     [Fact]

@@ -252,14 +252,97 @@ public sealed class PlayerbotContentionTests
             Assert.False(mob.IsAlive);
             Think(bot, brain);
             // The same creature, the same guid, alive again with nothing on it.
-            mob.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Alive;
-            mob.Health = mob.MaxHealth;
-            mob.ClearLootRecipient();
-            Assert.True(mob.IsAlive);
+            Respawn(mob);
+            bot.Player.Map!.Combat.CombatStop(bot.Player); // the fight is over for the bot
             Assert.False(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            for (int round = 0; round < 6 && !ReferenceEquals(brain.InspectionTarget, mob); round++) Think(bot, brain);
+            Assert.True(ReferenceEquals(mob, brain.InspectionTarget), $"goal {brain.Goal}"); // the bot has chosen the respawned mob and walks up to it: a live, held mob, not a trivial pass
             bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1); // the hunter tags it while the bot walks up
             Think(bot, brain);
+            Assert.True(brain.Contention.IsSetAside(mob.Guid.Value, host.World.NowMs), "the bot did not judge the mob after the tag");
             Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _), "the respawned mob's first tagger was blamed");
+        });
+
+    [Fact]
+    public async Task AMobTheBotKilledThatRespawnsTaggedByAHunterAndThenAggroesTheBot_IsNoKillSteal()
+        => await KillStealScenarioAsync(995067, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            // The first life: the bot is on the mob's list, untagged, and kills it.
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            Think(bot, brain);
+            bot.Player!.Map!.Combat.DealDamage(bot.Player, mob, mob.Health, direct: true, meleeDamage: true);
+            Assert.False(mob.IsAlive);
+            Think(bot, brain); // the engagement of the dead mob ends here (UpdateCore)
+            // The second life: the hunter tags it first, and only then does it turn on the bot (the bot is on its list, the tag is the hunter's from the start).
+            Respawn(mob);
+            bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+            mob.Combat.Threat.AddThreat(bot.Player, 1f);
+            Assert.True(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _), "the first life's engagement carried over to the respawned mob");
+        });
+
+    [Fact]
+    public async Task AMobTheBotKilledThatRespawnsAndAggroesTheBot_ThatAHunterTagsAfterwards_IsAKillSteal()
+        => await KillStealScenarioAsync(995068, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            Think(bot, brain);
+            bot.Player!.Map!.Combat.DealDamage(bot.Player, mob, mob.Health, direct: true, meleeDamage: true);
+            Assert.False(mob.IsAlive);
+            Think(bot, brain);
+            // The second life aggroes onto the bot with nobody's tag: the bot engaged this life first.
+            Respawn(mob);
+            mob.Combat.Threat.AddThreat(bot.Player, 1f);
+            Think(bot, brain);
+            Assert.Same(mob, brain.InspectionTarget);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _));
+            bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+            Think(bot, brain);
+            Assert.True(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out PlayerbotRelation blamed), "the hunter tagged the new life after the bot engaged it");
+            Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerKillSteal, blamed.Affinity);
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AGroupmateWhoTaggedTheMob_ThenLeavesOrKicksTheBotMidFight_IsNoKillSteal(bool kick)
+        => await KillStealScenarioAsync(995069, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            GroupManager groups = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+            // The coordinator's kick note, as it wires it (the brain alone has no coordinator in this test).
+            groups.MemberKicked += (kicker, kicked) => recorder.Note(kicked, kicker, PlayerbotSocialEvent.Kicked);
+            groups.Invite(stranger.Player!, bot.Player!.Name);
+            groups.Accept(bot.Player!);
+            Assert.True(groups.AreInSameGroup(bot.Player!.Guid, stranger.Player!.Guid));
+            // The groupmate tags the mob; both are on its threat list.
+            bot.Player.Map!.Combat.DealDamage(stranger.Player, mob, 1);
+            mob.Combat.Threat.AddThreat(bot.Player, 1f);
+            Assert.True(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            Assert.Same(mob, brain.InspectionTarget);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out _));
+
+            // The group changes mid-fight; the tap stays with the groupmate, who is now a stranger.
+            if (kick) groups.UninviteByGuid(stranger.Player, bot.Player.Guid);
+            else groups.Leave(stranger.Player);
+            Assert.False(groups.AreInSameGroup(bot.Player.Guid, stranger.Player.Guid));
+            Assert.Equal(stranger.Player.Guid, mob.LootTapper);
+            Assert.True(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            Think(bot, brain);
+            Assert.Same(mob, brain.InspectionTarget);
+
+            bool found = recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out PlayerbotRelation relation);
+            if (kick)
+            {
+                Assert.True(found, "the kick was not recorded");
+                Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerKick, relation.Affinity); // the Kicked event alone: a steal would add its own
+            }
+            else
+            {
+                Assert.False(found, "the tagger who left the group was blamed for a steal");
+            }
         });
 
     [Fact]
@@ -557,10 +640,19 @@ public sealed class PlayerbotContentionTests
         Assert.Empty(PlayerbotDropIndex.HuntedDroppersOf(loot, 12));
     }
 
-    /// <summary>A few thinks (the first ones may be spent acknowledging movement orders).</summary>
+    /// <summary>The same creature, the same guid, alive again with nothing on it (no tap, no threat).</summary>
+    private static void Respawn(Creature mob)
+    {
+        mob.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Alive;
+        mob.Health = mob.MaxHealth;
+        mob.ClearLootRecipient();
+        Assert.True(mob.IsAlive);
+    }
+
     private static void NoSpells(WorldSession session)
         => session.Services.GetRequiredService<SpellFeature>().System.Store = new SpellStore([], [], []);
 
+    /// <summary>A few thinks (the first ones may be spent acknowledging movement orders).</summary>
     private static void Think(WorldSession session, PlayerbotBrain brain)
     {
         for (int i = 0; i < 4; i++)

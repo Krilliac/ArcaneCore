@@ -19503,7 +19503,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "Wipe the war layer at the next checkpoint after War Mode is switched off (off by default: the layer stays dormant and comes back when War Mode is switched on again).",
+      "meaning": "Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again).",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
