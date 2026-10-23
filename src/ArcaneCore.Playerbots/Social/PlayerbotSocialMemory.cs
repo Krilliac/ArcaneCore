@@ -283,8 +283,13 @@ internal sealed class PlayerbotSocialMemory
                 if (row.CharacterId > 0) bot.CharacterId = row.CharacterId;
                 bot.Relations[row.OtherGuid] = new Entry
                 {
-                    OtherGuid = row.OtherGuid, OtherIsBot = row.OtherIsBot, Affinity = row.Affinity, Familiarity = row.Familiarity,
-                    WarAffinity = row.WarAffinity, WarFlags = row.WarFlags, Anchor = row.LastSeenUnixMs, WarAnchor = row.LastSeenUnixMs,
+                    OtherGuid = row.OtherGuid, OtherIsBot = row.OtherIsBot,
+                    // The exact values and their anchors when the row has them (no fraction of a decay is lost), else the whole ones as of the last-seen time.
+                    Affinity = double.IsNaN(row.AffinityExact) ? row.Affinity : row.AffinityExact,
+                    Familiarity = double.IsNaN(row.FamiliarityExact) ? row.Familiarity : row.FamiliarityExact,
+                    WarAffinity = double.IsNaN(row.WarAffinityExact) ? row.WarAffinity : row.WarAffinityExact, WarFlags = row.WarFlags,
+                    Anchor = row.DecayAnchorUnixMs > 0 ? row.DecayAnchorUnixMs : row.LastSeenUnixMs,
+                    WarAnchor = row.WarDecayAnchorUnixMs > 0 ? row.WarDecayAnchorUnixMs : row.LastSeenUnixMs,
                     TrustPermille = row.TrustPermille, Flags = row.Flags, LastSeen = row.LastSeenUnixMs, LastExchange = long.MinValue,
                     LastTopic = Cut(row.LastTopic, PlayerbotRelation.MaxTopicLength), Summary = Cut(row.Summary, PlayerbotRelation.MaxSummaryLength),
                 };
@@ -526,10 +531,16 @@ internal sealed class PlayerbotSocialMemory
         return ToRecord(botId, bot, entry, EffectiveFamiliarity(entry, now), affinity, flags, war, warFlags);
     }
 
-    // The row as stored: every value as of LastSeen, rounded toward zero (the fractions and the anchors live in memory only).
+    // The row as stored: the whole values as of LastSeen (what readers of the row see), and the exact values with their anchors, which
+    // Load takes back unchanged.
     private PlayerbotRelation ToStored(Guid botId, BotMemory bot, Entry entry)
         => ToRecord(botId, bot, entry, (int)Math.Floor(FamiliarityAt(entry, entry.LastSeen) + Epsilon), ToWhole(AffinityAt(entry, entry.LastSeen)), entry.Flags,
-            (entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0 ? 0 : ToWhole(WarAffinityAt(entry, entry.LastSeen)), entry.WarFlags);
+            (entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0 ? 0 : ToWhole(WarAffinityAt(entry, entry.LastSeen)), entry.WarFlags)
+            with
+            {
+                FamiliarityExact = entry.Familiarity, AffinityExact = entry.Affinity, WarAffinityExact = entry.WarAffinity,
+                DecayAnchorUnixMs = entry.Anchor, WarDecayAnchorUnixMs = entry.WarAnchor,
+            };
 
     private static PlayerbotRelation ToRecord(Guid botId, BotMemory bot, Entry entry, int familiarity, int affinity, PlayerbotRelationFlags flags, int warAffinity, PlayerbotRelationFlags warFlags)
         => new(botId, bot.CharacterId, entry.OtherGuid, entry.OtherIsBot, (short)affinity, familiarity, entry.TrustPermille,

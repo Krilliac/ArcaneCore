@@ -63,7 +63,7 @@ public sealed class PlayerbotSocialWarPersistenceTests
             var restarted = PartyTestHost.Feature(second);
             await restarted.StartupAsync(default);
             Assert.True(restarted.Social.Memory.TryGet(id, Rival, out PlayerbotRelation loaded));
-            Assert.Equal(before, loaded);
+            Assert.Equal(before, restarted.Social.Memory.Snapshot(id).Single()); // the stored row, exact values and anchors included, comes back unchanged
             Assert.Equal(before.WarAffinity, restarted.Social.Memory.EffectiveAffinity(loaded));
         }
 
@@ -72,7 +72,7 @@ public sealed class PlayerbotSocialWarPersistenceTests
         var calm = PartyTestHost.Feature(third);
         await calm.StartupAsync(default);
         Assert.True(calm.Social.Memory.TryGet(id, Rival, out PlayerbotRelation dormant));
-        Assert.Equal(before, dormant);
+        Assert.Equal(before, calm.Social.Memory.Snapshot(id).Single());
         Assert.Equal(before.Affinity, calm.Social.Memory.EffectiveAffinity(dormant));
         Assert.Equal(before.WarAffinity, dormant.WarAffinity);
     }

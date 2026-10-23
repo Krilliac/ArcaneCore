@@ -272,7 +272,7 @@ public sealed class PlayerbotSocialForgivenessTests
     // ---- 12.5 / 13 War Mode: a separate layer ----
 
     private static PlayerbotRelation Normal(PlayerbotSocialMemory memory, ulong other = Other)
-        => memory.Snapshot(Bot).Single(r => r.OtherGuid == other) with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None };
+        => memory.Snapshot(Bot).Single(r => r.OtherGuid == other) with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 };
 
     private static void Script(PlayerbotSocialMemory memory, Clock clock)
     {
@@ -362,8 +362,8 @@ public sealed class PlayerbotSocialForgivenessTests
             plain.Note(Bot, 1, other, false, e);
             warred.Note(Bot, 1, other, false, e);
             Assert.Equal(
-                plain.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None }),
-                warred.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None }));
+                plain.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 }),
+                warred.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 }));
         }
 
         war.Enabled = false;
@@ -371,7 +371,7 @@ public sealed class PlayerbotSocialForgivenessTests
         {
             Assert.True(warred.TryGet(Bot, r.OtherGuid, out PlayerbotRelation w));
             Assert.True(plain.TryGet(Bot, r.OtherGuid, out PlayerbotRelation p));
-            Assert.Equal(p with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None }, w with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None });
+            Assert.Equal(p with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 }, w with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 });
         }
     }
 

@@ -17,6 +17,11 @@ public sealed class PlayerbotRelationRow
     public int Flags { get; set; }
     public short WarAffinity { get; set; }
     public int WarFlags { get; set; }
+    public double FamiliarityExact { get; set; }
+    public double AffinityExact { get; set; }
+    public double WarAffinityExact { get; set; }
+    public long DecayAnchorUnixMs { get; set; }
+    public long WarDecayAnchorUnixMs { get; set; }
     public long LastSeenUnixMs { get; set; }
     public string LastTopic { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;
@@ -60,7 +65,8 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
         => (await db.Set<PlayerbotRelationRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false))
             .Select(row => new PlayerbotRelation(row.BotId, row.CharacterId, row.OtherGuid, row.OtherIsBot, row.Affinity,
                 row.Familiarity, row.TrustPermille, (PlayerbotRelationFlags)row.Flags, row.LastSeenUnixMs,
-                row.LastTopic, row.Summary, row.WarAffinity, (PlayerbotRelationFlags)row.WarFlags)).ToArray();
+                row.LastTopic, row.Summary, row.WarAffinity, (PlayerbotRelationFlags)row.WarFlags,
+                row.FamiliarityExact, row.AffinityExact, row.WarAffinityExact, row.DecayAnchorUnixMs, row.WarDecayAnchorUnixMs)).ToArray();
 
     public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
     {
@@ -68,7 +74,10 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
         if (rows.Count > PlayerbotRelation.MaxRowsPerBot
             || rows.Any(row => row is null || row.BotId != botId || botId == Guid.Empty || row.CharacterId <= 0
                 || row.Affinity is < -100 or > 100 || row.WarAffinity is < -100 or > 100 || row.Familiarity < 0 || row.TrustPermille is < 0 or > 1000
-                || row.LastSeenUnixMs < 0 || row.LastTopic is null || row.Summary is null
+                || row.LastSeenUnixMs < 0 || row.DecayAnchorUnixMs < 0 || row.WarDecayAnchorUnixMs < 0
+                || double.IsInfinity(row.FamiliarityExact) || double.IsInfinity(row.AffinityExact) || double.IsInfinity(row.WarAffinityExact)
+                || !double.IsNaN(row.FamiliarityExact) && row.FamiliarityExact < 0 || !double.IsNaN(row.AffinityExact) && Math.Abs(row.AffinityExact) > 100
+                || !double.IsNaN(row.WarAffinityExact) && Math.Abs(row.WarAffinityExact) > 100 || row.LastTopic is null || row.Summary is null
                 || row.LastTopic.Length > PlayerbotRelation.MaxTopicLength || row.Summary.Length > PlayerbotRelation.MaxSummaryLength))
             throw new ArgumentException("Invalid or unbounded playerbot relation snapshot.", nameof(rows));
         if (rows.Select(row => row.OtherGuid).Distinct().Count() != rows.Count)
@@ -80,6 +89,12 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
             BotId = row.BotId, CharacterId = row.CharacterId, OtherGuid = row.OtherGuid, OtherIsBot = row.OtherIsBot,
             Affinity = row.Affinity, Familiarity = row.Familiarity, TrustPermille = row.TrustPermille, Flags = (int)row.Flags,
             WarAffinity = row.WarAffinity, WarFlags = (int)row.WarFlags,
+            // Without the exact values (a row built from whole numbers) the whole ones are exact, as of the last-seen time.
+            FamiliarityExact = double.IsNaN(row.FamiliarityExact) ? row.Familiarity : row.FamiliarityExact,
+            AffinityExact = double.IsNaN(row.AffinityExact) ? row.Affinity : row.AffinityExact,
+            WarAffinityExact = double.IsNaN(row.WarAffinityExact) ? row.WarAffinity : row.WarAffinityExact,
+            DecayAnchorUnixMs = row.DecayAnchorUnixMs > 0 ? row.DecayAnchorUnixMs : row.LastSeenUnixMs,
+            WarDecayAnchorUnixMs = row.WarDecayAnchorUnixMs > 0 ? row.WarDecayAnchorUnixMs : row.LastSeenUnixMs,
             LastSeenUnixMs = row.LastSeenUnixMs, LastTopic = row.LastTopic, Summary = row.Summary,
         }));
         db.ChangeTracker.DetectChanges();

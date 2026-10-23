@@ -4,7 +4,7 @@
 -- from: 63
 -- to: 64
 -- owner: Characters.Playerbots.PlayerbotRelationDataModule
--- body-sha256: 92899c662956e19ecbc07fb37cad05fce6d41f6da43305138ab6e17ada669d18
+-- body-sha256: a7c16242a7202feeb6499cf35e498ff1f319dcf1a386ab598876046862d2d91b
 -- apply: psql -v ON_ERROR_STOP=1 -d <database> -f this-file.sql
 
 BEGIN;
@@ -29,6 +29,11 @@ CREATE TABLE playerbot_relation (
     "Flags" integer NOT NULL,
     "WarAffinity" smallint NOT NULL,
     "WarFlags" integer NOT NULL,
+    "FamiliarityExact" double precision NOT NULL,
+    "AffinityExact" double precision NOT NULL,
+    "WarAffinityExact" double precision NOT NULL,
+    "DecayAnchorUnixMs" bigint NOT NULL,
+    "WarDecayAnchorUnixMs" bigint NOT NULL,
     "LastSeenUnixMs" bigint NOT NULL,
     "LastTopic" character varying(32) NOT NULL,
     "Summary" character varying(160) NOT NULL,

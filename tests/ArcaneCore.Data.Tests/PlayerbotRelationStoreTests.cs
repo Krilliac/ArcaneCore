@@ -25,7 +25,9 @@ public sealed class PlayerbotRelationStoreTests
 
     private static PlayerbotRelation Row(Guid bot, int characterId, ulong other, short affinity = 10) =>
         new(bot, characterId, other, other % 2 == 0, affinity, 4, 500, PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Rival,
-            1_760_000_000_000, "greeting", "Said hello.", (short)(-affinity), PlayerbotRelationFlags.WarSeeded | PlayerbotRelationFlags.Rival);
+            1_760_000_000_000, "greeting", "Said hello.", (short)(-affinity), PlayerbotRelationFlags.WarSeeded | PlayerbotRelationFlags.Rival,
+            FamiliarityExact: 4.0 + 1.0 / 3.0, AffinityExact: affinity + 0.123456789012345, WarAffinityExact: -affinity - 0.5,
+            DecayAnchorUnixMs: 1_759_990_000_001, WarDecayAnchorUnixMs: 1_759_980_000_002);
 
     [Fact]
     public async Task RoundTrip_AndReplaceIsAtomicPerBot_AndCharacterDeleteCleans()
@@ -53,6 +55,27 @@ public sealed class PlayerbotRelationStoreTests
     }
 
     [Fact]
+    public async Task TheExactValuesAndAnchors_RoundTripBitForBit_AndARowWithoutThemGetsTheWholeOnes()
+    {
+        var (connection, db, characterId) = await OpenAsync("Exactbot");
+        await using var _ = connection;
+        await using var __ = db;
+        var store = new EfPlayerbotRelationStore(db);
+        Guid bot = Guid.NewGuid();
+        PlayerbotRelation exact = Row(bot, characterId, 7);
+        PlayerbotRelation whole = new(bot, characterId, 8, false, 12, 3, 500, PlayerbotRelationFlags.None, 1_760_000_000_000, "", "", -4, PlayerbotRelationFlags.WarSeeded);
+        await store.ReplaceAsync(bot, [exact, whole]);
+
+        IReadOnlyList<PlayerbotRelation> loaded = await store.LoadAllAsync();
+        PlayerbotRelation back = loaded.Single(r => r.OtherGuid == 7);
+        Assert.Equal(exact, back);
+        Assert.Equal(BitConverter.DoubleToInt64Bits(exact.AffinityExact), BitConverter.DoubleToInt64Bits(back.AffinityExact));
+        PlayerbotRelation filled = loaded.Single(r => r.OtherGuid == 8);
+        Assert.Equal((3.0, 12.0, -4.0), (filled.FamiliarityExact, filled.AffinityExact, filled.WarAffinityExact));
+        Assert.Equal((1_760_000_000_000, 1_760_000_000_000), (filled.DecayAnchorUnixMs, filled.WarDecayAnchorUnixMs));
+    }
+
+    [Fact]
     public async Task Validation_RejectsBadSnapshots_AndLeavesRowsUntouched()
     {
         var (connection, db, characterId) = await OpenAsync("Badrelbot");
@@ -68,6 +91,9 @@ public sealed class PlayerbotRelationStoreTests
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1, 101)]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1, -101)]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { TrustPermille = 1001 }]));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { AffinityExact = 100.5 }]));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { FamiliarityExact = double.PositiveInfinity }]));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { DecayAnchorUnixMs = -1 }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { LastTopic = new string('x', 33) }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1), Row(bot, characterId, 1)]));
         Assert.Single(await store.LoadAllAsync());

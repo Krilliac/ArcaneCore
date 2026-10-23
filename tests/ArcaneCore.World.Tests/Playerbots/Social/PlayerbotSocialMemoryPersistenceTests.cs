@@ -96,6 +96,65 @@ public sealed class PlayerbotSocialMemoryPersistenceTests
         Assert.Equal((kept, 4242UL), (left.BotId, left.OtherGuid));
     }
 
+    private const long Day = 86_400_000L;
+    private static readonly Guid RestartBot = Guid.Parse("00000000-0000-0000-0000-0000000000e1");
+
+    private static PlayerbotSocialMemory Fresh(PlayerbotSocialMemoryOptions options, Func<long> clock, PlayerbotRelation[]? rows = null, PlayerbotWarModeOptions? war = null)
+    {
+        var memory = new PlayerbotSocialMemory(options, clock, war);
+        memory.SetSelf(RestartBot, 1);
+        if (rows is not null) memory.Load(rows);
+        return memory;
+    }
+
+    [Fact]
+    public void ADailyContact_WithARestartBetweenEveryContact_StillBuildsFamiliarity()
+    {
+        long now = 20_000 * Day;
+        var options = new PlayerbotSocialMemoryOptions();
+        PlayerbotSocialMemory memory = Fresh(options, () => now);
+        for (int day = 0; day < 10; day++)
+        {
+            memory.Note(RestartBot, 1, 42, false, PlayerbotSocialEvent.Grouped);
+            now += Day;
+            memory = Fresh(options, () => now, memory.Snapshot(RestartBot).ToArray()); // save, restart, reload
+        }
+
+        Assert.True(memory.TryGet(RestartBot, 42, out PlayerbotRelation r));
+        Assert.True(r.Familiarity >= 3, $"familiarity {r.Familiarity}");
+    }
+
+    [Fact]
+    public void AfterARestart_TheExactValuesEqualThoseOfARunWithoutOne_WithinAMillionth()
+    {
+        long plainNow = 20_000 * Day, restartNow = plainNow;
+        var options = new PlayerbotSocialMemoryOptions { MaxDailyAffinityGainPerPair = 0 };
+        var war = new PlayerbotWarModeOptions { Enabled = true };
+        PlayerbotSocialMemory plain = Fresh(options, () => plainNow, war: war);
+        PlayerbotSocialMemory restarted = Fresh(options, () => restartNow, war: war);
+        var random = new Random(7);
+        PlayerbotSocialEvent[] events = [PlayerbotSocialEvent.HelpedBy, PlayerbotSocialEvent.KilledBy, PlayerbotSocialEvent.Grouped, PlayerbotSocialEvent.TradeCompleted];
+        for (int step = 0; step < 60; step++)
+        {
+            long advance = random.Next(3_600_000, (int)(Day * 2));
+            plainNow += advance;
+            restartNow += advance;
+            PlayerbotSocialEvent e = events[random.Next(events.Length)];
+            plain.Note(RestartBot, 1, 42, false, e);
+            restarted.Note(RestartBot, 1, 42, false, e);
+            restarted = Fresh(options, () => restartNow, restarted.Snapshot(RestartBot).ToArray(), war);
+            PlayerbotRelation a = plain.Snapshot(RestartBot).Single(), b = restarted.Snapshot(RestartBot).Single();
+            Assert.InRange(Math.Abs(a.AffinityExact - b.AffinityExact), 0, 1e-6);
+            Assert.InRange(Math.Abs(a.FamiliarityExact - b.FamiliarityExact), 0, 1e-6);
+            Assert.InRange(Math.Abs(a.WarAffinityExact - b.WarAffinityExact), 0, 1e-6);
+            Assert.Equal((a.DecayAnchorUnixMs, a.WarDecayAnchorUnixMs, a.LastSeenUnixMs), (b.DecayAnchorUnixMs, b.WarDecayAnchorUnixMs, b.LastSeenUnixMs));
+        }
+
+        Assert.True(plain.TryGet(RestartBot, 42, out PlayerbotRelation pa));
+        Assert.True(restarted.TryGet(RestartBot, 42, out PlayerbotRelation pb));
+        Assert.Equal(pa, pb);
+    }
+
     [Fact]
     public async Task ThrowingStore_NeverBlocksTheStop_AndLeavesTheBotStopped()
     {
