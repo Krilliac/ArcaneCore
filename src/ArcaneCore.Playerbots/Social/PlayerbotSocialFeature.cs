@@ -107,6 +107,8 @@ internal sealed class PlayerbotSocialPass(
 
     internal WorldRuntime World => world;
 
+    internal IServiceProvider Services => services;
+
     internal PlayerbotChat? Chat => chat;
 
     /// <summary>The group coordinator, when the host runs one (guild calls for a forming group, <see cref="PlayerbotGuildChat"/>).</summary>
@@ -229,6 +231,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotMoodLane _mood = new();
+    private readonly PlayerbotInitiativeLane _initiative = new();
     private readonly PlayerbotChannelMembership _channels = new();
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
@@ -283,6 +286,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     /// <summary>The mood lane (tests).</summary>
     internal PlayerbotMoodLane MoodLane => _mood;
+
+    /// <summary>The initiative lane (tests and status).</summary>
+    internal PlayerbotInitiativeLane Initiative => _initiative;
 
     /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
     internal PlayerbotChannelMembership Channels => _channels;
@@ -459,6 +465,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _help.Run(pass);
         _mood.Run(pass);
         _gratitude.Run(pass, _help);
+        _initiative.Run(pass);
         _chat.Speak(pass);
         _emotes.Run(pass);
         RunChannels(pass);

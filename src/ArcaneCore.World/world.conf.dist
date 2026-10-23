@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       717 keys
+#   WORLD                       723 keys
 #
 ###############################################################################
 
@@ -15678,6 +15678,75 @@ World.Playerbots.Social.Helping.ResurrectStrangers = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Helping.TroubleRadiusYards = 30
+
+#
+#    World.Playerbots.Social.Initiative.CommentBotGapMinutes
+#        Description: The minutes between two comments of the same bot (1..1440, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.CommentBotGapMinutes = 10
+
+#
+#    World.Playerbots.Social.Initiative.CommentZoneGapSeconds
+#        Description: The seconds between two comments in the same zone, whichever bot (1..86400,
+#                     default 60).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.CommentZoneGapSeconds = 60
+
+#
+#    World.Playerbots.Social.Initiative.CommentsEnabled
+#        Description: Let bots comment on their surroundings (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.CommentsEnabled = true
+
+#
+#    World.Playerbots.Social.Initiative.Enabled
+#        Description: Let bots open conversations and comment on their surroundings (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.Enabled = true
+
+#
+#    World.Playerbots.Social.Initiative.MaxOpeningsPerPass
+#        Description: The most openings (all bots together) in one pass of the social feature
+#                     (1..64, default 4).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.MaxOpeningsPerPass = 4
+
+#
+#    World.Playerbots.Social.Initiative.OpeningCooldownMinutes
+#        Description: The minutes before any bot opens with the same real player again (1..1440,
+#                     default 30); an opening they ignored doubles it each time.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.OpeningCooldownMinutes = 30
 
 #
 #    World.Playerbots.Social.Lists.ChangeSpacingSeconds

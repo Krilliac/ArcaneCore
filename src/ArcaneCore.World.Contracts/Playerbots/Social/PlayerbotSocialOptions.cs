@@ -49,6 +49,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>The short-term mood of each bot (<c>World:Playerbots:Social:Mood</c>).</summary>
     public PlayerbotSocialMoodOptions Mood { get; set; } = new();
 
+    /// <summary>Bots starting conversations and commenting on their surroundings (<c>World:Playerbots:Social:Initiative</c>).</summary>
+    public PlayerbotSocialInitiativeOptions Initiative { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
@@ -64,6 +67,8 @@ public sealed class PlayerbotSocialOptions
         Gratitude.Validate();
         if (Mood is null) throw new InvalidOperationException($"{section}:Mood is missing.");
         Mood.Validate();
+        if (Initiative is null) throw new InvalidOperationException($"{section}:Initiative is missing.");
+        Initiative.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

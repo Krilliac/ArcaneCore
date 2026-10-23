@@ -179,6 +179,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// </summary>
     public void NoteChatLine(Guid botId, ObjectGuid botGuid, ObjectGuid sender, string? text)
     {
+        if (sender.IsPlayer && _replies.Count < 256) _replies.Enqueue((botId, sender, text));
         if (PlayerbotApology.IsApology(text)) NoteById(botId, botGuid, sender, PlayerbotSocialEvent.Apologized);
         NoteById(botId, botGuid, sender, PlayerbotSocialEvent.ChatExchange);
     }
@@ -195,6 +196,23 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     {
         if (!Enabled || !other.IsPlayer) return;
         Guarded(() => Memory.SetTopic(botId, other.Value, topicKey, summary));
+    }
+
+    private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Sender, string? Text)> _replies = new();
+
+    /// <summary>Take the oldest line a character addressed to a bot (the answer to an opening, <see cref="PlayerbotInitiativeLane"/>).</summary>
+    internal bool TryTakeReply(out Guid botId, out ObjectGuid sender, out string? text)
+    {
+        if (_replies.TryDequeue(out (Guid BotId, ObjectGuid Sender, string? Text) reply))
+        {
+            (botId, sender, text) = reply;
+            return true;
+        }
+
+        botId = Guid.Empty;
+        sender = default;
+        text = null;
+        return false;
     }
 
     private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Asker)> _helpCalls = new();

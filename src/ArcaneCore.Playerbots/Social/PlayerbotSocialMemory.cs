@@ -24,6 +24,9 @@ internal enum PlayerbotSocialEvent
     KillSteal,
     AbandonedRun,
     DiedFirstInWipe,
+
+    /// <summary>A bot's unprompted opening got no answer: affinity -1 and no familiarity (<c>PlayerbotInitiativeLane</c>).</summary>
+    OpeningIgnored,
 }
 
 /// <summary>
@@ -113,7 +116,7 @@ internal sealed class PlayerbotSocialMemory
             bool cooled = !shared || entry.LastExchange == long.MinValue || now - entry.LastExchange >= _options.ChatFamiliarityCooldownMinutes * 60_000L;
             if (cooled && shared) entry.LastExchange = now;
 
-            if (cooled) entry.Familiarity = Math.Min(entry.Familiarity + 1, int.MaxValue - 1);
+            if (cooled && e != PlayerbotSocialEvent.OpeningIgnored) entry.Familiarity = Math.Min(entry.Familiarity + 1, int.MaxValue - 1);
             int delta = e switch
             {
                 PlayerbotSocialEvent.ChatExchange => cooled ? _options.AffinityPerChat : 0,
@@ -134,6 +137,7 @@ internal sealed class PlayerbotSocialMemory
                 PlayerbotSocialEvent.NinjaLoot => _options.AffinityPerNinjaLoot,
                 PlayerbotSocialEvent.KillSteal => _options.AffinityPerKillSteal,
                 PlayerbotSocialEvent.AbandonedRun => _options.AffinityPerAbandonedRun,
+                PlayerbotSocialEvent.OpeningIgnored => -1,
                 _ => 0,
             };
             double before = entry.Affinity;

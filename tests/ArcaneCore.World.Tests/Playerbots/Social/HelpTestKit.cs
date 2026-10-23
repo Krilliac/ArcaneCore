@@ -26,6 +26,21 @@ internal static class HelpTestKit
     // One creature system per map: each numbers its own spawns, so a second one would hand out the same guid again.
     private static readonly ConditionalWeakTable<Map, CreatureMapSystem> Systems = new();
 
+    public const uint RareEntry = 990_541;
+
+    private static readonly CreatureTemplate Rare = new()
+    {
+        Entry = RareEntry, Name = "help test rare", CreatureType = 1, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 200_000, MaxLevelHealth = 200_000, Faction = 14, Rank = 4,
+    };
+
+    /// <summary>World thread: a rare (rank 4) creature nobody updates beside <paramref name="near"/>.</summary>
+    public static Creature SpawnRare(Player near, float dx = 10f)
+    {
+        CreatureMapSystem system = near.Map!.FindUpdater<CreatureMapSystem>()
+            ?? Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, new CreatureContent([Mob, Rare], [], [], [], []), random: new Random(1)));
+        return system.SpawnTemporary(Rare, near.X + dx, near.Y, near.Z, 0f);
+    }
+
     public static Player Online(SocialWorld world, string name) => world.Host.World.FindOnlinePlayer(name)!;
 
     /// <summary>World thread: a hostile creature nobody updates (it neither moves nor attacks on its own) beside <paramref name="near"/>.</summary>

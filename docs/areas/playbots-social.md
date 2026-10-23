@@ -281,6 +281,29 @@ initiative chances below use it too). At +0.3 or more the tone is cheerful, at -
 (`social.thanks`, `social.greet`, `help.sorry`) uses them instead of the plain lines, and the model prompt gets one mood sentence (`BotChatPersona.Mood`). The GM command
 `.playerbot social <bot>` shows the mood, its tone and the chance multiplier. `Enabled` false makes every mood 0.
 
+## Initiative (`World:Playerbots:Social:Initiative`, live)
+
+`PlayerbotInitiativeLane` (`Social/PlayerbotSocialInitiative.cs`, social pass, world thread) lets a bot start a conversation. At most
+`MaxOpeningsPerPass` (4) openings happen server-wide per pass; every one goes through `PlayerbotChat.TryAnnounce`, so the limiter, the safety screen, the
+opt-in rules and the AI disclosure apply, and a model may phrase it where the player opted in (otherwise the `social.*` templates). A round of 24 free bots (their own brain
+drives them, alive, out of combat, healthy, on a low-priority goal) looks at the same-faction characters within 20 yards, one bot at most every 20 seconds. An opening needs a reason:
+
+- **Shared objective**: the bot is on a quest and the other holds the same quest unfinished (`PlayerbotGroupCoordinator.SharesGoal`): "You on the <quest> too? Want to team up?"
+  A positive reply (a yes word and no no word) raises a group signal (source `contention`, the bot's objective creature and quest) and tells the coordinator the player
+  is welcome (`Welcome`, five minutes; a rival or a NoWhispers player is still refused), so the P3 coordinator matches them into a group when `World:Playerbots:Groups:InvitePlayers` allows.
+- **Follow-up**: familiarity 3 or more, affinity 0 or more and a last topic set: "How did <topic> go?" (once per pair per 6 hours).
+- **Greeting**: familiarity 2 or more, affinity 0 or more and the other was not in sight for 10 minutes: "Welcome back" (once per pair per 6 hours).
+- **Bot to bot**: the same openings between two bots only where a real same-faction player stands within `World:Playerbots:Social:Memory:BystanderRadiusYards`.
+
+Each has a base chance (0.5, 0.3, 0.25) times 0.5 + the bot's Sociability, times the mood multiplier (0.5..1.5), rolled as a hash of the bot, the other and the minute.
+A bot never opens with a rival or someone it dislikes, nor with a player who ignores it. **Unprompted whispers** only go to a player who opted in to AI chat or has affinity 10 or more;
+everyone else gets a public /say. A real player is opened with at most once per `OpeningCooldownMinutes` (30) by any bot; if they do not answer within 120 seconds the bot
+loses 1 affinity (`OpeningIgnored`, no familiarity) and the cooldown for that player doubles (up to 16x); an answer resets it.
+
+**Surroundings comments** (`CommentsEnabled`): a free bot with a real same-faction listener within earshot rarely says (template, or the model) one of: a rare creature (rank rare or rare elite)
+within 60 yards, a game event that started since the last pass, four or more players of the other faction within 80 yards, a familiar player's first mount (mount display seen for the first time). Chance 0.35 x (0.5 + Chattiness) x
+the mood multiplier per minute; at most one per bot per `CommentBotGapMinutes` (10) and one per zone per `CommentZoneGapSeconds` (60).
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is
@@ -297,4 +320,4 @@ state is in memory or read back from it.
 `PlayerbotAnnounceTests`, `PlayerbotSocialListsWorldTests` (the list thresholds and spacing, never ignoring a game master, guild invitations
 by affinity and their weekly limit), `PlayerbotHelpRulesTests` (trouble, rolls, classes, help-call text), `PlayerbotHelpAnswerWorldTests`
 (a `/helpme` through the real packets to a bot that fights), `PlayerbotTroubleWorldTests` (the scan, the flag rule, rivals, switches),
-`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown), `PlayerbotMoodTests` (events, half-life, multiplier, tone templates, prompt fact, GM line, the level-up lane), `PlayerbotGratitudeWorldTests` (the tip cap and favour rules, the thank emote across factions once per fight, a tip by a real trade).
+`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown), `PlayerbotInitiativeTests` (the rules; greeting by say then whisper; the player cooldown and the per-pass cap; rivals and the switch; ignored openings; a yes raising a group signal; a rare-creature comment and its gap), `PlayerbotMoodTests` (events, half-life, multiplier, tone templates, prompt fact, GM line, the level-up lane), `PlayerbotGratitudeWorldTests` (the tip cap and favour rules, the thank emote across factions once per fight, a tip by a real trade).

@@ -26,6 +26,20 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>Whether the bots invited <paramref name="player"/> within the last <see cref="PlayerbotGroupOptions.InvitePlayerCooldownMinutes"/>.</summary>
     internal bool InvitedRecently(ObjectGuid player) => _invitedPlayers.ContainsKey(player);
 
+    private readonly Dictionary<ObjectGuid, uint> _welcomed = [];
+
+    /// <summary>
+    /// A player a bot invited to team up said yes (<c>PlayerbotInitiativeLane</c>): until <paramref name="untilMs"/> (world milliseconds) they are welcome in a
+    /// matched group whatever the bots' affinity toward them is (a rival or a NoWhispers player is still refused).
+    /// </summary>
+    internal void Welcome(ObjectGuid player, uint untilMs)
+    {
+        if (_welcomed.Count >= 256)
+            foreach ((ObjectGuid key, uint until) in _welcomed)
+                if (unchecked((int)(until - Now)) <= 0) _welcomed.Remove(key);
+        if (_welcomed.Count < 256) _welcomed[player] = untilMs;
+    }
+
     /// <summary>
     /// Whether <paramref name="other"/> is on the goal the bot has: the one it waits for or its group works on, else its own quest.
     /// A quest goal is shared when the player holds that quest unfinished (or one asking for the goal's creature); a dungeon goal when the
@@ -107,7 +121,8 @@ public sealed partial class PlayerbotGroupCoordinator
     private bool PlayerWelcome(List<PlayerbotGroupCandidate> bots, Player real, PlayerbotGroupOptions groups, out PlayerbotRelationFlags role)
     {
         role = PlayerbotRelationFlags.None;
-        bool liked = ChatSafety?.Player(real.Name)?.AiReplies == true;
+        bool liked = ChatSafety?.Player(real.Name)?.AiReplies == true
+            || (_welcomed.TryGetValue(real.Guid, out uint welcomedUntil) && unchecked((int)(welcomedUntil - Now)) > 0);
         if (Social?.Memory is not { } memory) return liked;
         const PlayerbotRelationFlags roles = PlayerbotRelationFlags.PrefersTank | PlayerbotRelationFlags.PrefersHealer | PlayerbotRelationFlags.PrefersDamage;
         foreach (PlayerbotGroupCandidate bot in bots)
