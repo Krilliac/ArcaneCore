@@ -35,6 +35,7 @@ public sealed class CreatureOutcomeAnomalyTests
     private const uint UnreachableChaserEntry = 949014;
     private const uint ChaseStuckEntry = 949015;
     private const uint WaypointStuckEntry = 949016;
+    private const uint StandingChaserEntry = 949017;
     private const uint CombatEmptyEntry = 949020;
     private const uint CombatHealthyEntry = 949021;
     private const uint CombatEndedEntry = 949022;
@@ -80,6 +81,15 @@ public sealed class CreatureOutcomeAnomalyTests
             => route ? new PathResult(PathType.Normal, [start, end]) : new PathResult(PathType.NoPath, []);
     }
 
+    /// <summary>A pathfinder whose route is a normal path that ends at its start.</summary>
+    private sealed class StandingPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, [start, start]);
+    }
+
     private sealed record Scene(WorldRuntime World, Map Map, CreatureMapSystem System, Creature Wolf, Player Player) : IDisposable
     {
         public void Dispose() => World.Dispose();
@@ -114,6 +124,9 @@ public sealed class CreatureOutcomeAnomalyTests
 
     private static AnomalyCapture CaptureFor(string key, uint entry)
         => AnomalyLedger.Shared.Capture(n => n.Key == key && n.Subject.StartsWith($"creature entry {entry} ", StringComparison.Ordinal));
+
+    private static AnomalyCapture CaptureStuck(uint entry)
+        => AnomalyLedger.Shared.Capture(n => n.Key is "creature/stuck" or "creature/stuck-chasing" && n.Subject.StartsWith($"creature entry {entry} ", StringComparison.Ordinal));
 
     private static AnomalyCapture CaptureAny(uint entry)
         => AnomalyLedger.Shared.Capture(n => n.Subject.StartsWith($"creature entry {entry} ", StringComparison.Ordinal));
@@ -266,7 +279,7 @@ public sealed class CreatureOutcomeAnomalyTests
         // an evade that never comes is creature/stuck-in-combat). Live 2026-10-16: 351 of 851 "stuck while chasing" reports followed a
         // path-failed report for the same creature within a minute.
         using Scene s = Start(UnreachableChaserEntry, pathfinder: new FixedPathfinder(route: false));
-        using AnomalyCapture capture = CaptureFor("creature/stuck", UnreachableChaserEntry);
+        using AnomalyCapture capture = CaptureStuck(UnreachableChaserEntry); // both keys: a chase reports creature/stuck-chasing
 
         s.Map.Combat.DealDamage(s.Player, s.Wolf, 1, direct: false);
         s.Run(CreatureAnomalies.StuckThresholdMs + 4_000);
@@ -279,6 +292,27 @@ public sealed class CreatureOutcomeAnomalyTests
         Assert.Equal(WolfX, s.Wolf.X, 3);
         Assert.False(s.Wolf.Motion.IsReachable);
         Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
+    public void AStandingChaserWithAReachableTarget_ReportsStuckChasing_WithTheOutOfReachText()
+    {
+        // A normal path that ends where it starts: the chase is reachable, yet the chaser has nowhere to go and stands out of melee reach.
+        using Scene s = Start(StandingChaserEntry, pathfinder: new StandingPathfinder());
+        using AnomalyCapture capture = CaptureStuck(StandingChaserEntry);
+
+        s.Map.Combat.DealDamage(s.Player, s.Wolf, 1, direct: false);
+        s.Run(CreatureAnomalies.StuckThresholdMs + 4_000);
+
+        // The state the check reads for the standing kind: reachable, in combat, out of melee reach, no spline.
+        Assert.Equal(MovementGeneratorType.Chase, s.Wolf.Motion.CurrentType);
+        Assert.True(s.Wolf.Motion.IsReachable);
+        Assert.False(MapCombat.CanReachWithMeleeAutoAttack(s.Wolf, s.Player));
+        Assert.False(s.Wolf.IsMoving);
+        Assert.Null(s.Wolf.Spline);
+        AnomalyNotice notice = Assert.Single(capture.Notices);
+        Assert.Equal("creature/stuck-chasing", notice.Key);
+        Assert.Contains($"chasing target {s.Player.Guid} out of melee reach", notice.Detail);
     }
 
     [Fact]

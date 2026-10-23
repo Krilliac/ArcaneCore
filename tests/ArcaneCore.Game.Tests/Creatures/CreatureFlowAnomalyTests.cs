@@ -3,6 +3,7 @@ using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
@@ -27,6 +28,8 @@ public sealed class CreatureFlowAnomalyTests
     private const uint LastVictimEvadeEntry = 950008;
     private const uint WonFightsEvadeEntry = 950009;
     private const uint FlaggedEvadeEntry = 950010;
+    private const uint VictimEvadeEntry = 950011;
+    private const uint LongEvadeEntry = 950012;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -98,9 +101,9 @@ public sealed class CreatureFlowAnomalyTests
         f.Wolf.AI!.EnterEvadeMode();
 
         string detail = Assert.Single(capture.Notices).Detail;
-        Assert.Contains("; evades: EvadeOnce(no victim, 0 att, ", detail);
-        Assert.Contains("; EvadeOnce(", detail); // the second (the wolf, back home, had aggroed the player meanwhile)
-        Assert.True(detail.Contains("; " + f.Wolf.AI!.GetType().Name + ".TheEvade", StringComparison.Ordinal), detail); // the AI asked (the rest is past the ledger's text limit)
+        // Newest first: the AI's evade that triggered the report leads, then the second (the wolf, back home, had aggroed the player meanwhile).
+        Assert.Contains("; evades, newest first: " + f.Wolf.AI!.GetType().Name + ".TheEvade", detail);
+        Assert.Contains("; EvadeOnce(", detail);
     }
 
     /// <summary>
@@ -121,7 +124,7 @@ public sealed class CreatureFlowAnomalyTests
         }
 
         string detail = Assert.Single(capture.Notices).Detail;
-        Assert.Contains("; evades: EvadeOnce(no victim, 0 att, ", detail);
+        Assert.Contains("; evades, newest first: EvadeOnce(no victim, 0 att, ", detail);
         Assert.Contains(", last player alive ", detail);
     }
 
@@ -136,17 +139,24 @@ public sealed class CreatureFlowAnomalyTests
         using Fight f = Start(FlaggedEvadeEntry);
 
         string setBy = "";
+        string setVia = "";
+        uint sets = 0;
         for (int i = 0; i < 3; i++)
         {
             f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
             f.Map.Combat.AttackStop(f.Wolf); // an evade without a victim, as the live loops
-            setBy =f.Wolf.Combat.LastCombatSetBy ?? "";
-            Assert.NotEmpty(setBy);
+            setBy = f.Wolf.Combat.LastCombatSetBy ?? "";
+            setVia = f.Wolf.Combat.LastCombatSetVia ?? "";
+            sets = f.Wolf.Combat.CombatSetsSinceClear;
             EvadeOnce(f);
         }
 
+        // The subsystem that flagged combat, not the helper it went through (which is named separately).
+        Assert.Equal("DealDamage", setBy);
+        Assert.Equal("SetInCombatWithAggressor", setVia);
+        Assert.True(sets >= 1, $"sets={sets}");
         string detail = Assert.Single(capture.Notices).Detail;
-        Assert.Contains($", flagged by {setBy} x", detail);
+        Assert.Contains($", by {setBy}/{setVia} x{sets}", detail);
     }
 
     /// <summary>
@@ -244,22 +254,60 @@ public sealed class CreatureFlowAnomalyTests
         }
     }
 
+    /// <summary>An evade that ended a fight with a victim names no flagging member: it is no "re-flagged without threat" case.</summary>
     [Fact]
-    public void SparringCreaturesAndScriptedEventAiEvades_ClearHostileReferencesAndReportNoEvadeLoop()
+    public void AnEvadeWithAVictim_CarriesNoFlaggedSuffix()
     {
-        const uint GuardEntry = 948090;
-        const uint DummyEntry = 948091;
-        using AnomalyCapture guardCapture = Capture("creature/evade-loop", GuardEntry);
-        using AnomalyCapture dummyCapture = Capture("creature/evade-loop", DummyEntry);
-        CreatureContent content = new(
-            [Template(GuardEntry, t => t.AIName = CreatureAiFactory.EventAIName), Template(DummyEntry)],
-            [Spawn(1, GuardEntry, 5, 0), Spawn(2, DummyEntry, 8, 0)], [], [], [],
+        using AnomalyCapture capture = Capture("creature/evade-loop", VictimEvadeEntry);
+        using Fight f = Start(VictimEvadeEntry);
+
+        for (int i = 0; i < 3; i++)
+        {
+            f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
+            Assert.NotNull(f.Wolf.Combat.Victim);
+            EvadeOnce(f);
+        }
+
+        string detail = Assert.Single(capture.Notices).Detail;
+        Assert.Contains("(player alive ", detail);
+        Assert.DoesNotContain(", by ", detail);
+    }
+
+    /// <summary>
+    /// The ledger cuts a detail at 300 characters. Three evades without a victim, each with a long reason and the flagging suffix, do not fit:
+    /// the report lists the newest evade first, so it is the oldest that is cut, never the evade that triggered the report.
+    /// </summary>
+    [Fact]
+    public void TheEvadeLoopReport_KeepsTheNewestEvadeWhole_WhenTheTextIsCut()
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", LongEvadeEntry);
+        using Fight f = Start(LongEvadeEntry);
+
+        foreach (string reason in new[] { "AlphaSelectHostileTargetReason", "BetaSelectHostileTargetReason", "GammaSelectHostileTargetReason" })
+        {
+            f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
+            f.Map.Combat.AttackStop(f.Wolf);
+            f.Wolf.Relocate(25, 0, 83.5f, 0, 0);
+            f.System.EnterEvadeMode(f.Wolf, reason);
+            Run(f.World, 6_000);
+        }
+
+        string detail = Assert.Single(capture.Notices).Detail;
+        Assert.EndsWith("...", detail); // the text was cut
+        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(detail, @"GammaSelectHostileTargetReason\(no victim, 0 att, threat \d+, \w+, last player alive \d+yd, by DealDamage/SetInCombatWithAggressor x\d+\)"), detail);
+    }
+
+    /// <summary>A guard (EventAI: ACTION_T_EVADE 100 ms into every fight) at x=5 and a dummy at x=8.</summary>
+    private static CreatureContent EvadingGuardContent(uint guardEntry, uint dummyEntry)
+        => new(
+            [Template(guardEntry, t => t.AIName = CreatureAiFactory.EventAIName), Template(dummyEntry)],
+            [Spawn(1, guardEntry, 5, 0), Spawn(2, dummyEntry, 8, 0)], [], [], [],
             new CreatureAiContent(
                 [
                     new CreatureAiEvent
                     {
                         Id = 1,
-                        CreatureId = GuardEntry,
+                        CreatureId = guardEntry,
                         EventType = (byte)EventAiEventType.TimerInCombat,
                         Param1 = 100,
                         Param2 = 100,
@@ -270,6 +318,46 @@ public sealed class CreatureFlowAnomalyTests
                     },
                 ],
                 []));
+
+    /// <summary>
+    /// A scripted evade ends a fight on purpose, but not one against a player's pet: that is a player-driven fight, and a loop of it is a
+    /// real defect (a guard that evades from a hunter's pet again and again).
+    /// </summary>
+    [Fact]
+    public void ScriptedEventAiEvadesAgainstAPlayersPet_AreStillReportedAsEvadeLoop()
+    {
+        const uint GuardEntry = 948092;
+        const uint PetEntry = 948093;
+        using AnomalyCapture capture = Capture("creature/evade-loop", GuardEntry);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(EvadingGuardContent(GuardEntry, PetEntry));
+        using (world)
+        {
+            (Player owner, _) = AddPlayer(world, 1, 0, 0);
+            Run(world, 100);
+            Creature guard = system.Creatures.Single(c => c.Entry == GuardEntry);
+            Creature pet = system.Creatures.Single(c => c.Entry == PetEntry);
+            pet.SetOwnerGuid(owner.Guid);
+
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.True(system.AttackStart(guard, pet), "the guard did not engage the pet");
+                Run(world, 700); // the EventAI timers tick every 500 ms
+                Assert.Null(guard.Combat.Victim);
+                Run(world, 3_000);
+            }
+
+            Assert.Single(capture.Notices); // creature/evade-loop is reported
+        }
+    }
+
+    [Fact]
+    public void SparringCreaturesAndScriptedEventAiEvades_ClearHostileReferencesAndReportNoEvadeLoop()
+    {
+        const uint GuardEntry = 948090;
+        const uint DummyEntry = 948091;
+        using AnomalyCapture guardCapture = Capture("creature/evade-loop", GuardEntry);
+        using AnomalyCapture dummyCapture = Capture("creature/evade-loop", DummyEntry);
+        CreatureContent content = EvadingGuardContent(GuardEntry, DummyEntry);
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
         using (world)
         {

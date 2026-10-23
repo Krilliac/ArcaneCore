@@ -65,7 +65,7 @@ public sealed partial class Creature
         => RecordEvadeForAnomaly(clockMs, null, out count, out windowElapsedMs, out _);
 
     /// <param name="reason">Why this evade happened (<see cref="CreatureMapSystem.EnterEvadeMode"/>); the window's reasons come back in
-    /// <paramref name="reasons"/>, oldest first, so a loop report says which path keeps sending the creature home.</param>
+    /// <paramref name="reasons"/>, newest first, so a loop report says which path keeps sending the creature home.</param>
     internal bool RecordEvadeForAnomaly(long clockMs, string? reason, out int count, out long windowElapsedMs, out string? reasons)
     {
         reasons = null;
@@ -88,7 +88,7 @@ public sealed partial class Creature
             _evadeCountInWindow++;
             if (reason is not null && _evadeCountInWindow <= CreatureAnomalies.LoopThreshold)
             {
-                _evadeReasons = _evadeReasons is null ? reason : _evadeReasons + "; " + reason;
+                _evadeReasons = _evadeReasons is null ? reason : reason + "; " + _evadeReasons; // newest first: the ledger's cut falls on the oldest
             }
         }
 

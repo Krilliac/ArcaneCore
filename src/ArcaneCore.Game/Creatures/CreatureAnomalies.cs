@@ -42,6 +42,8 @@ public static class CreatureAnomalies
     /// <summary>
     /// The evade reason of a scripted EventAI evade (ACTION_T_EVADE): a fight a script ends on purpose is no evade loop. A shared constant,
     /// not a caller name, so the exemption cannot drift from what production passes (<c>GetType().Name + "." + caller</c> never read "Execute").
+    /// Only the EventAI action passes it: SmartAI's SMART_ACTION_EVADE (<c>SmartScript</c>) is deliberately not exempt, and no fight against a
+    /// player, or a unit a player owns or charms, is ever exempt.
     /// </summary>
     public const string ScriptedEvadeReason = "EventAi.Evade";
 
@@ -149,7 +151,8 @@ public static class CreatureAnomalies
     }
 
     /// <summary>
-    /// A stuck creature. <paramref name="chasing"/> (a chase of a player or pet it cannot reach) is <c>creature/stuck-chasing</c>; a spline or a
+    /// A stuck creature. <paramref name="chasing"/> (the chase generator is on top and the creature makes no progress: either standing out of
+    /// melee reach of a reachable victim, or on a chase spline that goes nowhere) is <c>creature/stuck-chasing</c>; any other spline or a
     /// waypoint walk without progress (bad path data) stays <c>creature/stuck</c>.
     /// </summary>
     public static void ReportStuck(Creature creature, uint elapsedMs, string context, bool chasing = false)
