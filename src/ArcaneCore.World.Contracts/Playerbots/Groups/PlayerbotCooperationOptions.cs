@@ -46,6 +46,13 @@ public sealed class PlayerbotCooperationOptions
     public int MaxLfgAnswersPerLine { get; set; } = 4;
 
     /// <summary>
+    /// How long a candidate's refusal of a waiting group is remembered, in minutes (1..1440, default 10). Time is cut into windows of this length:
+    /// the candidate's roll for the group is made once per window, so a bot that refused is not asked again inside the window and gets a fresh
+    /// roll in the next one, when the group is still waiting.
+    /// </summary>
+    public int RefusalMemoryMinutes { get; set; } = 10;
+
+    /// <summary>
     /// Let a guild's bot say "anyone for the dungeon?" in guild chat while a group of the guild's members is forming for it, and let the
     /// guildmates who hear it join at once (on by default). The line is said only when such a group exists.
     /// </summary>
@@ -88,6 +95,7 @@ public sealed class PlayerbotCooperationOptions
         CheckUnit(LfgAnswerBonus, nameof(LfgAnswerBonus));
         Check(RefuseAffinity, -100, 0, nameof(RefuseAffinity));
         Check(MaxLfgAnswersPerLine, 1, 64, nameof(MaxLfgAnswersPerLine));
+        Check(RefusalMemoryMinutes, 1, 1440, nameof(RefusalMemoryMinutes));
         CheckUnit(MentorChance, nameof(MentorChance));
         Check(MentorMaxMinutes, 1, 240, nameof(MentorMaxMinutes));
         Check(MentorLevelGap, 1, 60, nameof(MentorLevelGap));

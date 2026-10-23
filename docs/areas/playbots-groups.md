@@ -194,7 +194,8 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
   below `RefuseAffinity` (-40) (either direction), never joins. It accepts with chance
   `clamp(RecruitBaseChance (0.35) + 0.4 x Sociability + 0.003 x affinity toward the leader + 0.2 if it fills a missing role, 0, 0.95)`
   (+`GuildBonus` 0.2 for a guildmate of the waiting group, +`LfgAnswerBonus` 0.15 when it answered a call), rolled by a hash of the bot and
-  the group id. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
+  the group's stable id and the current refusal window (`RefusalMemoryMinutes`, 10): a candidate that refuses is not asked again in that window
+  and gets a fresh roll in the next one while the group still waits. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
   quest through the usual quest share; one that cannot take the quest still joins and helps. The group cap is `MaxGroups` (16); when it
   holds waiting bots back that is logged and noted once a minute.
 * **Answering calls** (`AnswerBotCalls`). A bot that hears another bot's looking-for-group line in a channel offers itself to the
@@ -229,6 +230,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
 | `LfgAnswerBonus` | 0.15 | chance bonus for a bot that answered the call (0..1) |
 | `RefuseAffinity` | -40 | affinity at or below which a bot never joins (-100..0) |
 | `AnswerBotCalls` | true | bots answer other bots' looking-for-group lines |
+| `RefusalMemoryMinutes` | 10 | how long a refusal of a waiting group is remembered; the candidate rolls afresh after it (1..1440) |
 | `MaxLfgAnswersPerLine` | 4 | the most bots that may take a place from one looking-for-group line (1..64) |
 | `GuildCalls` | true | the guild call for a forming group |
 | `Mentoring` | true | mentoring |

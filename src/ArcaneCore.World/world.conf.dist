@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       708 keys
+#   WORLD                       709 keys
 #
 ###############################################################################
 
@@ -13566,6 +13566,21 @@ World.Playerbots.Groups.Cooperation.RecruitRadiusYards = 300
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Groups.Cooperation.RecruitWaitSeconds = 20
+
+#
+#    World.Playerbots.Groups.Cooperation.RefusalMemoryMinutes
+#        Description: How long a candidate's refusal of a waiting group is remembered, in minutes
+#                     (1..1440, default 10). Time is cut into windows of this length: the
+#                     candidate's roll for the group is made once per window, so a bot that refused
+#                     is not asked again inside the window and gets a fresh roll in the next one,
+#                     when the group is still waiting.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RefusalMemoryMinutes = 10
 
 #
 #    World.Playerbots.Groups.Cooperation.RefuseAffinity

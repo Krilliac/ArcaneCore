@@ -180,40 +180,84 @@ public sealed class PlayerbotRecruitWorldTests
         Assert.Equal(tankId, await world.OnWorldAsync(() => world.Coordinator.WaitingGroupIdOf(tank.Id)));
     }
 
-    /// <summary>The refusal is decided once for the group: raising the chance afterwards (or any other change of the facts) does not ask the candidate again.</summary>
+    /// <summary>
+    /// The refusal is decided once per refusal window (RefusalMemoryMinutes): raising the chance afterwards does not ask the candidate again
+    /// inside the window; in the next window the candidate rolls afresh, on a seed that includes the window.
+    /// </summary>
     [Fact]
-    public async Task ACandidateThatRefusedAGroup_IsNotAskedAgain_WhileTheGroupWaits()
+    public async Task ACandidateThatRefusedAGroup_IsNotAskedAgainInTheWindow_AndRollsAfreshInTheNext()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
         {
             Still(options);
             options.Groups.Cooperation.RecruitWaitSeconds = 600; // no recruiting until the chance is set below
             options.Groups.Cooperation.RecruitRadiusYards = 1500;
+            options.Groups.Cooperation.RefusalMemoryMinutes = 1;
+            options.Groups.FormationTimeoutSeconds = 3_600;
         });
         var (tank, _) = await WaitingPairAsync(world);
-        var healer = await world.AddBotAsync("Refusepr", Human, Priest, 10, [LesserHeal, Smite], FarSouth);
+        var healer = await world.AddBotAsync("Refusepr", Human, Priest, 10, [LesserHeal, Smite], new Vector3(StartX, StartY - 1450f, StartZ)); // at the edge of the 1500 yard radius, hours of walking from the quest
+        uint WindowOf(uint ms) => ms / (60_000u);
 
-        // Pick a base chance that puts this healer's own roll for this group just above its chance: it refuses.
-        double roll = await world.OnWorldAsync(() =>
+        // Wait for a window whose roll refuses (above the chance, below 0.9) and whose next window's roll comes (below 0.9): the rolls are fixed per
+        // (candidate, group, window), so the proof needs such a pair; the waiting pair holds its group meanwhile (no recruiting yet).
+        await world.RunAsync(await world.OnWorldAsync(() => (WindowOf((uint)world.World.Host.World.NowMs) + 1) * 60_000u - (uint)world.World.Host.World.NowMs + 1_000));
+        for (int tries = 0; tries < 5; tries++)
+        {
+            (double now, double later, uint w) = await world.OnWorldAsync(() =>
+            {
+                ulong guid = world.Player(healer.Id).Guid.Value;
+                int gid = world.Coordinator.WaitingGroupIdOf(tank.Id);
+                uint current = WindowOf((uint)world.World.Host.World.NowMs);
+                double other = (0.4 * PlayerbotTraits.For(guid).Sociability) + 0.2;
+                double r0 = PlayerbotRecruitment.Roll(guid, PlayerbotRecruitment.RollGroup(gid, current));
+                double r1 = PlayerbotRecruitment.Roll(guid, PlayerbotRecruitment.RollGroup(gid, current + 1));
+                return (r0 >= other + 0.02 && r0 <= 0.9 ? r0 : -1, r1, current);
+            });
+            if (now >= 0 && later < 0.9) break;
+            Assert.True(tries < 4, "no window with a usable pair of rolls");
+            uint left = await world.OnWorldAsync(() => (w + 1) * 60_000u - (uint)world.World.Host.World.NowMs);
+            await world.RunAsync(left + 1_000);
+        }
+
+        // Pick a base chance that puts this healer's own roll for this group in this window just above its chance: it refuses.
+        (double roll, uint window) = await world.OnWorldAsync(() =>
         {
             Player player = world.Player(healer.Id);
+            uint w = WindowOf((uint)world.World.Host.World.NowMs);
             double other = (0.4 * PlayerbotTraits.For(player.Guid.Value).Sociability) + 0.2; // sociability weight and the missing-role bonus
-            double r = PlayerbotRecruitment.Roll(player.Guid.Value, world.Coordinator.WaitingGroupIdOf(tank.Id));
+            double r = PlayerbotRecruitment.Roll(player.Guid.Value, PlayerbotRecruitment.RollGroup(world.Coordinator.WaitingGroupIdOf(tank.Id), w));
             Assert.InRange(r, other + 0.02, 0.9); // feasible: refuses at (r - other - 0.01), accepts at the 0.95 clamp
             world.Options.Groups.Cooperation.RecruitBaseChance = (float)(r - other - 0.01);
             world.Options.Groups.Cooperation.RecruitWaitSeconds = 1;
-            return r;
+            return (r, w);
         });
-        await world.RunAsync(40_000);
+        await world.RunAsync(25_000);
+        Assert.Equal(window, await world.OnWorldAsync(() => WindowOf((uint)world.World.Host.World.NowMs))); // still the same window
         Assert.False(world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null), $"roll {roll}: " + await world.TraceAsync());
 
         await world.OnWorldAsync(() =>
         {
-            world.Options.Groups.Cooperation.RecruitBaseChance = 1f; // everybody would come now: but this one refused this group
+            world.Options.Groups.Cooperation.RecruitBaseChance = 1f; // everybody would come now: but this one refused this group in this window
             return true;
         });
-        await world.RunAsync(60_000);
+        await world.RunAsync(20_000);
+        Assert.Equal(window, await world.OnWorldAsync(() => WindowOf((uint)world.World.Host.World.NowMs)));
         Assert.False(world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null), await world.TraceAsync());
+
+        // The next window: a new roll (it must be one that passes at the 0.95 clamp for the proof to mean something).
+        double next = await world.OnWorldAsync(() => PlayerbotRecruitment.Roll(world.Player(healer.Id).Guid.Value,
+            PlayerbotRecruitment.RollGroup(world.Coordinator.WaitingGroupIdOf(tank.Id), window + 1)));
+        Assert.InRange(next, 0.0, 0.9);
+        uint untilNext = await world.OnWorldAsync(() => (window + 1) * 60_000u - (uint)world.World.Host.World.NowMs);
+        await world.RunAsync(untilNext + 1_000);
+        bool walkedIn = false; // the healer must be recruited, not arrive at the quest and wait for a group itself
+        Assert.True(await world.RunUntilAsync(120_000, () =>
+        {
+            walkedIn |= world.Coordinator.WaitingBots.Any(w => w.BotId == healer.Id);
+            return world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null);
+        }), $"next roll {next}: " + await world.TraceAsync());
+        Assert.False(walkedIn, "the healer walked to the quest and waited by itself: it was not recruited");
     }
 
     [Fact]
@@ -233,7 +277,7 @@ public sealed class PlayerbotRecruitWorldTests
             int groupId = world.Coordinator.WaitingGroupIdOf(tank.Id); // the waiting group's own id, whatever other groups there are
             Assert.NotEqual(0, groupId);
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, 0, 0, false, FillsRole: true, false, false);
-            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value, groupId, facts);
+            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value, PlayerbotRecruitment.RollGroup(groupId, (uint)world.World.Host.World.NowMs / (10u * 60_000u)), facts);
         });
 
         bool formed = await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Count > 0);

@@ -71,6 +71,12 @@ internal static class PlayerbotRecruitment
             : PlayerbotGroupContent.PartySize;
     }
 
+    /// <summary>
+    /// The seed a candidate rolls on for a waiting group in one refusal window (<paramref name="window"/>: time divided by the refusal memory):
+    /// the group's id in the first window, a different one in each later window.
+    /// </summary>
+    internal static int RollGroup(int groupId, uint window) => unchecked(groupId ^ (int)(window * 0x9E3779B1u));
+
     /// <summary>The candidate's roll for the group: a fixed number in [0, 1) for the pair, whoever asks and whenever.</summary>
     internal static double Roll(ulong candidateGuid, int groupId)
         => (PlayerbotContention.Mix(PlayerbotContention.Mix(candidateGuid, 0x5EC8017AUL), (ulong)(uint)groupId) >> 11) * (1.0 / 9007199254740992.0);
