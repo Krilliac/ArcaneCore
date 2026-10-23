@@ -177,7 +177,7 @@ closed.
 | `Game/Progression/QuestProgressionContracts.cs`, `QuestRewardSpells.cs`, `QuestRewardSpellGrant.cs` | `IQuestRewardEffects` is now prepare / announce / publish; shared caster resolution; the frozen grant types |
 | `Game/Quests/Quest.cs`, `Kernel/Quests/QuestTemplate.cs` | `RewRepFaction1..5`, `RewRepValue1..5` |
 | `Game/Reputation/*` | `IQuestReputationSettlement`, `QuestReputationStage`, `PlayerReputation.Clone`, hold guards |
-| `Game/Spells/SpellSeams.cs`, `SpellTargetingSeams.cs` | `ITeleportSink.CanTeleport`, `ISpellSummonSink.CanSummon` |
+| `Game/Spells/SpellSeams.cs`, `SpellTargetRelations.cs` | `ITeleportSink.CanTeleport`, `ISpellSummonSink.CanSummon` |
 | `Game/Spells/SpellSystem*.cs` | `HasBuiltInEffectHandler`, `TryResolveTeleportDestination`, `AnnounceLearnedSpell`, `CastLearnedPassive` |
 | `Game/Teleport/TeleportService.cs` | `CanTeleportTo` (the checks of `TeleportTo`, nothing changed) |
 | `World/Progression/QuestRewardEffects.cs` | shape classification, preparation and preflight |
