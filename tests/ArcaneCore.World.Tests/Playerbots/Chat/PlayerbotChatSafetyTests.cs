@@ -416,6 +416,68 @@ public sealed class PlayerbotChatSafetyTests
     }
 
     [Fact]
+    public async Task ClassifyModeration_TurnsReasoningOffForALocalServer_AndKeepsAnExplicitChoice()
+    {
+        PlayerbotChatProviderOptions local = Model(PlayerbotChatModerationKind.Classify);
+        local.Kind = PlayerbotChatProviderKind.OpenAICompatible;
+        local.BaseUrl = "http://localhost:11434/v1";
+        local.Model = "qwen3.5:4b";
+        local.ApiKeyEnvironmentVariable = "";
+        await using var rig = new Rig(chat => chat.Providers = [local]);
+        rig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "SAFE"));
+        await rig.AnswerAsync("hello");
+        Assert.Equal("none", rig.Client.Calls.First().Provider.ReasoningEffort);
+
+        local.ReasoningEffort = "low";
+        await using var explicitRig = new Rig(chat => chat.Providers = [local]);
+        explicitRig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "SAFE"));
+        await explicitRig.AnswerAsync("hello");
+        Assert.Equal("low", explicitRig.Client.Calls.First().Provider.ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task ClassifyModeration_SendsNoReasoningEffortToAHostedServer_WhenTheOptionIsEmpty()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Model(PlayerbotChatModerationKind.Classify)]);
+        rig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "SAFE"));
+        await rig.AnswerAsync("hello");
+        Assert.Equal(string.Empty, rig.Client.Calls.First().Provider.ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task OmitNeverSendsReasoningEffort_NotEvenToTheLocalClassifier()
+    {
+        PlayerbotChatProviderOptions local = Model(PlayerbotChatModerationKind.Classify);
+        local.BaseUrl = "http://localhost:11434/v1";
+        local.ApiKeyEnvironmentVariable = "";
+        local.ReasoningEffort = "omit";
+        await using var rig = new Rig(chat => chat.Providers = [local]);
+        rig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "SAFE"));
+        await rig.AnswerAsync("hello");
+        Assert.Equal(2, rig.Client.Calls.Count);
+        foreach (var call in rig.Client.Calls)
+            Assert.False(HttpBotChatClient.OpenAIBody(call.Provider, call.Prompt).ContainsKey("reasoning_effort"));
+    }
+
+    [Fact]
+    public async Task AClassifierThatOnlyThinks_BacksTheProviderOffOnTheSecond_AndLogsTheHint()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Model(PlayerbotChatModerationKind.Classify)]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.ReasoningOnly));
+        Assert.Equal("Builtin", (await rig.AnswerAsync("hello"))!.Provider);
+        Assert.Contains(rig.Log.Lines, line => line.Contains("set ReasoningEffort=none for this provider"));
+        Assert.Equal("reasoning-only", rig.Chat.Status().Providers[0].LastError);
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds);
+
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.ReasoningOnly));
+        Assert.Equal("Builtin", (await rig.AnswerAsync("hello again"))!.Provider);
+        Assert.True(rig.Chat.Status().Providers[0].CooldownSeconds > 0);
+
+        Assert.Equal("Builtin", (await rig.AnswerAsync("and again"))!.Provider);
+        Assert.Equal(2, rig.Client.Calls.Count); // cooling down: the model is not asked
+    }
+
+    [Fact]
     public async Task TheModerationStep_RunsOnlyWithScreeningOn()
     {
         await using var rig = new Rig(chat => { chat.Providers = [Model(PlayerbotChatModerationKind.Endpoint)]; chat.Safety.Enabled = false; });

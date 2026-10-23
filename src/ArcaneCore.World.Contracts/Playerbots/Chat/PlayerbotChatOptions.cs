@@ -116,7 +116,7 @@ public sealed class PlayerbotChatOptions
     /// The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing
     /// key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when
     /// listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable,
-    /// Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
+    /// Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
     /// ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).
     /// </summary>
     public PlayerbotChatProviderOptions[] Providers { get; set; } = [];
@@ -289,6 +289,15 @@ public sealed class PlayerbotChatProviderOptions
     /// <summary>OpenAICompatible only: the body field of the reply limit, <c>max_tokens</c> (default) or <c>max_completion_tokens</c> (newer OpenAI models).</summary>
     public string TokenLimitParameter { get; set; } = "max_tokens";
 
+    /// <summary>
+    /// OpenAICompatible only: the <c>reasoning_effort</c> body field, one of <c>none</c>, <c>minimal</c>, <c>low</c>, <c>medium</c>, <c>high</c>,
+    /// <c>xhigh</c> (any case, surrounding spaces ignored), or empty to send nothing on a hosted server (the default; the moderation classifier
+    /// still sends <c>none</c> to a server on this machine). A thinking model (e.g. qwen3.5 on Ollama) otherwise spends the whole
+    /// <see cref="MaxTokens"/> reasoning and returns no text; <c>none</c> turns that off. <c>omit</c> never sends the field, to either the reply
+    /// or the classifier call (for a server that rejects it).
+    /// </summary>
+    public string ReasoningEffort { get; set; } = string.Empty;
+
     /// <summary>US dollars per million input tokens for the spend estimate (unset = the built-in price of a known Anthropic model, else unpriced; 0 for a local model).</summary>
     public double? InputUsdPerMillionTokens { get; set; }
 
@@ -381,8 +390,28 @@ public sealed class PlayerbotChatProviderOptions
     /// <summary>A short label for status lines and logs (kind and model; never the key).</summary>
     internal string Label => Kind == PlayerbotChatProviderKind.Builtin ? "Builtin" : $"{Kind} {EffectiveModel}";
 
+    /// <summary>
+    /// The <c>reasoning_effort</c> of the moderation classifier call: the provider's own setting; when none is set, <c>none</c> for an
+    /// OpenAICompatible server on this machine (a local thinking model would otherwise spend the 16 tokens reasoning), else empty so a
+    /// hosted endpoint that rejects the field is never sent one it was not asked for.
+    /// </summary>
+    internal string ClassifierReasoningEffort
+        => NormalizedReasoningEffort == OmitReasoningEffort ? string.Empty
+            : NormalizedReasoningEffort.Length > 0 ? NormalizedReasoningEffort
+            : Kind == PlayerbotChatProviderKind.OpenAICompatible && Uri.TryCreate(BaseUrl?.Trim(), UriKind.Absolute, out Uri? root) && root.Scheme is "http" or "https" && IsLoopback(root) ? "none"
+            : string.Empty;
+
     /// <summary>What identifies this provider's runtime state (hour window, cooldown) across a reload.</summary>
-    internal string Signature => $"{Kind}|{BaseUrl.Trim()}|{EffectiveModel}|{EffectiveKeyVariable}";
+    internal string Signature => $"{Kind}|{BaseUrl.Trim()}|{EffectiveModel}|{EffectiveKeyVariable}|{NormalizedReasoningEffort}";
+
+    /// <summary>The <c>ReasoningEffort</c> option value meaning "never send the field".</summary>
+    internal const string OmitReasoningEffort = "omit";
+
+    /// <summary><see cref="ReasoningEffort"/> trimmed and lower-cased (empty when unset).</summary>
+    internal string NormalizedReasoningEffort => ReasoningEffort?.Trim().ToLowerInvariant() ?? string.Empty;
+
+    /// <summary>The value of the body's <c>reasoning_effort</c>, or null when the field is not sent (unset or <c>omit</c>).</summary>
+    internal string? ReasoningEffortToSend => NormalizedReasoningEffort is { Length: > 0 } effort && effort != OmitReasoningEffort ? effort : null;
 
     /// <summary>This entry's problem (null when valid).</summary>
     internal string? Problem()
@@ -408,6 +437,8 @@ public sealed class PlayerbotChatProviderOptions
             && (variable.Trim().Length > 128 || !variable.Trim().All(c => char.IsAsciiLetterOrDigit(c) || c == '_')))
             return "ApiKeyEnvironmentVariable must be a variable name (letters, digits, underscores; at most 128)";
         if (TokenLimitParameter is not ("max_tokens" or "max_completion_tokens")) return "TokenLimitParameter must be max_tokens or max_completion_tokens";
+        if (ReasoningEffort is null || !(NormalizedReasoningEffort.Length == 0 || NormalizedReasoningEffort is "none" or "minimal" or "low" or "medium" or "high" or "xhigh" or OmitReasoningEffort))
+            return "ReasoningEffort must be empty, none, minimal, low, medium, high, xhigh or omit";
         if (InputUsdPerMillionTokens is { } input && (!double.IsFinite(input) || input is < 0 or > 1000)) return "InputUsdPerMillionTokens must be 0..1000";
         if (OutputUsdPerMillionTokens is { } output && (!double.IsFinite(output) || output is < 0 or > 1000)) return "OutputUsdPerMillionTokens must be 0..1000";
         if (ModerationProblem() is { } moderation) return moderation;
@@ -455,6 +486,7 @@ public sealed class PlayerbotChatProviderOptions
         Kind = Kind, BaseUrl = BaseUrl, Model = Model, ApiKeyEnvironmentVariable = ApiKeyEnvironmentVariable,
         Headers = new Dictionary<string, string>(Headers ?? [], StringComparer.OrdinalIgnoreCase),
         MaxRepliesPerHour = MaxRepliesPerHour, MaxTokens = MaxTokens, TokenLimitParameter = TokenLimitParameter,
+        ReasoningEffort = ReasoningEffort,
         InputUsdPerMillionTokens = InputUsdPerMillionTokens, OutputUsdPerMillionTokens = OutputUsdPerMillionTokens,
         Moderation = Moderation, ModerationBaseUrl = ModerationBaseUrl, ModerationModel = ModerationModel,
         ModerationApiKeyEnvironmentVariable = ModerationApiKeyEnvironmentVariable,
@@ -464,6 +496,7 @@ public sealed class PlayerbotChatProviderOptions
     internal bool SameAs(PlayerbotChatProviderOptions other)
         => Kind == other.Kind && BaseUrl == other.BaseUrl && Model == other.Model && ApiKeyEnvironmentVariable == other.ApiKeyEnvironmentVariable
             && MaxRepliesPerHour == other.MaxRepliesPerHour && MaxTokens == other.MaxTokens && TokenLimitParameter == other.TokenLimitParameter
+            && ReasoningEffort == other.ReasoningEffort
             && InputUsdPerMillionTokens == other.InputUsdPerMillionTokens && OutputUsdPerMillionTokens == other.OutputUsdPerMillionTokens
             && Moderation == other.Moderation && ModerationBaseUrl == other.ModerationBaseUrl && ModerationModel == other.ModerationModel
             && ModerationApiKeyEnvironmentVariable == other.ModerationApiKeyEnvironmentVariable

@@ -321,6 +321,12 @@ public enum BotChatOutcome
 
     /// <summary>The response could not be read or held no text.</summary>
     BadResponse,
+
+    /// <summary>
+    /// A thinking model returned no text: the content was empty while the tokens went to reasoning (or the reply was cut at the limit).
+    /// Fix: <c>ReasoningEffort</c> = <c>none</c> on the provider, or a larger <c>MaxTokens</c>.
+    /// </summary>
+    ReasoningOnly,
 }
 
 /// <summary>A model request's result and the tokens it reports (0 when the provider reports none).</summary>
