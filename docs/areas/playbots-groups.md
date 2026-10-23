@@ -82,8 +82,14 @@ two members), invites the rest and moves members into their subgroups (`CMSG_GRO
 **Without partners.** A bot that found nobody within `FormationTimeoutSeconds` sets the goal aside for 10 minutes (it is not waited
 for again meanwhile) and the hold ends: the brain may try the objective alone, where the risk estimate decides as before.
 
-**Real players** (`InvitePlayers`, off by default): a group one member or role short may take a nearby real player (100 yards, same
-team, ungrouped, of a fitting level) through the same ordinary invitation. A real player never leads a bot group and is never driven;
+**Real players** (`InvitePlayers`, on by default): a group one member or role short may take a nearby real player (100 yards, same
+team, ungrouped, of a fitting level) through the same ordinary invitation, but only one who is on the group's goal (holds its quest
+unfinished, or is inside its dungeon, or stands at its entrance: on the meeting map within `SameGoalMeetingRadiusYards` (150) of the
+entrance and in level range) and who either opted in to AI chat (`ai on`) or is liked: affinity of at least
+`InvitePlayerAffinity` (20) toward one of the waiting bots, read through `EffectiveAffinity`. A rival of any of them, or a player a bot
+flagged `NoWhispers`, is never asked, and a player is asked at most once per `InvitePlayerCooldownMinutes` (30). A player whose
+remembered role (the P1 `PrefersTank` / `PrefersHealer` flags) fills the missing tank or healer comes first, then one whose class can.
+A real player never leads a bot group and is never driven;
 one who declines or does not answer within 30 seconds is not asked again for 10 minutes, and the group is given up. A real player's
 own party with a bot (`.playerbot invite`, the party AI) is not a bot group and is left alone: that bot is not free.
 
@@ -159,7 +165,7 @@ credit with members in reward range), or, without a quest, when the objective cr
 group then walks out, then disbands. The brains turn the quests in.
 
 **Failure**: two wipes, 30 minutes on one goal, a step (gather, travel, enter, leave, regroup) taking more than 5 minutes, two minutes at
-the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point or objective (`no-path-to-approach`, `no-path-to-objective`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left, or the leader gone. The goal is then set aside for every member for
+the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point or objective (`no-path-to-approach`, `no-path-to-objective`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left (a real player counts toward the two only while online: when the player of a one-bot-and-one-player pair disconnects or logs out the group ends at once with `player-gone`, with no grace period; a group that has already succeeded, or is walking out, is not failed by it), or the leader gone. The goal is then set aside for every member for
 10 minutes (its quest and objective in the brain's suspensions, so the brain does not walk into it alone either), and the group walks
 out of an instance before it disbands. A group that cannot walk out in time is brought to the entrance by the teleport service (at most `MaxBringOuts`, 2 times, before it disbands).
 
@@ -175,6 +181,67 @@ walking out, or the forming, wiped, leaving and disbanding states (leaving has i
 are brought out), nor while the leader waits at the objective's spawn (that has its own two minutes). Outside engaging the stall line
 names target 0. The leader's own new target right after a re-target (within 5 s) keeps the strike, so a group with several unreachable
 targets still dissolves on the second bound.
+
+## Cooperation (`World:Playerbots:Groups:Cooperation`, live)
+
+Bots help each other fill groups. Everything here reads the social memory through `EffectiveAffinity` and `IsRival`, is decided by a
+deterministic hash (the same state gives the same answer; no `Random`), and is on by default.
+
+* **Recruiting** (`Recruit`). A waiting group short of members, or of the tank or healer it needs, waits `RecruitWaitSeconds` (20) and
+  then asks the free bots of its team within `RecruitRadiusYards` (300) on the group's map and in its level range. A bot qualifies when
+  it is idle or on a lower-priority goal (Explore, Grind, Town, Train; never Combat, Recover, a dungeon run, or a quest within two
+  objectives of done), is not grouped and has not set the goal aside. A rival, or a bot whose affinity toward any waiting member is at or
+  below `RefuseAffinity` (-40) (either direction), never joins. It accepts with chance
+  `clamp(RecruitBaseChance (0.35) + 0.4 x Sociability + 0.003 x affinity toward the leader + 0.2 if it fills a missing role, 0, 0.95)`
+  (+`GuildBonus` 0.2 for a guildmate of the waiting group, +`LfgAnswerBonus` 0.15 when it answered a call), rolled by a hash of the bot and
+  the group's stable id and the pair's current refusal window: a candidate that refuses is remembered with the time of the refusal and is not asked
+  again for `RefusalMemoryMinutes` (10) from then, and gets a fresh roll afterwards while the group still waits. The roll's window is the clock
+  divided by that period, shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over at the same instant. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
+  quest through the usual quest share; one that cannot take the quest still joins and helps. The group cap is `MaxGroups` (16); when it
+  holds waiting bots back that is logged and noted once a minute.
+* **Answering calls** (`AnswerBotCalls`). A bot that hears another bot's looking-for-group line in a channel offers itself to the
+  coordinator; if the coordinator can build the group with it (the caller is waiting, the hearer is eligible and the roll, with the
+  `LfgAnswerBonus`, passes) it is pledged and joins at the next scan without the wait, and only then replies in the channel ("inv me,
+  I'll tank"). With no real match it says nothing. A hearer that is busy, of the other team, on another map or out of the level range
+  is turned away at once, the post's candidates are worked out once for all its hearers however many ticks they hear it over, and at most `MaxLfgAnswersPerLine` (4) hearers
+  get a place from one post (the count lives as long as the post, `World:Playerbots:Chat:Voice:PostLifeSeconds`, 600 by default, up to 64 posts at a time).
+* **Guild calls** (`GuildCalls`). When the coordinator really has a dungeon or raid group forming, its longest-waiting bot says
+  "anyone for <dungeon>?" in guild chat (once per ten minutes per guild and goal, dropped if the group is gone by then). Guildmates that
+  heard it are weighed at the next scan without the wait.
+* **Mentoring** (`Mentoring`). A bot at least `MentorLevelGap` (10) levels above a friend or guildmate (affinity at least
+  `MentorAffinity` 30, no rival) whose quest was set aside, failed twice, or who called for help in a fight, may team up with it as a group
+  of two with chance `MentorChance` (0.3) x its Helpfulness. The goal is the friend's quest objective (`source=mentor`); it ends with the
+  objective like any quest group, or after `MentorMaxMinutes` (20). Strangers and bots within ten levels never mentor. The scan runs every
+  30 seconds, inside a guard that records a fault under `playerbot.groups`. A bot that soloes a quest and is neither waiting nor set aside
+  but calls for help is mentored on the quest it was on when it called (its brain's current quest, else the first unfinished objective with
+  a spawn on its map); a bot on no quest is not mentored. The mentor group lifts the brain's set-aside of that quest and creature.
+* **Raid escalation** (`RaidEscalation`, needs `RaidsEnabled`). A risk signal ("too strong alone, feasible for N") may now ask for up to
+  `MaxRaidSize` (40) instead of five; a group of more than five converts to a raid (`CMSG_GROUP_RAID_CONVERT`) and recruits as above.
+  With too few bots around it times out like any group goal (`FormationTimeoutSeconds`) and is set aside.
+  Only a rare elite or a boss (rank 2 or 3) may ask for more than five; a plain elite or any other creature needs five or fewer or is passed over. The
+  size is found by bisection (about six estimates for a raid of 40).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Recruit` | true | recruiting |
+| `RecruitWaitSeconds` | 20 | wait before a silent recruit round (1..3600) |
+| `RecruitRadiusYards` | 300 | how far a recruit may be (10..1500) |
+| `RecruitBaseChance` | 0.35 | base accept chance (0..1) |
+| `GuildBonus` | 0.2 | chance and preference bonus for a guildmate (0..1) |
+| `LfgAnswerBonus` | 0.15 | chance bonus for a bot that answered the call (0..1) |
+| `RefuseAffinity` | -40 | affinity at or below which a bot never joins (-100..0) |
+| `AnswerBotCalls` | true | bots answer other bots' looking-for-group lines |
+| `RefusalMemoryMinutes` | 10 | how long a refusal of a waiting group is remembered; the candidate rolls afresh after it (1..1440) |
+| `MaxLfgAnswersPerLine` | 4 | the most bots that may take a place from one looking-for-group line (1..64) |
+| `GuildCalls` | true | the guild call for a forming group |
+| `Mentoring` | true | mentoring |
+| `MentorChance` | 0.3 | mentoring chance before Helpfulness (0..1) |
+| `MentorMaxMinutes` | 20 | longest mentor group (1..240) |
+| `MentorLevelGap` | 10 | levels the mentor must be above (1..60) |
+| `MentorAffinity` | 30 | affinity a mentor needs toward the friend (-100..100) |
+| `RaidEscalation` | true | risk signals above five become raid goals |
+| `MaxRaidSize` | 40 | largest raid goal (6..40) |
+| `SameGoalMeetingRadiusYards` | 150 | how near a dungeon's entrance a player on the continent still counts as on its goal (10..1500) |
 
 ## Few bots and stray cases
 
@@ -295,9 +362,9 @@ given up (`wiped`), so a run gets `MaxWipes` - 1 retries (`Wipes >= MaxWipes` gi
 `travel` step checks for one (`CheckWipe`, signal `PlayerbotRunSignal.Wipe`) and the machine counts a wipe in any step except `wiped`. The run is also given up (reason in the events and the machine's `Reason`) for: `travel-timeout` or
 `enter-refused-or-timeout` (`TravelTimeoutMinutes`, 30; the enter step 5 minutes), `run-timeout` (`MaxRunMinutes`: 90 for a dungeon, 240
 for a raid, from formation), `no-path-to-entrance` / `no-path-to-boss` (the leader could not plan a way for 30 seconds), `too-few` (fewer
-than two bots left), `leader-gone`, or `leader-stopped` (the leader's bot stopped: `Forget`). A follower that stops leaves the group and
+than two bots left), `leader-gone`, `player-gone` (the group's real player is no longer online), or `leader-stopped` (the leader's bot stopped: `Forget`). A follower that stops leaves the group and
 the run goes on. A given-up run walks out of the instance first, then disbands; every bot still in it sets the wing aside. Totals:
-`completed` and `given-up` in the runs line. A run that ends for a content or code reason (`no-path-*`, a real step timeout, `objective-missing`, `stalled`, `wiped`) is also reported to bot QA as a `run failed` finding (docs/areas/playbots-qa.md; operator and lifecycle ends such as `leader-stopped`, `leader-left`, `leader-gone`, `too-few`, `invites-unanswered` and `disbanded` are not): its instance map, wing, the stage it failed at, the boss it was heading for and the reason, never the group or a bot, so repeated give-ups at one stage aggregate into one issue. Metric: `arcanecore_playerbot_runs_total{outcome}` with `completed`, `given_up` and `timeout` (a reason ending in `timeout`: `gather-timeout`, `travel-timeout`, `enter-refused-or-timeout`, `regroup-timeout`, `run-timeout`; every other end, operator stops included, is `given_up`) (docs/ops/metrics.md).
+`completed` and `given-up` in the runs line. A run that ends for a content or code reason (`no-path-*`, a real step timeout, `objective-missing`, `stalled`, `wiped`) is also reported to bot QA as a `run failed` finding (docs/areas/playbots-qa.md; operator and lifecycle ends such as `leader-stopped`, `leader-left`, `leader-gone`, `player-gone`, `too-few`, `invites-unanswered` and `disbanded` are not): its instance map, wing, the stage it failed at, the boss it was heading for and the reason, never the group or a bot, so repeated give-ups at one stage aggregate into one issue. Metric: `arcanecore_playerbot_runs_total{outcome}` with `completed`, `given_up` and `timeout` (a reason ending in `timeout`: `gather-timeout`, `travel-timeout`, `enter-refused-or-timeout`, `regroup-timeout`, `run-timeout`; every other end, operator stops included, is `given_up`) (docs/ops/metrics.md).
 
 After a completed run has left the instance, its leader sends `CMSG_RESET_INSTANCES` while the group still exists, then every bot
 disbands. This is observability: the leader asks the way a client would and the coordinator records each `SMSG_INSTANCE_RESET` or
@@ -531,13 +598,15 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
 | Key | Default | Range | Meaning |
 |---|---|---|---|
 | `Enabled` | true | | form groups for group content |
-| `MaxGroups` | 4 | 0..64 | bot-led groups at once |
+| `MaxGroups` | 16 | 0..64 | bot-led groups at once |
 | `LevelRange` | 5 | 0..60 | most levels between members |
 | `MinTank` | 1 | 0..5 | tanks a group of three or more needs |
 | `MinHealer` | 1 | 0..5 | healers a group of three or more needs |
 | `FormationTimeoutSeconds` | 300 | 30..86400 | how long a bot waits for partners before it sets the goal aside |
 | `RaidsEnabled` | true | | raid quests and raid instances as quest and instance goals (convert to a raid); it does not gate raid runs, which only `World:Playerbots:Groups:DungeonRuns:Raids:Enabled` switches |
-| `InvitePlayers` | false | | invite a nearby real player into a short group |
+| `InvitePlayers` | true | | invite a nearby real player on the group's goal into a short group (opted in to AI chat, or liked) |
+| `InvitePlayerAffinity` | 20 | -100..100 | affinity that lets the bots invite a player without an AI chat opt-in |
+| `InvitePlayerCooldownMinutes` | 30 | 0..1440 | minutes before the same player is invited again |
 | `DungeonRuns:*` | see `docs/reference/configuration.md` | | dungeon and raid runs ("Dungeon and raid runs", above); `World:Playerbots:Groups:DungeonRuns:Raids:SkipPrerequisites` is the switch for the raids' key item, quest and condition |
 
 ## Where it shows
@@ -642,3 +711,7 @@ d3b26dcb):
   instance the leader stands in: it never travels to another wing. The adopted bots are those inside at the handoff; ones that zone in
   later follow the player.
 * A bot without a quest for the goal is not matched for it (sharing happens inside a group formed for the goal, below).
+
+Cooperation tests: `PlayerbotRecruitmentTests` (the pure chance, refusal, ordering and guild-bonus rules), `PlayerbotRecruitWorldTests`
+(recruiting, bot LFG answers, guild calls), `PlayerbotMentorWorldTests`, `PlayerbotRaidEscalationWorldTests`, and the player invites in
+`PlayerbotGroupPlayerTests`.

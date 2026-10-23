@@ -1,12 +1,18 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
+using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
 using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Groups;
@@ -20,6 +26,26 @@ public sealed class PlayerbotGroupPlayerTests
 {
     private const byte Human = 1, Warrior = 1, Priest = 5, Mage = 8;
     private const uint LesserHeal = 2050, Fireball = 133, Smite = 585;
+
+    /// <summary>The player holds <paramref name="quest"/> unfinished (it is on the bots' goal) and, when given, the bot remembers them with that affinity and those flags.</summary>
+    private static async Task GivePlayerQuestAsync(GroupTestWorld world, string playerName, uint quest)
+        => await world.OnWorldAsync(() =>
+        {
+            Player player = world.World.Host.World.FindOnlinePlayer(playerName)!;
+            PlayerNpcState state = world.World.Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!;
+            state.Quests.GetOrAdd(quest).Status = QuestStatus.Incomplete;
+            return true;
+        });
+
+    private static async Task RememberPlayerAsync(GroupTestWorld world, (Guid Id, string Name) bot, string playerName, short affinity, PlayerbotRelationFlags flags = PlayerbotRelationFlags.None)
+        => await world.OnWorldAsync(() =>
+        {
+            Player self = world.Player(bot.Id), them = world.World.Host.World.FindOnlinePlayer(playerName)!;
+            world.Bots.Social.Memory.Load([new PlayerbotRelation(bot.Id, (int)self.Guid.Low, them.Guid.Value, true, affinity, 6, 500, flags, world.Bots.Social.Memory.NowMs, "", "")]);
+            return true;
+        });
+
+    private static bool PlayerInvited(GroupTestWorld world) => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Invited));
 
     [Fact]
     public async Task ARealPlayersPartyBot_StaysItsMastersBot_AndTheCoordinatorLeavesItAlone()
@@ -49,8 +75,10 @@ public sealed class PlayerbotGroupPlayerTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
         await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPHELPER", "Grouphelper", AccountSecurity.Player);
         var bot = await world.AddBotAsync("Askerone", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Grouphelper", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Grouphelper", 30);
 
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Invited))), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         Assert.Equal(bot.Id, group.LeaderBotId); // a real player never leads a bot group
         byte[] invite = await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
@@ -62,6 +90,339 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.Contains(world.Coordinator.Events, e => e.Contains("Grouphelper did not join", StringComparison.Ordinal));
         await world.RunAsync(10_000);
         Assert.Empty(world.Coordinator.Groups);
+    }
+
+    /// <summary>One bot and one real player are a group: the player counts toward the two members, so the coordinator keeps it and goes on to work the objective.</summary>
+    [Fact]
+    public async Task OneBotAndOneRealPlayer_AreAGroup_TheCoordinatorKeeps_AndWorksTheObjectiveWith()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPPAIR", "Grouppair", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askerpair", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Grouppair", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Grouppair", 30);
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+
+        await AcceptAsync(player);
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Joined))), await world.TraceAsync());
+
+        // Several coordinator passes later (each 2 s) the pair is still one group, and it has moved on from forming.
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)), await world.TraceAsync());
+        await world.RunAsync(20_000);
+        PlayerbotGroupCoordinator.BotGroup group = Assert.Single(world.Coordinator.Groups);
+        Assert.Equal(2, group.Members.Count);
+        Assert.Contains(group.Members, m => m.Real && m.Joined);
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Accepts the invitation and waits for the server's answer (the player's group list), which is read from the socket in real time: the
+    /// manual clock does not wait for a packet still on its way, so advancing it right after the send can use up the budget before the
+    /// server has even read the accept.
+    /// </summary>
+    private static async Task AcceptAsync(WorldTestClient player)
+    {
+        await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await player.ReadUntilAsync(WorldOpcode.SmsgGroupList);
+    }
+
+    /// <summary>Advances the world clock in small steps, pausing in real time between them, so that a packet sent just before is read and handled well inside the budget.</summary>
+    private static async Task<bool> PatientlyAsync(GroupTestWorld world, uint budgetMs, Func<bool> condition)
+    {
+        for (uint spent = 0; spent < budgetMs; spent += 200)
+        {
+            if (await world.RunUntilAsync(200, condition)) return true;
+            await Task.Delay(50);
+        }
+
+        return false;
+    }
+
+    /// <summary>A one-bot, one-player group that has moved on from forming (the player accepted the bot's invitation).</summary>
+    private static async Task<WorldTestClient> FormPairAsync(GroupTestWorld world, string accountName, string playerName, string botName)
+    {
+        WorldTestClient player = await world.World.EnterWorldAsync(accountName, playerName, AccountSecurity.Player);
+        var bot = await world.AddBotAsync(botName, Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, playerName, DuoQuest);
+        await RememberPlayerAsync(world, bot, playerName, 30);
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        await AcceptAsync(player);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)), await world.TraceAsync());
+        return player;
+    }
+
+    /// <summary>
+    /// Logs the player out on the world thread, as a completed logout does (the same <c>LogoutPlayer</c> an instant logout calls). A logout
+    /// request is not used: it is refused in combat (the pair is fighting), and otherwise runs a 20 s countdown that starts only when the
+    /// packet is read from the socket, which the virtual clock does not wait for.
+    /// </summary>
+    private static async Task LogOutAsync(GroupTestWorld world, string name)
+    {
+        await world.OnWorldAsync(() =>
+        {
+            world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer(name)!);
+            return true;
+        });
+        Assert.Null(await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(name)));
+    }
+
+    /// <summary>The server keeps a logged-out player in its group, so the pair is still "two members"; a player who is not online does not count toward the two.</summary>
+    [Fact]
+    public async Task APairWhosePlayerLogsOut_Ends_BecauseAnOfflinePlayerDoesNotCountTowardTheTwo()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await FormPairAsync(world, "GROUPGONE", "Groupgone", "Askergone");
+
+        await LogOutAsync(world, "Groupgone");
+
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("player-gone", StringComparison.Ordinal));
+    }
+
+    /// <summary>A run that already succeeded is not failed because the player logs out while the bots walk out: it ends as completed.</summary>
+    [Fact]
+    public async Task APairWhosePlayerLogsOutWhileLeaving_AfterASuccess_EndsAsCompleted_NotPlayerGone()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await FormPairAsync(world, "GROUPLEAVING", "Groupleaving", "Askerleaving");
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+
+        int held = 0;
+        // The group has succeeded and is walking out (held in Leaving, as a bot still inside an instance would hold it) until the logout completes.
+        Assert.True(await world.RunUntilAsync(40_000, () =>
+        {
+            bool online = world.World.Host.World.FindOnlinePlayer("Groupleaving") is not null;
+            if (online && world.Coordinator.Groups.Contains(group))
+            {
+                group.Succeeded = true;
+                group.Reason = null;
+                group.State = PlayerbotGroupState.Leaving;
+                group.StateSinceMs = world.World.Host.World.NowMs;
+                if (++held == 3) world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer("Groupleaving")!);
+            }
+
+            return !online;
+        }), await world.TraceAsync());
+
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(group.Succeeded);
+        Assert.Equal("completed", group.Reason);
+        Assert.Equal(0, world.Coordinator.Totals.Failed);
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("player-gone", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task APairWhosePlayerLeavesTheGroup_Ends()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await FormPairAsync(world, "GROUPLEAVE", "Groupleave", "Askerleave");
+
+        await player.SendAsync(WorldOpcode.CmsgGroupDisband, []);
+
+        Assert.True(await PatientlyAsync(world, 15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("Groupleave left", StringComparison.Ordinal));
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AStranger_OnTheSameGoal_IsInvitedOnlyOnceTheBotsLikeThem()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPSTRANGE", "Groupstrange", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askertwo", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Groupstrange", DuoQuest);
+
+        await world.RunAsync(30_000);
+        Assert.False(PlayerInvited(world), "a stranger with no affinity and no AI chat opt-in is not invited");
+        await RememberPlayerAsync(world, bot, "Groupstrange", 19);
+        await world.RunAsync(10_000);
+        Assert.False(PlayerInvited(world), "affinity 19 is below InvitePlayerAffinity (20)");
+        await RememberPlayerAsync(world, bot, "Groupstrange", 20);
+        Assert.True(await world.RunUntilAsync(30_000, () => PlayerInvited(world)), await world.TraceAsync());
+    }
+
+    [Fact]
+    public async Task APlayerOnAnotherGoal_AndANoWhispersPlayer_AreNeverInvited()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using WorldTestClient elsewhere = await world.World.EnterWorldAsync("GROUPELSE", "Groupelse", AccountSecurity.Player);
+        await using WorldTestClient quiet = await world.World.EnterWorldAsync("GROUPQUIET", "Groupquiet", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askerthree", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Groupquiet", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Groupelse", 90);                                         // liked, but not on the goal
+        await RememberPlayerAsync(world, bot, "Groupquiet", 90, PlayerbotRelationFlags.NoWhispers);     // on the goal, liked, but asked for quiet
+
+        await world.RunAsync(60_000);
+        Assert.False(PlayerInvited(world), await world.TraceAsync());
+    }
+
+    /// <summary>The rival is on the goal and opted in to AI chat, so only the bot's rival flag keeps it out; forgiven, the same player is invited.</summary>
+    [Fact]
+    public async Task AnOptedInPlayerOnTheGoal_WhoIsARival_IsNeverInvited_UntilTheBotForgives()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using WorldTestClient rival = await world.World.EnterWorldAsync("GROUPRIVAL", "Grouprival", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askerrival", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Grouprival", DuoQuest);
+        await rival.SendChatAsync(ChatType.Whisper, Language.Common, "ai on", bot.Name);
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Bots.Chat!.Safety.Player("Grouprival")?.AiReplies == true), "the player opted in to AI chat");
+
+        await RememberPlayerAsync(world, bot, "Grouprival", -80);
+        Assert.True(await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Grouprival")!;
+            return world.Bots.Social.Memory.TryGet(bot.Id, them.Guid.Value, out PlayerbotRelation relation) && world.Bots.Social.Memory.IsRival(relation);
+        }), "the bot holds the player as a rival");
+        await world.RunAsync(60_000);
+        Assert.False(PlayerInvited(world), await world.TraceAsync());
+
+        await RememberPlayerAsync(world, bot, "Grouprival", 0); // forgiven: the same opted-in player on the goal now qualifies
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+    }
+
+    /// <summary>"On the same quest" is the help-quest invite's reason, not a reason to open a trade: only a friend, a guildmate or a liked player gets one.</summary>
+    [Theory]
+    [InlineData(0, false)]  // a stranger on the same quest
+    [InlineData(15, true)]  // liked: at least AcceptInviteAffinity (10)
+    public async Task ATrade_IsOpenedForALikedPlayer_NotForAStrangerOnTheSameQuest(short affinity, bool opened)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Groups.InvitePlayers = false;
+            options.MoveSpeed = 0.1f; // the bot stays within trade reach of the player
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("TRADEPLAYER", "Tradeplayer", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Traderbot", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Tradeplayer", DuoQuest);
+        if (affinity != 0) await RememberPlayerAsync(world, bot, "Tradeplayer", affinity);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), await world.TraceAsync());
+
+        // Away from the creatures (a bot in a fight opens no trade), the player a few yards from the bot.
+        await world.OnWorldAsync(() =>
+        {
+            var far = new System.Numerics.Vector3(StartX - 1000f, StartY, StartZ);
+            uint now = world.World.Host.World.NowMs;
+            world.Player(bot.Id).Relocate(far.X, far.Y, far.Z, 0, now);
+            world.World.Host.World.FindOnlinePlayer("Tradeplayer")!.Relocate(far.X + 3f, far.Y, far.Z, 0, now);
+            return true;
+        });
+        await world.RunAsync(1_000);
+        await player.CollectAsync();
+
+        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
+        // The player keeps standing beside the bot, which drifts while it waits (the answer comes after a typing delay).
+        void Stick()
+        {
+            Player self = world.Player(bot.Id), other = world.World.Host.World.FindOnlinePlayer("Tradeplayer")!;
+            other.Relocate(self.X + 2f, self.Y, self.Z, 0, world.World.Host.World.NowMs);
+        }
+
+        Assert.True(await world.RunUntilAsync(60_000, () => { Stick(); return dispatched.Contains(WorldOpcode.CmsgMessagechat); }), "the bot answers the whisper");
+        await world.RunUntilAsync(3_000, () => { Stick(); return dispatched.Contains(WorldOpcode.CmsgInitiateTrade); }); // the trade follows the answer
+        Assert.Equal(opened, dispatched.Contains(WorldOpcode.CmsgInitiateTrade));
+        Assert.Equal(opened, (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgTradeStatus));
+    }
+
+    /// <summary>A player on the bot's ignore list is not heard: no answer to a whisper (the same whisper from a player not ignored is answered).</summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task AWhisperFromAnIgnoredPlayer_GetsNoAnswer(bool ignored, bool answered)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Groups.InvitePlayers = false;
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("IGNOREDONE", "Ignoredone", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Ignorerbot", Human, Warrior, 1, []);
+        if (ignored)
+            await world.OnWorldAsync(() =>
+            {
+                Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Set(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored, true);
+                return true;
+            });
+        await player.CollectAsync();
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
+        await world.RunAsync(30_000);
+        // The bot's answer reaches the player as a whisper (the player's own whisper comes back as WhisperInform; other bot talk is not a whisper).
+        bool replied = (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgMessagechat && packet.Payload.Length > 0 && packet.Payload[0] == (byte)ChatType.Whisper);
+        Assert.True(answered == replied, "ignoreHas=" + await world.OnWorldAsync(() => Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Has(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored)));
+    }
+
+    /// <summary>A friendly emote at a bot moves its memory of the emoter and is answered; from a player on its ignore list it does neither.</summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true, AccountSecurity.GameMaster)] // a game master is never dropped, as in OnChat
+    public async Task AnEmoteFromAnIgnoredPlayer_ChangesNothingAndGetsNoReply(bool ignored, bool noticed, AccountSecurity security = AccountSecurity.Player)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Groups.InvitePlayers = false;
+            options.Chat.Speech.EmoteReplies = true;
+            options.Chat.Speech.EmoteReplyGapSeconds = 1;
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("EMOTEONE", "Emoteone", security);
+        var bot = await world.AddBotAsync("Emotebot", Human, Warrior, 1, []);
+        await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Emoteone")!;
+            them.Relocate(world.Player(bot.Id).X + 2f, world.Player(bot.Id).Y, world.Player(bot.Id).Z, 0, world.World.Host.World.NowMs);
+            return true;
+        });
+        await world.RunAsync(3_000);
+        if (ignored)
+            await world.OnWorldAsync(() =>
+            {
+                Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Set(world.World.Host.World.FindOnlinePlayer("Emoteone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored, true);
+                return true;
+            });
+        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        // The server's SMSG_TEXT_EMOTE is handed to the bot's session as it would be by the broadcast: the bot walks off on its errands, and a
+        // broadcast from a player left behind would not reach it.
+        await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Emoteone")!;
+            world.Session(bot.Id).Send(WorldOpcode.SmsgTextEmote, ArcaneCore.World.Packets.ChatPackets.BuildTextEmote(them.Guid, 101 /* WAVE */, 0, bot.Name));
+            return true;
+        });
+        await world.RunAsync(20_000);
+
+        bool remembered = await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Emoteone")!;
+            return world.Bots.Social.Memory.TryGet(bot.Id, them.Guid.Value, out PlayerbotRelation relation) && world.Bots.Social.Memory.EffectiveAffinity(relation) != 0;
+        });
+        Assert.Equal(noticed, remembered);
+        Assert.Equal(noticed, dispatched.Contains(WorldOpcode.CmsgTextEmote));
+    }
+
+    [Fact]
+    public async Task APlayerInvitedOnce_IsNotInvitedAgainWithinTheCooldown()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPCOOL", "Groupcool", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askerfour", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Groupcool", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Groupcool", 40);
+
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        ObjectGuid guid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer("Groupcool")!.Guid);
+        Assert.True(await world.OnWorldAsync(() => world.Coordinator.InvitedRecently(guid)));
+        await player.SendAsync(WorldOpcode.CmsgGroupDecline, []);
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+
+        // The decline's own hold (ten minutes) ends first; the thirty minute cooldown still keeps the bots from asking again.
+        await world.RunAsync(11 * 60_000);
+        Assert.True(await world.OnWorldAsync(() => world.Coordinator.InvitedRecently(guid)));
+        Assert.False(PlayerInvited(world), await world.TraceAsync());
     }
 
     [Fact]

@@ -34,6 +34,29 @@ public sealed class PlayerbotGroupInviteTests
         Assert.Equal(accepted, PlayerbotGroupInvites.Allows(policy, allowlist, "Inviter", sameGuild, onBotsFriendList));
     }
 
+    [Theory]
+    [InlineData(false, false, false, false, false, false, false)] // a stranger
+    [InlineData(false, false, false, true, false, false, true)]   // known well enough
+    [InlineData(false, false, false, false, true, false, true)]   // same quest or dungeon goal
+    [InlineData(true, false, false, false, false, false, true)]   // guild mate
+    [InlineData(false, true, false, false, false, false, true)]   // friend
+    [InlineData(true, true, true, true, true, false, false)]      // a rival is always declined, even a guild mate on the same goal
+    [InlineData(false, false, true, false, false, false, false)]  // a rival with nothing else
+    public void TheAffinityPolicy_AcceptsTheKnownAndTheOnSameGoal_AndNeverARival(bool sameGuild, bool friend, bool rival, bool wellKnown, bool sharesGoal, bool allowlisted, bool accepted)
+    {
+        string[] allowlist = allowlisted ? ["Inviter"] : [];
+        var standing = new PlayerbotGroupInvites.Standing(rival, wellKnown, sharesGoal);
+        Assert.Equal(accepted, PlayerbotGroupInvites.Allows(PlayerbotInvitePolicy.Affinity, allowlist, "Inviter", sameGuild, friend, standing));
+    }
+
+    [Fact]
+    public void TheAffinityPolicy_WithoutStanding_ReadsAStranger_AndTheAllowlistStaysAbsolute()
+    {
+        Assert.False(PlayerbotGroupInvites.Allows(PlayerbotInvitePolicy.Affinity, [], "Inviter", false, false));
+        Assert.True(PlayerbotGroupInvites.Allows(PlayerbotInvitePolicy.Affinity, [], "Inviter", true, false));
+        Assert.True(PlayerbotGroupInvites.Allows(PlayerbotInvitePolicy.Affinity, ["inviter"], "Inviter", false, false, new PlayerbotGroupInvites.Standing(true, false, false)));
+    }
+
     [Fact]
     public void TheAllowlistIgnoresCase()
         => Assert.True(PlayerbotGroupInvites.Allows(PlayerbotInvitePolicy.None, ["inviter"], "INVITER", false, false));
@@ -58,7 +81,8 @@ public sealed class PlayerbotGroupInviteTests
     public void Defaults_FollowVmangos_AndValidate()
     {
         var party = new PlayerbotPartyOptions();
-        Assert.Equal(PlayerbotInvitePolicy.GuildOrFriends, party.InvitePolicy);
+        Assert.Equal(PlayerbotInvitePolicy.Affinity, party.InvitePolicy);
+        Assert.Equal(10, party.AcceptInviteAffinity);
         Assert.Empty(party.Allowlist);
         Assert.True(party.TeleportToLeader);
         Assert.True(party.AutoRevive);

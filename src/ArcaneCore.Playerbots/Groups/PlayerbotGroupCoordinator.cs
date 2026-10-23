@@ -230,6 +230,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private WorldRuntime? _world;
     private uint _scanElapsed = ScanMs;
     private int _nextId = 1;
+    private int _nextWaitingGroupId = 1;
 
     /// <summary>The groups formed so far, completed so far and given up so far (status and tests).</summary>
     internal (int Formed, int Completed, int Failed) Totals { get; private set; }
@@ -317,6 +318,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             _groups.Clear();
             _memberOf.Clear();
             _waiting.Clear();
+            ResetRecruiting();
             _setAside.Clear();
             _failStreaks.Clear();
             _declinedPlayers.Clear();
@@ -552,9 +554,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     // --- needs and matching ---------------------------------------------------------------------------------------------
 
-    private sealed class Waiting(string name, PlayerbotGroupGoal goal, uint since)
+    /// <param name="name">The bot's name.</param>
+    /// <param name="goal">What it waits for.</param>
+    /// <param name="since">Since when (world ms).</param>
+    /// <param name="groupId">The id of the waiting group (the bots that wait for the same goal and team): stable from the first member's wait to the last one's end
+    /// (<see cref="WaitingGroupIdOf"/>), the identity recruiting rolls on, unlike <see cref="BotGroup.Id"/> which only exists once the group has formed.</param>
+    private sealed class Waiting(string name, PlayerbotGroupGoal goal, uint since, int groupId)
     {
         public string Name { get; } = name;
+        public int GroupId { get; } = groupId;
+        public Team Team { get; init; }
         public PlayerbotGroupGoal Goal { get; set; } = goal;
         public uint SinceMs { get; } = since;
         private PlayerbotGroupGoal? _descGoal;
@@ -653,7 +662,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
             if (FindNeed(bot, player, quests, creatures, maps) is { } goal)
             {
-                _waiting[bot.BotId] = new Waiting(player.Name, goal, now);
+                _waiting[bot.BotId] = new Waiting(player.Name, goal, now, WaitingGroupIdFor(goal, player.Team)) { Team = player.Team };
                 bot.Brain.GroupHeld.Add((goal.QuestId, goal.ObjectiveEntry));
                 bot.Brain.Risk.ClearGroupSignal();
                 Note($"{player.Name} needs a group: {goal}");
@@ -664,6 +673,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         if (_options.Groups.Enabled) Match();
+        if (_options.Groups.Enabled) MentorSafely();
         if (_options.Groups.Enabled) StartRuns();
     }
 
@@ -846,7 +856,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             uint questId = signal.QuestId != 0 ? signal.QuestId : QuestFor(player, signal.Entry, quests);
             var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Quest, questId, signal.Entry, player.MapId, player.MapId,
-                signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotGroupContent.PartySize), player.Level, signal.Source);
+                signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotRecruitment.SignalLimit(_options.Groups)), player.Level, signal.Source);
             if (!IsSetAside(bot.BotId, goal.Key)) return goal;
         }
 
@@ -997,30 +1007,38 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     private void Match()
     {
-        if (!QuestGroupSlotFree() || GroupManagerOrNull() is not { } groupManager) return;
+        PruneRecruiting(Now);
+        if (!QuestGroupSlotFree())
+        {
+            NoteCapBlocked();
+            return;
+        }
+
+        if (GroupManagerOrNull() is not { } groupManager) return;
         foreach (var wanting in _waiting
                      .Select(w => (BotId: w.Key, Waiting: w.Value))
                      .GroupBy(w => (w.Waiting.Goal.Key, Team: _bots[w.BotId].Session.Player?.Team ?? 0))
                      .OrderBy(g => g.Min(w => w.Waiting.SinceMs)).ToArray())
         {
-            if (!QuestGroupSlotFree()) return;
+            if (!QuestGroupSlotFree())
+            {
+                NoteCapBlocked();
+                return;
+            }
+
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
             int size = wanting.Max(w => w.Waiting.Goal.Size);
-            var candidates = new List<PlayerbotGroupCandidate>();
-            foreach ((Guid botId, Waiting waiting) in wanting)
-            {
-                if (_bots[botId].Session.Player is not { IsAlive: true } player || player.MapId != goal.MeetingMap) continue;
-                if (player.Level < goal.MinLevel) continue;
-                if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), goal.Meeting) > MaxMeetingYards) continue;
-                candidates.Add(Candidate(botId, player, waiting.SinceMs));
-            }
+            List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, goal);
 
             PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups);
             if (plan is null && candidates.Count >= 1) plan = MatchWithVolunteer(candidates, size, goal, groupManager); // asked for it (Volunteers.cs)
+            List<Guid> recruited = [];
+            if (plan is null && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
             if (plan is null && _options.Groups.InvitePlayers && candidates.Count >= 1)
                 plan = MatchWithPlayer(candidates, size, goal, groupManager);
             if (plan is null) continue;
             Form(goal with { Size = size }, plan);
+            if (recruited.Count > 0) NoteRecruited(plan, recruited);
         }
     }
 
@@ -1049,34 +1067,6 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         for (byte slot = 0; slot < Game.Items.InventorySlots.EquipmentEnd; slot++)
             if (player.Inventory.GetItem(Game.Items.InventorySlots.Bag0, slot) is { } item) total += item.Template.ItemLevel;
         return total;
-    }
-
-    /// <summary>
-    /// <see cref="PlayerbotGroupOptions.InvitePlayers"/>: a group one short (a role or a member) may take a nearby real player of the
-    /// same team, ungrouped, of a fitting level, who has not declined lately.
-    /// </summary>
-    private PlayerbotGroupPlan? MatchWithPlayer(List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, GroupManager groupManager)
-    {
-        PlayerbotGroupCandidate oldest = candidates.OrderBy(c => c.NeedSinceMs).First();
-        if (_bots[oldest.BotId].Session.Player is not { Map: { } map } anchor) return null;
-        foreach (ObjectGuid guid in anchor.VisibleObjects)
-        {
-            if (map.FindObject(guid) is not Player { IsAlive: true } real || real.Session is not WorldSession { IsManaged: false }) continue;
-            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
-            if (_declinedPlayers.ContainsKey(real.Guid) || real.Level < goal.MinLevel) continue;
-            if (Vector3.Distance(new Vector3(real.X, real.Y, real.Z), new Vector3(anchor.X, anchor.Y, anchor.Z)) > InvitePlayerYards) continue;
-            var withPlayer = new List<PlayerbotGroupCandidate>(candidates)
-            {
-                new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
-                    new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue),
-            };
-            // A real player never leads a bot group: the bots keep their goal.
-            if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups) is { } plan && plan.Leader.BotId != Guid.Empty
-                && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
-                return plan;
-        }
-
-        return null;
     }
 
     private BotGroup Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null)
@@ -1173,12 +1163,19 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 }
             }
             if (!_groups.Contains(group)) return;
-            int botMembers = 0;
+            int botMembers = 0, present = 0;
+            bool realOffline = false;
             for (int i = 0; i < group.Members.Count; i++)
-                if (!group.Members[i].Real) botMembers++;
-            if (botMembers < 2 && group.Goal.Size >= 2 && !group.Solo)
             {
-                Finish(group, success: false, "too-few");
+                Member m = group.Members[i];
+                if (!m.Real) { botMembers++; present++; }
+                else if (!m.Joined) present++;                                   // still being invited: the Forming rules own it
+                else if (world.FindOnlinePlayer(m.Guid) is not null || group.Succeeded || group.State == PlayerbotGroupState.Leaving) present++; // a finished run is not failed by a logout while the bots walk out
+                else realOffline = true;                                          // the server group keeps a logged-out player; it does not count
+            }
+            if ((botMembers < 1 || present < 2) && group.Goal.Size >= 2 && !group.Solo) // a real player counts toward the two only while online
+            {
+                Finish(group, success: false, realOffline && botMembers >= 1 ? "player-gone" : "too-few");
                 return;
             }
         }
@@ -1191,6 +1188,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         SyncRun(group);
+        if (MentorTimedOut(group, now))
+        {
+            Finish(group, success: false, "mentor-timeout", setAside: false);
+            return;
+        }
+
         if (group.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding or PlayerbotGroupState.Leaving)
             && unchecked(now - group.FormedMs) > GoalTimeoutOf(group))
         {
@@ -1873,7 +1876,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal uint SetAsideLeftMs(Guid botId, (PlayerbotGroupGoalKind, uint) key)
         => _setAside.TryGetValue((botId, key), out uint until) && unchecked((int)(until - Now)) > 0 ? unchecked(until - Now) : 0;
 
-    private void SetAside(Guid botId, PlayerbotGroupGoal goal, bool suspendInBrain, bool failed = false)
+    internal void SetAside(Guid botId, PlayerbotGroupGoal goal, bool suspendInBrain, bool failed = false)
     {
         uint ms = SetAsideMs;
         if (failed)
@@ -1885,6 +1888,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         _setAside[(botId, goal.Key)] = unchecked(Now + ms);
+        NoteStruggle(botId, goal);
         if (!suspendInBrain || _world is null || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
         if (goal.QuestId != 0) bot.Brain.Suspensions.SuspendQuest(goal.QuestId, Now);
         bot.Brain.Suspensions.SuspendEntry(goal.ObjectiveEntry, Now);

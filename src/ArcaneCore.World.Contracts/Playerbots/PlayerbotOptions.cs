@@ -343,6 +343,13 @@ public enum PlayerbotInvitePolicy
 
     /// <summary>Every player.</summary>
     Anyone,
+
+    /// <summary>
+    /// The allowlist, and a player the bot knows well enough: in the bot's guild or on its friend list, with affinity (the bot's memory of
+    /// the player; War Mode's layer while it is on) of at least <see cref="PlayerbotPartyOptions.AcceptInviteAffinity"/>, or on the same
+    /// quest or dungeon goal as the bot. A rival is always declined.
+    /// </summary>
+    Affinity,
 }
 
 /// <summary>What a grouped bot answers to a group loot roll (<see cref="PlayerbotPartyOptions.LootRoll"/>).</summary>
@@ -363,8 +370,11 @@ public sealed class PlayerbotPartyOptions
     /// <summary>The most names <see cref="Allowlist"/> may hold.</summary>
     public const int MaxAllowlist = 64;
 
-    /// <summary>Who may invite a bot (<see cref="PlayerbotInvitePolicy.GuildOrFriends"/> by default).</summary>
-    public PlayerbotInvitePolicy InvitePolicy { get; set; } = PlayerbotInvitePolicy.GuildOrFriends;
+    /// <summary>Who may invite a bot (<see cref="PlayerbotInvitePolicy.Affinity"/> by default).</summary>
+    public PlayerbotInvitePolicy InvitePolicy { get; set; } = PlayerbotInvitePolicy.Affinity;
+
+    /// <summary>The affinity toward a stranger that makes a bot accept its group invitation under <see cref="PlayerbotInvitePolicy.Affinity"/> (-100..100).</summary>
+    public int AcceptInviteAffinity { get; set; } = 10;
 
     /// <summary>Character names whose invitations a bot always accepts, whatever <see cref="InvitePolicy"/> says (case-insensitive).</summary>
     public string[] Allowlist { get; set; } = [];
@@ -387,7 +397,8 @@ public sealed class PlayerbotPartyOptions
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Party";
-        if (!Enum.IsDefined(InvitePolicy)) throw new InvalidOperationException($"{section}: InvitePolicy must be None, GuildOrFriends or Anyone.");
+        if (!Enum.IsDefined(InvitePolicy)) throw new InvalidOperationException($"{section}: InvitePolicy must be None, GuildOrFriends, Anyone or Affinity.");
+        if (AcceptInviteAffinity is < -100 or > 100) throw new InvalidOperationException($"{section}: AcceptInviteAffinity must be -100..100.");
         if (!Enum.IsDefined(LootRoll)) throw new InvalidOperationException($"{section}: LootRoll must be Pass, Greed or Need.");
         if (MasterTimeoutSeconds is < 1 or > 3600) throw new InvalidOperationException($"{section}: MasterTimeoutSeconds must be 1..3600.");
         if (Allowlist is null || Allowlist.Length > MaxAllowlist

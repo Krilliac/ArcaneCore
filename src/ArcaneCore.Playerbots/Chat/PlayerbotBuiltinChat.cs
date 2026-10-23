@@ -205,8 +205,8 @@ internal static partial class PlayerbotBuiltinChat
                 return QuestHelpAnswer(ask, intent, Say);
             case BuiltinChatIntent.Trade:
                 if (ask.SenderIsBot || f is null) return Text("trade.no");
-                if (!f.SpeakerNearby) return Text(f.SpeakerInGroup || ask.InviteAllowed ? "trade.far" : "trade.no");
-                return f.SpeakerInGroup || ask.InviteAllowed ? new(Say("trade.yes"), null, BotChatAction.OpenTrade, intent) : Text("trade.no");
+                if (!f.SpeakerNearby) return Text(f.SpeakerInGroup || ask.TradeAllowed ? "trade.far" : "trade.no");
+                return f.SpeakerInGroup || ask.TradeAllowed ? new(Say("trade.yes"), null, BotChatAction.OpenTrade, intent) : Text("trade.no");
             case BuiltinChatIntent.Share:
                 return ask.FromMaster && (f is { Quests.Count: > 0 } || p.QuestTitle is not null)
                     ? new(Say("share.yes"), null, BotChatAction.ShareQuest, intent)

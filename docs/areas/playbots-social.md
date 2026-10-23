@@ -40,10 +40,35 @@ the day from a template (`CMSG_GUILD_MOTD`), screened like every other line.
 * A bot answers every invitation it receives, even with `World:Playerbots:Social:Guilds:Enabled` off. An invitation of a guild the
   founding bots are building (expected) is accepted (`CMSG_GUILD_ACCEPT`); one from another managed bot that nobody expected is declined
   (`CMSG_GUILD_DECLINE`); one from a real player is accepted by `World:Playerbots:Social:Guilds:InvitePolicy` (`None`,
-  `GuildOrFriends` (default), `Anyone`; the same rules as `World:Playerbots:Party:InvitePolicy`) and always for the names in
+  `GuildOrFriends` (default), `Anyone`, `Affinity`; the same rules as `World:Playerbots:Party:InvitePolicy`) and always for the names in
   `World:Playerbots:Party:Allowlist`. The same policy decides whether a bot signs a real player's charter.
+* **Invitations by affinity** (`World:Playerbots:Social:Guilds:AffinityInvites`, on). A bot-led guild's master or an officer (a guild whose
+  master is a real player is never recruited for by the bots) also invites a
+  guildless same-team character, player or bot, that it knows and likes: affinity at least `GuildInviteAffinity` (60) and familiarity at
+  least `GuildInviteMinFamiliarity` (8), never a rival or a game master, and at most one invitation per character per
+  `GuildInviteCooldownDays` (7), within `TargetSize` as above. A guildless bot accepts an invitation, from a player or a bot, whose sender it
+  likes: affinity at least `GuildAcceptAffinity` (30) and no rival (affinity read through `EffectiveAffinity`); otherwise the rules above
+  decide. The operator's `InvitePolicy` comes first: with `None` a bot declines every guild invitation of a player or bot it was not
+  expecting, however much it likes the inviter (only the `World:Playerbots:Party:Allowlist` names still get in); the affinity acceptance
+  widens `GuildOrFriends`, `Anyone` and `Affinity`, never `None`. With the switch off bots invite and accept as before.
 * **Fail-closed declines.** With no invitation packet seen (the bounded capture queue may have dropped it) and no expectation, the
   answer is a decline; so it is when the inviter is offline, the guild name differs from the packet's, or the policy refuses.
+
+## Friend and ignore lists (`World:Playerbots:Social:Lists`, live)
+
+Bots keep real friend and ignore lists from their social memory, through the same client packets a player sends, so the server's own
+rules (50 friends, 25 ignores, same team, no self) apply. Each bot makes at most one change per `ChangeSpacingSeconds` (60), by
+priority: ignore, un-ignore, un-friend, friend; a few bots are looked over per pass.
+
+| Change | Packet | When |
+|---|---|---|
+| friend | `CMSG_ADD_FRIEND` | affinity at least `FriendAffinity` (50), familiarity at least `FriendMinFamiliarity` (5), not a rival, not ignored |
+| un-friend | `CMSG_DEL_FRIEND` | affinity below `UnfriendAffinity` (20) |
+| ignore | `CMSG_ADD_IGNORE` | affinity at or below `IgnoreAffinity` (-70), or a rival that earned a chat safety strike; never a game master |
+| un-ignore | `CMSG_DEL_IGNORE` | affinity above `UnignoreAffinity` (-30) and not a rival with a strike |
+
+`Enabled` switches the lane off. The `Affinity` invite policy of `World:Playerbots:Party:InvitePolicy` reads these lists (a friend is
+accepted) next to the memory.
 
 ## Ranks
 
@@ -201,4 +226,5 @@ state is in memory or read back from it.
 
 `tests/ArcaneCore.World.Tests/Playerbots/Social/`: `PlayerbotGuildFoundingWorldTests`, `PlayerbotGuildInviteWorldTests`,
 `PlayerbotGuildChatWorldTests`, `PlayerbotGuildRulesTests`, `PlayerbotGuildNamesTests`, `PlayerbotSocialRateLimiterTests`,
-`PlayerbotAnnounceTests`.
+`PlayerbotAnnounceTests`, `PlayerbotSocialListsWorldTests` (the list thresholds and spacing, never ignoring a game master, guild invitations
+by affinity and their weekly limit).

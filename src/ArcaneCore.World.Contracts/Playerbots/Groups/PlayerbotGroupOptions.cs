@@ -13,8 +13,8 @@ public sealed class PlayerbotGroupOptions
     /// <summary>Let bots form groups for group content (on by default). Off: no new group forms; running ones finish.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>The most bot-led groups at once (0..64; 0 forms none).</summary>
-    public int MaxGroups { get; set; } = 4;
+    /// <summary>The most bot-led groups at once (0..64; 0 forms none). A group the cap keeps from forming is logged.</summary>
+    public int MaxGroups { get; set; } = 16;
 
     /// <summary>The most levels between the lowest and the highest member of a group (0..60).</summary>
     public int LevelRange { get; set; } = 5;
@@ -35,10 +35,21 @@ public sealed class PlayerbotGroupOptions
     public bool RaidsEnabled { get; set; } = true;
 
     /// <summary>
-    /// A bot group short of a role or a member may invite a nearby real player of a fitting level and class through the ordinary
-    /// invitation (off by default). A real player never becomes the group's master: the bots keep their goal.
+    /// A bot group short of a role or a member may invite a nearby real player on the same goal through the ordinary invitation (on by
+    /// default), when the player opted in to AI chat or has affinity of at least <see cref="InvitePlayerAffinity"/> toward the bots; never
+    /// a rival or a player the bot flagged NoWhispers, and a player at most once per <see cref="InvitePlayerCooldownMinutes"/>. A real
+    /// player never becomes the group's master: the bots keep their goal.
     /// </summary>
-    public bool InvitePlayers { get; set; }
+    public bool InvitePlayers { get; set; } = true;
+
+    /// <summary>The affinity toward a player that lets the bots invite it without an AI chat opt-in (-100..100).</summary>
+    public int InvitePlayerAffinity { get; set; } = 20;
+
+    /// <summary>Minutes before the bots invite the same player again (0..1440).</summary>
+    public int InvitePlayerCooldownMinutes { get; set; } = 30;
+
+    /// <summary>Recruiting, answering LFG calls, guild calls, mentoring and raid escalation (<c>World:Playerbots:Groups:Cooperation</c>; live).</summary>
+    public PlayerbotCooperationOptions Cooperation { get; set; } = new();
 
     /// <summary>Dungeon and raid runs: free bots group up on their own for instances that fit them (<c>World:Playerbots:Groups:DungeonRuns</c>; live).</summary>
     public PlayerbotRunOptions DungeonRuns { get; set; } = new();
@@ -50,6 +61,10 @@ public sealed class PlayerbotGroupOptions
         if (LevelRange is < 0 or > 60) throw new InvalidOperationException($"{section}: LevelRange must be 0..60.");
         if (MinTank is < 0 or > 5 || MinHealer is < 0 or > 5) throw new InvalidOperationException($"{section}: MinTank and MinHealer must be 0..5.");
         if (FormationTimeoutSeconds is < 30 or > 86_400) throw new InvalidOperationException($"{section}: FormationTimeoutSeconds must be 30..86400.");
+        if (InvitePlayerAffinity is < -100 or > 100) throw new InvalidOperationException($"{section}: InvitePlayerAffinity must be -100..100.");
+        if (InvitePlayerCooldownMinutes is < 0 or > 1440) throw new InvalidOperationException($"{section}: InvitePlayerCooldownMinutes must be 0..1440.");
+        if (Cooperation is null) throw new InvalidOperationException($"{section}:Cooperation is missing.");
+        Cooperation.Validate();
         if (DungeonRuns is null) throw new InvalidOperationException($"{section}:DungeonRuns is missing.");
         DungeonRuns.Validate();
     }

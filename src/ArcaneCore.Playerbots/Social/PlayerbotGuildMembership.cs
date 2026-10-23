@@ -1,6 +1,8 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Party;
@@ -40,6 +42,9 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
     private readonly Dictionary<(int Guild, uint Candidate), long> _refused = [];
     private readonly Dictionary<int, long> _lastRecruit = [];
     private readonly Dictionary<int, long> _lastPromotion = [];
+    private readonly Dictionary<uint, (int GuildId, long SinceMs)> _offered = [];
+    private readonly Dictionary<uint, long> _offeredAt = [];
+    private readonly Dictionary<int, long> _lastAffinityInvite = [];
 
     // --- rules without a world ----------------------------------------------------------------------------------------
 
@@ -134,11 +139,31 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         int count = 0;
         foreach ((int guild, _) in _pending.Values)
             if (guild == guildId) count++;
+        foreach ((int guild, _) in _offered.Values)
+            if (guild == guildId) count++;
         return count;
     }
 
+    /// <summary>
+    /// Whether a guildless bot takes the invitation of an inviter, a player or a bot: its affinity toward the inviter
+    /// (<c>EffectiveAffinity</c>) reaches <paramref name="acceptAffinity"/> and the inviter is no rival.
+    /// </summary>
+    internal static bool AcceptsByAffinity(PlayerbotSocialMemory memory, Guid botId, ulong inviterGuid, int acceptAffinity)
+        => memory.TryGet(botId, inviterGuid, out PlayerbotRelation relation) && !memory.IsRival(relation) && memory.EffectiveAffinity(relation) >= acceptAffinity;
+
+    /// <summary>
+    /// Whether <paramref name="relation"/> (the inviter's memory of a guildless character) earns a guild invitation: affinity at least
+    /// <see cref="PlayerbotSocialGuildOptions.GuildInviteAffinity"/> and familiarity at least <see cref="PlayerbotSocialGuildOptions.GuildInviteMinFamiliarity"/>,
+    /// no rival.
+    /// </summary>
+    internal static bool WorthInviting(PlayerbotSocialMemory memory, PlayerbotSocialGuildOptions options, PlayerbotRelation relation)
+        => !memory.IsRival(relation) && memory.EffectiveAffinity(relation) >= options.GuildInviteAffinity && relation.Familiarity >= options.GuildInviteMinFamiliarity;
+
     /// <summary>A packet of SMSG_GUILD_INVITE drained from a bot (the inviter's name and the guild's).</summary>
     internal void NoteInvite(Guid botId, string inviter, string guild) => _seenInvites[botId] = (inviter, guild);
+
+    /// <summary>Whether an invitation packet of <paramref name="botId"/> was noted and not yet answered (tests wait on it instead of a delay).</summary>
+    internal bool HasSeenInvite(Guid botId) => _seenInvites.ContainsKey(botId);
 
     // --- the world thread ---------------------------------------------------------------------------------------------
 
@@ -177,6 +202,9 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         if (!_seenInvites.TryGetValue(bot.Id, out (string Inviter, string Guild) seen)) return false; // no packet, no expectation: decline
         if (pass.Social.Guilds.Get(guildId) is not { } guild || !string.Equals(guild.Name, seen.Guild, StringComparison.OrdinalIgnoreCase)) return false;
         if (pass.World.FindOnlinePlayer(seen.Inviter) is not { } inviter) return false;
+        // The operator's policy comes first: None declines everyone (the allowlist apart); affinity only widens a policy that allows something.
+        if (pass.Options.Guilds.InvitePolicy != PlayerbotInvitePolicy.None && pass.Options.Guilds.AffinityInvites && pass.Recorder is { Enabled: true } recorder
+            && AcceptsByAffinity(recorder.Memory, bot.Id, inviter.Guid.Value, pass.Options.Guilds.GuildAcceptAffinity)) return true;
         if (inviter.Session is WorldSession { IsManaged: true }) return false; // another managed bot that no founding of ours expected
         return AcceptsRealPlayer(pass.Options.Guilds.InvitePolicy, pass.Bot.Party.Allowlist, inviter.Name,
             PlayerbotGroupInvites.OnBotsFriendList(pass.Social, bot.Player, inviter));
@@ -222,6 +250,60 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         }
 
         if (_refused.Count > 256) _refused.Clear();
+    }
+
+    /// <summary>
+    /// A bot-led guild's master or officer (a guild whose leader is no registered bot is left alone, as in <see cref="Recruit"/>) invites a guildless same-team character (player or bot) it likes (<see cref="WorthInviting"/>), at most
+    /// one invitation per character per <see cref="PlayerbotSocialGuildOptions.GuildInviteCooldownDays"/> and one per guild per
+    /// <see cref="PlayerbotSocialTimings.RecruitSpacingMs"/>, while the guild has room. The guild invite goes through CMSG_GUILD_INVITE, so the
+    /// server's rights check applies; the invited bot answers it by <see cref="AcceptsByAffinity"/>.
+    /// </summary>
+    internal void InviteByAffinity(PlayerbotSocialPass pass)
+    {
+        PlayerbotSocialGuildOptions options = pass.Options.Guilds;
+        GuildManager guilds = pass.Social.Guilds;
+        foreach ((uint id, (int guildId, long since)) in _offered.ToArray())
+        {
+            Player? invited = pass.World.FindOnlinePlayer(new ObjectGuid(id));
+            if (guilds.Get(guildId) is null || invited is null || guilds.InvitedTo(invited) != guildId || pass.NowMs - since >= pass.Timings.PendingInviteTimeoutMs)
+                _offered.Remove(id);
+        }
+
+        if (!options.Enabled || !options.AffinityInvites || pass.Recorder is not { Enabled: true } recorder) return;
+        long cooldownMs = options.GuildInviteCooldownDays * 86_400_000L;
+        foreach (Guild guild in guilds.All.ToArray())
+        {
+            if (!pass.Registered.Contains(guild.LeaderId)) continue; // a guild led by a real player is theirs to recruit for (as in Recruit)
+            if (_lastAffinityInvite.TryGetValue(guild.Id, out long last) && pass.NowMs - last < pass.Timings.RecruitSpacingMs) continue;
+            if (InviteRoom(guild.MemberCount, PendingFor(guild.Id), options.TargetSize) <= 0) continue;
+            if (InviterOf(pass, guild) is not { } inviter) continue;
+            PlayerbotRelation? best = null;
+            Player? target = null;
+            foreach (PlayerbotRelation relation in recorder.Memory.Relations(inviter.Id))
+            {
+                if (!WorthInviting(recorder.Memory, options, relation)) continue;
+                if (pass.World.FindOnlinePlayer(new ObjectGuid(relation.OtherGuid)) is not { IsAlive: true } other || other.Team != inviter.Player.Team) continue;
+                if (other.IsGameMaster || guilds.GetGuildOf(other) is not null || guilds.InvitedTo(other) != 0) continue;
+                if (_offeredAt.TryGetValue(other.Guid.Low, out long at) && pass.NowMs - at < cooldownMs) continue;
+                if (best is null || recorder.Memory.EffectiveAffinity(relation) > recorder.Memory.EffectiveAffinity(best)
+                    || (recorder.Memory.EffectiveAffinity(relation) == recorder.Memory.EffectiveAffinity(best) && relation.OtherGuid < best.OtherGuid))
+                {
+                    best = relation;
+                    target = other;
+                }
+            }
+
+            if (target is null) continue;
+            _lastAffinityInvite[guild.Id] = pass.NowMs;
+            PlayerbotSocialPackets.Send(inviter.Session, WorldOpcode.CmsgGuildInvite, PlayerbotSocialPackets.GuildInvite(target.Name));
+            _offeredAt[target.Guid.Low] = pass.NowMs; // the target's week starts when it was asked, whether or not the server took the invitation
+            if (guilds.InvitedTo(target) != guild.Id) continue;
+            _offered[target.Guid.Low] = (guild.Id, pass.NowMs);
+        }
+
+        if (_offeredAt.Count > 1024)
+            foreach ((uint id, long at) in _offeredAt.ToArray())
+                if (pass.NowMs - at >= cooldownMs) _offeredAt.Remove(id);
     }
 
     private static PlayerbotSocialBot? InviterOf(PlayerbotSocialPass pass, Guild guild)

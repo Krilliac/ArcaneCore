@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Playerbots.Groups;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
@@ -17,11 +18,12 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// <summary>
 /// One thing a guild's bots may remark on: the key of its built-in lines (<see cref="PlayerbotSocialTemplates"/>), a plain sentence of what
 /// happened (screened like any input), the instruction a model gets, the placeholder values, and who may say it
-/// (<see cref="OnlySpeaker"/>: only that character; <see cref="ExceptSpeaker"/>: anyone but).
+/// (<see cref="OnlySpeaker"/>: only that character; <see cref="ExceptSpeaker"/>: anyone but). <see cref="StillValid"/> is asked just before
+/// the line goes out (false: it is dropped unsaid); <see cref="Said"/> runs once the chat service has taken the line.
 /// </summary>
 internal sealed record PlayerbotGuildTopic(
     string Key, string Sentence, string Instruction, IReadOnlyDictionary<string, string> Values, long QueuedMs,
-    uint? OnlySpeaker = null, uint? ExceptSpeaker = null);
+    uint? OnlySpeaker = null, uint? ExceptSpeaker = null, Func<bool>? StillValid = null, Action? Said = null);
 
 /// <summary>
 /// What bots say in their guild's chat (docs/areas/playbots-social.md). Events and chance queue <i>topics</i> per guild (at most
@@ -56,10 +58,17 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
     private readonly PlayerbotSocialRateLimiter<Guid> _speakers = new();
     private readonly Dictionary<(int Guild, uint Instance, ulong Victim), long> _bossSeen = [];
     private readonly Dictionary<int, long> _bgWinAt = [];
+    private readonly Dictionary<(int Guild, (PlayerbotGroupGoalKind, uint) Key), long> _callAt = [];
     private long _sweptAtMs;
+
+    /// <summary>How long a guild is not asked again for the same group's goal (ten minutes of world time).</summary>
+    internal const long CallRepeatMs = 10 * 60_000;
 
     /// <summary>Topics waiting for a guild (tests and status).</summary>
     internal int Waiting(int guildId) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.Count : 0;
+
+    /// <summary>Topics with this <paramref name="key"/> waiting for a guild (tests and status).</summary>
+    internal int Waiting(int guildId, string key) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.Count(topic => topic.Key == key) : 0;
 
     /// <summary>Lines the guild has had queued within the hour.</summary>
     internal int UsedThisHour(int guildId, long nowMs) => _guilds.Used(guildId, nowMs);
@@ -176,6 +185,7 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
         }
 
         if (pass.Timings.IdleChatter) RollSmallTalk(pass, options);
+        QueueCalls(pass);
         foreach (int id in _topics.Keys.ToArray())
         {
             List<PlayerbotGuildTopic> list = _topics[id];
@@ -189,6 +199,12 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
             if (!_guilds.HasRoom(id, options.MessagesPerHour, pass.NowMs) || !HasListener(pass, guild)) continue;
             foreach (PlayerbotGuildTopic topic in list.ToArray())
             {
+                if (topic.StillValid is { } stillValid && !stillValid())
+                {
+                    list.Remove(topic);
+                    continue;
+                }
+
                 if (PickSpeaker(pass, guild, topic) is not { } speaker) continue;
                 BotChatAdmission admission = chat.TryAnnounce(Ask(pass, guild, speaker, topic));
                 if (admission == BotChatAdmission.Queued)
@@ -196,6 +212,7 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
                     _guilds.TryTake(id, options.MessagesPerHour, pass.NowMs);
                     _speakers.MarkSpoke(speaker.Id, pass.NowMs);
                     list.Remove(topic);
+                    topic.Said?.Invoke();
                     logger.LogDebug("Playerbot {Bot} says {Topic} in the guild {Guild}", speaker.Player.Name, topic.Key, guild.Name);
                 }
                 else if (admission == BotChatAdmission.Disabled)
@@ -206,6 +223,43 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
 
                 break; // one line per guild per pass; a refused one (budget, queue) is tried again next pass
             }
+        }
+    }
+
+    /// <summary>
+    /// "Anyone for &lt;dungeon&gt;?": for each dungeon or raid group the coordinator really has forming (<see cref="PlayerbotGroupCoordinator.FormingCalls"/>),
+    /// the bot waiting longest asks its guild, if it has one with another bot in it, once per <see cref="CallRepeatMs"/> per guild and goal. The
+    /// line is dropped unsaid if the group is gone by the time it would go out; once it is taken, the guild's bots count as having heard it
+    /// (<see cref="PlayerbotGroupCoordinator.NoteGuildCall"/>) and are weighed for the group at the next scan, without the wait.
+    /// </summary>
+    private void QueueCalls(PlayerbotSocialPass pass)
+    {
+        if (pass.Coordinator is not { } coordinator || !pass.Bot.Groups.Cooperation.GuildCalls) return;
+        if (_callAt.Count > 0)
+            foreach (var (callKey, at) in _callAt)
+                if (pass.NowMs - at >= CallRepeatMs) _callAt.Remove(callKey);
+        foreach (PlayerbotFormingCall call in coordinator.FormingCalls())
+        {
+            PlayerbotSocialBot? caller = null;
+            foreach (PlayerbotSocialBot running in pass.Bots)
+                if (running.Id == call.CallerBotId) { caller = running; break; }
+            if (caller is null || pass.Social.Guilds.GetGuildOf(caller.Player) is not { } guild) continue;
+            var callKey = (guild.Id, call.Goal.Key);
+            if (_callAt.ContainsKey(callKey) || Waiting(guild.Id) >= MaxTopicsPerGuild) continue;
+            bool helpers = false;
+            foreach (GuildMember member in guild.Members)
+                if (member.CharacterId != caller.Player.Guid.Low && pass.ByCharacter.ContainsKey(member.CharacterId)) { helpers = true; break; }
+            if (!helpers) continue;
+            string? dungeon = PlayerbotVoiceFacts.DungeonName(call.Goal.MapId, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Registry.Find(call.Goal.MapId)?.Name, pass.Random);
+            if (dungeon is null) continue;
+            _callAt[callKey] = pass.NowMs;
+            Guid callerId = call.CallerBotId;
+            (PlayerbotGroupGoalKind, uint) goalKey = call.Goal.Key;
+            Queue(guild.Id, new PlayerbotGuildTopic("guild.lfm", $"Looking for more for {dungeon}.",
+                $"Ask your guild whether anyone wants to do {dungeon} with you.", Values(("guild", guild.Name), ("dungeon", dungeon), ("who", caller.Player.Name)), pass.NowMs,
+                OnlySpeaker: caller.Player.Guid.Low,
+                StillValid: () => coordinator.FormingCalls().Any(c => c.CallerBotId == callerId && c.Goal.Key == goalKey),
+                Said: () => coordinator.NoteGuildCall(guild.Id, goalKey)));
         }
     }
 

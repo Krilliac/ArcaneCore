@@ -140,7 +140,7 @@ internal static class PlayerbotSocialPackets
         return writer.ToArray();
     }
 
-    private static byte[] GuidOnly(ObjectGuid guid)
+    internal static byte[] GuidOnly(ObjectGuid guid)
     {
         var writer = new PacketWriter(8);
         writer.WriteUInt64(guid.Value);

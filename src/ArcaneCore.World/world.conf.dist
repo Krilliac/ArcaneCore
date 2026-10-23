@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       675 keys
+#   WORLD                       709 keys
 #
 ###############################################################################
 
@@ -13378,6 +13378,238 @@ World.Playerbots.Follow.NoProgressSeconds = 8
 World.Playerbots.Follow.TeleportDistanceYards = 100
 
 #
+#    World.Playerbots.Groups.Cooperation.AnswerBotCalls
+#        Description: Let a bot that hears another bot's LFG or LFM line for a goal it could join
+#                     offer itself to that group (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.AnswerBotCalls = true
+
+#
+#    World.Playerbots.Groups.Cooperation.GuildBonus
+#        Description: The chance and the preference a guildmate of a group's member gains (0..1).
+#        Type: float
+#        Default: 0.2
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.GuildBonus = 0.2
+
+#
+#    World.Playerbots.Groups.Cooperation.GuildCalls
+#        Description: Let a guild's bot say "anyone for the dungeon?" in guild chat while a group of
+#                     the guild's members is forming for it, and let the guildmates who hear it join
+#                     at once (on by default). The line is said only when such a group exists.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.GuildCalls = true
+
+#
+#    World.Playerbots.Groups.Cooperation.LfgAnswerBonus
+#        Description: The chance a bot that answered another bot's LFG or LFM line gains (0..1).
+#        Type: float
+#        Default: 0.15
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.LfgAnswerBonus = 0.15
+
+#
+#    World.Playerbots.Groups.Cooperation.MaxLfgAnswersPerLine
+#        Description: The most bots that may answer one LFG or LFM line of another bot (1..64,
+#                     default 4): once that many hold a place in the group, the rest of the hearers
+#                     of the line are not weighed at all.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MaxLfgAnswersPerLine = 4
+
+#
+#    World.Playerbots.Groups.Cooperation.MaxRaidSize
+#        Description: The most members a raid made from a risk signal recruits (6..40).
+#        Type: int
+#        Default: 40
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MaxRaidSize = 40
+
+#
+#    World.Playerbots.Groups.Cooperation.MentorAffinity
+#        Description: The affinity a mentor needs toward the friend (-100..100).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MentorAffinity = 30
+
+#
+#    World.Playerbots.Groups.Cooperation.MentorChance
+#        Description: The chance, times the mentor's helpfulness trait, that a bot able to mentor
+#                     does (0..1).
+#        Type: float
+#        Default: 0.3
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MentorChance = 0.3
+
+#
+#    World.Playerbots.Groups.Cooperation.MentorLevelGap
+#        Description: The levels a mentor must stand above the friend (1..60).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MentorLevelGap = 10
+
+#
+#    World.Playerbots.Groups.Cooperation.MentorMaxMinutes
+#        Description: The longest, in minutes, a mentoring group lasts (1..240).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.MentorMaxMinutes = 20
+
+#
+#    World.Playerbots.Groups.Cooperation.Mentoring
+#        Description: Let a bot far above a friend or guildmate that struggles with a quest group
+#                     with it to clear the quest's objective (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.Mentoring = true
+
+#
+#    World.Playerbots.Groups.Cooperation.RaidEscalation
+#        Description: Let a risk-signal group that needs more than five become a raid goal when
+#                     enough bots are nearby (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RaidEscalation = true
+
+#
+#    World.Playerbots.Groups.Cooperation.Recruit
+#        Description: Let a waiting group recruit nearby bots that lack its goal (on by default).
+#                     Off: only bots that share the goal are grouped.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.Recruit = true
+
+#
+#    World.Playerbots.Groups.Cooperation.RecruitBaseChance
+#        Description: The base chance that a candidate accepts (0..1). The chance is this plus 0.4
+#                     times the candidate's sociability, plus 0.003 per point of its affinity toward
+#                     the group's caller, plus 0.2 when the candidate fills a missing tank or
+#                     healer, plus GuildBonus for a guildmate and LfgAnswerBonus for one that
+#                     answered the call; at most 0.95. A rival and an affinity at or below
+#                     RefuseAffinity never accept.
+#        Type: float
+#        Default: 0.35
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RecruitBaseChance = 0.35
+
+#
+#    World.Playerbots.Groups.Cooperation.RecruitRadiusYards
+#        Description: The farthest from the waiting bot, in yards, a recruit may stand (10..1500).
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RecruitRadiusYards = 300
+
+#
+#    World.Playerbots.Groups.Cooperation.RecruitWaitSeconds
+#        Description: Seconds a group of waiting bots stays short before it recruits (1..3600).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RecruitWaitSeconds = 20
+
+#
+#    World.Playerbots.Groups.Cooperation.RefusalMemoryMinutes
+#        Description: How long a candidate's refusal of a waiting group is remembered, in minutes
+#                     (1..1440, default 10). The refusal is stored with its time: the candidate is
+#                     not asked again until this long after it, and then rolls afresh (when the
+#                     group is still waiting). The roll is made once per window of this length, with
+#                     windows shifted by a phase hashed from the (candidate, group) pair, so
+#                     different pairs do not all turn over together.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RefusalMemoryMinutes = 10
+
+#
+#    World.Playerbots.Groups.Cooperation.RefuseAffinity
+#        Description: A candidate whose affinity toward the group's caller is at or below this never
+#                     joins (-100..0).
+#        Type: int
+#        Default: -40
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.RefuseAffinity = -40
+
+#
+#    World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards
+#        Description: How far from a dungeon's entrance (the group's meeting point), in yards, a
+#                     player on the same continent still counts as on the dungeon goal of a bot that
+#                     waits for a group (10..1500). A player inside the dungeon's instance always
+#                     counts. Quest goals are unaffected.
+#        Type: int
+#        Default: 150
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards = 150
+
+#
 #    World.Playerbots.Groups.DungeonRuns.BandAboveBoss
 #        Description: Levels above the strongest boss the level band ends (0..20).
 #        Type: int
@@ -13619,17 +13851,43 @@ World.Playerbots.Groups.Enabled = true
 World.Playerbots.Groups.FormationTimeoutSeconds = 300
 
 #
+#    World.Playerbots.Groups.InvitePlayerAffinity
+#        Description: The affinity toward a player that lets the bots invite it without an AI chat
+#                     opt-in (-100..100).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.InvitePlayerAffinity = 20
+
+#
+#    World.Playerbots.Groups.InvitePlayerCooldownMinutes
+#        Description: Minutes before the bots invite the same player again (0..1440).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.InvitePlayerCooldownMinutes = 30
+
+#
 #    World.Playerbots.Groups.InvitePlayers
-#        Description: A bot group short of a role or a member may invite a nearby real player of a
-#                     fitting level and class through the ordinary invitation (off by default). A
-#                     real player never becomes the group's master: the bots keep their goal.
+#        Description: A bot group short of a role or a member may invite a nearby real player on the
+#                     same goal through the ordinary invitation (on by default), when the player
+#                     opted in to AI chat or has affinity of at least InvitePlayerAffinity toward
+#                     the bots; never a rival or a player the bot flagged NoWhispers, and a player
+#                     at most once per InvitePlayerCooldownMinutes. A real player never becomes the
+#                     group's master: the bots keep their goal.
 #        Type: bool
-#        Default: false
+#        Default: true
 #        Allowed: true | false
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Groups.InvitePlayers = false
+World.Playerbots.Groups.InvitePlayers = true
 
 #
 #    World.Playerbots.Groups.LevelRange
@@ -13644,14 +13902,15 @@ World.Playerbots.Groups.LevelRange = 5
 
 #
 #    World.Playerbots.Groups.MaxGroups
-#        Description: The most bot-led groups at once (0..64; 0 forms none).
+#        Description: The most bot-led groups at once (0..64; 0 forms none). A group the cap keeps
+#                     from forming is logged.
 #        Type: int
-#        Default: 4
+#        Default: 16
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Groups.MaxGroups = 4
+World.Playerbots.Groups.MaxGroups = 16
 
 #
 #    World.Playerbots.Groups.MinHealer
@@ -14057,6 +14316,18 @@ World.Playerbots.Opportunities.RiskAppetite = 1
 World.Playerbots.Opportunities.ScanRadiusYards = 45
 
 #
+#    World.Playerbots.Party.AcceptInviteAffinity
+#        Description: The affinity toward a stranger that makes a bot accept its group invitation
+#                     under PlayerbotInvitePolicy.Affinity (-100..100).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Party.AcceptInviteAffinity = 10
+
+#
 #    World.Playerbots.Party.Allowlist
 #        Description: Character names whose invitations a bot always accepts, whatever InvitePolicy
 #                     says (case-insensitive).
@@ -14083,15 +14354,15 @@ World.Playerbots.Party.AutoRevive = true
 
 #
 #    World.Playerbots.Party.InvitePolicy
-#        Description: Who may invite a bot (PlayerbotInvitePolicy.GuildOrFriends by default).
-#                     Values: None, GuildOrFriends, Anyone.
+#        Description: Who may invite a bot (PlayerbotInvitePolicy.Affinity by default). Values:
+#                     None, GuildOrFriends, Anyone, Affinity.
 #        Type: PlayerbotInvitePolicy
-#        Default: GuildOrFriends
-#        Allowed: None | GuildOrFriends | Anyone
+#        Default: Affinity
+#        Allowed: None | GuildOrFriends | Anyone | Affinity
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Party.InvitePolicy = GuildOrFriends
+World.Playerbots.Party.InvitePolicy = Affinity
 
 #
 #    World.Playerbots.Party.LootRoll
@@ -15218,6 +15489,21 @@ World.Playerbots.Social.GuildChat.Enabled = true
 World.Playerbots.Social.GuildChat.MessagesPerHour = 4
 
 #
+#    World.Playerbots.Social.Guilds.AffinityInvites
+#        Description: Let a guild's master or officer invite a guildless, same-team character it
+#                     knows and likes (GuildInviteAffinity, GuildInviteMinFamiliarity; at most one
+#                     invitation per character per GuildInviteCooldownDays), and let a guildless bot
+#                     accept the invitation of a character it likes (GuildAcceptAffinity) (on by
+#                     default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.AffinityInvites = true
+
+#
 #    World.Playerbots.Social.Guilds.Creation
 #        Description: How a guild is founded (PlayerbotGuildCreation.Auto by default). Values: Auto,
 #                     Charter, ClientCreate.
@@ -15243,16 +15529,63 @@ World.Playerbots.Social.Guilds.Creation = Auto
 World.Playerbots.Social.Guilds.Enabled = true
 
 #
+#    World.Playerbots.Social.Guilds.GuildAcceptAffinity
+#        Description: The affinity toward the inviter at which a guildless bot accepts a guild
+#                     invitation; it declines below it (-100..100).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.GuildAcceptAffinity = 30
+
+#
+#    World.Playerbots.Social.Guilds.GuildInviteAffinity
+#        Description: The affinity an officer needs toward a guildless character before it invites
+#                     it (-100..100).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.GuildInviteAffinity = 60
+
+#
+#    World.Playerbots.Social.Guilds.GuildInviteCooldownDays
+#        Description: Days before the same character is invited again (0..365).
+#        Type: int
+#        Default: 7
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.GuildInviteCooldownDays = 7
+
+#
+#    World.Playerbots.Social.Guilds.GuildInviteMinFamiliarity
+#        Description: The familiarity an officer needs with a guildless character before it invites
+#                     it (0..1000).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.GuildInviteMinFamiliarity = 8
+
+#
 #    World.Playerbots.Social.Guilds.InvitePolicy
 #        Description: Who may invite a bot into a guild, and whose charter a bot signs
 #                     (PlayerbotInvitePolicy.GuildOrFriends by default): the same rules as
 #                     World:Playerbots:Party:InvitePolicy, and the names in
 #                     World:Playerbots:Party:Allowlist are always accepted. Another bot's invitation
 #                     into a guild the founding bots are building is always accepted. Values: None,
-#                     GuildOrFriends, Anyone.
+#                     GuildOrFriends, Anyone, Affinity.
 #        Type: PlayerbotInvitePolicy
 #        Default: GuildOrFriends
-#        Allowed: None | GuildOrFriends | Anyone
+#        Allowed: None | GuildOrFriends | Anyone | Affinity
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
@@ -15280,6 +15613,88 @@ World.Playerbots.Social.Guilds.MaxBotGuilds = 4
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Guilds.TargetSize = 25
+
+#
+#    World.Playerbots.Social.Lists.ChangeSpacingSeconds
+#        Description: The least seconds between two list changes of one bot (1..3600).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.ChangeSpacingSeconds = 60
+
+#
+#    World.Playerbots.Social.Lists.Enabled
+#        Description: Let bots manage their friend and ignore lists by affinity (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.Enabled = true
+
+#
+#    World.Playerbots.Social.Lists.FriendAffinity
+#        Description: The affinity at or above which a bot befriends a character (with
+#                     FriendMinFamiliarity; -100..100).
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.FriendAffinity = 50
+
+#
+#    World.Playerbots.Social.Lists.FriendMinFamiliarity
+#        Description: The familiarity a bot needs with a character before it befriends it (0..1000).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.FriendMinFamiliarity = 5
+
+#
+#    World.Playerbots.Social.Lists.IgnoreAffinity
+#        Description: The affinity at or below which a bot ignores a character (-100..0). A
+#                     character the bot treats as a rival and that earned a chat strike is ignored
+#                     too.
+#        Type: int
+#        Default: -70
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.IgnoreAffinity = -70
+
+#
+#    World.Playerbots.Social.Lists.UnfriendAffinity
+#        Description: A friend whose affinity has fallen below this is removed (-100..100; keep it
+#                     below FriendAffinity).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.UnfriendAffinity = 20
+
+#
+#    World.Playerbots.Social.Lists.UnignoreAffinity
+#        Description: An ignored character whose affinity has risen above this is no longer ignored
+#                     (-100..0; keep it above IgnoreAffinity).
+#        Type: int
+#        Default: -30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Lists.UnignoreAffinity = -30
 
 #
 #    World.Playerbots.Social.Memory.AffinityHalfLifeDays

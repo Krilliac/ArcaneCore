@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 
@@ -48,6 +49,17 @@ public sealed class PlayerSocial
 
     private readonly Dictionary<uint, SocialFlags> _entries = [];
 
+    /// <summary>
+    /// The changes made before the player's rows arrived (a list made by <see cref="FriendsService.Get"/> before <see cref="FriendsService.Load"/>),
+    /// per target: the flags set and the flags cleared. The load applies them on top of the stored row instead of dropping them.
+    /// </summary>
+    private Dictionary<uint, (SocialFlags Set, SocialFlags Cleared)>? _pending;
+
+    /// <summary>Whether the stored rows are in (a list that is not yet loaded keeps its changes in <see cref="_pending"/>).</summary>
+    internal bool Loaded { get; init; }
+
+    internal IReadOnlyDictionary<uint, (SocialFlags Set, SocialFlags Cleared)>? Pending => _pending;
+
     public IReadOnlyDictionary<uint, SocialFlags> Entries => _entries;
 
     public int Count(SocialFlags flag) => _entries.Values.Count(f => (f & flag) != 0);
@@ -66,6 +78,12 @@ public sealed class PlayerSocial
         else
         {
             _entries[other] = flags;
+        }
+
+        if (!Loaded)
+        {
+            (SocialFlags set, SocialFlags cleared) = (_pending ??= []).GetValueOrDefault(other);
+            _pending[other] = on ? (set | flag, cleared & ~flag) : (set & ~flag, cleared | flag);
         }
 
         return flags;
@@ -93,17 +111,59 @@ public sealed class FriendsService(SocialContext context)
         return social;
     }
 
-    public bool IsLoaded(Player player) => _socials.ContainsKey(player.Guid);
+    public bool IsLoaded(Player player) => _socials.TryGetValue(player.Guid, out PlayerSocial? social) && social.Loaded;
 
     /// <summary>Install a player's rows (entries of deleted characters are skipped).</summary>
     public void Load(Player player, IEnumerable<SocialEntry> entries)
     {
-        var social = new PlayerSocial();
+        var social = new PlayerSocial { Loaded = true };
         foreach (SocialEntry entry in entries)
         {
             if (entry.OtherId > 0 && context.Characters.Find((uint)entry.OtherId) is not null)
             {
                 social.Set((uint)entry.OtherId, entry.Flags & (SocialFlags.Friend | SocialFlags.Ignored), true);
+            }
+        }
+
+        // Changes made on the empty list before the rows arrived are deltas over the stored rows: flags set are added, flags cleared are
+        // removed (a stored Friend plus a pending Ignore is Friend|Ignored). Additions beyond the list limits are dropped. What was written
+        // before the load were absolute flags of the empty list, so every touched target is written again with the merged flags.
+        if (_socials.TryGetValue(player.Guid, out PlayerSocial? early) && early.Pending is { } pending)
+        {
+            SocialFlags[] kinds = [SocialFlags.Friend, SocialFlags.Ignored];
+            uint[] targets = [.. pending.Keys.Order()];
+
+            // Clears first, so a removal that frees a slot runs before the addition that needs it.
+            foreach (uint other in targets)
+            {
+                foreach (SocialFlags flag in kinds)
+                {
+                    if ((pending[other].Cleared & flag) != 0) social.Set(other, flag, false);
+                }
+            }
+
+            foreach (uint other in targets)
+            {
+                SocialFlags set = pending[other].Set;
+                foreach (SocialFlags flag in kinds)
+                {
+                    if ((set & flag) == 0 || social.Has(other, flag)) continue;
+                    if (context.Characters.Find(other) is null) continue; // a deleted character takes no slot
+                    int limit = flag == SocialFlags.Friend ? PlayerSocial.FriendLimit : PlayerSocial.IgnoreLimit;
+                    if (social.Count(flag) >= limit)
+                    {
+                        AnomalyLedger.Shared.Report("social", "pending-over-limit", player.Name,
+                            $"{flag} of character {other} made before the list loaded is dropped: the list holds {limit}", AnomalySeverity.Info);
+                        continue;
+                    }
+
+                    social.Set(other, flag, true);
+                }
+            }
+
+            foreach (uint other in targets)
+            {
+                Persist(player, other, social.Entries.GetValueOrDefault(other));
             }
         }
 

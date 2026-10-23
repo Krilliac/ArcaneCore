@@ -52,6 +52,11 @@ internal static class PlayerbotVoiceTemplates
             "{task} anyone? its elite", "lf help {task}", "anyone else on {task}?",
         ],
 
+        // --- bots answering a group call, and recruits joining a waiting group ------------------------------------------------------
+        ["voice.recruit.tank"] = ["inv me, ill tank", "ill tank, inv", "can tank, inv me", "coming, ill tank", "inv, warrior tank here"],
+        ["voice.recruit.heal"] = ["inv me, ill heal", "ill come, need a healer?", "can heal, inv me", "coming, ill heal", "need a healer? inv me"],
+        ["voice.recruit.dps"] = ["inv me, ill come", "ill come, need dps?", "inv me pls", "can join, inv", "coming along"],
+
         // --- answers to whispers about a call ---------------------------------------------------------------------------------
         ["voice.reply.lfg.ready"] =
         [

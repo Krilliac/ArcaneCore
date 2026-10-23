@@ -398,7 +398,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             };
         }
 
-        if (coordinator is { } groupCoordinator) groupCoordinator.Social = Social;
+        if (coordinator is { } groupCoordinator)
+        {
+            groupCoordinator.Social = Social;
+            groupCoordinator.ChatSafety = _chat?.Safety;
+        }
 
         _world = world;
         _sharedSetAsides.World = world;
@@ -608,6 +612,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
     }
 
+    /// <summary>
+    /// <see cref="PlayerbotInvitePolicy.Affinity"/>: the bot's memory of <paramref name="inviter"/> (rival; affinity at least
+    /// <c>AcceptInviteAffinity</c>, through <c>EffectiveAffinity</c>) and whether they share a quest or dungeon goal. World thread.
+    /// </summary>
+    private PlayerbotGroupInvites.Standing InviteStandingOf(Guid botId, Player bot, Player inviter)
+    {
+        bool rival = false, wellKnown = false;
+        if (Social.Memory.TryGet(botId, inviter.Guid.Value, out PlayerbotRelation relation))
+        {
+            rival = Social.Memory.IsRival(relation);
+            wellKnown = Social.Memory.EffectiveAffinity(relation) >= _options.Party.AcceptInviteAffinity;
+        }
+
+        return new PlayerbotGroupInvites.Standing(rival, wellKnown, !rival && coordinator?.SharesGoal(botId, inviter) == true);
+    }
+
     /// <summary>The feature's driver of one bot around its core entry: the party AI wired to the coordinator, the brain given.</summary>
     private ActiveBot NewActiveBot(ManagedBot entry, PlayerbotBrain brain)
     {
@@ -618,6 +638,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             GroupLootVote = (member, item) => coordinator?.LootVote(member, item),
             // A group whose lead its master handed to a bot (PlayerbotGroupCoordinator.Handoff.cs) owns the bot until an order takes the lead back.
             GroupOwns = (member, master, command) => coordinator?.OwnsAgainst(member, master, command) == true,
+            // What the bot's memory and goal say about an inviter (PlayerbotInvitePolicy.Affinity).
+            InviteStanding = (member, inviter) => InviteStandingOf(entry.BotId, member, inviter),
         };
         party.Social = Social;
         Social.Track(entry.BotId, entry.Record.CharacterId);
@@ -639,6 +661,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private bool SayCallForHelp(ActiveBot active, Player bot, Player nearest)
     {
+        coordinator?.NoteHelpCall(active.Record.BotId, active.Brain.QuestId);
         if (_chat is not { IsActive: true } chat) return false;
         Guid botId = active.Record.BotId;
         var speech = new BotChat.BotSpeech(BotChat.BotSpeechChannel.Yell, string.Empty, "call-for-help", BotChat.BotSpeechPriority.High);
