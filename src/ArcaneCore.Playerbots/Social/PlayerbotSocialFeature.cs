@@ -222,6 +222,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly PlayerbotGuildMembership _membership = new(logger);
+    private readonly PlayerbotSocialLists _lists = new();
     private readonly PlayerbotGuildFounding _founding = new(logger);
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
@@ -261,6 +262,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     internal int Passes { get; private set; }
 
     internal PlayerbotGuildMembership Membership => _membership;
+
+    /// <summary>The friend and ignore list lane (tests, status).</summary>
+    internal PlayerbotSocialLists Lists => _lists;
 
     internal PlayerbotGuildFounding Founding => _founding;
 
@@ -437,7 +441,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _founding.Run(pass, _membership);
         _founding.SetMotds(pass);
         _membership.Recruit(pass, _founding);
+        _membership.InviteByAffinity(pass);
         _membership.Promote(pass);
+        _lists.Run(pass);
         _chat.Speak(pass);
         _emotes.Run(pass);
         RunChannels(pass);

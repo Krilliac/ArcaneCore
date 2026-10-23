@@ -186,7 +186,10 @@ internal static class SocialTestKit
         List<PlayerbotSocialBot> bots = Gather(host, partyDriven);
         HashSet<uint> registered = [.. bots.Select(bot => bot.Player.Guid.Low)];
         return new PlayerbotSocialPass(PartyTestHost.PlayerbotOptionsOf(host), Social(host).Context, host.World, host.WorldServices,
-            PartyTestHost.Feature(host).Chat, registered, registryLoaded: true, timings ?? new PlayerbotSocialTimings(), new Random(seed), nowMs, elapsedMs, () => bots);
+            PartyTestHost.Feature(host).Chat, registered, registryLoaded: true, timings ?? new PlayerbotSocialTimings(), new Random(seed), nowMs, elapsedMs, () => bots)
+        {
+            Recorder = PartyTestHost.Feature(host).Social,
+        };
     }
 
     /// <summary>

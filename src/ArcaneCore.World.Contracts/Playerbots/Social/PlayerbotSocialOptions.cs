@@ -122,7 +122,7 @@ public sealed class PlayerbotSocialGuildOptions
         if (MaxBotGuilds is < 0 or > MaxBotGuildsCeiling) throw new InvalidOperationException($"{section}: MaxBotGuilds must be 0..{MaxBotGuildsCeiling}.");
         if (TargetSize is < MinTargetSize or > MaxTargetSize)
             throw new InvalidOperationException($"{section}: TargetSize must be {MinTargetSize}..{MaxTargetSize}.");
-        if (!Enum.IsDefined(InvitePolicy)) throw new InvalidOperationException($"{section}: InvitePolicy must be None, GuildOrFriends or Anyone.");
+        if (!Enum.IsDefined(InvitePolicy)) throw new InvalidOperationException($"{section}: InvitePolicy must be None, GuildOrFriends, Anyone or Affinity.");
         if (!Enum.IsDefined(Creation)) throw new InvalidOperationException($"{section}: Creation must be Auto, Charter or ClientCreate.");
     }
 }

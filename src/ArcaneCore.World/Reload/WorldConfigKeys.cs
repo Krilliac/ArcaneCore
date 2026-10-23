@@ -474,7 +474,7 @@ public static class WorldConfigKeys
             v => v is >= Playerbots.BotSocial.PlayerbotSocialGuildOptions.MinTargetSize and <= Playerbots.BotSocial.PlayerbotSocialGuildOptions.MaxTargetSize
                 ? null : "must be 2..500"),
         LivePlayerbotsValue("Social:Guilds:InvitePolicy", o => o.Social.Guilds.InvitePolicy, (o, v) => o.Social.Guilds.InvitePolicy = v,
-            v => Enum.IsDefined(v) ? null : "must be None, GuildOrFriends or Anyone"),
+            v => Enum.IsDefined(v) ? null : "must be None, GuildOrFriends, Anyone or Affinity"),
         LivePlayerbotsValue("Social:Guilds:Creation", o => o.Social.Guilds.Creation, (o, v) => o.Social.Guilds.Creation = v,
             v => Enum.IsDefined(v) ? null : "must be Auto, Charter or ClientCreate"),
         LivePlayerbots("Social:Guilds:AffinityInvites", o => o.Social.Guilds.AffinityInvites, (o, v) => o.Social.Guilds.AffinityInvites = v),
