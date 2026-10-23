@@ -109,6 +109,13 @@ internal static class PlayerbotInitiativeRules
 
     /// <summary>Whether a reply to an offer to team up is a yes.</summary>
     internal static bool IsPositiveReply(string? text) => Classify(text) == Reply.Yes;
+
+    /// <summary>Whether the word is one the reply rules read (a yes or no word, "not", a greeting or thanks): such a word is never taken for a character's name.</summary>
+    internal static bool IsReplyWord(string word)
+    {
+        string w = word.ToLowerInvariant();
+        return Array.IndexOf(Yes, w) >= 0 || Array.IndexOf(No, w) >= 0 || w is "not" or "thanks" or "thank" or "hey" or "hello" or "hi";
+    }
 }
 
 /// <summary>
@@ -278,24 +285,28 @@ internal sealed class PlayerbotInitiativeLane
         }
     }
 
-    /// <summary>Whether the line names an online character other than the speaker and the bot ("hey Bob, sure"): it is for them, not the answer to this bot's opening.</summary>
-    private static bool NamesAnother(PlayerbotSocialPass pass, string? text, ObjectGuid speaker, ObjectGuid bot)
+    /// <summary>
+    /// Whether the line names a character the speaker could be talking to instead of the bot ("hey Bob, sure"): one in the bot's sight, on its map and within
+    /// <c>BystanderRadiusYards</c> (earshot), other than the speaker and the bot. A reply word ("sure", "no", "thanks") is never a name, so a character called
+    /// Sure swallows nothing; a character elsewhere in the realm is never considered.
+    /// </summary>
+    private static bool NamesAnother(PlayerbotSocialPass pass, string? text, ObjectGuid speaker, ObjectGuid botGuid)
     {
-        if (string.IsNullOrEmpty(text)) return false;
-        int start = -1;
-        for (int i = 0; i <= text.Length; i++)
+        if (string.IsNullOrEmpty(text) || !pass.ByCharacter.TryGetValue(botGuid.Low, out PlayerbotSocialBot? bot)) return false;
+        Player self = bot.Player;
+        HashSet<string>? near = null;
+        int looked = 0;
+        foreach (ObjectGuid guid in self.VisibleObjects)
         {
-            bool letter = i < text.Length && char.IsLetter(text[i]);
-            if (letter)
-            {
-                if (start < 0) start = i;
-                continue;
-            }
-
-            if (start >= 0 && i - start >= 3 && i - start <= 12 && pass.World.FindOnlinePlayer(text.Substring(start, i - start)) is { } named && named.Guid != speaker && named.Guid != bot) return true;
-            start = -1;
+            if (!guid.IsPlayer || guid == speaker || guid == botGuid) continue;
+            if (++looked > SightLimit) break;
+            if (pass.World.FindOnlinePlayer(guid) is { } other && ReferenceEquals(other.Map, self.Map) && Distance(self, other) <= pass.Options.Memory.BystanderRadiusYards)
+                (near ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(other.Name);
         }
 
+        if (near is null) return false;
+        foreach (string word in text.Split([' ', ',', '.', '!', '?', ';', ':'], StringSplitOptions.RemoveEmptyEntries))
+            if (word.Length is >= 3 and <= 12 && !PlayerbotInitiativeRules.IsReplyWord(word) && near.Contains(word)) return true;
         return false;
     }
 

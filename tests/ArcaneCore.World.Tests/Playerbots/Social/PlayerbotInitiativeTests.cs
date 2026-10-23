@@ -467,4 +467,39 @@ public sealed class PlayerbotInitiativeTests
         await PassAsync(world, now + PlayerbotInitiativeLane.ReplyWaitMs + 1_000);
         Assert.Equal(0, Lane(world).Ignored);
     }
+
+    [Fact]
+    public async Task AnOnlineCharacterNamedLikeAReply_FarAway_OrBeside_NeverSwallowsTheAnswer()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient player = await world.AddPlayerAsync("Initsayer");
+        await using WorldTestClient namesake = await world.AddPlayerAsync("Sure"); // a character called like a yes
+        Pair pair = await FamiliarAsync(world, "Initnamesake", "Initsayer");
+        long now = 10_000;
+
+        // Case 1: the namesake is 400 yards away, nowhere near the conversation.
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(world, "Initnamesake");
+            HelpTestKit.Online(world, "Sure").Relocate(bot.X + 400f, bot.Y, bot.Z, 0f, world.Host.World.NowMs);
+            Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, now);
+        });
+        await player.SendChatAsync(ChatType.Say, Language.Common, "sure");
+        await AnswerTakenAsync(world, pair, now + 1_000);
+        Assert.Equal(1, Lane(world).Accepted); // fails today: NamesAnother finds the online character "Sure" anywhere in the realm
+        Assert.False(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid));
+
+        // Case 2: the namesake stands beside the bot: "sure" is still a reply word, never a name.
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(world, "Initnamesake");
+            HelpTestKit.Online(world, "Sure").Relocate(bot.X + 3f, bot.Y, bot.Z, 0f, world.Host.World.NowMs);
+        });
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Initnamesake").VisibleObjects.Contains(HelpTestKit.Online(world, "Sure").Guid)).Result, "the namesake to be in sight");
+        await world.Host.OnWorldAsync(() => Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, now + 2_000));
+        await player.SendChatAsync(ChatType.Say, Language.Common, "sure");
+        await AnswerTakenAsync(world, pair, now + 3_000);
+        Assert.Equal(2, Lane(world).Accepted);
+        Assert.False(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid));
+    }
 }
