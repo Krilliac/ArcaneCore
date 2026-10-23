@@ -194,6 +194,33 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.Equal(opened, (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgTradeStatus));
     }
 
+    /// <summary>A player on the bot's ignore list is not heard: no answer to a whisper (the same whisper from a player not ignored is answered).</summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task AWhisperFromAnIgnoredPlayer_GetsNoAnswer(bool ignored, bool answered)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Groups.InvitePlayers = false;
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("IGNOREDONE", "Ignoredone", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Ignorerbot", Human, Warrior, 1, []);
+        await world.RunAsync(3_000); // the bot's lists have loaded
+        if (ignored)
+            await world.OnWorldAsync(() =>
+            {
+                Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Set(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored, true);
+                return true;
+            });
+        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
+        bool replied = await world.RunUntilAsync(ignored ? 20_000u : 60_000u, () => dispatched.Contains(WorldOpcode.CmsgMessagechat));
+        Assert.True(answered == replied, string.Join(",", dispatched));
+    }
+
     [Fact]
     public async Task APlayerInvitedOnce_IsNotInvitedAgainWithinTheCooldown()
     {

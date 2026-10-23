@@ -396,6 +396,11 @@ internal sealed class PlayerbotPartyAI
         bool senderIsBot = sender?.Session is WorldSession { IsManaged: true };
         bool isGm = sender is not null && IsGm(sender);
         ObjectGuid master = ResolveMaster(player);
+        // A player on the bot's ignore list is not heard at all, as a client hides an ignored player's chat: no reply, no listener (so no
+        // affinity from the talk). The master and a game master are never dropped.
+        if (sender is not null && sender.Guid != player.Guid && sender.Guid != master && !isGm
+            && Services.Social?.Friends.Get(player).Has(sender.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored) == true)
+            return;
         // Every line heard is input for the chat service's listeners (later lanes react to channel talk, needs, LFG calls), bots' lines too.
         // A line the bot voice answered itself (an "inv" to its LFG call, a price question to its WTS call) gets no other reply; the
         // master's lines are never taken from the orders.
