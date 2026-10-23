@@ -19,6 +19,7 @@ using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -306,7 +307,7 @@ internal sealed class ElevatorNetwork
     public (ElevatorLift Lift, ElevatorLevel From)? Choose(uint mapId, Vector3 bot, Vector3 goal, ElevatorSurvey survey)
     {
         ArgumentNullException.ThrowIfNull(survey);
-        if (!Finite(bot) || !Finite(goal)) return null;
+        if (!bot.IsFinite() || !goal.IsFinite()) return null;
         (ElevatorLift Lift, ElevatorLevel From)? best = null;
         float bestVia = float.PositiveInfinity;
         foreach (ElevatorLift lift in Lifts)
@@ -339,9 +340,6 @@ internal sealed class ElevatorNetwork
 
         return best;
     }
-    internal static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
-
-    private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 }
 
 /// <summary>The stages of one bot's lift ride (<see cref="PlayerbotElevator"/>).</summary>
@@ -620,7 +618,7 @@ internal static class PlayerbotElevator
             if (directPlan == PlanOutcome.Pending) return false;
         }
 
-        if (directPlan == PlanOutcome.Route && direct is { Points.Count: > 0 } && Vector2.Distance(ElevatorNetwork.Flat(direct.Points[^1]), ElevatorNetwork.Flat(goal)) <= ReachedYards
+        if (directPlan == PlanOutcome.Route && direct is { Points.Count: > 0 } && Vector2.Distance(Flat(direct.Points[^1]), Flat(goal)) <= ReachedYards
             && MathF.Abs(direct.Points[^1].Z - goal.Z) <= PlayerbotNavigation.ProjectedEndYards)
         {
             walk = direct;
@@ -779,7 +777,7 @@ internal static class PlayerbotElevator
                 Vector3 bot = new(player.X, player.Y, player.Z);
                 if (trip.Car is null || trip.CarObject is not { IsInWorld: true } || !ReferenceEquals(trip.CarObject.Map, map))
                 {
-                    if (trip.Options is not { } opt || Vector2.Distance(ElevatorNetwork.Flat(bot), trip.Lift.Centre) > ApproachYards) return;
+                    if (trip.Options is not { } opt || Vector2.Distance(Flat(bot), trip.Lift.Centre) > ApproachYards) return;
                     // ChooseCar allocates and may plan a path per candidate: the pump retries it at most once per PlanRetryMs.
                     if (trip.NextPumpChooseMs != 0 && unchecked((int)(now - trip.NextPumpChooseMs)) < 0) return;
                     trip.NextPumpChooseMs = unchecked(now + PlanRetryMs) | 1u;
@@ -792,7 +790,7 @@ internal static class PlayerbotElevator
 
                 GuardPlatformShaft(session, player, map, trip);
                 bot = new(player.X, player.Y, player.Z);
-                if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(trip.Landing)) <= AtLandingYards
+                if (Vector2.Distance(Flat(bot), Flat(trip.Landing)) <= AtLandingYards
                     && MathF.Abs(bot.Z - trip.Landing.Z) <= LandingFloorYards + 1f)
                 {
                     if (!PlayerbotMovementControl.Stop(session, player)) return;
@@ -939,7 +937,7 @@ internal static class PlayerbotElevator
             if (lift.MapId != map.MapId) continue;
             foreach (ElevatorCar car in lift.Cars)
             {
-                if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) > CarHalfYards) continue;
+                if (Vector2.Distance(Flat(car.Low), Flat(at)) > CarHalfYards) continue;
                 if (state.SinceMs == 0) state.SinceMs = now == 0 ? 1u : now;
                 GameObjectMapSystem? system = map.FindUpdater<GameObjectMapSystem>();
                 GameObject? live = system is null ? null : FindCar(system, car);
@@ -1021,7 +1019,7 @@ internal static class PlayerbotElevator
         bool sent = false;
         foreach (ElevatorLevel level in (ElevatorLevel[])[nearer, ElevatorLift.Other(nearer)])
         {
-            foreach (ElevatorCar car in lift.Cars.OrderBy(c => Vector2.DistanceSquared(ElevatorNetwork.Flat(c.Low), ElevatorNetwork.Flat(at))))
+            foreach (ElevatorCar car in lift.Cars.OrderBy(c => Vector2.DistanceSquared(Flat(c.Low), Flat(at))))
             {
                 if (LandingBeside(map, car.At(level), at) is not { } landing) continue;
                 if (teleports.TeleportTo(player, map.MapId, landing.X, landing.Y, landing.Z, player.Orientation))
@@ -1180,11 +1178,11 @@ internal static class PlayerbotElevator
         if (trip.Car is null || trip.CarObject is not { IsInWorld: true } || !ReferenceEquals(trip.CarObject.Map, map))
         {
             Vector3 stop = trip.Lift.Cars[0].At(trip.From);
-            if (Vector2.Distance(ElevatorNetwork.Flat(bot), trip.Lift.Centre) > ApproachYards)
+            if (Vector2.Distance(Flat(bot), trip.Lift.Centre) > ApproachYards)
             {
                 // Far from the lift (its cars are grid objects, in the world only round players near them): walk towards its landing/stop.
                 Vector3? approachTarget = null;
-                foreach (ElevatorCar car in trip.Lift.Cars.OrderBy(c => Vector2.DistanceSquared(ElevatorNetwork.Flat(c.At(trip.From)), ElevatorNetwork.Flat(bot))))
+                foreach (ElevatorCar car in trip.Lift.Cars.OrderBy(c => Vector2.DistanceSquared(Flat(c.At(trip.From)), Flat(bot))))
                 {
                     if (LandingBesideReachable(player, map, car.At(trip.From), bot, options) is { } reachable)
                     {
@@ -1211,7 +1209,7 @@ internal static class PlayerbotElevator
         }
 
         bot = new(player.X, player.Y, player.Z);
-        if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(trip.Landing)) <= AtLandingYards
+        if (Vector2.Distance(Flat(bot), Flat(trip.Landing)) <= AtLandingYards
             && MathF.Abs(bot.Z - trip.Landing.Z) <= LandingFloorYards + 1f)
         {
             if (!PlayerbotMovementControl.Stop(session, player)) return ElevatorStep.Traveling;
@@ -1254,7 +1252,7 @@ internal static class PlayerbotElevator
             anyCar = true;
             Vector3 stop = car.At(trip.From);
             if ((LandingBesideReachable(player, map, stop, bot, options) ?? LandingBeside(map, stop, bot)) is not { } landing) continue;
-            uint walk = (uint)(Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(landing)) / speed * 1000f);
+            uint walk = (uint)(Vector2.Distance(Flat(bot), Flat(landing)) / speed * 1000f);
             uint ready = NextStop(system, live, stop.Z, walk) ?? uint.MaxValue;
             candidates.Add((car, live, landing, ready));
         }
@@ -1328,7 +1326,7 @@ internal static class PlayerbotElevator
         CheckWaitingLanding(session, player, map, trip, car);
         Vector3 bot = new(player.X, player.Y, player.Z);
         Vector3 stopAtFrom = car.At(trip.From);
-        float preFlatDist = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(stopAtFrom));
+        float preFlatDist = Vector2.Distance(Flat(bot), Flat(stopAtFrom));
         float preZDiff = MathF.Abs(bot.Z - stopAtFrom.Z);
         if (preFlatDist > LandingRadii[^1] + AtLandingYards || preZDiff > LandingFloorYards + 1f)
         {
@@ -1382,7 +1380,7 @@ internal static class PlayerbotElevator
             trip.StopMaxStandsForMs = standsFor;
         }
 
-        float flatDist = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(at));
+        float flatDist = Vector2.Distance(Flat(bot), Flat(at));
         float zDiff = MathF.Abs(bot.Z - at.Z);
         if (flatDist > LandingRadii[^1] + AtLandingYards || zDiff > LandingFloorYards + 1f)
         {
@@ -1615,7 +1613,7 @@ internal static class PlayerbotElevator
         float footprint = vault ? VaultDoorOuterYards : CarHalfYards + 1.5f;
         foreach (ElevatorCar car in lift.Cars)
         {
-            if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) <= footprint && floor < car.Low.Z - PitYards)
+            if (Vector2.Distance(Flat(car.Low), Flat(at)) <= footprint && floor < car.Low.Z - PitYards)
                 return true;
         }
 
@@ -1637,13 +1635,13 @@ internal static class PlayerbotElevator
         Vector3 toStop = car.At(trip.To);
 
         bool startedAtFromFloor = MathF.Abs(trip.StartPosition.Z - trip.Lift.LevelZ(trip.From)) <= ElevatorNetwork.LevelYards;
-        bool startedNearShaft = Vector2.Distance(ElevatorNetwork.Flat(trip.StartPosition), ElevatorNetwork.Flat(toStop)) <= LandingRadii[^1] + AtLandingYards;
+        bool startedNearShaft = Vector2.Distance(Flat(trip.StartPosition), Flat(toStop)) <= LandingRadii[^1] + AtLandingYards;
         if (trip.Stage != ElevatorStage.Waiting && !startedAtFromFloor && !startedNearShaft)
         {
             return false;
         }
 
-        float flatToDest = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(toStop));
+        float flatToDest = Vector2.Distance(Flat(bot), Flat(toStop));
         float zToDest = MathF.Abs(bot.Z - toStop.Z);
         if (flatToDest > LandingRadii[^1] + AtLandingYards || zToDest > LandingFloorYards + 1.5f)
         {
@@ -1691,8 +1689,8 @@ internal static class PlayerbotElevator
         float footprint = vault ? VaultDoorOuterYards : CarHalfYards + 1.5f;
         foreach (ElevatorCar car in trip.Lift.Cars)
         {
-            if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(bot)) <= footprint
-                || Vector2.Distance(ElevatorNetwork.Flat(car.High), ElevatorNetwork.Flat(bot)) <= footprint)
+            if (Vector2.Distance(Flat(car.Low), Flat(bot)) <= footprint
+                || Vector2.Distance(Flat(car.High), Flat(bot)) <= footprint)
             {
                 return true;
             }
@@ -1715,7 +1713,7 @@ internal static class PlayerbotElevator
 
         if (trip.Landing != default)
         {
-            float landingFlat = Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(stop));
+            float landingFlat = Vector2.Distance(Flat(trip.Landing), Flat(stop));
             if (landingFlat < guardRadius)
             {
                 trip.Landing = (trip.Options is { } opt ? LandingBesideReachable(player, map, stop, bot, opt) : null)
@@ -1729,11 +1727,11 @@ internal static class PlayerbotElevator
         Vector3 nearestStop = nearestShaftCar.At(trip.From);
         bool nearestVault = ElevatorRegions.IsVaultLift(map.MapId, nearestStop);
         float nearestGuardRadius = nearestVault ? VaultDoorOuterYards : CarHalfYards;
-        float botFlat = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(nearestStop));
+        float botFlat = Vector2.Distance(Flat(bot), Flat(nearestStop));
         float botZDiff = MathF.Abs(bot.Z - nearestStop.Z);
         if (botFlat < nearestGuardRadius && botZDiff <= LandingFloorYards + 2f)
         {
-            Vector3 safeTarget = trip.Landing != default && Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(nearestStop)) >= nearestGuardRadius
+            Vector3 safeTarget = trip.Landing != default && Vector2.Distance(Flat(trip.Landing), Flat(nearestStop)) >= nearestGuardRadius
                 ? trip.Landing
                 : LandingBeside(map, nearestStop, bot) ?? SafeWaitOutsideShaft(map, nearestStop, bot);
             trip.Landing = safeTarget;
@@ -1753,7 +1751,7 @@ internal static class PlayerbotElevator
     {
         bool vault = ElevatorRegions.IsVaultLift(mapIdOverride ?? map.MapId, stop);
         float safeRadius = vault ? VaultLandingRadii[0] : LandingRadii[0];
-        Vector2 dir = ElevatorNetwork.Flat(toward) - ElevatorNetwork.Flat(stop);
+        Vector2 dir = Flat(toward) - Flat(stop);
         float len = dir.Length();
         dir = len > 1e-3f ? dir / len : new Vector2(1f, 0f);
         float x = stop.X + (dir.X * safeRadius);
@@ -1763,7 +1761,7 @@ internal static class PlayerbotElevator
     }
 
     private static ElevatorCar ClosestCar(ElevatorLift lift, ElevatorLevel level, Vector3 near)
-        => lift.Cars.OrderBy(c => Vector2.DistanceSquared(ElevatorNetwork.Flat(c.At(level)), ElevatorNetwork.Flat(near))).First();
+        => lift.Cars.OrderBy(c => Vector2.DistanceSquared(Flat(c.At(level)), Flat(near))).First();
 
     /// <summary>
     /// Whether a fall of <paramref name="yards"/> costs the bot less than <see cref="MaxFallHealthPercent"/> percent of its current health:
@@ -1886,8 +1884,8 @@ internal static class PlayerbotElevator
         if (trip.WaitingInsideDoorReported) return;
         Vector3 stop = car.At(trip.From);
         Vector3 checkPos = trip.Landing == default ? new Vector3(player.X, player.Y, player.Z) : trip.Landing;
-        float radial = Vector2.Distance(ElevatorNetwork.Flat(checkPos), ElevatorNetwork.Flat(stop));
-        float botRadial = Vector2.Distance(new Vector2(player.X, player.Y), ElevatorNetwork.Flat(stop));
+        float radial = Vector2.Distance(Flat(checkPos), Flat(stop));
+        float botRadial = Vector2.Distance(new Vector2(player.X, player.Y), Flat(stop));
         bool vault = ElevatorRegions.IsVaultLift(map.MapId, stop);
         bool insideDoor = vault && (radial < VaultDoorOuterYards || botRadial < VaultDoorOuterYards);
         bool insideShaft = radial < CarHalfYards || botRadial < CarHalfYards;
@@ -2069,7 +2067,7 @@ internal static class PlayerbotElevator
             }
 
             Vector3 pos = new(player.X, player.Y, player.Z);
-            float radial = Vector2.Distance(ElevatorNetwork.Flat(pos), ElevatorNetwork.Flat(stop));
+            float radial = Vector2.Distance(Flat(pos), Flat(stop));
             bool insideVaultDoor = ElevatorRegions.IsVaultLift(map.MapId, stop) && radial < VaultDoorOuterYards;
             bool insideShaft = radial < CarHalfYards;
             bool offMesh = map.Collision.MeshPoints is not null && !PlayerbotNavigation.OnWalkableMesh(map, pos);
@@ -2088,7 +2086,7 @@ internal static class PlayerbotElevator
             uint cycleMs = trip.Car?.CycleMs ?? (trip.Lift.Cars.Count > 0 ? trip.Lift.Cars[0].CycleMs : 40_000u);
             if (cycleMs == 0) cycleMs = 40_000u;
             float speed = MathF.Max(1f, options.MoveSpeed);
-            float walkDist = Vector2.Distance(ElevatorNetwork.Flat(trip.StartPosition), trip.Lift.Centre);
+            float walkDist = Vector2.Distance(Flat(trip.StartPosition), trip.Lift.Centre);
             uint walkMs = (uint)(walkDist / speed * 1000f);
             uint effectiveCycleMs = Math.Max(cycleMs, 30_000u);
             uint walkBudgetMs = walkMs * 2;
@@ -2186,7 +2184,7 @@ internal static class PlayerbotElevator
                     var candidate = new Vector3(x, y, floor);
                     if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)
                         || !PlayerbotMoveCheck.LineClear(map.Collision, stop, candidate)) continue;
-                    float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
+                    float distance = Vector2.Distance(new Vector2(x, y), Flat(toward));
                     if (distance < bestAnyDistance)
                     {
                         bestAnyDistance = distance;
@@ -2230,7 +2228,7 @@ internal static class PlayerbotElevator
     {
         if (route is null || route.Points.Count == 0) return false;
         if (!route.MeshEndedShort) return true;
-        if (Vector2.Distance(ElevatorNetwork.Flat(route.Points[^1]), ElevatorNetwork.Flat(candidate)) <= 10f
+        if (Vector2.Distance(Flat(route.Points[^1]), Flat(candidate)) <= 10f
             && MathF.Abs(route.Points[^1].Z - candidate.Z) <= LandingFloorYards + 2f)
         {
             return true;
@@ -2272,7 +2270,7 @@ internal static class PlayerbotElevator
                         || !PlayerbotMoveCheck.LineClear(map.Collision, stop, candidate)) continue;
                     if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)) continue;
                     bool onFragment = PlayerbotNavigation.IsPointOnMeshFragment(map, candidate);
-                    float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
+                    float distance = Vector2.Distance(new Vector2(x, y), Flat(toward));
                     candidates.Add((candidate, onFragment, distance));
                 }
 

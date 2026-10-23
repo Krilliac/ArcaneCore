@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps.Pools;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Pools;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.GameObjects;
 
@@ -138,7 +139,7 @@ public sealed partial class GameObjectMapSystem : IPoolHost
             _respawnAt[spawnGuid] = _clockMs + ScaleRespawnDelayMs(spawn, Math.Max(1000L, RollRespawnSeconds(spawn) * 1000L)); // population-scaled like a despawn
         }
 
-        if (FindBySpawn(spawnGuid) is null && _grids.TryGetValue(CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y), out List<GameObject>? list))
+        if (FindBySpawn(spawnGuid) is null && _grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out List<GameObject>? list))
         {
             LoadSpawns(list, [spawn]);
         }

@@ -1,4 +1,3 @@
-using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Validation;
 using Microsoft.Extensions.Configuration;
@@ -27,74 +26,74 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
     public static List<ConfigIssue> Problems(WatchdogOptions o)
     {
         var issues = new List<ConfigIssue>();
-        Range(issues, $"{Root}:CheckIntervalMs", o.CheckIntervalMs, 100, 60_000, "100-60000 milliseconds");
-        Range(issues, $"{Root}:TickMonitor:RingCapacity", o.TickMonitor.RingCapacity, TickRing.MinCapacity, TickRing.MaxCapacity, $"{TickRing.MinCapacity}-{TickRing.MaxCapacity} ticks");
-        NonNegative(issues, $"{Root}:TickMonitor:BudgetMs", o.TickMonitor.BudgetMs);
-        NonNegative(issues, $"{Root}:TickMonitor:HangMs", o.TickMonitor.HangMs);
-        NonNegative(issues, $"{Root}:TickMonitor:ActionHangMs", o.TickMonitor.ActionHangMs);
-        Range(issues, $"{Root}:TickMonitor:WarnIntervalSeconds", o.TickMonitor.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
-        NonNegative(issues, $"{Root}:TickMonitor:SummaryIntervalSeconds", o.TickMonitor.SummaryIntervalSeconds);
-        Range(issues, $"{Root}:TickMonitor:StackCaptureIntervalSeconds", o.TickMonitor.StackCaptureIntervalSeconds, 10, 86_400, "10-86400 seconds");
+        ConfigChecks.Range(issues, $"{Root}:CheckIntervalMs", o.CheckIntervalMs, 100, 60_000, "100-60000 milliseconds");
+        ConfigChecks.Range(issues, $"{Root}:TickMonitor:RingCapacity", o.TickMonitor.RingCapacity, TickRing.MinCapacity, TickRing.MaxCapacity, $"{TickRing.MinCapacity}-{TickRing.MaxCapacity} ticks");
+        ConfigChecks.NonNegative(issues, $"{Root}:TickMonitor:BudgetMs", o.TickMonitor.BudgetMs);
+        ConfigChecks.NonNegative(issues, $"{Root}:TickMonitor:HangMs", o.TickMonitor.HangMs);
+        ConfigChecks.NonNegative(issues, $"{Root}:TickMonitor:ActionHangMs", o.TickMonitor.ActionHangMs);
+        ConfigChecks.Range(issues, $"{Root}:TickMonitor:WarnIntervalSeconds", o.TickMonitor.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
+        ConfigChecks.NonNegative(issues, $"{Root}:TickMonitor:SummaryIntervalSeconds", o.TickMonitor.SummaryIntervalSeconds);
+        ConfigChecks.Range(issues, $"{Root}:TickMonitor:StackCaptureIntervalSeconds", o.TickMonitor.StackCaptureIntervalSeconds, 10, 86_400, "10-86400 seconds");
         if (o.TickMonitor.HangMs > 0 && o.TickMonitor.BudgetMs > 0 && o.TickMonitor.HangMs <= o.TickMonitor.BudgetMs)
         {
-            issues.Add(Error($"{Root}:TickMonitor:HangMs", $"{o.TickMonitor.HangMs} is not above BudgetMs ({o.TickMonitor.BudgetMs}).", "a hang must be longer than an overrun; use a larger HangMs or 0 to disable hang detection"));
+            issues.Add(ConfigChecks.Error($"{Root}:TickMonitor:HangMs", $"{o.TickMonitor.HangMs} is not above BudgetMs ({o.TickMonitor.BudgetMs}).", "a hang must be longer than an overrun; use a larger HangMs or 0 to disable hang detection"));
         }
 
         if (!Enum.IsDefined(o.TickMonitor.Action))
         {
-            issues.Add(Error($"{Root}:TickMonitor:Action", $"'{o.TickMonitor.Action}' is not a tick hang action.", "use " + string.Join(", ", Enum.GetNames<TickHangAction>())));
+            issues.Add(ConfigChecks.Error($"{Root}:TickMonitor:Action", $"'{o.TickMonitor.Action}' is not a tick hang action.", "use " + string.Join(", ", Enum.GetNames<TickHangAction>())));
         }
 
         if (o.TickMonitor.ActionHangMs > 0 && o.TickMonitor.HangMs > 0 && o.TickMonitor.ActionHangMs < o.TickMonitor.HangMs)
         {
-            issues.Add(Error($"{Root}:TickMonitor:ActionHangMs", $"{o.TickMonitor.ActionHangMs} is below HangMs ({o.TickMonitor.HangMs}).", "the fatal hang action threshold must be at least HangMs, or 0 to disable the action"));
+            issues.Add(ConfigChecks.Error($"{Root}:TickMonitor:ActionHangMs", $"{o.TickMonitor.ActionHangMs} is below HangMs ({o.TickMonitor.HangMs}).", "the fatal hang action threshold must be at least HangMs, or 0 to disable the action"));
         }
 
         if (o.TickMonitor.Action != TickHangAction.None && o.TickMonitor.ActionHangMs == 0)
         {
-            issues.Add(Warn($"{Root}:TickMonitor:ActionHangMs", $"TickMonitor:Action is {o.TickMonitor.Action} but ActionHangMs is 0, so the action never fires.", "set the hang duration in milliseconds at which it fires, or set Action to None"));
+            issues.Add(ConfigChecks.Warn($"{Root}:TickMonitor:ActionHangMs", $"TickMonitor:Action is {o.TickMonitor.Action} but ActionHangMs is 0, so the action never fires.", "set the hang duration in milliseconds at which it fires, or set Action to None"));
         }
 
-        Range(issues, $"{Root}:Memory:SampleIntervalSeconds", o.Memory.SampleIntervalSeconds, 1, 3600, "1-3600 seconds");
-        NonNegative(issues, $"{Root}:Memory:GrowthLogBytes", o.Memory.GrowthLogBytes);
-        NonNegative(issues, $"{Root}:Memory:WarnHeapBytes", o.Memory.WarnHeapBytes);
-        Range(issues, $"{Root}:Memory:WarnLoadPercent", o.Memory.WarnLoadPercent, 0, 100, "0 to disable, or 1-100");
-        NonNegative(issues, $"{Root}:Memory:ActionHeapBytes", o.Memory.ActionHeapBytes);
-        Range(issues, $"{Root}:Memory:ActionCooldownSeconds", o.Memory.ActionCooldownSeconds, 1, 86_400, "1-86400 seconds");
-        Range(issues, $"{Root}:Memory:WarnIntervalSeconds", o.Memory.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
+        ConfigChecks.Range(issues, $"{Root}:Memory:SampleIntervalSeconds", o.Memory.SampleIntervalSeconds, 1, 3600, "1-3600 seconds");
+        ConfigChecks.NonNegative(issues, $"{Root}:Memory:GrowthLogBytes", o.Memory.GrowthLogBytes);
+        ConfigChecks.NonNegative(issues, $"{Root}:Memory:WarnHeapBytes", o.Memory.WarnHeapBytes);
+        ConfigChecks.Range(issues, $"{Root}:Memory:WarnLoadPercent", o.Memory.WarnLoadPercent, 0, 100, "0 to disable, or 1-100");
+        ConfigChecks.NonNegative(issues, $"{Root}:Memory:ActionHeapBytes", o.Memory.ActionHeapBytes);
+        ConfigChecks.Range(issues, $"{Root}:Memory:ActionCooldownSeconds", o.Memory.ActionCooldownSeconds, 1, 86_400, "1-86400 seconds");
+        ConfigChecks.Range(issues, $"{Root}:Memory:WarnIntervalSeconds", o.Memory.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
         if (!Enum.IsDefined(o.Memory.Action))
         {
-            issues.Add(Error($"{Root}:Memory:Action", $"'{o.Memory.Action}' is not an action.", "use " + string.Join(", ", Enum.GetNames<MemoryPressureAction>())));
+            issues.Add(ConfigChecks.Error($"{Root}:Memory:Action", $"'{o.Memory.Action}' is not an action.", "use " + string.Join(", ", Enum.GetNames<MemoryPressureAction>())));
         }
 
         if (o.Memory.Action != MemoryPressureAction.None && o.Memory.ActionHeapBytes == 0)
         {
-            issues.Add(Warn($"{Root}:Memory:ActionHeapBytes", $"Memory:Action is {o.Memory.Action} but ActionHeapBytes is 0, so the action never fires.", "set the heap size in bytes at which it fires, or set Action to None"));
+            issues.Add(ConfigChecks.Warn($"{Root}:Memory:ActionHeapBytes", $"Memory:Action is {o.Memory.Action} but ActionHeapBytes is 0, so the action never fires.", "set the heap size in bytes at which it fires, or set Action to None"));
         }
 
-        Range(issues, $"{Root}:ThreadPool:ProbeIntervalSeconds", o.ThreadPool.ProbeIntervalSeconds, 1, 3600, "1-3600 seconds");
-        NonNegative(issues, $"{Root}:ThreadPool:WarnDelayMs", o.ThreadPool.WarnDelayMs);
-        NonNegative(issues, $"{Root}:ThreadPool:CriticalDelayMs", o.ThreadPool.CriticalDelayMs);
-        Range(issues, $"{Root}:ThreadPool:WarnIntervalSeconds", o.ThreadPool.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
+        ConfigChecks.Range(issues, $"{Root}:ThreadPool:ProbeIntervalSeconds", o.ThreadPool.ProbeIntervalSeconds, 1, 3600, "1-3600 seconds");
+        ConfigChecks.NonNegative(issues, $"{Root}:ThreadPool:WarnDelayMs", o.ThreadPool.WarnDelayMs);
+        ConfigChecks.NonNegative(issues, $"{Root}:ThreadPool:CriticalDelayMs", o.ThreadPool.CriticalDelayMs);
+        ConfigChecks.Range(issues, $"{Root}:ThreadPool:WarnIntervalSeconds", o.ThreadPool.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
         if (o.ThreadPool.CriticalDelayMs > 0 && o.ThreadPool.WarnDelayMs > 0 && o.ThreadPool.CriticalDelayMs <= o.ThreadPool.WarnDelayMs)
         {
-            issues.Add(Error($"{Root}:ThreadPool:CriticalDelayMs", $"{o.ThreadPool.CriticalDelayMs} is not above WarnDelayMs ({o.ThreadPool.WarnDelayMs}).", "use a larger critical delay, or 0 to disable the critical line"));
+            issues.Add(ConfigChecks.Error($"{Root}:ThreadPool:CriticalDelayMs", $"{o.ThreadPool.CriticalDelayMs} is not above WarnDelayMs ({o.ThreadPool.WarnDelayMs}).", "use a larger critical delay, or 0 to disable the critical line"));
         }
 
         if (!Enum.IsDefined(o.Heartbeat.Mode))
         {
-            issues.Add(Error($"{Root}:Heartbeat:Mode", $"'{o.Heartbeat.Mode}' is not a heartbeat mode.", "use " + string.Join(", ", Enum.GetNames<HeartbeatMode>())));
+            issues.Add(ConfigChecks.Error($"{Root}:Heartbeat:Mode", $"'{o.Heartbeat.Mode}' is not a heartbeat mode.", "use " + string.Join(", ", Enum.GetNames<HeartbeatMode>())));
         }
 
-        NonNegative(issues, $"{Root}:Heartbeat:IntervalSeconds", o.Heartbeat.IntervalSeconds);
-        Range(issues, $"{Root}:Heartbeat:WarnIntervalSeconds", o.Heartbeat.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
+        ConfigChecks.NonNegative(issues, $"{Root}:Heartbeat:IntervalSeconds", o.Heartbeat.IntervalSeconds);
+        ConfigChecks.Range(issues, $"{Root}:Heartbeat:WarnIntervalSeconds", o.Heartbeat.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
         if (o.Heartbeat.Mode == HeartbeatMode.File && string.IsNullOrWhiteSpace(o.Heartbeat.FilePath))
         {
-            issues.Add(Error($"{Root}:Heartbeat:FilePath", "Heartbeat:Mode is File but no FilePath is set.", "set the liveness file path, or choose another mode"));
+            issues.Add(ConfigChecks.Error($"{Root}:Heartbeat:FilePath", "Heartbeat:Mode is File but no FilePath is set.", "set the liveness file path, or choose another mode"));
         }
 
-        Range(issues, $"{Root}:HostLoad:HistorySeconds", o.HostLoad.HistorySeconds, 10, 3600, "10-3600 seconds");
-        NonNegative(issues, $"{Root}:Counters:DumpIntervalSeconds", o.Counters.DumpIntervalSeconds);
+        ConfigChecks.Range(issues, $"{Root}:HostLoad:HistorySeconds", o.HostLoad.HistorySeconds, 10, 3600, "10-3600 seconds");
+        ConfigChecks.NonNegative(issues, $"{Root}:Counters:DumpIntervalSeconds", o.Counters.DumpIntervalSeconds);
         return issues;
     }
 
@@ -152,91 +151,15 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
         return issues;
     }
 
-    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
+    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback) =>
+        ConfigChecks.IntOr(issues, $"{Root}:{key}", section[key], fallback, "use a whole number");
 
-        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
-        {
-            return value;
-        }
+    private static long Long(List<ConfigIssue> issues, IConfigurationSection section, string key, long fallback) =>
+        ConfigChecks.LongOr(issues, $"{Root}:{key}", section[key], fallback, "use a whole number of bytes");
 
-        issues.Add(Error($"{Root}:{key}", $"'{text}' is not a whole number.", "use a whole number"));
-        return fallback;
-    }
+    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback) =>
+        ConfigChecks.BoolOr(issues, $"{Root}:{key}", section[key], fallback);
 
-    private static long Long(List<ConfigIssue> issues, IConfigurationSection section, string key, long fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
-        {
-            return value;
-        }
-
-        issues.Add(Error($"{Root}:{key}", $"'{text}' is not a whole number.", "use a whole number of bytes"));
-        return fallback;
-    }
-
-    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(text, out bool value))
-        {
-            return value;
-        }
-
-        issues.Add(Error($"{Root}:{key}", $"'{text}' is not true or false.", "use true or false"));
-        return fallback;
-    }
-
-    private static T EnumValue<T>(List<ConfigIssue> issues, IConfigurationSection section, string key, T fallback) where T : struct, Enum
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (Enum.TryParse(text, ignoreCase: true, out T value) && Enum.IsDefined(value))
-        {
-            return value;
-        }
-
-        issues.Add(Error($"{Root}:{key}", $"'{text}' is not one of the allowed values.", "use " + string.Join(", ", Enum.GetNames<T>())));
-        return fallback;
-    }
-
-    private static void Range(List<ConfigIssue> issues, string key, long value, long min, long max, string expected)
-    {
-        if (value < min || value > max)
-        {
-            issues.Add(Error(key, $"{value} is out of range.", $"use {expected}"));
-        }
-    }
-
-    private static void NonNegative(List<ConfigIssue> issues, string key, long value)
-    {
-        if (value < 0)
-        {
-            issues.Add(Error(key, $"{value} is negative.", "use 0 to disable, or a positive value"));
-        }
-    }
-
-    private static ConfigIssue Error(string key, string problem, string fix) => new(ConfigSeverity.Error, key, problem, fix);
-
-    private static ConfigIssue Warn(string key, string problem, string fix) => new(ConfigSeverity.Warning, key, problem, fix);
+    private static T EnumValue<T>(List<ConfigIssue> issues, IConfigurationSection section, string key, T fallback) where T : struct, Enum =>
+        ConfigChecks.EnumOr(issues, $"{Root}:{key}", section[key], fallback);
 }

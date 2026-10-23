@@ -7,6 +7,8 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -133,7 +135,7 @@ public sealed partial class CreatureMapSystem
         creature.ResetToHome(_serverTime());
         creature.IsNewObject = true;
 
-        GridCoord grid = ComputeGrid(x, y);
+        GridCoord grid = GridDefines.ComputeGridCoord(x, y);
         if (!_grids.TryGetValue(grid, out LoadedGrid? loaded))
         {
             loaded = LoadGrid(grid);
@@ -467,7 +469,7 @@ public sealed partial class CreatureMapSystem
         {
             RemoveGroupMemberCorpse(creature, creature.Spawn);
         }
-        else if (!_grids.ContainsKey(ComputeGrid(creature.Home.X, creature.Home.Y)))
+        else if (!_grids.ContainsKey(GridDefines.ComputeGridCoord(creature.Home.X, creature.Home.Y)))
         {
             // The creature died after walking out of an unloaded home grid. Keep its deadline
             // as dormant spawn data; do not respawn into a grid no player has loaded.
@@ -572,7 +574,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            GridCoord home = ComputeGrid(creature.Home.X, creature.Home.Y);
+            GridCoord home = GridDefines.ComputeGridCoord(creature.Home.X, creature.Home.Y);
             if ((home.X != grid.Coord.X || home.Y != grid.Coord.Y)
                 && _grids.TryGetValue(home, out LoadedGrid? homeGrid)
                 && (creature.DeathState == CreatureDeathState.Alive

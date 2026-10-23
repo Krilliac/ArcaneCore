@@ -6,6 +6,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -1174,12 +1175,12 @@ public sealed partial class CreatureMapSystem
     {
         if (_poolSpawns.TryGetValue(spawnGuid, out CreatureSpawn? pooled))
         {
-            return _grids.ContainsKey(ComputeGrid(pooled.X, pooled.Y)) ? pooled : null;
+            return _grids.ContainsKey(GridDefines.ComputeGridCoord(pooled.X, pooled.Y)) ? pooled : null;
         }
 
         if (_groupSpawns.TryGetValue(spawnGuid, out CreatureSpawn? grouped))
         {
-            return _grids.ContainsKey(ComputeGrid(grouped.X, grouped.Y)) ? grouped : null;
+            return _grids.ContainsKey(GridDefines.ComputeGridCoord(grouped.X, grouped.Y)) ? grouped : null;
         }
 
         if (_spawnByGuid is null)
@@ -1196,7 +1197,7 @@ public sealed partial class CreatureMapSystem
             _spawnByGuid = index;
         }
 
-        return _spawnByGuid.TryGetValue(spawnGuid, out CreatureSpawn? found) && _grids.ContainsKey(ComputeGrid(found.X, found.Y))
+        return _spawnByGuid.TryGetValue(spawnGuid, out CreatureSpawn? found) && _grids.ContainsKey(GridDefines.ComputeGridCoord(found.X, found.Y))
             ? found
             : null;
     }

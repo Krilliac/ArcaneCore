@@ -20,6 +20,7 @@ using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Form = ArcaneCore.Game.Spells.ShapeshiftForm;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Combat;
 
@@ -337,12 +338,6 @@ internal static class PlayerbotCombatView
             IsCrowdControlled = !self && system.HasBreakableByDamageCrowdControlAura(unit, bot),
             Auras = auras,
         };
-    }
-
-    internal static float Distance(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
     }
 
     private static float CombatReach(Unit unit)

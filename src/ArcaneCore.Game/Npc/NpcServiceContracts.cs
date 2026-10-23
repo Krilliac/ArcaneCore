@@ -87,15 +87,6 @@ public interface ICreatureLookup
         => Find(player, guid) is { } info && (requiredFlags == NpcFlags.None || (info.NpcFlags & requiredFlags) != 0) ? info : null;
 }
 
-/// <summary>vmangos InventoryResult values the NPC services interpret (ItemDefines.h).</summary>
-public enum InventoryResult : byte
-{
-    Ok = 0,
-    ItemNotFound = 23,
-    InventoryFull = 50,
-    CantCarryMoreOfThis = 17,
-}
-
 /// <summary>item_template data the vendor and quest packets carry (vmangos ItemPrototype).</summary>
 public sealed record ItemInfo(
     uint Entry,
@@ -147,7 +138,7 @@ public interface IItemService
     uint GetItemCount(Player player, uint itemId, bool inBankAlso);
 
     /// <summary>vmangos Player::CanStoreNewItem(NULL_BAG, NULL_SLOT, …).</summary>
-    InventoryResult CanStoreNewItem(Player player, uint itemId, uint count);
+    Items.InventoryResult CanStoreNewItem(Player player, uint itemId, uint count);
 
     /// <summary>Store new items and tell the client (vmangos StoreNewItem + SendNewItem). False if it could not.</summary>
     bool StoreNewItem(Player player, uint itemId, uint count);
@@ -165,7 +156,7 @@ public interface IItemService
     /// one and a legal slot, anything else does not go to that slot. The default ignores the position
     /// (CMSG_BUY_ITEM semantics).
     /// </summary>
-    InventoryResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => CanStoreNewItem(player, itemId, count);
+    Items.InventoryResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => CanStoreNewItem(player, itemId, count);
 
     /// <summary>Store or equip the bought items at the position <see cref="CanStoreNewItemAt"/> accepted and tell the client. The default ignores the position.</summary>
     bool StoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => StoreNewItem(player, itemId, count);
@@ -180,7 +171,7 @@ public interface IItemService
     ItemSale SellToVendor(Player player, ObjectGuid vendor, ObjectGuid item, byte count);
 
     /// <summary>SMSG_INVENTORY_CHANGE_FAILURE for a failed store of a new item (vmangos Player::SendEquipError(msg, null, null, 0, item)).</summary>
-    void SendEquipError(Player player, InventoryResult result, uint itemId);
+    void SendEquipError(Player player, Items.InventoryResult result, uint itemId);
 
     /// <summary>The item and price in buyback slot <paramref name="slot"/> (69..80), or null (vmangos GetItemFromBuyBackSlot).</summary>
     BuybackInfo? GetBuyback(Player player, byte slot) => null;
@@ -189,7 +180,7 @@ public interface IItemService
     /// Move the buyback item back into the bags if it fits (vmangos HandleBuybackItem after the
     /// money check); on failure nothing changes and the result is returned for SendEquipError.
     /// </summary>
-    InventoryResult RestoreBuyback(Player player, byte slot) => InventoryResult.ItemNotFound;
+    Items.InventoryResult RestoreBuyback(Player player, byte slot) => Items.InventoryResult.ItemNotFound;
 
     /// <summary>
     /// vmangos Player::DurabilityRepair / DurabilityRepairAll with cost: each damaged candidate

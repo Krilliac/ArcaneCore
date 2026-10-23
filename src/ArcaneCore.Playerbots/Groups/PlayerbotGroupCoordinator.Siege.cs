@@ -12,6 +12,7 @@ using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Party;
 using Microsoft.Extensions.Logging;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Groups;
 

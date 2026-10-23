@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Numerics;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ArcaneCore.Kernel.Accounts;
@@ -83,34 +85,58 @@ public static partial class BanTime
     public static bool IsWellFormed(string timeString) => WellFormed().IsMatch(timeString);
 
     /// <summary>vmangos secsToTimeString(secs, shortText = true): "1d", "2h3m", "45s", "0s".</summary>
-    public static string SecsToTimeString(ulong timeInSecs)
+    public static string SecsToTimeString(ulong timeInSecs) => FormatDuration(timeInSecs, shortText: true);
+
+    /// <summary>
+    /// vmangos secsToTimeString(secs, shortText, hoursOnly) (shared/Util.cpp:197-250), the one copy every module
+    /// forwards to. Long form: "1 Day 2 Hours 3 Minutes 4 Seconds." (the word forms, trailing spaces and the full stop
+    /// after "Seconds" are the reference's own; "Hour" and "Second" are singular for 0 and 1). Short form: "1d2h3m4s".
+    /// Negative input is not clamped: each unit is computed with truncating division and printed as is.
+    /// </summary>
+    public static string FormatDuration(long timeInSecs, bool shortText = false, bool hoursOnly = false)
+        => FormatCore(timeInSecs, shortText, hoursOnly);
+
+    /// <summary><see cref="FormatDuration(long, bool, bool)"/> for the full unsigned range (no wrap above <see cref="long.MaxValue"/>).</summary>
+    public static string FormatDuration(ulong timeInSecs, bool shortText = false, bool hoursOnly = false)
+        => FormatCore(timeInSecs, shortText, hoursOnly);
+
+    private static string FormatCore<T>(T timeInSecs, bool shortText, bool hoursOnly)
+        where T : IBinaryInteger<T>
     {
-        ulong secs = timeInSecs % 60;
-        ulong minutes = timeInSecs % 3600 / 60;
-        ulong hours = timeInSecs % 86400 / 3600;
-        ulong days = timeInSecs / 86400;
+        T one = T.One;
+        T secs = timeInSecs % T.CreateChecked(60);
+        T minutes = timeInSecs % T.CreateChecked(3600) / T.CreateChecked(60);
+        T hours = timeInSecs % T.CreateChecked(86400) / T.CreateChecked(3600);
+        T days = timeInSecs / T.CreateChecked(86400);
 
-        string text = string.Empty;
-        if (days != 0)
+        var ss = new StringBuilder();
+        if (days != T.Zero)
         {
-            text += days.ToString(CultureInfo.InvariantCulture) + "d";
+            ss.Append(days.ToString(null, CultureInfo.InvariantCulture));
+            ss.Append(shortText ? "d" : days == one ? " Day " : " Days ");
         }
 
-        if (hours != 0)
+        if (hours != T.Zero || hoursOnly)
         {
-            text += hours.ToString(CultureInfo.InvariantCulture) + "h";
+            ss.Append(hours.ToString(null, CultureInfo.InvariantCulture));
+            ss.Append(shortText ? "h" : hours <= one ? " Hour " : " Hours ");
         }
 
-        if (minutes != 0)
+        if (!hoursOnly)
         {
-            text += minutes.ToString(CultureInfo.InvariantCulture) + "m";
+            if (minutes != T.Zero)
+            {
+                ss.Append(minutes.ToString(null, CultureInfo.InvariantCulture));
+                ss.Append(shortText ? "m" : minutes == one ? " Minute " : " Minutes ");
+            }
+
+            if (secs != T.Zero || (days == T.Zero && hours == T.Zero && minutes == T.Zero))
+            {
+                ss.Append(secs.ToString(null, CultureInfo.InvariantCulture));
+                ss.Append(shortText ? "s" : secs <= one ? " Second." : " Seconds.");
+            }
         }
 
-        if (secs != 0 || (days == 0 && hours == 0 && minutes == 0))
-        {
-            text += secs.ToString(CultureInfo.InvariantCulture) + "s";
-        }
-
-        return text;
+        return ss.ToString();
     }
 }

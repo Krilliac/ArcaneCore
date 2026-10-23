@@ -174,8 +174,3 @@ internal sealed class PlayerbotAsyncNavigationPlan
         public void Dispose() => t_current = previous;
     }
 }
-
-internal static class Vector3AsyncPlanExtensions
-{
-    internal static bool IsFinite(this Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
-}

@@ -11,6 +11,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -186,7 +187,7 @@ internal static class PlayerbotMotion
         MotionState state = Of(player);
         foreach (Vector3 place in places)
         {
-            if (!Finite(place)) continue;
+            if (!place.IsFinite()) continue;
             state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(place)) <= SamePlaceYards);
             state.Blacklist.Add((place, unchecked(now + LoopBlacklistMs)));
         }
@@ -223,7 +224,7 @@ internal static class PlayerbotMotion
         uint age = Age(world.NowMs, state.AnchorMs);
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * age / 1000f, state.Heading,
             out _, out _, out _, out _);
-        return Finite(position) ? position : stored;
+        return position.IsFinite() ? position : stored;
     }
 
     /// <summary>
@@ -451,7 +452,7 @@ internal static class PlayerbotMotion
 
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * age / 1000f, state.Heading,
             out int nextPoint, out float heading, out bool arrived, out bool turned);
-        if (!Finite(position)) PlayerbotMotionAnomalies.ReportNonFinite(session, player, "the position the route walk computed", now);
+        if (!position.IsFinite()) PlayerbotMotionAnomalies.ReportNonFinite(session, player, "the position the route walk computed", now);
         PlayerbotTriggerTracker tracker = state.TriggerTracker ??= PlayerbotAreaTriggers.TrackerOf(player);
         // A client checks its area triggers every frame; this checks every world tick. Stepping into a volume is reported at
         // once: a heartbeat where the bot is now, then CMSG_AREATRIGGER (PlayerbotAreaTriggers).
@@ -865,7 +866,7 @@ internal static class PlayerbotMotion
         out string? rejectReason)
     {
         rejectReason = null;
-        if (!Finite(candidate))
+        if (!candidate.IsFinite())
         {
             rejectReason = "NonFiniteCoordinate";
             return null;
@@ -1272,10 +1273,6 @@ internal static class PlayerbotMotion
         return difference > MathF.PI ? MathF.Tau - difference : difference;
     }
 
-    private static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
-
-    private static bool Finite(Vector3 value)
-        => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 }
 
 /// <summary>

@@ -131,8 +131,8 @@ public sealed class StatAuras : ISpellHandlerModule
         {
             if (target is Player staminaPlayer)
             {
-                int healthDelta = (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, after))
-                    - (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before));
+                int healthDelta = (int)StatFormulas.HealthBonusFromStaminaPoints((uint)Math.Max(0, after))
+                    - (int)StatFormulas.HealthBonusFromStaminaPoints((uint)Math.Max(0, before));
                 ChangeMaxHealth(target, healthDelta);
 
                 // The stats lane recomputes this bonus from the total stamina on every item and level update and keeps a
@@ -150,8 +150,8 @@ public sealed class StatAuras : ISpellHandlerModule
             {
                 if (player.PowerType == PowerType.Mana)
                 {
-                    int manaDelta = (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, after))
-                        - (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before));
+                    int manaDelta = (int)StatFormulas.ManaBonusFromIntellectPoints((uint)Math.Max(0, after))
+                        - (int)StatFormulas.ManaBonusFromIntellectPoints((uint)Math.Max(0, before));
                     ChangeMaxMana(target, manaDelta);
                     StatBonuses.NoteManaMoved(player, manaDelta); // see NoteHealthMoved above
                 }

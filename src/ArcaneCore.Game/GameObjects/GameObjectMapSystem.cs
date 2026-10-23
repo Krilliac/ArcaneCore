@@ -16,6 +16,8 @@ using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 
 namespace ArcaneCore.Game.GameObjects;
@@ -111,7 +113,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z) && float.IsFinite(spawn.Orientation),
                 "gameobject-spawn-finite-coords",
                 $"GameObjectSpawn {spawn.Guid} on map {map.MapId} has non-finite coordinates ({spawn.X}, {spawn.Y}, {spawn.Z}, {spawn.Orientation})");
-            GridCoord grid = CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y);
+            GridCoord grid = GridDefines.ComputeGridCoord(spawn.X, spawn.Y);
             if (!_spawnsByGrid.TryGetValue(grid, out List<GameObjectSpawn>? list))
             {
                 _spawnsByGrid[grid] = list = [];
@@ -1498,11 +1500,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             Map.RemoveObject(go);
         }
 
-        GridCoord currentGrid = CreatureMapSystem.ComputeGrid(go.X, go.Y);
+        GridCoord currentGrid = GridDefines.ComputeGridCoord(go.X, go.Y);
         bool removedFromGrid = _grids.TryGetValue(currentGrid, out List<GameObject>? currentList) && currentList.Remove(go);
         if (!removedFromGrid && go.Spawn is { } spawn)
         {
-            GridCoord spawnGrid = CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y);
+            GridCoord spawnGrid = GridDefines.ComputeGridCoord(spawn.X, spawn.Y);
             if (spawnGrid != currentGrid && _grids.TryGetValue(spawnGrid, out List<GameObject>? spawnList))
             {
                 removedFromGrid = spawnList.Remove(go);
@@ -1873,7 +1875,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// </summary>
     private List<GameObject> GridListOf(float x, float y)
     {
-        GridCoord coord = CreatureMapSystem.ComputeGrid(x, y);
+        GridCoord coord = GridDefines.ComputeGridCoord(x, y);
         if (!_grids.TryGetValue(coord, out List<GameObject>? list))
         {
             LoadGrid(coord);

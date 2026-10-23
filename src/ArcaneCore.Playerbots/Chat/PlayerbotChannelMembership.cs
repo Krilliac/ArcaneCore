@@ -116,7 +116,7 @@ internal sealed class PlayerbotChannelMembership
         foreach (string name in current)
         {
             if (desired.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
-            if (BotSocial.PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgLeaveChannel, OneString(name))) Leaves++;
+            if (BotSocial.PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgLeaveChannel, BotSocial.PlayerbotSocialPackets.OneString(name))) Leaves++;
         }
 
         foreach (string name in desired)
@@ -132,14 +132,6 @@ internal sealed class PlayerbotChannelMembership
         var writer = new PacketWriter(name.Length + 2);
         writer.WriteCString(name);
         writer.WriteCString(string.Empty);
-        return writer.ToArray();
-    }
-
-    /// <summary>CMSG_LEAVE_CHANNEL: CString name.</summary>
-    internal static byte[] OneString(string name)
-    {
-        var writer = new PacketWriter(name.Length + 1);
-        writer.WriteCString(name);
         return writer.ToArray();
     }
 

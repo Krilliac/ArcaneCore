@@ -1,5 +1,4 @@
-using System.Globalization;
-using System.Text;
+using ArcaneCore.Kernel.Accounts;
 
 namespace ArcaneCore.World.Gm.Args;
 
@@ -56,40 +55,5 @@ public static class GmDuration
 
     /// <summary>Seconds -> "1 Day 2 Hours 30 Minutes 10 Seconds." (long) or "1d2h30m10s" (short), Util.cpp:197-250.</summary>
     public static string SecsToTimeString(long timeInSecs, bool shortText = false, bool hoursOnly = false)
-    {
-        long secs = timeInSecs % Minute;
-        long minutes = timeInSecs % Hour / Minute;
-        long hours = timeInSecs % Day / Hour;
-        long days = timeInSecs / Day;
-
-        var ss = new StringBuilder();
-        if (days != 0)
-        {
-            ss.Append(days.ToString(CultureInfo.InvariantCulture));
-            ss.Append(shortText ? "d" : days == 1 ? " Day " : " Days ");
-        }
-
-        if (hours != 0 || hoursOnly)
-        {
-            ss.Append(hours.ToString(CultureInfo.InvariantCulture));
-            ss.Append(shortText ? "h" : hours <= 1 ? " Hour " : " Hours ");
-        }
-
-        if (!hoursOnly)
-        {
-            if (minutes != 0)
-            {
-                ss.Append(minutes.ToString(CultureInfo.InvariantCulture));
-                ss.Append(shortText ? "m" : minutes == 1 ? " Minute " : " Minutes ");
-            }
-
-            if (secs != 0 || (days == 0 && hours == 0 && minutes == 0))
-            {
-                ss.Append(secs.ToString(CultureInfo.InvariantCulture));
-                ss.Append(shortText ? "s" : secs <= 1 ? " Second." : " Seconds.");
-            }
-        }
-
-        return ss.ToString();
-    }
+        => BanTime.FormatDuration(timeInSecs, shortText, hoursOnly);
 }

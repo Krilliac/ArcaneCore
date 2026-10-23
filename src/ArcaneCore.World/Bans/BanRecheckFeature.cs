@@ -1,12 +1,12 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Bans;
 
 /// <summary>

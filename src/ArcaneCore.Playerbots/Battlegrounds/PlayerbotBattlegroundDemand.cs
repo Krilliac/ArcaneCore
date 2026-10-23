@@ -60,7 +60,7 @@ internal sealed class PlayerbotBattlegroundDemand
 
     internal bool AnyBotWaiting => _bots.Count > 0;
 
-    private static int Slot(Team team) => BattlegroundConstants.TeamIndex(team);
+    private static int Slot(Team team) => team.Index();
 
     private static void Bump(Dictionary<(BattlegroundType, int, int), int> map, BattlegroundType type, int bracket, Team team)
     {

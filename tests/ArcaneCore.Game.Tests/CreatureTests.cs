@@ -5,6 +5,8 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
 
@@ -165,13 +167,13 @@ public sealed class CreatureTests
     [Fact]
     public void ComputeGrid_MatchesVMangosGridPair()
     {
-        Assert.Equal(new GridCoord(32, 32), CreatureMapSystem.ComputeGrid(0, 0));
-        Assert.Equal(new GridCoord(32, 32), CreatureMapSystem.ComputeGrid(533.0f, 533.0f));
-        Assert.Equal(new GridCoord(33, 31), CreatureMapSystem.ComputeGrid(533.4f, -0.1f));
+        Assert.Equal(new GridCoord(32, 32), GridDefines.ComputeGridCoord(0, 0));
+        Assert.Equal(new GridCoord(32, 32), GridDefines.ComputeGridCoord(533.0f, 533.0f));
+        Assert.Equal(new GridCoord(33, 31), GridDefines.ComputeGridCoord(533.4f, -0.1f));
 
         // Northshire Abbey (-8949.95, -132.49): ((-8949.95 - 266.67) / 533.33 + 32.5) = 15.2; y → 31.7.
-        Assert.Equal(new GridCoord(15, 31), CreatureMapSystem.ComputeGrid(-8949.95f, -132.49f));
-        Assert.Equal(new GridCoord(0, 63), CreatureMapSystem.ComputeGrid(-1e6f, 1e6f));
+        Assert.Equal(new GridCoord(15, 31), GridDefines.ComputeGridCoord(-8949.95f, -132.49f));
+        Assert.Equal(new GridCoord(0, 63), GridDefines.ComputeGridCoord(-1e6f, 1e6f));
     }
 
     // --- grids & visibility ----------------------------------------------------------------

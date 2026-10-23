@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Spells;
 public sealed partial class SpellSystem
 {
     /// <summary>vmangos DEFAULT_WORLD_OBJECT_SIZE, the bounding radius of the summoned object (ObjectDefines.h:42).</summary>
-    private const float SummonedObjectSize = 0.388999998569489f;
+    private const float SummonedObjectSize = WorldObject.DefaultBoundingRadius;
 
     /// <summary>The objects spells created and their owners.</summary>
     public SpellObjectRegistry SpellObjects { get; } = new();

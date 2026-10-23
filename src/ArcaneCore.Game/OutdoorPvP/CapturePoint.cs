@@ -281,5 +281,5 @@ public abstract class CapturePoint
         _active[1].Clear();
     }
 
-    internal static int TeamIndex(Team team) => team == Entities.Team.Alliance ? 0 : 1;
+    internal static int TeamIndex(Team team) => team.Index();
 }

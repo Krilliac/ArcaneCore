@@ -162,7 +162,7 @@ internal sealed class PlayerbotServiceIndex
         {
             foreach (CreatureSpawn spawn in _content.GetSpawns(map, entry))
             {
-                if (float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z) && spawns.Count < MaxSpawnsPerSite) spawns.Add(spawn);
+                if (spawn.IsFinite() && spawns.Count < MaxSpawnsPerSite) spawns.Add(spawn);
             }
         }
 

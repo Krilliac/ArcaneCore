@@ -138,35 +138,7 @@ public sealed class ChatRestrictionService(ChatRestrictionOptions options, Func<
     }
 
     /// <summary>vmangos secsToTimeString(secs, shortText = false, hoursOnly = false) (Util.cpp:197-250), trailing spaces and periods included.</summary>
-    public static string FormatDuration(long seconds)
-    {
-        long secs = seconds % 60;
-        long minutes = seconds % 3600 / 60;
-        long hours = seconds % 86400 / 3600;
-        long days = seconds / 86400;
-        var text = new System.Text.StringBuilder();
-        if (days != 0)
-        {
-            text.Append(days).Append(days == 1 ? " Day " : " Days ");
-        }
-
-        if (hours != 0)
-        {
-            text.Append(hours).Append(hours <= 1 ? " Hour " : " Hours ");
-        }
-
-        if (minutes != 0)
-        {
-            text.Append(minutes).Append(minutes == 1 ? " Minute " : " Minutes ");
-        }
-
-        if (secs != 0 || (days == 0 && hours == 0 && minutes == 0))
-        {
-            text.Append(secs).Append(secs <= 1 ? " Second." : " Seconds.");
-        }
-
-        return text.ToString();
-    }
+    public static string FormatDuration(long seconds) => ArcaneCore.Kernel.Accounts.BanTime.FormatDuration(seconds);
 
     /// <summary>mangos_string 705 (LANG_WAIT_BEFORE_SPEAKING): "You must wait %s before speaking again."</summary>
     public static string WaitMessage(long seconds) => $"You must wait {FormatDuration(seconds)} before speaking again.";

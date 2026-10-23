@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.World.Characters.Creation;
@@ -12,9 +13,6 @@ public static class RaceClassRules
 {
     /// <summary>RACEMASK_ALL_PLAYABLE (SharedDefines.h:72).</summary>
     private const uint PlayableRaces = 0xFF;
-
-    /// <summary>RACEMASK_ALLIANCE: human, dwarf, night elf, gnome (SharedDefines.h:79).</summary>
-    private const uint AllianceRaces = (1u << 0) | (1u << 2) | (1u << 3) | (1u << 6);
 
     /// <summary>CLASSMASK_ALL_PLAYABLE (SharedDefines.h:101).</summary>
     private const uint PlayableClasses = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 10);
@@ -32,5 +30,5 @@ public static class RaceClassRules
     public static bool ClassExists(byte cls) => cls is >= 1 and <= 11 && (PlayableClasses & (1u << (cls - 1))) != 0;
 
     /// <summary>vmangos Player::TeamForRace for the playable races.</summary>
-    public static Team TeamForRace(byte race) => race is >= 1 and <= 8 && (AllianceRaces & (1u << (race - 1))) != 0 ? Team.Alliance : Team.Horde;
+    public static Team TeamForRace(byte race) => TeamRules.TeamOf((Race)race);
 }

@@ -266,7 +266,7 @@ public static class BattlegroundConstants
     }
 
     /// <summary>The team index used by the arrays of a battleground (vmangos <c>BG_TEAM_ALLIANCE</c> 0, <c>BG_TEAM_HORDE</c> 1).</summary>
-    public static int TeamIndex(Team team) => team == Team.Alliance ? 0 : 1;
+    public static int TeamIndex(Team team) => team.Index();
 
     /// <summary>The other team (vmangos <c>GetOtherTeam</c>).</summary>
     public static Team OtherTeam(Team team) => team == Team.Alliance ? Team.Horde : Team.Alliance;

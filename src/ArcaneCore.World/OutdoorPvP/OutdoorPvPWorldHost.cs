@@ -67,7 +67,7 @@ internal sealed class OutdoorPvPWorldHost(OutdoorPvPFeature feature) : IOutdoorP
     }
 
     /// <summary>vmangos DEFAULT_WORLD_OBJECT_SIZE, a game object's bounding radius (GameObject::GetObjectBoundingRadius, GameObject.cpp:2268-2272).</summary>
-    internal const float GameObjectBoundingRadius = 0.388999998569489f;
+    internal const float GameObjectBoundingRadius = WorldObject.DefaultBoundingRadius;
 
     /// <summary>
     /// vmangos AnyPlayerInObjectRangeCheck → IsWithinDistInMap(player, radius, 3d) (GridNotifiers.h:1228-1236, Object.cpp:1660-1666): the 3D

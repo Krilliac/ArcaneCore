@@ -43,8 +43,6 @@ public sealed partial class Player : Unit
 {
     private bool _nativeDisplayModelInitialized;
     public event Action<Player, StandState, StandState>? StandStateChanged;
-    /// <summary>vmangos ObjectDefines.h DEFAULT_WORLD_OBJECT_SIZE (used until model data is imported).</summary>
-    public const float DefaultBoundingRadius = 0.388999998569489f;
 
     /// <summary>vmangos ObjectDefines.h DEFAULT_COMBAT_REACH.</summary>
     public const float DefaultCombatReach = 1.5f;
@@ -176,7 +174,7 @@ public sealed partial class Player : Unit
         }
     }
 
-    public Team Team => Race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome ? Team.Alliance : Team.Horde;
+    public Team Team => TeamRules.TeamOf(Race);
 
     public PlayerFlags Flags
     {

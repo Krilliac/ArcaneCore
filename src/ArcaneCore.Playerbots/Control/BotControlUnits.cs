@@ -5,6 +5,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Control;
 
@@ -109,12 +110,6 @@ internal static class BotControlUnits
         GameObject g => g.Template.Name,
         _ => null,
     };
-
-    internal static float Distance(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-    }
 
     private static bool TryEntry(string text, string prefix, out uint entry)
     {

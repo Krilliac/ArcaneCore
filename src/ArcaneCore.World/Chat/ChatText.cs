@@ -1,4 +1,4 @@
-using System.Text;
+using ArcaneCore.Kernel.Accounts;
 
 namespace ArcaneCore.World.Chat;
 
@@ -11,34 +11,5 @@ public static class ChatText
     /// after "Seconds" are the reference's own.
     /// It is what the mute notice (mangos_string 705, "You must wait %s before speaking again.") shows.
     /// </summary>
-    public static string SecsToTimeString(long timeInSecs)
-    {
-        long secs = timeInSecs % 60;
-        long minutes = timeInSecs % 3600 / 60;
-        long hours = timeInSecs % 86400 / 3600;
-        long days = timeInSecs / 86400;
-
-        var text = new StringBuilder();
-        if (days != 0)
-        {
-            text.Append(days).Append(days == 1 ? " Day " : " Days ");
-        }
-
-        if (hours != 0)
-        {
-            text.Append(hours).Append(hours <= 1 ? " Hour " : " Hours ");
-        }
-
-        if (minutes != 0)
-        {
-            text.Append(minutes).Append(minutes == 1 ? " Minute " : " Minutes ");
-        }
-
-        if (secs != 0 || (days == 0 && hours == 0 && minutes == 0))
-        {
-            text.Append(secs).Append(secs <= 1 ? " Second." : " Seconds.");
-        }
-
-        return text.ToString();
-    }
+    public static string SecsToTimeString(long timeInSecs) => BanTime.FormatDuration(timeInSecs);
 }

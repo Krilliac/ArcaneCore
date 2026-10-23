@@ -739,8 +739,8 @@ internal sealed class PlayerbotQaPublisher
             try
             {
                 Directory.CreateDirectory(folder);
-                WriteAtomic(Path.Combine(folder, f.Id + ".md"), draft.Body);
-                WriteAtomic(Path.Combine(folder, f.Id + ".json"), JsonSerializer.Serialize(
+                QaFiles.WriteAtomic(Path.Combine(folder, f.Id + ".md"), draft.Body);
+                QaFiles.WriteAtomic(Path.Combine(folder, f.Id + ".json"), JsonSerializer.Serialize(
                     new QaPendingIssueFile(f.Id, git.Repository, draft.Title, draft.Marker, draft.Labels, f.Count, f.DistinctBots, now), QaPendingJsonContext.Default.QaPendingIssueFile));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -756,12 +756,5 @@ internal sealed class PlayerbotQaPublisher
             _state.Apply(f.Id, new QaPublicationUpdate(new QaPublication(QaPublicationState.DryRun), null, f.Count));
             _logger.LogInformation("bot-qa dry run: would open '{Title}' ({Id}) -> qa/pending-issues/{Id}.md", draft.Title, f.Id, f.Id);
         }
-    }
-
-    private static void WriteAtomic(string path, string text)
-    {
-        string temp = path + ".tmp";
-        File.WriteAllText(temp, text);
-        File.Move(temp, path, overwrite: true);
     }
 }

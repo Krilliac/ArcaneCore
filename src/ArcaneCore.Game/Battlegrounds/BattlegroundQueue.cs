@@ -253,7 +253,7 @@ internal sealed class BattlegroundQueue
 
         // Most players are in the higher brackets, so count down; premade and normal lists are both searched because a premade that joined
         // a battleground leaves its group info.
-        int firstList = group.Team == Team.Alliance ? 0 : 1;
+        int firstList = group.Team.Index();
         for (int bracket = BattlegroundConstants.BracketCount - 1; bracket >= 0 && foundBracket == -1; bracket--)
         {
             for (int list = firstList; list < QueueLists.Count; list += QueueLists.NormalAlliance)

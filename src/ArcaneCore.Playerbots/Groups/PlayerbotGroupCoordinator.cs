@@ -29,6 +29,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots.Progression;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Groups;
 
@@ -1874,9 +1875,6 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Events.Add(string.Create(CultureInfo.InvariantCulture, $"{Now / 1000}s {line}"));
         if (Events.Count > 32) Events.RemoveAt(0);
     }
-
-    private static float Distance(WorldObject a, WorldObject b)
-        => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 
     // --- the group --------------------------------------------------------------------------------------------------
 

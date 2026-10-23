@@ -60,7 +60,7 @@ internal sealed class PlayerbotHazards
 
     internal void Add(uint mapId, Vector3 at, float radius, uint nowMs, int seconds, string kind, ObjectGuid creature = default)
     {
-        if (seconds <= 0 || radius <= 0 || !Finite(at)) return;
+        if (seconds <= 0 || radius <= 0 || !at.IsFinite()) return;
         uint until = unchecked(nowMs + ((uint)seconds * 1000u));
         if (!creature.IsEmpty)
             for (int i = _hazards.Count - 1; i >= 0; i--)
@@ -73,7 +73,7 @@ internal sealed class PlayerbotHazards
     /// <summary>Remember one newly reported loop. A later loop in the same zone gets twice the configured life.</summary>
     internal bool RememberDeathLoop(uint mapId, Vector3 centre, uint nowMs, int seconds, IReadOnlyList<uint> killers)
     {
-        if (seconds <= 0 || !Finite(centre)) return false;
+        if (seconds <= 0 || !centre.IsFinite()) return false;
         Expire(nowMs);
         int prior = _hazards.FindIndex(h => h.Kind == DeathLoopKind && h.MapId == mapId && h.Covers(centre));
         bool repeated = prior >= 0;
@@ -110,7 +110,7 @@ internal sealed class PlayerbotHazards
     internal void SetStrong(uint mapId, Vector3 at, float radius, uint nowMs, uint lifeMs, ObjectGuid creature,
         bool returnPassable = false)
     {
-        if (creature.IsEmpty || radius <= 0 || !Finite(at)) return;
+        if (creature.IsEmpty || radius <= 0 || !at.IsFinite()) return;
         if (_strong.Count >= MaxStrong && !_strong.ContainsKey(creature)) return;
         _strong[creature] = (new PlayerbotHazard(mapId, at, radius, unchecked(nowMs + lifeMs), creature, StrongKind,
             returnPassable), _scan);
@@ -422,8 +422,6 @@ internal sealed class PlayerbotHazards
     }
 
     private static bool Live(in PlayerbotHazard hazard, uint nowMs) => unchecked((int)(hazard.UntilMs - nowMs)) > 0;
-
-    private static bool Finite(Vector3 at) => float.IsFinite(at.X) && float.IsFinite(at.Y) && float.IsFinite(at.Z);
 
     private void EvictOldest()
     {

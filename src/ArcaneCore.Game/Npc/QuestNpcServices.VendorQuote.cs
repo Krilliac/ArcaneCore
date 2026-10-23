@@ -25,15 +25,14 @@ public sealed partial class QuestNpcServices
             || (row.MaxCount != 0 && CurrentStock(npc.Guid, row, proto) < proto.BuyCount))
             return null;
 
-        uint faction = proto.RequiredReputationFaction != 0 || proto.RequiredReputationRank == 0
-            ? proto.RequiredReputationFaction : npc.FactionId;
-        if (proto.RequiredReputationRank > 0 && (Deps.Reputation is not { } reputation
-            || reputation.GetReputationRank(player, faction) < proto.RequiredReputationRank))
+        if (!MeetsVendorReputation(player, npc, proto))
+        {
             return null;
+        }
 
         uint price = Discounted(proto.BuyPrice, PriceDiscount(player, npc));
         if (player.Money < price || items.CanStoreNewItemAt(player, itemId, proto.BuyCount,
-            Items.InventorySlots.NullBag, Items.InventorySlots.NullSlot) != InventoryResult.Ok)
+            Items.InventorySlots.NullBag, Items.InventorySlots.NullSlot) != Items.InventoryResult.Ok)
             return null;
 
         return price;

@@ -1,6 +1,6 @@
 using ArcaneCore.Game.Maps;
-
 using ArcaneCore.Kernel.Diagnostics;
+
 namespace ArcaneCore.World.WorldState;
 
 /// <summary>
