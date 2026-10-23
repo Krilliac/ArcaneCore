@@ -25,6 +25,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots;
+using BotChat = ArcaneCore.World.Playerbots.Chat;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -609,10 +610,33 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Social.Track(entry.BotId, entry.Record.CharacterId);
         brain.Social = Social;
         var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId) };
+        active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
+        {
+            Recorder = Social,
+            CallForHelp = (bot, nearest) => SayCallForHelp(active, bot, nearest),
+        };
         // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
         active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
         active.Party.BrainDiagnostics = p => FormatBotDiagnostics(active, p);
         return active;
+    }
+
+    /// <summary>
+    /// A bot losing a fight calls for help: one line through the chat service (its limits, safety screen and disclosure rules apply) and the help
+    /// text emote at the nearest asked unit. True when either was taken. World thread.
+    /// </summary>
+    private bool SayCallForHelp(ActiveBot active, Player bot, Player nearest)
+    {
+        if (_chat is not { IsActive: true } chat) return false;
+        Guid botId = active.Record.BotId;
+        var speech = new BotChat.BotSpeech(BotChat.BotSpeechChannel.Yell, string.Empty, "call-for-help", BotChat.BotSpeechPriority.High);
+        var topic = new BotChat.BotChatTopic("callhelp", "You are losing a fight and a healthy player is nearby. Call out for help in one short line.",
+            new Dictionary<string, string>(), string.Empty);
+        var ask = new BotChat.BotChatAsk(botId, bot.Guid, active.Party.PersonaFor(bot), bot.Guid, bot.Name, ChatType.Yell,
+            "You are losing a fight and call out for help.", FromMaster: false, InviteAllowed: false, SenderAccountId: 0, Topic: topic, Speech: speech);
+        bool said = chat.TryAnnounce(ask) == BotChat.BotChatAdmission.Queued;
+        bool waved = chat.TrySpeak(botId, bot.Guid, BotChat.BotSpeech.EmoteAt(BotSocial.PlayerbotEmoteMoods.HelpMe, nearest.Guid, "call-for-help")) == BotChat.BotSpeechAdmission.Queued;
+        return said || waved;
     }
 
     /// <summary>The core's view of a bot session while this feature is attached (<see cref="IManagedBotSessionPolicy"/>).</summary>
@@ -2352,7 +2376,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             active.StarvedReported = false;
             try
             {
-                if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
+                if (active.Session.Player is { IsInWorld: true } observed)
+                {
+                    active.Brain.ObserveKillingBlows(observed);
+                    active.Fight?.Observe(observed, world, world.NowMs);
+                }
                 if (active.Controller is { } controller)
                 {
                     // Scripted mode: the brain is suppressed and the shared action budget does not apply.
@@ -3548,6 +3576,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public PlayerbotBrain Brain = brain;
         public int SavedSetAsideVersion;
         public long SavedRelationVersion;
+
+        /// <summary>The bot's social view of its fights (helpers, the low-health window, the call for help); survives a brain replacement.</summary>
+        public BotSocial.PlayerbotFightSocial? Fight;
         public readonly object SetAsideGate = new();
         public PlayerbotPartyAI Party { get; } = party;
         public bool PartyDriven;

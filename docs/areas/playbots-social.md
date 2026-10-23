@@ -114,6 +114,26 @@ request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` na
 brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.PlayerKilled` for PvP kills. All of them go through
 `PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).
 
+**Help, bystanders and the call for help** (`PlayerbotFightSocial`, one per bot, read once a second while the bot is in combat):
+
+- *Help.* Every player (or player's pet) on the threat list of a creature that is fighting the bot, with threat above 0, helped it: the bot
+  records HelpedBy toward the helper and, when the helper is a managed bot, the helper records HelpedThem toward the bot, once per helper
+  and fight (`PlayerbotSocialRecorder.NoteHelp`, shared with the assist and heal-the-tagger paths so one assist is never counted twice; a
+  victim bot leaving combat ends its fight). Healers and taunters are on the threat list too. Buffs without threat are not seen.
+- *Low-health window.* When the bot's health first drops below 40% in a fight it samples up to 16 nearby bystanders once: alive, same
+  faction, out of combat, at least `BystanderMinHealthPercent` healthy, within `BystanderRadiusYards`, not in a duel, level at least the
+  bot's minus 5. It re-checks them every second.
+- *Call for help or go alone.* If the fight looks lost (the strongest attacker has a higher health fraction than the bot) and a candidate
+  is askable (not disliked, not a rival, same faction), the bot decides once per fight with a hash of its guid and the fight start: it asks
+  with probability `CallForHelpBaseChance + CallForHelpSociabilityWeight * sociability + 0.002 * best affinity`. Asking is one yell
+  through the chat service (`TryAnnounce`: limits, safety screen and disclosure rules apply) and the targeted help text emote at the nearest
+  asked unit. Going alone says nothing. `CallForHelpEnabled` off means the bot never asks (and so blames nobody).
+- *Watched me die.* If the bot dies in the window (not a duel, window at least `BystanderMinSeconds`), each asked candidate that still
+  qualifies at death and never helped gets WatchedMeDie (`AffinityPerWatchedDie`). A bot that went alone blames nobody.
+- *Answering* (`AnswerHelpEnabled`): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
+  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The function is in place and tested, but the answer is not wired to
+  the brain's assist lane yet (that moves to P2); nothing acts on a help emote today.
+
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
 split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
 
