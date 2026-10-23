@@ -188,5 +188,21 @@ public sealed partial class WorldRuntime
     /// <summary>The phase times of the last <see cref="RunTick"/> (world thread).</summary>
     public TickPhases LastTickPhases { get; private set; }
 
+    /// <summary>The length in microseconds of the last <see cref="RunTick"/> body, from before its commands to its last phase (world thread).</summary>
+    public long LastTickDurationMicros { get; private set; }
+
+    /// <summary>
+    /// Copy the slowest features of the last <see cref="RunTick"/> (slowest first) into the buffers and return how many were copied:
+    /// <c>min(count recorded, names.Length, micros.Length)</c>. World thread only; the data is valid until the next <see cref="RunTick"/> starts its commands
+    /// (readable from a <see cref="TickStarting"/> handler).
+    /// </summary>
+    public int CopyLastTickTopFeatures(Span<string?> names, Span<long> micros)
+    {
+        int count = Math.Min(_topCount, Math.Min(names.Length, micros.Length));
+        _topNames.AsSpan(0, count).CopyTo(names);
+        _topMicros.AsSpan(0, count).CopyTo(micros);
+        return count;
+    }
+
     private static long Micros(long stopwatchTicks) => stopwatchTicks * 1_000_000 / Stopwatch.Frequency;
 }

@@ -18,9 +18,9 @@ namespace ArcaneCore.World.Ops.Watchdog;
 
 /// <summary>
 /// Feeds the Kernel <see cref="TickMonitor"/> from the world thread (docs/ops/watchdog.md). It is
-/// the one consumer of the existing <see cref="WorldRuntime.WorldTick"/> seam here: the handler
-/// runs at the start of every tick and does nothing but <see cref="TickMonitor.OnTick(long)"/>, a
-/// clock read and a few stores. The body-duration percentiles of <see cref="WorldRuntime.Stats"/>
+/// the one consumer of <see cref="WorldRuntime.TickStarting"/> here: the handler
+/// runs as the first step of every tick and does nothing but <see cref="TickMonitor.OnTick(long)"/>, a
+/// clock read and a few stores (plus one small record when the frame it closes was a hang). The body-duration percentiles of <see cref="WorldRuntime.Stats"/>
 /// are read by the watchdog thread only (its snapshot takes the recorder's short lock, never the
 /// world thread's time beyond that). When the watchdog is not registered (a test host, or
 /// <c>AddWorldWatchdog</c> not called) the feature attaches nothing.
@@ -67,7 +67,8 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         };
         monitor.AttachLatency(world.Stats.FrameLatency, world.Stats.BodyLatency, world.Stats.PhaseLatencies);
         monitor.HangDetail = inProgress => SafeDescribe(world, inProgress);
-        monitor.FrameDetail = span => SafeDescribeFrame(world, span);
+        monitor.CompletedHangDetail = SafeDescribeCompleted;
+        monitor.HangClosed = frameMicros => RecordHungFrame(world, frameMicros);
         if (services.GetService<HostLoadSampler>() is { Enabled: true } hostLoad)
         {
             monitor.HostLoad = hostLoad;
@@ -103,7 +104,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             };
         }
 
-        world.WorldTick += OnTick;
+        world.TickStarting += OnTickStarting;
         logger.LogInformation("tick watchdog attached: budget {BudgetMs} ms, hang {HangMs} ms, ring {Ring} frames",
             monitor.BudgetMicros / 1000, monitor.HangMicros == long.MaxValue ? 0 : monitor.HangMicros / 1000, monitor.Ring.Capacity);
     }
@@ -112,6 +113,9 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     // monitor raises the alert, and the handler reads them. They are identity strings for bot QA's fingerprint (a phase name and a kind of work), never a duration.
     private ManagedBotRegistry? _bots;
     private HangFacts _facts = HangFacts.Unknown;
+
+    /// <summary>The identity the last completed-hang description left for bot QA (watchdog thread, so tests read it from the thread that called Check).</summary>
+    internal HangFacts LastHangFacts => _facts;
     private string? _lastInProgress;
     private int _inProgressDistinct;
     private long _attachedMicros;
@@ -131,23 +135,26 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         => new(position.Phase.ToString(), position.Phase == TickPhase.Autosave ? "autosave" : WorkKind(position.Work), false);
 
     /// <summary>
-    /// The facts of a hang that ended, from the hung frame's own tick body (see <see cref="FormatCompletedFrame"/>; <paramref name="worst"/> is that body): its dominant phase, and the work that belongs to that phase (<c>map</c> for the maps phase, a
+    /// The facts of a hang that ended, from the tick body that ended the hung frame: its dominant phase, and the work that belongs to that phase (<c>map</c> for the maps phase, a
     /// fixed token for commands, world-tick handlers and autosave, the slowest feature only when the feature phase dominates), so the item never names code that
-    /// was not the slow part. No body recorded for the frame: the stall was outside the tick body.
+    /// was not the slow part. No body: the stall was outside the tick body.
     /// </summary>
     internal static HangFacts CompletedFacts(SlowTickInfo? worst)
+        => worst is null ? new HangFacts("OutsideTick", "none", false) : CompletedFacts(worst.Phases, worst.TopFeatures, worst.DurationMicros);
+
+    /// <summary>The facts of a tick body with this phase split, slowest features and length.</summary>
+    internal static HangFacts CompletedFacts(TickPhases phases, IReadOnlyList<(string Name, long Micros)> topFeatures, long bodyMicros)
     {
-        if (worst is null) return new HangFacts("OutsideTick", "none", false);
-        string phase = DominantPhase(worst.Phases);
+        string phase = DominantPhase(phases);
         string item = phase switch
         {
             nameof(TickPhase.Maps) => "map",
             nameof(TickPhase.Autosave) => "autosave",
             nameof(TickPhase.Commands) => "commands",
             nameof(TickPhase.WorldTick) => "worldtick-handlers",
-            _ => worst.TopFeatures.Count > 0 ? worst.TopFeatures[0].Name : "none",
+            _ => topFeatures.Count > 0 ? topFeatures[0].Name : "none",
         };
-        bool gc = worst.Phases.GcCaptured && worst.Phases.Gc.PauseTicks / 10.0 >= worst.DurationMicros * GcShare;
+        bool gc = phases.GcCaptured && phases.Gc.PauseTicks / 10.0 >= bodyMicros * GcShare;
         return new HangFacts(phase, item, gc);
     }
 
@@ -238,15 +245,68 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         }
     }
 
-    private string SafeDescribeFrame(WorldRuntime world, TickFrameSpan span)
+    /// <summary>
+    /// A hung frame, snapshotted on the world thread the moment the next tick starts (while the closing tick's phases, duration and slowest features are complete):
+    /// <paramref name="FrameMicros"/> the frame's length, <paramref name="BodyMicros"/> the tick body that ended it.
+    /// </summary>
+    internal sealed record HungFrame(long FrameMicros, long BodyMicros, TickPhases Phases, IReadOnlyList<(string Name, long Micros)> TopFeatures);
+
+    private readonly object _hungGate = new();
+    private HungFrame? _worstHung;
+    private int _hungCount;
+
+    /// <summary>
+    /// World thread, inside <see cref="TickMonitor.OnTick(long)"/> before the hang is counted: snapshot the closing tick for the watchdog thread. Allocates one small record
+    /// (and two five-entry buffers) per hang, an event that costs seconds anyway; keeps the longest frame since the last report.
+    /// </summary>
+    private void RecordHungFrame(WorldRuntime world, long frameMicros)
+    {
+        var names = new string?[TickStats.TopFeatureCount];
+        var micros = new long[TickStats.TopFeatureCount];
+        int count = world.CopyLastTickTopFeatures(names, micros);
+        var top = new (string Name, long Micros)[count];
+        for (int i = 0; i < count; i++)
+        {
+            top[i] = (names[i] ?? "?", micros[i]);
+        }
+
+        var frame = new HungFrame(frameMicros, world.LastTickDurationMicros, world.LastTickPhases, top);
+        lock (_hungGate)
+        {
+            _hungCount++;
+            if (_worstHung is null || frameMicros >= _worstHung.FrameMicros)
+            {
+                _worstHung = frame;
+            }
+        }
+    }
+
+    /// <summary>Watchdog thread, once per completed-hang line: the worst hung frame recorded since the last report (and how many there were), then forget them.</summary>
+    private string SafeDescribeCompleted()
     {
         try
         {
-            _facts = HangFacts.Unknown;
-            IReadOnlyList<SlowTickInfo> slow = world.Stats.SlowTicks(DetailWindow);
-            // The wall time of the report moment (span.NowStopwatch), so the label does not depend on how long this method took to get here.
-            DateTime wallAtReport = DateTime.UtcNow - Stopwatch.GetElapsedTime(span.NowStopwatch);
-            string text = FormatCompletedFrame(slow, span, wallAtReport, out _facts);
+            HungFrame? frame;
+            int count;
+            lock (_hungGate)
+            {
+                frame = _worstHung;
+                count = _hungCount;
+                _worstHung = null;
+                _hungCount = 0;
+            }
+
+            string text;
+            if (frame is null)
+            {
+                _facts = CompletedFacts((SlowTickInfo?)null);
+                text = $"no tick body over the interval was recorded in the last {DetailWindow.TotalSeconds:F0} s (the stall was outside the tick body)";
+            }
+            else
+            {
+                text = FormatHungFrame(frame, count, out _facts);
+            }
+
             return AppendSaveQueue(text);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -258,67 +318,34 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     }
 
     /// <summary>
-    /// The detail of a hang that ended, from the hung frame's own tick body: the recorded slow tick bodies are placed on the watchdog clock by their age at
-    /// <see cref="TickFrameSpan.NowStopwatch"/> (a body runs from its stamp minus its duration to its stamp, the stamp being taken when it ended), and the one overlapping
-    /// <paramref name="span"/> the most is the frame's body. A body can start inside the frame and end after it: the watchdog's tick callback runs after the commands phase, so a
-    /// slow command of the next tick is inside this frame while that tick's body is recorded after it. With no overlapping body recorded (TickStats keeps only the eight slowest
-    /// over the interval) the report says none was recorded and that the time was outside tick code (a GC pause, paging, a suspended process), instead of naming an earlier
-    /// tick; the window's slowest body is still shown, labelled with the UTC time it was recorded (<paramref name="wallAtReport"/> is UTC at the report moment).
-    /// <paramref name="facts"/> are the hang's identity for bot QA, taken from the frame's body (<c>OutsideTick</c> without one).
+    /// The completed-hang detail from the hung frame's own tick: how long the frame was, how much of it the tick body (commands to autosave) filled and the rest as time
+    /// outside tick code (a wait between ticks, a GC pause or paging that hit the idle wait). <paramref name="facts"/> are the hang's identity for bot QA: <c>OutsideTick</c> when
+    /// the time outside the body dominates, else the body's dominant phase and work.
     /// </summary>
-    internal static string FormatCompletedFrame(IReadOnlyList<SlowTickInfo> slow, in TickFrameSpan span, DateTime wallAtReport, out HangFacts facts)
+    internal static string FormatHungFrame(HungFrame frame, int count, out HangFacts facts)
     {
-        double frameMs = span.DurationMicros / 1000.0;
-        SlowTickInfo? body = null;
-        long bestOverlap = 0;
-        foreach (SlowTickInfo info in slow)
-        {
-            long endMicros = span.NowMicros - (long)Stopwatch.GetElapsedTime(info.Timestamp, span.NowStopwatch).TotalMicroseconds;
-            long overlap = Math.Min(endMicros, span.EndMicros) - Math.Max(endMicros - info.DurationMicros, span.StartMicros);
-            if (overlap > bestOverlap || (overlap > 0 && overlap == bestOverlap && body is not null && info.DurationMicros > body.DurationMicros))
-            {
-                body = info;
-                bestOverlap = overlap;
-            }
-        }
-
-        facts = CompletedFacts(body);
+        long outside = Math.Max(0, frame.FrameMicros - frame.BodyMicros);
         var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture, $"hung frame {frameMs:F0} ms: ");
-        if (body is null)
-        {
-            text.Append(CultureInfo.InvariantCulture, $"frame body 0 ms (none recorded over the interval); {frameMs:F0} ms outside tick code");
-        }
-        else
-        {
-            double outside = Math.Max(0, frameMs - (bestOverlap / 1000.0));
-            text.Append(CultureInfo.InvariantCulture, $"frame body {body.DurationMicros / 1000} ms: ");
-            AppendBody(text, body);
-            text.Append(CultureInfo.InvariantCulture, $"; {outside:F0} ms outside tick code");
-        }
-
-        if (slow.Count > 0 && (body is null || slow[0].Sequence != body.Sequence))
-        {
-            SlowTickInfo worst = slow[0];
-            TimeSpan age = Stopwatch.GetElapsedTime(worst.Timestamp, span.NowStopwatch);
-            text.Append(CultureInfo.InvariantCulture, $"; slowest body in window at {(wallAtReport - age):HH:mm:ss} UTC: {worst.DurationMicros / 1000} ms: ");
-            AppendBody(text, worst);
-        }
-
-        return text.ToString();
-    }
-
-    private static void AppendBody(StringBuilder text, SlowTickInfo tick)
-    {
-        text.Append(tick.Phases.Format());
-        if (tick.TopFeatures.Count > 0)
+        text.Append(CultureInfo.InvariantCulture, $"hung frame {frame.FrameMicros / 1000} ms: tick body {frame.BodyMicros / 1000} ms: {frame.Phases.Format()}");
+        if (frame.TopFeatures.Count > 0)
         {
             text.Append("; top features: ");
-            for (int i = 0; i < tick.TopFeatures.Count; i++)
+            for (int i = 0; i < frame.TopFeatures.Count; i++)
             {
-                text.Append(CultureInfo.InvariantCulture, $"{(i > 0 ? ", " : string.Empty)}{tick.TopFeatures[i].Name} {tick.TopFeatures[i].Micros / 1000.0:F1} ms");
+                text.Append(CultureInfo.InvariantCulture, $"{(i > 0 ? ", " : string.Empty)}{frame.TopFeatures[i].Name} {frame.TopFeatures[i].Micros / 1000.0:F1} ms");
             }
         }
+
+        text.Append(CultureInfo.InvariantCulture, $"; {outside / 1000} ms outside tick code");
+        if (count > 1)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"; {count} hung frames since the last report, worst shown");
+        }
+
+        facts = outside > frame.BodyMicros
+            ? new HangFacts("OutsideTick", "none", false)
+            : CompletedFacts(frame.Phases, frame.TopFeatures, frame.BodyMicros);
+        return text.ToString();
     }
 
     private string AppendSaveQueue(string text)
@@ -385,8 +412,8 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         return text.ToString();
     }
 
-    // World thread, once per tick: no allocation, no lock, no log.
-    private void OnTick(uint diffMs)
+    // World thread, once per tick, before the tick's commands: no allocation, no lock, no log (a hung frame is recorded by TickMonitor.HangClosed).
+    private void OnTickStarting(uint diffMs)
     {
         try
         {

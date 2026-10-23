@@ -462,6 +462,8 @@ public sealed partial class WorldRuntime : IDisposable
             Interlocked.Add(ref _manualNowMs, diffMs);
         }
 
+        // Before anything of this tick runs: the previous tick's phases, duration and slowest features are complete and still readable.
+        RaiseTickStarting(diffMs);
         long phaseStart = Stopwatch.GetTimestamp();
         long bytesStart = GC.GetAllocatedBytesForCurrentThread();
         _topCount = 0;
@@ -469,8 +471,8 @@ public sealed partial class WorldRuntime : IDisposable
         RunCommands();
         long commandsEnd = Stopwatch.GetTimestamp();
         long commandsBytesEnd = GC.GetAllocatedBytesForCurrentThread();
-        // World-level services (game events, rest, the tick watchdog) run before the maps. Their time counts as world
-        // features and is also timed per handler ("WorldTick:<Type>"); the watchdog's handler stays first and is a few stores.
+        // World-level services (game events, rest) run before the maps. Their time counts as world
+        // features and is also timed per handler ("WorldTick:<Type>"). The tick watchdog is not one of them: it runs on TickStarting.
         SetPosition(TickPhase.WorldTick, null, commandsEnd);
         RaiseWorldTick(diffMs);
         try
@@ -608,6 +610,7 @@ public sealed partial class WorldRuntime : IDisposable
             AutosaveSnapshots = autosaveSnapshots,
             CommandsRun = _commandsRun,
         };
+        LastTickDurationMicros = Micros(Stopwatch.GetTimestamp() - phaseStart);
         SetPosition(TickPhase.Idle, null, 0);
         _perfLog?.FlushIfDue();
     }

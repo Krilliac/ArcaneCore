@@ -69,18 +69,6 @@ public enum TickAlertKind
 public readonly record struct TickAlert(TickAlertKind Kind, string Text, string Detail, bool InProgress = false, HostLoadVerdict HostVerdict = HostLoadVerdict.Unknown, int Hangs = 1);
 
 /// <summary>
-/// A completed frame on the watchdog clock (microseconds): it began when the tick at <see cref="StartMicros"/> started and ended when the next tick started at
-/// <see cref="EndMicros"/>. <see cref="NowMicros"/> is the clock when the report is made and <see cref="NowStopwatch"/> the <see cref="System.Diagnostics.Stopwatch"/> timestamp taken
-/// together with it (at the top of <see cref="TickMonitor.Check"/>), so a host can place its own records, which carry a Stopwatch stamp, inside the frame without a pause
-/// between two separate clock reads shifting them.
-/// </summary>
-public readonly record struct TickFrameSpan(long StartMicros, long EndMicros, long NowMicros, long NowStopwatch)
-{
-    /// <summary>The frame's length in microseconds.</summary>
-    public long DurationMicros => EndMicros - StartMicros;
-}
-
-/// <summary>
 /// The world-tick frame monitor. The tick thread calls <see cref="OnTick"/> once at the start of
 /// every tick (it is the <c>WorldRuntime.WorldTick</c> handler); the frame time is the interval
 /// between two consecutive starts, which is vmangos' "Slow world update" measure
@@ -122,12 +110,6 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private long _lastStartMicros = NoTick;
     private long _overruns;
     private long _hangsCompleted;
-
-    // Longest hung frame since the last report: written by the tick thread (only on a hang, a rare event) and taken by the watchdog thread under the gate.
-    private readonly object _hangFrameGate = new();
-    private long _worstHangFrameMicros;
-    private long _worstHangStartMicros;
-    private long _worstHangEndMicros;
 
     // Watchdog thread state.
     private LogRateLimiter _overrunLimiter;
@@ -179,12 +161,19 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     public Func<bool, string>? HangDetail { get; set; }
 
     /// <summary>
-    /// Set by the host of the simulation to say where <em>the hung frame itself</em> went, used for the completed-hang line and alert instead of
-    /// <see cref="HangDetail"/>(false) (which describes the slowest tick body of a whole window and so can name an earlier, unrelated tick).
-    /// The argument is the span of the longest hung frame that completed since the last report, on the watchdog clock. Called on the watchdog
-    /// thread, only when a line is about to be logged; a throwing callback is reported in the line.
+    /// Set by the host of the simulation to describe the hung frame(s) that completed since the last report, used for the completed-hang line and alert instead of
+    /// <see cref="HangDetail"/>(false) (which describes the slowest tick body of a whole window and so can name an earlier, unrelated tick). Called exactly once per
+    /// completed-hang line, on the watchdog thread; a throwing callback is reported in the line. The host records the frame it describes in
+    /// <see cref="HangClosed"/>.
     /// </summary>
-    public Func<TickFrameSpan, string>? FrameDetail { get; set; }
+    public Func<string>? CompletedHangDetail { get; set; }
+
+    /// <summary>
+    /// Set by the host of the simulation to be told, on the tick thread inside <see cref="OnTick(long)"/> and <em>before</em> the hang is counted, of each frame that
+    /// closed over <see cref="HangMicros"/> (the argument is its length in microseconds). The watchdog thread reports a hang only after it is counted, so whatever this
+    /// stores is visible to <see cref="CompletedHangDetail"/>. It runs once per hang (a rare event) and must be quick; a throwing callback is ignored.
+    /// </summary>
+    public Action<long>? HangClosed { get; set; }
 
     /// <summary>
     /// Set by the host of the simulation to the host-load sampler, so a hang or overrun line says whether the machine, the garbage
@@ -286,12 +275,13 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// Once per histogram slice (20 s) the recording takes the histogram's short rotation lock, and the first use of a slice allocates its 9 KB bucket array; otherwise no allocation or lock.
     /// With the simulation's histogram attached (<see cref="AttachLatency"/>) the monitor records no frame itself.
     /// </summary>
-    public void OnTick(long nowMicros)
+    public long OnTick(long nowMicros)
     {
         long last = _lastStartMicros;
+        long frame = 0;
         if (last != NoTick)
         {
-            long frame = nowMicros - last;
+            frame = nowMicros - last;
             _ring.Record(frame);
             if (!_frameLatencyExternal)
             {
@@ -304,14 +294,13 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
             if (frame > _hangMicros)
             {
-                lock (_hangFrameGate)
+                try
                 {
-                    if (frame >= _worstHangFrameMicros)
-                    {
-                        _worstHangFrameMicros = frame;
-                        _worstHangStartMicros = last;
-                        _worstHangEndMicros = nowMicros;
-                    }
+                    HangClosed?.Invoke(frame);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // The tick thread must go on whatever the host's recorder does.
                 }
 
                 _hangsCompleted++;
@@ -319,14 +308,14 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         }
 
         Volatile.Write(ref _lastStartMicros, nowMicros);
+        return frame;
     }
 
-    /// <summary>Tick thread convenience: <see cref="OnTick"/> with the clock's time.</summary>
-    public void OnTick() => OnTick(_clock.NowMicros);
+    /// <summary>Tick thread convenience: <see cref="OnTick(long)"/> with the clock's time.</summary>
+    public long OnTick() => OnTick(_clock.NowMicros);
 
     public void Check(long nowMicros)
     {
-        long nowStopwatch = System.Diagnostics.Stopwatch.GetTimestamp(); // read with nowMicros, before anything can pause this thread
         if (!_options.Enabled || !_started)
         {
             return;
@@ -393,7 +382,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         if (hangs > _hangsReported)
         {
             RingStats stats = Stats(out long[] buffer);
-            string after = HungFrameText(nowMicros, nowStopwatch);
+            string after = HungFrameText();
             string host = HostText(stats.Max);
             _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}{Host}",
                 Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, after, host);
@@ -497,30 +486,17 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         }
     }
 
-    /// <summary>
-    /// The detail of a completed hang: the hung frame's own breakdown from <see cref="FrameDetail"/> when set (taking the recorded span), else the window-wide
-    /// <see cref="HangDetail"/>(false). Watchdog thread.
-    /// </summary>
-    private string HungFrameText(long nowMicros, long nowStopwatch)
+    /// <summary>The detail of a completed hang: the host's <see cref="CompletedHangDetail"/> when set, else the window-wide <see cref="HangDetail"/>(false). Watchdog thread.</summary>
+    private string HungFrameText()
     {
-        TickFrameSpan? span = null;
-        lock (_hangFrameGate)
-        {
-            if (_worstHangFrameMicros > 0)
-            {
-                span = new TickFrameSpan(_worstHangStartMicros, _worstHangEndMicros, nowMicros, nowStopwatch);
-                _worstHangFrameMicros = 0;
-            }
-        }
-
-        if (span is not { } frame || FrameDetail is not { } detail)
+        if (CompletedHangDetail is not { } detail)
         {
             return DetailText(inProgress: false);
         }
 
         try
         {
-            string text = detail(frame);
+            string text = detail();
             return string.IsNullOrEmpty(text) ? string.Empty : "; " + text;
         }
         catch (Exception ex)

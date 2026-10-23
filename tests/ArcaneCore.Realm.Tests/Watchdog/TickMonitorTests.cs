@@ -488,7 +488,7 @@ public sealed class TickMonitorTests
             _clock.AdvanceMs(50);
         }, 100_000);
         Assert.Equal(0, bytes);
-        Assert.Equal(0, WatchdogTestKit.AllocatedBy(monitor.OnTick, 100_000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(() => monitor.OnTick(), 100_000));
     }
 
     [Fact]
@@ -626,38 +626,69 @@ public sealed class TickMonitorTests
     }
 
     [Fact]
-    public void Hang_WithFrameDetail_ReportsTheHungFramesOwnSpan_NotTheWindowsSlowestBody()
+    public void OnTick_ReturnsTheClosedFramesLength_AndZeroForTheFirstTick()
+    {
+        TickMonitor monitor = Create();
+
+        Assert.Equal(0, monitor.OnTick(_clock.NowMicros));
+        _clock.AdvanceMs(70);
+        Assert.Equal(70_000, monitor.OnTick(_clock.NowMicros));
+        _clock.AdvanceMs(5);
+        Assert.Equal(5_000, monitor.OnTick(_clock.NowMicros));
+    }
+
+    [Fact]
+    public void Hang_WithCompletedHangDetail_CallsItOncePerCompletedHangLine_AndCarriesItsText()
     {
         TickMonitor monitor = Create(o => o.HangMs = 1000);
-        var spans = new List<TickFrameSpan>();
+        var closed = new List<long>();
+        int calls = 0;
         // The window-wide detail still names an earlier 1.9 s body; it must not be what the completed-hang line carries.
         monitor.HangDetail = inProgress => inProgress ? "running" : "slowest tick body 1938 ms: features SyntheticSlowFeature";
-        monitor.FrameDetail = span =>
+        monitor.HangClosed = closed.Add;
+        monitor.CompletedHangDetail = () =>
         {
-            spans.Add(span);
-            return $"hung frame {span.DurationMicros / 1000} ms: frame body 0 ms; {span.DurationMicros / 1000} ms outside tick code";
+            calls++;
+            Assert.Equal(2, closed.Count); // both frames were recorded before the hang was reported
+            return "hung frame 4000 ms: tick body 0 ms";
         };
 
         Tick(monitor, 5, 50);
-        Tick(monitor, 1, 1_900); // an earlier 1.9 s frame (a body)
-        long fourSecondStart = _clock.NowMicros;
-        Tick(monitor, 1, 4_000); // the body-less 4 s frame
-        monitor.OnTick(_clock.NowMicros); // it ends
-        monitor.Check(_clock.NowMicros);
-
-        TickFrameSpan span = Assert.Single(spans);
-        Assert.Equal(4_000_000, span.DurationMicros);
-        Assert.Equal(fourSecondStart, span.StartMicros);
-        Assert.Equal(_clock.NowMicros, span.EndMicros);
-        LogLine done = _log.Of(WatchdogEvents.TickHang).Last();
-        Assert.Contains("hung frame 4000 ms: frame body 0 ms; 4000 ms outside tick code", done.Message);
-        Assert.DoesNotContain("1938", done.Message);
-
-        // The next hang is its own frame: the previous span was consumed.
-        Tick(monitor, 1, 1_200);
+        Tick(monitor, 1, 1_900); // an earlier 1.9 s hang
+        Tick(monitor, 1, 4_000); // the body-less 4 s hang
         monitor.OnTick(_clock.NowMicros);
         monitor.Check(_clock.NowMicros);
-        Assert.Equal(1_200_000, spans[^1].DurationMicros);
-        Assert.Equal(2, spans.Count);
+
+        Assert.Equal([1_900_000L, 4_000_000L], closed);
+        Assert.Equal(1, calls);
+        LogLine done = _log.Of(WatchdogEvents.TickHang).Last();
+        Assert.EndsWith("; hung frame 4000 ms: tick body 0 ms", done.Message);
+        Assert.DoesNotContain("1938", done.Message);
+
+        // Nothing new: no second line, no second call.
+        monitor.Check(_clock.NowMicros);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Hang_WithoutCompletedHangDetail_FallsBackToHangDetail_AndAThrowingOneIsNamed()
+    {
+        TickMonitor fallback = Create(o => o.HangMs = 1000);
+        fallback.HangDetail = inProgress => inProgress ? "running" : "slowest tick body 9000 ms: maps 3 ms";
+        Tick(fallback, 3, 50);
+        Tick(fallback, 1, 1_500);
+        fallback.OnTick(_clock.NowMicros);
+        fallback.Check(_clock.NowMicros);
+        Assert.Contains("; slowest tick body 9000 ms: maps 3 ms", _log.Of(WatchdogEvents.TickHang).Last().Message);
+
+        TickMonitor throwing = Create(o => o.HangMs = 1000);
+        throwing.CompletedHangDetail = () => throw new InvalidOperationException("boom");
+        throwing.HangClosed = _ => throw new InvalidOperationException("recorder boom");
+        Tick(throwing, 3, 50);
+        Tick(throwing, 1, 1_500);
+        throwing.OnTick(_clock.NowMicros); // the throwing recorder must not stop the hang being counted
+        Assert.Equal(1, throwing.HangsCompleted);
+        throwing.Check(_clock.NowMicros);
+        Assert.Contains("hang detail unavailable (InvalidOperationException)", _log.Of(WatchdogEvents.TickHang).Last().Message);
     }
 }
