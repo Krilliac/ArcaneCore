@@ -485,6 +485,12 @@ public sealed record AnomalySnapshot(
     /// <summary>First and last seen, reports in the last 15 minutes and hour (rate per hour) and the p50/p99 gap between reports.</summary>
     public LedgerTiming Timing { get; init; }
 
+    /// <summary>Whether <see cref="DistinctSubjects"/> hit <see cref="AnomalyLedger.MaxTrackedSubjects"/>: more subjects than that may have reported, so the count is a floor.</summary>
+    public bool SubjectsSaturated => DistinctSubjects >= AnomalyLedger.MaxTrackedSubjects;
+
+    /// <summary>The subject count for a log line: <c>subjects=12</c>, or <c>subjects&gt;=256</c> when <see cref="SubjectsSaturated"/> (the real number is unknown).</summary>
+    public string SubjectsText => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"subjects{(SubjectsSaturated ? ">=" : "=")}{DistinctSubjects}");
+
     /// <summary>The subjects reported most under this key with their counts (Space-Saving, bounded: see <see cref="AnomalyLedger.MaxTrackedSubjects"/>), highest first, at most <see cref="AnomalyLedger.SnapshotTopSubjects"/>.</summary>
     public IReadOnlyList<SubjectCount> TopSubjects { get; init; } = [];
 
