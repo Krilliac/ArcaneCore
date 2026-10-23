@@ -216,6 +216,8 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
 * **Raid escalation** (`RaidEscalation`, needs `RaidsEnabled`). A risk signal ("too strong alone, feasible for N") may now ask for up to
   `MaxRaidSize` (40) instead of five; a group of more than five converts to a raid (`CMSG_GROUP_RAID_CONVERT`) and recruits as above.
   With too few bots around it times out like any group goal (`FormationTimeoutSeconds`) and is set aside.
+  Only an elite (elite, rare elite or boss) may ask for more than five; any other creature needs five or fewer or is passed over. The
+  size is found by bisection (about six estimates for a raid of 40).
 
 | Key | Default | Meaning |
 |---|---|---|

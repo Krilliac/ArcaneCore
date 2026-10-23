@@ -55,6 +55,9 @@ internal static class PlayerbotRecruitment
         return (float)Math.Clamp(chance, 0d, MaxChance);
     }
 
+    /// <summary>The largest group a creature that is no elite may ask for: a party.</summary>
+    internal const int PartyLimit = PlayerbotGroupContent.PartySize;
+
     /// <summary>
     /// The largest group a risk signal may ask for: a party (five), or with <see cref="PlayerbotCooperationOptions.RaidEscalation"/> and
     /// <see cref="PlayerbotGroupOptions.RaidsEnabled"/> up to <see cref="PlayerbotCooperationOptions.MaxRaidSize"/> (a raid the coordinator

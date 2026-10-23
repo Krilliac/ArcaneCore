@@ -486,8 +486,10 @@ internal sealed class PlayerbotRisk
         PlayerbotEngagementFacts facts = Facts(player, target, questObjective, out Vector3 spot, out HashSet<ObjectGuid> fight);
         PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
         // Too strong alone, but a few players would take it: a "needs a group of N" goal instead of abandoning the objective.
+        // Only an elite (rank elite, rare elite or boss) may ask for more than a party: any other creature needs five or fewer.
         if (verdict.Decision == PlayerbotEngageDecision.Avoid && questObjective && _options.Groups.Enabled
-            && PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, Groups.PlayerbotRecruitment.SignalLimit(_options.Groups)) is var size and > 1)
+            && PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, target.Template.Rank is 1 or 2 or 3
+                ? Groups.PlayerbotRecruitment.SignalLimit(_options.Groups) : Groups.PlayerbotRecruitment.PartyLimit) is var size and > 1)
         {
             verdict = verdict with { Reason = $"group-of-{size}" };
             GroupSignal = new PlayerbotGroupSignal(target.Entry, size, player.MapId, new Vector3(target.X, target.Y, target.Z), now);

@@ -248,17 +248,35 @@ internal static class PlayerbotRiskModel
         PlayerbotEngagementFacts alone = facts with { GroupSize = 1 };
         if (Assess(alone, options).Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Rest or PlayerbotEngageDecision.Detour)
             return 0;
-        for (int size = 2; size <= Math.Min(maxSize, 40); size++)
+        // A bigger group is never weaker, so the smallest size that takes the fight is found by bisection: about log2(limit) estimates
+        // (6 for a raid of 40), not one per size.
+        int limit = Math.Min(maxSize, 40);
+        if (limit < 2 || !GroupTakes(facts, options, limit)) return 0;
+        int low = 2, high = limit;
+        while (low < high)
         {
-            // Judged at full health and mana: a group rests before it pulls.
-            PlayerbotEngagementFacts group = facts with
-            {
-                GroupSize = size, BotHealth = facts.BotMaxHealth, BotManaPct = facts.BotManaPct is null ? null : 100f,
-            };
-            if (Assess(group, options).Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Detour) return size;
+            int mid = low + ((high - low) / 2);
+            if (GroupTakes(facts, options, mid)) high = mid;
+            else low = mid + 1;
         }
 
-        return 0;
+        return low;
+    }
+
+    private static long _groupProbes;
+
+    /// <summary>How many group-size estimates <see cref="NeededGroupSize"/> has made (tests bound the cost of a raid-sized search).</summary>
+    internal static long GroupProbes => Interlocked.Read(ref _groupProbes);
+
+    /// <summary>Whether a group of <paramref name="size"/> would take the fight, judged at full health and mana: a group rests before it pulls.</summary>
+    private static bool GroupTakes(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options, int size)
+    {
+        Interlocked.Increment(ref _groupProbes);
+        PlayerbotEngagementFacts group = facts with
+        {
+            GroupSize = size, BotHealth = facts.BotMaxHealth, BotManaPct = facts.BotManaPct is null ? null : 100f,
+        };
+        return Assess(group, options).Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Detour;
     }
 
     /// <summary>
