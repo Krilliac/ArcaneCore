@@ -27,7 +27,7 @@ A drift test (`CraftingDocsTests`) fails when a key named here is not a real opt
 
 - `Game/Spells/SpellSystem.cs`: `Prepare`/`CheckCast` take an optional `castItem`; `SpellCast.CastItem`; `TakePower` is skipped for an item cast (vmangos `Spell.cpp:5053`); `TakeCosts(cast)` between
   `TakePower` and `TakeAmmo` (the ranged lane may register through `ISpellCostTaker` instead of the inline `TakeAmmo` call, whichever merges first); `TakeCastItem(cast)` after the target loop;
-  `SendCastResult` is now `internal`; item cooldown categories in `IsSpellReady`/`AddCooldown` (`ItemSpellCooldowns.Pick`);
+  `SendCastResult` is now `internal`; item cooldown categories in `IsSpellReady`/`AddCooldown` (now in `SpellSystem.Cooldowns.cs`; `ItemSpellCooldowns.Pick`);
   **behaviour change**: a self cast now tests `ImmunityRules.IsImmuneToSpell(..., castOnSelf: true)` and can be `Immune` (vmangos `SpellCaster.cpp:175-180`).
 - `Game/Spells/SpellInfo.cs`: `IsPositive` returns false for a `MECHANIC_IMMUNITY` aura to bandage, shield, mount or invulnerability (vmangos `SpellEntry.cpp:976-987`); the aura-engine lane's own rewrite of
   `IsPositive` should keep that clause.
