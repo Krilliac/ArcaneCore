@@ -23,6 +23,24 @@ internal static class HelpTestKit
         Entry = MobEntry, Name = "help test mob", CreatureType = 1, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 200_000, MaxLevelHealth = 200_000, Faction = 14,
     };
 
+    public const uint StrongEntry = 990_542;
+
+    /// <summary>A mob ten levels above a level-1 bot: no fight a bot of that level may take on.</summary>
+    public static readonly CreatureTemplate Strong = new()
+    {
+        Entry = StrongEntry, Name = "help test strong mob", CreatureType = 1, MinLevel = 10, MaxLevel = 10, MinLevelHealth = 200_000, MaxLevelHealth = 200_000, Faction = 14,
+    };
+
+    public const uint EliteEntry = 990_543;
+
+    /// <summary>An elite (rank 1) of the bot's own level: a fight only a group of three takes on.</summary>
+    public static readonly CreatureTemplate Elite = new()
+    {
+        Entry = EliteEntry, Name = "help test elite", CreatureType = 1, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 200_000, MaxLevelHealth = 200_000, Faction = 14, Rank = 1,
+    };
+
+    private static CreatureContent AllTemplates() => new([Mob, Rare, Strong, Elite], [], [], [], []);
+
     // One creature system per map: each numbers its own spawns, so a second one would hand out the same guid again.
     private static readonly ConditionalWeakTable<Map, CreatureMapSystem> Systems = new();
 
@@ -37,18 +55,18 @@ internal static class HelpTestKit
     public static Creature SpawnRare(Player near, float dx = 10f)
     {
         CreatureMapSystem system = near.Map!.FindUpdater<CreatureMapSystem>()
-            ?? Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, new CreatureContent([Mob, Rare], [], [], [], []), random: new Random(1)));
+            ?? Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, AllTemplates(), random: new Random(1)));
         return system.SpawnTemporary(Rare, near.X + dx, near.Y, near.Z, 0f);
     }
 
     public static Player Online(SocialWorld world, string name) => world.Host.World.FindOnlinePlayer(name)!;
 
     /// <summary>World thread: a hostile creature nobody updates (it neither moves nor attacks on its own) beside <paramref name="near"/>.</summary>
-    public static Creature SpawnMob(Player near, float dx = 3f)
+    public static Creature SpawnMob(Player near, float dx = 3f, CreatureTemplate? template = null)
     {
         CreatureMapSystem system = near.Map!.FindUpdater<CreatureMapSystem>()
-            ?? Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, new CreatureContent([Mob], [], [], [], []), random: new Random(1)));
-        return system.SpawnTemporary(Mob, near.X + dx, near.Y, near.Z, 0f);
+            ?? Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, AllTemplates(), random: new Random(1)));
+        return system.SpawnTemporary(template ?? Mob, near.X + dx, near.Y, near.Z, 0f);
     }
 
     /// <summary>World thread: <paramref name="mob"/> fights <paramref name="victim"/> (the swing is registered, so the mob is among its attackers) and lands a hit.</summary>

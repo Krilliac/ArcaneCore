@@ -495,6 +495,8 @@ public static class WorldConfigKeys
         LivePlayerbots("Social:Helping:BuffStrangers", o => o.Social.Helping.BuffStrangers, (o, v) => o.Social.Helping.BuffStrangers = v),
         LivePlayerbotsValue("Social:Helping:BuffCooldownMinutes", o => o.Social.Helping.BuffCooldownMinutes, (o, v) => o.Social.Helping.BuffCooldownMinutes = v, v => v is >= 0 and <= 1440 ? null : "must be 0..1440"),
         LivePlayerbots("Social:Helping:AnswerHelp", o => o.Social.Helping.AnswerHelp, (o, v) => o.Social.Helping.AnswerHelp = v),
+        LivePlayerbotsValue("Social:Helping:MaxAnswersPerCall", o => o.Social.Helping.MaxAnswersPerCall, (o, v) => o.Social.Helping.MaxAnswersPerCall = v, v => v is >= 1 and <= 16 ? null : "must be 1..16"),
+        LivePlayerbotsValue("Social:Helping:ResurrectMaxCorpseMinutes", o => o.Social.Helping.ResurrectMaxCorpseMinutes, (o, v) => o.Social.Helping.ResurrectMaxCorpseMinutes = v, v => v is >= 1 and <= 60 ? null : "must be 1..60"),
         LivePlayerbots("Social:Gratitude:Enabled", o => o.Social.Gratitude.Enabled, (o, v) => o.Social.Gratitude.Enabled = v),
         LivePlayerbotsValue("Social:Gratitude:TipChance", o => o.Social.Gratitude.TipChance, (o, v) => o.Social.Gratitude.TipChance = v, v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Social:Gratitude:MaxTipCopper", o => o.Social.Gratitude.MaxTipCopper, (o, v) => o.Social.Gratitude.MaxTipCopper = v, v => v is >= 0 and <= 1000000 ? null : "must be 0..1000000"),

@@ -52,6 +52,8 @@ internal sealed class PlayerbotHelpLane
     private const long EpisodeGapMs = 20_000;
 
     private readonly Dictionary<(Guid Bot, ulong Asker), long> _answered = [];
+    private readonly Dictionary<ulong, (long Until, int Count)> _callAnswers = [];
+    private readonly Dictionary<Guid, PlayerbotSocialBot> _byId = [];
     private readonly Dictionary<ulong, (long Since, long Seen)> _trouble = [];
     private readonly Dictionary<ulong, long> _deadSince = [];
     private readonly Dictionary<ulong, long> _rezzedFor = [];
@@ -97,7 +99,7 @@ internal sealed class PlayerbotHelpLane
             return;
         }
 
-        Sweep(pass.NowMs);
+        Sweep(pass);
         if (options.AnswerHelp) AnswerCalls(pass, recorder);
         else
             while (recorder.TryTakeHelpCall(out _, out _)) { }
@@ -112,9 +114,9 @@ internal sealed class PlayerbotHelpLane
     {
         if (bot.PartyDriven || bot.GroupDriven || bot.Brain is not { PendingHelp: PlayerbotHelpKind.None } brain) return false;
         Player player = bot.Player;
-        return player.IsAlive && player.Map is not null && !player.Combat.IsInCombat && player.Duel is null
-            && player.MaxHealth > 0 && player.Health * 100UL >= (ulong)PlayerbotHelpRules.HelperMinHealthPercent * player.MaxHealth
-            && PlayerbotHelpRules.IsFreeGoal(brain.Goal);
+        if (!player.IsAlive || player.Map is null || player.Combat.IsInCombat || player.Duel is not null || player.MaxHealth == 0 || !PlayerbotHelpRules.IsFreeGoal(brain.Goal)) return false;
+        (int health, int? mana) = PlayerbotPersonaFacts.Vitals(player);
+        return PlayerbotHelpRules.HelperFit(health, mana, player.Class);
     }
 
     private static (bool Known, int Affinity, bool Rival) Feelings(PlayerbotSocialRecorder recorder, Guid bot, ulong other)
@@ -128,32 +130,31 @@ internal sealed class PlayerbotHelpLane
     private void AnswerCalls(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder)
     {
         PlayerbotSocialMemoryOptions memory = pass.Options.Memory;
+        if (recorder.PendingHelpCalls == 0) return;
+        _byId.Clear();
+        foreach (PlayerbotSocialBot candidate in pass.Bots) _byId[candidate.Id] = candidate;
         for (int budget = CallsPerPass; budget > 0 && recorder.TryTakeHelpCall(out Guid botId, out ObjectGuid askerGuid); budget--)
         {
-            PlayerbotSocialBot? bot = null;
-            foreach (PlayerbotSocialBot candidate in pass.Bots)
-                if (candidate.Id == botId)
-                {
-                    bot = candidate;
-                    break;
-                }
-
-            if (bot is null || !IsFree(bot) || pass.World.FindOnlinePlayer(askerGuid) is not { } asker) continue;
+            if (!_byId.TryGetValue(botId, out PlayerbotSocialBot? bot) || !IsFree(bot) || pass.World.FindOnlinePlayer(askerGuid) is not { } asker) continue;
             Player self = bot.Player;
             if (ReferenceEquals(asker, self) || !ReferenceEquals(asker.Map, self.Map) || asker.Team != self.Team || !asker.IsAlive
                 || !asker.Combat.IsInCombat || Distance(self, asker) > memory.BystanderRadiusYards) continue;
             if (_answered.TryGetValue((botId, askerGuid.Value), out long until) && until > pass.NowMs) continue;
+            // One call draws a few bots, not all that heard it.
+            if (_callAnswers.TryGetValue(askerGuid.Value, out (long Until, int Count) taken) && taken.Until > pass.NowMs && taken.Count >= pass.Options.Helping.MaxAnswersPerCall) continue;
             _answered[(botId, askerGuid.Value)] = pass.NowMs + AnswerMemoryMs;
 
             (bool known, int affinity, bool rival) = Feelings(recorder, botId, askerGuid.Value);
             float helpfulness = PlayerbotTraits.For(self.Guid.Value).Helpfulness;
             bool answers = PlayerbotCallForHelp.Askable(known, affinity, rival)
                 && PlayerbotCallForHelp.Answers(self.Guid.Value, askerGuid.Value, (uint)(pass.NowMs / 15_000), helpfulness, affinity)
-                && PlayerbotHelpRules.AttackerOf(self, asker, PlayerbotHelpRules.MayFlag(self, pass.Options.WarMode.Enabled)) is not null
+                && PlayerbotHelpRules.AttackerOf(self, asker, PlayerbotHelpRules.MayFlag(self, pass.Options.WarMode.Enabled), GroupSizeOf(pass, self)) is not null
                 && bot.Brain!.RequestHelp(PlayerbotHelpKind.Assist, asker.Guid);
             if (answers)
             {
                 Answered++;
+                bool open = _callAnswers.TryGetValue(askerGuid.Value, out taken) && taken.Until > pass.NowMs;
+                _callAnswers[askerGuid.Value] = (open ? taken.Until : pass.NowMs + AnswerMemoryMs, open ? taken.Count + 1 : 1);
                 continue;
             }
 
@@ -162,6 +163,8 @@ internal sealed class PlayerbotHelpLane
             if (PlayerbotCallForHelp.SaysSorry(self.Guid.Value, askerGuid.Value, (uint)(pass.NowMs / 15_000))) Sorry(pass, bot, asker);
         }
     }
+
+    private static int GroupSizeOf(PlayerbotSocialPass pass, Player player) => pass.Social.Groups.GetGroup(player.Guid)?.MemberCount ?? 1;
 
     // "Sorry, can't": now and then a bot that stays says so. Through the announcement path, so the limiter, the safety screen and the opt-in rules apply.
     private static void Sorry(PlayerbotSocialPass pass, PlayerbotSocialBot bot, Player asker)
@@ -255,7 +258,7 @@ internal sealed class PlayerbotHelpLane
         (_, int affinity, bool rival) = Feelings(recorder, bot.Id, victim.Guid.Value);
         if (rival) return false;
         Player self = bot.Player;
-        if (PlayerbotHelpRules.AttackerOf(self, victim, mayFlag) is null) return false;
+        if (PlayerbotHelpRules.AttackerOf(self, victim, mayFlag, GroupSizeOf(pass, self)) is null) return false;
         uint episode = (uint)_trouble[victim.Guid.Value].Since;
         if (!PlayerbotHelpRules.Helps(self.Guid.Value, victim.Guid.Value, episode, helpfulness, affinity)) return false;
         if (!bot.Brain!.RequestHelp(PlayerbotHelpKind.Assist, victim.Guid)) return false;
@@ -267,7 +270,13 @@ internal sealed class PlayerbotHelpLane
     {
         Player self = bot.Player;
         if (!PlayerbotHelpRules.CanResurrect(self.Class) || !_deadSince.TryGetValue(dead.Guid.Value, out long since)) return false;
-        if (pass.NowMs - since > PlayerbotHelpRules.CorpseFreshMs || _rezzedFor.TryGetValue(dead.Guid.Value, out long done) && done == since) return false;
+        // Recency: the body must not have lain dead longer than ResurrectMaxCorpseMinutes. The age is the later-known of the first sight (the scan's) and the death
+        // timer a player who has not released still runs (UnitCombat.DeathTimer counts down from CorpseRepopTimeMs); a ghost has no death time to read.
+        long ageMs = pass.NowMs - since;
+        if (dead.Combat.DeathTimer != 0) ageMs = Math.Max(ageMs, ArcaneCore.Game.Combat.CombatConstants.CorpseRepopTimeMs - dead.Combat.DeathTimer);
+        if (ageMs > pass.Options.Helping.ResurrectMaxCorpseMinutes * 60_000L) return false;
+        // One offer per death: the entry stays for as long as the player lies dead (see PruneAlive), however often they turn it down.
+        if (_rezzedFor.ContainsKey(dead.Guid.Value)) return false;
         if (PlayerbotHelpRules.IsPvpFlagged(dead) && !PlayerbotHelpRules.IsPvpFlagged(self)) return false;
         if (ArcaneCore.Game.Death.Resurrection.ResurrectionRequests.IsRequested(dead)) return false;
         // The body to reach: the player's unit until it released, then its corpse.
@@ -285,7 +294,7 @@ internal sealed class PlayerbotHelpLane
         if (!owes && !PlayerbotHelpRules.Helps(self.Guid.Value, dead.Guid.Value, (uint)since, helpfulness, affinity)) return false;
         if (PlayerbotGroupAI.FindResurrectionSpell(bot.Session, self) is null) return false;
         if (!bot.Brain!.RequestHelp(PlayerbotHelpKind.Resurrect, dead.Guid)) return false;
-        _rezzedFor[dead.Guid.Value] = since;
+        _rezzedFor[dead.Guid.Value] = pass.NowMs;
         Resurrections++;
         return true;
     }
@@ -310,24 +319,34 @@ internal sealed class PlayerbotHelpLane
         return true;
     }
 
-    private void Sweep(long nowMs)
+    // A body is remembered as long as its player lies dead (an offer made for it is made once, whatever the time): the entry goes when they are alive again or gone.
+    private static void PruneAlive(PlayerbotSocialPass pass, Dictionary<ulong, long> map)
     {
+        if (map.Count == 0) return;
+        foreach (ulong guid in map.Keys)
+            if (pass.World.FindOnlinePlayer(new ObjectGuid(guid)) is not { IsAlive: false }) map.Remove(guid);
+    }
+
+    private void Sweep(PlayerbotSocialPass pass)
+    {
+        long nowMs = pass.NowMs;
         if (nowMs - _sweptAtMs < 60_000) return;
         _sweptAtMs = nowMs;
         Prune(_answered, static (until, now) => until <= now, nowMs);
         Prune(_botNext, static (until, now) => until <= now, nowMs);
         Prune(_grateful, static (until, now) => until <= now, nowMs);
         Prune(_buffed, static (at, now) => now - at > 24 * 3_600_000L, nowMs);
-        Prune(_deadSince, static (at, now) => now - at > 30 * 60_000L, nowMs);
-        Prune(_rezzedFor, static (at, now) => now - at > 30 * 60_000L, nowMs);
+        Prune(_callAnswers, static (taken, now) => taken.Until <= now, nowMs);
+        PruneAlive(pass, _deadSince);
+        PruneAlive(pass, _rezzedFor);
         foreach (KeyValuePair<ulong, (long Since, long Seen)> entry in _trouble)
             if (nowMs - entry.Value.Seen > EpisodeGapMs) _trouble.Remove(entry.Key);
     }
 
-    private static void Prune<TKey>(Dictionary<TKey, long> map, Func<long, long, bool> stale, long now) where TKey : notnull
+    private static void Prune<TKey, TValue>(Dictionary<TKey, TValue> map, Func<TValue, long, bool> stale, long now) where TKey : notnull
     {
         if (map.Count == 0) return;
-        foreach (KeyValuePair<TKey, long> entry in map)
+        foreach (KeyValuePair<TKey, TValue> entry in map)
             if (stale(entry.Value, now)) map.Remove(entry.Key);
     }
 }

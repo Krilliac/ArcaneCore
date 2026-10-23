@@ -68,8 +68,9 @@ public sealed class PlayerbotHelpAnswerWorldTests
         Assert.Equal(askerGuid, brain.LastHelpTarget);
         await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => mob.Health).Result < healthBefore, "the bot to damage the asker's attacker");
 
-        // The assist is recorded once as help, in the bot's memory of the asker.
+        // The assist is recorded once as help, in the bot's memory of the asker, from the moment it has really hurt the attacker (not when it decided to).
         PlayerbotSocialMemory memory = HelpTestKit.RecorderOf(world).Memory;
+        await HelpTestKit.UntilAsync(() => memory.TryGet(bot, askerGuid.Value, out _), "the help to be recorded once the attacker was hurt");
         Assert.True(memory.TryGet(bot, askerGuid.Value, out PlayerbotRelation relation));
         Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerHelp, relation.Affinity);
     }
@@ -140,5 +141,36 @@ public sealed class PlayerbotHelpAnswerWorldTests
         Assert.Equal(0, SocialTestKit.Feature(world.Host).Help.Answered);
         Assert.Equal(0, HelpTestKit.RecorderOf(world).PendingHelpCalls); // the call was taken and dropped, not kept for later
         Assert.Equal(PlayerbotHelpKind.None, HelpTestKit.BrainOf(world, bot).PendingHelp);
+    }
+
+    [Fact]
+    public async Task OneCallHeardBySixFreeBots_DrawsAtMostMaxAnswersPerCall()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        await using WorldTestClient asker = await world.AddPlayerAsync("Helpasker");
+        string[] names = ["Helpmanya", "Helpmanyb", "Helpmanyc", "Helpmanyd", "Helpmanye", "Helpmanyf"];
+        var ids = new List<Guid>();
+        foreach (string name in names) ids.Add(await world.AddBotAsync(name));
+        await HelpTestKit.StandAsync(world, "Helpasker", names.Select((name, i) => (name, 2f + i)).ToArray());
+        ObjectGuid askerGuid = await world.Host.PlayerStateAsync("Helpasker", p => p.Guid);
+        var guids = new List<ObjectGuid>();
+        foreach (string name in names) guids.Add(await world.Host.PlayerStateAsync(name, p => p.Guid));
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player victim = HelpTestKit.Online(world, "Helpasker");
+            HelpTestKit.Engage(HelpTestKit.SpawnMob(victim, -4f), victim);
+        });
+        // A moment at which most of them would say yes: without the cap they would all pile in.
+        long now = HelpTestKit.BucketWhere(b => guids.Count(g => PlayerbotCallForHelp.Answers(g.Value, askerGuid.Value, b, PlayerbotTraits.For(g.Value).Helpfulness, 0)) >= 4);
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            foreach (Guid id in ids) HelpTestKit.RecorderOf(world).NoteHelpCall(id, askerGuid);
+        });
+        await RunLaneAsync(world, now);
+
+        PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
+        Assert.Equal(new PlayerbotSocialHelpingOptions().MaxAnswersPerCall, lane.Answered);
+        Assert.Equal(2, lane.Answered);
     }
 }

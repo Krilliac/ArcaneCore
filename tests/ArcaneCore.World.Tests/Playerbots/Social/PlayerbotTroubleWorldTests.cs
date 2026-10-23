@@ -17,7 +17,7 @@ public sealed class PlayerbotTroubleWorldTests
 {
     private sealed record Scene(Guid Bot, ObjectGuid BotGuid, ObjectGuid VictimGuid, Creature Mob);
 
-    private static async Task<Scene> SetUpAsync(SocialWorld world, uint victimHealthPercent = 25)
+    private static async Task<Scene> SetUpAsync(SocialWorld world, uint victimHealthPercent = 25, ArcaneCore.Kernel.WorldData.Creatures.CreatureTemplate? template = null)
     {
         Guid bot = await world.AddBotAsync("Troublebot");
         await HelpTestKit.StandAsync(world, "Troublebot", ("Troublevic", 6f));
@@ -27,7 +27,7 @@ public sealed class PlayerbotTroubleWorldTests
         await world.Host.OnWorldAsync(() =>
         {
             Player victim = HelpTestKit.Online(world, "Troublevic");
-            mob = HelpTestKit.SpawnMob(victim, 4f);
+            mob = HelpTestKit.SpawnMob(victim, 4f, template);
             HelpTestKit.Engage(mob, victim);
             victim.Health = Math.Max(1u, victim.MaxHealth * victimHealthPercent / 100);
         });
@@ -150,8 +150,8 @@ public sealed class PlayerbotTroubleWorldTests
             scene.Mob.SetUInt64(UpdateFields.UnitFieldSummonedby, enemy.Guid.Value);
             Assert.True(PlayerbotHelpRules.WouldFlag(scene.Mob));
             Assert.False(PlayerbotHelpRules.MayFlag(self, warMode: false));
-            Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false));
-            Assert.Same(scene.Mob, PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: true));
+            Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false, groupSize: 1));
+            Assert.Same(scene.Mob, PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: true, groupSize: 1));
 
             // Flagged already, or War Mode on: it may.
             self.UnitFlags |= UnitFlags.Pvp;
@@ -185,7 +185,7 @@ public sealed class PlayerbotTroubleWorldTests
             Player vic = HelpTestKit.Online(world, "Troublevic");
             scene.Mob.UnitFlags |= UnitFlags.Pvp; // a guard or an enemy town NPC
             Assert.True(PlayerbotHelpRules.WouldFlag(scene.Mob));
-            Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false));
+            Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false, groupSize: 1));
         });
 
         long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
@@ -196,5 +196,22 @@ public sealed class PlayerbotTroubleWorldTests
         long warNow = HelpTestKit.NowWhere(t => t > now + 60_000 && PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
         await ScanAsync(world, warNow);
         Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
+    }
+
+    [Fact]
+    public async Task AFightAboveTheBotsLevel_OrAnEliteOne_IsNotWinnable_SoNobodyIsHelped()
+    {
+        foreach (ArcaneCore.Kernel.WorldData.Creatures.CreatureTemplate template in new[] { HelpTestKit.Strong, HelpTestKit.Elite })
+        {
+            await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+            await using WorldTestClient victim = await world.AddPlayerAsync("Troublevic");
+            Scene scene = await SetUpAsync(world, template: template);
+            long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
+
+            await ScanAsync(world, now);
+
+            Assert.Equal(0, SocialTestKit.Feature(world.Host).Help.Helped);
+            Assert.Equal(PlayerbotHelpKind.None, HelpTestKit.BrainOf(world, scene.Bot).PendingHelp);
+        }
     }
 }

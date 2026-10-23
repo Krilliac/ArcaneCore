@@ -1,7 +1,9 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Death.Resurrection;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -65,6 +67,7 @@ public sealed class PlayerbotHelpCastWorldTests
             world.Host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.GiveLevel(priest, 20);
             foreach (SpellInfo spell in spells) feature.Spellbook.LearnSpell(priest, spell.Id);
             priest.Health = priest.MaxHealth;
+            SpellSystem.SetPower(priest, PowerType.Mana, priest.GetUInt32(UpdateFields.UnitFieldMaxpower1)); // a healer helps only with mana to spare
         });
         ObjectGuid botGuid = await world.Host.PlayerStateAsync("Helpprie", p => p.Guid);
         ObjectGuid otherGuid = await world.Host.PlayerStateAsync(other, p => p.Guid);
@@ -98,8 +101,44 @@ public sealed class PlayerbotHelpCastWorldTests
         Assert.Equal(PlayerbotHelpKind.Resurrect, brain.LastHelpKind);
         Assert.Equal(deadGuid, brain.LastHelpTarget);
 
-        // The same corpse is not offered again, whatever the passes say; and a rival would never have been raised at all.
+        // The dead player sees the offer and turns it down; only then is "not offered again" worth checking (an offer still open would hide a second one).
+        await dead.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest);
+        await dead.SendAsync(WorldOpcode.CmsgResurrectResponse, DeclineResponse());
+        await world.Host.WaitForWorldAsync(() => ResurrectionRequests.Get(world.Host.World.FindOnlinePlayer("Helpghost")!) is null, "the declined offer to be gone");
         for (int i = 1; i <= 3; i++) await ScanAsync(world, now + i * 6_000L);
+        Assert.Equal(1, lane.Resurrections);
+    }
+
+    private static byte[] DeclineResponse()
+    {
+        var writer = new PacketWriter();
+        writer.WriteUInt64(0);
+        writer.WriteByte(0);
+        return writer.ToArray();
+    }
+
+    [Fact]
+    public async Task ACorpseThatKeepsDeclining_GetsExactlyOneOfferPerDeath_EvenHalfAnHourLater()
+    {
+        await using SocialWorld world = await StartWorldAsync();
+        await using WorldTestClient dead = await world.AddPlayerAsync("Helpstubborn");
+        (Guid bot, ObjectGuid botGuid, ObjectGuid deadGuid) = await SetUpAsync(world, "Helpstubborn", PlayerbotGroupResurrectionTests.RealResurrectionSpells());
+        float helpfulness = PlayerbotTraits.For(botGuid.Value).Helpfulness;
+        long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(botGuid.Value, deadGuid.Value, (uint)t, helpfulness, 0));
+        await world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helpstubborn").Map!.Combat.KillPlayer(HelpTestKit.Online(world, "Helpstubborn")));
+
+        await ScanAsync(world, now);
+        PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
+        Assert.Equal(1, lane.Resurrections);
+        await dead.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest);
+        await dead.SendAsync(WorldOpcode.CmsgResurrectResponse, DeclineResponse());
+        await world.Host.WaitForWorldAsync(() => ResurrectionRequests.Get(world.Host.World.FindOnlinePlayer("Helpstubborn")!) is null, "the declined offer to be gone");
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);
+        await HelpTestKit.UntilAsync(() => brain.PendingHelp == PlayerbotHelpKind.None, "the bot to be free again");
+
+        // Half an hour on the same body still lies there, and a pass whose roll would say yes for a fresh death: no second offer, the one was the death's.
+        long later = HelpTestKit.NowWhere(t => t > now + 31 * 60_000L && PlayerbotHelpRules.Helps(botGuid.Value, deadGuid.Value, (uint)t, helpfulness, 0));
+        await ScanAsync(world, later);
         Assert.Equal(1, lane.Resurrections);
     }
 
@@ -125,9 +164,22 @@ public sealed class PlayerbotHelpCastWorldTests
             return feature.System.GetAuras(HelpTestKit.Online(world, "Helpbuffed")).Any(h => !h.IsRemoved && h.Spell.Id == Fortitude);
         }).Result, "the stranger to carry the buff");
 
-        // Inside the cooldown (30 minutes) no pass offers it again, even at a time whose roll says yes.
+        // The stranger loses the aura (the buff is no reason to hold back now): inside the cooldown (30 minutes) no pass offers it again, even at a time whose roll says yes...
+        await world.Host.OnWorldAsync(() =>
+        {
+            SpellFeature feature = world.Host.WorldServices.GetRequiredService<SpellFeature>();
+            Player stranger = HelpTestKit.Online(world, "Helpbuffed");
+            feature.System.RemoveAuras(stranger, Fortitude);
+            Assert.DoesNotContain(feature.System.GetAuras(stranger), h => !h.IsRemoved && h.Spell.Id == Fortitude);
+        });
+        await HelpTestKit.UntilAsync(() => brain.PendingHelp == PlayerbotHelpKind.None, "the bot to be free again");
         long later = HelpTestKit.NowWhere(t => t > now + 60_000 && t < now + 20 * 60_000L && PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
         await ScanAsync(world, later);
         Assert.Equal(1, lane.Buffs);
+
+        // ...and once the cooldown is over, a pass whose roll says yes offers it again.
+        long after = HelpTestKit.NowWhere(t => t > now + 31 * 60_000L && PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
+        await ScanAsync(world, after);
+        Assert.Equal(2, lane.Buffs);
     }
 }

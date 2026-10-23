@@ -592,6 +592,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _trace.ObserveState(this, _session.World.NowMs);
         CheckThinkClock(player, _session.World.NowMs);
         ThinkCount++;
+        CheckAssistCredit(player);
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         _thinkStartedAt = startedAt;
         try

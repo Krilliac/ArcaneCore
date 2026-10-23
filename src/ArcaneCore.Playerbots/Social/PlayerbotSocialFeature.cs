@@ -538,8 +538,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void LaneFaulted(string lane, Exception error)
     {
+        error.Data["playerbot.social.lane"] = lane;
         FaultLedger.Shared.Record("playerbot.social", error);
-        AnomalyLedger.Shared.Report("bot-social", "lane-fault", lane, $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
+        AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"lane {lane}: {error.GetType().Name}: {error.Message}", origin: _world?.Identity);
         if (_faults++ < 5) logger.LogWarning(error, "Playerbot social lane {Lane} failed ({Type}: {Message})", lane, error.GetType().Name, error.Message);
     }
 

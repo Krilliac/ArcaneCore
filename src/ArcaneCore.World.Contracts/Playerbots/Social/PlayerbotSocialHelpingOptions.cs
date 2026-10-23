@@ -31,6 +31,12 @@ public sealed class PlayerbotSocialHelpingOptions
     /// <summary>The least minutes between two buffs a bot gives the same stranger (0..1440).</summary>
     public int BuffCooldownMinutes { get; set; } = 30;
 
+    /// <summary>The most bots that answer one call for help (1..16, 2 by default): a call is heard by every free bot in earshot, but a crowd is not what the asker needs.</summary>
+    public int MaxAnswersPerCall { get; set; } = 2;
+
+    /// <summary>The longest (minutes) a body may have lain dead for a stranger's resurrection to be offered (1..60, 10 by default), counted from the death when the server knows it, else from the scan's first sight of it.</summary>
+    public int ResurrectMaxCorpseMinutes { get; set; } = 10;
+
     /// <summary>Let a bot that is asked for help (a targeted help emote, or a help yell or say from someone close) decide whether to answer it (on by default).</summary>
     public bool AnswerHelp { get; set; } = true;
 
@@ -41,5 +47,7 @@ public sealed class PlayerbotSocialHelpingOptions
             throw new InvalidOperationException($"{section}: TroubleRadiusYards must be 1..{MaxTroubleRadiusYards}.");
         if (BuffCooldownMinutes is < 0 or > MaxBuffCooldownMinutes)
             throw new InvalidOperationException($"{section}: BuffCooldownMinutes must be 0..{MaxBuffCooldownMinutes}.");
+        if (MaxAnswersPerCall is < 1 or > 16) throw new InvalidOperationException($"{section}: MaxAnswersPerCall must be 1..16.");
+        if (ResurrectMaxCorpseMinutes is < 1 or > 60) throw new InvalidOperationException($"{section}: ResurrectMaxCorpseMinutes must be 1..60.");
     }
 }

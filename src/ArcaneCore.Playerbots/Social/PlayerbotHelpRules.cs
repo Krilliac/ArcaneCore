@@ -28,11 +28,28 @@ internal static class PlayerbotHelpRules
     /// <summary>A helper must have at least this health, in percent, to step in.</summary>
     internal const int HelperMinHealthPercent = 70;
 
+    /// <summary>A helper that heals must have at least this mana, in percent, to step in.</summary>
+    internal const int HealerMinManaPercent = 30;
+
+    /// <summary>The most levels an attacker may stand above the helper for the fight to be one it takes on.</summary>
+    internal const int MaxLevelsAbove = 3;
+
+    /// <summary>The group size a helper needs to take on an elite.</summary>
+    internal const int EliteGroupSize = 3;
+
+    /// <summary>Whether the helper's health, and (a healer's) mana, are enough to step in.</summary>
+    internal static bool HelperFit(int healthPercent, int? manaPercent, Class cls)
+        => healthPercent >= HelperMinHealthPercent && (!IsHealer(cls) || manaPercent is not { } mana || mana >= HealerMinManaPercent);
+
+    /// <summary>
+    /// Whether a bot of <paramref name="botLevel"/> in a group of <paramref name="groupSize"/> takes on the attacker: it stands at most
+    /// <see cref="MaxLevelsAbove"/> levels above, and an elite needs a group of <see cref="EliteGroupSize"/> or more.
+    /// </summary>
+    internal static bool Winnable(int botLevel, int attackerLevel, bool elite, int groupSize)
+        => attackerLevel <= botLevel + MaxLevelsAbove && (!elite || groupSize >= EliteGroupSize);
+
     /// <summary>How far (yards) a bot casts a resurrection or a buff on a stranger (the spells reach 30; a margin is left).</summary>
     internal const float CastYards = 25f;
-
-    /// <summary>How long (milliseconds) a corpse stays worth a stranger's resurrection after the scan first saw it dead.</summary>
-    internal const long CorpseFreshMs = 5 * 60_000L;
 
     /// <summary>
     /// Whether the unit is in trouble now: alive, of the bot's faction, in a fight (not a duel) and either below <see cref="TroubleHealthPercent"/>
@@ -99,7 +116,7 @@ internal static class PlayerbotHelpRules
     /// attack, and (when it would flag the bot) only if <paramref name="mayFlag"/>. Players are never taken: the brain's targets are creatures.
     /// Null when there is none.
     /// </summary>
-    internal static Creature? AttackerOf(Player bot, Player victim, bool mayFlag)
+    internal static Creature? AttackerOf(Player bot, Player victim, bool mayFlag, int groupSize)
     {
         if (bot.Map is not { } map) return null;
         Creature? best = null;
@@ -115,6 +132,7 @@ internal static class PlayerbotHelpRules
             {
                 if (unit is not Creature { IsAlive: true, IsInWorld: true } creature || !ReferenceEquals(creature.Map, map)) continue;
                 if (WouldFlag(creature) && !mayFlag) continue;
+                if (!Winnable(bot.Level, creature.Level, creature.Template.Rank is 1 or 2 or 3, groupSize)) continue;
                 if (!map.Combat.Hooks.CanAttack(bot, creature)) continue;
                 float yards = Distance(bot, creature);
                 if (yards < bestYards)
@@ -126,18 +144,45 @@ internal static class PlayerbotHelpRules
         }
     }
 
-    /// <summary>Whether the text is a call for help in words: it holds the whole word "help" (the bots' own call is the template "callhelp").</summary>
+    private static readonly string[] Distress = ["adds", "add", "dying", "dead", "die", "aggro", "pls", "plz", "mobs", "attacked", "ganked", "gank", "hp", "health"];
+    private static readonly string[] ThanksWords = ["thanks", "thank", "thx", "ty", "tyvm"];
+    private static readonly string[] QuestTalk = ["quest", "quests", "where", "how", "anyone", "looking", "find", "tips"];
+
+    /// <summary>
+    /// Whether the text is a call for help in words: it holds the whole word "help" (the bots' own call is the template "callhelp"). A thanks for help
+    /// ("thanks for the help") and a question about a quest ("can someone help with this quest?") are no call unless a word of distress comes with it
+    /// (adds, dying, aggro, pls).
+    /// </summary>
     internal static bool LooksLikeHelpCall(string? text)
     {
         if (string.IsNullOrEmpty(text)) return false;
-        int at = text.IndexOf("help", StringComparison.OrdinalIgnoreCase);
-        while (at >= 0)
+        bool help = false, thanks = false, quest = false, distress = false;
+        int start = -1;
+        for (int i = 0; i <= text.Length; i++)
         {
-            int end = at + 4;
-            if ((at == 0 || !char.IsLetter(text[at - 1])) && (end >= text.Length || !char.IsLetter(text[end]))) return true;
-            at = text.IndexOf("help", end, StringComparison.OrdinalIgnoreCase);
+            bool letter = i < text.Length && char.IsLetter(text[i]);
+            if (letter)
+            {
+                if (start < 0) start = i;
+                continue;
+            }
+
+            if (start < 0) continue;
+            ReadOnlySpan<char> word = text.AsSpan(start, i - start);
+            start = -1;
+            if (word.Equals("help", StringComparison.OrdinalIgnoreCase)) help = true;
+            else if (Contains(ThanksWords, word)) thanks = true;
+            else if (Contains(QuestTalk, word)) quest = true;
+            else if (Contains(Distress, word)) distress = true;
         }
 
+        return help && (distress || (!thanks && !quest));
+    }
+
+    private static bool Contains(string[] words, ReadOnlySpan<char> word)
+    {
+        foreach (string candidate in words)
+            if (word.Equals(candidate, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 }

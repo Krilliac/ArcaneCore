@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
@@ -40,6 +42,27 @@ internal sealed partial class PlayerbotBrain
     private PlayerbotHelpKind _helpKind;
     private ObjectGuid _helpTarget;
     private uint _helpUntilMs;
+
+    // The attacker an assist took on and whom it was for: the help is recorded once the bot has really hurt the attacker (it is on the attacker's threat list).
+    private Creature? _assistAttacker;
+    private ObjectGuid _assistVictim;
+    private uint _assistUntilMs;
+
+    private const uint AssistCreditMs = 60_000;
+
+    private void CheckAssistCredit(Player player)
+    {
+        if (_assistAttacker is not { } attacker) return;
+        if (attacker.IsInWorld && attacker.Combat.HasThreatList && attacker.Combat.Threat.GetThreat(player) > 0f)
+        {
+            if (player.Map?.FindPlayer(_assistVictim) is { } victim) Social?.NoteHelp(player, victim);
+            _assistAttacker = null;
+        }
+        else if (!attacker.IsAlive || !attacker.IsInWorld || unchecked((int)(_assistUntilMs - _session.World.NowMs)) <= 0)
+        {
+            _assistAttacker = null;
+        }
+    }
 
     /// <summary>The request waiting for a think, or <see cref="PlayerbotHelpKind.None"/>.</summary>
     internal PlayerbotHelpKind PendingHelp => _helpKind;
@@ -108,7 +131,8 @@ internal sealed partial class PlayerbotBrain
                 }
 
                 bool mayFlag = PlayerbotHelpRules.MayFlag(player, _options.Social.WarMode.Enabled);
-                if (PlayerbotHelpRules.AttackerOf(player, target, mayFlag) is not { } attacker)
+                int groupSize = _session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid)?.MemberCount ?? 1;
+                if (PlayerbotHelpRules.AttackerOf(player, target, mayFlag, groupSize) is not { } attacker)
                 {
                     ClearHelp();
                     return 0;
@@ -123,7 +147,9 @@ internal sealed partial class PlayerbotBrain
                 _attacking = false;
                 _lootOpened = false;
                 _goal = PlayerbotGoalKind.Combat;
-                Social?.NoteHelp(player, target);
+                _assistAttacker = attacker;
+                _assistVictim = target.Guid;
+                _assistUntilMs = unchecked(_session.World.NowMs + AssistCreditMs);
                 DoneHelp(PlayerbotHelpKind.Assist, targetGuid);
                 return 2;
             }
@@ -141,7 +167,11 @@ internal sealed partial class PlayerbotBrain
     // A resurrection or a buff: stop, then one cast. A bot that cannot cast it now (no spell, out of reach, refused lately) drops the request.
     private int CastOnStranger(Player player, Player target, PlayerbotHelpKind kind)
     {
-        if (player.Combat.IsInCombat || Distance(player, target) > PlayerbotHelpRules.CastYards)
+        // The body to reach: a released ghost's is its corpse, not the unit (which stands at the graveyard).
+        WorldObject body = target;
+        if (kind == PlayerbotHelpKind.Resurrect && (target.Flags & PlayerFlags.Ghost) != 0 && target.Combat.Corpse is { IsInWorld: true } ghostCorpse && ReferenceEquals(ghostCorpse.Map, player.Map))
+            body = ghostCorpse;
+        if (player.Combat.IsInCombat || Distance(player, body) > PlayerbotHelpRules.CastYards)
         {
             ClearHelp();
             return 0;

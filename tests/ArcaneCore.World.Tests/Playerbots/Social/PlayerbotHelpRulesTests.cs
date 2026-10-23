@@ -82,11 +82,43 @@ public sealed class PlayerbotHelpRulesTests
     [InlineData("I need help over here!", true)]
     [InlineData("someone HELP me", true)]
     [InlineData("A hand, please!", false)]
+    [InlineData("thanks for the help", false)]
+    [InlineData("Thank you for the help!", false)]
+    [InlineData("ty for the help", false)]
+    [InlineData("can someone help with this quest?", false)]
+    [InlineData("help me find the quest item", false)]
+    [InlineData("anyone know where to go? need help", false)]
+    [InlineData("help with the quest, mobs everywhere pls", true)]
+    [InlineData("help! adds! dying", true)]
+    [InlineData("thanks! help, aggro", true)]
     [InlineData("helpful guy", false)]
     [InlineData("unhelp", false)]
     [InlineData("", false)]
     [InlineData(null, false)]
     public void LooksLikeHelpCall_WantsTheWholeWord(string? text, bool expected) => Assert.Equal(expected, PlayerbotHelpRules.LooksLikeHelpCall(text));
+
+    [Theory]
+    [InlineData(100, 100, Class.Warrior, true)]
+    [InlineData(70, null, Class.Warrior, true)]
+    [InlineData(69, null, Class.Warrior, false)]
+    [InlineData(100, 5, Class.Warrior, true)] // a warrior has no mana worth the name
+    [InlineData(100, 30, Class.Priest, true)]
+    [InlineData(100, 29, Class.Priest, false)]
+    [InlineData(100, 29, Class.Mage, true)]
+    [InlineData(100, 29, Class.Druid, false)]
+    public void HelperFit_WantsHealth_AndManaForAHealer(int health, int? mana, Class cls, bool expected)
+        => Assert.Equal(expected, PlayerbotHelpRules.HelperFit(health, mana, cls));
+
+    [Fact]
+    public void WinnableFight_IsWithinThreeLevels_AndElitesNeedAGroupOfThree()
+    {
+        Assert.True(PlayerbotHelpRules.Winnable(botLevel: 10, attackerLevel: 13, elite: false, groupSize: 1));
+        Assert.False(PlayerbotHelpRules.Winnable(10, 14, false, 1));
+        Assert.False(PlayerbotHelpRules.Winnable(10, 10, true, 1));
+        Assert.False(PlayerbotHelpRules.Winnable(10, 10, true, 2));
+        Assert.True(PlayerbotHelpRules.Winnable(10, 10, true, 3));
+        Assert.False(PlayerbotHelpRules.Winnable(10, 14, true, 5)); // a group does not make a too-high level winnable
+    }
 
     [Fact]
     public void SaysSorry_IsRare_AndDeterministic()
