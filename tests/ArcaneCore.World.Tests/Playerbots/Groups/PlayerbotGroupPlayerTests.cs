@@ -116,6 +116,47 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
     }
 
+    /// <summary>A one-bot, one-player group that has moved on from forming (the player accepted the bot's invitation).</summary>
+    private static async Task<WorldTestClient> FormPairAsync(GroupTestWorld world, string accountName, string playerName, string botName)
+    {
+        WorldTestClient player = await world.World.EnterWorldAsync(accountName, playerName, AccountSecurity.Player);
+        var bot = await world.AddBotAsync(botName, Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, playerName, DuoQuest);
+        await RememberPlayerAsync(world, bot, playerName, 30);
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)), await world.TraceAsync());
+        return player;
+    }
+
+    /// <summary>The server keeps a logged-out player in its group, so the pair is still "two members"; a player who is not online does not count toward the two.</summary>
+    [Fact]
+    public async Task APairWhosePlayerLogsOut_Ends_BecauseAnOfflinePlayerDoesNotCountTowardTheTwo()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await FormPairAsync(world, "GROUPGONE", "Groupgone", "Askergone");
+
+        await player.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+        Assert.True(await world.RunUntilAsync(30_000, () => world.World.Host.World.FindOnlinePlayer("Groupgone") is null), "the logout completes in world time");
+
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("player-gone", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task APairWhosePlayerLeavesTheGroup_Ends()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await FormPairAsync(world, "GROUPLEAVE", "Groupleave", "Askerleave");
+
+        await player.SendAsync(WorldOpcode.CmsgGroupDisband, []);
+
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("Groupleave left", StringComparison.Ordinal));
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task AStranger_OnTheSameGoal_IsInvitedOnlyOnceTheBotsLikeThem()
     {

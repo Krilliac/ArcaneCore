@@ -1163,12 +1163,19 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 }
             }
             if (!_groups.Contains(group)) return;
-            int botMembers = 0;
+            int botMembers = 0, present = 0;
+            bool realOffline = false;
             for (int i = 0; i < group.Members.Count; i++)
-                if (!group.Members[i].Real) botMembers++;
-            if ((botMembers < 1 || group.Members.Count < 2) && group.Goal.Size >= 2 && !group.Solo) // a real player counts toward the two: one bot and one player is a group
             {
-                Finish(group, success: false, "too-few");
+                Member m = group.Members[i];
+                if (!m.Real) { botMembers++; present++; }
+                else if (!m.Joined) present++;                                   // still being invited: the Forming rules own it
+                else if (world.FindOnlinePlayer(m.Guid) is not null) present++;
+                else realOffline = true;                                          // the server group keeps a logged-out player; it does not count
+            }
+            if ((botMembers < 1 || present < 2) && group.Goal.Size >= 2 && !group.Solo) // a real player counts toward the two only while online
+            {
+                Finish(group, success: false, realOffline ? "player-gone" : "too-few");
                 return;
             }
         }
