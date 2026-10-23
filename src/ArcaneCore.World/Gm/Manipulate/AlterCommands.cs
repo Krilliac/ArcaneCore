@@ -125,7 +125,7 @@ public sealed class AlterCommands : ICommandGroup
             return hex != 0 && (hex & (hex - 1)) == 0 ? hex : null;
         }
 
-        return Enum.TryParse(text, ignoreCase: true, out UnitFlags flag) && !int.TryParse(text, out _) && (uint)flag != 0 && ((uint)flag & ((uint)flag - 1)) == 0
+        return CommandArgs.TryParseEnumName<UnitFlags, uint>(text, requireDefined: false, out UnitFlags flag) && (uint)flag != 0 && ((uint)flag & ((uint)flag - 1)) == 0
             ? (uint)flag
             : null;
     }
@@ -161,7 +161,7 @@ public sealed class AlterCommands : ICommandGroup
         {
             state = (StandState)raw;
         }
-        else if (!Enum.TryParse(text, ignoreCase: true, out state) || !Enum.IsDefined(state) || byte.TryParse(text, out _))
+        else if (!CommandArgs.TryParseEnumName<StandState, byte>(text, requireDefined: true, out state))
         {
             return false;
         }
@@ -185,7 +185,7 @@ public sealed class AlterCommands : ICommandGroup
     private static bool React(CommandContext context, string args)
     {
         string text = args.Trim();
-        if (!Enum.TryParse(text, ignoreCase: true, out CreatureReactState state) || !Enum.IsDefined(state) || byte.TryParse(text, out _))
+        if (!CommandArgs.TryParseEnumName<CreatureReactState, byte>(text, requireDefined: true, out CreatureReactState state))
         {
             return false;
         }

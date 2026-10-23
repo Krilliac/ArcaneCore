@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -536,8 +537,6 @@ internal static class PlayerbotRouteSmoothing
             sum += Vector2.Distance(Flat(points[i - 1]), Flat(points[i]));
         return sum;
     }
-
-    private static Vector2 Flat(Vector3 v) => new(v.X, v.Y);
 
     private static bool ValidHeight(float height)
         => float.IsFinite(height) && height != TerrainTile.InvalidHeight && height != TerrainTile.InvalidHeightValue;

@@ -6,6 +6,8 @@ using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -19,7 +21,7 @@ public sealed partial class CreatureMapSystem
         creature.SetHome(home);
         creature.ResetToHome(_serverTime());
         creature.IsNewObject = true;
-        GridCoord grid = ComputeGrid(home.X, home.Y);
+        GridCoord grid = GridDefines.ComputeGridCoord(home.X, home.Y);
         if (!_grids.TryGetValue(grid, out LoadedGrid? loaded)) loaded = LoadGrid(grid);
         AddToWorld(creature, loaded);
         return creature;

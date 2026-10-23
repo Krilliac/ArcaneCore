@@ -883,7 +883,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     private bool Act(WorldOpcode opcode, byte[] payload, bool budgeted = true)
         => Groups.PlayerbotGroupCoordinator.Act(_session, opcode, payload, budgeted);
 
-    private static Vector3 Position(WorldObject o) => o is Player p ? PlayerbotMotion.CurrentPosition(p) : new(o.X, o.Y, o.Z);
+    private static Vector3 Position(WorldObject o) => PlayerbotGeometry.MotionPosition(o);
 
-    private static float Distance(WorldObject a, WorldObject b) => Vector3.Distance(Position(a), Position(b));
+    private static float Distance(WorldObject a, WorldObject b) => PlayerbotGeometry.MotionDistance(a, b);
 }

@@ -43,7 +43,7 @@ public abstract partial class Battleground
         }
 
         if (!Invariant.Check(
-            IsFinite(template.AllianceStart) && IsFinite(template.HordeStart),
+            template.IsFinite(),
             $"battleground {template.Type} template has non-finite start coordinates"))
         {
             throw new ArgumentException($"battleground {template.Type} template has non-finite start coordinates", nameof(template));
@@ -60,9 +60,6 @@ public abstract partial class Battleground
         Winner = BattlegroundWinner.None;
         _activeEvents[BattlegroundConstants.EventDoor] = 0;   // door-event2 is always 0 (BattleGround.cpp:1013)
     }
-
-    private static bool IsFinite(BattlegroundStartLocation loc)
-        => float.IsFinite(loc.X) && float.IsFinite(loc.Y) && float.IsFinite(loc.Z) && float.IsFinite(loc.Orientation);
 
     // ------------------------------------------------------------------ identity
 

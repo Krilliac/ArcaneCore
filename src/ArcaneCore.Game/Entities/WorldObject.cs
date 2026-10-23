@@ -66,7 +66,10 @@ public abstract class WorldObject
     /// Radius used by distance checks (vmangos SizeFactor::BoundingRadius). Units read
     /// UNIT_FIELD_BOUNDINGRADIUS; other objects use DEFAULT_WORLD_OBJECT_SIZE (ObjectDefines.h).
     /// </summary>
-    public virtual float BoundingRadius => 0.388999998569489f;
+    public virtual float BoundingRadius => DefaultBoundingRadius;
+
+    /// <summary>vmangos ObjectDefines.h DEFAULT_WORLD_OBJECT_SIZE (used until model data is imported).</summary>
+    public const float DefaultBoundingRadius = 0.388999998569489f;
 
     public uint MapId { get; set; }
 

@@ -1,7 +1,7 @@
 using ArcaneCore.Data.Characters.Talents;
-using ArcaneCore.Game;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Talents;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
@@ -9,6 +9,7 @@ using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Talents;
 using ArcaneCore.World.Characters;
@@ -21,7 +22,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Talents;
 
 /// <summary>

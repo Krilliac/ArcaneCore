@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
+using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
 
 namespace ArcaneCore.Game.GameObjects;
 

@@ -136,5 +136,5 @@ internal sealed class PlayerbotPvpFight(WorldSession session, PlayerbotCombatSpe
         return max > 0 && Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) * 100UL < max * (ulong)LowManaPct;
     }
 
-    private static Vector3 Position(WorldObject o) => o is Player p ? PlayerbotMotion.CurrentPosition(p) : new(o.X, o.Y, o.Z);
+    private static Vector3 Position(WorldObject o) => PlayerbotGeometry.MotionPosition(o);
 }

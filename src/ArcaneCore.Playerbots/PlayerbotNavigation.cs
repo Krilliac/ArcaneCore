@@ -10,6 +10,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -270,7 +271,7 @@ internal static class PlayerbotNavigation
     internal static bool IsUsablePath(PathResult path, int maxPoints, float maxDistance)
         => path.HasPath && (path.Type & (PathType.NotUsingPath | PathType.DestForced | PathType.FlyPath)) == 0
             && path.Points.Count <= maxPoints
-            && path.Points.All(Finite) && float.IsFinite(path.Length)
+            && path.Points.All(static p => p.IsFinite()) && float.IsFinite(path.Length)
             && path.Length <= maxDistance;
 
     /// <summary>
@@ -328,7 +329,7 @@ internal static class PlayerbotNavigation
     internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
         out PlayerbotRoute? route)
     {
-        if (player.Map is { } wanderMap && Finite(destination))
+        if (player.Map is { } wanderMap && destination.IsFinite())
         {
             float surface = wanderMap.Collision.GetHeight(destination.X, destination.Y, destination.Z + 20f);
             if (!InvalidHeight(surface)
@@ -436,7 +437,7 @@ internal static class PlayerbotNavigation
         bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null)
     {
         Vector3 origin = PlayerbotMotion.CurrentPosition(player);
-        if (nowMs is { } watchNow && Finite(origin) && Finite(goal)
+        if (nowMs is { } watchNow && origin.IsFinite() && goal.IsFinite()
             && PlayerbotRoutePlanWatch.ShouldRefuse(player, origin, goal, watchNow))
         {
             route = null;
@@ -451,7 +452,7 @@ internal static class PlayerbotNavigation
         // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then (never on a
         // pending tile read, which is no verdict on the route), never per tick.
         Vector3 current = PlayerbotMotion.CurrentPosition(player);
-        if (nowMs is { } hopNow && !PendingSince(pending) && (!planned || route is { Distance: < FragmentRouteYards }) && Finite(goal)
+        if (nowMs is { } hopNow && !PendingSince(pending) && (!planned || route is { Distance: < FragmentRouteYards }) && goal.IsFinite()
             && Vector2.Distance(new(current.X, current.Y), new(goal.X, goal.Y)) > FragmentGoalYards
             && TryFragmentHop(player, options, hopNow, out PlayerbotRoute? hop))
         {
@@ -463,7 +464,7 @@ internal static class PlayerbotNavigation
         bool inconclusive = PendingSince(pending)
             || PlayerbotAsyncNavigationPlan.Current is { Deferred: true } or { Exhausted: true }
             || (!routed && (t_nonPathRefusal || ((PlayerbotThinkProbe.Active?.Refused ?? 0) > probeRefusedBefore)));
-        if (nowMs is { } recordNow && !inconclusive && Finite(origin) && Finite(goal))
+        if (nowMs is { } recordNow && !inconclusive && origin.IsFinite() && goal.IsFinite())
         {
             PlayerbotRoutePlanWatch.RecordOutcome(player, origin, goal, routed, route, recordNow);
         }
@@ -479,7 +480,7 @@ internal static class PlayerbotNavigation
         route = null;
         if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
         Vector3 origin = PlayerbotMotion.CurrentPosition(player);
-        if (!Finite(goal) || !Finite(origin)) return false;
+        if (!goal.IsFinite() || !origin.IsFinite()) return false;
         float distance = Vector3.Distance(origin, goal);
         long pending = PendingMark;
         // The way to the goal itself first: the search reads the navigation tiles it crosses (PathOptions.LoadTiles), so a road
@@ -607,7 +608,7 @@ internal static class PlayerbotNavigation
             || !PlayerbotMapPolicy.MayMoveOn(player, options))
             return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
-        if (!Finite(here)) return false;
+        if (!here.IsFinite()) return false;
         int own = nav.RegionAt(graph, here, WalkingLocate);
         if (own < 0 || !IsFragment(graph, own)) return false;
         System.Runtime.CompilerServices.StrongBox<long> retry = HopRetry.GetValue(player, static _ => new System.Runtime.CompilerServices.StrongBox<long>(-1));
@@ -648,7 +649,7 @@ internal static class PlayerbotNavigation
     internal static bool IsUnreachableOnFoot(Player player, Vector3 goal, out int fromComponent, out int toComponent)
     {
         fromComponent = toComponent = -1;
-        if (!Finite(goal) || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+        if (!goal.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
             || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
             return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
@@ -900,8 +901,8 @@ internal static class PlayerbotNavigation
     {
         straightRefused = false;
         route = null;
-        if (player.Map is not { } map || !Finite(destination)
-            || !Finite(new Vector3(player.X, player.Y, player.Z)))
+        if (player.Map is not { } map || !destination.IsFinite()
+            || !new Vector3(player.X, player.Y, player.Z).IsFinite())
             return false;
 
         // AllowedMaps limits open-world travel; the dungeon or raid instance the bot is in is always walkable (PlayerbotMapPolicy).
@@ -1106,7 +1107,7 @@ internal static class PlayerbotNavigation
         for (int index = 0; index < points.Count; index++)
         {
             Vector3 point = points[index];
-            if (!Finite(point)) return null;
+            if (!point.IsFinite()) return null;
             if (index > 0)
             {
                 float leg = Vector3.Distance(points[index - 1], point);
@@ -1185,7 +1186,7 @@ internal static class PlayerbotNavigation
     internal static bool IsOnMeshIsland(Player player, Vector3 start, PlayerbotOptions options)
     {
         if (player.Map is not { } map) return false;
-        if (!Finite(start)) return false;
+        if (!start.IsFinite()) return false;
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         for (int direction = 0; direction < IslandDirections; direction++)
         {
@@ -1198,7 +1199,7 @@ internal static class PlayerbotNavigation
             // A search the think's node budget cut short ends early on ground that may go on: no proof of an island.
             if ((PlayerbotThinkProbe.Active?.Clamped ?? 0) != cutBefore) return false;
             // A path cut at the point bound (Short) ends early on ground that goes on: winding connected ground, never an island.
-            if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) != 0 || !Finite(path.End)
+            if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) != 0 || !path.End.IsFinite()
                 || Vector2.Distance(Flat(path.End), Flat(start)) > IslandYards)
                 return false;
         }
@@ -1252,8 +1253,6 @@ internal static class PlayerbotNavigation
         return null;
     }
 
-    private static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
-
     /// <summary>How far above where the bot stands a way off steep ground may lead (<see cref="TryLeaveSteepGround"/>).</summary>
     internal const float SteepEscapeClimbYards = 1.5f;
 
@@ -1277,7 +1276,7 @@ internal static class PlayerbotNavigation
     internal static bool RequiresSteepAscent(Player player, Vector3 goal, PlayerbotOptions options, out float ascent)
     {
         ascent = 0;
-        if (player.Map is not { } map || !Finite(goal)) return false;
+        if (player.Map is not { } map || !goal.IsFinite()) return false;
         Vector3 start = PlayerbotMotion.CurrentPosition(player);
         PathResult ordinary = Query(map, start, goal, options, partial: true, steep: false, DiagnosisSearchNodes);
         if ((ordinary.Type & PathType.NotUsingPath) != 0
@@ -1291,7 +1290,7 @@ internal static class PlayerbotNavigation
         for (int index = 1; index < steep.Points.Count && index <= SteepEscapeCorners; index++)
         {
             Vector3 from = steep.Points[index - 1], to = steep.Points[index];
-            if (!Finite(from) || !Finite(to)) return false;
+            if (!from.IsFinite() || !to.IsFinite()) return false;
             float rise = to.Z - from.Z;
             if (rise > 0 && rise >= Vector2.Distance(Flat(from), Flat(to)) * SteepLegSlope) climb += rise;
         }
@@ -1361,7 +1360,7 @@ internal static class PlayerbotNavigation
         for (int index = 1; index < steep.Points.Count && index <= SteepEscapeCorners; index++)
         {
             Vector3 point = steep.Points[index];
-            if (!Finite(point) || point.Z > start.Z + SteepEscapeClimbYards) return false;
+            if (!point.IsFinite() || point.Z > start.Z + SteepEscapeClimbYards) return false;
             distance += Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;
@@ -1549,7 +1548,7 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? chained)
     {
         chained = null;
-        if (current.Complete || current.Points.Count < 2 || !PlayerbotMotion.IsActive(player) || !Finite(destination)) return false;
+        if (current.Complete || current.Points.Count < 2 || !PlayerbotMotion.IsActive(player) || !destination.IsFinite()) return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
         if (!PlanDirect(player, destination, destination, options, partial: true, out PlayerbotRoute? leg, out _, null, current.Points[^1])
             || leg is null
@@ -1566,7 +1565,7 @@ internal static class PlayerbotNavigation
     {
         next = start;
         nextPoint = route.NextPoint;
-        if (!Finite(start) || !float.IsFinite(budget) || budget <= 0 || route.Complete
+        if (!start.IsFinite() || !float.IsFinite(budget) || budget <= 0 || route.Complete
             || nextPoint < 1) return false;
         float remainingBudget = budget;
         int scanned = 0;
@@ -1574,13 +1573,13 @@ internal static class PlayerbotNavigation
         {
             Vector3 destination = route.Points[nextPoint];
             float remaining = Vector3.Distance(next, destination);
-            if (!Finite(destination) || !float.IsFinite(remaining)) break;
+            if (!destination.IsFinite() || !float.IsFinite(remaining)) break;
             if (remaining <= 0.05f) { nextPoint++; continue; }
             bool reachesPoint = remaining <= remainingBudget;
             Vector3 candidate = reachesPoint ? destination
                 : next + Vector3.Normalize(destination - next) * remainingBudget;
             Vector3? checkedPoint = validate(candidate);
-            if (checkedPoint is not { } accepted || !Finite(accepted)) break;
+            if (checkedPoint is not { } accepted || !accepted.IsFinite()) break;
             float spent = Vector3.Distance(next, accepted);
             if (!float.IsFinite(spent) || spent > remainingBudget + 0.05f) break;
             next = accepted;
@@ -1596,7 +1595,7 @@ internal static class PlayerbotNavigation
         => TryStep(route, start, budget, candidate =>
         {
             float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
-            if (!Finite(candidate) || InvalidHeight(floor) || MathF.Abs(floor - candidate.Z) > 2f
+            if (!candidate.IsFinite() || InvalidHeight(floor) || MathF.Abs(floor - candidate.Z) > 2f
                 || !PlayerbotMoveCheck.LineClear(map.Collision, start, candidate with { Z = floor })) return null;
             return new Vector3(candidate.X, candidate.Y, floor + 0.05f);
         }, out next, out nextPoint);
@@ -1606,7 +1605,7 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? route)
     {
         route = null;
-        if (!Finite(start) || !Finite(destination)) return false;
+        if (!start.IsFinite() || !destination.IsFinite()) return false;
         float horizontal = Vector2.Distance(new Vector2(start.X, start.Y), new Vector2(destination.X, destination.Y));
         if (!float.IsFinite(horizontal) || horizontal < 0.05f || horizontal > options.MaxRouteYards) return false;
         int steps = (int)MathF.Ceiling(horizontal); // at most one yard between floor probes
@@ -1661,9 +1660,6 @@ internal static class PlayerbotNavigation
         writer.WritePackedGuid(unit.Value);
         return writer.ToArray();
     }
-
-    private static bool Finite(Vector3 value)
-        => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 
     internal static bool InvalidHeight(float height)
         => !float.IsFinite(height) || height == TerrainTile.InvalidHeight

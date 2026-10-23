@@ -17,6 +17,7 @@ using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -172,7 +173,7 @@ internal sealed class TramNetwork
     }
 
     internal bool CanConsider(uint mapId, Vector3 bot, Vector3 goal)
-        => mapId == ContinentMap && Finite(bot) && Finite(goal);
+        => mapId == ContinentMap && bot.IsFinite() && goal.IsFinite();
 
     /// <summary>Build-5875 AreaTable.dbc top-level zones of the southern (Stormwind) and northern (Ironforge) road networks.</summary>
     private static TramSide SideOf(uint zoneId) => zoneId switch
@@ -187,9 +188,6 @@ internal sealed class TramNetwork
         _ => TramSide.Unknown,
     };
 
-    internal static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
-
-    private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 }
 
 /// <summary>When a car stands at a platform: the first stop window found ahead of now, in ms from now.</summary>
@@ -435,7 +433,7 @@ internal static class PlayerbotTram
     private static bool CanReachEntranceApproach(Player player, Vector3 approach)
     {
         Vector3 at = new(player.X, player.Y, player.Z);
-        if (Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(approach)) > 150f)
+        if (Vector2.Distance(Flat(at), Flat(approach)) > 150f)
             return true;
         var options = new PlayerbotOptions();
         if (!PlayerbotNavigation.TryPlanToward(player, approach, options, out PlayerbotRoute? route) || route is null)
@@ -443,13 +441,13 @@ internal static class PlayerbotTram
         if (!route.MeshEndedShort)
             return true;
         bool reachesApproach = route.Points.Count > 0
-            && Vector2.Distance(TramNetwork.Flat(route.Points[^1]), TramNetwork.Flat(approach)) <= PlayerbotNavigation.ProjectedEndYards
+            && Vector2.Distance(Flat(route.Points[^1]), Flat(approach)) <= PlayerbotNavigation.ProjectedEndYards
             && MathF.Abs(route.Points[^1].Z - approach.Z) <= PlayerbotNavigation.ProjectedEndYards;
         return reachesApproach || route.Points.Count >= options.MaxPathPoints || route.Distance >= 50f;
     }
 
     private static bool IsBesideDock(Vector3 bot, Vector3 dock)
-        => Vector2.Distance(TramNetwork.Flat(bot), TramNetwork.Flat(dock)) <= BesideYards + CarHalfLength;
+        => Vector2.Distance(Flat(bot), Flat(dock)) <= BesideYards + CarHalfLength;
 
     /// <summary>Drop the trip without a packet (death, a controller taking the bot over); the entrance consent goes with it.</summary>
     internal static void Cancel(Player player)
@@ -514,7 +512,7 @@ internal static class PlayerbotTram
                 TramPlatform here = trip.Network.Other(trip.To);
                 if (Standing(system, car, 0) is not { } at || !AtEnd(at, here, trip.To)) return;
                 Vector3 bot = new(player.X, player.Y, player.Z);
-                if (Vector2.Distance(TramNetwork.Flat(bot), TramNetwork.Flat(at)) > BesideYards + CarHalfLength) return;
+                if (Vector2.Distance(Flat(bot), Flat(at)) > BesideYards + CarHalfLength) return;
                 if (StandingFor(system, car, at, cycle) < InsideMarginMs) return;
                 if (!PlayerbotMovementControl.Stop(session, player)) return;
 
@@ -544,15 +542,15 @@ internal static class PlayerbotTram
 
                 TramPlatform here = trip.Network.Other(trip.To);
                 Vector3 at = new(carAt.X, carAt.Y, carAt.Z);
-                if (!trip.LeftPlatform && Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(here.Landing))
-                        > Vector2.Distance(TramNetwork.Flat(trip.Dock.Position), TramNetwork.Flat(here.Landing)) + 5f)
+                if (!trip.LeftPlatform && Vector2.Distance(Flat(at), Flat(here.Landing))
+                        > Vector2.Distance(Flat(trip.Dock.Position), Flat(here.Landing)) + 5f)
                 {
                     trip.LeftPlatform = true;
                 }
 
                 if (trip.LeftPlatform)
                 {
-                    float distToDest = Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(trip.To.Landing));
+                    float distToDest = Vector2.Distance(Flat(at), Flat(trip.To.Landing));
                     if (distToDest < trip.ClosestToDestination) trip.ClosestToDestination = distToDest;
                 }
 
@@ -854,7 +852,7 @@ internal static class PlayerbotTram
 
         GameObject car = trip.Car!;
         if (Standing(system, car, 0) is not { } at || !AtEnd(at, here, trip.To)) return TramStep.Traveling;
-        if (Vector2.Distance(TramNetwork.Flat(bot), TramNetwork.Flat(at)) > BesideYards + CarHalfLength)
+        if (Vector2.Distance(Flat(bot), Flat(at)) > BesideYards + CarHalfLength)
         {
             trip.Car = null; // not beside the car (the walk stopped short): pick and walk again
             return TramStep.Traveling;
@@ -881,7 +879,7 @@ internal static class PlayerbotTram
     }
 
     private static uint WalkMs(Vector3 from, Vector3 to, float speed)
-        => (uint)(Vector2.Distance(TramNetwork.Flat(from), TramNetwork.Flat(to)) / speed * 1000f) + 1_000;
+        => (uint)(Vector2.Distance(Flat(from), Flat(to)) / speed * 1000f) + 1_000;
 
     /// <summary>A stop shorter than this is not boarded.</summary>
     private const uint InsideMarginMs = 1_000;
@@ -952,13 +950,13 @@ internal static class PlayerbotTram
         route = null;
         pending = false;
         Vector3 bot = new(player.X, player.Y, player.Z);
-        foreach (Vector3 spot in Sides(map, car, dock, here.Landing.Z).OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(bot))))
+        foreach (Vector3 spot in Sides(map, car, dock, here.Landing.Z).OrderBy(s => Vector2.DistanceSquared(Flat(s), Flat(bot))))
         {
-            if (Vector2.Distance(TramNetwork.Flat(spot), TramNetwork.Flat(bot)) <= 1.5f) return spot;
+            if (Vector2.Distance(Flat(spot), Flat(bot)) <= 1.5f) return spot;
             PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, spot, options, ref tiles, now, out PlayerbotRoute? planned);
             pending |= outcome == PlanOutcome.Pending;
             if (outcome == PlanOutcome.Route && planned is not null
-                && Vector2.Distance(TramNetwork.Flat(planned.Points[^1]), TramNetwork.Flat(spot)) <= 2f)
+                && Vector2.Distance(Flat(planned.Points[^1]), Flat(spot)) <= 2f)
             {
                 route = planned;
                 return spot;
@@ -975,10 +973,10 @@ internal static class PlayerbotTram
     {
         Vector3? best = null;
         float bestDistance = float.MaxValue;
-        Vector2 target = TramNetwork.Flat(exitCentre);
+        Vector2 target = Flat(exitCentre);
         foreach (Vector3 side in Sides(map, car, stop, floorZ))
         {
-            float d = Vector2.DistanceSquared(TramNetwork.Flat(side), target);
+            float d = Vector2.DistanceSquared(Flat(side), target);
             if (d < bestDistance)
             {
                 bestDistance = d;
@@ -1038,14 +1036,14 @@ internal static class PlayerbotTram
         TramPlatform here = trip.Network.Other(trip.To);
         Vector3 at = new(carAt.X, carAt.Y, carAt.Z);
         uint cycle = system.ElevatorCycle(car);
-        if (!trip.LeftPlatform && Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(here.Landing))
-                > Vector2.Distance(TramNetwork.Flat(trip.Dock.Position), TramNetwork.Flat(here.Landing)) + 5f)
+        if (!trip.LeftPlatform && Vector2.Distance(Flat(at), Flat(here.Landing))
+                > Vector2.Distance(Flat(trip.Dock.Position), Flat(here.Landing)) + 5f)
             trip.LeftPlatform = true;
 
         if (!trip.LeftBehindReported)
         {
             Vector3 expectedSeat = Seat(car, at, trip.Offset);
-            float seatDrift = Vector2.Distance(TramNetwork.Flat(new Vector3(player.X, player.Y, player.Z)), TramNetwork.Flat(expectedSeat));
+            float seatDrift = Vector2.Distance(Flat(new Vector3(player.X, player.Y, player.Z)), Flat(expectedSeat));
             if (seatDrift > LeftBehindYards)
             {
                 trip.LeftBehindReported = true;
@@ -1060,7 +1058,7 @@ internal static class PlayerbotTram
 
         if (trip.LeftPlatform)
         {
-            float distToDest = Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(trip.To.Landing));
+            float distToDest = Vector2.Distance(Flat(at), Flat(trip.To.Landing));
             if (distToDest < trip.ClosestToDestination)
             {
                 trip.ClosestToDestination = distToDest;
@@ -1083,7 +1081,7 @@ internal static class PlayerbotTram
         {
             // At the other platform: step off on the side nearest its exit.
             Vector3? off = Sides(map, car, stop, trip.To.Landing.Z)
-                .OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(trip.To.ExitCentre)))
+                .OrderBy(s => Vector2.DistanceSquared(Flat(s), Flat(trip.To.ExitCentre)))
                 .Select(s => (Vector3?)s).FirstOrDefault();
             if (off is not { } ground)
                 return LeaveAfterFailure(trip, trip.To, now, $"tram: no platform floor beside the car at the {trip.To.Name} platform", "no-destination-floor");
@@ -1136,7 +1134,7 @@ internal static class PlayerbotTram
             }
 
             Vector3 continentPos = new(player.X, player.Y, player.Z);
-            float distToArrival = Vector2.Distance(TramNetwork.Flat(continentPos), TramNetwork.Flat(trip.IntendedTo.Arrival));
+            float distToArrival = Vector2.Distance(Flat(continentPos), Flat(trip.IntendedTo.Arrival));
             if (map.MapId != trip.IntendedTo.ContinentMap || distToArrival > WrongStationYards)
             {
                 string wrongWhy = string.Create(CultureInfo.InvariantCulture,
@@ -1315,8 +1313,8 @@ internal static class PlayerbotTram
 
     /// <summary>Whether a car at <paramref name="at"/> stands at <paramref name="platform"/>'s end of the tunnel (nearer its landing).</summary>
     private static bool AtEnd(Vector3 at, TramPlatform platform, TramPlatform other)
-        => Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(platform.Landing))
-            < Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(other.Landing));
+        => Vector2.Distance(Flat(at), Flat(platform.Landing))
+            < Vector2.Distance(Flat(at), Flat(other.Landing));
 
     /// <summary>
     /// The first stop of a car at <paramref name="here"/>'s end of the tunnel from now (sampled every 250 ms over one cycle of
@@ -1329,7 +1327,7 @@ internal static class PlayerbotTram
     {
         ArgumentNullException.ThrowIfNull(positionAt);
         if (cycle == 0) return null;
-        bool AtHere(Vector3 p) => Vector2.Distance(TramNetwork.Flat(p), TramNetwork.Flat(here)) < Vector2.Distance(TramNetwork.Flat(p), TramNetwork.Flat(other));
+        bool AtHere(Vector3 p) => Vector2.Distance(Flat(p), Flat(here)) < Vector2.Distance(Flat(p), Flat(other));
         Vector3? StandingAt(uint t)
         {
             if (Sample(positionAt, t) is not { } a || Sample(positionAt, t + 500) is not { } b) return null;

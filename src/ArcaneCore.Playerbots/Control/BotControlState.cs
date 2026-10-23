@@ -115,7 +115,7 @@ internal static class BotControlState
         {
             ["guid"] = Hex(obj.Guid.Value),
             ["name"] = BotControlUnits.NameOf(obj) ?? string.Empty,
-            ["distance"] = R(BotControlUnits.Distance(bot, obj)),
+            ["distance"] = R(PlayerbotGeometry.Distance(bot, obj)),
         };
         if (obj is Creature creature) json["entry"] = creature.Entry;
         if (obj is ArcaneCore.Game.GameObjects.GameObject go) json["entry"] = go.Entry;

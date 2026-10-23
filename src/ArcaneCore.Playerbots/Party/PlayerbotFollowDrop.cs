@@ -55,7 +55,7 @@ internal static class PlayerbotFollowDrop
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(options);
         Vector2 across = new(leader.X - origin.X, leader.Y - origin.Y);
-        if (!Finite(origin) || !Finite(leader) || leader.Z > origin.Z - MinDropYards || across.Length() > SearchYards || health == 0) return null;
+        if (!origin.IsFinite() || !leader.IsFinite() || leader.Z > origin.Z - MinDropYards || across.Length() > SearchYards || health == 0) return null;
         float bearing = across.LengthSquared() > 1e-4f ? MathF.Atan2(across.Y, across.X) : 0f;
         MapCollision collision = map.Collision;
         foreach (float degrees in FanDegrees)
@@ -122,5 +122,4 @@ internal static class PlayerbotFollowDrop
     private static bool ValidHeight(float height)
         => float.IsFinite(height) && height != TerrainTile.InvalidHeight && height != TerrainTile.InvalidHeightValue;
 
-    private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 }

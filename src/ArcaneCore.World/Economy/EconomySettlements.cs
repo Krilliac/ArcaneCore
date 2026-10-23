@@ -1,8 +1,9 @@
-using ArcaneCore.Game.Entities;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -12,7 +13,6 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Economy;
 
 /// <summary>Where an economy operation ended up durably.</summary>

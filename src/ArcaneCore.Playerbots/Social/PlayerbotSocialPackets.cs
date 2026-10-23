@@ -132,7 +132,8 @@ internal static class PlayerbotSocialPackets
         }
     }
 
-    private static byte[] OneString(string text)
+    /// <summary>A payload of one CString (a guild name, a MOTD, a channel to leave).</summary>
+    internal static byte[] OneString(string text)
     {
         var writer = new PacketWriter(text.Length + 1);
         writer.WriteCString(text);

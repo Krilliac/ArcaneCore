@@ -9,6 +9,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots;
 

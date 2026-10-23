@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps.SpawnGroups;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using ArcaneCore.Protocol;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.GameObjects;
 
@@ -97,7 +98,7 @@ public sealed partial class GameObjectMapSystem : ISpawnGroupHost
             {
                 GameObjectSpawn spawn = _groupSpawns[guid];
                 _respawnAt.Remove(guid);
-                if (_grids.TryGetValue(CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y), out List<GameObject>? list))
+                if (_grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out List<GameObject>? list))
                 {
                     CreateGroupMember(list, state, spawn, entry);
                 }

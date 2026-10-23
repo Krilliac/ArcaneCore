@@ -28,6 +28,15 @@ public sealed partial class MapCombat
             return;
         }
 
+        WearRandomArmorPiece(player);
+    }
+
+    /// <summary>
+    /// Picks one worn armor piece with durability uniformly and takes one point off it. Draws nothing when no armor is worn,
+    /// so the caller's chance roll stays the only draw in that case. World thread only; allocation free (stack slot list).
+    /// </summary>
+    private void WearRandomArmorPiece(Player player)
+    {
         Span<byte> armor = stackalloc byte[InventorySlots.EquipmentEnd];
         int count = player.Inventory.CollectWornArmorWithDurability(armor);
         if (count == 0)
@@ -109,12 +118,7 @@ public sealed partial class MapCombat
 
         if (info.Absorbed > 0 && RollDurabilityChance(options, options.DurabilityLossChanceAbsorb))
         {
-            Span<byte> armor = stackalloc byte[InventorySlots.EquipmentEnd];
-            int count = victim.Inventory.CollectWornArmorWithDurability(armor);
-            if (count > 0)
-            {
-                victim.Inventory.DurabilityPointLossForEquipSlot(armor[Random.Next(0, count - 1)]);
-            }
+            WearRandomArmorPiece(victim);
         }
     }
 }

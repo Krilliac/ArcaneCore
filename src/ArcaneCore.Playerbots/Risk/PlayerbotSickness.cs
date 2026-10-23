@@ -2,7 +2,6 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
-using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.World.Net;
@@ -60,7 +59,7 @@ internal static class PlayerbotSickness
     /// The bot's maximum health without its resurrection sickness: what a corpse-run revival leaves it with once the sickness runs out
     /// (the reclaim itself adds none). The sickness's MOD_PERCENT_STAT share of the stamina's level base is taken back out of the
     /// player's stat ledger (<see cref="UnitModLedger"/>: <c>((base x BasePct) + (pre - base)) x TotalPct</c>, the reference's order,
-    /// <see cref="PercentStatAuras"/>), and the health that stamina gives (<see cref="ExperienceFormulas.HealthBonusFromStamina"/>,
+    /// <see cref="PercentStatAuras"/>), and the health that stamina gives (<see cref="StatFormulas.HealthBonusFromStaminaPoints"/>,
     /// Player::GetHealthBonusFromStamina) is added back. Everything else stays as it is: broken gear gives no stats with or without
     /// the sickness. <see cref="Unit.MaxHealth"/> itself when the bot is not sick.
     /// </summary>
@@ -85,7 +84,7 @@ internal static class PlayerbotSickness
         if (total <= 0) return player.MaxHealth;
         int well = Math.Max(0, (int)(((baseValue * (ledger.BasePct(group) / factor)) + (pre - baseValue)) * total));
         if (well <= current) return player.MaxHealth;
-        long gained = ExperienceFormulas.HealthBonusFromStamina((uint)well) - (long)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, current));
+        long gained = StatFormulas.HealthBonusFromStaminaPoints((uint)well) - (long)StatFormulas.HealthBonusFromStaminaPoints((uint)Math.Max(0, current));
         return (uint)Math.Clamp(player.MaxHealth + gained, player.MaxHealth, uint.MaxValue);
     }
 }

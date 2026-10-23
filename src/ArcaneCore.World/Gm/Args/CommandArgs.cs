@@ -612,4 +612,15 @@ public sealed class CommandArgs(string text)
         name = key;
         return true;
     }
+
+    /// <summary>
+    /// Parses <paramref name="text"/> as an enum name (case-insensitive) and refuses text that
+    /// <typeparamref name="TNumber"/> also parses as a number, so a bare number never reaches
+    /// <see cref="Enum.TryParse{TEnum}(string?, bool, out TEnum)"/>'s numeric branch. With
+    /// <paramref name="requireDefined"/> the result must also be a defined member.
+    /// </summary>
+    internal static bool TryParseEnumName<TEnum, TNumber>(string text, bool requireDefined, out TEnum value)
+        where TEnum : struct, Enum
+        where TNumber : struct, IParsable<TNumber>
+        => Enum.TryParse(text, ignoreCase: true, out value) && (!requireDefined || Enum.IsDefined(value)) && !TNumber.TryParse(text, null, out _);
 }

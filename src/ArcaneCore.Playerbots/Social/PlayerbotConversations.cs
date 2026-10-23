@@ -342,7 +342,7 @@ internal sealed class PlayerbotConversations
             foreach (PlayerbotSocialBot other in pass.Bots)
             {
                 if (!ReferenceEquals(other.Player.Map, map) || !Usable(a, other, now)) continue;
-                float distance = PlayerbotPersonaFacts.Distance(player, other.Player);
+                float distance = PlayerbotGeometry.Distance(player, other.Player);
                 if (distance <= best)
                 {
                     best = distance;
@@ -511,7 +511,7 @@ internal sealed class PlayerbotConversations
     {
         if (player.Map is not { } map) return false;
         foreach (Player other in map.Players)
-            if (other.Session is WorldSession { IsManaged: false } && other.IsInWorld && PlayerbotPersonaFacts.Distance(other, player) <= SayYards)
+            if (other.Session is WorldSession { IsManaged: false } && other.IsInWorld && PlayerbotGeometry.Distance(other, player) <= SayYards)
                 return true;
         return false;
     }

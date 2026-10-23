@@ -39,8 +39,8 @@ public abstract class LogSink : IDisposable
 
     public abstract void Emit<TState>(in LogEvent evt, TState state, IExternalScopeProvider? scopes);
 
-    /// <summary>The line this sink writes to report <paramref name="lost"/> Error or Critical lines that no queue slot could be found for (at Error).</summary>
-    public abstract string PriorityDropNotice(long lost);
+    /// <summary>Formats a drop-notice event into <paramref name="buffer"/> in this sink's own line format (timestamp, level and message are fixed by the base class).</summary>
+    protected abstract void FormatNotice(ref LogBuffer buffer, in LogEvent evt);
 
     /// <summary>Hands a finished line to the writer; Error and above are priority lines of a queued writer (never displaced by ordinary ones).</summary>
     protected void Deliver(in LogEvent evt, ReadOnlySpan<char> line)
@@ -56,7 +56,25 @@ public abstract class LogSink : IDisposable
     }
 
     /// <summary>The line this sink writes to report <paramref name="dropped"/> lost lines (its own format, at Warning).</summary>
-    public abstract string DropNotice(long dropped);
+    public string DropNotice(long dropped) => Notice(LogLevel.Warning, $"{Name} sink dropped {dropped} log line(s): the queue was full.");
+
+    /// <summary>The line this sink writes to report <paramref name="lost"/> Error or Critical lines that no queue slot could be found for (at Error).</summary>
+    public string PriorityDropNotice(long lost) => Notice(LogLevel.Error, $"{Name} sink LOST {lost} Error/Critical log line(s): the queue was full of Error/Critical lines.");
+
+    private string Notice(LogLevel level, string message)
+    {
+        var buffer = new LogBuffer(stackalloc char[256]);
+        try
+        {
+            var evt = new LogEvent(DateTime.UtcNow, level, "ArcaneCore.Logging", default, message, null);
+            FormatNotice(ref buffer, in evt);
+            return buffer.Written.ToString();
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
 
     public void CountFault() => Interlocked.Increment(ref _faults);
 
@@ -91,35 +109,7 @@ public sealed class TextLogSink(string name, ILineWriter writer, bool color) : L
         }
     }
 
-    public override string DropNotice(long dropped)
-    {
-        var buffer = new LogBuffer(stackalloc char[256]);
-        try
-        {
-            var evt = new LogEvent(DateTime.UtcNow, LogLevel.Warning, "ArcaneCore.Logging", default, $"{Name} sink dropped {dropped} log line(s): the queue was full.", null);
-            LogLineFormatter.Write(ref buffer, in evt, null, _color);
-            return buffer.Written.ToString();
-        }
-        finally
-        {
-            buffer.Dispose();
-        }
-    }
-
-    public override string PriorityDropNotice(long lost)
-    {
-        var buffer = new LogBuffer(stackalloc char[256]);
-        try
-        {
-            var evt = new LogEvent(DateTime.UtcNow, LogLevel.Error, "ArcaneCore.Logging", default, $"{Name} sink LOST {lost} Error/Critical log line(s): the queue was full of Error/Critical lines.", null);
-            LogLineFormatter.Write(ref buffer, in evt, null, _color);
-            return buffer.Written.ToString();
-        }
-        finally
-        {
-            buffer.Dispose();
-        }
-    }
+    protected override void FormatNotice(ref LogBuffer buffer, in LogEvent evt) => LogLineFormatter.Write(ref buffer, in evt, null, _color);
 }
 
 /// <summary>The JSON-lines format (<see cref="JsonLineFormatter"/>).</summary>
@@ -139,33 +129,5 @@ public sealed class JsonLogSink(string name, ILineWriter writer) : LogSink(name,
         }
     }
 
-    public override string DropNotice(long dropped)
-    {
-        var buffer = new LogBuffer(stackalloc char[256]);
-        try
-        {
-            var evt = new LogEvent(DateTime.UtcNow, LogLevel.Warning, "ArcaneCore.Logging", default, $"{Name} sink dropped {dropped} log line(s): the queue was full.", null);
-            JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
-            return buffer.Written.ToString();
-        }
-        finally
-        {
-            buffer.Dispose();
-        }
-    }
-
-    public override string PriorityDropNotice(long lost)
-    {
-        var buffer = new LogBuffer(stackalloc char[256]);
-        try
-        {
-            var evt = new LogEvent(DateTime.UtcNow, LogLevel.Error, "ArcaneCore.Logging", default, $"{Name} sink LOST {lost} Error/Critical log line(s): the queue was full of Error/Critical lines.", null);
-            JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
-            return buffer.Written.ToString();
-        }
-        finally
-        {
-            buffer.Dispose();
-        }
-    }
+    protected override void FormatNotice(ref LogBuffer buffer, in LogEvent evt) => JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
 }

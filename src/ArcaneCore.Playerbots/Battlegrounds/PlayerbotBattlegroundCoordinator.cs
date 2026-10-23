@@ -26,6 +26,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Battlegrounds;
 
@@ -1170,9 +1171,6 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>A client's own battleground request: through its world handler, never refused for lack of the shared action budget.</summary>
     private static bool Act(WorldSession session, WorldOpcode opcode, byte[] payload)
         => session.IsManaged && Groups.PlayerbotGroupCoordinator.Act(session, opcode, payload, budgeted: false);
-
-    private static float Distance(WorldObject a, WorldObject b)
-        => Vector3.Distance(new Vector3(a.X, a.Y, a.Z), new Vector3(b.X, b.Y, b.Z));
 
     private void Note(string line)
     {

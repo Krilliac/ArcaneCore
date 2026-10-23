@@ -15,7 +15,7 @@ public sealed record CharacterInfo(uint Id, int AccountId, string Name, Race Rac
     public ObjectGuid Guid => ObjectGuid.Player(Id);
 
     /// <summary>vmangos Player::TeamForRace.</summary>
-    public Team Team => Race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome ? Team.Alliance : Team.Horde;
+    public Team Team => TeamRules.TeamOf(Race);
 }
 
 /// <summary>Finds characters that may be offline (the world daemon's character directory).</summary>

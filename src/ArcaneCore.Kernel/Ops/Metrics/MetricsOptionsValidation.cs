@@ -1,4 +1,3 @@
-using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Validation;
 using Microsoft.Extensions.Configuration;
@@ -27,11 +26,11 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         var issues = new List<ConfigIssue>();
         if (!Enum.IsDefined(o.Exporter))
         {
-            issues.Add(Error($"{Root}:Exporter", $"'{o.Exporter}' is not an exporter.", "use " + string.Join(", ", Enum.GetNames<MetricsExporter>())));
+            issues.Add(ConfigChecks.Error($"{Root}:Exporter", $"'{o.Exporter}' is not an exporter.", "use " + string.Join(", ", Enum.GetNames<MetricsExporter>())));
         }
 
-        Range(issues, $"{Root}:OtlpIntervalSeconds", o.OtlpIntervalSeconds, 1, 3600);
-        Range(issues, $"{Root}:MapSampleIntervalSeconds", o.MapSampleIntervalSeconds, 1, 3600);
+        ConfigChecks.Range(issues, $"{Root}:OtlpIntervalSeconds", o.OtlpIntervalSeconds, 1, 3600, "1-3600 seconds");
+        ConfigChecks.Range(issues, $"{Root}:MapSampleIntervalSeconds", o.MapSampleIntervalSeconds, 1, 3600, "1-3600 seconds");
         if (!o.Enabled)
         {
             return issues;
@@ -46,7 +45,7 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         if (o.Exporter is MetricsExporter.Otlp or MetricsExporter.Both
             && (!Uri.TryCreate(o.OtlpEndpoint, UriKind.Absolute, out Uri? uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)))
         {
-            issues.Add(Error($"{Root}:OtlpEndpoint", $"'{o.OtlpEndpoint}' is not an http(s) URL.", "use the collector's OTLP/HTTP metrics URL, for example http://otel-collector:4318/v1/metrics"));
+            issues.Add(ConfigChecks.Error($"{Root}:OtlpEndpoint", $"'{o.OtlpEndpoint}' is not an http(s) URL.", "use the collector's OTLP/HTTP metrics URL, for example http://otel-collector:4318/v1/metrics"));
         }
 
         return issues;
@@ -71,18 +70,7 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         o.RealmPrometheusPrefix = section["RealmPrometheusPrefix"] ?? o.RealmPrometheusPrefix;
         o.OtlpEndpoint = section["OtlpEndpoint"] ?? o.OtlpEndpoint;
         o.Realm = section["Realm"] ?? o.Realm;
-        string? exporter = section["Exporter"];
-        if (!string.IsNullOrWhiteSpace(exporter))
-        {
-            if (Enum.TryParse(exporter, ignoreCase: true, out MetricsExporter value) && Enum.IsDefined(value))
-            {
-                o.Exporter = value;
-            }
-            else
-            {
-                issues.Add(Error($"{Root}:Exporter", $"'{exporter}' is not one of the allowed values.", "use " + string.Join(", ", Enum.GetNames<MetricsExporter>())));
-            }
-        }
+        o.Exporter = ConfigChecks.EnumOr(issues, $"{Root}:Exporter", section["Exporter"], o.Exporter);
 
         if (issues.Count == 0)
         {
@@ -92,56 +80,18 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         return issues;
     }
 
-    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
+    private static int Int(List<ConfigIssue> issues, IConfigurationSection section, string key, int fallback) =>
+        ConfigChecks.IntOr(issues, $"{Root}:{key}", section[key], fallback, "use a whole number");
 
-        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
-        {
-            return value;
-        }
-
-        issues.Add(Error($"{Root}:{key}", $"'{text}' is not a whole number.", "use a whole number"));
-        return fallback;
-    }
-
-    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback)
-    {
-        string? text = section[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(text, out bool value))
-        {
-            return value;
-        }
-
-        issues.Add(Error($"{Root}:{key}", $"'{text}' is not true or false.", "use true or false"));
-        return fallback;
-    }
+    private static bool Bool(List<ConfigIssue> issues, IConfigurationSection section, string key, bool fallback) =>
+        ConfigChecks.BoolOr(issues, $"{Root}:{key}", section[key], fallback);
 
     private static void Prefix(List<ConfigIssue> issues, string key, string value, string example)
     {
         if (string.IsNullOrWhiteSpace(value) || !value.EndsWith('/')
             || !(value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
         {
-            issues.Add(Error(key, $"'{value}' is not a listener prefix.", $"use an http:// prefix ending in /, for example {example}"));
+            issues.Add(ConfigChecks.Error(key, $"'{value}' is not a listener prefix.", $"use an http:// prefix ending in /, for example {example}"));
         }
     }
-
-    private static void Range(List<ConfigIssue> issues, string key, int value, int min, int max)
-    {
-        if (value < min || value > max)
-        {
-            issues.Add(Error(key, $"{value} is out of range.", $"use {min}-{max} seconds"));
-        }
-    }
-
-    private static ConfigIssue Error(string key, string problem, string fix) => new(ConfigSeverity.Error, key, problem, fix);
 }

@@ -48,7 +48,7 @@ All other files are new, under these paths:
   - `Creature.Template` has the damage, attack time and rank fields.
 - **Grid/map/terrain:**
   - Register an `ICreatureHeightProvider` singleton in DI to get ground Z for random movement.
-  - Grid math is in `CreatureMapSystem.ComputeGrid` (vmangos GridDefines). If a shared grid/cell index lands, the system's per-grid lists can move onto it.
+  - Grid math is in `GridDefines.ComputeGridCoord` (vmangos GridDefines). If a shared grid/cell index lands, the system's per-grid lists can move onto it.
 - **Quests / gossip / NPC services:**
   - `Creature.NpcFlags`, `Template.NpcFlags` and `FindCreature` for interaction checks.
 - **Items:** equipment (virtual item slots) is not set. Hook point: `Creature.InitializeFields`.

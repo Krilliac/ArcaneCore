@@ -245,7 +245,7 @@ public sealed class ToolsAlterCommands : ICommandExtension
         if (word is null) return false;
         if (uint.TryParse(word, NumberStyles.None, C, out uint raw) && raw <= 2) state = (GameObjectState)raw;
         else if (word.Equals("alternative", StringComparison.OrdinalIgnoreCase)) state = GameObjectState.ActiveAlternative;
-        else if (!Enum.TryParse(word, ignoreCase: true, out state) || !Enum.IsDefined(state) || uint.TryParse(word, out _)) return false;
+        else if (!CommandArgs.TryParseEnumName<GameObjectState, uint>(word, requireDefined: true, out state)) return false;
         if (!GmGameObjectTarget.TryOptionalGuid(args, out uint counter)) return false;
         if (GmGameObjectTarget.Find(context, counter, out _) is not { } go) return true;
         GameObjectState before = go.State;

@@ -14,6 +14,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Party;
 
@@ -694,6 +695,4 @@ internal sealed class PlayerbotFollower
     }
 
     private static Vector3 Position(WorldObject unit) => new(unit.X, unit.Y, unit.Z);
-
-    private static float Distance(WorldObject a, WorldObject b) => Vector3.Distance(Position(a), Position(b));
 }

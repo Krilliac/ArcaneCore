@@ -52,20 +52,20 @@ public sealed class LoggingConfigChecks : IConfigCheck
     {
         if (!Enum.IsDefined(options.Console.Mode))
         {
-            issues.Add(Error(Root + ":Console:Mode", $"must be Color, Plain or Off; {(int)options.Console.Mode} is not one of them.", "use Color, Plain or Off"));
+            issues.Add(ConfigChecks.Error(Root + ":Console:Mode", $"must be Color, Plain or Off; {(int)options.Console.Mode} is not one of them.", "use Color, Plain or Off"));
         }
 
         QueueCapacity(issues, Root + ":Console:QueueCapacity", options.Console.QueueCapacity);
         if (!Enum.IsDefined(options.Timestamps))
         {
-            issues.Add(Error(Root + ":Timestamps", $"must be Utc or Local; {(int)options.Timestamps} is not one of them.", "use Utc or Local"));
+            issues.Add(ConfigChecks.Error(Root + ":Timestamps", $"must be Utc or Local; {(int)options.Timestamps} is not one of them.", "use Utc or Local"));
         }
 
         FileSink(issues, Root + ":File", options.File.Enabled, options.File.Path, options.File.RollSizeMb, options.File.Retain, options.File.QueueCapacity);
         FileSink(issues, Root + ":Json", options.Json.Enabled, options.Json.Path, options.Json.RollSizeMb, options.Json.Retain, options.Json.QueueCapacity);
         if (options.File.Enabled && options.Json.Enabled && SamePath(options.File.Path, options.Json.Path))
         {
-            issues.Add(Error(Root + ":Json:Path", $"must differ from {Root}:File:Path when both sinks are enabled; both are '{options.Json.Path}'.", "give the JSON-lines sink its own file, such as logs/arcanecore.jsonl"));
+            issues.Add(ConfigChecks.Error(Root + ":Json:Path", $"must differ from {Root}:File:Path when both sinks are enabled; both are '{options.Json.Path}'.", "give the JSON-lines sink its own file, such as logs/arcanecore.jsonl"));
         }
     }
 
@@ -73,17 +73,17 @@ public sealed class LoggingConfigChecks : IConfigCheck
     {
         if (enabled && PathProblem(path) is { } problem)
         {
-            issues.Add(Error(section + ":Path", $"'{path}' {problem}.", "use a file path such as logs/arcanecore.log (relative paths resolve against the working directory)"));
+            issues.Add(ConfigChecks.Error(section + ":Path", $"'{path}' {problem}.", "use a file path such as logs/arcanecore.log (relative paths resolve against the working directory)"));
         }
 
         if (rollSizeMb < 0)
         {
-            issues.Add(Error(section + ":RollSizeMb", $"must be 0 (never roll by size) or a positive number of MiB; {rollSizeMb} is out of range.", "use 0 or a positive number of MiB"));
+            issues.Add(ConfigChecks.Error(section + ":RollSizeMb", $"must be 0 (never roll by size) or a positive number of MiB; {rollSizeMb} is out of range.", "use 0 or a positive number of MiB"));
         }
 
         if (retain < 0)
         {
-            issues.Add(Error(section + ":Retain", $"must be 0 (keep all) or the number of rolled segments to keep; {retain} is out of range.", "use 0 or the number of segments to keep"));
+            issues.Add(ConfigChecks.Error(section + ":Retain", $"must be 0 (keep all) or the number of rolled segments to keep; {retain} is out of range.", "use 0 or the number of segments to keep"));
         }
 
         QueueCapacity(issues, section + ":QueueCapacity", queueCapacity);
@@ -93,11 +93,9 @@ public sealed class LoggingConfigChecks : IConfigCheck
     {
         if (value is < 1 or > MaxQueueCapacity)
         {
-            issues.Add(Error(key, $"must be {QueueRange}; {value} is out of range.", "use " + QueueRange));
+            issues.Add(ConfigChecks.Error(key, $"must be {QueueRange}; {value} is out of range.", "use " + QueueRange));
         }
     }
-
-    private static ConfigIssue Error(string key, string problem, string fix) => new(ConfigSeverity.Error, key, problem, fix);
 
     private static string? PathProblem(string? path)
     {
@@ -177,7 +175,7 @@ public sealed class LoggingConfigChecks : IConfigCheck
             return value;
         }
 
-        issues.Add(Error(key, $"'{raw}' is not one of {allowed}.", "use " + allowed));
+        issues.Add(ConfigChecks.Error(key, $"'{raw}' is not one of {allowed}.", "use " + allowed));
         return fallback;
     }
 
@@ -194,7 +192,7 @@ public sealed class LoggingConfigChecks : IConfigCheck
             return value;
         }
 
-        issues.Add(Error(key, $"'{raw}' is not true or false.", "use true or false"));
+        issues.Add(ConfigChecks.Error(key, $"'{raw}' is not true or false.", "use true or false"));
         return fallback;
     }
 
@@ -211,7 +209,7 @@ public sealed class LoggingConfigChecks : IConfigCheck
             return value;
         }
 
-        issues.Add(Error(key, $"'{raw}' is not a whole number.", "use " + allowed));
+        issues.Add(ConfigChecks.Error(key, $"'{raw}' is not a whole number.", "use " + allowed));
         return fallback;
     }
 }

@@ -4,7 +4,6 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ItemsResult = ArcaneCore.Game.Items.InventoryResult;
-using NpcResult = ArcaneCore.Game.Npc.InventoryResult;
 
 namespace ArcaneCore.Game.Npc;
 
@@ -38,16 +37,16 @@ public sealed class InventoryItemService(
 
     public uint GetItemCount(Player player, uint itemId, bool inBankAlso) => player.Inventory.GetItemCount(itemId, inBankAlso);
 
-    public NpcResult CanStoreNewItem(Player player, uint itemId, uint count)
-        => (NpcResult)(byte)player.Inventory.CanStoreNewItem(itemId, count, [], out _);
+    public ItemsResult CanStoreNewItem(Player player, uint itemId, uint count)
+        => player.Inventory.CanStoreNewItem(itemId, count, [], out _);
 
     public bool StoreNewItem(Player player, uint itemId, uint count)
         => player.Inventory.AddItem(itemId, count, out _, received: true) == ItemsResult.Ok;
 
     public byte? FindBagSlot(Player player, ObjectGuid bagGuid) => player.Inventory.FindBagSlot(bagGuid);
 
-    public NpcResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot)
-        => (NpcResult)(byte)player.Inventory.CheckAddItemAt(bag, slot, itemId, count);
+    public ItemsResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot)
+        => player.Inventory.CheckAddItemAt(bag, slot, itemId, count);
 
     public bool StoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot)
         => player.Inventory.AddItemAt(bag, slot, itemId, count, out _, received: true) == ItemsResult.Ok;
@@ -67,23 +66,23 @@ public sealed class InventoryItemService(
         };
     }
 
-    public void SendEquipError(Player player, NpcResult result, uint itemId)
-        => player.Inventory.SendEquipError((ItemsResult)(byte)result, null, null, 0, itemId);
+    public void SendEquipError(Player player, ItemsResult result, uint itemId)
+        => player.Inventory.SendEquipError(result, null, null, 0, itemId);
 
     public BuybackInfo? GetBuyback(Player player, byte slot)
         => player.Inventory.GetBuybackItem(slot) is { } item ? new BuybackInfo(item.Entry, player.Inventory.GetBuybackPrice(slot)) : null;
 
-    public NpcResult RestoreBuyback(Player player, byte slot)
+    public ItemsResult RestoreBuyback(Player player, byte slot)
     {
         var dest = new List<ItemPosCount>();
         ItemsResult result = player.Inventory.CanRestoreBuyback(slot, dest);
         if (result != ItemsResult.Ok)
         {
-            return (NpcResult)(byte)result;
+            return result;
         }
 
         player.Inventory.RestoreBuyback(slot, dest);
-        return NpcResult.Ok;
+        return ItemsResult.Ok;
     }
 
     public uint Repair(Player player, ObjectGuid item, float discount, Func<uint, bool> pay)

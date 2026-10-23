@@ -32,6 +32,7 @@ using ArcaneCore.World.Talents;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.World.Bots.Progression;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Party;
 
@@ -1946,9 +1947,6 @@ internal sealed class PlayerbotPartyAI
             _session.ManagedBudget = budget;
         }
     }
-
-    private static float Distance(WorldObject a, WorldObject b)
-        => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 
     /// <summary>The world features the party AI uses (any may be absent in a minimal host).</summary>
     private sealed class PartyServices(WorldSession session)

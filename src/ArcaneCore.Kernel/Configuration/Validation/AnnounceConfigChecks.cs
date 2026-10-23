@@ -19,17 +19,17 @@ public sealed class AnnounceConfigChecks : IConfigCheck
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var issues = new List<ConfigIssue>();
-        Bool(issues, configuration, AnnounceOptions.SectionName + ":Enabled");
+        ConfigChecks.ReadBool(issues, configuration, AnnounceOptions.SectionName + ":Enabled");
         foreach (string category in Categories)
         {
             string prefix = $"{AnnounceOptions.SectionName}:{category}:";
-            Bool(issues, configuration, prefix + "GmNotify");
-            Bool(issues, configuration, prefix + "WorldMessage");
-            Bool(issues, configuration, prefix + "IncludeDetails");
-            Bool(issues, configuration, prefix + "AllowNamesInWorldMessage");
-            Range(issues, configuration, prefix + "RateBurst", 0, 10_000);
-            Range(issues, configuration, prefix + "RatePerMinute", 0, 100_000);
-            Range(issues, configuration, prefix + "DedupSeconds", 0, 86_400);
+            ConfigChecks.ReadBool(issues, configuration, prefix + "GmNotify");
+            ConfigChecks.ReadBool(issues, configuration, prefix + "WorldMessage");
+            ConfigChecks.ReadBool(issues, configuration, prefix + "IncludeDetails");
+            ConfigChecks.ReadBool(issues, configuration, prefix + "AllowNamesInWorldMessage");
+            ConfigChecks.ReadRange(issues, configuration, prefix + "RateBurst", 0, 10_000);
+            ConfigChecks.ReadRange(issues, configuration, prefix + "RatePerMinute", 0, 100_000);
+            ConfigChecks.ReadRange(issues, configuration, prefix + "DedupSeconds", 0, 86_400);
 
             string? severity = configuration[prefix + "MinimumSeverity"];
             if (!string.IsNullOrWhiteSpace(severity) && !Enum.TryParse(severity, ignoreCase: true, out AnnounceSeverity parsed))
@@ -43,8 +43,8 @@ public sealed class AnnounceConfigChecks : IConfigCheck
         }
 
         string hotSwap = $"{AnnounceOptions.SectionName}:HotSwap:";
-        Bool(issues, configuration, hotSwap + "WorldMessageOnFailure");
-        Bool(issues, configuration, hotSwap + "WorldMessageIncludeReason");
+        ConfigChecks.ReadBool(issues, configuration, hotSwap + "WorldMessageOnFailure");
+        ConfigChecks.ReadBool(issues, configuration, hotSwap + "WorldMessageIncludeReason");
         foreach (IConfigurationSection lane in configuration.GetSection("World:Announce:HotSwap:Lanes").GetChildren())
         {
             if (!HotSwapLanes.Contains(lane.Value ?? string.Empty, StringComparer.OrdinalIgnoreCase))
@@ -54,32 +54,5 @@ public sealed class AnnounceConfigChecks : IConfigCheck
         }
 
         return issues;
-    }
-
-    private static void Bool(List<ConfigIssue> issues, IConfiguration configuration, string key)
-    {
-        string? text = configuration[key];
-        if (!string.IsNullOrWhiteSpace(text) && !bool.TryParse(text, out _))
-        {
-            issues.Add(new ConfigIssue(ConfigSeverity.Error, key, $"'{text}' is not a boolean.", "use true or false"));
-        }
-    }
-
-    private static void Range(List<ConfigIssue> issues, IConfiguration configuration, string key, int min, int max)
-    {
-        string? text = configuration[key];
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return;
-        }
-
-        if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
-        {
-            issues.Add(new ConfigIssue(ConfigSeverity.Error, key, $"'{text}' is not a whole number.", $"use {min}..{max}"));
-        }
-        else if (value < min || value > max)
-        {
-            issues.Add(new ConfigIssue(ConfigSeverity.Error, key, $"{value} is outside {min}..{max}.", $"use {min}..{max}"));
-        }
     }
 }

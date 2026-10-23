@@ -209,7 +209,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             FactionTemplateCatalog? factions = _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
             if (factions?.Find(template.Faction) is null || factions.Find(player.FactionTemplate) is null)
                 continue;
-            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, row.Entry).Where(IsFinite).Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn)).Take(MaxEntryScan - _destinations.Count))
+            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, row.Entry).Where(static s => s.IsFinite()).Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn)).Take(MaxEntryScan - _destinations.Count))
                 _destinations.Add(new(row.Entry, row.TrainerClass, factions!.Find(template.Faction)?.Faction ?? 0, template.Faction, spawn));
             if (_destinations.Count >= MaxEntryScan) break;
         }
@@ -323,7 +323,6 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
 
     private void ClearRoute() { _route = null; _routeSpawn = 0; _routeDestination = null; }
     private void Backoff(uint now) { _backoffUntil = unchecked(now + BackoffMs); }
-    private static bool IsFinite(CreatureSpawn spawn) => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
     private static float DistanceSquared(Player p, CreatureSpawn s) => Vector3.DistanceSquared(new(p.X, p.Y, p.Z), new(s.X, s.Y, s.Z));
     private sealed record Destination(uint Entry, byte TrainerClass, uint FactionId, uint FactionTemplate, CreatureSpawn Spawn);
 }

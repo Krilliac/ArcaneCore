@@ -99,8 +99,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        uint reqFaction = proto.RequiredReputationFaction != 0 || proto.RequiredReputationRank == 0 ? proto.RequiredReputationFaction : npc.FactionId;
-        if (proto.RequiredReputationRank > 0 && (Deps.Reputation is not { } rep || rep.GetReputationRank(player, reqFaction) < proto.RequiredReputationRank))
+        if (!MeetsVendorReputation(player, npc, proto))
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.ReputationRequire));
             return;
@@ -122,8 +121,8 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        InventoryResult store = items.CanStoreNewItemAt(player, itemId, totalCount, bag, slot);
-        if (store != InventoryResult.Ok)
+        Items.InventoryResult store = items.CanStoreNewItemAt(player, itemId, totalCount, bag, slot);
+        if (store != Items.InventoryResult.Ok)
         {
             items.SendEquipError(player, store, itemId);
             return;
@@ -210,8 +209,8 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        InventoryResult result = items.RestoreBuyback(player, (byte)slot);
-        if (result != InventoryResult.Ok)
+        Items.InventoryResult result = items.RestoreBuyback(player, (byte)slot);
+        if (result != Items.InventoryResult.Ok)
         {
             items.SendEquipError(player, result, buyback.Entry);
             return;
@@ -386,6 +385,22 @@ public sealed partial class QuestNpcServices
 
     /// <summary>vmangos uint32(price × GetReputationPriceDiscount() + 0.5f) (vendors and trainers): <see cref="ReputationPricing"/>.</summary>
     private static uint Discounted(ulong price, float discount) => ReputationPricing.Round(price, discount);
+
+    /// <summary>
+    /// The buy-time reputation gate shared by BuyItem, the purchase price and the advisory quote: the item's own faction, or
+    /// the vendor's when the item names a rank but no faction. Items without a rank are never gated; no reputation owner
+    /// fails closed. Not the list-visibility rule in <see cref="IsVendorItemVisible"/>, which is deliberately different.
+    /// </summary>
+    private bool MeetsVendorReputation(Player player, NpcInfo npc, ItemInfo proto)
+    {
+        if (proto.RequiredReputationRank == 0)
+        {
+            return true;
+        }
+
+        uint faction = proto.RequiredReputationFaction != 0 ? proto.RequiredReputationFaction : npc.FactionId;
+        return Deps.Reputation is { } reputation && reputation.GetReputationRank(player, faction) >= proto.RequiredReputationRank;
+    }
 
     /// <summary>vmangos Creature::GetVendorItemCurrentCount (restock by BuyCount every incrtime seconds).</summary>
     private uint CurrentStock(ObjectGuid vendor, VendorItem item, ItemInfo proto)

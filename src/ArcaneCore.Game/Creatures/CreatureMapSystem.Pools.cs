@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps.Pools;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -130,7 +131,7 @@ public sealed partial class CreatureMapSystem : IPoolHost
             return;
         }
 
-        bool gridLoaded = _grids.TryGetValue(ComputeGrid(spawn.X, spawn.Y), out LoadedGrid? grid);
+        bool gridLoaded = _grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out LoadedGrid? grid);
         if (!instantly && !gridLoaded)
         {
             // cmangos PoolGroup<Creature>::Spawn1Object: in a grid that is not loaded the replacement only gets a fresh respawn time

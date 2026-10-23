@@ -1,5 +1,4 @@
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stats;
 using Xunit;
@@ -194,8 +193,8 @@ public sealed class StatAuraModuleTests
         system.Attach(player); // syncs the ledger with the stat fields as they are
         uint baseline = player.MaxHealth;
         int baseStamina = player.GetInt32(UpdateFields.UnitFieldStat0 + 2);
-        uint baseBonus = ExperienceFormulas.HealthBonusFromStamina((uint)baseStamina);
-        uint Expected(int stamina) => baseline - baseBonus + ExperienceFormulas.HealthBonusFromStamina((uint)stamina);
+        uint baseBonus = StatFormulas.HealthBonusFromStaminaPoints((uint)baseStamina);
+        uint Expected(int stamina) => baseline - baseBonus + StatFormulas.HealthBonusFromStaminaPoints((uint)stamina);
 
         kit.System.CastSpell(player, Stamina, SpellCastTargets.ForSelf(), triggered: true);
         Assert.Equal(Expected(baseStamina + 10), player.MaxHealth);
@@ -231,8 +230,8 @@ public sealed class StatAuraModuleTests
         system.Attach(mage);
         int manaField = UpdateFields.UnitFieldMaxpower1;
         uint baseline = mage.GetUInt32(manaField);
-        uint baseBonus = ExperienceFormulas.ManaBonusFromIntellect(30);
-        uint Expected(int intellect) => baseline - baseBonus + ExperienceFormulas.ManaBonusFromIntellect((uint)intellect);
+        uint baseBonus = StatFormulas.ManaBonusFromIntellectPoints(30);
+        uint Expected(int intellect) => baseline - baseBonus + StatFormulas.ManaBonusFromIntellectPoints((uint)intellect);
 
         kit.System.CastSpell(mage, Intellect, SpellCastTargets.ForSelf(), triggered: true);
         Assert.Equal(Expected(40), mage.GetUInt32(manaField));

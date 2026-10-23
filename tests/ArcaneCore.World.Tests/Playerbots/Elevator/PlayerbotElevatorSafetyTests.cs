@@ -469,13 +469,13 @@ public sealed class PlayerbotElevatorSafetyTests(ITestOutputHelper output)
             bool guarded = PlayerbotElevator.GuardPlatformShaft(world.Session, world.Player, world.Player.Map!, trip);
             Assert.True(guarded, "expected GuardPlatformShaft to step the bot out of the open shaft");
 
-            float landingDist = Vector2.Distance(ElevatorNetwork.Flat(trip.Landing), ElevatorNetwork.Flat(topCar.High));
+            float landingDist = Vector2.Distance(PlayerbotGeometry.Flat(trip.Landing), PlayerbotGeometry.Flat(topCar.High));
             Assert.True(landingDist >= PlayerbotElevator.CarHalfYards, $"expected clamped landing outside shaft, got {landingDist:F2} yd");
 
             // Also verify that SafeWaitOutsideShaft on an Undercity vault lift (map 0) stays outside VaultDoorOuterYards (10.6 yd).
             var ucStop = new Vector3(1595f, 189f, 1.18f);
             Vector3 ucSafe = PlayerbotElevator.SafeWaitOutsideShaft(world.Player.Map!, ucStop, ucStop + new Vector3(20f, 0f, 0f), mapIdOverride: 0);
-            float ucDist = Vector2.Distance(ElevatorNetwork.Flat(ucSafe), ElevatorNetwork.Flat(ucStop));
+            float ucDist = Vector2.Distance(PlayerbotGeometry.Flat(ucSafe), PlayerbotGeometry.Flat(ucStop));
             Assert.True(ucDist >= PlayerbotElevator.VaultDoorOuterYards, $"expected vault wait radius >= {PlayerbotElevator.VaultDoorOuterYards:F1}, got {ucDist:F2}");
         });
     }

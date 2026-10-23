@@ -4,6 +4,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Reputation;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.ServerMail;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -16,7 +17,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.ServerMail;
 
 /// <summary>Configuration section "ServerMail".</summary>
