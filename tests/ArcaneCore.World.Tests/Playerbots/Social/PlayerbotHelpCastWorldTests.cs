@@ -73,6 +73,8 @@ public sealed class PlayerbotHelpCastWorldTests
             priest.Health = priest.MaxHealth;
             SpellSystem.SetPower(priest, PowerType.Mana, priest.GetUInt32(UpdateFields.UnitFieldMaxpower1)); // a healer helps only with mana to spare
         });
+        // The bot is free to help (not between goals, healthy, mana to spare) before any pass is taken: a scan at a moment it is not would see nobody to help.
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => SocialTestKit.BotPass(world.Host, 0).Bots.Any(b => b.Id == bot && PlayerbotHelpLane.IsFree(b))).Result, "the bot to be free");
         ObjectGuid botGuid = await world.Host.PlayerStateAsync("Helpprie", p => p.Guid);
         ObjectGuid otherGuid = await world.Host.PlayerStateAsync(other, p => p.Guid);
         return (bot, botGuid, otherGuid);
