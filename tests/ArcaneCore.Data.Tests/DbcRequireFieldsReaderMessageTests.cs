@@ -34,7 +34,7 @@ public sealed class DbcRequireFieldsReaderMessageTests
     public void MapReader_MessageIncludesFieldCountAndRecordSize()
     {
         Assert.Equal("Map.dbc requires 42 four-byte fields, found 41/164", Message(() => MapDbcReader.Read(Table(41))));
-        Assert.Empty(MapDbcReader.Read(Table(MapDbcReader.FieldCount)));
+        Assert.Equal("Map.dbc must contain both continent ids 0 and 1", Message(() => MapDbcReader.Read(Table(MapDbcReader.FieldCount))));
     }
 
     [Fact]
