@@ -95,6 +95,30 @@ public sealed class PlayerbotSocialListsWorldTests
     }
 
     [Fact]
+    public async Task TheCursorAdvancesByTheBotsScanned_SoEveryBotIsLookedOverOnceInNOver8Passes()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(options => options.Social.Guilds.Enabled = false, frozen: true);
+        await world.AddBotAsync("Cursorone");
+        var lists = new PlayerbotSocialLists();
+        var seen = new Dictionary<Guid, int>();
+        lists.OnExamine = id => seen[id] = seen.GetValueOrDefault(id) + 1;
+        Guid[] ids = [.. Enumerable.Range(0, 24).Select(_ => Guid.NewGuid())];
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialBot real = SocialTestKit.Gather(world.Host).Single();
+            List<PlayerbotSocialBot> bots = [.. ids.Select(id => real with { Id = id })];
+            for (int pass = 0; pass < ids.Length / PlayerbotSocialLists.BotsPerPass; pass++)
+                lists.Run(new PlayerbotSocialPass(PartyTestHost.PlayerbotOptionsOf(world.Host), SocialTestKit.Social(world.Host).Context, world.Host.World,
+                    world.Host.WorldServices, PartyTestHost.Feature(world.Host).Chat, new HashSet<uint>(), registryLoaded: true, new PlayerbotSocialTimings(),
+                    new Random(1), 100_000 + pass, 1000, () => bots) { Recorder = PartyTestHost.Feature(world.Host).Social });
+        });
+
+        Assert.Equal(ids.Length, seen.Count);
+        Assert.All(ids, id => Assert.Equal(1, seen[id]));
+    }
+
+    [Fact]
     public async Task ABotNeverIgnoresAGameMaster()
     {
         await using SocialWorld world = await SocialWorld.StartAsync(options => options.Social.Guilds.Enabled = false, frozen: true);

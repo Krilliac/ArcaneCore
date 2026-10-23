@@ -28,6 +28,9 @@ internal sealed class PlayerbotSocialLists
     private readonly Dictionary<Guid, long> _lastChange = [];
     private int _cursor;
 
+    /// <summary>Test seam: called with each bot a pass looks over (its relations are read) before it is judged.</summary>
+    internal Action<Guid>? OnExamine { get; set; }
+
     /// <summary>Changes made so far (tests, status).</summary>
     internal int Changes { get; private set; }
 
@@ -57,16 +60,20 @@ internal sealed class PlayerbotSocialLists
         if (!options.Enabled || pass.Recorder is not { Enabled: true } recorder || pass.Bots.Count == 0) return;
         long spacingMs = options.ChangeSpacingSeconds * 1000L;
         int count = pass.Bots.Count;
-        int looked = 0;
+        int looked = 0, scanned = 0;
         for (int i = 0; i < count && looked < BotsPerPass; i++)
         {
+            scanned = i + 1;
             PlayerbotSocialBot bot = pass.Bots[(_cursor + i) % count];
             if (_lastChange.TryGetValue(bot.Id, out long last) && pass.NowMs - last < spacingMs) continue;
             looked++;
+            OnExamine?.Invoke(bot.Id);
             if (ChangeFor(pass, recorder, options, bot)) _lastChange[bot.Id] = pass.NowMs;
         }
 
-        _cursor = (_cursor + 1) % count;
+        // The next pass starts where this one stopped: every bot is looked over once in count / BotsPerPass passes (a cursor that moved by one
+        // would look over the same seven bots again and again).
+        _cursor = (_cursor + scanned) % count;
         if (_lastChange.Count > 4 * count + 64)
             foreach (Guid id in _lastChange.Keys.ToArray())
                 if (!pass.BotIds.Contains(id)) _lastChange.Remove(id);
