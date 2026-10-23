@@ -1,5 +1,5 @@
+using ArcaneCore.Game.ClientErrors;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.DependencyInjection;

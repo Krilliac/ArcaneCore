@@ -102,7 +102,7 @@ internal sealed class GuardedBanStore(GuardedCalls<IBanStore> calls) : IBanStore
 
 /// <summary>
 /// Runs one store call under the Auth <see cref="DatabaseGuard"/>, on the undecorated store
-/// (<see cref="RealmResilienceServiceCollectionExtensions.InnerStoreKey"/>) of a DI scope of the call's own: the guarded
+/// (<see cref="InnerStoreKey"/>) of a DI scope of the call's own: the guarded
 /// operation creates that scope and disposes it when the store call has ended, never earlier.
 /// <para>
 /// Why not the caller's scope: with SQLite the guard abandons a call at the deadline while it still runs inside its
@@ -122,6 +122,9 @@ internal sealed class GuardedBanStore(GuardedCalls<IBanStore> calls) : IBanStore
 internal sealed class GuardedCalls<TStore>(IServiceScopeFactory scopes, DatabaseGuard guard)
     where TStore : class
 {
+    /// <summary>The key under which the undecorated store registrations are kept.</summary>
+    public const string InnerStoreKey = "ArcaneCore.Realm.Resilience.Inner";
+
     public Task<TResult> RunAsync<TState, TResult>(
         Func<TStore, TState, CancellationToken, Task<TResult>> call, TState state, CancellationToken cancellationToken)
         => guard.ExecuteAsync(
@@ -149,7 +152,7 @@ internal sealed class GuardedCalls<TStore>(IServiceScopeFactory scopes, Database
         => RunAsync(static (store, c, ct) => c(store, ct), call, cancellationToken);
 
     private static TStore Inner(AsyncServiceScope scope)
-        => scope.ServiceProvider.GetRequiredKeyedService<TStore>(RealmResilienceServiceCollectionExtensions.InnerStoreKey);
+        => scope.ServiceProvider.GetRequiredKeyedService<TStore>(InnerStoreKey);
 }
 
 /// <summary>

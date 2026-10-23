@@ -84,10 +84,10 @@ by the character and its `character_inventory` slots.
 | `src/ArcaneCore.Data/Stores/EfCharacterStore.cs` | `DeleteAsync` is transactional and runs the module cleanups; item deletion moved to `ItemCharacterDataModule`; recovery: implements `ICharacterDeletionStore`, a `Guid operationId` overload writes the ledger row, `CreateAsync` fences explicit ids |
 | `src/ArcaneCore.World/WorldServiceCollectionExtensions.cs` | `CharacterDeletionReconciler` singleton (recovery) |
 | `src/ArcaneCore.Kernel/Reputation/CharacterReputation.cs`, `ReputationWriteQueue`, `EfCharacterReputationStore` | `ICharacterReputationStore.DeleteDeletedCharacterAsync`, used by the queued removal (recovery) |
-| `src/ArcaneCore.Game/Social/SocialContext.cs` | `ISocialPersistence.FlushAsync` with a default completed-task body; `SocialWriteQueue.FlushAsync` (recovery) |
+| `src/ArcaneCore.Game/Social/ISocialPersistence.cs` | `ISocialPersistence.FlushAsync` with a default completed-task body; `SocialWriteQueue.FlushAsync` (recovery) |
 | `EfCharacterSpellStore`, `EfCharacterSpellStateStore`, `EfInstanceStore`, `EfSocialStore` | their post-delete removals are conditional on the id having no `characters` row (recovery) |
 | `src/ArcaneCore.Kernel/Social/SocialRecords.cs` | `ISocialStore.PurgeCharacterAsync` with a default no-op body |
-| `src/ArcaneCore.Game/Social/SocialContext.cs` | `ISocialPersistence.PurgeCharacter` with a default no-op body |
+| `src/ArcaneCore.Game/Social/ISocialPersistence.cs` | `ISocialPersistence.PurgeCharacter` with a default no-op body |
 | `src/ArcaneCore.Game/Groups/GroupManager.cs` | additive `OnCharacterDeleted(ObjectGuid)` (the only way to remove an offline member) |
 | Module files (items, spells, quests, social) | each implements `ICharacterDataCleanup` |
 | `CharacterSaveQueue`, `QuestNpcPersistence`, `SocialWriteQueue` | additive `ForgetCharacter` / `PurgeCharacter` |

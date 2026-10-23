@@ -215,7 +215,7 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 | File | Change |
 |---|---|
 | `Game/Creatures/Creature.cs` | optional `HighGuid` constructor parameter (default `Unit`), internal `Summon` property, `IsTotem`, `IsPet` |
-| `Game/Spells/SpellTargetingSeams.cs` | `SpellSummonRequest` and an additive default `Summon(Unit, in SpellSummonRequest)` member on `ISpellSummonSink` |
+| `Game/Spells/SpellTargetRelations.cs` | `SpellSummonRequest` and an additive default `Summon(Unit, in SpellSummonRequest)` member on `ISpellSummonSink` |
 | `Game/Spells/SpellSystem.Combat.cs` | `EffectSummon` calls the request overload (the vmangos behaviour is unchanged) |
 | `World/Features/WorldFeatures.cs` | `ISpellSummonSink` added to the seam interface list so a feature can be the sink |
 
@@ -224,7 +224,7 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 ### P7 persistent current hunter pet and effect 109
 
 The 2026-10-04 continuation adds a thin current hunter-pet lifecycle in
-`Game/Pets/PersistentPetService.cs`, `Data/Characters/Pets/PersistentPetDataModule.cs`, and
+`Game/Pets/SummonService.PersistentPets.cs`, `Data/Characters/Pets/PersistentPetDataModule.cs`, and
 `World/Pets/PersistentPetFeature.cs`. Character loading reads the detached snapshot before
 world entry through `ICharacterHooks`, then publishes synchronously on `PlayerLoggedIn`.
 The read records the character's pet generation first. GM `.pet rename` / `.pet delete` find the

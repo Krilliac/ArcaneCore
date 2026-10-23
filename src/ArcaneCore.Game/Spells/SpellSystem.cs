@@ -596,34 +596,121 @@ public sealed partial class SpellSystem
         Unit? currentFaultTarget = unitTarget;
         try
         {
-        SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true,
-            castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
-        InventoryRewardStage? reagentStage = null;
-        if (result == SpellCastResult.CastOk)
-        {
-            InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
-            result = StageCastReagents(cast, out reagentStage);
-        }
-        if (result != SpellCastResult.CastOk)
-        {
-            SendCastResult(caster, spell, result, cast.IsTriggered);
-            if (!cast.IsTriggered)
+            SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true,
+                castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
+            InventoryRewardStage? reagentStage = null;
+            if (result == SpellCastResult.CastOk)
             {
-                SendInterrupted(cast);
+                InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
+                result = StageCastReagents(cast, out reagentStage);
+            }
+            if (result != SpellCastResult.CastOk)
+            {
+                SendCastResult(caster, spell, result, cast.IsTriggered);
+                if (!cast.IsTriggered)
+                {
+                    SendInterrupted(cast);
+                }
+
+                Finish(cast);
+                return result;
             }
 
-            Finish(cast);
-            return result;
-        }
+            // vmangos Spell::cast (Spell.cpp:3646-3658): the cost is read again, now spending mod charges, and everything the cast
+            // reads from here until it returns (effects, crit rolls) spends the charges of the mods it uses.
+            using SpellModWindow modWindow = BeginModWindow(cast.ModScope);
+            if (cast.ModScope is not null && !cast.IsTriggered && cast.CastItem is null)
+            {
+                cast.PowerCost = PowerCostFor(caster, spell);
+            }
 
-        // vmangos Spell::cast (Spell.cpp:3646-3658): the cost is read again, now spending mod charges, and everything the cast
-        // reads from here until it returns (effects, crit rolls) spends the charges of the mods it uses.
-        using SpellModWindow modWindow = BeginModWindow(cast.ModScope);
-        if (cast.ModScope is not null && !cast.IsTriggered && cast.CastItem is null)
+            PayCastCosts(cast, state, reagentStage);
+            SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
+            cast.Completed = true;
+            NotifyCast(cast);
+            if (spell.IsChanneled)
+            {
+                ResetPendingChannelBeforeStart(state); // vmangos Spell::cast, after OnSpellLaunch and before the spell go (Spell.cpp:3460-3469)
+            }
+
+            Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
+            // Magnet selection changes the explicit target; a channel must track that selected unit.
+            unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
+            RollTargetOutcomes(cast, targetEffects, out List<ObjectGuid> hits, out List<(ObjectGuid Guid, SpellMissInfo Reason)> misses);
+
+            SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
+                cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
+                RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
+
+            // Proc engine: the cast-end procs before the effects (vmangos Spell::cast, Spell.cpp:3724-3749), and for a channel the target triggers
+            // as soon as the targets are known (Spell.cpp:3682-3683).
+            Unit castEndTarget = unitTarget ?? caster;
+            FireCastEndProcs(cast, castEndTarget, targetEffects.TryGetValue(castEndTarget, out SpellTargetEntry? mainEntry) ? mainEntry.Miss : null,
+                targetEffects.Count == 0);
+            var procOutcomes = targetEffects.Select(pair => (pair.Key, pair.Value.Miss)).ToList();
+            if (spell.IsChanneled && !cast.IsTriggered)
+            {
+                HandleAddTargetTriggerAuras(cast, procOutcomes);
+            }
+
+            int duration = cast.Duration;
+            if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
+            {
+                cast.State = SpellCastState.Casting;
+                cast.Timer = duration;
+                cast.ElapsedMs = 0;
+                SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
+                cast.RememberCastPosition(); // vmangos Spell.cpp:4108-4110: the channel's movement check starts here
+                if (caster is Player player)
+                {
+                    player.Session.Send(WorldOpcode.MsgChannelStart, SpellPackets.BuildChannelStart(spell.Id, (uint)duration));
+                }
+
+                caster.SetUInt64(UpdateFields.UnitFieldChannelObject, (unitTarget ?? caster).Guid.Value);
+                caster.SetUInt32(UpdateFields.UnitChannelSpell, spell.Id);
+            }
+
+            ApplyToTargets(cast, targetEffects, ref currentFaultTarget);
+
+            HandleGroundEffects(cast, unitTarget); // vmangos "process ground" (Spell.cpp:3971-3976)
+            if (!spell.IsChanneled || cast.IsTriggered)
+            {
+                HandleAddTargetTriggerAuras(cast, procOutcomes); // vmangos Spell::finish (Spell.cpp:4368-4369)
+            }
+
+            // ranged (autorepeat lane): a non-triggered cast with the combat interrupt bit restarts the melee swing (vmangos Spell.cpp:3805-3810).
+            if (!cast.IsTriggered && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Combat) && !RangedSpellFacts.DoesNotResetCombatTimers(spell))
+            {
+                caster.Map?.FindUpdater<Combat.MapCombat>()?.ResetMeleeTimersAfterCast(caster);
+            }
+
+            ConsumeCastItem(cast);
+
+            if (cast.State != SpellCastState.Casting)
+            {
+                Finish(cast);
+            }
+
+            return SpellCastResult.CastOk;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            cast.PowerCost = PowerCostFor(caster, spell);
+            FaultLedger.Shared.Record("spell.script", ex);
+            RecordSpellScriptFault("Cast", ex, spell, caster, currentFaultTarget);
+            Finish(cast);
+            throw;
         }
+    }
 
+    /// <summary>
+    /// The cost half of <see cref="Cast"/>: the cooldown, the power, the staged reagents, the registered cost takers and the ammunition,
+    /// in the vmangos order (TakePower, TakeReagents, TakeAmmo). It changes <c>cast.CastItem</c> and the item target in place, and runs inside
+    /// the caller's mod window and before SMSG_SPELL_GO reads them.
+    /// </summary>
+    private void PayCastCosts(SpellCast cast, UnitSpellState state, InventoryRewardStage? reagentStage)
+    {
+        Unit caster = cast.Caster;
+        SpellInfo spell = cast.Spell;
         if (!cast.IsItemEquipCast)
         {
             // ranged (autorepeat lane): shots tell the client nothing; an item spell may carry its own category and times.
@@ -666,19 +753,19 @@ public sealed partial class SpellSystem
 
         TakeCosts(cast); // registered cost takers (ISpellCostTaker), after the reagents and before TakeAmmo
         TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
-        SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
-        cast.Completed = true;
-        NotifyCast(cast);
-        if (spell.IsChanneled)
-        {
-            ResetPendingChannelBeforeStart(state); // vmangos Spell::cast, after OnSpellLaunch and before the spell go (Spell.cpp:3460-3469)
-        }
+    }
 
-        Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
-        // Magnet selection changes the explicit target; a channel must track that selected unit.
-        unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
-        var hits = new List<ObjectGuid>();
-        var misses = new List<(ObjectGuid Guid, SpellMissInfo Reason)>();
+    /// <summary>
+    /// Per target of <see cref="Cast"/>: drop the immune effects, roll the hit once, and sort the targets into the hit and miss lists of
+    /// SMSG_SPELL_GO (selected game objects follow the unit hits). Targets are visited in dictionary order, so the RNG draws keep their sequence.
+    /// </summary>
+    private void RollTargetOutcomes(SpellCast cast, Dictionary<Unit, SpellTargetEntry> targetEffects, out List<ObjectGuid> hits,
+        out List<(ObjectGuid Guid, SpellMissInfo Reason)> misses)
+    {
+        Unit caster = cast.Caster;
+        SpellInfo spell = cast.Spell;
+        hits = new List<ObjectGuid>();
+        misses = new List<(ObjectGuid Guid, SpellMissInfo Reason)>();
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
             // Spell::AddUnitTarget removes immune effects before WriteSpellGoTargets. A target
@@ -722,39 +809,16 @@ public sealed partial class SpellSystem
         {
             if (!hits.Contains(guid)) hits.Add(guid);
         }
+    }
 
-        SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-            cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
-            RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
-
-        // Proc engine: the cast-end procs before the effects (vmangos Spell::cast, Spell.cpp:3724-3749), and for a channel the target triggers
-        // as soon as the targets are known (Spell.cpp:3682-3683).
-        Unit castEndTarget = unitTarget ?? caster;
-        FireCastEndProcs(cast, castEndTarget, targetEffects.TryGetValue(castEndTarget, out SpellTargetEntry? mainEntry) ? mainEntry.Miss : null,
-            targetEffects.Count == 0);
-        var procOutcomes = targetEffects.Select(pair => (pair.Key, pair.Value.Miss)).ToList();
-        if (spell.IsChanneled && !cast.IsTriggered)
-        {
-            HandleAddTargetTriggerAuras(cast, procOutcomes);
-        }
-
-        int duration = cast.Duration;
-        if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
-        {
-            cast.State = SpellCastState.Casting;
-            cast.Timer = duration;
-            cast.ElapsedMs = 0;
-            SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
-            cast.RememberCastPosition(); // vmangos Spell.cpp:4108-4110: the channel's movement check starts here
-            if (caster is Player player)
-            {
-                player.Session.Send(WorldOpcode.MsgChannelStart, SpellPackets.BuildChannelStart(spell.Id, (uint)duration));
-            }
-
-            caster.SetUInt64(UpdateFields.UnitFieldChannelObject, (unitTarget ?? caster).Guid.Value);
-            caster.SetUInt32(UpdateFields.UnitChannelSpell, spell.Id);
-        }
-
+    /// <summary>
+    /// The effect half of <see cref="Cast"/>: each target in turn takes its effects, its miss handling or its reflect. <paramref name="currentFaultTarget"/>
+    /// is updated before the target is touched, so a throw names that target in the fault record.
+    /// </summary>
+    private void ApplyToTargets(SpellCast cast, Dictionary<Unit, SpellTargetEntry> targetEffects, ref Unit? currentFaultTarget)
+    {
+        Unit caster = cast.Caster;
+        SpellInfo spell = cast.Spell;
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
             currentFaultTarget = target;
@@ -786,18 +850,7 @@ public sealed partial class SpellSystem
 
             if (entry.Miss != SpellMissInfo.None)
             {
-                FireSpellHitProcs(cast, target, entry.Miss, 0, 0, false, 0, entry.EffectMask, reflected: false);
-                SendNextMeleeSpellNoDamage(cast, target, entry.Miss);
-                // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
-                SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
-                InterruptTargetOfHostileSpell(cast, target, hit: false, dealsDamage: false); // rogue lane (vmangos Spell.cpp:1893-1897)
-                if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
-                {
-                    Damage.DealSpellDamage(caster, target, spell, 0, periodic: false, startsCombat: StartsCombat(caster, target));
-                }
-
-                HandleItemSpecialProc(cast, target, entry.Miss);
-                NotifyOutcome(cast, new SpellTargetOutcome(target, entry.Miss, 0, 0, false, entry.EffectMask));
+                ApplyMissedTarget(cast, target, entry);
                 continue;
             }
 
@@ -814,19 +867,31 @@ public sealed partial class SpellSystem
                 NotifyOutcome(cast, outcome);
             }
         }
+    }
 
-        HandleGroundEffects(cast, unitTarget); // vmangos "process ground" (Spell.cpp:3971-3976)
-        if (!spell.IsChanneled || cast.IsTriggered)
-        {
-            HandleAddTargetTriggerAuras(cast, procOutcomes); // vmangos Spell::finish (Spell.cpp:4368-4369)
-        }
+    /// <summary>A target the hit roll missed (or was immune): the miss procs, the miss packets, the zero-damage combat start and the observers.</summary>
+    private void ApplyMissedTarget(SpellCast cast, Unit target, SpellTargetEntry entry)
+    {
+        Unit caster = cast.Caster;
+        SpellInfo spell = cast.Spell;
+            FireSpellHitProcs(cast, target, entry.Miss, 0, 0, false, 0, entry.EffectMask, reflected: false);
+            SendNextMeleeSpellNoDamage(cast, target, entry.Miss);
+            // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
+            SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
+            InterruptTargetOfHostileSpell(cast, target, hit: false, dealsDamage: false); // rogue lane (vmangos Spell.cpp:1893-1897)
+            if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
+            {
+                Damage.DealSpellDamage(caster, target, spell, 0, periodic: false, startsCombat: StartsCombat(caster, target));
+            }
 
-        // ranged (autorepeat lane): a non-triggered cast with the combat interrupt bit restarts the melee swing (vmangos Spell.cpp:3805-3810).
-        if (!cast.IsTriggered && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Combat) && !RangedSpellFacts.DoesNotResetCombatTimers(spell))
-        {
-            caster.Map?.FindUpdater<Combat.MapCombat>()?.ResetMeleeTimersAfterCast(caster);
-        }
+            HandleItemSpecialProc(cast, target, entry.Miss);
+            NotifyOutcome(cast, new SpellTargetOutcome(target, entry.Miss, 0, 0, false, entry.EffectMask));
+    }
 
+    /// <summary>Spell::TakeCastItem for <see cref="Cast"/>: runs after the effects and SMSG_SPELL_GO.</summary>
+    private void ConsumeCastItem(SpellCast cast)
+    {
+        Unit caster = cast.Caster;
         // vmangos Spell::TakeCastItem, after the effects and SMSG_SPELL_GO (Spell.cpp:3876-3878). Cancellation and failed
         // completion therefore leave both charges and stack count untouched; a multi-spell item use consumes once.
         if (!cast.IsTriggered && cast.CastItem is { } consumed && caster is Player owner)
@@ -843,21 +908,6 @@ public sealed partial class SpellSystem
                     cast.CastItem = null; // vmangos Spell::TakeCastItem -> ClearCastItem (Spell.cpp:5045-5047)
                 }
             }
-        }
-
-        if (cast.State != SpellCastState.Casting)
-        {
-            Finish(cast);
-        }
-
-        return SpellCastResult.CastOk;
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record("spell.script", ex);
-            RecordSpellScriptFault("Cast", ex, spell, caster, currentFaultTarget);
-            Finish(cast);
-            throw;
         }
     }
 
@@ -1576,58 +1626,6 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// vmangos SpellCaster::IsSpellReady + HasGCD: no running spell cooldown, category cooldown or
-    /// global cooldown of the spell's StartRecoveryCategory.
-    /// </summary>
-    public bool IsSpellReady(Unit unit, SpellInfo spell)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        ArgumentNullException.ThrowIfNull(spell);
-        return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell);
-    }
-
-    /// <summary>
-    /// vmangos SpellCaster::IsSpellReady proper (SpellCaster.cpp:2487-2515): <see cref="IsSpellReady(Unit, SpellInfo)"/> without the global
-    /// cooldown, which vmangos keeps apart (HasGCD).
-    /// </summary>
-    public bool IsSpellReadyIgnoringGlobalCooldown(Unit unit, SpellInfo spell)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        ArgumentNullException.ThrowIfNull(spell);
-        return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell, includeGlobal: false);
-    }
-
-    private bool IsSpellReady(UnitSpellState state, SpellInfo spell, uint? itemCategory = null, Item? castItem = null, bool includeGlobal = true)
-    {
-        ItemSpellCooldown cooldown = ItemSpellCooldowns.Pick(spell, castItem);
-        // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
-        if (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(state.Unit, spell.Id))
-        {
-            return false;
-        }
-
-        uint now = NowMs;
-        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
-        {
-            return false;
-        }
-
-        // crafting lane: an item spell may carry its own category (Player.cpp:22139-22160); an explicit item use passes it.
-        uint category = itemCategory ?? cooldown.Category;
-        if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && until > now)
-        {
-            return false;
-        }
-
-        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
-        {
-            return false;
-        }
-
-        return !includeGlobal || !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
-    }
-
-    /// <summary>
     /// The explicit-target rules this round adds after range and line of sight (vmangos
     /// Spell::CheckCast / CheckTarget): party- and raid-only targets must be in the caster's
     /// group, and a client-requested dispel-only spell needs something to dispel.
@@ -1808,267 +1806,6 @@ public sealed partial class SpellSystem
         }
     }
 
-    /// <summary>vmangos Player::AddGCD (see <see cref="SpellConstants.GlobalCooldownCategory"/>).</summary>
-    private void AddGlobalCooldown(UnitSpellState state, SpellInfo spell)
-    {
-        if (state.Unit is Player { Cheats: not PlayerCheats.None } cheater && cheater.HasCheat(PlayerCheats.NoCooldown))
-        {
-            return; // vmangos Spell::prepare (Spell.cpp:3492): no GCD under the no-cooldown cheat
-        }
-
-        int duration = (int)spell.StartRecoveryTime;
-        if (spell.StartRecoveryCategory == 0 && duration == 0)
-        {
-            return;
-        }
-
-        // vmangos Player::AddGCD (Player.cpp:22101-22105): SPELLMOD_GLOBAL_COOLDOWN before the haste scaling, so a modified
-        // duration no longer equals 1500 and is not scaled.
-        duration = ModInt(state.Unit, spell, SpellModOp.GlobalCooldown, duration);
-
-        if (spell.StartRecoveryCategory == SpellConstants.GlobalCooldownCategory && duration == 1500
-            && spell.DamageClass is not (SpellDamageClass.Melee or SpellDamageClass.Ranged)
-            && !spell.HasAttribute(SpellAttributes.UsesRangedSlot) && !spell.HasAttribute(SpellAttributes.IsAbility))
-        {
-            duration = Math.Clamp((int)(duration * CastSpeed(state.Unit)), 1000, 1500);
-        }
-
-        if (duration < 1)
-        {
-            return;
-        }
-
-        duration = Math.Max(1, duration - (int)MapUpdateIntervalMs);
-        state.GlobalCooldowns[spell.StartRecoveryCategory] = NowMs + (uint)duration;
-    }
-
-    /// <summary>
-    /// vmangos Spell::SendSpellCooldown → SpellCaster::AddCooldown: start the spell and category
-    /// cooldowns unless the spell is passive. The client starts its own timers from SMSG_SPELL_GO
-    /// for casts it requested (vmangos sends nothing then); for server-initiated (triggered) casts
-    /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
-    /// COOLDOWN_ON_EVENT spells are not started here: their event (the aura fading, StartCooldownOnAuraEnd; a created object going, RemoveSpellObject) calls this with onEvent.
-    /// </summary>
-    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, int? itemCooldownMs = null,
-        int? itemCategoryCooldownMs = null, uint? itemCategory = null, uint itemId = 0, bool onEvent = false, Item? castItem = null)
-    {
-        if (spell.IsPassive || (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && !onEvent))
-        {
-            return;
-        }
-
-        if (state.Unit is Player { Cheats: not PlayerCheats.None } cheater && cheater.HasCheat(PlayerCheats.NoCooldown))
-        {
-            return; // vmangos Spell::SendSpellCooldown (Spell.cpp:3993-3995): the no-cooldown cheat starts none
-        }
-
-        if (itemCooldownMs is < -1 || itemCategoryCooldownMs is < -1)
-        {
-            AnomalyLedger.Shared.Report(
-                "spell",
-                "cooldown-invalid",
-                FormatSpellSubject(spell.Id),
-                $"unit={FormatUnitSubject(state.Unit)} recoveryTime={spell.RecoveryTime} categoryRecoveryTime={spell.CategoryRecoveryTime} itemCooldownMs={itemCooldownMs} itemCategoryCooldownMs={itemCategoryCooldownMs}",
-                AnomalySeverity.Warning);
-        }
-
-        // ranged (hunter lane): a ranged-slot spell also waits out the weapon speed (Player.cpp:22193-22197).
-        // crafting lane: an item spell may carry its own category and times (Player.cpp:22139-22160): the explicit item-use values
-        // when given, else the cast item's template; an ItemPrototype cooldown of -1 means the Spell.dbc recovery (Player.cpp:22139).
-        ItemSpellCooldown picked = ItemSpellCooldowns.Pick(spell, castItem);
-        uint recovery = itemCooldownMs is { } itemRecovery ? (itemRecovery < 0 ? spell.RecoveryTime : (uint)itemRecovery) : picked.RecoveryTime;
-        recovery += RangedRecoveryMs(state.Unit, spell);
-        uint categoryRecovery = itemCategoryCooldownMs is { } itemCategoryRecovery
-            ? (itemCategoryRecovery < 0 ? spell.CategoryRecoveryTime : (uint)itemCategoryRecovery)
-            : picked.CategoryRecoveryTime;
-        uint category = itemCategory ?? picked.Category;
-        bool itemOwned = itemCategory is not null || itemCooldownMs is not null || itemCategoryCooldownMs is not null || castItem is not null;
-        if (recovery == 0 && categoryRecovery == 0)
-        {
-            return;
-        }
-
-        if (recovery > MaxReasonableCooldownMs || categoryRecovery > MaxReasonableCooldownMs)
-        {
-            AnomalyLedger.Shared.Report(
-                "spell",
-                "cooldown-invalid",
-                FormatSpellSubject(spell.Id),
-                $"unit={FormatUnitSubject(state.Unit)} recoveryMs={recovery} categoryRecoveryMs={categoryRecovery}",
-                AnomalySeverity.Warning);
-            // Report-only: the cooldown is applied unchanged (see the Math.Max clamps below).
-        }
-
-        // vmangos Player::AddCooldown (Player.cpp:22200-22206): the cooldown spell mod applies to the spell's own time when it
-        // has one, otherwise to the category time ("blizzlike code for choosing which is recTime > categoryRecTime").
-        if (recovery > 0)
-        {
-            recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)recovery), 0);
-        }
-        else if (category != 0 && categoryRecovery > 0)
-        {
-            categoryRecovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)categoryRecovery), 0);
-        }
-
-        uint now = NowMs;
-        if (recovery > 0)
-        {
-            state.SpellCooldowns[spell.Id] = now + recovery;
-        }
-
-        if (category != 0 && categoryRecovery > 0)
-        {
-            // vmangos CooldownMap::AddCooldown: a running category cooldown keeps its original owner and is only extended.
-            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || running <= now)
-            {
-                state.CategoryOwners[category] = spell.Id;
-            }
-
-            state.CategoryCooldowns[category] = now + categoryRecovery;
-        }
-
-        if (itemOwned)
-        {
-            state.CooldownOwners[spell.Id] = new ItemCooldownOwner(itemId != 0 ? itemId : castItem?.Entry ?? 0, category, spell.Id);
-        }
-        else
-        {
-            state.CooldownOwners.Remove(spell.Id);
-        }
-
-        if (triggered && state.Unit is Player player)
-        {
-            uint ms = Math.Max(recovery, categoryRecovery);
-            player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(spell.Id, ms)]));
-        }
-    }
-
-    /// <summary>Clear a spell's cooldown and its category cooldown, and tell the client (vmangos Player::RemoveSpellCooldown → SMSG_CLEAR_COOLDOWN).</summary>
-    public void ClearCooldown(Unit unit, uint spellId)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        if (GetState(unit.Guid) is not { } state)
-        {
-            return;
-        }
-
-        bool removed = state.SpellCooldowns.Remove(spellId);
-        if (Store.Get(spellId) is { } spell)
-        {
-            uint category = state.CooldownOwners.GetValueOrDefault(spellId).Category;
-            uint cleared = category != 0 ? category : spell.Category;
-            removed |= state.CategoryCooldowns.Remove(cleared);
-            state.CategoryOwners.Remove(cleared);
-            state.CooldownOwners.Remove(spellId);
-        }
-
-        if (removed && unit is Player player)
-        {
-            player.Session.Send(WorldOpcode.SmsgClearCooldown, SpellPackets.BuildClearCooldown(spellId, player.Guid));
-        }
-    }
-
-    /// <summary>Running cooldowns for SMSG_INITIAL_SPELLS (vmangos Player::SendInitialSpells cooldown block).</summary>
-    public IReadOnlyList<InitialSpellCooldown> GetActiveCooldowns(Unit unit)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        if (GetState(unit.Guid) is not { } state)
-        {
-            return [];
-        }
-
-        uint now = NowMs;
-        var result = new List<InitialSpellCooldown>();
-        foreach ((uint spellId, uint until) in state.SpellCooldowns)
-        {
-            if (until > now && Store.Get(spellId) is { } spell)
-            {
-                ItemCooldownOwner owner = state.CooldownOwners.GetValueOrDefault(spellId);
-                uint categoryId = owner.Category != 0 ? owner.Category : spell.Category;
-                uint category = categoryId != 0 && state.CategoryCooldowns.TryGetValue(categoryId, out uint catUntil) && catUntil > now
-                    ? catUntil - now : 0;
-                result.Add(new InitialSpellCooldown(spellId, owner.ItemId, categoryId, until - now, category));
-            }
-        }
-
-        foreach ((uint spellId, ItemCooldownOwner owner) in state.CooldownOwners)
-        {
-            if ((state.SpellCooldowns.TryGetValue(spellId, out uint spellUntil) && spellUntil > now)
-                || owner.Category == 0 || !state.CategoryCooldowns.TryGetValue(owner.Category, out uint until) || until <= now
-                || Store.Get(spellId) is not { } spell)
-                continue;
-            result.Add(new InitialSpellCooldown(spellId, owner.ItemId, owner.Category, 0, until - now));
-        }
-
-        // A category cooldown nothing above lists (COOLDOWN_ON_EVENT spells such as Stealth, Prowl, Shadowmeld, Presence of Mind have no
-        // cooldown of their own, only the category; a relog restores just the category row): the client keeps it under a spell of the
-        // category (vmangos "client keeps track of category cd by original spellId"), so name the recorded owner or else a known spell.
-        foreach ((uint categoryId, uint categoryUntil) in state.CategoryCooldowns.OrderBy(c => c.Key))
-        {
-            if (categoryUntil <= now || result.Any(c => c.Category == categoryId))
-            {
-                continue;
-            }
-
-            uint spellId = state.CategoryOwners.TryGetValue(categoryId, out uint recordedOwner) && Store.Get(recordedOwner) is not null
-                ? recordedOwner : FindCategorySpell(unit, categoryId);
-            if (spellId != 0)
-            {
-                result.Add(new InitialSpellCooldown(spellId, 0, categoryId, 0, categoryUntil - now));
-            }
-        }
-
-        return result;
-    }
-
-    /// <summary>The lowest-id spell of a category the unit may use (a player's spellbook), COOLDOWN_ON_EVENT spells first; 0 when none.</summary>
-    private uint FindCategorySpell(Unit unit, uint category)
-    {
-        uint best = 0;
-        bool bestOnEvent = false;
-        foreach (SpellInfo candidate in Store.All)
-        {
-            if (candidate.Category != category || (unit is Player player && Spellbook is { } book && !book.HasSpell(player, candidate.Id)))
-            {
-                continue;
-            }
-
-            bool onEvent = candidate.HasAttribute(SpellAttributes.CooldownOnEvent);
-            if (best == 0 || (onEvent && !bestOnEvent) || (onEvent == bestOnEvent && candidate.Id < best))
-            {
-                best = candidate.Id;
-                bestOnEvent = onEvent;
-            }
-        }
-
-        return best;
-    }
-
-    private static void ExpireCooldowns(UnitSpellState state, uint now)
-    {
-        Expire(state.SpellCooldowns, now);
-        Expire(state.CategoryCooldowns, now);
-        Expire(state.GlobalCooldowns, now);
-        foreach ((SpellSchool school, uint until) in state.SchoolLockouts.ToArray())
-        {
-            if (until <= now)
-            {
-                state.SchoolLockouts.Remove(school);
-            }
-        }
-
-        static void Expire(Dictionary<uint, uint> cooldowns, uint now)
-        {
-            foreach ((uint key, uint until) in cooldowns.ToArray())
-            {
-                if (until <= now)
-                {
-                    cooldowns.Remove(key);
-                }
-            }
-        }
-    }
-
     // --- packets ------------------------------------------------------------------------
 
     /// <summary>
@@ -2188,44 +1925,6 @@ public sealed partial class SpellSystem
     public static bool IsExplicitUnitTarget(SpellImplicitTarget target)
         => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty
             or SpellImplicitTarget.UnitRaid or SpellImplicitTarget.UnitFriendChainHeal;
-
-    private static bool IsMoving(Player player)
-        => (player.Movement.Flags & (MovementFlags.Forward | MovementFlags.Backward | MovementFlags.StrafeLeft
-            | MovementFlags.StrafeRight | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0;
-
-    internal static float CastSpeed(Unit unit)
-    {
-        float speed = unit.GetFloat(UpdateFields.UnitModCastSpeed);
-        return speed > 0 ? speed : 1.0f;
-    }
-
-    private static float CombatReach(Unit unit)
-    {
-        float reach = unit.GetFloat(UpdateFields.UnitFieldCombatreach);
-        return reach > 0 ? reach : SpellConstants.DefaultCombatReach;
-    }
-
-    private static float Distance3D(Unit unit, float x, float y, float z)
-    {
-        float dx = unit.X - x;
-        float dy = unit.Y - y;
-        float dz = unit.Z - z;
-        return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
-    }
-
-    /// <summary>UNIT_FIELD_POWER1 + power type (vmangos Unit::GetPower).</summary>
-    public static uint GetPower(Unit unit, PowerType power)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        return ArcaneCore.Game.Combat.MapCombat.GetPower(unit, power);
-    }
-
-    /// <summary>vmangos Unit::SetPower: clamped to UNIT_FIELD_MAXPOWER1 + power type.</summary>
-    public static void SetPower(Unit unit, PowerType power, uint value)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        ArcaneCore.Game.Combat.MapCombat.SetPower(unit, power, value);
-    }
 
     private void ReportUnsupported(string kind, uint value, uint spellId)
     {

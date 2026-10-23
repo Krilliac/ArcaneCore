@@ -8,7 +8,7 @@ using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
-namespace ArcaneCore.Game.Maps;
+namespace ArcaneCore.Game.ClientErrors;
 
 /// <summary>Which kind of "no" a server packet tells the client.</summary>
 public enum ClientRejectionKind : byte
