@@ -460,7 +460,6 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     private const int MaxLfgPosts = 64;
-    private const uint LfgPostLifeMs = 30_000;
     private readonly List<LfgLine> _lfgPosts = [];
 
     /// <summary>How many times an LFG line's shared data was built (tests: one line heard by many bots builds it once).</summary>
@@ -497,17 +496,36 @@ public sealed partial class PlayerbotGroupCoordinator
         return new(PlayerbotLfgOfferOutcome.Pledged, role);
     }
 
+    /// <summary>How long an LFG post's entry (and its answer count) lives: as long as the post on the voice board.</summary>
+    private uint LfgPostLifeMs => (uint)_options.Chat.Voice.PostLifeSeconds * 1000u;
+
+    private void PruneLfgPosts(uint now)
+    {
+        uint life = LfgPostLifeMs;
+        for (int i = _lfgPosts.Count - 1; i >= 0; i--)
+            if (unchecked(now - _lfgPosts[i].CreatedMs) > life) _lfgPosts.RemoveAt(i);
+    }
+
+    /// <summary>The places held for a post (tests): its answer count after the expired entries are dropped, or -1 when it has no entry.</summary>
+    internal int LfgAnswersOf(Guid poster, long postId)
+    {
+        PruneLfgPosts(Now);
+        foreach (LfgLine entry in _lfgPosts)
+            if (entry.Poster == poster && entry.PostId == postId) return entry.Answers;
+        return -1;
+    }
+
     /// <summary>
     /// The entry of the post (at most <see cref="MaxLfgPosts"/>, the oldest dropped): found without allocating; made, or its data built again
     /// (the answer count kept), when the caller's waiting entry is another or a candidate has stopped waiting.
     /// </summary>
     private LfgLine LfgPostFor(Guid posterBotId, long postId, Waiting caller, Player poster, uint now)
     {
+        PruneLfgPosts(now);
         LfgLine? line = null;
         for (int i = _lfgPosts.Count - 1; i >= 0; i--)
         {
             LfgLine entry = _lfgPosts[i];
-            if (unchecked(now - entry.CreatedMs) > LfgPostLifeMs) { _lfgPosts.RemoveAt(i); continue; }
             if (entry.Poster == posterBotId && entry.PostId == postId) line = entry;
         }
 

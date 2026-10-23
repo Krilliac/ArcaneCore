@@ -534,6 +534,51 @@ public sealed class PlayerbotRecruitWorldTests
         Assert.Equal(2, await world.OnWorldAsync(() => (long)world.Coordinator.LfgLineBuilds) - buildsBefore); // once per post
     }
 
+    /// <summary>A post's answer count lives as long as the post (PostLifeSeconds), not 30 s: the poster speaking again later does not buy it a fresh set of answers.</summary>
+    [Fact]
+    public async Task AnLfgPostsAnswerCount_LivesAsLongAsThePost()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Still(options);
+            options.MaxBots = 30;
+            options.MaxRegisteredBots = 40;
+            options.Chat.Enabled = true;
+            options.Chat.Voice.PostLifeSeconds = 60;
+            options.Groups.Cooperation.RecruitBaseChance = 1f;
+            options.Groups.Cooperation.RecruitRadiusYards = 1500;
+            options.Groups.Cooperation.MaxLfgAnswersPerLine = 2;
+        });
+        var (tank, _) = await WaitingPairAsync(world);
+        var healers = new List<(Guid Id, string Name)>();
+        for (int i = 0; i < 8; i++)
+            healers.Add(await world.AddBotAsync("Lfglife" + (char)('a' + i), Human, Priest, 10, [LesserHeal, Smite], South + new Vector3(i, 0, 0)));
+        PlayerbotChat chat = world.Bots.Chat!;
+        Assert.True(await world.RunUntilAsync(10_000, () => chat.Responder is not null), await world.TraceAsync());
+
+        (long postedMs, int answers, int pledged) = await world.OnWorldAsync(() =>
+        {
+            long at = chat.NowMs;
+            chat.Voice.Post(tank.Id, new PlayerbotVoicePost(PlayerbotVoicePostKind.LookingForGroup, at, "the ogre", MinLevel: 1));
+            foreach (var hearer in healers)
+            {
+                Player hearing = world.Player(hearer.Id), speaking = world.Player(tank.Id);
+                chat.Hear(new BotHeardLine(hearer.Id, hearing.Guid, hearing.Name, ChatType.Channel, "LookingForGroup", speaking.Guid, speaking.Name,
+                    SenderIsBot: true, "LFM the ogre need heals", AddressesBot: false, FirstHearing: true));
+            }
+
+            var goalKey = world.Coordinator.WaitingBots.Single(w => w.BotId == tank.Id).Goal.Key;
+            return (at, world.Coordinator.LfgAnswersOf(tank.Id, at), healers.Count(h => world.Coordinator.IsPledged(h.Id, goalKey)));
+        });
+        Assert.InRange(answers, 1, 2);
+        Assert.Equal(answers, pledged); // pledges, not replies
+
+        await world.RunAsync(31_000);
+        Assert.Equal(answers, await world.OnWorldAsync(() => world.Coordinator.LfgAnswersOf(tank.Id, postedMs)));
+        await world.RunAsync(35_000);
+        Assert.Equal(-1, await world.OnWorldAsync(() => world.Coordinator.LfgAnswersOf(tank.Id, postedMs)));
+    }
+
     [Fact]
     public async Task AGuildCall_ForADungeonGroup_BringsAGuildmateWithoutTheWait_AndOnlyThen()
     {
