@@ -4,7 +4,7 @@
 -- from: 63
 -- to: 64
 -- owner: Characters.Playerbots.PlayerbotRelationDataModule
--- body-sha256: 9c54943e517508dc44c464c50f038209713e601ac6cfa3dccf463f412b96b4a0
+-- body-sha256: 8b6a6a32ab949b885f2d105d4fe4e7a4a812acd7fe6a4c1be05b140b11789be7
 -- apply: mysql <database> < this-file.sql   (the mysql/mariadb client; stops at the first error)
 
 -- guard: refuse any database that is not recorded at schema version 63
@@ -25,6 +25,8 @@ CREATE TABLE `playerbot_relation` (
     `Familiarity` int NOT NULL,
     `TrustPermille` smallint NOT NULL,
     `Flags` int NOT NULL,
+    `WarAffinity` smallint NOT NULL,
+    `WarFlags` int NOT NULL,
     `LastSeenUnixMs` bigint NOT NULL,
     `LastTopic` varchar(32) CHARACTER SET utf8mb4 NOT NULL,
     `Summary` varchar(160) CHARACTER SET utf8mb4 NOT NULL,

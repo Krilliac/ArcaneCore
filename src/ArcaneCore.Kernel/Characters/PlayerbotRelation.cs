@@ -14,6 +14,9 @@ public enum PlayerbotRelationFlags : int
     Grouped = 64,
     OtherFaction = 128,
     Rival = 256,
+
+    /// <summary>Only ever in <c>WarFlags</c>: the war layer has been seeded from the normal affinity (never set in <c>Flags</c>).</summary>
+    WarSeeded = 512,
 }
 
 /// <summary>
@@ -25,6 +28,8 @@ public enum PlayerbotRelationFlags : int
 /// <param name="TrustPermille">0..1000, 500 is neutral.</param>
 /// <param name="LastTopic">At most 32 characters.</param>
 /// <param name="Summary">At most 160 characters.</param>
+/// <param name="WarAffinity">-100..100: the affinity War Mode keeps on top of <c>Affinity</c> (read only while War Mode is on; meaningful once <c>WarFlags</c> has WarSeeded).</param>
+/// <param name="WarFlags">The war layer's flags: Rival and WarSeeded only.</param>
 public sealed record PlayerbotRelation(
     Guid BotId, int CharacterId, ulong OtherGuid, bool OtherIsBot,
     short Affinity,
@@ -33,7 +38,9 @@ public sealed record PlayerbotRelation(
     PlayerbotRelationFlags Flags,
     long LastSeenUnixMs,
     string LastTopic,
-    string Summary)
+    string Summary,
+    short WarAffinity = 0,
+    PlayerbotRelationFlags WarFlags = PlayerbotRelationFlags.None)
 {
     public const int MaxRowsPerBot = 1024;
     public const int MaxTopicLength = 32;

@@ -53,7 +53,7 @@ public sealed class PlayerbotSocialMemoryTests
         Assert.Equal(delta, r.Affinity);
         Assert.Equal(1, r.Familiarity);
         Assert.Equal(7, r.CharacterId);
-        Assert.Equal(500, r.TrustPermille);
+        Assert.Equal(eventName == "GroupSucceeded" ? 530 : 500, r.TrustPermille); // a finished run is also reliability
     }
 
     [Fact]
@@ -71,7 +71,8 @@ public sealed class PlayerbotSocialMemoryTests
     [Fact]
     public void Affinity_ClampsBothWays()
     {
-        (PlayerbotSocialMemory memory, _, _) = Make();
+        (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, _) = Make();
+        options.MaxDailyAffinityGainPerPair = 0;
         for (int i = 0; i < 30; i++) memory.Note(Bot, 7, 100, false, PlayerbotSocialEvent.HelpedBy);
         Assert.Equal(100, Get(memory, 100).Affinity);
         for (int i = 0; i < 30; i++) memory.Note(Bot, 7, 101, false, PlayerbotSocialEvent.KilledBy);
@@ -198,6 +199,9 @@ public sealed class PlayerbotSocialMemoryTests
     {
         (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, Clock clock) = Make();
         options.MaxRelationsPerBot = 16;
+        options.MaxDailyAffinityGainPerPair = 0;
+        options.AffinityHalfLifeDays = 365; // affinity drifts too: keep the bond and the grudge strong across the 200 days below
+        options.RivalHalfLifeDays = 3650;
         // 16 entries of familiarity 2, the first of them a grudge (affinity -100) and the second a bond.
         for (ulong other = 100; other < 116; other++)
         {

@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       661 keys
+#   WORLD                       675 keys
 #
 ###############################################################################
 
@@ -15282,6 +15282,42 @@ World.Playerbots.Social.Guilds.MaxBotGuilds = 4
 World.Playerbots.Social.Guilds.TargetSize = 25
 
 #
+#    World.Playerbots.Social.Memory.AffinityHalfLifeDays
+#        Description: Days after which a relation's affinity has drifted half-way back to 0 when it
+#                     is not refreshed (1..365). Rivals use RivalHalfLifeDays.
+#        Type: int
+#        Default: 14
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityHalfLifeDays = 14
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerAbandonedRun
+#        Description: Affinity change toward a member who left the group during a dungeon or raid
+#                     run (-100..0).
+#        Type: int
+#        Default: -10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerAbandonedRun = -10
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerApology
+#        Description: Affinity gained when someone the bot dislikes says sorry to it (a chat line or
+#                     the sorry emote), at most once per pair per UTC day (0..50).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerApology = 10
+
+#
 #    World.Playerbots.Social.Memory.AffinityPerChat
 #        Description: Affinity gained when a chat exchange with the bot happens (0..20).
 #        Type: int
@@ -15349,6 +15385,18 @@ World.Playerbots.Social.Memory.AffinityPerHelp = 8
 World.Playerbots.Social.Memory.AffinityPerKick = -10
 
 #
+#    World.Playerbots.Social.Memory.AffinityPerKillSteal
+#        Description: Affinity change toward a player who took a mob the bot was already fighting
+#                     (-100..0).
+#        Type: int
+#        Default: -6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerKillSteal = -6
+
+#
 #    World.Playerbots.Social.Memory.AffinityPerKilledBy
 #        Description: Affinity change toward someone who killed the bot in PvP (-100..0).
 #        Type: int
@@ -15370,6 +15418,18 @@ World.Playerbots.Social.Memory.AffinityPerKilledBy = -20
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.AffinityPerKilledThem = -5
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerNinjaLoot
+#        Description: Affinity change toward a groupmate who won a Need roll on an item it could not
+#                     use while the bot also needed it (-100..0).
+#        Type: int
+#        Default: -8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerNinjaLoot = -8
 
 #
 #    World.Playerbots.Social.Memory.AffinityPerRudeEmote
@@ -15538,6 +15598,18 @@ World.Playerbots.Social.Memory.Enabled = true
 World.Playerbots.Social.Memory.FamiliarityHalfLifeDays = 30
 
 #
+#    World.Playerbots.Social.Memory.MaxDailyAffinityGainPerPair
+#        Description: The most affinity one pair can gain in one UTC day, whatever the sources
+#                     (0..200; 0 is unlimited). Kept in memory only: a restart resets the day.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.MaxDailyAffinityGainPerPair = 20
+
+#
 #    World.Playerbots.Social.Memory.MaxRelationsPerBot
 #        Description: The most relations one bot keeps (16..1024). Past it the least familiar,
 #                     oldest entry that is not a strong bond or grudge is dropped.
@@ -15560,6 +15632,104 @@ World.Playerbots.Social.Memory.MaxRelationsPerBot = 256
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.RivalAffinity = -50
+
+#
+#    World.Playerbots.Social.Memory.RivalHalfLifeDays
+#        Description: The same half-life for a relation flagged Rival: a grudge fades slower
+#                     (1..3650).
+#        Type: int
+#        Default: 45
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.RivalHalfLifeDays = 45
+
+#
+#    World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe
+#        Description: Trust (permille) change toward the member who died first in a wipe
+#                     (-500..500).
+#        Type: int
+#        Default: -30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe = -30
+
+#
+#    World.Playerbots.Social.Memory.TrustPerGroupSuccess
+#        Description: Trust (permille) gained toward every member of a group that finished its run
+#                     (-500..500).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.TrustPerGroupSuccess = 30
+
+#
+#    World.Playerbots.Social.WarMode.ClearOnDisable
+#        Description: Wipe the war layer at the next checkpoint after War Mode is switched off (off
+#                     by default: the layer stays dormant and comes back when War Mode is switched
+#                     on again).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.ClearOnDisable = false
+
+#
+#    World.Playerbots.Social.WarMode.Enabled
+#        Description: Hold grudges harder and longer (off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.Enabled = false
+
+#
+#    World.Playerbots.Social.WarMode.NegativeMultiplier
+#        Description: While enabled, every negative affinity change is multiplied by this (1..10);
+#                     positive changes are untouched.
+#        Type: float
+#        Default: 3
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.NegativeMultiplier = 3
+
+#
+#    World.Playerbots.Social.WarMode.NeverForget
+#        Description: In the war layer negative affinity never drifts back toward 0 and the war
+#                     Rival flag is never cleared by drift, only by positive events that lift the
+#                     war affinity back over the threshold.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.NeverForget = true
+
+#
+#    World.Playerbots.Social.WarMode.RemoveCaps
+#        Description: In the war layer the daily affinity gain cap and the one-apology-a-day limit
+#                     are lifted, and while War Mode is on a full memory keeps every entry the war
+#                     layer holds a grudge against (it drops neutral and positive ones first).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.RemoveCaps = true
 
 #
 #    World.Playerbots.StallSeconds

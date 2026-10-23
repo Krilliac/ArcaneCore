@@ -25,7 +25,7 @@ public sealed class PlayerbotRelationStoreTests
 
     private static PlayerbotRelation Row(Guid bot, int characterId, ulong other, short affinity = 10) =>
         new(bot, characterId, other, other % 2 == 0, affinity, 4, 500, PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Rival,
-            1_760_000_000_000, "greeting", "Said hello.");
+            1_760_000_000_000, "greeting", "Said hello.", (short)(-affinity), PlayerbotRelationFlags.WarSeeded | PlayerbotRelationFlags.Rival);
 
     [Fact]
     public async Task RoundTrip_AndReplaceIsAtomicPerBot_AndCharacterDeleteCleans()

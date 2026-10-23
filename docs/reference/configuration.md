@@ -1653,14 +1653,19 @@ How to read the tables:
 | `World:Playerbots:Social:Guilds:InvitePolicy` | `PlayerbotInvitePolicy` | `GuildOrFriends` | live | Who may invite a bot into a guild, and whose charter a bot signs (`PlayerbotInvitePolicy.GuildOrFriends` by default): the same rules as `World:Playerbots:Party:InvitePolicy`, and the names in `World:Playerbots:Party:Allowlist` are always accepted. Another bot's invitation into a guild the founding bots are building is always accepted. Values: `None`, `GuildOrFriends`, `Anyone`. |
 | `World:Playerbots:Social:Guilds:MaxBotGuilds` | `int` | `4` | live | The most guilds led by a registered bot at once (0..64; 0 founds none). Lowering it disbands nothing: it only stops new foundings. |
 | `World:Playerbots:Social:Guilds:TargetSize` | `int` | `25` | live | The most members of a bot guild, pending invitations counted (2..500). |
+| `World:Playerbots:Social:Memory:AffinityHalfLifeDays` | `int` | `14` | live | Days after which a relation's affinity has drifted half-way back to 0 when it is not refreshed (1..365). Rivals use `RivalHalfLifeDays`. |
+| `World:Playerbots:Social:Memory:AffinityPerAbandonedRun` | `int` | `-10` | live | Affinity change toward a member who left the group during a dungeon or raid run (-100..0). |
+| `World:Playerbots:Social:Memory:AffinityPerApology` | `int` | `10` | live | Affinity gained when someone the bot dislikes says sorry to it (a chat line or the sorry emote), at most once per pair per UTC day (0..50). |
 | `World:Playerbots:Social:Memory:AffinityPerChat` | `int` | `1` | live | Affinity gained when a chat exchange with the bot happens (0..20). |
 | `World:Playerbots:Social:Memory:AffinityPerFriendlyEmote` | `int` | `2` | live | Affinity gained when someone makes a friendly emote at the bot (0..20). |
 | `World:Playerbots:Social:Memory:AffinityPerGroup` | `int` | `3` | live | Affinity gained when the bot is grouped with someone (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerGroupSuccess` | `int` | `5` | live | Affinity gained when a group the bot was in succeeds at its run (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerHelp` | `int` | `8` | live | Affinity gained toward someone who helped the bot, and toward someone the bot helped (0..50). |
 | `World:Playerbots:Social:Memory:AffinityPerKick` | `int` | `-10` | live | Affinity change toward a player who kicks the bot from a group (-100..0). |
+| `World:Playerbots:Social:Memory:AffinityPerKillSteal` | `int` | `-6` | live | Affinity change toward a player who took a mob the bot was already fighting (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerKilledBy` | `int` | `-20` | live | Affinity change toward someone who killed the bot in PvP (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerKilledThem` | `int` | `-5` | live | Affinity change toward someone the bot killed in PvP (-100..0); rivalry cuts both ways. |
+| `World:Playerbots:Social:Memory:AffinityPerNinjaLoot` | `int` | `-8` | live | Affinity change toward a groupmate who won a Need roll on an item it could not use while the bot also needed it (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerRudeEmote` | `int` | `-5` | live | Affinity change when someone makes a rude emote at the bot (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerStrike` | `int` | `-15` | live | Affinity change when the chat safety screen strikes a player's line to the bot (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerTrade` | `int` | `3` | live | Affinity gained when a trade with the bot completes (0..30). |
@@ -1675,8 +1680,17 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:ChatFamiliarityCooldownMinutes` | `int` | `10` | live | A chat exchange or emote raises familiarity at most once per pair in this window, in minutes (0..1440; 0 counts every one). |
 | `World:Playerbots:Social:Memory:Enabled` | `bool` | `true` | live | Record and use the memory (on by default). Off: nothing is noted and the speech ignores any stored relations. |
 | `World:Playerbots:Social:Memory:FamiliarityHalfLifeDays` | `int` | `30` | live | Days after which a relation's familiarity has halved when it is not refreshed (1..365). |
+| `World:Playerbots:Social:Memory:MaxDailyAffinityGainPerPair` | `int` | `20` | live | The most affinity one pair can gain in one UTC day, whatever the sources (0..200; 0 is unlimited). Kept in memory only: a restart resets the day. |
 | `World:Playerbots:Social:Memory:MaxRelationsPerBot` | `int` | `256` | live | The most relations one bot keeps (16..1024). Past it the least familiar, oldest entry that is not a strong bond or grudge is dropped. |
 | `World:Playerbots:Social:Memory:RivalAffinity` | `int` | `-50` | live | At or below this affinity the Rival flag is set; above it again, the flag is cleared (-100..0). |
+| `World:Playerbots:Social:Memory:RivalHalfLifeDays` | `int` | `45` | live | The same half-life for a relation flagged Rival: a grudge fades slower (1..3650). |
+| `World:Playerbots:Social:Memory:TrustPerFirstDeathInWipe` | `int` | `-30` | live | Trust (permille) change toward the member who died first in a wipe (-500..500). |
+| `World:Playerbots:Social:Memory:TrustPerGroupSuccess` | `int` | `30` | live | Trust (permille) gained toward every member of a group that finished its run (-500..500). |
+| `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer at the next checkpoint after War Mode is switched off (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
+| `World:Playerbots:Social:WarMode:Enabled` | `bool` | `false` | live | Hold grudges harder and longer (off by default). |
+| `World:Playerbots:Social:WarMode:NegativeMultiplier` | `float` | `3` | live | While enabled, every negative affinity change is multiplied by this (1..10); positive changes are untouched. |
+| `World:Playerbots:Social:WarMode:NeverForget` | `bool` | `true` | live | In the war layer negative affinity never drifts back toward 0 and the war Rival flag is never cleared by drift, only by positive events that lift the war affinity back over the threshold. |
+| `World:Playerbots:Social:WarMode:RemoveCaps` | `bool` | `true` | live | In the war layer the daily affinity gain cap and the one-apology-a-day limit are lifted, and while War Mode is on a full memory keeps every entry the war layer holds a grudge against (it drops neutral and positive ones first). |
 | `World:Playerbots:StallSeconds` | `int` | `120` | - | Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400). |
 | `World:Playerbots:Taxi:BackoffMinutes` | `int` | `10` | live | The longest, in minutes, a flight node is backed off after trips from it failed (the server refused the flight, the flight master could not be reached, or none stood where the node is): the per-node cap on the schedule of `World:Playerbots:Travel` (`TransitBackoffSeconds` doubling to `TransitBackoffMaxSeconds`). Only the failing node waits; the bot walks, or flies from another known node, meanwhile (1..1440; default 10). |
 | `World:Playerbots:Taxi:Enabled` | `bool` | `true` | live | Let bots discover flight masters they pass and fly between known nodes (on by default). Off: bots never talk to a flight master. |

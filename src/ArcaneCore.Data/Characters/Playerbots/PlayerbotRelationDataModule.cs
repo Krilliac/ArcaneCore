@@ -15,6 +15,8 @@ public sealed class PlayerbotRelationRow
     public int Familiarity { get; set; }
     public short TrustPermille { get; set; }
     public int Flags { get; set; }
+    public short WarAffinity { get; set; }
+    public int WarFlags { get; set; }
     public long LastSeenUnixMs { get; set; }
     public string LastTopic { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;
@@ -58,14 +60,14 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
         => (await db.Set<PlayerbotRelationRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false))
             .Select(row => new PlayerbotRelation(row.BotId, row.CharacterId, row.OtherGuid, row.OtherIsBot, row.Affinity,
                 row.Familiarity, row.TrustPermille, (PlayerbotRelationFlags)row.Flags, row.LastSeenUnixMs,
-                row.LastTopic, row.Summary)).ToArray();
+                row.LastTopic, row.Summary, row.WarAffinity, (PlayerbotRelationFlags)row.WarFlags)).ToArray();
 
     public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rows);
         if (rows.Count > PlayerbotRelation.MaxRowsPerBot
             || rows.Any(row => row is null || row.BotId != botId || botId == Guid.Empty || row.CharacterId <= 0
-                || row.Affinity is < -100 or > 100 || row.Familiarity < 0 || row.TrustPermille is < 0 or > 1000
+                || row.Affinity is < -100 or > 100 || row.WarAffinity is < -100 or > 100 || row.Familiarity < 0 || row.TrustPermille is < 0 or > 1000
                 || row.LastSeenUnixMs < 0 || row.LastTopic is null || row.Summary is null
                 || row.LastTopic.Length > PlayerbotRelation.MaxTopicLength || row.Summary.Length > PlayerbotRelation.MaxSummaryLength))
             throw new ArgumentException("Invalid or unbounded playerbot relation snapshot.", nameof(rows));
@@ -77,6 +79,7 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
         {
             BotId = row.BotId, CharacterId = row.CharacterId, OtherGuid = row.OtherGuid, OtherIsBot = row.OtherIsBot,
             Affinity = row.Affinity, Familiarity = row.Familiarity, TrustPermille = row.TrustPermille, Flags = (int)row.Flags,
+            WarAffinity = row.WarAffinity, WarFlags = (int)row.WarFlags,
             LastSeenUnixMs = row.LastSeenUnixMs, LastTopic = row.LastTopic, Summary = row.Summary,
         }));
         db.ChangeTracker.DetectChanges();

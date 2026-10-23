@@ -205,7 +205,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
             long ageMs = Math.Max(0, nowMs - r.LastSeenUnixMs);
             string age = ageMs >= 86_400_000 ? string.Create(c, $"{ageMs / 86_400_000}d") : ageMs >= 3_600_000 ? string.Create(c, $"{ageMs / 3_600_000}h") : string.Create(c, $"{ageMs / 60_000}m");
             yield return string.Create(c,
-                $"{who} ({(r.OtherIsBot ? "bot" : "player")}): affinity {r.Affinity}, familiarity {r.Familiarity}, trust {r.TrustPermille}, flags {r.Flags}, topic {(r.LastTopic.Length == 0 ? "-" : r.LastTopic)}, seen {age} ago");
+                $"{who} ({(r.OtherIsBot ? "bot" : "player")}): affinity {r.Affinity}, familiarity {r.Familiarity}, trust {r.TrustPermille}, flags {r.Flags}, topic {(r.LastTopic.Length == 0 ? "-" : r.LastTopic)}, seen {age} ago{((r.WarFlags & PlayerbotRelationFlags.WarSeeded) != 0 ? $", war affinity {r.WarAffinity}" : string.Empty)}");
         }
     }
 

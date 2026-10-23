@@ -189,8 +189,8 @@ internal sealed class PlayerbotFightSocial(Guid botId, PlayerbotSocialMemoryOpti
         for (int i = 0; i < _count; i++)
         {
             bool known = recorder.Memory.TryGet(_botId, _candidates[i], out PlayerbotRelation relation);
-            int affinity = known ? relation.Affinity : 0;
-            mayAsk[i] = PlayerbotCallForHelp.Askable(known, affinity, known && relation.Flags.HasFlag(PlayerbotRelationFlags.Rival));
+            int affinity = known ? recorder.Memory.EffectiveAffinity(relation) : 0;
+            mayAsk[i] = PlayerbotCallForHelp.Askable(known, affinity, known && recorder.Memory.IsRival(relation));
             if (!mayAsk[i]) continue;
             askable++;
             maxAffinity = Math.Max(maxAffinity, affinity);

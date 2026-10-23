@@ -4,7 +4,7 @@
 -- from: 63
 -- to: 64
 -- owner: Characters.Playerbots.PlayerbotRelationDataModule
--- body-sha256: fa52a282639bc19edfbc1bdd0fd192bb497b9a0d081b66d04621115229fa9a7d
+-- body-sha256: ca28d01c119742ee4d81bcd78c906f7bcb559db06ce60ff648923d3a54afc2d1
 -- apply: sqlite3 -bail <database-file> < this-file.sql
 
 BEGIN;
@@ -23,6 +23,8 @@ CREATE TABLE "playerbot_relation" (
     "Familiarity" INTEGER NOT NULL,
     "TrustPermille" INTEGER NOT NULL,
     "Flags" INTEGER NOT NULL,
+    "WarAffinity" INTEGER NOT NULL,
+    "WarFlags" INTEGER NOT NULL,
     "LastSeenUnixMs" INTEGER NOT NULL,
     "LastTopic" TEXT NOT NULL,
     "Summary" TEXT NOT NULL,

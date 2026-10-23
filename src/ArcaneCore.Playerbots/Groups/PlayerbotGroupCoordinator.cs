@@ -119,6 +119,41 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         });
     }
 
+    /// <summary>Every bot member remembers the blamed member: it died first and the group wiped, or it left the run before the end.</summary>
+    private void NoteAgainst(BotGroup group, ObjectGuid blamed, BotSocial.PlayerbotSocialEvent e)
+    {
+        BotSocial.PlayerbotSocialRecorder? social = Social;
+        if (social is not { Enabled: true } || blamed.IsEmpty) return;
+        social.Guarded(() =>
+        {
+            foreach (Member a in group.Members)
+                if (!a.Real && a.Guid != blamed) social.Note(a.Guid, blamed, e);
+        });
+    }
+
+    /// <summary>Each bot member remembers the role every other bot member played in this group (replacing the role it noted before); a real player's role is not known.</summary>
+    private void NoteRoles(BotGroup group)
+    {
+        BotSocial.PlayerbotSocialRecorder? social = Social;
+        if (social is not { Enabled: true }) return;
+        social.Guarded(() =>
+        {
+            foreach (Member a in group.Members)
+            {
+                if (a.Real) continue;
+                foreach (Member b in group.Members)
+                    if (!ReferenceEquals(a, b) && !b.Real) social.SetRole(a.Guid, b.Guid, RoleFlag(b.Role));
+            }
+        });
+    }
+
+    private static PlayerbotRelationFlags RoleFlag(PlayerbotGroupRole role) => role switch
+    {
+        PlayerbotGroupRole.Tank => PlayerbotRelationFlags.PrefersTank,
+        PlayerbotGroupRole.Healer => PlayerbotRelationFlags.PrefersHealer,
+        _ => PlayerbotRelationFlags.PrefersDamage,
+    };
+
     /// <summary>How often free bots are looked over for group goals and matched.</summary>
     internal const uint ScanMs = 2_000;
 
@@ -227,15 +262,20 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         _subscriptions = subscriptions;
         // The raid runs' entrance waivers, consulted by the teleport handler for exactly as long as this coordinator is attached.
         if (services.GetService<ITeleportWaiverRegistry>() is { } waivers) subscriptions.Add(waivers.Register(new RunWaiver(this)));
-        // A bot removed from its group by another member remembers who did it (a kick is the only uninvite that removes a member).
-        if (GroupManagerOrNull() is { } serverGroups)
-            subscriptions.Subscribe<Action<ObjectGuid, ObjectGuid>>(OnMemberKicked, h => serverGroups.MemberKicked += h, h => serverGroups.MemberKicked -= h);
         _world = world;
         _detaching = false;
         LoadEncounters();
     }
 
-    private void OnMemberKicked(ObjectGuid kicker, ObjectGuid kicked) => Social?.Note(kicked, kicker, BotSocial.PlayerbotSocialEvent.Kicked);
+    // Members the leader kicked since the last scan: leaving by a kick is not abandoning the run.
+    private readonly HashSet<ObjectGuid> _kicked = [];
+
+    private void OnMemberKicked(ObjectGuid kicker, ObjectGuid kicked)
+    {
+        if (_kicked.Count >= 64) _kicked.Clear();
+        _kicked.Add(kicked);
+        Social?.Note(kicked, kicker, BotSocial.PlayerbotSocialEvent.Kicked);
+    }
 
     public Task QuiesceAsync(CancellationToken cancellationToken) => Task.CompletedTask; // world-thread only: nothing runs in the background
 
@@ -1105,7 +1145,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             for (int i = 0; i < _membersScratch.Count; i++)
             {
                 Member member = _membersScratch[i];
-                if (!groupManager.AreInSameGroup(leader.Guid, member.Guid)) DropMember(group, member.BotId, "left", member.Guid);
+                if (!groupManager.AreInSameGroup(leader.Guid, member.Guid))
+                {
+                    // Leaving a run before its end, unkicked and with the leader still grouped (not a disband), is abandoning it.
+                    bool kicked = _kicked.Remove(member.Guid);
+                    if (!kicked && group.Run is { Finished: false } && !group.Succeeded && group.State != PlayerbotGroupState.Leaving && groupManager.GetGroup(leader.Guid) is not null)
+                        NoteAgainst(group, member.Guid, BotSocial.PlayerbotSocialEvent.AbandonedRun);
+                    DropMember(group, member.BotId, "left", member.Guid);
+                }
             }
             if (!_groups.Contains(group)) return;
             int botMembers = 0;
@@ -1496,16 +1543,28 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 alive++;
                 fighting |= player.Combat.IsInCombat;
             }
-            else dead++;
+            else
+            {
+                dead++;
+                if (group.FirstDeath.IsEmpty) group.FirstDeath = member.Guid;
+            }
         }
 
+        if (dead == 0) group.FirstDeath = default;
         if (alive + dead == 0 || dead == 0) return false;
         // The fight goes on, or has just ended with the members' deaths (the killer may not have turned on anyone yet).
         fighting |= group.InFight(Now);
         if (alive > 0 && (!fighting || dead * 2 < alive + dead)) return false;
         Note($"group {group.Id} is wiping: {dead} dead, {alive} alive");
         group.Run?.Apply(PlayerbotRunSignal.Wipe);
-        if (group.State != PlayerbotGroupState.Wiped) NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupWiped);
+        if (group.State != PlayerbotGroupState.Wiped)
+        {
+            NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupWiped);
+            NoteAgainst(group, group.FirstDeath, BotSocial.PlayerbotSocialEvent.DiedFirstInWipe);
+            NoteRoles(group);
+        }
+
+        group.FirstDeath = default;
         Enter(group, PlayerbotGroupState.Wiped);
         return true;
     }
@@ -1664,7 +1723,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
     private void Finish(BotGroup group, bool success, string reason, bool setAside = true)
     {
-        if (success && !group.Succeeded) NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupSucceeded);
+        if (success && !group.Succeeded)
+        {
+            NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupSucceeded);
+            NoteRoles(group);
+        }
+
         // A handed-over group never walks out or disbands (that would take the bots out of the player's group): it is released in place.
         if (group.Handoff is { } handoff)
         {
@@ -1980,6 +2044,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public uint MissingSinceMs { get; set; }
         public ObjectGuid Objective { get; private set; }
         public bool Succeeded { get; set; }
+
+        /// <summary>The first member seen dead in the current fight (empty while nobody is dead); the social memory blames it for a wipe.</summary>
+        public ObjectGuid FirstDeath { get; set; }
         public string? Reason { get; set; }
 
         public Member? Find(Guid botId)

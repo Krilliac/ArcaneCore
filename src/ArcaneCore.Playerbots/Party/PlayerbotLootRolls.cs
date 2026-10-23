@@ -31,6 +31,38 @@ internal static class PlayerbotLootRolls
         return true;
     }
 
+    /// <summary>A roll the server settled: who won it and with which vote.</summary>
+    internal readonly record struct RollResult(ObjectGuid Source, uint Slot, uint ItemId, ObjectGuid Winner, RollVote Vote);
+
+    /// <summary>SMSG_LOOT_ROLL_WON: u64 source, u32 slot, u32 item, u32 0, u32 0, u64 winner, u8 roll, u8 vote (GroupLootPackets.RollWon).</summary>
+    internal static bool TryReadWon(byte[] payload, out RollResult result)
+    {
+        result = default;
+        var reader = new PacketReader(payload);
+        if (!reader.TryReadUInt64(out ulong source) || !reader.TryReadUInt32(out uint slot) || !reader.TryReadUInt32(out uint item)
+            || !reader.TryReadUInt32(out _) || !reader.TryReadUInt32(out _) || !reader.TryReadUInt64(out ulong winner)
+            || !reader.TryReadByte(out _) || !reader.TryReadByte(out byte vote) || vote > (byte)RollVote.Greed) return false;
+        result = new RollResult(new ObjectGuid(source), slot, item, new ObjectGuid(winner), (RollVote)vote);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the winner of a roll took something it had no use for: it won on a Need vote, the bot had voted Need too (so the item was an upgrade or a
+    /// use for the bot), and the winner could not use the item (<see cref="WantsItem"/> false).
+    /// </summary>
+    internal static bool IsNinja(RollVote botVote, RollVote winnerVote, bool winnerCouldUse)
+        => botVote == RollVote.Need && winnerVote == RollVote.Need && !winnerCouldUse;
+
+    /// <summary>Whether <paramref name="player"/> could use <paramref name="itemId"/>: a wearable upgrade over its gear, a bag upgrade, or a learnable spell, recipe or mount item.</summary>
+    internal static bool WantsItem(Player player, uint itemId, SpellStore? store = null, SpellbookCache? spellbook = null)
+    {
+        if (player.Inventory.Templates.Find(itemId) is not { } template) return false;
+        PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        return PlayerbotItemScore.UpgradeGain(player, template, weights) is > PlayerbotItemScore.MinimumGain
+            || PlayerbotEquipment.IsBagUpgrade(player, template)
+            || PlayerbotEquipment.CanLearnFromItem(player, template, store, spellbook);
+    }
+
     /// <summary>The direct vote for <paramref name="choice"/> when no item inspection is available.</summary>
     internal static RollVote VoteFor(PlayerbotLootRoll choice) => choice switch
     {
@@ -51,18 +83,7 @@ internal static class PlayerbotLootRolls
         if (choice == PlayerbotLootRoll.Greed)
             return RollVote.Greed;
 
-        if (player.Inventory.Templates.Find(itemId) is { } template)
-        {
-            PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
-            if (PlayerbotItemScore.UpgradeGain(player, template, weights) is > PlayerbotItemScore.MinimumGain
-                || PlayerbotEquipment.IsBagUpgrade(player, template)
-                || PlayerbotEquipment.CanLearnFromItem(player, template, store, spellbook))
-            {
-                return RollVote.Need;
-            }
-        }
-
-        return RollVote.Greed;
+        return WantsItem(player, itemId, store, spellbook) ? RollVote.Need : RollVote.Greed;
     }
 
     /// <summary>CMSG_LOOT_ROLL: u64 loot source, u32 slot, u8 vote (GroupLootPackets.TryParseLootRoll).</summary>

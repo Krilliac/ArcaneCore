@@ -2720,6 +2720,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
+        // The bot chose this mob while it was nobody's and was already fighting it when another player's tag took it over: that player started second.
+        if (tagger is not null && _attacking && ReferenceEquals(_target, held))
+            Social?.Note(player.Guid, tagger.Guid, BotSocial.PlayerbotSocialEvent.KillSteal, tagger.Team != player.Team);
+
         LeaveSomeoneElses(player, held, now);
     }
 

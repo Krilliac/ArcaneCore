@@ -64,7 +64,7 @@ internal sealed class PlayerbotPartyAI
     internal static readonly WorldOpcode[] IntakeOpcodes =
     [
         WorldOpcode.SmsgGroupInvite, WorldOpcode.SmsgMessagechat, WorldOpcode.SmsgLootStartRoll, WorldOpcode.SmsgResurrectRequest,
-        WorldOpcode.SmsgTradeStatus, WorldOpcode.SmsgTextEmote,
+        WorldOpcode.SmsgTradeStatus, WorldOpcode.SmsgTextEmote, WorldOpcode.SmsgLootRollWon,
     ];
 
     /// <summary>The brain's melee approach distance (PlayerbotBrain: chase until within 4 yards, then swing).</summary>
@@ -317,6 +317,7 @@ internal sealed class PlayerbotPartyAI
                 case WorldOpcode.SmsgGroupInvite: OnInvite(player, packet.Payload); break;
                 case WorldOpcode.SmsgMessagechat: OnChat(player, packet.Payload); break;
                 case WorldOpcode.SmsgLootStartRoll: OnLootRoll(player, packet.Payload); break;
+                case WorldOpcode.SmsgLootRollWon: OnLootRollWon(player, packet.Payload); break;
                 case WorldOpcode.SmsgResurrectRequest: OnResurrectRequest(player, packet.Payload); break;
                 case WorldOpcode.SmsgTradeStatus: OnTradeStatus(player, packet.Payload); break;
                 case WorldOpcode.SmsgTextEmote: OnTextEmote(player, packet.Payload); break;
@@ -533,8 +534,13 @@ internal sealed class PlayerbotPartyAI
         BotSocial.PlayerbotEmoteMood mood = BotSocial.PlayerbotEmoteMoods.Classify(emote.TextEmote);
         if (mood is BotSocial.PlayerbotEmoteMood.Neutral or BotSocial.PlayerbotEmoteMood.Help) return;
         bool otherFaction = _session.World.FindOnlinePlayer(emote.Emoter) is { } emoter && emoter.Team != player.Team;
-        social.NoteById(_botId, player.Guid, emote.Emoter,
-            mood == BotSocial.PlayerbotEmoteMood.Friendly ? BotSocial.PlayerbotSocialEvent.FriendlyEmote : BotSocial.PlayerbotSocialEvent.RudeEmote, otherFaction);
+        BotSocial.PlayerbotSocialEvent noted = mood switch
+        {
+            BotSocial.PlayerbotEmoteMood.Friendly => BotSocial.PlayerbotSocialEvent.FriendlyEmote,
+            BotSocial.PlayerbotEmoteMood.Apology => BotSocial.PlayerbotSocialEvent.Apologized,
+            _ => BotSocial.PlayerbotSocialEvent.RudeEmote,
+        };
+        social.NoteById(_botId, player.Guid, emote.Emoter, noted, otherFaction);
     }
 
     /// <summary>The bot's facts for a line it starts itself (world thread; the social features' guild announcements and greetings).</summary>
@@ -582,8 +588,8 @@ internal sealed class PlayerbotPartyAI
             Chat.BotChatRole? role = relation.Flags.HasFlag(PlayerbotRelationFlags.PrefersTank) ? Chat.BotChatRole.Tank
                 : relation.Flags.HasFlag(PlayerbotRelationFlags.PrefersHealer) ? Chat.BotChatRole.Healer
                 : relation.Flags.HasFlag(PlayerbotRelationFlags.PrefersDamage) ? Chat.BotChatRole.Damage : null;
-            return new Chat.BotChatRelation(relation.Familiarity, relation.Affinity, BotSocial.PlayerbotSocialBands.Of(relation.Affinity),
-                relation.Flags.HasFlag(PlayerbotRelationFlags.Rival), role,
+            return new Chat.BotChatRelation(relation.Familiarity, social.Memory.EffectiveAffinity(relation), BotSocial.PlayerbotSocialBands.Of(social.Memory.EffectiveAffinity(relation)),
+                social.Memory.IsRival(relation), role,
                 relation.LastTopic.Length == 0 ? null : relation.LastTopic, relation.Summary.Length == 0 ? null : relation.Summary,
                 BotSocial.PlayerbotTraits.Band(traits.Sociability), BotSocial.PlayerbotTraits.Band(traits.Chattiness));
         }
@@ -728,9 +734,27 @@ internal sealed class PlayerbotPartyAI
 
         RollVote vote = GroupLootVote?.Invoke(player, roll.ItemId)
             ?? PlayerbotLootRolls.VoteFor(player, roll.ItemId, _options.Party.LootRoll, Services.Spells?.System.Store, Services.Spells?.Spellbook);
+        if (_myRolls.Count >= 32) _myRolls.Clear();
+        _myRolls[(roll.Source.Value, roll.Slot)] = vote;
         if (!Act(WorldOpcode.CmsgLootRoll, PlayerbotLootRolls.Vote(roll, vote), budgeted: false))
             PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.LootRollUncast,
                 string.Create(CultureInfo.InvariantCulture, $"the {vote} vote on item {roll.ItemId} (slot {roll.Slot}) was not dispatched"));
+    }
+
+    // The votes this bot cast on the rolls it was offered, until the roll is announced settled (bounded; a lost announcement just ages out).
+    private readonly Dictionary<(ulong Source, uint Slot), RollVote> _myRolls = [];
+
+    /// <summary>
+    /// A roll was won (SMSG_LOOT_ROLL_WON): when the bot had voted Need and a groupmate won it on a Need vote for an item that groupmate could not use,
+    /// the bot remembers it as a ninja looter (<see cref="BotSocial.PlayerbotSocialEvent.NinjaLoot"/>). Costs nothing for a roll the bot did not vote on.
+    /// </summary>
+    private void OnLootRollWon(Player player, byte[] payload)
+    {
+        if (!PlayerbotLootRolls.TryReadWon(payload, out PlayerbotLootRolls.RollResult won)) return;
+        if (!_myRolls.Remove((won.Source.Value, won.Slot), out RollVote mine) || Social is not { Enabled: true } social) return;
+        if (won.Winner == player.Guid || _session.World.FindOnlinePlayer(won.Winner) is not { } winner) return;
+        if (!PlayerbotLootRolls.IsNinja(mine, won.Vote, PlayerbotLootRolls.WantsItem(winner, won.ItemId, Services.Spells?.System.Store, Services.Spells?.Spellbook))) return;
+        social.NoteById(_botId, player.Guid, won.Winner, BotSocial.PlayerbotSocialEvent.NinjaLoot, winner.Team != player.Team);
     }
 
     /// <summary>mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted, any other declined.</summary>

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
@@ -133,6 +134,13 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         lock (_helpGate)
             if (_helped.Count > 0)
                 foreach (var key in _helped.Keys.Where(k => k.Victim == victim.Value).ToArray()) _helped.Remove(key);
+    }
+
+    /// <summary>Record the role <paramref name="other"/> played in a group with <paramref name="bot"/> (replacing the earlier one); nothing if the first is not a managed bot or no relation exists yet.</summary>
+    public void SetRole(ObjectGuid bot, ObjectGuid other, PlayerbotRelationFlags role)
+    {
+        if (!Enabled || !other.IsPlayer || !TryBot(bot, out Guid botId, out _)) return;
+        Guarded(() => Memory.SetRole(botId, other.Value, role));
     }
 
     /// <summary>Set the last topic and the bot-side summary of an existing relation.</summary>

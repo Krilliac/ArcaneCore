@@ -82,6 +82,33 @@ public sealed class PlayerbotSocialMemoryOptions
     /// <summary>Let a managed bot that is asked for help join the fight, by its helpfulness and its liking for the asker.</summary>
     public bool AnswerHelpEnabled { get; set; } = true;
 
+    /// <summary>Days after which a relation's affinity has drifted half-way back to 0 when it is not refreshed (1..365). Rivals use <see cref="RivalHalfLifeDays"/>.</summary>
+    public int AffinityHalfLifeDays { get; set; } = 14;
+
+    /// <summary>The same half-life for a relation flagged Rival: a grudge fades slower (1..3650).</summary>
+    public int RivalHalfLifeDays { get; set; } = 45;
+
+    /// <summary>Affinity gained when someone the bot dislikes says sorry to it (a chat line or the sorry emote), at most once per pair per UTC day (0..50).</summary>
+    public int AffinityPerApology { get; set; } = 10;
+
+    /// <summary>The most affinity one pair can gain in one UTC day, whatever the sources (0..200; 0 is unlimited). Kept in memory only: a restart resets the day.</summary>
+    public int MaxDailyAffinityGainPerPair { get; set; } = 20;
+
+    /// <summary>Affinity change toward a groupmate who won a Need roll on an item it could not use while the bot also needed it (-100..0).</summary>
+    public int AffinityPerNinjaLoot { get; set; } = -8;
+
+    /// <summary>Affinity change toward a player who took a mob the bot was already fighting (-100..0).</summary>
+    public int AffinityPerKillSteal { get; set; } = -6;
+
+    /// <summary>Affinity change toward a member who left the group during a dungeon or raid run (-100..0).</summary>
+    public int AffinityPerAbandonedRun { get; set; } = -10;
+
+    /// <summary>Trust (permille) gained toward every member of a group that finished its run (-500..500).</summary>
+    public int TrustPerGroupSuccess { get; set; } = 30;
+
+    /// <summary>Trust (permille) change toward the member who died first in a wipe (-500..500).</summary>
+    public int TrustPerFirstDeathInWipe { get; set; } = -30;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social:Memory";
@@ -104,6 +131,15 @@ public sealed class PlayerbotSocialMemoryOptions
         Check(BystanderRadiusYards, 5, 60, nameof(BystanderRadiusYards));
         Check(BystanderMinHealthPercent, 1, 100, nameof(BystanderMinHealthPercent));
         Check(BystanderMinSeconds, 1, 60, nameof(BystanderMinSeconds));
+        Check(AffinityHalfLifeDays, 1, 365, nameof(AffinityHalfLifeDays));
+        Check(RivalHalfLifeDays, 1, 3650, nameof(RivalHalfLifeDays));
+        Check(AffinityPerApology, 0, 50, nameof(AffinityPerApology));
+        Check(MaxDailyAffinityGainPerPair, 0, 200, nameof(MaxDailyAffinityGainPerPair));
+        Check(AffinityPerNinjaLoot, -100, 0, nameof(AffinityPerNinjaLoot));
+        Check(AffinityPerKillSteal, -100, 0, nameof(AffinityPerKillSteal));
+        Check(AffinityPerAbandonedRun, -100, 0, nameof(AffinityPerAbandonedRun));
+        Check(TrustPerGroupSuccess, -500, 500, nameof(TrustPerGroupSuccess));
+        Check(TrustPerFirstDeathInWipe, -500, 500, nameof(TrustPerFirstDeathInWipe));
         CheckUnit(CallForHelpBaseChance, nameof(CallForHelpBaseChance));
         CheckUnit(CallForHelpSociabilityWeight, nameof(CallForHelpSociabilityWeight));
 

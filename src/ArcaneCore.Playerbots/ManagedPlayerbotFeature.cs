@@ -210,7 +210,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// use from the live <c>World:Playerbots:Social:Memory</c> options and the feature's clock; any thread.
     /// </summary>
     internal BotSocial.PlayerbotSocialRecorder Social => _social ??= new BotSocial.PlayerbotSocialRecorder(
-        new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()), logger);
+        new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode), logger);
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
@@ -384,7 +384,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _chat.LineHeard += line =>
             {
                 if (line.AddressesBot && line.SenderGuid != line.BotGuid)
+                {
                     recorder.NoteById(line.BotId, line.BotGuid, line.SenderGuid, BotSocial.PlayerbotSocialEvent.ChatExchange);
+                    if (BotSocial.PlayerbotApology.IsApology(line.Text))
+                        recorder.NoteById(line.BotId, line.BotGuid, line.SenderGuid, BotSocial.PlayerbotSocialEvent.Apologized);
+                }
             };
         }
 
@@ -3173,12 +3177,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// a copy. A failure is recorded at <c>playerbot.social-memory</c> and logged; it never blocks a stop or a checkpoint, and the next
     /// call tries again (the saved version is only recorded after the write).
     /// </summary>
+    private int _warLayerLive = 1;
+
+    // War Mode on marks the war layer live; once it is off and ClearOnDisable is set, the next checkpoint wipes the layer (once).
+    private void ClearWarLayerIfSwitchedOff(BotSocial.PlayerbotSocialMemory memory)
+    {
+        BotSocial.PlayerbotWarModeOptions war = _options.Social.WarMode;
+        if (war.Enabled) Volatile.Write(ref _warLayerLive, 1);
+        else if (war.ClearOnDisable && Interlocked.Exchange(ref _warLayerLive, 0) == 1) memory.ClearWarLayers();
+    }
+
     private async Task SaveBotRelationsAsync(ActiveBot active)
     {
         Guid botId = active.Record.BotId;
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            ClearWarLayerIfSwitchedOff(memory);
             long version = memory.Version(botId);
             if (Volatile.Read(ref active.SavedRelationVersion) == version) return;
             IReadOnlyList<PlayerbotRelation> rows = memory.Snapshot(botId);

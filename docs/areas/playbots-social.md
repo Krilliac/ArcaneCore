@@ -134,6 +134,38 @@ brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.Player
   answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The function is in place and tested, but the answer is not wired to
   the brain's assist lane yet (that moves to P2); nothing acts on a help emote today.
 
+**Forgiveness, caps, bad group behaviour, reliability and War Mode** (all in `PlayerbotSocialMemory`, all live):
+
+- *Drift.* Affinity drifts toward 0 on the same lazy whole-day clock as familiarity, with half-life `AffinityHalfLifeDays` (14), or
+  `RivalHalfLifeDays` (45) for an entry flagged Rival, so a grudge fades slower. A read returns the drifted value and the Rival flag the
+  drifted affinity implies; a write folds the drift into the stored value first.
+- *Apology.* A player or bot the bot has negative affinity toward says sorry to it (an addressed line containing "sorry", "my bad",
+  "apologies" or "apologize", or the sorry text emote aimed at it by name) and gains `AffinityPerApology` (10), at most once per pair per UTC
+  day (the event is `Apologized`; it does nothing for a stranger or someone the bot likes). The line is matched and dropped, never stored.
+- *Daily cap.* A pair gains at most `MaxDailyAffinityGainPerPair` (20; 0 is unlimited) affinity per UTC day from all sources together; the rest
+  is dropped. Negative changes are never capped. The day counters are kept in memory only: a restart gives every pair a fresh day.
+- *Bad group behaviour.* `NinjaLoot` (`AffinityPerNinjaLoot`, -8): a groupmate won a Need roll (SMSG_LOOT_ROLL_WON, taken by the party AI) on an
+  item it could not use (no upgrade, bag upgrade or learnable item by the same test the bot votes with) while the bot had voted Need too.
+  `KillSteal` (`AffinityPerKillSteal`, -6): the bot had chosen a mob that was nobody's, was fighting it, and another player's tag took it
+  over (the brain's someone-else's-mob check) and the bot did not decide to help the tagger. `AbandonedRun` (`AffinityPerAbandonedRun`, -10):
+  a member left the server group while a coordinator run was in progress; not after the run finished, not when the leader kicked the member
+  and not when the leader's group was disbanded. Each other bot member of the group records it.
+- *Reliability.* Every bot member of a coordinator group that finished successfully gains `TrustPerGroupSuccess` (+30 permille) toward every
+  other member, and every other bot member loses `TrustPerFirstDeathInWipe` (-30) toward the member seen dead first in a wipe. Trust stays
+  within 0..1000. On a success and on a wipe each bot member also stores the role (tank, healer or damage) every other bot member played,
+  replacing the one it stored before; the role of a real player is not known and is left alone.
+- *War Mode* (`World:Playerbots:Social:WarMode`, **off by default**; a server mode for massive world PvP) is a separate layer. The normal layer
+  (affinity, trust, flags, drift, daily cap, apology limit) is always updated with the normal rules and War Mode never writes to it. Each
+  relation also has a war layer (`WarAffinity`, `WarFlags`: Rival and a seeded marker, stored in the same row). While `Enabled`, every event is
+  also applied to the war layer under the war rules: negative changes multiplied by `NegativeMultiplier` (3); with `NeverForget` negative war
+  affinity does not drift and the war Rival flag is not cleared by drift; with `RemoveCaps` the war layer has no daily cap and no
+  once-a-day apology limit, and a full memory keeps every entry the war layer holds a grudge against (only while War Mode is on). The war layer
+  is seeded from the normal affinity the first time an event reaches it. Every decision (speech facts, call for help) reads
+  `PlayerbotSocialMemory.EffectiveAffinity` and `IsRival`, which return the war layer only while War Mode is on. Switching it off makes the
+  normal layer effective at once; the war layer stays dormant (frozen) and comes back when it is switched on again, unless `ClearOnDisable` is
+  set, in which case the next checkpoint wipes it. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
+  never force-flags anyone for PvP and a player's opt-out still applies (the rivalry that acts on this memory is a later phase).
+
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
 split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
 

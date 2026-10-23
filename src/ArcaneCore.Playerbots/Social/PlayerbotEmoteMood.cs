@@ -12,6 +12,9 @@ internal enum PlayerbotEmoteMood : byte
     /// <summary>A rude gesture, a threat, a taunt: lowers affinity.</summary>
     Rude,
 
+    /// <summary>An apology (/sorry): not a mood either, it is what repairs a grudge (<see cref="PlayerbotSocialEvent.Apologized"/>).</summary>
+    Apology,
+
     /// <summary>A call for help (/helpme). Not a mood: it is what a bot in a losing fight asks with and what an answering bot reacts to.</summary>
     Help,
 }
@@ -33,6 +36,7 @@ internal static class PlayerbotEmoteMoods
         // rude, spit, chicken, threaten, insult, mock, violin, no, slap
         77 or 89 or 22 or 98 or 113 or 119 or 143 or 66 or 130 => PlayerbotEmoteMood.Rude,
         HelpMe => PlayerbotEmoteMood.Help,
+        PlayerbotApology.SorryEmote => PlayerbotEmoteMood.Apology,
         _ => PlayerbotEmoteMood.Neutral,
     };
 }
