@@ -26,6 +26,7 @@ public sealed class CreatureFlowAnomalyTests
     private const uint ReasonEvadeEntry = 950007;
     private const uint LastVictimEvadeEntry = 950008;
     private const uint WonFightsEvadeEntry = 950009;
+    private const uint FlaggedEvadeEntry = 950010;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -125,6 +126,30 @@ public sealed class CreatureFlowAnomalyTests
     }
 
     /// <summary>
+    /// Live 2026-10-22: Firemane mobs looped "SelectHostileTarget(no victim, 0 att)" every 2-3 s; something re-flagged combat without threat.
+    /// Each evade of the report now names the member that last put the creature in combat and how often since the flag was cleared.
+    /// </summary>
+    [Fact]
+    public void TheEvadeLoopReport_NamesWhoLastSetTheCreatureInCombat_AndHowOften()
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", FlaggedEvadeEntry);
+        using Fight f = Start(FlaggedEvadeEntry);
+
+        string setBy = "";
+        for (int i = 0; i < 3; i++)
+        {
+            f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
+            f.Map.Combat.AttackStop(f.Wolf); // an evade without a victim, as the live loops
+            setBy =f.Wolf.Combat.LastCombatSetBy ?? "";
+            Assert.NotEmpty(setBy);
+            EvadeOnce(f);
+        }
+
+        string detail = Assert.Single(capture.Notices).Detail;
+        Assert.Contains($", flagged by {setBy} x", detail);
+    }
+
+    /// <summary>
     /// Live 2026-10-18: six Stockade guards killed the four RP Defias Rioters one by one after each respawn, an evade after every kill (vmangos:
     /// the threat list is empty), and that was reported as an evade loop ~36 times an hour. Fights the creature won are no loop.
     /// </summary>
@@ -220,15 +245,31 @@ public sealed class CreatureFlowAnomalyTests
     }
 
     [Fact]
-    public void SparringCreaturesAndScriptedExecuteEvades_ClearHostileReferencesAndReportNoEvadeLoop()
+    public void SparringCreaturesAndScriptedEventAiEvades_ClearHostileReferencesAndReportNoEvadeLoop()
     {
         const uint GuardEntry = 948090;
         const uint DummyEntry = 948091;
         using AnomalyCapture guardCapture = Capture("creature/evade-loop", GuardEntry);
         using AnomalyCapture dummyCapture = Capture("creature/evade-loop", DummyEntry);
-        CreatureContent content = Content(
-            [Template(GuardEntry), Template(DummyEntry)],
-            [Spawn(1, GuardEntry, 5, 0), Spawn(2, DummyEntry, 8, 0)]);
+        CreatureContent content = new(
+            [Template(GuardEntry, t => t.AIName = CreatureAiFactory.EventAIName), Template(DummyEntry)],
+            [Spawn(1, GuardEntry, 5, 0), Spawn(2, DummyEntry, 8, 0)], [], [], [],
+            new CreatureAiContent(
+                [
+                    new CreatureAiEvent
+                    {
+                        Id = 1,
+                        CreatureId = GuardEntry,
+                        EventType = (byte)EventAiEventType.TimerInCombat,
+                        Param1 = 100,
+                        Param2 = 100,
+                        Param3 = 100,
+                        Param4 = 100,
+                        Chance = 100,
+                        Action1 = new CreatureAiAction((byte)EventAiActionType.Evade, 0, 0, 0),
+                    },
+                ],
+                []));
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
         using (world)
         {
@@ -239,18 +280,23 @@ public sealed class CreatureFlowAnomalyTests
 
             for (int i = 0; i < 4; i++)
             {
-                map.Combat.Attack(guard, dummy, melee: true);
+                Assert.True(system.AttackStart(guard, dummy), "the guard did not engage the dummy"); // through the AI, so EventAI is in combat
                 dummy.Combat.Threat.AddThreat(guard, 10f);
                 Assert.True(dummy.Combat.HasThreatList);
 
-                // Guard executes scripted ACTION_T_EVADE ("Execute") while sparring with the dummy (no player involved).
-                system.EnterEvadeMode(guard, "Execute");
+                // The guard's EventAI row runs ACTION_T_EVADE (the production reason, not a literal) while sparring with the dummy.
+                Assert.IsType<CreatureEventAI>(guard.AI);
+                guard.Relocate(-20, 0, 83.5f, 0, 0); // far from home, so the guard is still running back when the dummy evades
+                Run(world, 700); // the EventAI timers tick every 500 ms
+                Assert.Null(guard.Combat.Victim); // the evade action ended the fight
+                Assert.True(guard.IsInEvadeMode);
                 Assert.False(dummy.Combat.HasThreatList);
 
                 // Even if the dummy evades via SelectHostileTarget after its NPC opponent evaded:
                 dummy.Combat.LastVictimGuid = guard.Guid;
                 system.EnterEvadeMode(dummy, "SelectHostileTarget");
-                Run(world, 2_000);
+                Run(world, 8_000);
+                Assert.False(guard.IsEvading);
             }
 
             Assert.Empty(guardCapture.Notices);

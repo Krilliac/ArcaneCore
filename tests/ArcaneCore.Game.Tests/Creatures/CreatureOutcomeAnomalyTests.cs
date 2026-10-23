@@ -33,6 +33,8 @@ public sealed class CreatureOutcomeAnomalyTests
     private const uint StunnedEntry = 949012;
     private const uint IdleEntry = 949013;
     private const uint UnreachableChaserEntry = 949014;
+    private const uint ChaseStuckEntry = 949015;
+    private const uint WaypointStuckEntry = 949016;
     private const uint CombatEmptyEntry = 949020;
     private const uint CombatHealthyEntry = 949021;
     private const uint CombatEndedEntry = 949022;
@@ -87,7 +89,7 @@ public sealed class CreatureOutcomeAnomalyTests
 
     private static Scene Start(uint entry, Func<CreatureTemplate, CreatureTemplate>? shape = null, float z = 83.5f, byte movementType = 0,
         float wander = 0, ICreatureHeightProvider? height = null, IPathfinder? pathfinder = null, CreatureOptions? options = null,
-        IUnderMapClassifier? underMap = null)
+        IUnderMapClassifier? underMap = null, IEnumerable<(uint, CreatureWaypoint)>? waypoints = null)
     {
         CreatureTemplate template = Template(entry);
         if (shape is not null)
@@ -95,7 +97,7 @@ public sealed class CreatureOutcomeAnomalyTests
             template = shape(template);
         }
 
-        CreatureContent content = Content([template], [Spawn(1, entry, WolfX, 0, z, movementType: movementType, wander: wander)]);
+        CreatureContent content = Content([template], [Spawn(1, entry, WolfX, 0, z, movementType: movementType, wander: wander)], waypoints);
         WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
         var system = new CreatureMapSystem(map, content, options, height, random: new Random(1), underMap: underMap ?? new FixedUnderMap(UnderMapVerdict.Under(100f)));
@@ -277,6 +279,43 @@ public sealed class CreatureOutcomeAnomalyTests
         Assert.Equal(WolfX, s.Wolf.X, 3);
         Assert.False(s.Wolf.Motion.IsReachable);
         Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
+    public void AChaserThatMakesNoProgressTowardAPlayer_ReportsStuckChasing_NotStuck()
+    {
+        using Scene s = Start(ChaseStuckEntry, pathfinder: new FixedPathfinder(route: true));
+        using AnomalyCapture chasing = CaptureFor("creature/stuck-chasing", ChaseStuckEntry);
+        using AnomalyCapture pathWalk = CaptureFor("creature/stuck", ChaseStuckEntry);
+
+        s.Map.Combat.DealDamage(s.Player, s.Wolf, 1, direct: false);
+        s.Run(100);
+        s.Wolf.RunSpeed = 0.01f; // the chase leg then makes well under StuckMinProgressYards in StuckThresholdMs
+        s.Wolf.StartSpline(s.Player.X, 0, 83.5f, run: true, finalOrientation: null, splineId: 1, clockMs: s.System.ClockMs);
+        s.Run(CreatureAnomalies.StuckThresholdMs + 4_000);
+
+        Assert.Equal(MovementGeneratorType.Chase, s.Wolf.Motion.CurrentType);
+        Assert.False(MapCombat.CanReachWithMeleeAutoAttack(s.Wolf, s.Player));
+        AnomalyNotice notice = Assert.Single(chasing.Notices);
+        Assert.Contains("generator=Chase", notice.Detail);
+        Assert.Empty(pathWalk.Notices);
+    }
+
+    [Fact]
+    public void AWaypointWalkerThatMakesNoProgress_ReportsStuck_NotStuckChasing()
+    {
+        var node = new CreatureWaypoint(1, WolfX + 400f, 0, 83.5f, 100f, 0);
+        using Scene s = Start(WaypointStuckEntry, movementType: 2, waypoints: [(1u, node)]);
+        using AnomalyCapture pathWalk = CaptureFor("creature/stuck", WaypointStuckEntry);
+        using AnomalyCapture chasing = CaptureFor("creature/stuck-chasing", WaypointStuckEntry);
+
+        Assert.Equal(MovementGeneratorType.Waypoint, s.Wolf.Motion.CurrentType);
+        StartSlowWalk(s);
+        s.Run(CreatureAnomalies.StuckThresholdMs + 4_000);
+
+        AnomalyNotice notice = Assert.Single(pathWalk.Notices);
+        Assert.Contains("generator=Waypoint", notice.Detail);
+        Assert.Empty(chasing.Notices);
     }
 
     [Fact]

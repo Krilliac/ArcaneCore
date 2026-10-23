@@ -68,7 +68,11 @@ public sealed partial class CreatureMapSystem
         string victim = combat.Victim is { } v ? DescribeEvadeTarget(creature, v) : "no victim";
         string threat = combat.HasThreatList ? $", threat {combat.Threat.Entries.Count}" : "";
         string last = combat.Victim is null && !combat.LastVictimGuid.IsEmpty ? ", last " + DescribeLastVictim(creature, combat.LastVictimGuid) : "";
-        return $"{reason}({victim}, {combat.AttackersInternal.Count} att{threat}, {creature.Motion.CurrentType}{last})";
+        // Who last flagged the creature in combat, and how often since the flag was last cleared: an evade without a victim means something
+        // re-flagged combat without threat (live 2026-10-22: Firemane mobs 4328/4329/4331, SelectHostileTarget(no victim, 0 att) every 2-3 s).
+        // Only for an evade without a victim, to stay inside the ledger's 300-char text limit for the fights that matter.
+        string flagged = combat.Victim is null ? $", flagged by {combat.LastCombatSetBy ?? "?"} x{combat.CombatSetsSinceClear}" : "";
+        return $"{reason}({victim}, {combat.AttackersInternal.Count} att{threat}, {creature.Motion.CurrentType}{last}{flagged})";
     }
 
     /// <summary>Whether the evading creature's victim, or else the last unit it attacked, is dead (the creature won the fight).</summary>
@@ -82,7 +86,7 @@ public sealed partial class CreatureMapSystem
         UnitCombat combat = creature.Combat;
         Unit? last = combat.Victim
             ?? (combat.LastVictimGuid.IsEmpty ? null : Map.FindPlayer(combat.LastVictimGuid) as Unit ?? Map.FindObject(combat.LastVictimGuid) as Unit);
-        if (reason == "Execute" && combat.Victim is not Player && combat.LastVictimGuid.High != HighGuid.Player)
+        if (reason == CreatureAnomalies.ScriptedEvadeReason && combat.Victim is not Player && combat.LastVictimGuid.High != HighGuid.Player)
         {
             return true;
         }
@@ -345,7 +349,7 @@ public sealed partial class CreatureMapSystem
                 2 => $"chasing target {chaseVictim!.Guid} out of melee reach",
                 _ => "walking waypoint path",
             };
-            CreatureAnomalies.ReportStuck(creature, stuckMs, movingContext);
+            CreatureAnomalies.ReportStuck(creature, stuckMs, movingContext, chasing: movingKind == 2 || (movingKind == 1 && creature.Motion.CurrentType == MovementGeneratorType.Chase));
         }
     }
 

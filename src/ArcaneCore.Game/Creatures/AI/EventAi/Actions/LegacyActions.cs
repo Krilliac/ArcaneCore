@@ -211,7 +211,7 @@ public sealed class EvadeAction : EventAiActionHandler
         }
         else
         {
-            context.Ai.EnterEvadeMode();
+            context.System?.EnterEvadeMode(context.Me, CreatureAnomalies.ScriptedEvadeReason);
         }
 
         return true;
