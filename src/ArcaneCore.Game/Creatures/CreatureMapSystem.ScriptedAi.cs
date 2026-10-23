@@ -183,8 +183,8 @@ public sealed partial class CreatureMapSystem
         ArgumentNullException.ThrowIfNull(center);
         float rangeSq = range * range;
         return [.. _creatures.Values
-            .Where(c => c.Template.Entry == entry && c.DeathState != CreatureDeathState.Dead && DistanceSquared3D(center, c) <= rangeSq)
-            .OrderBy(c => DistanceSquared3D(center, c))];
+            .Where(c => c.Template.Entry == entry && c.DeathState != CreatureDeathState.Dead && WorldGeometry.DistanceSq3D(center, c) <= rangeSq)
+            .OrderBy(c => WorldGeometry.DistanceSq3D(center, c))];
     }
 
     /// <summary>
@@ -292,9 +292,9 @@ public sealed partial class CreatureMapSystem
         }
 
         return candidates
-            .Where(u => IsAggroTarget(creature, u) && DistanceSquared3D(creature, u) <= rangeSq
+            .Where(u => IsAggroTarget(creature, u) && WorldGeometry.DistanceSq3D(creature, u) <= rangeSq
                 && Map.Combat.Hooks.CanAttack(creature, u) && _ai.Hostility.IsHostile(creature, u) && InLineOfSight(creature, u))
-            .OrderBy(u => DistanceSquared3D(creature, u))
+            .OrderBy(u => WorldGeometry.DistanceSq3D(creature, u))
             .FirstOrDefault();
     }
 
@@ -305,13 +305,5 @@ public sealed partial class CreatureMapSystem
         {
             _logger.LogWarning("escort of creature {Entry} has no points ({Path}); it does not start", creature.Template.Entry, path);
         }
-    }
-
-    private static float DistanceSquared3D(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        return (dx * dx) + (dy * dy) + (dz * dz);
     }
 }

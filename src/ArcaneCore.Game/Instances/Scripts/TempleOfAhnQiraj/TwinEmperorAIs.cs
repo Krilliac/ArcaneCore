@@ -30,12 +30,6 @@ public abstract class TwinEmperorAI(Creature creature) : RaidBossAI(creature, Te
         SetCombatMovement(true);
     }
 
-    protected static bool Due(ref uint timer, uint diff)
-    {
-        timer = timer > diff ? timer - diff : 0;
-        return timer == 0;
-    }
-
     public override void MoveInLineOfSight(Unit who)
     {
         if (who is Player && Victim is null && _idleMs == 0 && MathF.Abs(Me.Z - who.Z) <= 7
@@ -106,7 +100,7 @@ public abstract class TwinEmperorAI(Creature creature) : RaidBossAI(creature, Te
             if (_afterTeleportTarget is { } nearest) Me.Combat.Threat.AddThreat(nearest, 3000);
         }
 
-        if (!Due(ref _idleMs, diffMs)) return;
+        if (!ScriptTimers.Due(ref _idleMs, diffMs)) return;
         SetMeleeEnabled(true);
         SetCombatMovement(true);
         if (_afterTeleportTarget is { IsAlive: true } target) AttackStart(target);
@@ -136,10 +130,10 @@ public abstract class TwinEmperorAI(Creature creature) : RaidBossAI(creature, Te
         if (_idleMs != 0) UpdateTeleportIdle(diffMs);
         else if (!UpdateVictim()) return;
 
-        if (Due(ref _enrageMs, diffMs) && Me.Map?.Combat.SpellMitigation?.HasAura(Me, 26662) != true
+        if (ScriptTimers.Due(ref _enrageMs, diffMs) && Me.Map?.Combat.SpellMitigation?.HasAura(Me, 26662) != true
             && _idleMs == 0 && Cast(26662, Me, triggered: true)) _enrageMs = 5 * 60_000;
 
-        if (_idleMs == 0 && Due(ref _bugMs, diffMs)) MutateBug();
+        if (_idleMs == 0 && ScriptTimers.Due(ref _bugMs, diffMs)) MutateBug();
         if (_idleMs == 0) UpdateTwin(diffMs);
     }
 
@@ -175,7 +169,7 @@ public sealed class VeklorAI : TwinEmperorAI
 
     private void HealBrother(uint diffMs)
     {
-        if (!Due(ref _healMs, diffMs) || Brother is not { IsAlive: true } brother || Me.Map?.Combat.SpellMitigation is not { } spells)
+        if (!ScriptTimers.Due(ref _healMs, diffMs) || Brother is not { IsAlive: true } brother || Me.Map?.Combat.SpellMitigation is not { } spells)
             return;
         float dx = brother.X - Me.X, dy = brother.Y - Me.Y;
         if (dx * dx + dy * dy > 60f * 60f) return;
@@ -186,7 +180,7 @@ public sealed class VeklorAI : TwinEmperorAI
 
     protected override void UpdateTwin(uint diffMs)
     {
-        if (Due(ref _teleportMs, diffMs))
+        if (ScriptTimers.Due(ref _teleportMs, diffMs))
         {
             _teleportMs = RandomDelay(30_000, 40_000);
             TeleportPair();
@@ -194,11 +188,11 @@ public sealed class VeklorAI : TwinEmperorAI
         }
         HealBrother(diffMs);
         if (Victim is null) return;
-        if (Due(ref _burstMs, diffMs) && RandomPlayerInRange(10f, skipTopThreat: false) is { } close
+        if (ScriptTimers.Due(ref _burstMs, diffMs) && RandomPlayerInRange(10f, skipTopThreat: false) is { } close
             && Cast(568, close)) _burstMs = RandomDelay(5000, 10_000);
-        if (Due(ref _blizzardMs, diffMs) && RandomPlayerInRange(45f, skipTopThreat: true) is { } player
+        if (ScriptTimers.Due(ref _blizzardMs, diffMs) && RandomPlayerInRange(45f, skipTopThreat: true) is { } player
             && Cast(26607, player)) _blizzardMs = RandomDelay(15_000, 20_000);
-        if (Due(ref _shadowMs, diffMs) && Cast(26006, Victim)) _shadowMs = RandomDelay(1800, 2500);
+        if (ScriptTimers.Due(ref _shadowMs, diffMs) && Cast(26006, Victim)) _shadowMs = RandomDelay(1800, 2500);
     }
 
     private Player? RandomPlayerInRange(float range, bool skipTopThreat)
@@ -231,8 +225,8 @@ public sealed class VeknilashAI : TwinEmperorAI
     protected override void UpdateTwin(uint diffMs)
     {
         if (Me.Map?.Combat.SpellMitigation?.HasAura(Me, 18943) != true) Cast(18943, Me, triggered: true);
-        if (Due(ref _strikeMs, diffMs) && Cast(26613, Victim)) _strikeMs = RandomDelay(8000, 18_000);
-        if (Due(ref _uppercutMs, diffMs) && Me.Combat.Threat.Entries.Select(e => e.Target)
+        if (ScriptTimers.Due(ref _strikeMs, diffMs) && Cast(26613, Victim)) _strikeMs = RandomDelay(8000, 18_000);
+        if (ScriptTimers.Due(ref _uppercutMs, diffMs) && Me.Combat.Threat.Entries.Select(e => e.Target)
             .FirstOrDefault(t => t.IsAlive && MathF.Abs(t.Z - Me.Z) < 7f
                 && (t.X - Me.X) * (t.X - Me.X) + (t.Y - Me.Y) * (t.Y - Me.Y) <= 5f * 5f) is { } melee
             && Cast(26007, melee)) _uppercutMs = RandomDelay(14_000, 29_000);

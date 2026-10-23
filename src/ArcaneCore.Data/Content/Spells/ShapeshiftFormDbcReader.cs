@@ -1,3 +1,4 @@
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Data.Content.Spells;
@@ -16,10 +17,7 @@ public static class ShapeshiftFormDbcReader
     public static ShapeshiftFormCatalog Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"build-5875 SpellShapeshiftForm.dbc requires {FieldCount} four-byte fields, found {file.FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"build-5875 SpellShapeshiftForm.dbc requires {FieldCount} four-byte fields, found {table.FieldCount}");
 
         var rows = new List<ShapeshiftFormInfo>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

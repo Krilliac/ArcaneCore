@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Stats;
 
 namespace ArcaneCore.Game.Spells;
@@ -39,9 +40,6 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class PercentStatAuras : ISpellHandlerModule
 {
-    /// <summary>mangos CLASSMASK_WAND_USERS: priest, mage and warlock take no ranged attack power.</summary>
-    private static readonly Class[] s_wandUsers = [Class.Priest, Class.Mage, Class.Warlock];
-
     /// <summary>Warrior Last Stand's triggered spell (HandleAuraModIncreaseHealth: the amount is also added to the current health).</summary>
     private const uint LastStandTriggered = 12976;
 
@@ -51,7 +49,7 @@ public sealed class PercentStatAuras : ISpellHandlerModule
     /// <summary>Dire Bear Form (Passive): as <see cref="BearFormPassive"/>.</summary>
     private const uint DireBearFormPassive = 9635;
 
-    private static readonly ConditionalWeakTable<SpellAura, Applied> s_applied = new();
+    private static readonly AppliedLedger<Applied> s_applied = new();
     private static readonly ConditionalWeakTable<Unit, IntellectArmorState> s_intellectArmor = new();
 
     /// <summary>What an aura contributed on apply: its amount and, for the pool auras, the group it went to (a druid's power type can change later).</summary>
@@ -91,17 +89,11 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         if (apply)
         {
             var record = new Applied(aura.Amount, group);
-            s_applied.AddOrUpdate(aura, record);
+            s_applied.Record(aura, record);
             return record;
         }
 
-        if (!s_applied.TryGetValue(aura, out Applied? previous))
-        {
-            return null;
-        }
-
-        s_applied.Remove(aura);
-        return previous;
+        return s_applied.TryTake(aura, out Applied? previous) ? previous : null;
     }
 
     // --- refresh: recompute a group's field from the flat sum and the ledger ---------------------
@@ -461,7 +453,7 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         group = UnitMods.End;
         if (!apply)
         {
-            if (!s_applied.TryGetValue(aura, out Applied? recorded) || recorded.Group == UnitMods.End)
+            if (!s_applied.TryGet(aura, out Applied? recorded) || recorded.Group == UnitMods.End)
             {
                 return false;
             }
@@ -576,7 +568,7 @@ public sealed class PercentStatAuras : ISpellHandlerModule
     private static void ApplyAttackPowerPercent(SpellAuraHolder holder, SpellAura aura, bool apply, bool ranged)
     {
         Unit target = holder.Target;
-        if ((ranged && Array.IndexOf(s_wandUsers, target.Class) >= 0) || Take(aura, apply) is not { } applied)
+        if ((ranged && RangedSpellFacts.IsWandUser(target.Class)) || Take(aura, apply) is not { } applied)
         {
             return;
         }

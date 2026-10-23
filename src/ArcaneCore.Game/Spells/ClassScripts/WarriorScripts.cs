@@ -39,7 +39,7 @@ public sealed class ExecuteDummyScript : ISpellScript
 
         SpellSystem system = context.System;
         float rage = SpellSystem.GetPower(context.Caster, PowerType.Rage) * context.Spell.Effects[0].DamageMultiplier;
-        int basePoints = (int)context.Spell.SimpleValue(0) + (int)Math.Floor(rage + system.Random.NextSingle()); // rand_dither
+        int basePoints = (int)context.Spell.SimpleValue(0) + SpellRounding.DitherFloor(rage, system.Random); // rand_dither
         system.CastCustomSpell(context.Caster, ExecuteDamage, SpellCastTargets.ForUnit(context.Target.Guid), basePoints);
     }
 }

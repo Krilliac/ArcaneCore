@@ -137,12 +137,12 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
             Me.Motion.MovePoint(11, -1.060547f, -229.9293f, -86.14094f, run: true);
             return;
         }
-        if (Phase == OnyxiaPhase.LiftingOff && Due(ref _transition, diffMs))
+        if (Phase == OnyxiaPhase.LiftingOff && ScriptTimers.Due(ref _transition, diffMs))
         {
             Phase = OnyxiaPhase.FlyingNorth; Raid.SetData(0, EncounterState.Special);
             _whelps = 3000; MoveTo(0, 10); return;
         }
-        if (Phase == OnyxiaPhase.LandingDelay && Due(ref _transition, diffMs))
+        if (Phase == OnyxiaPhase.LandingDelay && ScriptTimers.Due(ref _transition, diffMs))
         {
             Phase = OnyxiaPhase.Final; CombatMovement = true; SetMeleeEnabled(true);
             if (Victim is { } victim) Me.Motion.MoveChase(victim);
@@ -150,12 +150,12 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
         }
         if (Phase is OnyxiaPhase.FlyingNorth or OnyxiaPhase.Flight)
         {
-            if (Due(ref _whelps, diffMs)) SummonWave();
+            if (ScriptTimers.Due(ref _whelps, diffMs)) SummonWave();
         }
         if (Phase == OnyxiaPhase.Flight)
         {
             // ONYXIA_MOVEMENT: retried each update while a spell is being cast, otherwise not gated on the previous move.
-            if (Due(ref _movement, diffMs) && !IsCasting)
+            if (ScriptTimers.Due(ref _movement, diffMs) && !IsCasting)
             {
                 uint choice = Random(0, 2);
                 if (choice == 0)

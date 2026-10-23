@@ -1,3 +1,5 @@
+using ArcaneCore.Data.ClientData;
+
 namespace ArcaneCore.Data.Content.Spells;
 
 /// <summary>
@@ -246,17 +248,11 @@ public static class SpellDbcImporter
 
     private static void Require(DbcFile file, string name, int fields)
     {
-        if (file.FieldCount != fields)
-        {
-            throw new InvalidDataException($"{name} has {file.FieldCount} fields; build 5875 has {fields}");
-        }
+        file.RequireFields(fields, table => $"{name} has {table.FieldCount} fields; build 5875 has {fields}");
     }
 
     private static void RequireAtLeast(DbcFile file, string name, int fields)
     {
-        if (file.FieldCount < fields)
-        {
-            throw new InvalidDataException($"{name} has {file.FieldCount} fields; at least {fields} expected");
-        }
+        file.RequireAtLeast(fields, table => $"{name} has {table.FieldCount} fields; at least {fields} expected");
     }
 }

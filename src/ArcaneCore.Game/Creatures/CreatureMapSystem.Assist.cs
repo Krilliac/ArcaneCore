@@ -137,7 +137,7 @@ public sealed partial class CreatureMapSystem
         ArgumentNullException.ThrowIfNull(enemy);
         float range = radius + helper.BoundingRadius + caller.BoundingRadius;
         return CanAssistNow(helper, caller, enemy)
-            && DistanceSquared(helper, caller) <= range * range
+            && WorldGeometry.DistanceSq3D(helper, caller) <= range * range
             && InLineOfSight(caller, helper);
     }
 
@@ -177,7 +177,7 @@ public sealed partial class CreatureMapSystem
         {
             if (CanAssist(helper, creature, enemy, _options.FleeAssistanceRadius))
             {
-                float d = DistanceSquared(helper, creature);
+                float d = WorldGeometry.DistanceSq3D(helper, creature);
                 if (d < best)
                 {
                     best = d;

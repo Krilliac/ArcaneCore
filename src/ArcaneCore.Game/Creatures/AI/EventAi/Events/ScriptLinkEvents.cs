@@ -44,7 +44,7 @@ public sealed class OutOfCombatLineOfSightEvent : EventAiEventHandler
         }
 
         float range = holder.Param(1);
-        return EventAiSearch.DistanceSquared(context.Me, who) <= range * range && system.IsInLineOfSight(context.Me, who);
+        return WorldGeometry.DistanceSq3D(context.Me, who) <= range * range && system.IsInLineOfSight(context.Me, who);
     }
 
     public override bool Check(EventAiContext context, EventAiHolder holder, Unit? invoker)
@@ -198,7 +198,7 @@ public sealed class SelectAttackingTargetEvent : FriendlySearchEventHandler
 
     private static bool InRange(Creature me, Unit target, float min, float max)
     {
-        float distanceSquared = EventAiSearch.DistanceSquared(me, target);
+        float distanceSquared = WorldGeometry.DistanceSq3D(me, target);
         return distanceSquared >= min * min && distanceSquared <= max * max;
     }
 }
@@ -279,14 +279,6 @@ public sealed class SpellHitTargetEvent : EventAiEventHandler
 /// <summary>Searches shared by the event and action handlers.</summary>
 internal static class EventAiSearch
 {
-    public static float DistanceSquared(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        return (dx * dx) + (dy * dy) + (dz * dz);
-    }
-
     /// <summary>
     /// The living creatures of the map within <paramref name="radius"/> yards that the creature can assist (cmangos CanAssist: the same
     /// faction template, or a friendly one), itself included when asked.
@@ -303,7 +295,7 @@ internal static class EventAiSearch
         float rangeSquared = radius * radius;
         foreach (Creature other in system.Creatures)
         {
-            if (!other.IsAlive || (!includeSelf && ReferenceEquals(other, me)) || DistanceSquared(me, other) > rangeSquared)
+            if (!other.IsAlive || (!includeSelf && ReferenceEquals(other, me)) || WorldGeometry.DistanceSq3D(me, other) > rangeSquared)
             {
                 continue;
             }

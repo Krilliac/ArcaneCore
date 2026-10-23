@@ -124,7 +124,7 @@ public sealed class MoltenCoreBossAI(Creature creature, MoltenCoreInstance insta
         if (Me.Template.Entry == 11988 && (_threshold || Below(10)))
         {
             _threshold = true;
-            if (Due(ref _quake, diffMs) && Cast(19798)) _quake = 3000;
+            if (ScriptTimers.Due(ref _quake, diffMs) && Cast(19798)) _quake = 3000;
         }
         if (Me.Template.Entry == 11672 && Below(50) && Cast(17683)) Say(7865);
         if (Me.Template.Entry != 12056 || !_threshold) TickActions(diffMs);

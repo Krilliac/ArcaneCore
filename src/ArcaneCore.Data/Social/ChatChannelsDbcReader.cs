@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Social;
 
 namespace ArcaneCore.Data.Social;
@@ -23,10 +23,7 @@ public static class ChatChannelsDbcReader
     public static IReadOnlyList<ChatChannelRow> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"ChatChannels.dbc of build 5875 has {FieldCount} fields, this file has {file.FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"ChatChannels.dbc of build 5875 has {FieldCount} fields, this file has {table.FieldCount}");
 
         var rows = new List<ChatChannelRow>(file.RecordCount);
         var ids = new HashSet<uint>();

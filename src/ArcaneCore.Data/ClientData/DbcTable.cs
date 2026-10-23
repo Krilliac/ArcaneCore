@@ -1,4 +1,4 @@
-namespace ArcaneCore.Data.Content.Spells;
+namespace ArcaneCore.Data.ClientData;
 
 /// <summary>
 /// The rows of one client DBC keyed by their id (field 0), in file order. Built by a table's reader, which

@@ -62,18 +62,11 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
 {
     public const long DefaultMaxBytes = 1L * 1024 * 1024 * 1024;
 
-    private readonly ConcurrentDictionary<(string Layer, TileKey Tile), Lazy<Entry>> _entries = new();
-    private readonly LinkedList<(string Layer, TileKey Tile)> _lru = new();
-    private readonly Lock _lruGate = new();
-    private long _bytes;
+    private readonly CostBoundedLazyCache<(string Layer, TileKey Tile), Entry> _cache = new(maxBytes);
 
-    private sealed record Entry(LayerBuild Build, IReadOnlyList<byte[]> Wire, long Bytes)
-    {
-        // Set under _lruGate by Touch once Bytes are in _bytes; Drop subtracts only counted entries.
-        public bool Counted { get; set; }
-    }
+    private sealed record Entry(LayerBuild Build, IReadOnlyList<byte[]> Wire);
 
-    public long Bytes => Interlocked.Read(ref _bytes);
+    public long Bytes => _cache.Cost;
 
     /// <summary>The build for a tile (from cache when present). Unknown layers throw <see cref="KeyNotFoundException"/>.</summary>
     public LayerBuild Get(string layerId, TileKey tile, CancellationToken cancellationToken)
@@ -86,9 +79,9 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
     /// <summary>The status without building when the tile is not cached.</summary>
     public TileStatus Peek(string layerId, TileKey tile)
     {
-        if (_entries.TryGetValue((layerId, tile), out Lazy<Entry>? lazy) && lazy.IsValueCreated)
+        if (_cache.TryPeek((layerId, tile), out Entry? entry))
         {
-            return lazy.Value.Build.Status;
+            return entry.Build.Status;
         }
 
         return Source(layerId).PeekStatus(layerId, tile);
@@ -96,18 +89,7 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
 
     /// <summary>Drops cached tiles (all, one layer, or one tile) so the next request rebuilds them.</summary>
     public int Invalidate(string? layerId = null, TileKey? tile = null)
-    {
-        int removed = 0;
-        foreach ((string Layer, TileKey Tile) key in _entries.Keys)
-        {
-            if ((layerId is null || key.Layer == layerId) && (tile is null || key.Tile == tile))
-            {
-                removed += Drop(key) ? 1 : 0;
-            }
-        }
-
-        return removed;
-    }
+        => _cache.Invalidate(key => (layerId is null || key.Layer == layerId) && (tile is null || key.Tile == tile));
 
     private Entry Resolve(string layerId, TileKey tile, CancellationToken cancellationToken)
     {
@@ -117,93 +99,15 @@ public sealed class LayerCache(LayerRegistry registry, long maxBytes = LayerCach
             throw new ArgumentException($"Tile {tile} is outside the map grid.");
         }
 
-        (string, TileKey) key = (layerId, tile);
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Lazy<Entry> lazy = _entries.GetOrAdd(key, _ => new Lazy<Entry>(
-                () => Create(source, layerId, tile, cancellationToken), LazyThreadSafetyMode.ExecutionAndPublication));
-            try
-            {
-                Entry entry = lazy.Value;
-                Touch(key, lazy, entry);
-                return entry;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Another caller's build was cancelled; it is not cached, so build again for this caller.
-                _entries.TryRemove(new KeyValuePair<(string, TileKey), Lazy<Entry>>(key, lazy));
-            }
-            catch
-            {
-                // A cancelled or failed build is not cached.
-                _entries.TryRemove(new KeyValuePair<(string, TileKey), Lazy<Entry>>(key, lazy));
-                throw;
-            }
-        }
+        return _cache.GetOrLoad((layerId, tile), () => Create(source, layerId, tile, cancellationToken), cancellationToken: cancellationToken);
     }
 
-    private Entry Create(ILayerSource source, string layerId, TileKey tile, CancellationToken cancellationToken)
+    private static (Entry Value, long Cost) Create(ILayerSource source, string layerId, TileKey tile, CancellationToken cancellationToken)
     {
         LayerBuild build = source.Build(layerId, tile, cancellationToken);
         byte[][] wire = [.. build.Chunks.OrderBy(c => c.Part).Select(GeometryWire.Write)];
         long bytes = wire.Sum(w => (long)w.Length) + 256;
-        return new Entry(build, wire, bytes);
-    }
-
-    private void Touch((string, TileKey) key, Lazy<Entry> lazy, Entry entry)
-    {
-        List<(string, TileKey)> evict = [];
-        lock (_lruGate)
-        {
-            // An Invalidate that ran while this build was in flight already dropped the entry; counting it now would leak bytes.
-            if (!_entries.TryGetValue(key, out Lazy<Entry>? current) || !ReferenceEquals(current, lazy))
-            {
-                return;
-            }
-
-            if (!entry.Counted)
-            {
-                entry.Counted = true;
-                Interlocked.Add(ref _bytes, entry.Bytes);
-            }
-
-            _lru.Remove(key);
-            _lru.AddFirst(key);
-            long over = Interlocked.Read(ref _bytes) - maxBytes;
-            for (LinkedListNode<(string, TileKey)>? node = _lru.Last; over > 0 && node is not null && node != _lru.First; node = node.Previous)
-            {
-                if (_entries.TryGetValue(node.Value, out Lazy<Entry>? candidate) && candidate.IsValueCreated && candidate.Value.Counted)
-                {
-                    over -= candidate.Value.Bytes;
-                    evict.Add(node.Value);
-                }
-            }
-        }
-
-        foreach ((string, TileKey) victim in evict)
-        {
-            Drop(victim);
-        }
-    }
-
-    private bool Drop((string, TileKey) key)
-    {
-        lock (_lruGate)
-        {
-            if (!_entries.TryRemove(key, out Lazy<Entry>? lazy))
-            {
-                return false;
-            }
-
-            if (lazy.IsValueCreated && lazy.Value.Counted)
-            {
-                Interlocked.Add(ref _bytes, -lazy.Value.Bytes);
-            }
-
-            _lru.Remove(key);
-            return true;
-        }
+        return (new Entry(build, wire), bytes);
     }
 
     private ILayerSource Source(string layerId)

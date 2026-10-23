@@ -325,7 +325,7 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
         {
             if (!wrap.Target.IsAlive || !ReferenceEquals(wrap.Target.Map, Me.Map))
             { _wraps.Remove(wrap); continue; }
-            if (!Due(ref wrap.Timer, diffMs)) continue;
+            if (!ScriptTimers.Due(ref wrap.Timer, diffMs)) continue;
             if (!wrap.Cocoon)
             {
                 // ClassicDB z2815 spell 28622: both effects APPLY_AURA (stun, periodic damage) at UNIT_CASTER, so the wrapped player casts
@@ -346,8 +346,8 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
     {
         if (!Me.Combat.IsInCombat || !UpdateVictim()) return;
         if (_entry == 15952) ProcessWraps(diffMs);
-        if (_entry == 15953 && _embraced && Due(ref _secondaryTimer, diffMs)) _embraced = false;
-        if (_entry == 15956 && Due(ref _corpseTimer, diffMs))
+        if (_entry == 15953 && _embraced && ScriptTimers.Due(ref _secondaryTimer, diffMs)) _embraced = false;
+        if (_entry == 15956 && ScriptTimers.Due(ref _corpseTimer, diffMs))
         {
             if (_deadGuards.Count > 0)
             {
@@ -366,7 +366,7 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
 
         if (_entry == 15954 && _balcony)
         {
-            if (Due(ref _secondaryTimer, diffMs))
+            if (ScriptTimers.Due(ref _secondaryTimer, diffMs))
             {
                 Cast(29231, Me, triggered: true);
                 System?.RemoveAuras(Me, 29230);
@@ -378,7 +378,7 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
                 _phaseTimer = _phaseCount == 1 ? 110000u : 180000u;
                 NothGroundActions(true);
             }
-            else if (_balconyWaves < 2 && Due(ref _phaseTimer, diffMs))
+            else if (_balconyWaves < 2 && ScriptTimers.Due(ref _phaseTimer, diffMs))
             {
                 SpawnBalconyWave();
                 _balconyWaves++;
@@ -391,22 +391,22 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
             }
             return;
         }
-        if (_entry == 15936 && Due(ref _secondaryTimer, diffMs))
+        if (_entry == 15936 && ScriptTimers.Due(ref _secondaryTimer, diffMs))
         {
             Erupt();
             _secondaryTimer = _dance ? 3000u : 10000u;
         }
-        if (_entry == 15936 && !_dance && Due(ref _manaBurnTimer, diffMs))
+        if (_entry == 15936 && !_dance && ScriptTimers.Due(ref _manaBurnTimer, diffMs))
             _manaBurnTimer = ManaBurn() ? 3000u : 1000u;
         if (_entry == 15936 && !_dance)
             for (int i = _portTimers.Count - 1; i >= 0; i--)
             {
                 uint timer = _portTimers[i];
-                if (Due(ref timer, diffMs)) { _portTimers.RemoveAt(i); PortPlayers(); }
+                if (ScriptTimers.Due(ref timer, diffMs)) { _portTimers.RemoveAt(i); PortPlayers(); }
                 else _portTimers[i] = timer;
             }
 
-        if (Due(ref _phaseTimer, diffMs)) AdvancePhase();
+        if (ScriptTimers.Due(ref _phaseTimer, diffMs)) AdvancePhase();
         if (!_dance && !_balcony) TickActions(diffMs);
     }
 

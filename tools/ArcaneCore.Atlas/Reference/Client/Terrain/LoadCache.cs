@@ -1,3 +1,5 @@
+using ArcaneCore.Atlas.Core;
+
 namespace ArcaneCore.Atlas.Reference.Client.Terrain;
 
 /// <summary>
@@ -12,21 +14,10 @@ internal sealed class LoadCache<TKey, TValue>(int capacity)
     where TKey : notnull
     where TValue : class
 {
-    private readonly Dictionary<TKey, Entry> _entries = [];
-    private readonly LinkedList<TKey> _recent = new();
-    private readonly Lock _gate = new();
+    private readonly CostBoundedLazyCache<TKey, TValue> _cache = new(capacity, evictOnInsert: true);
 
     /// <summary>Number of cached keys (loaded or loading).</summary>
-    public int Count
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _entries.Count;
-            }
-        }
-    }
+    public int Count => _cache.Count;
 
     /// <summary>
     /// The value for <paramref name="key"/>, loading it with <paramref name="load"/> when it is not cached. Callers that
@@ -36,83 +27,12 @@ internal sealed class LoadCache<TKey, TValue>(int capacity)
     public TValue GetOrLoad(TKey key, Func<TValue> load, Func<TValue, bool>? keep = null)
     {
         ArgumentNullException.ThrowIfNull(load);
-        Lazy<TValue> lazy;
-        lock (_gate)
-        {
-            if (_entries.TryGetValue(key, out Entry? entry))
-            {
-                _recent.Remove(entry.Node);
-                _recent.AddFirst(entry.Node);
-                lazy = entry.Value;
-            }
-            else
-            {
-                lazy = new Lazy<TValue>(load, LazyThreadSafetyMode.ExecutionAndPublication);
-                _entries[key] = new Entry(lazy, _recent.AddFirst(key));
-                while (_entries.Count > capacity && _recent.Last is { } oldest)
-                {
-                    _recent.RemoveLast();
-                    _entries.Remove(oldest.Value);
-                }
-            }
-        }
-
-        TValue value;
-        try
-        {
-            value = lazy.Value;
-        }
-        catch
-        {
-            Forget(key, lazy);
-            throw;
-        }
-
-        if (keep is not null && !keep(value))
-        {
-            Forget(key, lazy);
-        }
-
-        return value;
+        return _cache.GetOrLoad(key, () => (load(), 1), keep);
     }
 
     /// <summary>The value when it is already loaded; never starts a load and does not change the recency order.</summary>
-    public bool TryPeek(TKey key, out TValue? value)
-    {
-        lock (_gate)
-        {
-            if (_entries.TryGetValue(key, out Entry? entry) && entry.Value.IsValueCreated)
-            {
-                value = entry.Value.Value;
-                return true;
-            }
-        }
-
-        value = null;
-        return false;
-    }
+    public bool TryPeek(TKey key, out TValue? value) => _cache.TryPeek(key, out value);
 
     /// <summary>Drops every cached value.</summary>
-    public void Clear()
-    {
-        lock (_gate)
-        {
-            _entries.Clear();
-            _recent.Clear();
-        }
-    }
-
-    private void Forget(TKey key, Lazy<TValue> lazy)
-    {
-        lock (_gate)
-        {
-            if (_entries.TryGetValue(key, out Entry? entry) && ReferenceEquals(entry.Value, lazy))
-            {
-                _recent.Remove(entry.Node);
-                _entries.Remove(key);
-            }
-        }
-    }
-
-    private sealed record Entry(Lazy<TValue> Value, LinkedListNode<TKey> Node);
+    public void Clear() => _cache.Clear();
 }

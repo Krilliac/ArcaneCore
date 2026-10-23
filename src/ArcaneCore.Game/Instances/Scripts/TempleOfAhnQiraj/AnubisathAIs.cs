@@ -152,16 +152,6 @@ public sealed class AnubisathDefenderAI : RaidBossAI
         else _shadowStormMs = RandomDelay(5, 8) * 1000;
     }
 
-    /// <summary>A disabled action (0) never fires; an armed one fires when its countdown reaches 0.</summary>
-    private static bool Due(ref uint timer, uint diffMs)
-    {
-        if (timer == 0) return false;
-        timer = timer > diffMs ? timer - diffMs : 0;
-        if (timer != 0) return false;
-        timer = 1; // stays armed until the cast succeeds and sets the next delay
-        return true;
-    }
-
     private Unit? RandomPlayer(bool skipTank)
     {
         Unit[] targets = [.. Me.Combat.Threat.Entries.Select(e => e.Target)
@@ -180,13 +170,13 @@ public sealed class AnubisathDefenderAI : RaidBossAI
             else if (Cast(Explode, Me)) _hpCheckDone = true;
         }
 
-        if (Due(ref _meteorMs, diffMs) && RandomPlayer(false) is { } meteorTarget && Cast(Meteor, meteorTarget, triggered: true))
+        if (ScriptTimers.DueLatched(ref _meteorMs, diffMs) && RandomPlayer(false) is { } meteorTarget && Cast(Meteor, meteorTarget, triggered: true))
             _meteorMs = RandomDelay(8, 12) * 1000;
-        if (Due(ref _plagueMs, diffMs) && RandomPlayer(true) is { } plagueTarget && Cast(Plague, plagueTarget, triggered: true))
+        if (ScriptTimers.DueLatched(ref _plagueMs, diffMs) && RandomPlayer(true) is { } plagueTarget && Cast(Plague, plagueTarget, triggered: true))
             _plagueMs = RandomDelay(8, 12) * 1000;
-        if (Due(ref _shadowStormMs, diffMs) && Cast(ShadowStorm, null, triggered: true)) _shadowStormMs = RandomDelay(6, 10) * 1000;
-        if (Due(ref _thunderclapMs, diffMs) && Cast(Thunderclap, null, triggered: true)) _thunderclapMs = RandomDelay(6, 10) * 1000;
-        if (Due(ref _summonMs, diffMs) && Cast(Coin() ? SummonSwarmguard : SummonWarrior, null, triggered: true))
+        if (ScriptTimers.DueLatched(ref _shadowStormMs, diffMs) && Cast(ShadowStorm, null, triggered: true)) _shadowStormMs = RandomDelay(6, 10) * 1000;
+        if (ScriptTimers.DueLatched(ref _thunderclapMs, diffMs) && Cast(Thunderclap, null, triggered: true)) _thunderclapMs = RandomDelay(6, 10) * 1000;
+        if (ScriptTimers.DueLatched(ref _summonMs, diffMs) && Cast(Coin() ? SummonSwarmguard : SummonWarrior, null, triggered: true))
             _summonMs = RandomDelay(12, 16) * 1000;
     }
 }

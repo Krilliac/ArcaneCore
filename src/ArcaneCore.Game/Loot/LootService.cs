@@ -1552,11 +1552,5 @@ public sealed partial class LootService : IViewerFieldFilter
     }
 
     internal static float Distance3D(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        float d = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)) - a.BoundingRadius - b.BoundingRadius;
-        return d > 0 ? d : 0;
-    }
+    => WorldGeometry.DistanceMinusRadii(a, b);
 }

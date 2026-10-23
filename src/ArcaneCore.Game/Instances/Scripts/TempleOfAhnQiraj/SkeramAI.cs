@@ -87,13 +87,6 @@ public sealed class SkeramAI : RaidBossAI
     private static float DistanceSquared(Unit a, Unit b)
         => (a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) + (a.Z - b.Z) * (a.Z - b.Z);
 
-    private static bool Due(ref uint timer, uint diffMs)
-    {
-        if (timer > diffMs) { timer -= diffMs; return false; }
-        timer = 0;
-        return true;
-    }
-
     private void Blink(Creature unit, uint spell)
     {
         unit.System?.CastSpell(unit, spell, unit, true);
@@ -158,7 +151,7 @@ public sealed class SkeramAI : RaidBossAI
                 if (_nextSplit == 0) System?.SayText(Me, -1531006);
             }
         }
-        if (Due(ref _arcane, diffMs))
+        if (ScriptTimers.Due(ref _arcane, diffMs))
         {
             int melee = Me.Map?.Players.Count(p => p.IsAlive && MapCombat.CanReachWithMeleeAutoAttack(Me, p)) ?? 0;
             int limit = (Me.Map?.Players.Count ?? 0) / 10;
@@ -166,10 +159,10 @@ public sealed class SkeramAI : RaidBossAI
         }
         if (Victim is { } victim && !MapCombat.CanReachWithMeleeAutoAttack(Me, victim))
         {
-            if (Due(ref _earthShock, diffMs)) _earthShock = Cast(26194, victim) ? 2000u : 0u;
+            if (ScriptTimers.Due(ref _earthShock, diffMs)) _earthShock = Cast(26194, victim) ? 2000u : 0u;
         }
         else _earthShock = 2000;
-        if (Due(ref _fulfillment, diffMs))
+        if (ScriptTimers.Due(ref _fulfillment, diffMs))
         {
             Player? closest = Me.Map?.Players.Where(p => p.IsAlive && DistanceSquared(Me, p) <= 1600)
                 .OrderBy(p => DistanceSquared(Me, p)).FirstOrDefault();
@@ -183,7 +176,7 @@ public sealed class SkeramAI : RaidBossAI
                 _fulfillment = RandomDelay(20500, 25000);
             }
         }
-        if (Due(ref _blink, diffMs))
+        if (ScriptTimers.Due(ref _blink, diffMs))
         {
             if (!_isImage) BlinkGroup();
             _blink = RandomDelay(10000, 18000);

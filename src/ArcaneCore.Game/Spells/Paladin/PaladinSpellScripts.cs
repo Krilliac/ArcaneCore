@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
 
 namespace ArcaneCore.Game.Spells.Paladin;
@@ -225,7 +226,7 @@ public sealed class HolyLightScript : ISpellScript
         if (context.Spell.SpellIconId == FlashOfLightIcon)
         {
             healSpell = FlashOfLightHeal;
-            heal = (int)Math.Floor(context.Value + system.Random.NextSingle()); // rand_dither(damage)
+            heal = SpellRounding.DitherFloor(context.Value, system.Random); // rand_dither(damage)
             heal += system.HasAura(context.Caster, LibramOfDivinity) ? 53 : 0;
             heal += system.HasAura(context.Caster, LibramOfLight) ? 83 : 0;
         }

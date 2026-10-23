@@ -85,7 +85,7 @@ public sealed class RagnarosAI(Creature creature, MoltenCoreInstance instance) :
     public override void OnKilledUnit(Unit victim) => Say(7626);
     public override void OnUpdate(uint diffMs)
     {
-        if (_intro > 0 && Due(ref _intro, diffMs))
+        if (_intro > 0 && ScriptTimers.Due(ref _intro, diffMs))
         {
             if (!_introYelled) { Say(7685); _introYelled = true; _intro = 3000; }
             else
@@ -97,7 +97,7 @@ public sealed class RagnarosAI(Creature creature, MoltenCoreInstance instance) :
         }
         if (_introPending) return;
         if (!Me.Combat.IsInCombat || !UpdateVictim()) return;
-        if (Due(ref _phaseTimer, diffMs))
+        if (ScriptTimers.Due(ref _phaseTimer, diffMs))
         {
             switch (Phase)
             {
@@ -126,7 +126,7 @@ public sealed class RagnarosAI(Creature creature, MoltenCoreInstance instance) :
         if (Phase == RagnarosPhase.Emerged)
         {
             TickActions(diffMs);
-            if (Due(ref _magma, diffMs))
+            if (ScriptTimers.Due(ref _magma, diffMs))
             {
                 _magma = 500;
                 if (Victim is { } victim && MapCombat.CanReachWithMeleeAutoAttack(Me, victim)) _rangeCheck = -1;

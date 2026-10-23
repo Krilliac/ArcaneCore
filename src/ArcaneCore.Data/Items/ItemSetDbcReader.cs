@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Data.Items;
@@ -26,10 +26,7 @@ public static class ItemSetDbcReader
     public static ItemSetCatalog Build(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"ItemSet.dbc has {file.FieldCount} fields, expected {FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"ItemSet.dbc has {table.FieldCount} fields, expected {FieldCount}");
 
         var rows = new List<ItemSetRecord>(file.RecordCount);
         HashSet<uint> seen = [];

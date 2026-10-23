@@ -127,12 +127,6 @@ public sealed class OuroAI : RaidBossAI
             system.ForcedDespawn(add, 0);
     }
 
-    private static bool Due(ref uint timer, uint diff)
-    {
-        timer = timer > diff ? timer - diff : 0;
-        return timer == 0;
-    }
-
     private void Submerge()
     {
         if (_submerged || _enraged || !Cast(26063, Me, triggered: true)) return;
@@ -177,8 +171,8 @@ public sealed class OuroAI : RaidBossAI
     {
         if (_submerged)
         {
-            Due(ref _invisMs, diffMs);
-            if (Due(ref _submergeMs, diffMs)) Emerge();
+            ScriptTimers.Due(ref _invisMs, diffMs);
+            if (ScriptTimers.Due(ref _submergeMs, diffMs)) Emerge();
             return;
         }
         if (!UpdateVictim()) return;
@@ -189,16 +183,16 @@ public sealed class OuroAI : RaidBossAI
             _summonBase = false;
         }
 
-        if (Due(ref _sweepMs, diffMs) && Cast(26103, Me)) _sweepMs = 20_500;
-        if (Due(ref _sandblastMs, diffMs) && Victim is Player victim && Cast(26102, victim))
+        if (ScriptTimers.Due(ref _sweepMs, diffMs) && Cast(26103, Me)) _sweepMs = 20_500;
+        if (ScriptTimers.Due(ref _sandblastMs, diffMs) && Victim is Player victim && Cast(26102, victim))
             _sandblastMs = RandomDelay(20_000, 25_000);
 
         if (!_enraged && HealthBelowPct(20) && Cast(26615, Me, triggered: true)) _enraged = true;
         if (_enraged)
         {
-            if (Due(ref _moundMs, diffMs) && Cast(26617, Me, triggered: true)) _moundMs = 10_000;
+            if (ScriptTimers.Due(ref _moundMs, diffMs) && Cast(26617, Me, triggered: true)) _moundMs = 10_000;
         }
-        else if (Due(ref _submergeMs, diffMs)) Submerge();
+        else if (ScriptTimers.Due(ref _submergeMs, diffMs)) Submerge();
 
         if (Victim is { } current && MapCombat.CanReachWithMeleeAutoAttack(Me, current))
             _noMeleeMs = Math.Max(3000u, _graceMs);
@@ -206,7 +200,7 @@ public sealed class OuroAI : RaidBossAI
         {
             if (RandomTarget() is { } target) Cast(26616, target);
         }
-        else if (Due(ref _noMeleeMs, diffMs)) Submerge();
+        else if (ScriptTimers.Due(ref _noMeleeMs, diffMs)) Submerge();
         _graceMs = _graceMs > diffMs ? _graceMs - diffMs : 0;
     }
 }
@@ -235,17 +229,11 @@ public sealed class OuroMoundAI(Creature creature) : CreatureAI(creature)
         }
         else _retargetMs -= diffMs;
 
-        if (Due(ref _despawnMs, diffMs))
+        if (ScriptTimers.Due(ref _despawnMs, diffMs))
         {
             DoCast(Me, 26060, triggered: true);
             System?.ForcedDespawn(Me, 0);
         }
-    }
-
-    private static bool Due(ref uint timer, uint diff)
-    {
-        timer = timer > diff ? timer - diff : 0;
-        return timer == 0;
     }
 }
 

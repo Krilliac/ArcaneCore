@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Channels;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Game.Entities;
@@ -108,10 +107,10 @@ public sealed class WorldSessionOptions
 public sealed partial class WorldSession : IPlayerSession
 {
     /// <summary>vmangos WorldSocket::handle_input_header rejects sizes outside [4, 0x2800].</summary>
-    public const int MaxClientPacketSize = 0x2800;
+    public const int MaxClientPacketSize = WorldFrameCodec.MaxClientPacketSize;
 
     /// <summary>The SMSG size field is 16 bits and counts the 2 opcode bytes.</summary>
-    public const int MaxServerPayload = ushort.MaxValue - 2;
+    public const int MaxServerPayload = WorldFrameCodec.MaxServerPayload;
 
     private static readonly NetProtectionOptions DefaultProtection = new();
 
@@ -331,8 +330,8 @@ public sealed partial class WorldSession : IPlayerSession
 
         int headerLength = _crypt.OutgoingHeaderLength;
         byte[] frame = new byte[headerLength + payload.Length];
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
-        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), _protocol.Opcodes.ToWire(opcode));
+        WorldFrameCodec.WriteServerSize(frame, payload.Length);
+        WorldFrameCodec.WriteServerOpcode(frame, _protocol.Opcodes.ToWire(opcode));
         payload.CopyTo(frame.AsSpan(headerLength));
 
         lock (_sendLock)
@@ -652,9 +651,7 @@ public sealed partial class WorldSession : IPlayerSession
                 _crypt.DecryptHeader(header);
 
                 // The size is checked against the frame bound before anything is allocated for it.
-                ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
-                rawOpcode = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
-                if (size < 4 || size > MaxClientPacketSize || rawOpcode > ushort.MaxValue)
+                if (!WorldFrameCodec.TryParseClientHeader(header, out ushort size, out rawOpcode))
                 {
                     _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
                         RemoteEndpoint, size, rawOpcode);
@@ -947,7 +944,7 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         // digest = SHA1(account, u32 0, clientSeed, serverSeed, K) (vmangos WorldSocket::HandleAuthSession)
-        byte[] expected = Sha1.Hash(Encoding.ASCII.GetBytes(account), new byte[4], Le(clientSeed), Le(_serverSeed), stored.SessionKey);
+        byte[] expected = WowAuthDigest.Compute(account, clientSeed, _serverSeed, stored.SessionKey);
         if (!CryptographicOperations.FixedTimeEquals(expected, request.ClientDigest.Span))
         {
             _guard?.RecordAuthFailure(_address);
@@ -1170,13 +1167,6 @@ public sealed partial class WorldSession : IPlayerSession
         {
             Kick("the socket is gone"); // stop reading too
         }
-    }
-
-    private static byte[] Le(uint value)
-    {
-        byte[] bytes = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
-        return bytes;
     }
 
     private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload, uint ReceivedMs, bool Injected = false);

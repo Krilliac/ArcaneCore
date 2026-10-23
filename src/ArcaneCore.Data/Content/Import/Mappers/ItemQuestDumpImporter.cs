@@ -1,4 +1,3 @@
-using System.Globalization;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.World.Creatures;
@@ -318,9 +317,7 @@ public sealed class ItemQuestDumpImporter
     private static int PatchOf(DumpRow row) => row.Has("patch") ? Int(row, "patch") : 0;
 
     private static int Int(DumpRow row, string column)
-        => row.TryGet(out string? raw, column) && !string.IsNullOrEmpty(raw)
-            ? (int)double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture)
-            : 0;
+        => DumpRowReader.TruncatedInt(row, column, 0);
 
     /// <summary>mangos-classic Quest::XPValue (QuestDef.cpp:171-205), the full-XP term: RewMoneyMaxLevel / divisor, ceil.</summary>
     internal static uint DerivedRewXp(int questLevel, uint rewMoneyMaxLevel)

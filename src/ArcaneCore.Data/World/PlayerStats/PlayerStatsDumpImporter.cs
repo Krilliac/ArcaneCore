@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.WorldData.PlayerStats;
 using Microsoft.EntityFrameworkCore;
@@ -204,62 +205,24 @@ public sealed class PlayerStatsDumpImporter
             throw new InvalidOperationException("The caller's transaction does not support savepoints; the import cannot protect its existing work.");
         }
 
-        await using IDbContextTransaction? ownedTransaction = callerTransaction is null
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-        IDbContextTransaction transaction = callerTransaction ?? ownedTransaction!;
-        string? savepoint = callerTransaction is not null ? "ArcanePlayerStatsImport_" + Guid.NewGuid().ToString("N") : null;
-        if (savepoint is not null)
+        await ImportTransaction.RunAsync(db, "Player stats", "ArcanePlayerStatsImport_", async ct =>
         {
-            await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-        }
-
-        bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
-        db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
-        {
-            await ClearAsync(db, replace, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _classLevel.Rows.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _levelStats.Rows.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _xp.Rows.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _crit.Rows.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _dodge.Rows.Values, cancellationToken).ConfigureAwait(false);
-
-            if (savepoint is not null)
-            {
-                await transaction.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (Exception importError)
-        {
+            bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
-                if (savepoint is not null)
-                {
-                    await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
-                    await transaction.ReleaseSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
-                }
-                else
-                {
-                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                }
+                await ClearAsync(db, replace, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _classLevel.Rows.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _levelStats.Rows.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _xp.Rows.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _crit.Rows.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _dodge.Rows.Values, ct).ConfigureAwait(false);
             }
-            catch (Exception rollbackError)
+            finally
             {
-                throw new AggregateException("Player stats import and rollback failed; discard the context and transaction.", importError, rollbackError);
+                db.ChangeTracker.AutoDetectChangesEnabled = detect;
             }
-
-            throw;
-        }
-        finally
-        {
-            db.ChangeTracker.Clear();
-            db.ChangeTracker.AutoDetectChangesEnabled = detect;
-        }
+        }, cancellationToken).ConfigureAwait(false);
 
         return BuildReport();
     }

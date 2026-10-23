@@ -23,7 +23,7 @@ namespace ArcaneCore.Game.Pets.PetAuras;
 /// </summary>
 public sealed class PetAuraService
 {
-    private static readonly ConditionalWeakTable<SpellSystem, PetAuraService> Services = new();
+    private static readonly InstanceAttachments<SpellSystem, PetAuraService> Services = new();
 
     private readonly ConditionalWeakTable<Unit, HashSet<uint>> _owners = new();
 
@@ -33,7 +33,7 @@ public sealed class PetAuraService
     public static PetAuraService For(SpellSystem spells)
     {
         ArgumentNullException.ThrowIfNull(spells);
-        return Services.GetValue(spells, static s => new PetAuraService(s));
+        return Services.GetOrCreate(spells, static s => new PetAuraService(s));
     }
 
     public SpellSystem Spells { get; }

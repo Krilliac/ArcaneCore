@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
@@ -156,8 +157,8 @@ public sealed class GatheringRulesTests
     {
         Assert.Equal(26u, (uint)SpellImplicitTarget.GameObjectItem);
 
-        (SpellSystem system, Entities.Player player) = Rig();
-        Entities.Unit? seenTarget = null;
+        (SpellSystem system, Player player) = Rig();
+        ArcaneCore.Game.Entities.Unit? seenTarget = null;
         system.RegisterEffect(SpellEffectName.OpenLock, c => seenTarget = c.Target);
         var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = ObjectGuid.WithEntry(HighGuid.GameObject, 1, 1) };
         Assert.Equal(SpellCastResult.CastOk, system.CastSpell(player, 9300, targets, triggered: true));
@@ -167,7 +168,7 @@ public sealed class GatheringRulesTests
     [Fact]
     public void EffectChecks_RunAfterTheTargetRules_StrictAtPrepare_NonStrictWhenTheCastLands()
     {
-        (SpellSystem system, Entities.Player player) = Rig();
+        (SpellSystem system, Player player) = Rig();
         var seen = new List<(int Index, bool Strict, bool Triggered)>();
         system.RegisterEffectCheck(SpellEffectName.OpenLock, c =>
         {
@@ -181,7 +182,7 @@ public sealed class GatheringRulesTests
     [Fact]
     public void AnEffectCheckThatRefuses_StopsTheCast_AndItsResultIsTheCastResult()
     {
-        (SpellSystem system, Entities.Player player) = Rig();
+        (SpellSystem system, Player player) = Rig();
         bool effectRan = false;
         system.RegisterEffect(SpellEffectName.OpenLock, _ => effectRan = true);
         system.RegisterEffectCheck(SpellEffectName.OpenLock, _ => SpellCastResult.TryAgain);
@@ -193,7 +194,7 @@ public sealed class GatheringRulesTests
         Assert.Equal(SpellCastResult.CastOk, system.CastSpell(player, 9301, SpellCastTargets.ForSelf(), triggered: false));
     }
 
-    private static (SpellSystem System, Entities.Player Player) Rig()
+    private static (SpellSystem System, Player Player) Rig()
     {
         SpellInfo[] spells =
         [
@@ -201,7 +202,7 @@ public sealed class GatheringRulesTests
             SpellTestKit.Spell(9301, SpellTestKit.Effect(SpellEffectName.Dummy, 1)),
         ];
         var system = new SpellSystem(new SpellStore(spells, [], []), () => 0u);
-        Entities.Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+        Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
         return (system, player);
     }
 }

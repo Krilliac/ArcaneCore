@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Social;
 
 namespace ArcaneCore.Data.Social;
@@ -61,9 +61,6 @@ public static class EmoteDbcReaders
 
     private static void Require(DbcFile file, int fields, string name)
     {
-        if (file.FieldCount != fields)
-        {
-            throw new InvalidDataException($"{name} of build 5875 has {fields} fields, this file has {file.FieldCount}");
-        }
+        file.RequireFields(fields, table => $"{name} of build 5875 has {fields} fields, this file has {table.FieldCount}");
     }
 }

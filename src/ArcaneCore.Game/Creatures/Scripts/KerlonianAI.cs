@@ -86,8 +86,8 @@ public sealed class KerlonianAI(Creature creature) : FollowerAI(creature), IQues
         SetFollowPaused(true);
         if (System is { } system)
         {
-            system.SayText(Me, s_sleepEmotes[system.RandomInt(0, 2)]);
-            system.SayText(Me, s_sleepSays[system.RandomInt(0, 3)]);
+            system.SayText(Me, s_sleepEmotes[system.RandomInt(0, s_sleepEmotes.Length - 1)]);
+            system.SayText(Me, s_sleepSays[system.RandomInt(0, s_sleepSays.Length - 1)]);
         }
 
         if (DoCast(Me, SpellSleepVisual) == CreatureCastResult.Ok)

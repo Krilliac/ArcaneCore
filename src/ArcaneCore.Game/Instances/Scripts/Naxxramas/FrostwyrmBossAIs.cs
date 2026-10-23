@@ -293,13 +293,13 @@ public sealed class KelThuzadAI : RaidBossAI
         _sinceNova = Saturating(_sinceNova, diffMs);
         bool casting = System?.AiServices.Spells?.IsCasting(Me) ?? false;
 
-        if (Due(ref _frostBolt, diffMs))
+        if (ScriptTimers.Due(ref _frostBolt, diffMs))
         {
             _frostBolt = RandomDelay(5000, 7000); // vmangos: "todo: this is guesswork"
             Cast(28478, Victim);
         }
 
-        if (Due(ref _nova, diffMs))
+        if (ScriptTimers.Due(ref _nova, diffMs))
         {
             if (_sinceBlast < 5000) _nova = 5000 - _sinceBlast;
             else if (_sinceFissure < 5000) _nova = 5000 - _sinceFissure;
@@ -307,7 +307,7 @@ public sealed class KelThuzadAI : RaidBossAI
             else _nova = 1000;
         }
 
-        if (Due(ref _blast, diffMs))
+        if (ScriptTimers.Due(ref _blast, diffMs))
         {
             if (_sinceFissure < 5000) _blast = 5000 - _sinceFissure;
             else if (_sinceNova < 8000) _blast = 8000 - _sinceNova;
@@ -316,7 +316,7 @@ public sealed class KelThuzadAI : RaidBossAI
             else _blast = 1000;
         }
 
-        if (Due(ref _fissure, diffMs))
+        if (ScriptTimers.Due(ref _fissure, diffMs))
         {
             if (_sinceBlast < 5000) _fissure = 5000 - _sinceBlast;
             else if (_sinceNova < 8000) _fissure = 8000 - _sinceNova;
@@ -325,7 +325,7 @@ public sealed class KelThuzadAI : RaidBossAI
             else _fissure = 1000;
         }
 
-        if (Due(ref _mana, diffMs))
+        if (ScriptTimers.Due(ref _mana, diffMs))
         {
             if (casting) _mana = 2000;
             else
@@ -335,7 +335,7 @@ public sealed class KelThuzadAI : RaidBossAI
             }
         }
 
-        if (Due(ref _chains, diffMs))
+        if (ScriptTimers.Due(ref _chains, diffMs))
         {
             // vmangos DoChains: the threat list is reset after a successful cast.
             if (!Cast(28408, Me)) _chains = 2000;
@@ -348,13 +348,6 @@ public sealed class KelThuzadAI : RaidBossAI
     }
 
     private static uint Saturating(uint value, uint add) => (uint)Math.Min(uint.MaxValue, (ulong)value + add);
-
-    private static bool Due(ref uint remaining, uint diffMs)
-    {
-        if (remaining > diffMs) { remaining -= diffMs; return false; }
-        remaining = 0;
-        return true;
-    }
 
     /// <summary>vmangos SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 1): any threat entry but the first.</summary>
     private Unit? PickNonTank()

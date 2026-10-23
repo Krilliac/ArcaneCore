@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 
@@ -30,7 +31,7 @@ public sealed partial class SpellSystem
                 if (effect.MiscValue is >= 0 and <= (int)PowerType.Happiness)
                 {
                     int power = effect.MiscValue;
-                    if (target.GetUInt32(UpdateFields.UnitFieldPower1 + power) < target.GetUInt32(UpdateFields.UnitFieldMaxpower1 + power)) return SpellCastResult.CastOk;
+                    if (MapCombat.GetPower(target, (PowerType)power) < MapCombat.GetMaxPower(target, (PowerType)power)) return SpellCastResult.CastOk;
                 }
             }
         }

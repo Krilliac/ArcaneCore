@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells.Mods;
 using ArcaneCore.Game.Spells.Procs;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells.Paladin;
 
@@ -76,7 +77,7 @@ public sealed class SealOfRighteousnessProc : IProcScript
             damage = bonus.Modify(SpellAmountStage.DirectDamage, player, victim, context.Holder.Spell, 0, damage, 1);
         }
 
-        int dithered = (int)Math.Floor(Math.Max(damage, 0f) + system.Random.NextSingle()); // rand_dither
+        int dithered = SpellRounding.DitherFloor(Math.Max(damage, 0f), system.Random); // rand_dither
         system.CastProcSpell(player, damageSpell, SpellCastTargets.ForUnit(victim.Guid), context.Holder.Spell, dithered);
         system.CastItemCombatSpell(player, victim, WeaponAttackType.BaseAttack);
         return AuraProcResult.Ok;
