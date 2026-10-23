@@ -222,7 +222,7 @@ internal static partial class PlayerbotBuiltinChat
             case BuiltinChatIntent.Bye:
                 return Text("bye");
             case BuiltinChatIntent.Greeting:
-                return Text("greeting");
+                return GreetingVariant(p.Relation) is { } variant && Say(variant) is { } known ? new(known, null, Intent: intent) : Text("greeting");
             case BuiltinChatIntent.FollowYou:
                 return Text(lastIntent is null ? DoingKey(p) : "followup.you");
             case BuiltinChatIntent.FollowWhy:
@@ -337,6 +337,21 @@ internal static partial class PlayerbotBuiltinChat
         List<string> from = fresh.Count > 0 ? fresh : candidates;
         return from[random.Next(from.Count)];
     }
+
+    /// <summary>Met at least this many times (and not disliked) for the "welcome back" greeting.</summary>
+    internal const int WelcomeBackFamiliarity = 3;
+
+    /// <summary>At or below this affinity the greeting is curt.</summary>
+    internal const int CurtAffinity = -40;
+
+    /// <summary>
+    /// The greeting key for a person the bot remembers: "welcome back" at familiarity 3 or more and affinity 0 or more, curt at affinity -40 or
+    /// less, else null (the plain greeting).
+    /// </summary>
+    internal static string? GreetingVariant(BotChatRelation? relation)
+        => relation is null ? null
+            : relation.AffinityScore <= CurtAffinity ? "greeting.curt"
+            : relation.Familiarity >= WelcomeBackFamiliarity && relation.AffinityScore >= 0 ? "greeting.back" : null;
 
     private static void AddFilled(List<string> candidates, string[] lines, BotChatAsk ask)
     {

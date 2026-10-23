@@ -87,13 +87,49 @@ waves (`CMSG_TEXT_EMOTE`, `TEXTEMOTE_WAVE` = 101, vmangos `SharedDefines.h`) or 
 who has not ignored the bot. Limits, on world time: once per bot and player in 30 minutes, once per player in 10, once per bot in 5,
 twelve in all per minute.
 
+## Social memory
+
+Every managed bot keeps a bounded memory of the players and bots it has dealt with (design: `docs/design/playerbot-social.md`, phase P1).
+It only records, persists and colours the bot's speech; nothing it stores changes what the bot does yet.
+
+**What is stored** (`playerbot_relation`, characters schema 64, one row per bot and other character, at most `MaxRelationsPerBot`,
+default 256, per bot): affinity (-100..100), familiarity (encounters), trust (0..1000, 500 neutral), flags (role preferences, grouped, other
+faction, rival), when it was last seen, a topic key (at most 32 characters) and a summary (at most 160). The topic is an intent key and the
+summary is one of the bot's own built-in template lines: a player's words are never stored, and neither is anything a model wrote.
+Each bot also has five stable traits from its guid (sociability, chattiness, generosity, curiosity, helpfulness; `PlayerbotTraits`).
+
+**Events and deltas** (`World:Playerbots:Social:Memory`, all live, on by default; `PlayerbotSocialMemory.Note`): a chat exchange
+(`AffinityPerChat`), grouped (`AffinityPerGroup`), a group's run succeeding (`AffinityPerGroupSuccess`), a wipe (+1, shared hardship), a
+kick from a group (`AffinityPerKick`), a completed trade (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
+safety strike (`AffinityPerStrike`), a PvP kill either way (`AffinityPerKilledBy`, `AffinityPerKilledThem`; duels never count), and a
+friendly or rude emote aimed at the bot, from either faction (`AffinityPerFriendlyEmote`, `AffinityPerRudeEmote`). Every event adds one
+familiarity; a chat exchange or emote does so at most once per pair in `ChatFamiliarityCooldownMinutes`, and a friendly emote raises
+affinity once per window too. Familiarity halves every `FamiliarityHalfLifeDays` since the pair was last seen (read lazily). Affinity at or
+below `RivalAffinity` sets the Rival flag and above it clears it. Over the limit the least familiar, oldest relation goes, but never one with
+affinity of 50 or more either way unless every one is like that.
+
+**Where each event comes from**: chat lines heard by a bot and addressed to it (`PlayerbotChat.LineHeard`); the group coordinator (forming,
+wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from the begin-trade packet or the bot's own
+request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
+brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.PlayerKilled` for PvP kills. All of them go through
+`PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).
+
+**Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
+split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
+
+**Speech**: the bot's chat persona carries the relation with the asking player (met N times, liking band, preferred role, last topic) and the
+bot's trait bands; the model prompt gets one line from it ("You know Sam: met 4 times, you like them, last time: greeting."), only when a
+relation exists. The built-in greeting says "welcome back" at familiarity 3 or more with affinity 0 or more, and is curt at affinity -40 or less.
+
+**GM command**: `.playerbot social $bot` (Administrator, read-only) shows the traits and the ten best-known relations.
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is
 gathered once per pass and only when something needs it; an event handler's pass gathers none), drains only the guild-invite,
 charter-signature and battleground-win packets of each bot's capture queue, and makes at most one chat admission per guild. The rate
 limiters and the boss and battleground-win maps are bounded and swept; a pass that throws is logged (the first five in full) and the world
-carries on. No schema change: guilds, ranks, petitions and members persist through the existing social system, and the feature's own
+carries on. Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
 state is in memory or read back from it.
 
 ## Tests

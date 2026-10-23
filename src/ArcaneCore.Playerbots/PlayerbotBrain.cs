@@ -36,6 +36,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly PlayerbotContention _contention = new(options, claims);
+
+    /// <summary>The bots' social memory seam (set by the feature; null in a host or a test without it).</summary>
+    internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
     private PlayerbotRoute? _route;
     private bool _routeAbandoned;
 
@@ -2712,6 +2715,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_contention.Decide(facts, player.Guid.Value, mob, now) == PlayerbotHelpDecision.Help && tagger is not null)
         {
             _contention.BeginAssist(held.Guid, tagger.Guid);
+            Social?.NoteHelp(player, tagger);
             _contention.ReleaseClaim();
             return;
         }
@@ -2786,7 +2790,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || tagger.MaxHealth == 0 || tagger.Health * 100f >= 85f * tagger.MaxHealth) return false;
         // A self-only heal such as Desperate Prayer would heal the bot, not its tagger; a scripted (Holy Light) or chain (Healing Wave) heal lands on the target.
         PlayerbotAbilities abilities = _combatSpells.Abilities(player);
-        return _combatSpells.FirstCastable(player, abilities.DirectHeals, tagger, abilities.HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
+        bool healed = _combatSpells.FirstCastable(player, abilities.DirectHeals, tagger, abilities.HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
+        if (healed) Social?.NoteHelp(player, tagger);
+        return healed;
     }
 
     private void RememberAttackers(Player player)

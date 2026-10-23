@@ -31,14 +31,19 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Waves and greetings for nearby real players (<c>World:Playerbots:Social:Emotes</c>).</summary>
     public PlayerbotSocialEmoteOptions Emotes { get; set; } = new();
 
+    /// <summary>Each managed bot's persisted memory of the characters it has dealt with (<c>World:Playerbots:Social:Memory</c>).</summary>
+    public PlayerbotSocialMemoryOptions Memory { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
         if (Guilds is null) throw new InvalidOperationException($"{section}:Guilds is missing.");
         if (GuildChat is null) throw new InvalidOperationException($"{section}:GuildChat is missing.");
         if (Emotes is null) throw new InvalidOperationException($"{section}:Emotes is missing.");
+        if (Memory is null) throw new InvalidOperationException($"{section}:Memory is missing.");
         Guilds.Validate();
         GuildChat.Validate();
+        Memory.Validate();
     }
 }
 

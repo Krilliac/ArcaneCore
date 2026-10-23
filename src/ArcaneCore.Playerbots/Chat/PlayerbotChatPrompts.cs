@@ -56,6 +56,7 @@ internal static class PlayerbotChatPrompts
         if (DescribeGoal(p) is { } goal) text.Append(c, $" Right now you are {goal}.");
         text.Append(p.MasterName is { } master ? $" You are in a party led by {master}." : p.InGroup ? " You are in a party." : " You are travelling alone.");
         if (p.Facts is { } facts) AppendFacts(text, facts);
+        if (p.Relation is { } relation) AppendRelation(text, relation, ask.SenderName);
         if (p.RecentEvents.Count > 0) text.Append(" Recently: ").Append(string.Join("; ", p.RecentEvents)).Append('.');
         text.Append(c, $" You are speaking with {ask.SenderName} {ChannelWords(ask.Channel)}");
         text.Append(ask.FromMaster ? ", your party leader." : ".");
@@ -134,6 +135,30 @@ internal static class PlayerbotChatPrompts
         if (f.Place is { } place)
             text.Append(c, $" The place asked about, {place.Name}, is {(place.Zone is { } zone ? "in " + zone + ", " : string.Empty)}{(place.Map is { } map ? "on " + map : "somewhere you do not know")}.");
     }
+
+    /// <summary>
+    /// One short line of what the bot remembers of the person it is talking to, from bands and the bot's own topic key and summary (never the
+    /// person's words), e.g. "You know Sam: met 4 times, you like them, last time: greeting.". Only when a relation exists.
+    /// </summary>
+    internal static void AppendRelation(StringBuilder text, BotChatRelation r, string name)
+    {
+        CultureInfo c = CultureInfo.InvariantCulture;
+        string feeling = r.Rival ? "you see them as a rival" : r.Affinity switch
+        {
+            BotChatAffinityBand.Dislike => "you dislike them",
+            BotChatAffinityBand.Like => "you like them",
+            BotChatAffinityBand.Close => "you are close friends",
+            _ => "you feel neutral about them",
+        };
+        text.Append(c, $" You know {name}: met {r.Familiarity} {(r.Familiarity == 1 ? "time" : "times")}, {feeling}");
+        if (r.PreferredRole is { } role) text.Append(c, $", they like to {RoleSentence(role)} in a group");
+        if (r.LastTopic is { } topic) text.Append(c, $", last time: {topic}");
+        if (r.Summary is { } summary) text.Append(c, $" ({summary})");
+        text.Append('.');
+        text.Append(c, $" You are {TraitWords(r.SociabilityBand, "shy", "friendly", "very sociable")} and {TraitWords(r.ChattinessBand, "quiet", "talkative enough", "chatty")}.");
+    }
+
+    private static string TraitWords(int band, string low, string middle, string high) => band <= 0 ? low : band == 1 ? middle : high;
 
     private static string RoleSentence(BotChatRole role) => role switch
     {

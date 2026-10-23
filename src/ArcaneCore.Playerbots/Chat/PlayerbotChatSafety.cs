@@ -275,12 +275,16 @@ internal sealed class PlayerbotChatSafety
 
     // --- flags and strikes ------------------------------------------------------------------------------------------------
 
+    /// <summary>Called (on the thread that flagged the line) for every flag that counts as a strike against the sender; must not throw (the bot social memory).</summary>
+    internal Action<BotChatAsk>? OnStrike { get; set; }
+
     /// <summary>
     /// Record a flag: the ring, a log warning, and for <paramref name="strike"/> a strike that may cut the player off (and, with
     /// <see cref="PlayerbotChatSafetyOptions.AutoMute"/>, queue a mute for the world thread).
     /// </summary>
     internal void Flag(BotChatAsk ask, string category, BotChatFlagSource source, bool strike, string flaggedText)
     {
+        if (strike) OnStrike?.Invoke(ask);
         PlayerbotChatSafetyOptions options = Options;
         DateTimeOffset now = _time.GetUtcNow();
         string? excerpt = options.StoreExcerpt ? Excerpt(flaggedText) : null;

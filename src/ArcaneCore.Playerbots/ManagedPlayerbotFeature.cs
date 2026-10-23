@@ -202,6 +202,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
+    private BotSocial.PlayerbotSocialRecorder? _social;
+
+    /// <summary>
+    /// The bots' social memory and the one seam events are recorded through (docs/areas/playbots-social.md, "Social memory"). Created on first
+    /// use from the live <c>World:Playerbots:Social:Memory</c> options and the feature's clock; any thread.
+    /// </summary>
+    internal BotSocial.PlayerbotSocialRecorder Social => _social ??= new BotSocial.PlayerbotSocialRecorder(
+        new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()), logger);
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
@@ -321,6 +329,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private const string HandoverControllers = "playerbots.controllers";
     private const string HandoverSharedSetAsides = "playerbots.sharedSetAsides";
     private const string HandoverLoadedSetAsides = "playerbots.loadedSetAsides";
+    private const string HandoverRelations = "playerbots.socialRelations";
     private const string HandoverHomes = "playerbots.homes";
     private const string HandoverHomeStore = "playerbots.homeStore";
     private const string HandoverClock = "playerbots.clockMs";
@@ -368,10 +377,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
                 services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
             if (_options.Enabled) _chat.LogConfiguration();
+            _chat.Social = Social;
+            BotSocial.PlayerbotSocialRecorder recorder = Social;
+            // A line addressed to a bot is an exchange with its sender; the recorder never throws into the chat service.
+            _chat.LineHeard += line =>
+            {
+                if (line.AddressesBot && line.SenderGuid != line.BotGuid)
+                    recorder.NoteById(line.BotId, line.BotGuid, line.SenderGuid, BotSocial.PlayerbotSocialEvent.ChatExchange);
+            };
         }
+
+        if (coordinator is { } groupCoordinator) groupCoordinator.Social = Social;
 
         _world = world;
         _sharedSetAsides.World = world;
+        // A player killed by another player (or its pet) is rivalry for the managed bot on either side.
+        subscriptions.Subscribe<Action<Unit?, Unit>>(Social.NotePvpKill, h => PlayerbotKillObserver.PlayerKilled += h, h => PlayerbotKillObserver.PlayerKilled -= h);
         if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;
@@ -403,6 +424,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 brain.Suspensions.Restore(rows, world.NowMs, unixNow);
             ActiveBot active = NewActiveBot(entry, brain);
             active.SavedSetAsideVersion = -1; // written again at the next checkpoint
+            active.SavedRelationVersion = -1;
             if (controllers?.TryGetValue(entry.BotId, out IPlayerbotController? controller) == true) active.Controller = controller;
             if (_active.TryAdd(entry.BotId, active)) Interlocked.Increment(ref _activeVersion);
         }
@@ -489,6 +511,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverControllers, controllers);
         handover.Set(HandoverSharedSetAsides, _sharedSetAsides.Export(nowMs, unixNow));
         handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
+        handover.Set(HandoverRelations, Social.Memory.SnapshotAll());
         handover.Set(HandoverHomes, _homes.Values.ToArray());
         handover.Set(HandoverHomeStore, _homeStore);
         handover.Set(HandoverClock, ClockMs);
@@ -518,6 +541,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
         if (handover.TryGet(HandoverClock, out long clock)) Interlocked.Exchange(ref _clockMs, clock);
+        if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
         if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
@@ -581,7 +605,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // A group whose lead its master handed to a bot (PlayerbotGroupCoordinator.Handoff.cs) owns the bot until an order takes the lead back.
             GroupOwns = (member, master, command) => coordinator?.OwnsAgainst(member, master, command) == true,
         };
-        var active = new ActiveBot(entry, brain, party);
+        party.Social = Social;
+        Social.Track(entry.BotId, entry.Record.CharacterId);
+        brain.Social = Social;
+        var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId) };
         // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
         active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
         active.Party.BrainDiagnostics = p => FormatBotDiagnostics(active, p);
@@ -622,9 +649,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }, cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref _savedSharedSetAsideVersion, _sharedSetAsides.Version);
         }
+        if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is { } relationStore)
+        {
+            try { Social.Memory.Load(await relationStore.LoadAllAsync(cancellationToken).ConfigureAwait(false)); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+            {
+                FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+                logger.LogWarning(ex, "Playerbot social memory could not be loaded ({Type}); the bots start with none", ex.GetType().Name);
+            }
+        }
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
+
             foreach (PlayerbotHome home in await homeStore.LoadAllAsync(cancellationToken).ConfigureAwait(false))
                 _homes[home.BotId] = home;
         }
@@ -1913,6 +1950,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
                 _chat?.Abandon(bot.BotId); // replies still being written for it are no longer wanted
+                Social.Untrack(bot.CharacterId);
             }
 
             bool stoppingWritten = false;
@@ -1928,6 +1966,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     FaultLedger.Shared.Record("playerbot.feature", ex);
                     logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name);
                 }
+
+                await SaveBotRelationsAsync(active).ConfigureAwait(false);
 
                 Quiesce();
                 // A reason, so the stop is no session/kick-no-reason (live: ~300 per restart and a steady trickle from the rotation).
@@ -2821,7 +2861,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
             if (SplitBrainLatched) return;
             foreach ((ActiveBot active, _) in live)
-                if (!conflicted.Contains(active)) await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
+            {
+                if (conflicted.Contains(active)) continue;
+                await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
+                await SaveBotRelationsAsync(active).ConfigureAwait(false);
+            }
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -2931,12 +2975,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 FaultLedger.Shared.Record("playerbot.checkpoint", ex);
                 logger.LogWarning(ex, "Playerbot {BotId} set-aside save failed ({Type})", botId, ex.GetType().Name);
             }
+
+            await SaveBotRelationsAsync(active).ConfigureAwait(false);
         }
 
         await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
+        Social.Untrack(active.Record.CharacterId);
         try { if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -3091,6 +3138,32 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (force) _loadedSetAsides[active.Record.BotId] = rows;
         lock (active.SetAsideGate)
             if (ReferenceEquals(active.Brain, brain)) Volatile.Write(ref active.SavedSetAsideVersion, version);
+    }
+
+    /// <summary>
+    /// Write the bot's social memory when it changed since the last write. Off the world thread: the memory is thread-safe and the rows are
+    /// a copy. A failure is recorded at <c>playerbot.social-memory</c> and logged; it never blocks a stop or a checkpoint, and the next
+    /// call tries again (the saved version is only recorded after the write).
+    /// </summary>
+    private async Task SaveBotRelationsAsync(ActiveBot active)
+    {
+        Guid botId = active.Record.BotId;
+        try
+        {
+            BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            long version = memory.Version(botId);
+            if (Volatile.Read(ref active.SavedRelationVersion) == version) return;
+            IReadOnlyList<PlayerbotRelation> rows = memory.Snapshot(botId);
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is { } store)
+                await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, rows), CancellationToken.None).ConfigureAwait(false);
+            Volatile.Write(ref active.SavedRelationVersion, version);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+            logger.LogWarning(ex, "Playerbot {BotId} social memory save failed ({Type})", botId, ex.GetType().Name);
+        }
     }
 
     private async Task SaveSharedSetAsidesAsync()
@@ -3474,6 +3547,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public WorldSession Session => Entry.Session;
         public PlayerbotBrain Brain = brain;
         public int SavedSetAsideVersion;
+        public long SavedRelationVersion;
         public readonly object SetAsideGate = new();
         public PlayerbotPartyAI Party { get; } = party;
         public bool PartyDriven;

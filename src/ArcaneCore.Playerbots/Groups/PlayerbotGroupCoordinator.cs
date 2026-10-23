@@ -100,6 +100,25 @@ internal enum PlayerbotGroupState : byte
 /// </summary>
 public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services, ILogger<PlayerbotGroupCoordinator> logger) : IDetachableWorldFeature
 {
+    /// <summary>The bots' social memory seam (set by the feature on attach; null in a host without it). Group events are recorded through it.</summary>
+    internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
+
+    /// <summary>Record <paramref name="e"/> for every ordered pair of the group's joined or invited members: each managed bot remembers each other member.</summary>
+    private void NotePairs(BotGroup group, BotSocial.PlayerbotSocialEvent e)
+    {
+        BotSocial.PlayerbotSocialRecorder? social = Social;
+        if (social is not { Enabled: true }) return;
+        social.Guarded(() =>
+        {
+            foreach (Member a in group.Members)
+            {
+                if (a.Real) continue;
+                foreach (Member b in group.Members)
+                    if (!ReferenceEquals(a, b)) social.Note(a.Guid, b.Guid, e);
+            }
+        });
+    }
+
     /// <summary>How often free bots are looked over for group goals and matched.</summary>
     internal const uint ScanMs = 2_000;
 
@@ -208,10 +227,15 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         _subscriptions = subscriptions;
         // The raid runs' entrance waivers, consulted by the teleport handler for exactly as long as this coordinator is attached.
         if (services.GetService<ITeleportWaiverRegistry>() is { } waivers) subscriptions.Add(waivers.Register(new RunWaiver(this)));
+        // A bot removed from its group by another member remembers who did it (a kick is the only uninvite that removes a member).
+        if (GroupManagerOrNull() is { } serverGroups)
+            subscriptions.Subscribe<Action<ObjectGuid, ObjectGuid>>(OnMemberKicked, h => serverGroups.MemberKicked += h, h => serverGroups.MemberKicked -= h);
         _world = world;
         _detaching = false;
         LoadEncounters();
     }
+
+    private void OnMemberKicked(ObjectGuid kicker, ObjectGuid kicked) => Social?.Note(kicked, kicker, BotSocial.PlayerbotSocialEvent.Kicked);
 
     public Task QuiesceAsync(CancellationToken cancellationToken) => Task.CompletedTask; // world-thread only: nothing runs in the background
 
@@ -1023,6 +1047,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         IPathfinder? pathfinder = _world is not null ? WorldCollision.Of(_world).Pathfinder : null;
         group.Approach = SnapToMesh(pathfinder, goal.MeetingMap, plan.Leader.Position, ApproachPoint(goal, plan.Leader.Position));
         _groups.Add(group);
+        NotePairs(group, BotSocial.PlayerbotSocialEvent.Grouped);
         Totals = (Totals.Formed + 1, Totals.Completed, Totals.Failed);
         Note($"group {group.Id} formed for {goal}: leader {plan.Leader.Name}, "
              + string.Join(", ", group.Members.Select(m => $"{m.Name} {m.Role.ToString().ToLowerInvariant()}")));
@@ -1480,6 +1505,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (alive > 0 && (!fighting || dead * 2 < alive + dead)) return false;
         Note($"group {group.Id} is wiping: {dead} dead, {alive} alive");
         group.Run?.Apply(PlayerbotRunSignal.Wipe);
+        if (group.State != PlayerbotGroupState.Wiped) NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupWiped);
         Enter(group, PlayerbotGroupState.Wiped);
         return true;
     }
@@ -1638,6 +1664,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
     private void Finish(BotGroup group, bool success, string reason, bool setAside = true)
     {
+        if (success && !group.Succeeded) NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupSucceeded);
         // A handed-over group never walks out or disbands (that would take the bots out of the player's group): it is released in place.
         if (group.Handoff is { } handoff)
         {

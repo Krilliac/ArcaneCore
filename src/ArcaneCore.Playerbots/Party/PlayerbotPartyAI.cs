@@ -87,6 +87,12 @@ internal sealed class PlayerbotPartyAI
 
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
+
+    /// <summary>The bots' social memory seam (set by the feature; null in a host or a test without it).</summary>
+    internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
+
+    /// <summary>Who the bot is trading with, from the begin-trade packet or the bot's own request; empty when no trade is open.</summary>
+    private ObjectGuid _tradePartner;
     private readonly PlayerbotCombatSpells _combatSpells;
     private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
@@ -497,6 +503,7 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     private void OnTextEmote(Player player, byte[] payload)
     {
+        RecordEmote(player, payload);
         if (_chat is not { IsActive: true } chat || chat.SpeechOptions is not { Enabled: true, EmoteReplies: true } options) return;
         if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
         if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
@@ -512,6 +519,22 @@ internal sealed class PlayerbotPartyAI
         if (BotSocial.PlayerbotSocialEmotes.ReplyTo(emote.TextEmote, _random) is not { } answer) return;
         _emoteReplies[emoter.Guid] = now;
         chat.TrySpeak(_botId, player.Guid, Chat.BotSpeech.EmoteAt(answer, emoter.Guid, "emote-reply") with { IsReply = true, ToBot = fromBot, Turn = turn });
+    }
+
+    /// <summary>
+    /// A text emote aimed at this bot by name, from any faction, moves its memory of the emoter: friendly raises affinity, rude lowers it, the
+    /// rest is ignored. Independent of the chat service, so a bot with chat off still remembers.
+    /// </summary>
+    private void RecordEmote(Player player, byte[] payload)
+    {
+        if (Social is not { Enabled: true } social) return;
+        if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
+        if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
+        BotSocial.PlayerbotEmoteMood mood = BotSocial.PlayerbotEmoteMoods.Classify(emote.TextEmote);
+        if (mood is BotSocial.PlayerbotEmoteMood.Neutral or BotSocial.PlayerbotEmoteMood.Help) return;
+        bool otherFaction = _session.World.FindOnlinePlayer(emote.Emoter) is { } emoter && emoter.Team != player.Team;
+        social.NoteById(_botId, player.Guid, emote.Emoter,
+            mood == BotSocial.PlayerbotEmoteMood.Friendly ? BotSocial.PlayerbotSocialEvent.FriendlyEmote : BotSocial.PlayerbotSocialEvent.RudeEmote, otherFaction);
     }
 
     /// <summary>The bot's facts for a line it starts itself (world thread; the social features' guild announcements and greetings).</summary>
@@ -542,7 +565,33 @@ internal sealed class PlayerbotPartyAI
                 SpeakerInGroup = Services.Social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true,
             };
         return new Chat.BotChatPersona(player.Name, player.Race, player.Class, player.Gender, player.Level, zone, subzone, goal, quest,
-            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts);
+            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts, Relation: RelationWith(player, speaker));
+    }
+
+    /// <summary>
+    /// What the bot remembers of <paramref name="speaker"/> for the chat (null when it remembers nothing, memory is off or there is no speaker).
+    /// Bot-side data only: bands, a topic key and the bot's own summary.
+    /// </summary>
+    private Chat.BotChatRelation? RelationWith(Player player, Player? speaker)
+    {
+        if (speaker is null || Social is not { Enabled: true } social) return null;
+        try
+        {
+            if (!social.Memory.TryGet(_botId, speaker.Guid.Value, out PlayerbotRelation relation)) return null;
+            BotSocial.PlayerbotTraits traits = BotSocial.PlayerbotTraits.For(player.Guid.Value);
+            Chat.BotChatRole? role = relation.Flags.HasFlag(PlayerbotRelationFlags.PrefersTank) ? Chat.BotChatRole.Tank
+                : relation.Flags.HasFlag(PlayerbotRelationFlags.PrefersHealer) ? Chat.BotChatRole.Healer
+                : relation.Flags.HasFlag(PlayerbotRelationFlags.PrefersDamage) ? Chat.BotChatRole.Damage : null;
+            return new Chat.BotChatRelation(relation.Familiarity, relation.Affinity, BotSocial.PlayerbotSocialBands.Of(relation.Affinity),
+                relation.Flags.HasFlag(PlayerbotRelationFlags.Rival), role,
+                relation.LastTopic.Length == 0 ? null : relation.LastTopic, relation.Summary.Length == 0 ? null : relation.Summary,
+                BotSocial.PlayerbotTraits.Band(traits.Sociability), BotSocial.PlayerbotTraits.Band(traits.Chattiness));
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, error);
+            return null;
+        }
     }
 
     /// <summary>The trade distance (vmangos TRADE_DISTANCE, 11.11 yards; a little less, so the server never refuses it).</summary>
@@ -576,7 +625,11 @@ internal sealed class PlayerbotPartyAI
             {
                 if (!player.IsAlive || player.Combat.IsInCombat || !ReferenceEquals(speaker.Map, player.Map) || Distance(speaker, player) > TradeReach) return;
                 bool trusted = social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true || InviteAllowed(player, speaker);
-                if (trusted) Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false);
+                if (trusted)
+                {
+                    _tradePartner = speaker.Guid;
+                    Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false);
+                }
                 return;
             }
 
@@ -707,6 +760,7 @@ internal sealed class PlayerbotPartyAI
             {
                 var trader = new ObjectGuid(BitConverter.ToUInt64(payload, 4));
                 if (trader.IsEmpty || trader == player.Guid) return;
+                _tradePartner = trader;
                 ObjectGuid master = ResolveMaster(player);
                 bool trusted = trader == _master || trader == master
                     || Services.Social?.Groups.AreInSameGroup(player.Guid, trader) == true;
@@ -719,6 +773,9 @@ internal sealed class PlayerbotPartyAI
                 break;
             case 8:
                 UpdateEquipment(player);
+                if (!_tradePartner.IsEmpty) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
+                    _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
+                _tradePartner = ObjectGuid.Empty;
                 break;
         }
     }

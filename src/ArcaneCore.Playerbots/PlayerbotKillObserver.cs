@@ -20,6 +20,12 @@ internal sealed class PlayerbotKillObserver(MapCombat combat)
     private readonly Dictionary<Player, Unit[]> _lethalPack = new(ReferenceEqualityComparer.Instance);
     private readonly object _gate = new();
 
+    /// <summary>
+    /// A player died (killer null for the environment). Raised once per kill on the map's combat while any bot is on that map, which holds whenever a bot
+    /// is the victim or the killer (the bot social memory's PvP rivalry); world thread. A handler must not throw.
+    /// </summary>
+    internal static event Action<Unit?, Unit>? PlayerKilled;
+
     internal static PlayerbotKillObserver For(MapCombat combat) => ByCombat.GetValue(combat, static key => new PlayerbotKillObserver(key));
 
     internal void Add(Player player, Action<Unit?, IReadOnlyList<Unit>> onKilled)
@@ -67,6 +73,7 @@ internal sealed class PlayerbotKillObserver(MapCombat combat)
     {
         Action<Unit?, IReadOnlyList<Unit>>? onKilled = null;
         IReadOnlyList<Unit> pack = NoPack;
+        if (victim is Player) PlayerKilled?.Invoke(killer, victim);
         if (victim is Player player)
         {
             lock (_gate)
