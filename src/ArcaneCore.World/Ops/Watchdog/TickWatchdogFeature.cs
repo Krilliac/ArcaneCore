@@ -125,6 +125,9 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     internal readonly record struct HangFacts(string Phase, string Item, bool GcDominated)
     {
         internal static HangFacts Unknown { get; } = new("Unknown", "none", false);
+
+        /// <summary>No description was made (an earlier report already consumed the hung frame): nothing is sent to bot QA.</summary>
+        internal static HangFacts NotDescribed { get; } = new(string.Empty, string.Empty, false);
     }
 
     /// <summary>The share of a completed tick that GC pauses must take for it to be the host's doing rather than the code's (the host sampler's own threshold).</summary>
@@ -158,7 +161,11 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         return new HangFacts(phase, item, gc);
     }
 
-    private void ReportHangToQa(TickAlert alert) => ReportHang(alert, _facts);
+    private void ReportHangToQa(TickAlert alert)
+    {
+        if (_facts.Phase.Length == 0) return; // the hung frame was described in an earlier report: do not invent a cause
+        ReportHang(alert, _facts);
+    }
 
     /// <summary>
     /// Watchdog thread, once per hang alert (a rate-limited event, never per tick): report the hang to bot QA unless it was not the code's doing. Never reported:
@@ -282,7 +289,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     }
 
     /// <summary>Watchdog thread, once per completed-hang line: the worst hung frame recorded since the last report (and how many there were), then forget them.</summary>
-    private string SafeDescribeCompleted()
+    private CompletedHangText SafeDescribeCompleted()
     {
         try
         {
@@ -296,24 +303,20 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                 _hungCount = 0;
             }
 
-            string text;
             if (frame is null)
             {
-                _facts = CompletedFacts((SlowTickInfo?)null);
-                text = $"no tick body over the interval was recorded in the last {DetailWindow.TotalSeconds:F0} s (the stall was outside the tick body)";
-            }
-            else
-            {
-                text = FormatHungFrame(frame, count, out _facts);
+                // The record and its count are taken together under the lock, so none left means an earlier report already described these hangs.
+                _facts = HangFacts.NotDescribed;
+                return new CompletedHangText("hung frame described in the previous report", 0);
             }
 
-            return AppendSaveQueue(text);
+            return new CompletedHangText(AppendSaveQueue(FormatHungFrame(frame, count, out _facts)), count);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _facts = HangFacts.Unknown;
             FaultLedger.Shared.Record("watchdog.describe", ex);
-            return "watchdog detail unavailable: " + ex.GetType().Name;
+            return new CompletedHangText("watchdog detail unavailable: " + ex.GetType().Name, 0);
         }
     }
 

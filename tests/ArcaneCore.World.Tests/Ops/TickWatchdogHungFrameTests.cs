@@ -3,7 +3,9 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Ops.Watchdog;
+using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -46,6 +48,17 @@ public sealed class TickWatchdogHungFrameTests : IDisposable
         }
     }
 
+    /// <summary>The bot QA hang sink as the playerbots feature wires it: every report becomes a TickHang signal on the real bus.</summary>
+    private sealed class BusHangSink(PlayerbotQaSignalBus bus) : IBotTickHangSink
+    {
+        public TimeSpan Warmup => TimeSpan.Zero;
+
+        public void ReportHang(string phase, string work, string message, long occurrences)
+            => bus.TryWrite(new QaSignal { Kind = QaSignalKind.TickHang, AtUtc = DateTime.UtcNow, Stage = phase, Reason = work, Message = message, Occurrences = occurrences });
+    }
+
+    private readonly PlayerbotQaSignalBus _bus = new(64);
+    private readonly ManagedBotRegistry _bots = new();
     private readonly ManualClock _clock = new();
     private readonly CapturingLogger _log = new();
     private readonly WorldRuntime _world = new(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
@@ -57,7 +70,8 @@ public sealed class TickWatchdogHungFrameTests : IDisposable
     {
         var options = new TickMonitorOptions { HangMs = 2000 };
         _monitor = new TickMonitor(options, _clock, new CounterRegistry(), _log);
-        _provider = new ServiceCollection().AddSingleton(_monitor).AddSingleton<WatchdogClock>(_clock).BuildServiceProvider();
+        _bots.UseHangSink(new BusHangSink(_bus));
+        _provider = new ServiceCollection().AddSingleton(_monitor).AddSingleton<WatchdogClock>(_clock).AddSingleton(_bots).BuildServiceProvider();
         _feature = new TickWatchdogFeature(_provider, NullLogger<TickWatchdogFeature>.Instance);
         _feature.Attach(_world);
     }
@@ -137,5 +151,44 @@ public sealed class TickWatchdogHungFrameTests : IDisposable
         Assert.Contains("hung frame 4000 ms", line);
         Assert.Contains("outside tick code", line);
         Assert.Equal(("OutsideTick", "none"), (_feature.LastHangFacts.Phase, _feature.LastHangFacts.Item));
+    }
+
+    private QaSignal[] Signals()
+    {
+        var list = new List<QaSignal>();
+        _bus.Drain(list, 16);
+        return [.. list];
+    }
+
+    [Fact]
+    public void AFrameWithNoTickBody_ReachesBotQaAsAnOutsideTickFingerprint()
+    {
+        _world.RunTick(50);
+        _clock.AdvanceMs(4_000);
+        _world.RunTick(50);
+        _monitor.Check(_clock.NowMicros);
+
+        QaSignal signal = Assert.Single(Signals());
+        Assert.Equal(QaSignalKind.TickHang, signal.Kind);
+        Assert.Equal("OutsideTick", signal.Stage);
+        Assert.Equal("none", signal.Reason);
+        Assert.StartsWith("v1|tickhang|phase=OutsideTick|item=none", PlayerbotQaFingerprint.Key(signal), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AHangAnEarlierReportAlreadyDescribed_SaysSo_AndSendsBotQaNothing()
+    {
+        _world.RunTick(50);
+        _clock.AdvanceMs(4_000);
+        _world.RunTick(50);
+
+        CompletedHangText first = _monitor.CompletedHangDetail!(); // the record is consumed here, as a racing report would
+        Assert.Equal(1, first.Hangs);
+        _monitor.Check(_clock.NowMicros);
+
+        string line = Assert.Single(HangLines());
+        Assert.Contains("hung frame described in the previous report", line);
+        Assert.DoesNotContain("no tick body", line);
+        Assert.Empty(Signals());
     }
 }

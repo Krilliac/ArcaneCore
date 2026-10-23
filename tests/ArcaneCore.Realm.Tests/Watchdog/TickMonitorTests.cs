@@ -650,7 +650,7 @@ public sealed class TickMonitorTests
         {
             calls++;
             Assert.Equal(2, closed.Count); // both frames were recorded before the hang was reported
-            return "hung frame 4000 ms: tick body 0 ms";
+            return new CompletedHangText("hung frame 4000 ms: tick body 0 ms", 2);
         };
 
         Tick(monitor, 5, 50);
@@ -668,6 +668,48 @@ public sealed class TickMonitorTests
         // Nothing new: no second line, no second call.
         monitor.Check(_clock.NowMicros);
         Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void AHangThatClosesBetweenTheCountReadAndTheDetail_IsReportedOnceWithItsOwnRecord()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 1000);
+        var pending = new List<long>();
+        var described = new List<int>();
+        monitor.HangClosed = pending.Add;
+        bool injected = false;
+        monitor.CompletedHangDetail = () =>
+        {
+            if (!injected)
+            {
+                // Check has already read "1 hang completed"; a second frame closes now, before the host is asked.
+                injected = true;
+                Tick(monitor, 1, 2_000);
+                monitor.OnTick(_clock.NowMicros);
+            }
+
+            int consumed = pending.Count;
+            long worst = pending.Max();
+            pending.Clear();
+            described.Add(consumed);
+            return new CompletedHangText($"worst {worst / 1000} ms", consumed);
+        };
+
+        Tick(monitor, 3, 50);
+        Tick(monitor, 1, 1_500); // hang 1 closes at the next tick
+        monitor.OnTick(_clock.NowMicros);
+        monitor.Check(_clock.NowMicros);
+
+        LogLine line = Assert.Single(_log.Of(WatchdogEvents.TickHang));
+        Assert.Contains("2 new hang(s), 2 since start", line.Message);
+        Assert.EndsWith("; worst 2000 ms", line.Message.Split("; host")[0]);
+        Assert.Equal([2], described);
+        Assert.Equal(2, monitor.HangsCompleted);
+
+        // Nothing is left for the next check: no second line, no "no record" report.
+        monitor.Check(_clock.NowMicros);
+        Assert.Single(_log.Of(WatchdogEvents.TickHang));
+        Assert.Equal(2, _counters.Find("watchdog.tick.hangs")!.Value);
     }
 
     [Fact]

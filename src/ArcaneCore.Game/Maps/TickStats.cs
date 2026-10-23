@@ -68,7 +68,7 @@ public readonly record struct TickPhases(long CommandsMicros, long MapsMicros, l
     public long MapsBytes { get; init; }
     public long FeaturesBytes { get; init; }
 
-    /// <summary>Of <see cref="FeaturesMicros"/>, the world-tick handlers (game events, rest, the watchdog ...) and the script hooks; the rest is the per-tick feature updates.</summary>
+    /// <summary>Of <see cref="FeaturesMicros"/>, the world-tick handlers (game events, rest ...) and the script hooks; the rest is the per-tick feature updates.</summary>
     public long WorldTickMicros { get; init; }
 
     /// <summary>The periodic character-save pass that ends a tick (zero in the ticks that do not autosave) and the snapshots it queued.</summary>

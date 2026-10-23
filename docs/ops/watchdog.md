@@ -31,7 +31,7 @@ lane was written, and the realm test project is the lightest one that references
   (rate-limited per monitor, counted in `watchdog.monitor_faults`) and the round goes on.
 - **The world thread** touches the watchdog in exactly one place: the `WorldRuntime.TickStarting` handler of `TickWatchdogFeature`, which calls
   `TickMonitor.OnTick`. That is one clock read and two to five plain stores (a ring slot, the ring count, the last-start stamp, the overrun
-  and hang counters): no allocation, no lock (a frame over `HangMs` also allocates one small record, see below), no interlocked instruction, no log. `TickMonitorTests.OnTick_DoesNotAllocate` asserts a zero
+  and hang counters): no allocation, no lock (a frame over `HangMs` also takes the feature's `_hungGate` lock and allocates one small record, see below), no interlocked instruction, no log. `TickMonitorTests.OnTick_DoesNotAllocate` asserts a zero
   `GC.GetAllocatedBytesForCurrentThread` delta over 100 000 ticks. The one-writer rule is what makes the plain stores correct: only the world
   thread writes those fields, the watchdog thread reads them with volatile loads.
 - **The ring** (`TickRing`) is lock-free for its one writer and any number of readers. A writer publishes a slot with a release store of the
@@ -89,7 +89,10 @@ recorder are appended to each line so both views are on one line.
     top features: ...; <X> ms outside tick code`, where `X = F - B` is the wait after the tick or a pause outside tick code (a GC pause, paging, a suspended process).
     Several hangs between two checks are reported once, the worst frame shown, with `; <N> hung frames since the last report, worst shown`. When the time outside
     the tick body is more than the body, bot QA's hang stage is `OutsideTick`, else the body's dominant phase and work. The overrun line keeps the window-wide
-    `slowest tick body` text above. No timestamps are matched across threads.
+    `slowest tick body` text above. No timestamps are matched across threads. The record and the number of hangs it stands for are taken together under `_hungGate`,
+    and the report counts the hangs it consumed, so a hang that closes while the check runs is reported once with its own record; with no record left the line says
+    `hung frame described in the previous report` and nothing goes to bot QA. World-thread work after `RunTick` returns (the tick observer, the tick-completed event, the
+    performance log) is not in the tick body, so it counts as outside tick code.
   Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
   (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own
   `Slow world update` performance-log line. Cost on the world thread: a few stores per phase change and per handler, a top-five insertion
