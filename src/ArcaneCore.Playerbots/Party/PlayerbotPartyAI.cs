@@ -837,6 +837,7 @@ internal sealed class PlayerbotPartyAI
                 break;
             case 8:
                 UpdateEquipment(player);
+                Social?.NoteTradeDone(_botId);
                 if (!_tradePartner.IsEmpty) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;

@@ -363,9 +363,29 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         return Task.CompletedTask;
     }
 
+    // A tip in flight leaves its trade window open for the helper: close it, on the world thread (the cancel is a session action).
+    private void CancelTips()
+    {
+        if (_world is not { IsStopped: false } world) return;
+        try
+        {
+            if (world.IsWorldThread) _gratitude.CancelAllTips();
+            else _ = world.InvokeAsync(() =>
+            {
+                _gratitude.CancelAllTips();
+                return true;
+            });
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.social", error);
+        }
+    }
+
     /// <summary>End what is in flight and forget the world (the bag removes the subscriptions).</summary>
     private void Release()
     {
+        CancelTips();
         UnsubscribeMaps();
         _conversations.Stop();
         _worldChatter.Stop();

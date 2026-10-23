@@ -215,6 +215,17 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         return false;
     }
 
+    private readonly ConcurrentDictionary<Guid, byte> _tradesDone = new();
+
+    /// <summary>A trade the bot was in completed (its own trade status 8): the gratitude lane counts a tip as paid from it.</summary>
+    public void NoteTradeDone(Guid botId)
+    {
+        if (_tradesDone.Count < 256) _tradesDone[botId] = 1;
+    }
+
+    /// <summary>Take the note that the bot's trade completed; false when none has since the last take.</summary>
+    internal bool TryTakeTradeDone(Guid botId) => _tradesDone.TryRemove(botId, out _);
+
     private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Asker)> _helpCalls = new();
 
     /// <summary>

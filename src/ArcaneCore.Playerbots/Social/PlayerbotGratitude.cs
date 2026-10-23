@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Chat;
 using Microsoft.Extensions.DependencyInjection;
 using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
@@ -109,23 +110,48 @@ internal sealed class PlayerbotGratitudeLane
     private const long TradeRetryMs = 5_000;
     private const int MaxTips = 32;
 
-    private sealed class Tip(ObjectGuid helper, uint copper, uint moneyBefore, long startedMs)
+    // The bot's session and player are kept so that a tip dropped after the bot left the pass (logged out, no longer managed) can still cancel its window.
+    private sealed class Tip(WorldSession session, Player bot, ObjectGuid helper, uint copper, long startedMs)
     {
+        public WorldSession Session { get; } = session;
+
+        public Player Bot { get; } = bot;
+
         public ObjectGuid Helper { get; } = helper;
 
         public uint Copper { get; } = copper;
-
-        public uint MoneyBefore { get; } = moneyBefore;
 
         public long StartedMs { get; } = startedMs;
 
         public long LastInitiateMs { get; set; }
 
         public bool Seen { get; set; }
+
+        public long ClosedAtMs { get; set; }
     }
+
+    // A thanks owed by a bot that was dead when it came up: tried again every few seconds until the bot lives or the debt is too old.
+    private sealed class Owed(ObjectGuid bot, ObjectGuid helper, PlayerbotThanksKind kind, long retryAtMs, long deadlineMs)
+    {
+        public ObjectGuid Bot { get; } = bot;
+
+        public ObjectGuid Helper { get; } = helper;
+
+        public PlayerbotThanksKind Kind { get; } = kind;
+
+        public long RetryAtMs { get; set; } = retryAtMs;
+
+        public long DeadlineMs { get; } = deadlineMs;
+    }
+
+    private const long OwedRetryMs = 5_000;
+    private const long OwedDeadlineMs = 2 * 60_000L;
+    private const int MaxOwed = 64;
+    private const long ClosedGraceMs = 3_000;
 
     private readonly Dictionary<(Guid Bot, ulong Helper), long> _thanked = [];
     private readonly Dictionary<Guid, Tip> _tips = [];
+    private readonly List<Owed> _owed = [];
     private long _sweptAtMs;
 
     /// <summary>Thank emotes sent (tests and status).</summary>
@@ -157,22 +183,54 @@ internal sealed class PlayerbotGratitudeLane
         if (!options.Enabled || !recorder.Enabled)
         {
             while (recorder.TryTakeThanks(out _, out _, out _)) { }
-            _tips.Clear();
+            _owed.Clear();
+            CancelAllTips();
             return;
         }
 
         Sweep(pass.NowMs);
+        if (_owed.Count > 0) RetryOwed(pass, recorder, help, options);
         for (int budget = PerPass; budget > 0 && recorder.TryTakeThanks(out ObjectGuid botGuid, out ObjectGuid helperGuid, out PlayerbotThanksKind kind); budget--)
             if (pass.ByCharacter.TryGetValue(botGuid.Low, out PlayerbotSocialBot? bot))
                 Thank(pass, recorder, help, options, bot, helperGuid, kind);
-        if (_tips.Count > 0) StepTips(pass);
+        if (_tips.Count > 0) StepTips(pass, recorder);
+    }
+
+    private void RetryOwed(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, PlayerbotHelpLane help, PlayerbotSocialGratitudeOptions options)
+    {
+        for (int i = _owed.Count - 1; i >= 0; i--)
+        {
+            Owed owed = _owed[i];
+            if (pass.NowMs < owed.RetryAtMs) continue;
+            if (!pass.ByCharacter.TryGetValue(owed.Bot.Low, out PlayerbotSocialBot? bot) || pass.NowMs >= owed.DeadlineMs)
+            {
+                _owed.RemoveAt(i);
+                continue;
+            }
+
+            if (!bot.Player.IsAlive)
+            {
+                owed.RetryAtMs = pass.NowMs + OwedRetryMs;
+                continue;
+            }
+
+            _owed.RemoveAt(i);
+            Thank(pass, recorder, help, options, bot, owed.Helper, owed.Kind);
+        }
     }
 
     private void Thank(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, PlayerbotHelpLane help, PlayerbotSocialGratitudeOptions options, PlayerbotSocialBot bot, ObjectGuid helperGuid,
         PlayerbotThanksKind kind)
     {
         Player self = bot.Player;
-        if (!self.IsAlive || pass.World.FindOnlinePlayer(helperGuid) is not { } helper || ReferenceEquals(helper, self) || !ReferenceEquals(helper.Map, self.Map)) return;
+        if (!self.IsAlive)
+        {
+            // A dead bot says nothing yet: the thanks waits for it to live again (or for the debt to go stale).
+            if (_owed.Count < MaxOwed) _owed.Add(new Owed(self.Guid, helperGuid, kind, pass.NowMs + OwedRetryMs, pass.NowMs + OwedDeadlineMs));
+            return;
+        }
+
+        if (pass.World.FindOnlinePlayer(helperGuid) is not { } helper || ReferenceEquals(helper, self) || !ReferenceEquals(helper.Map, self.Map)) return;
         if (Distance(self, helper) > PlayerbotGratitude.ThankYards) return;
         if (_thanked.TryGetValue((bot.Id, helperGuid.Value), out long at) && pass.NowMs - at < PlayerbotSocialRecorder.HelpWindowMs) return;
         _thanked[(bot.Id, helperGuid.Value)] = pass.NowMs;
@@ -200,7 +258,7 @@ internal sealed class PlayerbotGratitudeLane
         switch (PlayerbotGratitude.FavourOf(self.Guid.Value, helperGuid.Value, fight, traits.Generosity, affinity, options.TipChance, canTip, canBuff, canResurrect))
         {
             case PlayerbotFavour.Tip:
-                StartTip(bot.Id, helperGuid, tip, self.Money, pass.NowMs);
+                StartTip(pass.Recorder!, bot, helperGuid, tip, pass.NowMs);
                 break;
             case PlayerbotFavour.Buff:
                 if (bot.Brain!.RequestHelp(PlayerbotHelpKind.Buff, helperGuid)) Buffs++;
@@ -212,10 +270,11 @@ internal sealed class PlayerbotGratitudeLane
         }
     }
 
-    /// <summary>Begin a tip of <paramref name="copper"/> from the bot to the helper (the favour above, and tests).</summary>
-    internal void StartTip(Guid bot, ObjectGuid helper, uint copper, uint moneyBefore, long nowMs)
+    /// <summary>Begin a tip of <paramref name="copper"/> from the bot to the helper (the favour above).</summary>
+    private void StartTip(PlayerbotSocialRecorder recorder, PlayerbotSocialBot bot, ObjectGuid helper, uint copper, long nowMs)
     {
-        _tips[bot] = new Tip(helper, copper, moneyBefore, nowMs);
+        recorder.TryTakeTradeDone(bot.Id); // a completion from an earlier trade is not this tip's
+        _tips[bot.Id] = new Tip(bot.Session, bot.Player, helper, copper, nowMs);
         TipsStarted++;
     }
 
@@ -234,45 +293,70 @@ internal sealed class PlayerbotGratitudeLane
 
     // --- the tip -------------------------------------------------------------------------------------------------------------
 
-    private void StepTips(PlayerbotSocialPass pass)
+    private readonly List<Guid> _doneScratch = [];
+
+    private void StepTips(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder)
     {
+        _doneScratch.Clear();
         foreach ((Guid botId, Tip tip) in _tips)
-        {
-            if (!Step(pass, botId, tip)) _tips.Remove(botId);
-        }
+            if (!Step(pass, recorder, botId, tip)) _doneScratch.Add(botId);
+        foreach (Guid botId in _doneScratch) _tips.Remove(botId);
     }
 
-    // True while the tip is still under way.
-    private bool Step(PlayerbotSocialPass pass, Guid botId, Tip tip)
+    /// <summary>Drop every tip under way and close the windows they opened (the feature is switched off, detached or stopped).</summary>
+    internal void CancelAllTips()
     {
-        PlayerbotSocialBot? bot = null;
-        foreach (PlayerbotSocialBot candidate in pass.Bots)
-            if (candidate.Id == botId)
-            {
-                bot = candidate;
-                break;
-            }
+        if (_tips.Count == 0) return;
+        foreach (Tip tip in _tips.Values) Cancel(tip);
+        _tips.Clear();
+    }
 
-        if (bot is null || pass.World.FindOnlinePlayer(tip.Helper) is not { } helper) return false;
-        Player self = bot.Player;
-        EconomyFeature? economy = bot.Session.Services.GetService<EconomyFeature>();
-        if (economy is not { Enabled: true }) return false;
-        TradeSession? trade = economy.TradeOf(self);
-        if (trade is null && tip.LastInitiateMs != 0 && tip.MoneyBefore >= self.Money && tip.MoneyBefore - self.Money >= tip.Copper)
+    // Close the bot's trade window if it is the tip's: a dropped tip never leaves the helper looking at a stalled window.
+    private static void Cancel(Tip tip)
+    {
+        EconomyFeature? economy = tip.Session.Services.GetService<EconomyFeature>();
+        if (economy?.TradeOf(tip.Bot) is { Settling: false } trade && trade.OtherSide(tip.Bot).Player.Guid == tip.Helper)
+            PlayerbotSocialPackets.Send(tip.Session, WorldOpcode.CmsgCancelTrade, []);
+    }
+
+    // True while the tip is still under way. Every other path cancels the window first.
+    private bool Step(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, Guid botId, Tip tip)
+    {
+        if (!pass.ByCharacter.TryGetValue(tip.Bot.Guid.Low, out PlayerbotSocialBot? bot) || bot.Id != botId || pass.World.FindOnlinePlayer(tip.Helper) is not { } helper)
         {
-            TipsPaid++;
+            Cancel(tip);
             return false;
         }
 
+        Player self = bot.Player;
+        EconomyFeature? economy = bot.Session.Services.GetService<EconomyFeature>();
+        if (economy is not { Enabled: true })
+        {
+            Cancel(tip);
+            return false;
+        }
+
+        TradeSession? trade = economy.TradeOf(self);
         if (trade is not null) tip.Seen = true;
-        else if (tip.Seen) return false; // the window closed without the gold moving: the helper said no
+        else if (tip.Seen)
+        {
+            // The window closed. A completed trade (the bot's own trade status, noted by its party AI) is a paid tip; otherwise the helper said no.
+            if (recorder.TryTakeTradeDone(botId))
+            {
+                TipsPaid++;
+                return false;
+            }
+
+            if (tip.ClosedAtMs == 0) tip.ClosedAtMs = pass.NowMs;
+            return pass.NowMs - tip.ClosedAtMs < ClosedGraceMs;
+        }
 
         bool over = pass.NowMs - tip.StartedMs > TipWaitMs;
         bool unfit = !self.IsAlive || self.Combat.IsInCombat || !helper.IsAlive || !ReferenceEquals(helper.Map, self.Map) || Distance(self, helper) > PlayerbotGratitude.TipYards
             || self.Money < tip.Copper;
         if (over || unfit)
         {
-            if (trade is { Settling: false } && trade.Involves(helper)) PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgCancelTrade, []);
+            Cancel(tip);
             return false;
         }
 

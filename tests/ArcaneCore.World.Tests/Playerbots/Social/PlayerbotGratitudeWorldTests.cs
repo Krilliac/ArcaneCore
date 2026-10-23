@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
@@ -52,49 +53,154 @@ public sealed class PlayerbotGratitudeWorldTests
         Assert.Equal(1, SocialTestKit.Feature(world.Host).Gratitude.Emotes);
     }
 
-    [Fact]
-    public async Task ATip_IsARealTrade_ThatMovesTheGold()
-    {
-        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true,
-            services: services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new Party.PlayerbotPartyTests.StubEconomyStore()));
-        await using WorldTestClient friend = await world.AddPlayerAsync("Tipfriend");
-        Guid bot = await world.AddBotAsync("Tipbot", money: 50_000);
-        await HelpTestKit.StandAsync(world, "Tipbot", ("Tipfriend", 3f));
-        ObjectGuid botGuid = await world.Host.PlayerStateAsync("Tipbot", p => p.Guid);
-        ObjectGuid friendGuid = await world.Host.PlayerStateAsync("Tipfriend", p => p.Guid);
-        uint before = await world.Host.PlayerStateAsync("Tipfriend", p => p.Money);
-        await world.Host.OnWorldAsync(() =>
-        {
-            HelpTestKit.Online(world, "Tipbot").Inventory.Load([]);
-            HelpTestKit.Online(world, "Tipfriend").Inventory.Load([]);
-        });
-        uint copper = PlayerbotGratitude.TipCopper(50_000, 1, 10_000);
-        Assert.True(copper > 0);
-        await world.Host.OnWorldAsync(() => SocialTestKit.Feature(world.Host).Gratitude.StartTip(bot, friendGuid, copper, HelpTestKit.Online(world, "Tipbot").Money, 1_000));
+    private static ArcaneCore.World.Economy.EconomyFeature EconomyOf(SocialWorld world)
+        => (ArcaneCore.World.Economy.EconomyFeature)world.Host.WorldServices.GetService(typeof(ArcaneCore.World.Economy.EconomyFeature))!;
 
-        long now = 2_000;
-        for (int i = 0; i < 40 && await world.Host.PlayerStateAsync("Tipfriend", p => p.Money) == before; i++)
+    /// <summary>
+    /// A generous bot (Generosity 0.6 or more) that likes a real player and owes them thanks, so that a thank at the right world time rolls a tip. The
+    /// tip goes through the real thanks path: the help report, the thanks queue, <c>FavourOf</c> and the lane's own trade steps.
+    /// </summary>
+    private sealed class TipScene : IAsyncDisposable
+    {
+        private readonly WorldTestClient _friend;
+
+        private TipScene(SocialWorld world, WorldTestClient friend, string botName, Guid bot, ObjectGuid botGuid, ObjectGuid friendGuid, float generosity, uint copper)
         {
-            await PassAsync(world, now += 1_000);
-            await Task.Delay(1100); // a trade ignores an accept that follows a change by less than a second (scam prevention)
-            (bool exists, bool opened, bool goldSet) = await world.Host.OnWorldAsync(() =>
-            {
-                var economy = (ArcaneCore.World.Economy.EconomyFeature)world.Host.WorldServices.GetService(typeof(ArcaneCore.World.Economy.EconomyFeature))!;
-                return economy.TradeOf(HelpTestKit.Online(world, "Tipfriend")) is { } t ? (true, t.Opened, t.SideOf(HelpTestKit.Online(world, "Tipbot")).Gold == copper) : (false, false, false);
-            });
-            if (exists && !opened) await friend.SendAsync(WorldOpcode.CmsgBeginTrade, []);
-            else if (exists && goldSet) await world.Host.OnWorldAsync(() =>
-            {
-                Player p = HelpTestKit.Online(world, "Tipfriend");
-                ((ArcaneCore.World.Economy.EconomyFeature)world.Host.WorldServices.GetService(typeof(ArcaneCore.World.Economy.EconomyFeature))!).AcceptTrade((ArcaneCore.World.Net.WorldSession)p.Session, p);
-            });
+            World = world;
+            _friend = friend;
+            BotName = botName;
+            Bot = bot;
+            BotGuid = botGuid;
+            FriendGuid = friendGuid;
+            Generosity = generosity;
+            Copper = copper;
         }
 
-        Assert.Equal(before + copper, await world.Host.PlayerStateAsync("Tipfriend", p => p.Money));
-        Assert.Equal(50_000u - copper, await world.Host.PlayerStateAsync("Tipbot", p => p.Money));
-        await PassAsync(world, now + 1_000);
-        Assert.Equal(1, SocialTestKit.Feature(world.Host).Gratitude.TipsPaid);
-        Assert.Equal(0, SocialTestKit.Feature(world.Host).Gratitude.TipsPending);
-        _ = botGuid;
+        public SocialWorld World { get; }
+
+        public string BotName { get; }
+
+        public Guid Bot { get; }
+
+        public ObjectGuid BotGuid { get; }
+
+        public ObjectGuid FriendGuid { get; }
+
+        public float Generosity { get; }
+
+        public uint Copper { get; }
+
+        public long Now { get; private set; } = 1_000;
+
+        public static async Task<TipScene> StartAsync()
+        {
+            SocialWorld world = await SocialWorld.StartAsync(frozen: true,
+                services: services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new Party.PlayerbotPartyTests.StubEconomyStore()));
+            WorldTestClient friend = await world.AddPlayerAsync("Tipfriend");
+            await world.Host.OnWorldAsync(() =>
+            {
+                world.Options.Social.Gratitude.TipChance = 1f;
+                world.Options.Social.Memory.MaxDailyAffinityGainPerPair = 0; // the daily cap would hold a pair under the tipping affinity
+            });
+            for (int i = 0; i < 14; i++)
+            {
+                string name = "Tipbot" + (char)('a' + i);
+                Guid bot = await world.AddBotAsync(name, money: 50_000);
+                ObjectGuid botGuid = await world.Host.PlayerStateAsync(name, p => p.Guid);
+                float generosity = PlayerbotTraits.For(botGuid.Value).Generosity;
+                if (generosity < PlayerbotGratitude.GenerousAt) continue;
+                await HelpTestKit.StandAsync(world, name, ("Tipfriend", 3f));
+                ObjectGuid friendGuid = await world.Host.PlayerStateAsync("Tipfriend", p => p.Guid);
+                await world.Host.OnWorldAsync(() =>
+                {
+                    HelpTestKit.Online(world, name).Inventory.Load([]);
+                    HelpTestKit.Online(world, "Tipfriend").Inventory.Load([]);
+                });
+                return new TipScene(world, friend, name, bot, botGuid, friendGuid, generosity, PlayerbotGratitude.TipCopper(50_000, 1, 10_000));
+            }
+
+            throw new InvalidOperationException("no generous bot among fourteen");
+        }
+
+        /// <summary>The friend helps the bot; a pass at a world time where the thanks roll a tip runs.</summary>
+        public async Task ThankAsync()
+        {
+            await World.Host.OnWorldAsync(() =>
+            {
+                PlayerbotSocialRecorder recorder = HelpTestKit.RecorderOf(World);
+                for (int i = 0; i < 60 && !(recorder.Memory.TryGet(Bot, FriendGuid.Value, out PlayerbotRelation r) && r.Affinity >= PlayerbotGratitude.FavourAffinity); i++)
+                    recorder.NoteById(Bot, BotGuid, FriendGuid, PlayerbotSocialEvent.GroupSucceeded);
+                recorder.NoteHelp(HelpTestKit.Online(World, "Tipfriend"), HelpTestKit.Online(World, BotName));
+            });
+            Now = HelpTestKit.NowWhere(t => PlayerbotGratitude.FavourOf(BotGuid.Value, FriendGuid.Value, (uint)(t / 1000), Generosity, 100, 1f, true, true, true) == PlayerbotFavour.Tip);
+            await PassAsync(World, Now);
+        }
+
+        public async Task PassNextAsync() => await PassAsync(World, Now += 1_000);
+
+        /// <summary>The trade the friend is in: whether there is one, it opened, and the bot's gold is set.</summary>
+        public Task<(bool Exists, bool Opened, bool GoldSet)> TradeAsync() => World.Host.OnWorldAsync(() =>
+            EconomyOf(World).TradeOf(HelpTestKit.Online(World, "Tipfriend")) is { } t
+                ? (true, t.Opened, t.SideOf(HelpTestKit.Online(World, BotName)).Gold == Copper)
+                : (false, false, false));
+
+        public Task BeginTradeAsync() => _friend.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+
+        public Task AcceptTradeAsync() => _friend.SendAsync(WorldOpcode.CmsgAcceptTrade, []);
+
+        public async ValueTask DisposeAsync()
+        {
+            await _friend.DisposeAsync();
+            await World.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ATip_ComesThroughTheThanksPath_AndIsAcceptedByTheClient_AndCountsFromTheTradeCompletion()
+    {
+        await using TipScene scene = await TipScene.StartAsync();
+        uint before = await scene.World.Host.PlayerStateAsync("Tipfriend", p => p.Money);
+        Assert.True(scene.Copper > 0);
+
+        await scene.ThankAsync();
+        Assert.Equal(1, SocialTestKit.Feature(scene.World.Host).Gratitude.TipsStarted);
+
+        for (int i = 0; i < 40 && await scene.World.Host.PlayerStateAsync("Tipfriend", p => p.Money) == before; i++)
+        {
+            await scene.PassNextAsync();
+            await Task.Delay(1100); // a trade ignores an accept that follows a change by less than a second (scam prevention)
+            (bool exists, bool opened, bool goldSet) = await scene.TradeAsync();
+            if (exists && !opened) await scene.BeginTradeAsync();
+            else if (exists && goldSet) await scene.AcceptTradeAsync();
+        }
+
+        Assert.Equal(before + scene.Copper, await scene.World.Host.PlayerStateAsync("Tipfriend", p => p.Money));
+        await scene.PassNextAsync();
+        Assert.Equal(1, SocialTestKit.Feature(scene.World.Host).Gratitude.TipsPaid);
+        Assert.Equal(0, SocialTestKit.Feature(scene.World.Host).Gratitude.TipsPending);
+    }
+
+    [Fact]
+    public async Task DisablingGratitudeLive_MidTip_CancelsTheTrade()
+    {
+        await using TipScene scene = await TipScene.StartAsync();
+        await scene.ThankAsync();
+        for (int i = 0; i < 20; i++)
+        {
+            await scene.PassNextAsync();
+            (bool exists, bool opened, _) = await scene.TradeAsync();
+            if (exists && opened) break;
+            if (exists) await scene.BeginTradeAsync();
+            await Task.Delay(300);
+        }
+
+        Assert.True((await scene.TradeAsync()).Opened, "the trade window opened");
+        Assert.Equal(1, SocialTestKit.Feature(scene.World.Host).Gratitude.TipsPending);
+
+        await scene.World.Host.OnWorldAsync(() => scene.World.Options.Social.Gratitude.Enabled = false);
+        await scene.PassNextAsync();
+
+        Assert.Equal(0, SocialTestKit.Feature(scene.World.Host).Gratitude.TipsPending);
+        await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the bot's cancel to close the friend's trade window");
     }
 }
