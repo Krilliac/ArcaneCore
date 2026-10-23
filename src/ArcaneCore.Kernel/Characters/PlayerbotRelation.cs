@@ -17,6 +17,12 @@ public enum PlayerbotRelationFlags : int
 
     /// <summary>Only ever in <c>WarFlags</c>: the war layer has been seeded from the normal affinity (never set in <c>Flags</c>).</summary>
     WarSeeded = 512,
+
+    /// <summary>
+    /// Only ever in <c>Flags</c> of a stored row: the normal rules have evicted this relation and only the war layer still holds it. The normal
+    /// fields of such a row are blank and every normal read treats it as absent (a war read, with War Mode on, sees it).
+    /// </summary>
+    WarOnly = 1024,
 }
 
 /// <summary>
@@ -52,7 +58,8 @@ public sealed record PlayerbotRelation(
     long DecayAnchorUnixMs = 0,
     long WarDecayAnchorUnixMs = 0)
 {
-    public const int MaxRowsPerBot = 1024;
+    /// <summary>Rows one bot may store: four times the largest <c>MaxRelationsPerBot</c> (1024), the war-only rows being the rest.</summary>
+    public const int MaxRowsPerBot = 4096;
     public const int MaxTopicLength = 32;
     public const int MaxSummaryLength = 160;
 }

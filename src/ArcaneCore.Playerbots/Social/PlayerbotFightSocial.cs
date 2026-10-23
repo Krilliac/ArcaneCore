@@ -148,15 +148,30 @@ internal sealed class PlayerbotFightSocial(Guid botId, PlayerbotSocialMemoryOpti
 
     private void SampleHelpers(Player bot, PlayerbotSocialRecorder recorder)
     {
-        foreach (Unit unit in bot.Combat.Attackers) ReadThreat(bot, unit, recorder);
-        foreach (Unit unit in bot.Combat.ThreatenedBy) ReadThreat(bot, unit, recorder);
+        ReadThreats(bot, bot.Combat.Attackers, recorder);
+        ReadThreats(bot, bot.Combat.ThreatenedBy, recorder);
+    }
+
+    // The sets are HashSet<Unit> behind IReadOnlySet: matched to the concrete type, whose struct enumerator allocates nothing (an interface foreach boxes one every sample).
+    private void ReadThreats(Player bot, IReadOnlySet<Unit> units, PlayerbotSocialRecorder recorder)
+    {
+        if (units.Count == 0) return;
+        if (units is HashSet<Unit> set)
+        {
+            foreach (Unit unit in set) ReadThreat(bot, unit, recorder);
+            return;
+        }
+
+        foreach (Unit unit in units) ReadThreat(bot, unit, recorder);
     }
 
     private void ReadThreat(Player bot, Unit unit, PlayerbotSocialRecorder recorder)
     {
         if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer || !creature.Combat.HasThreatList) return;
-        foreach (ThreatEntry entry in creature.Combat.Threat.Entries)
+        IReadOnlyList<ThreatEntry> entries = creature.Combat.Threat.Entries;
+        for (int index = 0; index < entries.Count; index++)
         {
+            ThreatEntry entry = entries[index];
             if (entry.Threat <= 0f || DuelRules.ControllingPlayer(entry.Target) is not { } helper || ReferenceEquals(helper, bot)) continue;
             if (_helpers.Add(helper.Guid.Value)) recorder.NoteHelp(helper, bot);
         }
@@ -222,10 +237,22 @@ internal sealed class PlayerbotFightSocial(Guid botId, PlayerbotSocialMemoryOpti
     private bool LosingFight(Player bot)
     {
         if (bot.MaxHealth == 0) return false;
-        float strongest = 0f;
-        foreach (Unit unit in bot.Combat.Attackers) strongest = Math.Max(strongest, Fraction(unit));
-        foreach (Unit unit in bot.Combat.ThreatenedBy) strongest = Math.Max(strongest, Fraction(unit));
+        float strongest = Math.Max(Strongest(bot.Combat.Attackers), Strongest(bot.Combat.ThreatenedBy));
         return PlayerbotCallForHelp.LooksLost((float)bot.Health / bot.MaxHealth, strongest);
+
+        static float Strongest(IReadOnlySet<Unit> units)
+        {
+            float strongest = 0f;
+            if (units.Count == 0) return strongest;
+            if (units is HashSet<Unit> set)
+            {
+                foreach (Unit unit in set) strongest = Math.Max(strongest, Fraction(unit));
+                return strongest;
+            }
+
+            foreach (Unit unit in units) strongest = Math.Max(strongest, Fraction(unit));
+            return strongest;
+        }
 
         static float Fraction(Unit unit) => unit is Creature { MaxHealth: > 0 } creature && !creature.CharmerOrOwnerGuid.IsPlayer
             ? (float)creature.Health / creature.MaxHealth : 0f;

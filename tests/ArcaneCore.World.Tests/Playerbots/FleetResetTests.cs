@@ -114,6 +114,85 @@ public sealed class FleetResetTests
     }
 
     [Fact]
+    public async Task Reset_OfBotsThatAllKnowEachOther_WritesEachRemovedBotOnce_AndEachSurvivorOnce()
+    {
+        var store = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        Guid[] ids = await CreateBotsAsync(world, 4, started: 0);
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        var memory = world.Bots.Social.Memory;
+        int[] characters = [.. ids.Select(id => registry.Single(b => b.BotId == id).CharacterId)];
+        ulong[] guids = [.. characters.Select(c => ArcaneCore.Game.ObjectGuid.Player((uint)c).Value)];
+        for (int i = 0; i < ids.Length; i++)
+            for (int j = 0; j < ids.Length; j++)
+                if (i != j) memory.Note(ids[i], characters[i], guids[j], true, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        Guid survivor = Guid.NewGuid(); // a bot outside the registry that knows two of them (and a stranger)
+        memory.Note(survivor, 9001, guids[0], true, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        memory.Note(survivor, 9001, guids[1], true, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        memory.Note(survivor, 9001, 4242, false, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        foreach (Guid id in ids.Append(survivor)) await store.ReplaceAsync(id, memory.Snapshot(id));
+        int before = store.Replaces;
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(4, 4), _ => { });
+
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.Equal(ids.Length + 1, store.Replaces - before); // one delete per removed bot and one write of the survivor, not one per bot-pair
+        foreach (Guid id in ids) Assert.Empty(memory.Snapshot(id));
+        PlayerbotRelation left = Assert.Single(memory.Snapshot(survivor));
+        Assert.Equal(4242UL, left.OtherGuid);
+        Assert.Equal(4242UL, Assert.Single(await store.LoadAllAsync(), r => r.BotId == survivor).OtherGuid);
+    }
+
+    [Fact]
+    public async Task TwoWritesOfOneBotsRelations_NeverRunAtOnce_WhileDifferentBotsMay()
+    {
+        var store = new OverlapStore();
+        await using PopulationTestHost world = await StartAsync();
+        Guid one = Guid.NewGuid(), two = Guid.NewGuid();
+
+        await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => world.Bots.WriteRelationsAsync(store, one, () => [])));
+        Assert.Equal(1, store.MaxActive(one));
+        Assert.Equal(6, store.Calls(one));
+
+        await Task.WhenAll(world.Bots.WriteRelationsAsync(store, one, () => []), world.Bots.WriteRelationsAsync(store, two, () => []));
+        Assert.Equal(2, store.MaxActiveOverall); // different bots are not serialized with each other
+    }
+
+    private sealed class OverlapStore : IPlayerbotRelationStore
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<Guid, int> _active = [], _max = [], _calls = [];
+        private int _activeAll;
+        public int MaxActiveOverall { get; private set; }
+        public int MaxActive(Guid bot) { lock (_gate) return _max.GetValueOrDefault(bot); }
+        public int Calls(Guid bot) { lock (_gate) return _calls.GetValueOrDefault(bot); }
+
+        public Task<IReadOnlyList<PlayerbotRelation>> LoadAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PlayerbotRelation>>([]);
+
+        public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
+        {
+            lock (_gate)
+            {
+                _active[botId] = _active.GetValueOrDefault(botId) + 1;
+                _calls[botId] = _calls.GetValueOrDefault(botId) + 1;
+                _max[botId] = Math.Max(_max.GetValueOrDefault(botId), _active[botId]);
+                MaxActiveOverall = Math.Max(MaxActiveOverall, ++_activeAll);
+            }
+
+            await Task.Delay(60, cancellationToken);
+            lock (_gate)
+            {
+                _active[botId]--;
+                _activeAll--;
+            }
+        }
+    }
+
+    [Fact]
     public async Task Reset_WhenARegistryRowNamesARealPlayersCharacter_RefusesAndTouchesNothing()
     {
         await using PopulationTestHost world = await StartAsync();

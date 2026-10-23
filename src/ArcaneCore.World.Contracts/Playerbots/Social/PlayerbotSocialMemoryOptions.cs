@@ -10,7 +10,7 @@ public sealed class PlayerbotSocialMemoryOptions
     /// <summary>Record and use the memory (on by default). Off: nothing is noted and the speech ignores any stored relations.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>The most relations one bot keeps (16..1024). Past it the least familiar, oldest entry that is not a strong bond or grudge is dropped.</summary>
+    /// <summary>The most relations one bot keeps (16..1024). Past it the least familiar, oldest entry that is not a strong bond or grudge is dropped; with War Mode on and RemoveCaps, one the war layer holds a grudge against stays as a war-only entry that only War Mode sees (a bot holds at most four times this many entries in all).</summary>
     public int MaxRelationsPerBot { get; set; } = 256;
 
     /// <summary>Affinity gained when a chat exchange with the bot happens (0..20).</summary>

@@ -101,7 +101,8 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
             lock (_helpGate)
             {
                 if (_helped.Count > 2048)
-                    foreach (var stale in _helped.Where(pair => now - pair.Value > HelpWindowMs).Select(pair => pair.Key).ToArray()) _helped.Remove(stale);
+                    foreach (KeyValuePair<(ulong Low, ulong High), long> pair in _helped) // Dictionary.Remove during enumeration is allowed: no copy
+                        if (now - pair.Value > HelpWindowMs) _helped.Remove(pair.Key);
                 (ulong, ulong) key = helper.Guid.Value < victim.Guid.Value ? (helper.Guid.Value, victim.Guid.Value) : (victim.Guid.Value, helper.Guid.Value);
                 if (_helped.TryGetValue(key, out long at) && now - at <= HelpWindowMs) return;
                 _helped[key] = now;
@@ -136,7 +137,18 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     {
         lock (_helpGate)
             if (_helped.Count > 0)
-                foreach (var key in _helped.Keys.Where(k => k.Low == character.Value || k.High == character.Value).ToArray()) _helped.Remove(key);
+                foreach ((ulong Low, ulong High) key in _helped.Keys)
+                    if (key.Low == character.Value || key.High == character.Value) _helped.Remove(key);
+    }
+
+    /// <summary>
+    /// A line addressed to a bot: an exchange with its sender and, if the line apologises, an apology. The apology is recorded first, so the
+    /// exchange's own affinity cannot lift a small grudge to zero before the apology looks for it.
+    /// </summary>
+    public void NoteChatLine(Guid botId, ObjectGuid botGuid, ObjectGuid sender, string? text)
+    {
+        if (PlayerbotApology.IsApology(text)) NoteById(botId, botGuid, sender, PlayerbotSocialEvent.Apologized);
+        NoteById(botId, botGuid, sender, PlayerbotSocialEvent.ChatExchange);
     }
 
     /// <summary>Record the role <paramref name="other"/> played in a group with <paramref name="bot"/> (replacing the earlier one); nothing if the first is not a managed bot or no relation exists yet.</summary>

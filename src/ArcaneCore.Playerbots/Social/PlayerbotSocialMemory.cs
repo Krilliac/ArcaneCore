@@ -28,10 +28,10 @@ internal enum PlayerbotSocialEvent
 
 /// <summary>
 /// Each managed bot's bounded memory of the characters it has dealt with. Thread-safe (one lock; every call is a few dictionary operations).
-/// Familiarity decays lazily: a stored familiarity is the value at <see cref="PlayerbotRelation.LastSeenUnixMs"/> and reads halve it per
-/// <see cref="PlayerbotSocialMemoryOptions.FamiliarityHalfLifeDays"/> since then without changing the entry; a write folds the decay in
-/// first. <see cref="Snapshot"/> returns the stored values (what <see cref="Load"/> expects back); <see cref="TryGet"/> and
-/// <see cref="Top"/> return the effective ones.
+/// Familiarity and affinity decay lazily: an entry keeps exact values as of its decay anchor (persisted with the row, see <see cref="PlayerbotRelation.DecayAnchorUnixMs"/>),
+/// a read halves them per <see cref="PlayerbotSocialMemoryOptions.FamiliarityHalfLifeDays"/> (and the affinity half-lives) for the whole days since the anchor without
+/// changing the entry, and a write folds those days in and moves the anchor by exactly them. <see cref="Snapshot"/> returns the stored rows (what
+/// <see cref="Load"/> expects back); <see cref="TryGet"/> and <see cref="Top"/> return the effective ones.
 /// </summary>
 internal sealed class PlayerbotSocialMemory
 {
@@ -41,12 +41,15 @@ internal sealed class PlayerbotSocialMemory
     private readonly PlayerbotSocialMemoryOptions _options;
     private readonly PlayerbotWarModeOptions _war;
     private readonly Func<long> _clock;
+    private readonly Microsoft.Extensions.Logging.ILogger? _log;
+    private bool _ceilingLogged;
     private readonly object _gate = new();
     private readonly Dictionary<Guid, BotMemory> _bots = [];
     private long _versionSeq;
 
-    public PlayerbotSocialMemory(PlayerbotSocialMemoryOptions options, Func<long> clock, PlayerbotWarModeOptions? warMode = null)
+    public PlayerbotSocialMemory(PlayerbotSocialMemoryOptions options, Func<long> clock, PlayerbotWarModeOptions? warMode = null, Microsoft.Extensions.Logging.ILogger? log = null)
     {
+        _log = log;
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clock);
         _options = options;
@@ -84,9 +87,11 @@ internal sealed class PlayerbotSocialMemory
             }
             else
             {
+                // The normal rules evicted this relation and only the war layer kept it: to them it is a stranger, so a normal event starts it afresh.
+                if (entry.WarOnly && e != PlayerbotSocialEvent.Apologized) Revive(entry, now);
                 if (e == PlayerbotSocialEvent.Apologized)
                 {
-                    normalGrudge = EffectiveAffinity(entry, now) < 0;
+                    normalGrudge = !entry.WarOnly && EffectiveAffinity(entry, now) < 0;
                     warGrudge = warOn && EffectiveWarAffinity(entry, now) < 0;
                     if (!normalGrudge && !warGrudge) return;
                     if (!normalGrudge)
@@ -169,7 +174,7 @@ internal sealed class PlayerbotSocialMemory
         const PlayerbotRelationFlags managed = PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival;
         lock (_gate)
         {
-            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry)) return;
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || entry.WarOnly) return;
             PlayerbotRelationFlags next = (entry.Flags & managed) | (flags & ~managed);
             if (next == entry.Flags) return;
             entry.Flags = next;
@@ -184,7 +189,7 @@ internal sealed class PlayerbotSocialMemory
     public bool IsRival(PlayerbotRelation relation)
         => ((_war.Enabled ? relation.WarFlags : relation.Flags) & PlayerbotRelationFlags.Rival) != 0;
 
-    /// <summary>Wipe every war layer (the checkpoint does it after War Mode is switched off with <c>ClearOnDisable</c>); the normal layer is untouched. True if anything changed.</summary>
+    /// <summary>Wipe every war layer and delete the war-only relations (the checkpoint does it after War Mode is switched off with <c>ClearOnDisable</c>); the normal layer is untouched. True if anything changed.</summary>
     public bool ClearWarLayers()
     {
         bool any = false;
@@ -192,6 +197,12 @@ internal sealed class PlayerbotSocialMemory
             foreach (BotMemory bot in _bots.Values)
             {
                 bool changed = false;
+                foreach (Entry warOnly in bot.Relations.Values.Where(entry => entry.WarOnly).ToArray())
+                {
+                    bot.Relations.Remove(warOnly.OtherGuid);
+                    changed = true;
+                }
+
                 foreach (Entry entry in bot.Relations.Values)
                 {
                     if (entry.WarAffinity == 0 && entry.WarFlags == PlayerbotRelationFlags.None) continue;
@@ -217,7 +228,7 @@ internal sealed class PlayerbotSocialMemory
         const PlayerbotRelationFlags roles = PlayerbotRelationFlags.PrefersTank | PlayerbotRelationFlags.PrefersHealer | PlayerbotRelationFlags.PrefersDamage;
         lock (_gate)
         {
-            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry)) return;
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || entry.WarOnly) return;
             PlayerbotRelationFlags next = (entry.Flags & ~roles) | (role & roles);
             if (next == entry.Flags) return;
             entry.Flags = next;
@@ -233,7 +244,7 @@ internal sealed class PlayerbotSocialMemory
         string text = Cut(summary, PlayerbotRelation.MaxSummaryLength);
         lock (_gate)
         {
-            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry)) return;
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || entry.WarOnly) return;
             if (entry.LastTopic == topic && entry.Summary == text) return;
             entry.LastTopic = topic;
             entry.Summary = text;
@@ -246,7 +257,7 @@ internal sealed class PlayerbotSocialMemory
         long now = _clock();
         lock (_gate)
         {
-            if (_bots.TryGetValue(botId, out BotMemory? bot) && bot.Relations.TryGetValue(other, out Entry? entry))
+            if (_bots.TryGetValue(botId, out BotMemory? bot) && bot.Relations.TryGetValue(other, out Entry? entry) && Visible(entry))
             {
                 relation = Effective(botId, bot, entry, now);
                 return true;
@@ -265,6 +276,7 @@ internal sealed class PlayerbotSocialMemory
         {
             if (!_bots.TryGetValue(botId, out BotMemory? bot)) return [];
             return [.. bot.Relations.Values
+                .Where(Visible)
                 .Select(entry => Effective(botId, bot, entry, now))
                 .OrderByDescending(r => r.Familiarity).ThenByDescending(EffectiveAffinity).ThenBy(r => r.OtherGuid)
                 .Take(n)];
@@ -290,7 +302,7 @@ internal sealed class PlayerbotSocialMemory
                     WarAffinity = double.IsNaN(row.WarAffinityExact) ? row.WarAffinity : row.WarAffinityExact, WarFlags = row.WarFlags,
                     Anchor = row.DecayAnchorUnixMs > 0 ? row.DecayAnchorUnixMs : row.LastSeenUnixMs,
                     WarAnchor = row.WarDecayAnchorUnixMs > 0 ? row.WarDecayAnchorUnixMs : row.LastSeenUnixMs,
-                    TrustPermille = row.TrustPermille, Flags = row.Flags, LastSeen = row.LastSeenUnixMs, LastExchange = long.MinValue,
+                    TrustPermille = row.TrustPermille, Flags = row.Flags & ~PlayerbotRelationFlags.WarOnly, WarOnly = (row.Flags & PlayerbotRelationFlags.WarOnly) != 0, LastSeen = row.LastSeenUnixMs, LastExchange = long.MinValue,
                     LastTopic = Cut(row.LastTopic, PlayerbotRelation.MaxTopicLength), Summary = Cut(row.Summary, PlayerbotRelation.MaxSummaryLength),
                 };
             }
@@ -356,9 +368,9 @@ internal sealed class PlayerbotSocialMemory
 
     // Decay runs in whole days, but no time is lost: an entry keeps exact (fractional) values as of its decay anchor, a read or a write counts
     // the whole days since the anchor, and a write moves the anchor by exactly those days (never to "now"), so the part of a day not yet
-    // counted carries over to the next write. The anchor is separate from LastSeen and lives in memory only (a load starts it at LastSeen; a
-    // saved row holds the values as of its LastSeen). The war layer has its own anchor for the same reason: a war-only event may not touch
-    // the normal one.
+    // counted carries over to the next write. The anchor is separate from LastSeen and is persisted with the exact values (a row without them
+    // loads with the anchor at LastSeen). The war layer has its own anchor for the same reason: an event that only reaches the war layer
+    // may not touch the normal one.
     private const double Epsilon = 1e-6;
 
     private double Factor(long days, int halfLifeDays)
@@ -482,26 +494,88 @@ internal sealed class PlayerbotSocialMemory
         => entry.Flags = ToWhole(entry.Affinity) <= _options.RivalAffinity ? entry.Flags | PlayerbotRelationFlags.Rival : entry.Flags & ~PlayerbotRelationFlags.Rival;
 
     // Over the limit: drop the lowest (familiarity, then oldest last-seen) entry that is not a strong bond or grudge, and not the entry
-    // just written unless nothing else can go.
+    // just written unless nothing else can go. The normal rules alone decide, and see no war-only row, so the normal layer is the same with or
+    // without War Mode. What they drop and War Mode (on, RemoveCaps) holds a grudge against stays as a war-only row; the rows of one bot are
+    // bounded by four times the limit, the oldest war-only row going first.
     private void Evict(BotMemory bot, Entry touched, long now)
     {
-        int max = Math.Clamp(_options.MaxRelationsPerBot, 1, PlayerbotRelation.MaxRowsPerBot);
-        while (bot.Relations.Count > max)
+        int max = Math.Clamp(_options.MaxRelationsPerBot, 1, PlayerbotRelation.MaxRowsPerBot / 4);
+        if (bot.Relations.Count <= max) return;
+        int normal = 0;
+        foreach (Entry entry in bot.Relations.Values)
+            if (!entry.WarOnly) normal++;
+        while (normal > max)
         {
             Entry victim = Lowest(bot, touched, now, protectStrong: true) ?? Lowest(bot, touched, now, protectStrong: false) ?? touched;
-            bot.Relations.Remove(victim.OtherGuid);
+            if (_war.Enabled && _war.RemoveCaps && WarWantsToKeep(victim, now)) BecomeWarOnly(victim, now);
+            else bot.Relations.Remove(victim.OtherGuid);
+            normal--;
+        }
+
+        int ceiling = max * 4;
+        while (bot.Relations.Count > ceiling)
+        {
+            Entry? oldest = null;
+            foreach (Entry entry in bot.Relations.Values)
+                if (entry.WarOnly && (oldest is null || entry.LastSeen < oldest.LastSeen || entry.LastSeen == oldest.LastSeen && entry.OtherGuid < oldest.OtherGuid))
+                    oldest = entry;
+            if (oldest is null) break;
+            bot.Relations.Remove(oldest.OtherGuid);
+            if (_ceilingLogged) continue;
+            _ceilingLogged = true;
+            if (_log is not null)
+                Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(_log,
+                    "Playerbot social memory: a bot reached {Ceiling} relations (four times MaxRelationsPerBot); the oldest war-only relations are dropped.", ceiling);
         }
     }
 
-    // A strong bond or grudge is kept; while War Mode is on with RemoveCaps, so is every entry the war layer holds a grudge against.
-    private bool IsProtected(Entry entry, long now)
+    // A strong bond or grudge is kept by the normal rules (the war layer is not consulted: a normal decision never depends on War Mode).
+    private bool IsProtected(Entry entry, long now) => Math.Abs(EffectiveAffinity(entry, now)) >= ProtectedAffinity;
+
+    private bool WarWantsToKeep(Entry entry, long now)
     {
-        int affinity = EffectiveAffinity(entry, now);
-        if (Math.Abs(affinity) >= ProtectedAffinity) return true;
-        if (!_war.Enabled || !_war.RemoveCaps) return false;
         int war = EffectiveWarAffinity(entry, now);
         return war < 0 || war <= _options.RivalAffinity;
     }
+
+    // The relation leaves the normal layer but stays for the war layer: the war layer is seeded first (it may still read the normal affinity),
+    // then every normal field goes back to a brand-new relation's.
+    private void BecomeWarOnly(Entry entry, long now)
+    {
+        if ((entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0)
+        {
+            entry.WarAffinity = AffinityAt(entry, now);
+            entry.WarAnchor = now;
+            entry.WarFlags |= PlayerbotRelationFlags.WarSeeded;
+            if (ToWhole(entry.WarAffinity) <= _options.RivalAffinity) entry.WarFlags |= PlayerbotRelationFlags.Rival;
+        }
+        else FoldWar(entry, now);
+
+        ResetNormal(entry, now);
+        entry.WarOnly = true;
+    }
+
+    private static void Revive(Entry entry, long now)
+    {
+        ResetNormal(entry, now);
+        entry.WarOnly = false;
+    }
+
+    private static void ResetNormal(Entry entry, long now)
+    {
+        entry.Affinity = 0;
+        entry.Familiarity = 0;
+        entry.TrustPermille = 500;
+        entry.Flags = PlayerbotRelationFlags.None;
+        entry.Anchor = now;
+        entry.LastExchange = long.MinValue;
+        entry.ApologyDay = entry.GainDay = long.MinValue;
+        entry.Gained = 0;
+        entry.LastTopic = entry.Summary = string.Empty;
+    }
+
+    // A war-only relation is absent for the normal layer; a war read (War Mode on) sees it.
+    private bool Visible(Entry entry) => !entry.WarOnly || _war.Enabled;
 
     private Entry? Lowest(BotMemory bot, Entry touched, long now, bool protectStrong)
     {
@@ -509,9 +583,11 @@ internal sealed class PlayerbotSocialMemory
         int bestFamiliarity = 0;
         foreach (Entry entry in bot.Relations.Values)
         {
-            if (ReferenceEquals(entry, touched) || (protectStrong && IsProtected(entry, now))) continue;
+            if (entry.WarOnly || ReferenceEquals(entry, touched) || (protectStrong && IsProtected(entry, now))) continue;
             int familiarity = EffectiveFamiliarity(entry, now);
-            if (best is null || familiarity < bestFamiliarity || (familiarity == bestFamiliarity && entry.LastSeen < best.LastSeen))
+            // The guid breaks a full tie, so the choice does not depend on the order the rows happen to be stored in.
+            if (best is null || familiarity < bestFamiliarity || (familiarity == bestFamiliarity
+                && (entry.LastSeen < best.LastSeen || entry.LastSeen == best.LastSeen && entry.OtherGuid < best.OtherGuid)))
             {
                 best = entry;
                 bestFamiliarity = familiarity;
@@ -534,7 +610,8 @@ internal sealed class PlayerbotSocialMemory
     // The row as stored: the whole values as of LastSeen (what readers of the row see), and the exact values with their anchors, which
     // Load takes back unchanged.
     private PlayerbotRelation ToStored(Guid botId, BotMemory bot, Entry entry)
-        => ToRecord(botId, bot, entry, (int)Math.Floor(FamiliarityAt(entry, entry.LastSeen) + Epsilon), ToWhole(AffinityAt(entry, entry.LastSeen)), entry.Flags,
+        => ToRecord(botId, bot, entry, (int)Math.Floor(FamiliarityAt(entry, entry.LastSeen) + Epsilon), ToWhole(AffinityAt(entry, entry.LastSeen)),
+            entry.WarOnly ? entry.Flags | PlayerbotRelationFlags.WarOnly : entry.Flags,
             (entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0 ? 0 : ToWhole(WarAffinityAt(entry, entry.LastSeen)), entry.WarFlags)
             with
             {
@@ -562,6 +639,7 @@ internal sealed class PlayerbotSocialMemory
         public double Familiarity;
         public short TrustPermille;
         public PlayerbotRelationFlags Flags;
+        public bool WarOnly;
         public long LastSeen;
         public long LastExchange;
         public long ApologyDay = long.MinValue;

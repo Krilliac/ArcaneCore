@@ -68,6 +68,13 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
                 row.LastTopic, row.Summary, row.WarAffinity, (PlayerbotRelationFlags)row.WarFlags,
                 row.FamiliarityExact, row.AffinityExact, row.WarAffinityExact, row.DecayAnchorUnixMs, row.WarDecayAnchorUnixMs)).ToArray();
 
+    // The bits a stored row may carry: Flags never holds WarSeeded, WarFlags only Rival and WarSeeded.
+    private const PlayerbotRelationFlags KnownFlags = PlayerbotRelationFlags.PrefersTank | PlayerbotRelationFlags.PrefersHealer | PlayerbotRelationFlags.PrefersDamage
+        | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.NoWhispers | PlayerbotRelationFlags.OwesFavour | PlayerbotRelationFlags.Grouped
+        | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.WarOnly;
+
+    private const PlayerbotRelationFlags KnownWarFlags = PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.WarSeeded;
+
     public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rows);
@@ -78,7 +85,12 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
                 || double.IsInfinity(row.FamiliarityExact) || double.IsInfinity(row.AffinityExact) || double.IsInfinity(row.WarAffinityExact)
                 || !double.IsNaN(row.FamiliarityExact) && row.FamiliarityExact < 0 || !double.IsNaN(row.AffinityExact) && Math.Abs(row.AffinityExact) > 100
                 || !double.IsNaN(row.WarAffinityExact) && Math.Abs(row.WarAffinityExact) > 100 || row.LastTopic is null || row.Summary is null
-                || row.LastTopic.Length > PlayerbotRelation.MaxTopicLength || row.Summary.Length > PlayerbotRelation.MaxSummaryLength))
+                || row.LastTopic.Length > PlayerbotRelation.MaxTopicLength || row.Summary.Length > PlayerbotRelation.MaxSummaryLength
+                || (row.Flags & ~KnownFlags) != 0 || (row.WarFlags & ~KnownWarFlags) != 0
+                // An exact value is as of its anchor: without one it can only be the whole value (what a load takes the whole value to be).
+                || row.DecayAnchorUnixMs == 0 && (!double.IsNaN(row.FamiliarityExact) && row.FamiliarityExact != row.Familiarity
+                    || !double.IsNaN(row.AffinityExact) && row.AffinityExact != row.Affinity)
+                || row.WarDecayAnchorUnixMs == 0 && !double.IsNaN(row.WarAffinityExact) && row.WarAffinityExact != row.WarAffinity))
             throw new ArgumentException("Invalid or unbounded playerbot relation snapshot.", nameof(rows));
         if (rows.Select(row => row.OtherGuid).Distinct().Count() != rows.Count)
             throw new ArgumentException("Duplicate playerbot relation targets.", nameof(rows));

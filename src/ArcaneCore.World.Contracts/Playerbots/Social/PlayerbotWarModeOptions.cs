@@ -18,7 +18,7 @@ public sealed class PlayerbotWarModeOptions
     /// <summary>In the war layer negative affinity never drifts back toward 0 and the war Rival flag is never cleared by drift, only by positive events that lift the war affinity back over the threshold.</summary>
     public bool NeverForget { get; set; } = true;
 
-    /// <summary>In the war layer the daily affinity gain cap and the one-apology-a-day limit are lifted, and while War Mode is on a full memory keeps every entry the war layer holds a grudge against (it drops neutral and positive ones first).</summary>
+    /// <summary>In the war layer the daily affinity gain cap and the one-apology-a-day limit are lifted, and a relation a full memory drops from the normal layer stays for the war layer when the war layer holds a grudge against it (a war-only entry: the normal layer, and War Mode while it is off, never see it).</summary>
     public bool RemoveCaps { get; set; } = true;
 
     /// <summary>Wipe the war layer at the next checkpoint after War Mode is switched off (off by default: the layer stays dormant and comes back when War Mode is switched on again).</summary>

@@ -1568,6 +1568,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             else
             {
                 dead++;
+                // The first member found dead at a check. A Unit exposes no time of death (Combat.DeathTimer is a countdown that restarts on release),
+                // so when several die between two checks the one earliest in the member list stands for them.
                 if (group.FirstDeath.IsEmpty) group.FirstDeath = member.Guid;
             }
         }

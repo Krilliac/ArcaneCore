@@ -3,6 +3,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Party;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
@@ -200,6 +201,9 @@ public sealed class PlayerbotSocialForgivenessTests
     [InlineData("not sorry", false)]
     [InlineData("I'm not even sorry", false)]
     [InlineData("never sorry", false)]
+    [InlineData("sorry not sorry", false)]
+    [InlineData("Apologies, never apologies", false)]
+    [InlineData("sorry, I did not mean it", true)]
     [InlineData("I won't say sorry", false)]
     [InlineData("I don’t apologize", false)]
     [InlineData("sorrycake", false)]
@@ -347,8 +351,9 @@ public sealed class PlayerbotSocialForgivenessTests
     [InlineData(5)]
     public void ARandomEventSequence_LeavesTheNormalLayerIdentical_WithOrWithoutWarMode(int seed)
     {
-        (PlayerbotSocialMemory plain, _, _, Clock plainClock) = Make();
-        (PlayerbotSocialMemory warred, _, PlayerbotWarModeOptions war, Clock warClock) = Make();
+        (PlayerbotSocialMemory plain, PlayerbotSocialMemoryOptions plainOptions, _, Clock plainClock) = Make();
+        (PlayerbotSocialMemory warred, PlayerbotSocialMemoryOptions warOptions, PlayerbotWarModeOptions war, Clock warClock) = Make();
+        plainOptions.MaxRelationsPerBot = warOptions.MaxRelationsPerBot = 16; // far fewer places than characters: the eviction runs all the time
         var random = new Random(seed);
         for (int step = 0; step < 400; step++)
         {
@@ -357,22 +362,66 @@ public sealed class PlayerbotSocialForgivenessTests
             long advance = random.Next(4) switch { 0 => 0, 1 => 60_000L * random.Next(1, 120), 2 => Day / 2 + random.Next(1, 1000), _ => Day * random.Next(1, 6) };
             plainClock.Now += advance;
             warClock.Now += advance;
-            ulong other = (ulong)random.Next(2, 5);
+            ulong other = (ulong)random.Next(2, 2 + warOptions.MaxRelationsPerBot + 40);
             PlayerbotSocialEvent e = AllEvents[random.Next(AllEvents.Length)];
             plain.Note(Bot, 1, other, false, e);
             warred.Note(Bot, 1, other, false, e);
-            Assert.Equal(
-                plain.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 }),
-                warred.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 }));
+            Assert.Equal(NormalView(plain), NormalView(warred));
         }
 
         war.Enabled = false;
+        Assert.Equal(16, plain.Snapshot(Bot).Count); // the eviction really ran
         foreach (PlayerbotRelation r in plain.Snapshot(Bot))
         {
             Assert.True(warred.TryGet(Bot, r.OtherGuid, out PlayerbotRelation w));
             Assert.True(plain.TryGet(Bot, r.OtherGuid, out PlayerbotRelation p));
             Assert.Equal(p with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 }, w with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 });
         }
+
+        Assert.Equal(plain.Snapshot(Bot).Select(r => r.OtherGuid), warred.Snapshot(Bot).Where(r => !r.Flags.HasFlag(PlayerbotRelationFlags.WarOnly)).Select(r => r.OtherGuid));
+    }
+
+    // The normal layer as the stored rows show it, field by field: the war-only rows are not part of it and the war fields are not.
+    private static IEnumerable<PlayerbotRelation> NormalView(PlayerbotSocialMemory memory)
+        => memory.Snapshot(Bot).Where(r => !r.Flags.HasFlag(PlayerbotRelationFlags.WarOnly))
+            .Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None, WarAffinityExact = 0, WarDecayAnchorUnixMs = 0 });
+
+    [Fact]
+    public void AnApologisingLine_IsRecordedBeforeItsChatExchange_SoTheExchangesAffinityCannotCancelTheGrudge()
+    {
+        (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, _, _) = Make();
+        options.AffinityPerChat = 2;
+        options.AffinityPerKick = -2;
+        var recorder = new PlayerbotSocialRecorder(memory, NullLogger.Instance);
+        ObjectGuid sender = ObjectGuid.Player(77);
+        memory.Note(Bot, 1, sender.Value, false, PlayerbotSocialEvent.Kicked); // a grudge of exactly what one chat exchange is worth
+        Assert.Equal(-2, Get(memory, sender.Value).Affinity);
+
+        recorder.NoteChatLine(Bot, ObjectGuid.Player(1), sender, "sorry about that");
+
+        Assert.Equal(options.AffinityPerApology, Get(memory, sender.Value).Affinity); // -2, the apology, the exchange's +2
+        recorder.NoteChatLine(Bot, ObjectGuid.Player(1), ObjectGuid.Player(78), "sorry not sorry"); // no apology, and no relation from nothing
+        Assert.True(memory.TryGet(Bot, ObjectGuid.Player(78).Value, out PlayerbotRelation mocking));
+        Assert.Equal(options.AffinityPerChat, mocking.Affinity);
+    }
+
+    [Fact]
+    public void TheDormantWarLayer_KeepsDriftingByTheClock_PositiveAffinityAlways_NegativeOnlyWithNeverForgetOff()
+    {
+        (PlayerbotSocialMemory memory, _, PlayerbotWarModeOptions war, Clock clock) = Make(uncapped: true);
+        war.Enabled = true;
+        Repeat(memory, PlayerbotSocialEvent.HelpedBy, 5); // war +40
+        Repeat(memory, PlayerbotSocialEvent.Kicked, 1, other: 60); // war -30
+        Assert.Equal(40, Get(memory).WarAffinity);
+        Assert.Equal(-30, Get(memory, 60).WarAffinity);
+
+        war.Enabled = false; // dormant for a half-life (14 days)
+        clock.Now += 14 * Day;
+        war.Enabled = true;
+        Assert.Equal(20, Get(memory).WarAffinity); // not frozen at 40
+        Assert.Equal(-30, Get(memory, 60).WarAffinity); // NeverForget keeps the grudge
+        war.NeverForget = false;
+        Assert.Equal(-15, Get(memory, 60).WarAffinity); // off: it drifted like any other
     }
 
     // ---- decay keeps its time ----
@@ -568,14 +617,91 @@ public sealed class PlayerbotSocialForgivenessTests
 
             war.Enabled = warOn;
             memory.Note(Bot, 1, 2000, false, PlayerbotSocialEvent.Grouped);
-            Assert.Equal(16, memory.Snapshot(Bot).Count);
+            Assert.Equal(16, memory.Snapshot(Bot).Count(r => !r.Flags.HasFlag(PlayerbotRelationFlags.WarOnly)));
             return memory;
         }
 
+        // The normal rules decide alone: the least familiar entry (1000, met once) leaves the normal layer with War Mode on or off.
         PlayerbotSocialMemory on = Fill(true);
-        Assert.True(on.TryGet(Bot, 1000, out _)); // kept: the war layer holds a grudge
-        Assert.False(on.TryGet(Bot, 10, out _)); // the oldest friendly one went instead
         PlayerbotSocialMemory off = Fill(false);
-        Assert.False(off.TryGet(Bot, 1000, out _)); // normal rules: the least familiar entry goes
+        Assert.Equal(NormalView(off).Select(r => r.OtherGuid), NormalView(on).Select(r => r.OtherGuid));
+        Assert.DoesNotContain(1000UL, NormalView(on).Select(r => r.OtherGuid));
+        Assert.Equal(16, NormalView(on).Count());
+        Assert.Contains(10UL, NormalView(on).Select(r => r.OtherGuid)); // nobody else was dropped to make room
+        Assert.False(off.TryGet(Bot, 1000, out _));
+        Assert.DoesNotContain(off.Snapshot(Bot), r => r.OtherGuid == 1000); // no war grudge to keep with War Mode off: gone outright
+
+        // The war layer kept its grudge as a war-only row: visible to a war read only.
+        PlayerbotRelation kept = Assert.Single(on.Snapshot(Bot), r => r.OtherGuid == 1000);
+        Assert.True(kept.Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
+        Assert.True(kept.WarAffinity < 0);
+        Assert.Equal(0, kept.Affinity);
+        Assert.Equal(0, kept.Familiarity);
+    }
+
+    [Fact]
+    public void AWarOnlyRelation_IsAbsentFromEveryNormalRead_VisibleToWarReads_AndStartsFreshOnANormalEvent()
+    {
+        (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, PlayerbotWarModeOptions war, Clock clock) = Make();
+        war.Enabled = true;
+        options.MaxRelationsPerBot = 16;
+        memory.Note(Bot, 1, 1000, false, PlayerbotSocialEvent.Kicked);
+        for (ulong guid = 10; guid <= 25; guid++)
+        {
+            clock.Now += 60_000;
+            Repeat(memory, PlayerbotSocialEvent.Grouped, 2, guid);
+        }
+
+        Assert.True(memory.Snapshot(Bot).Single(r => r.OtherGuid == 1000).Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
+        Assert.True(memory.TryGet(Bot, 1000, out PlayerbotRelation seen)); // War Mode on: a war read sees it
+        Assert.True(seen.WarAffinity < 0);
+        Assert.Contains(1000UL, memory.Top(Bot, 100).Select(r => r.OtherGuid));
+
+        war.Enabled = false;
+        Assert.False(memory.TryGet(Bot, 1000, out _));
+        Assert.DoesNotContain(1000UL, memory.Top(Bot, 100).Select(r => r.OtherGuid));
+        memory.SetFlags(Bot, 1000, PlayerbotRelationFlags.WantsInvites); // no normal relation to set it on
+        memory.SetTopic(Bot, 1000, "topic", "summary");
+        Assert.Equal(PlayerbotRelationFlags.WarOnly, memory.Snapshot(Bot).Single(r => r.OtherGuid == 1000).Flags);
+
+        // Load takes the flag back: the row is still war-only after a restart.
+        var reloaded = new PlayerbotSocialMemory(options, () => clock.Now, war);
+        reloaded.Load(memory.SnapshotAll());
+        Assert.False(reloaded.TryGet(Bot, 1000, out _));
+        war.Enabled = true;
+        Assert.True(reloaded.TryGet(Bot, 1000, out _));
+        war.Enabled = false;
+
+        // A normal event: a brand-new relation, as if it had never been remembered (and the war layer keeps what it held).
+        clock.Now += 60_000;
+        memory.Note(Bot, 1, 1000, false, PlayerbotSocialEvent.TradeCompleted);
+        Assert.True(memory.TryGet(Bot, 1000, out PlayerbotRelation fresh));
+        Assert.Equal(1, fresh.Familiarity);
+        Assert.Equal(options.AffinityPerTrade, fresh.Affinity);
+        Assert.False(fresh.Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
+        Assert.True(fresh.WarAffinity < 0 || fresh.WarFlags.HasFlag(PlayerbotRelationFlags.WarSeeded));
+    }
+
+    [Fact]
+    public void WarOnlyRelations_AreBoundedByFourTimesTheLimit_OldestFirst_AndClearOnDisableDeletesThem()
+    {
+        (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, PlayerbotWarModeOptions war, Clock clock) = Make();
+        war.Enabled = true;
+        options.MaxRelationsPerBot = 16;
+        for (ulong guid = 100; guid < 100 + 80; guid++) // every one a grudge, so every eviction leaves a war-only row
+        {
+            clock.Now += 60_000;
+            memory.Note(Bot, 1, guid, false, PlayerbotSocialEvent.Kicked);
+        }
+
+        IReadOnlyList<PlayerbotRelation> rows = memory.Snapshot(Bot);
+        Assert.Equal(64, rows.Count); // 16 normal + 48 war-only
+        Assert.Equal(16, rows.Count(r => !r.Flags.HasFlag(PlayerbotRelationFlags.WarOnly)));
+        Assert.DoesNotContain(rows, r => r.OtherGuid is 100 or 115); // the oldest war-only ones went
+        Assert.Contains(rows, r => r.OtherGuid == 179);
+
+        Assert.True(memory.ClearWarLayers());
+        Assert.Equal(16, memory.Snapshot(Bot).Count);
+        Assert.DoesNotContain(memory.Snapshot(Bot), r => r.Flags.HasFlag(PlayerbotRelationFlags.WarOnly));
     }
 }

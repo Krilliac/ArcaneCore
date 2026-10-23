@@ -194,6 +194,13 @@ public sealed class PlayerbotSocialFightWorldTests
             before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 1000; i++) fight.Observe(bot, runtime, 5001);
             Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 1_000, "per-call allocation"); // the closure it replaced cost 56 bytes a call
+
+            // A think that samples (a second on from the last): the attacker and threat sets and the mob's threat list are read without an enumerator allocation.
+            uint at = 6000;
+            for (int i = 0; i < 50; i++) fight.Observe(bot, runtime, at += PlayerbotFightSocial.SampleMs);
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++) fight.Observe(bot, runtime, at += PlayerbotFightSocial.SampleMs);
+            Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 1_000, "per-sample allocation");
         });
     }
 
@@ -402,7 +409,7 @@ public sealed class PlayerbotSocialFightWorldTests
             Assert.False(b.IsAlive);
         });
 
-        await Task.Delay(2500); // the bot's next thinks see the death
+        await world.Host.WaitForWorldAsync(() => !tracker.InFight, "the bot's next think to see the death"); // the fight ends with it
         Assert.Null(RelationOf(world, bot, watcher));
         Assert.Equal(0, world.Log.Count("Deathalone", ArcaneCore.Protocol.WorldOpcode.CmsgTextEmote));
         Assert.Equal(0, PartyTestHost.Feature(world.Host).Chat!.Status().Answered); // no shout either

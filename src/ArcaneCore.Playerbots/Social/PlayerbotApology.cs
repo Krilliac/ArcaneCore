@@ -26,11 +26,15 @@ internal static class PlayerbotApology
             bool hit = Array.Exists(Words, w => string.Equals(w, words[i], StringComparison.OrdinalIgnoreCase))
                 || (string.Equals(words[i], "my", StringComparison.OrdinalIgnoreCase) && i + 1 < words.Length
                     && string.Equals(words[i + 1], "bad", StringComparison.OrdinalIgnoreCase));
-            if (hit && !Negated(words, i)) return true;
+            if (hit && !Negated(words, i) && !Mocked(words, i)) return true;
         }
 
         return false;
     }
+
+    // "sorry not sorry": a keyword answered by a negator and the keyword again takes itself back.
+    private static bool Mocked(string[] words, int at)
+        => at + 2 < words.Length && Negators.Contains(words[at + 1]) && Array.Exists(Words, w => string.Equals(w, words[at + 2], StringComparison.OrdinalIgnoreCase));
 
     private static bool Negated(string[] words, int at)
     {

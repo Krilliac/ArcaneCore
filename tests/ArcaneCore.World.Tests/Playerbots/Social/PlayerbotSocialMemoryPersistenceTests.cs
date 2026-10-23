@@ -1,6 +1,12 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Playerbots;
+using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -125,8 +131,15 @@ public sealed class PlayerbotSocialMemoryPersistenceTests
     }
 
     [Fact]
-    public void AfterARestart_TheExactValuesEqualThoseOfARunWithoutOne_WithinAMillionth()
+    public async Task AfterARestartThroughTheRealStore_TheExactValuesAndAnchorsAreBitForBitThoseOfARunWithoutOne()
     {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new CharacterDbContext(new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 11, Name = "Restartbot", Race = 1, Class = 1, Level = 1 });
+        var store = new EfPlayerbotRelationStore(db);
+
         long plainNow = 20_000 * Day, restartNow = plainNow;
         var options = new PlayerbotSocialMemoryOptions { MaxDailyAffinityGainPerPair = 0 };
         var war = new PlayerbotWarModeOptions { Enabled = true };
@@ -140,13 +153,15 @@ public sealed class PlayerbotSocialMemoryPersistenceTests
             plainNow += advance;
             restartNow += advance;
             PlayerbotSocialEvent e = events[random.Next(events.Length)];
-            plain.Note(RestartBot, 1, 42, false, e);
-            restarted.Note(RestartBot, 1, 42, false, e);
-            restarted = Fresh(options, () => restartNow, restarted.Snapshot(RestartBot).ToArray(), war);
+            plain.Note(RestartBot, character.Id, 42, false, e);
+            restarted.Note(RestartBot, character.Id, 42, false, e);
+            // Save and restart: the rows go through the real store (sqlite, as the production providers' EF mapping) and are loaded into a new memory.
+            await store.ReplaceAsync(RestartBot, restarted.Snapshot(RestartBot));
+            restarted = Fresh(options, () => restartNow, (await store.LoadAllAsync()).ToArray(), war);
             PlayerbotRelation a = plain.Snapshot(RestartBot).Single(), b = restarted.Snapshot(RestartBot).Single();
-            Assert.InRange(Math.Abs(a.AffinityExact - b.AffinityExact), 0, 1e-6);
-            Assert.InRange(Math.Abs(a.FamiliarityExact - b.FamiliarityExact), 0, 1e-6);
-            Assert.InRange(Math.Abs(a.WarAffinityExact - b.WarAffinityExact), 0, 1e-6);
+            Assert.Equal(BitConverter.DoubleToInt64Bits(a.AffinityExact), BitConverter.DoubleToInt64Bits(b.AffinityExact));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(a.FamiliarityExact), BitConverter.DoubleToInt64Bits(b.FamiliarityExact));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(a.WarAffinityExact), BitConverter.DoubleToInt64Bits(b.WarAffinityExact));
             Assert.Equal((a.DecayAnchorUnixMs, a.WarDecayAnchorUnixMs, a.LastSeenUnixMs), (b.DecayAnchorUnixMs, b.WarDecayAnchorUnixMs, b.LastSeenUnixMs));
         }
 
