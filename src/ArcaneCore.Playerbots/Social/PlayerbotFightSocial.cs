@@ -100,15 +100,16 @@ internal sealed class PlayerbotFightSocial(Guid botId, PlayerbotSocialMemoryOpti
         if (unchecked(nowMs - _sampledMs) >= SampleMs)
         {
             _sampledMs = nowMs;
-            recorder.Guarded(() =>
+            // Static lambdas over a state tuple: nothing is captured, so a think that does not sample allocates nothing.
+            recorder.Guarded((Fight: this, bot, world, recorder), static state =>
             {
-                SampleHelpers(bot, recorder);
-                if (_windowOpen) Reverify(bot, world);
+                state.Fight.SampleHelpers(state.bot, state.recorder);
+                if (state.Fight._windowOpen) state.Fight.Reverify(state.bot, state.world);
             });
         }
 
         if (!_windowOpen && bot.MaxHealth > 0 && bot.Health * 100f < PlayerbotCallForHelp.LowHealthPercent * bot.MaxHealth)
-            recorder.Guarded(() => OpenWindow(bot, world, recorder, nowMs));
+            recorder.Guarded((Fight: this, bot, world, recorder, nowMs), static state => state.Fight.OpenWindow(state.bot, state.world, state.recorder, state.nowMs));
     }
 
     private void Died(Player bot, WorldRuntime world, PlayerbotSocialRecorder recorder, uint nowMs)

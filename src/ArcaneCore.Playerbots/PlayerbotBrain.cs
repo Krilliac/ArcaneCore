@@ -2639,6 +2639,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private readonly Dictionary<ObjectGuid, uint> _fruitless = [];
 
+    // The mob the bot was last on the threat list of while nobody else held its tap (DropIfSomeoneElses): the only mob another player's tag can steal.
+    private ulong _engagedMob;
+
     private void MarkFruitless(Creature creature)
     {
         uint now = _session.World.NowMs;
@@ -2685,6 +2688,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         uint now = _session.World.NowMs;
         ulong mob = held.Guid.Value;
         bool mine = player.Combat.ThreatenedBy.Contains(held) || ReferenceEquals(held.Combat.Victim, player);
+        // The bot is on the threat list of a mob nobody else has tagged: it engaged the mob first. (_attacking says only that a swing was sent; it can be stale.)
+        if (mine && (held.LootTapper.IsEmpty || held.LootTapper == player.Guid)) _engagedMob = mob;
 
         if (_contention.IsAssisting(held.Guid))
         {
@@ -2720,9 +2725,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
-        // The bot chose this mob while it was nobody's and was already fighting it when another player's tag took it over: that player started second.
-        if (tagger is not null && _attacking && ReferenceEquals(_target, held))
+        // The bot had engaged this mob (it was on its threat list before anybody tagged it) and another player's tag took it over: that player started second.
+        // A mob the bot was only walking toward, or swinging at without landing a hit, was the tagger's by right: no blame.
+        if (tagger is not null && _engagedMob == mob)
+        {
+            _engagedMob = 0;
             Social?.Note(player.Guid, tagger.Guid, BotSocial.PlayerbotSocialEvent.KillSteal, tagger.Team != player.Team);
+        }
 
         LeaveSomeoneElses(player, held, now);
     }

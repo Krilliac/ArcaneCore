@@ -309,6 +309,101 @@ public sealed class PlayerbotSocialForgivenessTests
     }
 
     [Fact]
+    public void AWarOnlyApology_LeavesTheNormalLayerAlone_IncludingFamiliarityDecayAndLastSeen()
+    {
+        (PlayerbotSocialMemory memory, _, PlayerbotWarModeOptions war, Clock clock) = Make();
+        Repeat(memory, PlayerbotSocialEvent.HelpedBy, 2); // normal 16
+        war.Enabled = true;
+        memory.Note(Bot, 1, Other, false, PlayerbotSocialEvent.Kicked); // normal 6, war -14
+        Assert.Equal(6, Get(memory).Affinity);
+        Assert.Equal(-14, Get(memory).WarAffinity);
+        PlayerbotRelation before = Normal(memory);
+        clock.Now += 3 * Day;
+        long versionBefore = memory.Version(Bot);
+
+        memory.Note(Bot, 1, Other, false, PlayerbotSocialEvent.Apologized);
+
+        Assert.Equal(before, Normal(memory)); // affinity, familiarity, LastSeen: not a field moved
+        Assert.True(memory.Snapshot(Bot).Single().WarAffinity > -14); // the war layer took the apology
+        Assert.NotEqual(versionBefore, memory.Version(Bot));
+    }
+
+    private static readonly PlayerbotSocialEvent[] AllEvents = Enum.GetValues<PlayerbotSocialEvent>();
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void ARandomEventSequence_LeavesTheNormalLayerIdentical_WithOrWithoutWarMode(int seed)
+    {
+        (PlayerbotSocialMemory plain, _, _, Clock plainClock) = Make();
+        (PlayerbotSocialMemory warred, _, PlayerbotWarModeOptions war, Clock warClock) = Make();
+        var random = new Random(seed);
+        for (int step = 0; step < 400; step++)
+        {
+            // Both runs see the same events at the same times; only the war run has War Mode, switched on and off at random.
+            war.Enabled = random.Next(3) != 0;
+            long advance = random.Next(4) switch { 0 => 0, 1 => 60_000L * random.Next(1, 120), 2 => Day / 2 + random.Next(1, 1000), _ => Day * random.Next(1, 6) };
+            plainClock.Now += advance;
+            warClock.Now += advance;
+            ulong other = (ulong)random.Next(2, 5);
+            PlayerbotSocialEvent e = AllEvents[random.Next(AllEvents.Length)];
+            plain.Note(Bot, 1, other, false, e);
+            warred.Note(Bot, 1, other, false, e);
+            Assert.Equal(
+                plain.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None }),
+                warred.Snapshot(Bot).Select(r => r with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None }));
+        }
+
+        war.Enabled = false;
+        foreach (PlayerbotRelation r in plain.Snapshot(Bot))
+        {
+            Assert.True(warred.TryGet(Bot, r.OtherGuid, out PlayerbotRelation w));
+            Assert.True(plain.TryGet(Bot, r.OtherGuid, out PlayerbotRelation p));
+            Assert.Equal(p with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None }, w with { WarAffinity = 0, WarFlags = PlayerbotRelationFlags.None });
+        }
+    }
+
+    // ---- decay keeps its time ----
+
+    [Fact]
+    public void ADailyContact_KeepsItsFamiliarity_InsteadOfFreezingAtOne()
+    {
+        (PlayerbotSocialMemory memory, _, _, Clock clock) = Make();
+        for (int i = 0; i < 10; i++)
+        {
+            memory.Note(Bot, 1, Other, false, PlayerbotSocialEvent.Grouped);
+            clock.Now += Day;
+        }
+
+        Assert.True(Get(memory).Familiarity >= 3, $"familiarity {Get(memory).Familiarity}");
+    }
+
+    [Theory]
+    [InlineData(1, 14, 40)]
+    [InlineData(1, 28, 20)]
+    [InlineData(6, 14, 40)]
+    [InlineData(24, 28, 20)]
+    public void Affinity_HalvesOnItsConfiguredHalfLife_HoweverOftenTheEntryIsWritten(int writesPerDay, int days, int expected)
+    {
+        (PlayerbotSocialMemory memory, PlayerbotSocialMemoryOptions options, _, Clock clock) = Make(uncapped: true);
+        options.AffinityPerChat = 0;
+        options.ChatFamiliarityCooldownMinutes = 0;
+        Repeat(memory, PlayerbotSocialEvent.HelpedBy, 10); // 80
+        for (int i = 0; i < days * writesPerDay; i++)
+        {
+            clock.Now += Day / writesPerDay;
+            memory.Note(Bot, 1, Other, false, PlayerbotSocialEvent.ChatExchange);
+        }
+
+        int value = Get(memory).Affinity;
+        Assert.InRange(value, (int)Math.Floor(expected * 0.95), (int)Math.Ceiling(expected * 1.05));
+        Assert.InRange(memory.Snapshot(Bot).Single().Affinity, (int)Math.Floor(expected * 0.95), (int)Math.Ceiling(expected * 1.05));
+    }
+
+    [Fact]
     public void TheWarLayer_IsSeededFromTheNormalAffinity_TheFirstTime()
     {
         (PlayerbotSocialMemory memory, _, PlayerbotWarModeOptions war, _) = Make();

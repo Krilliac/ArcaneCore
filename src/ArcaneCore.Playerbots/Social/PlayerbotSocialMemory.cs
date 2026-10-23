@@ -76,7 +76,7 @@ internal sealed class PlayerbotSocialMemory
             {
                 // An apology means something only to a bot that holds something against the apologiser.
                 if (e == PlayerbotSocialEvent.Apologized) return;
-                entry = new Entry { OtherGuid = other, TrustPermille = 500, LastSeen = now, LastExchange = long.MinValue };
+                entry = new Entry { OtherGuid = other, TrustPermille = 500, LastSeen = now, Anchor = now, WarAnchor = now, LastExchange = long.MinValue };
                 bot.Relations[other] = entry;
             }
             else
@@ -86,6 +86,14 @@ internal sealed class PlayerbotSocialMemory
                     normalGrudge = EffectiveAffinity(entry, now) < 0;
                     warGrudge = warOn && EffectiveWarAffinity(entry, now) < 0;
                     if (!normalGrudge && !warGrudge) return;
+                    if (!normalGrudge)
+                    {
+                        // The normal layer is a function of its own state alone: a grudge only the war layer holds leaves it (and LastSeen) untouched.
+                        FoldWar(entry, now);
+                        ApplyWar(entry, e, _options.AffinityPerApology, entry.Affinity, warGrudge, day);
+                        bot.Version = ++_versionSeq;
+                        return;
+                    }
                 }
 
                 Decay(entry, now);
@@ -97,7 +105,7 @@ internal sealed class PlayerbotSocialMemory
             bool cooled = !shared || entry.LastExchange == long.MinValue || now - entry.LastExchange >= _options.ChatFamiliarityCooldownMinutes * 60_000L;
             if (cooled && shared) entry.LastExchange = now;
 
-            if (cooled) entry.Familiarity = (int)Math.Min((long)entry.Familiarity + 1, int.MaxValue - 1);
+            if (cooled) entry.Familiarity = Math.Min(entry.Familiarity + 1, int.MaxValue - 1);
             int delta = e switch
             {
                 PlayerbotSocialEvent.ChatExchange => cooled ? _options.AffinityPerChat : 0,
@@ -120,10 +128,14 @@ internal sealed class PlayerbotSocialMemory
                 PlayerbotSocialEvent.AbandonedRun => _options.AffinityPerAbandonedRun,
                 _ => 0,
             };
-            int before = entry.Affinity;
-            entry.Affinity = (short)Math.Clamp(entry.Affinity + AdjustNormal(entry, e, delta, normalGrudge, day), -100, 100);
+            double before = entry.Affinity;
+            entry.Affinity = Math.Clamp(entry.Affinity + AdjustNormal(entry, e, delta, normalGrudge, day), -100, 100);
             // The war layer exists only for the war rules: it is fed from the same event while War Mode is on, and never touches the normal fields above.
-            if (warOn) ApplyWar(entry, e, delta, before, warGrudge, day);
+            if (warOn)
+            {
+                FoldWar(entry, now);
+                ApplyWar(entry, e, delta, before, warGrudge, day);
+            }
             int trust = e switch
             {
                 PlayerbotSocialEvent.GroupSucceeded => _options.TrustPerGroupSuccess,
@@ -269,7 +281,7 @@ internal sealed class PlayerbotSocialMemory
                 bot.Relations[row.OtherGuid] = new Entry
                 {
                     OtherGuid = row.OtherGuid, OtherIsBot = row.OtherIsBot, Affinity = row.Affinity, Familiarity = row.Familiarity,
-                    WarAffinity = row.WarAffinity, WarFlags = row.WarFlags,
+                    WarAffinity = row.WarAffinity, WarFlags = row.WarFlags, Anchor = row.LastSeenUnixMs, WarAnchor = row.LastSeenUnixMs,
                     TrustPermille = row.TrustPermille, Flags = row.Flags, LastSeen = row.LastSeenUnixMs, LastExchange = long.MinValue,
                     LastTopic = Cut(row.LastTopic, PlayerbotRelation.MaxTopicLength), Summary = Cut(row.Summary, PlayerbotRelation.MaxSummaryLength),
                 };
@@ -289,7 +301,7 @@ internal sealed class PlayerbotSocialMemory
         lock (_gate)
         {
             if (!_bots.TryGetValue(botId, out BotMemory? bot)) return [];
-            return [.. bot.Relations.Values.Select(entry => ToRecord(botId, bot, entry, entry.Familiarity, entry.Affinity, entry.Flags, entry.WarAffinity, entry.WarFlags))
+            return [.. bot.Relations.Values.Select(entry => ToStored(botId, bot, entry))
                 .OrderBy(r => r.OtherGuid).Take(PlayerbotRelation.MaxRowsPerBot)];
         }
     }
@@ -298,7 +310,7 @@ internal sealed class PlayerbotSocialMemory
     public PlayerbotRelation[] SnapshotAll()
     {
         lock (_gate)
-            return [.. _bots.SelectMany(pair => pair.Value.Relations.Values.Select(entry => ToRecord(pair.Key, pair.Value, entry, entry.Familiarity, entry.Affinity, entry.Flags, entry.WarAffinity, entry.WarFlags)))];
+            return [.. _bots.SelectMany(pair => pair.Value.Relations.Values.Select(entry => ToStored(pair.Key, pair.Value, entry)))];
     }
 
     /// <summary>Drop one bot's memory (it was unregistered).</summary>
@@ -316,44 +328,67 @@ internal sealed class PlayerbotSocialMemory
     private static string Cut(string? text, int max)
         => string.IsNullOrEmpty(text) ? string.Empty : text.Length <= max ? text : text[..max];
 
-    private int EffectiveFamiliarity(Entry entry, long now)
+    // Decay runs in whole days, but no time is lost: an entry keeps exact (fractional) values as of its decay anchor, a read or a write counts
+    // the whole days since the anchor, and a write moves the anchor by exactly those days (never to "now"), so the part of a day not yet
+    // counted carries over to the next write. The anchor is separate from LastSeen and lives in memory only (a load starts it at LastSeen; a
+    // saved row holds the values as of its LastSeen). The war layer has its own anchor for the same reason: a war-only event may not touch
+    // the normal one.
+    private const double Epsilon = 1e-6;
+
+    private double Factor(long days, int halfLifeDays)
+        => Math.Pow(0.5, (double)days / Math.Max(1, halfLifeDays));
+
+    private double FamiliarityAt(Entry entry, long at)
     {
-        // Whole days only: an integer familiarity floored after every small step would drain to nothing within minutes.
-        long days = (now - entry.LastSeen) / DayMs;
-        if (days <= 0 || entry.Familiarity <= 0) return entry.Familiarity;
-        double halves = (double)days / Math.Max(1, _options.FamiliarityHalfLifeDays);
-        return (int)Math.Floor(entry.Familiarity * Math.Pow(0.5, halves));
+        long days = (at - entry.Anchor) / DayMs;
+        return days <= 0 || entry.Familiarity <= 0 ? entry.Familiarity : entry.Familiarity * Factor(days, _options.FamiliarityHalfLifeDays);
     }
 
-    // Affinity drifts toward 0 on the same whole-day clock; a grudge (Rival) fades on its own half-life, and War Mode's NeverForget stops
-    // negative affinity from drifting at all.
-    private int EffectiveAffinity(Entry entry, long now)
+    private int EffectiveFamiliarity(Entry entry, long now) => (int)Math.Floor(FamiliarityAt(entry, now) + Epsilon);
+
+    // Affinity drifts toward 0; a grudge (Rival) fades on its own half-life.
+    private double AffinityAt(Entry entry, long at)
     {
-        long days = (now - entry.LastSeen) / DayMs;
-        int affinity = entry.Affinity;
-        if (days <= 0 || affinity == 0) return affinity;
-        int halfLife = Math.Max(1, entry.Flags.HasFlag(PlayerbotRelationFlags.Rival) ? _options.RivalHalfLifeDays : _options.AffinityHalfLifeDays);
-        return (int)Math.Truncate(affinity * Math.Pow(0.5, (double)days / halfLife));
+        long days = (at - entry.Anchor) / DayMs;
+        if (days <= 0 || entry.Affinity == 0) return entry.Affinity;
+        return entry.Affinity * Factor(days, entry.Flags.HasFlag(PlayerbotRelationFlags.Rival) ? _options.RivalHalfLifeDays : _options.AffinityHalfLifeDays);
     }
+
+    private static int ToWhole(double value) => (int)Math.Truncate(value + (value < 0 ? -Epsilon : Epsilon));
+
+    private int EffectiveAffinity(Entry entry, long now) => ToWhole(AffinityAt(entry, now));
 
     // The war layer drifts like the normal one, except that NeverForget keeps negative war affinity as it is; an unseeded layer is the normal one.
-    private int EffectiveWarAffinity(Entry entry, long now)
+    // Evaluated at any instant, including one before WarAnchor (the stored frame of a row), where it grows back.
+    private double WarAffinityAt(Entry entry, long at)
     {
-        if ((entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0) return EffectiveAffinity(entry, now);
-        long days = (now - entry.LastSeen) / DayMs;
-        int affinity = entry.WarAffinity;
-        if (days <= 0 || affinity == 0 || (affinity < 0 && _war.NeverForget)) return affinity;
-        int halfLife = Math.Max(1, entry.WarFlags.HasFlag(PlayerbotRelationFlags.Rival) ? _options.RivalHalfLifeDays : _options.AffinityHalfLifeDays);
-        return (int)Math.Truncate(affinity * Math.Pow(0.5, (double)days / halfLife));
+        long days = (at - entry.WarAnchor) / DayMs;
+        double affinity = entry.WarAffinity;
+        if (days == 0 || affinity == 0 || (affinity < 0 && _war.NeverForget)) return affinity;
+        int halfLife = entry.WarFlags.HasFlag(PlayerbotRelationFlags.Rival) ? _options.RivalHalfLifeDays : _options.AffinityHalfLifeDays;
+        return Math.Clamp(affinity * Factor(days, halfLife), -100, 100);
     }
 
-    // A write folds the decay in (the caller then moves the last-seen anchor); inside a day nothing has decayed.
+    private int EffectiveWarAffinity(Entry entry, long now)
+        => (entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0 ? EffectiveAffinity(entry, now) : ToWhole(WarAffinityAt(entry, now));
+
+    // A write folds the whole days since the anchor in and moves the anchor by exactly those days.
     private void Decay(Entry entry, long now)
     {
-        if (now - entry.LastSeen < DayMs) return;
-        entry.Familiarity = EffectiveFamiliarity(entry, now);
-        if (_war.Enabled && (entry.WarFlags & PlayerbotRelationFlags.WarSeeded) != 0) entry.WarAffinity = (short)EffectiveWarAffinity(entry, now);
-        entry.Affinity = (short)EffectiveAffinity(entry, now);
+        long days = (now - entry.Anchor) / DayMs;
+        if (days <= 0) return;
+        entry.Familiarity = FamiliarityAt(entry, now);
+        entry.Affinity = AffinityAt(entry, now);
+        entry.Anchor += days * DayMs;
+    }
+
+    private void FoldWar(Entry entry, long now)
+    {
+        if ((entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0) return;
+        long days = (now - entry.WarAnchor) / DayMs;
+        if (days <= 0) return;
+        entry.WarAffinity = WarAffinityAt(entry, now);
+        entry.WarAnchor += days * DayMs;
     }
 
     // The normal rules: the daily cap drops gains beyond it and one apology counts per pair per day. Returns the delta to apply.
@@ -382,11 +417,12 @@ internal sealed class PlayerbotSocialMemory
 
     // The war rules: negative changes are multiplied, RemoveCaps lifts the daily cap and the apology limit (war counters otherwise), and the war
     // Rival flag follows the war affinity. A layer not yet seeded starts from the normal affinity the event found.
-    private void ApplyWar(Entry entry, PlayerbotSocialEvent e, int delta, int normalBefore, bool grudge, long day)
+    private void ApplyWar(Entry entry, PlayerbotSocialEvent e, int delta, double normalBefore, bool grudge, long day)
     {
         if ((entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0)
         {
-            entry.WarAffinity = (short)normalBefore;
+            entry.WarAffinity = normalBefore;
+            entry.WarAnchor = entry.Anchor;
             entry.WarFlags |= PlayerbotRelationFlags.WarSeeded;
             grudge = normalBefore < 0;
         }
@@ -412,12 +448,12 @@ internal sealed class PlayerbotSocialMemory
             entry.WarGained += delta;
         }
 
-        entry.WarAffinity = (short)Math.Clamp(entry.WarAffinity + delta, -100, 100);
-        entry.WarFlags = entry.WarAffinity <= _options.RivalAffinity ? entry.WarFlags | PlayerbotRelationFlags.Rival : entry.WarFlags & ~PlayerbotRelationFlags.Rival;
+        entry.WarAffinity = Math.Clamp(entry.WarAffinity + delta, -100, 100);
+        entry.WarFlags = ToWhole(entry.WarAffinity) <= _options.RivalAffinity ? entry.WarFlags | PlayerbotRelationFlags.Rival : entry.WarFlags & ~PlayerbotRelationFlags.Rival;
     }
 
     private void ApplyRival(Entry entry)
-        => entry.Flags = entry.Affinity <= _options.RivalAffinity ? entry.Flags | PlayerbotRelationFlags.Rival : entry.Flags & ~PlayerbotRelationFlags.Rival;
+        => entry.Flags = ToWhole(entry.Affinity) <= _options.RivalAffinity ? entry.Flags | PlayerbotRelationFlags.Rival : entry.Flags & ~PlayerbotRelationFlags.Rival;
 
     // Over the limit: drop the lowest (familiarity, then oldest last-seen) entry that is not a strong bond or grudge, and not the entry
     // just written unless nothing else can go.
@@ -469,6 +505,11 @@ internal sealed class PlayerbotSocialMemory
         return ToRecord(botId, bot, entry, EffectiveFamiliarity(entry, now), affinity, flags, war, warFlags);
     }
 
+    // The row as stored: every value as of LastSeen, rounded toward zero (the fractions and the anchors live in memory only).
+    private PlayerbotRelation ToStored(Guid botId, BotMemory bot, Entry entry)
+        => ToRecord(botId, bot, entry, (int)Math.Floor(FamiliarityAt(entry, entry.LastSeen) + Epsilon), ToWhole(AffinityAt(entry, entry.LastSeen)), entry.Flags,
+            (entry.WarFlags & PlayerbotRelationFlags.WarSeeded) == 0 ? 0 : ToWhole(WarAffinityAt(entry, entry.LastSeen)), entry.WarFlags);
+
     private static PlayerbotRelation ToRecord(Guid botId, BotMemory bot, Entry entry, int familiarity, int affinity, PlayerbotRelationFlags flags, int warAffinity, PlayerbotRelationFlags warFlags)
         => new(botId, bot.CharacterId, entry.OtherGuid, entry.OtherIsBot, (short)affinity, familiarity, entry.TrustPermille,
             flags, entry.LastSeen, entry.LastTopic, entry.Summary, (short)warAffinity, warFlags);
@@ -485,15 +526,17 @@ internal sealed class PlayerbotSocialMemory
     {
         public ulong OtherGuid;
         public bool OtherIsBot;
-        public short Affinity;
-        public int Familiarity;
+        public double Affinity;
+        public double Familiarity;
         public short TrustPermille;
         public PlayerbotRelationFlags Flags;
         public long LastSeen;
         public long LastExchange;
         public long ApologyDay = long.MinValue;
         public long GainDay = long.MinValue;
-        public short WarAffinity;
+        public double WarAffinity;
+        public long Anchor;
+        public long WarAnchor;
         public PlayerbotRelationFlags WarFlags;
         public long WarApologyDay = long.MinValue;
         public long WarGainDay = long.MinValue;

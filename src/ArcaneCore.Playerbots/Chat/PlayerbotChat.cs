@@ -259,8 +259,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// </summary>
     internal event Action<BotHeardLine>? LineHeard;
 
-    /// <summary>Whether anything listens to <see cref="LineHeard"/> or answers through <see cref="Responder"/> (the party AI skips building the line otherwise).</summary>
-    internal bool HasHearers => LineHeard is not null || Responder is not null;
+    /// <summary>Whether anything listens to <see cref="LineHeard"/> (only while the social memory is enabled, live) or answers through <see cref="Responder"/> (the party AI skips building the line otherwise).</summary>
+    internal bool HasHearers => (LineHeard is not null && Social is { Enabled: true }) || Responder is not null;
 
     /// <summary>
     /// World thread: the one feature that may answer a heard line itself (the bot voice, <see cref="PlayerbotNeedsVoice"/>: an "inv" to an

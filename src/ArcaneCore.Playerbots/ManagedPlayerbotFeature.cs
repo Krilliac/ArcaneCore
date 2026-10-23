@@ -209,8 +209,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// The bots' social memory and the one seam events are recorded through (docs/areas/playbots-social.md, "Social memory"). Created on first
     /// use from the live <c>World:Playerbots:Social:Memory</c> options and the feature's clock; any thread.
     /// </summary>
-    internal BotSocial.PlayerbotSocialRecorder Social => _social ??= new BotSocial.PlayerbotSocialRecorder(
-        new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode), logger);
+    internal BotSocial.PlayerbotSocialRecorder Social => _social ?? CreateSocial();
+
+    // Two threads may race to the first use: the loser's empty recorder is dropped and both see the winner's.
+    private BotSocial.PlayerbotSocialRecorder CreateSocial()
+    {
+        var created = new BotSocial.PlayerbotSocialRecorder(
+            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode), logger);
+        return Interlocked.CompareExchange(ref _social, created, null) ?? created;
+    }
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
@@ -1081,6 +1088,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>Whether the bot is in the active set (test seam; <see cref="FindBrain"/> also hides a paused one).</summary>
     internal bool IsActive(Guid botId) => _active.ContainsKey(botId);
+
+    /// <summary>The bot's fight tracker (null for an unknown bot; tests and inspection).</summary>
+    internal BotSocial.PlayerbotFightSocial? FightOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? active.Fight : null;
 
     /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
     internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;

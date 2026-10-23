@@ -74,10 +74,11 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         Note(b, a, e, crossFaction);
     }
 
-    /// <summary>How long a helper's credit toward one victim lasts (one fight; a victim bot that leaves combat ends it sooner, <see cref="EndFight"/>).</summary>
+    /// <summary>How long the credit between two characters lasts (one fight; either of them leaving combat ends it sooner, <see cref="EndFight"/>).</summary>
     internal const long HelpWindowMs = 60_000;
 
-    private readonly Dictionary<(ulong Helper, ulong Victim), long> _helped = [];
+    // Keyed by the unordered pair: two bots fighting the same mob each see the other on its threat list, and that is one help, not two.
+    private readonly Dictionary<(ulong Low, ulong High), long> _helped = [];
     private readonly object _helpGate = new();
     private Func<long> _now = static () => Environment.TickCount64;
 
@@ -86,8 +87,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
 
     /// <summary>
     /// <paramref name="helper"/> helped <paramref name="victim"/> in the current fight (an assist on a tagged mob, a heal, a hit on the mob that fights
-    /// the victim): the victim, if a managed bot, records HelpedBy and the helper, if a managed bot, records HelpedThem. Once per helper and
-    /// victim per fight, whichever source reports it first, so a single assist is never counted twice.
+    /// the victim): the victim, if a managed bot, records HelpedBy and the helper, if a managed bot, records HelpedThem. Once per pair of
+    /// characters per fight, whichever source reports it first and in whichever direction, so a single assist is never counted twice (an assist
+    /// the helper bot reports and the same bot's own fight read of the tagger are one help).
     /// </summary>
     public void NoteHelp(Unit helper, Unit victim)
     {
@@ -100,8 +102,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
             {
                 if (_helped.Count > 2048)
                     foreach (var stale in _helped.Where(pair => now - pair.Value > HelpWindowMs).Select(pair => pair.Key).ToArray()) _helped.Remove(stale);
-                if (_helped.TryGetValue((helper.Guid.Value, victim.Guid.Value), out long at) && now - at <= HelpWindowMs) return;
-                _helped[(helper.Guid.Value, victim.Guid.Value)] = now;
+                (ulong, ulong) key = helper.Guid.Value < victim.Guid.Value ? (helper.Guid.Value, victim.Guid.Value) : (victim.Guid.Value, helper.Guid.Value);
+                if (_helped.TryGetValue(key, out long at) && now - at <= HelpWindowMs) return;
+                _helped[key] = now;
             }
 
             bool crossFaction = helper is Player a && victim is Player b && a.Team != b.Team;
@@ -128,12 +131,12 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         Note(slayer.Guid, dead.Guid, PlayerbotSocialEvent.KilledThem, crossFaction);
     }
 
-    /// <summary>The victim left combat: its helpers may earn credit again in its next fight.</summary>
-    public void EndFight(ObjectGuid victim)
+    /// <summary>A character left combat: the help credits it is part of end with its fight, so the next fight can earn them again.</summary>
+    public void EndFight(ObjectGuid character)
     {
         lock (_helpGate)
             if (_helped.Count > 0)
-                foreach (var key in _helped.Keys.Where(k => k.Victim == victim.Value).ToArray()) _helped.Remove(key);
+                foreach (var key in _helped.Keys.Where(k => k.Low == character.Value || k.High == character.Value).ToArray()) _helped.Remove(key);
     }
 
     /// <summary>Record the role <paramref name="other"/> played in a group with <paramref name="bot"/> (replacing the earlier one); nothing if the first is not a managed bot or no relation exists yet.</summary>
@@ -159,9 +162,27 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record(FaultSite, error);
-            if (Interlocked.Increment(ref _faultsLogged) <= 20)
-                logger.LogWarning(error, "Playerbot social memory: a recording step failed");
+            Fault(error);
         }
+    }
+
+    /// <summary>As <see cref="Guarded(Action)"/>, for a step that carries its state in <paramref name="state"/>: with a static lambda nothing is allocated (the per-think paths).</summary>
+    public void Guarded<TState>(TState state, Action<TState> step)
+    {
+        try
+        {
+            step(state);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            Fault(error);
+        }
+    }
+
+    private void Fault(Exception error)
+    {
+        FaultLedger.Shared.Record(FaultSite, error);
+        if (Interlocked.Increment(ref _faultsLogged) <= 20)
+            logger.LogWarning(error, "Playerbot social memory: a recording step failed");
     }
 }

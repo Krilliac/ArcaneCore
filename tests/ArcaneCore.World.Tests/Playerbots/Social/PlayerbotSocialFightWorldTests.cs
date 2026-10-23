@@ -123,14 +123,15 @@ public sealed class PlayerbotSocialFightWorldTests
         Assert.True(RelationOf(world, victim, orcGuid)!.Flags.HasFlag(PlayerbotRelationFlags.OtherFaction));
         Assert.False(RelationOf(world, victim, secondGuid)!.Flags.HasFlag(PlayerbotRelationFlags.OtherFaction));
 
-        // Two managed bots on one mob help each other, and each remembers it: the helper bot is credited toward the victim (HelpedBy) and
-        // remembers helping it (HelpedThem). The victim bot may fight the mob too, which is the same thing the other way round; so the exact
-        // total depends on its brain, but every credit is one whole help, and it is there on both sides.
+        // Two managed bots on one mob help each other, and each remembers it once: the helper bot is credited toward the victim (HelpedBy) and
+        // remembers helping it (HelpedThem); the victim bot fighting the mob too is the same help seen from the other side, not a second one.
         PlayerbotRelation byBot = RelationOf(world, victim, botHelperGuid)!;
         PlayerbotRelation helped = RelationOf(world, helperBot, victimGuid)!;
         Assert.True(byBot.OtherIsBot && helped.OtherIsBot);
-        Assert.True(byBot.Affinity is 8 or 16, $"victim's affinity toward the helper bot is {byBot.Affinity}");
-        Assert.True(helped.Affinity is 8 or 16, $"helper bot's affinity toward the victim is {helped.Affinity}");
+        Assert.Equal(help, byBot.Affinity);
+        Assert.Equal(help, helped.Affinity);
+        Assert.Equal(1, byBot.Familiarity);
+        Assert.Equal(1, helped.Familiarity);
         short botBefore = byBot.Affinity, helperBefore = helped.Affinity;
 
         // The assist path firing again for the same pair in the same fight changes nothing.
@@ -150,7 +151,8 @@ public sealed class PlayerbotSocialFightWorldTests
             bot.Map!.Combat.CombatStop(bot);
             Assert.False(bot.Combat.IsInCombat);
         });
-        await Task.Delay(800);
+        PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(victim)!;
+        await world.Host.WaitForWorldAsync(() => !tracker.InFight, "the fight tracker to see the fight end");
         await world.Host.OnWorldAsync(() =>
         {
             Player bot = Online(world, "Helpvictim");
@@ -161,6 +163,63 @@ public sealed class PlayerbotSocialFightWorldTests
         await UntilAsync(() => RelationOf(world, victim, secondGuid)!.Affinity == 2 * help, "the second fight to credit the helper again");
         await Task.Delay(2500);
         Assert.Equal(2 * help, RelationOf(world, victim, secondGuid)!.Affinity);
+    }
+
+    [Fact]
+    public async Task AnAssistBetweenTwoBots_IsOneHelp_ExactlyOnEachSide_AssistPathAndFightReadsBoth()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        Guid victim = await world.AddBotAsync("Assistvictim");
+        Guid helper = await world.AddBotAsync("Assisthelper");
+        await StandAsync(world, "Assistvictim", ("Assisthelper", 2f));
+        ObjectGuid victimGuid = await world.Host.PlayerStateAsync("Assistvictim", p => p.Guid);
+        ObjectGuid helperGuid = await world.Host.PlayerStateAsync("Assisthelper", p => p.Guid);
+        short help = (short)new PlayerbotSocialMemoryOptions().AffinityPerHelp;
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player v = Online(world, "Assistvictim"), h = Online(world, "Assisthelper");
+            Creature mob = SpawnMob(v);
+            Engage(mob, v); // the mob fights the victim bot
+            RecorderOf(world).NoteHelp(h, v); // what the helper bot's BeginAssist reports
+            v.Map!.Combat.DealDamage(h, mob, 1); // and the helper is on the mob's threat list, which the victim's read finds; the helper's own read finds the victim
+        });
+
+        await UntilAsync(() => RelationOf(world, victim, helperGuid) is not null && RelationOf(world, helper, victimGuid) is not null, "both bots to remember the assist");
+        await Task.Delay(3500); // several reads of both fight trackers
+        PlayerbotRelation byHelper = RelationOf(world, victim, helperGuid)!;
+        PlayerbotRelation ofVictim = RelationOf(world, helper, victimGuid)!;
+        Assert.Equal(help, byHelper.Affinity);
+        Assert.Equal(help, ofVictim.Affinity);
+        Assert.Equal(1, byHelper.Familiarity);
+        Assert.Equal(1, ofVictim.Familiarity);
+    }
+
+    [Fact]
+    public async Task AHelpCredit_EndsWithTheFightOfTheBotItBelongsTo_WhetherTheBotHelpedOrWasHelped()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        Guid bot = await world.AddBotAsync("Endbot");
+        await using WorldTestClient other = await world.AddPlayerAsync("Endplayer");
+        await StandAsync(world, "Endbot", ("Endplayer", 2f));
+        ObjectGuid botGuid = await world.Host.PlayerStateAsync("Endbot", p => p.Guid);
+        ObjectGuid otherGuid = await world.Host.PlayerStateAsync("Endplayer", p => p.Guid);
+        short help = (short)new PlayerbotSocialMemoryOptions().AffinityPerHelp;
+
+        // The player helps the bot; then the bot's fight ends, and the bot helping the player (a victim with no fight tracker of its own) is credited again, once.
+        await world.Host.OnWorldAsync(() =>
+        {
+            RecorderOf(world).NoteHelp(Online(world, "Endplayer"), Online(world, "Endbot"));
+            RecorderOf(world).NoteHelp(Online(world, "Endplayer"), Online(world, "Endbot"));
+        });
+        Assert.Equal(help, RelationOf(world, bot, otherGuid)!.Affinity);
+        await world.Host.OnWorldAsync(() =>
+        {
+            RecorderOf(world).EndFight(botGuid);
+            RecorderOf(world).NoteHelp(Online(world, "Endbot"), Online(world, "Endplayer"));
+            RecorderOf(world).NoteHelp(Online(world, "Endbot"), Online(world, "Endplayer"));
+        });
+        Assert.Equal(2 * help, RelationOf(world, bot, otherGuid)!.Affinity); // the credit ended with the bot's fight; the reverse report within it counted nothing
     }
 
     [Fact]
@@ -297,9 +356,15 @@ public sealed class PlayerbotSocialFightWorldTests
 
         Creature mob = null!;
         await world.Host.OnWorldAsync(() => mob = Wound(world, "Deathalone"));
+        // The window opens and the bot decides, once, to fight on alone: the bystander is a candidate it did not ask.
+        PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(bot)!;
+        await world.Host.WaitForWorldAsync(() => tracker.WindowOpen, "the low-health window to open");
         await Task.Delay(2500); // longer than the window needs
         await world.Host.OnWorldAsync(() =>
         {
+            Assert.True(tracker.WindowOpen && tracker.InFight);
+            Assert.False(tracker.AskedForHelp);
+            Assert.Contains(tracker.Candidates, c => c.Guid == watcher.Value && !c.Asked);
             Player b = Online(world, "Deathalone");
             b.Map!.Combat.DealDamage(mob, b, b.Health);
             Assert.False(b.IsAlive);
@@ -349,6 +414,7 @@ public sealed class PlayerbotSocialFightWorldTests
                 plainFight.Observe(plain, runtime, 10_000);
                 Assert.True(duelFight.WindowOpen && plainFight.WindowOpen);
                 Assert.True(duelFight.AskedForHelp && plainFight.AskedForHelp);
+                Assert.Contains(duelFight.Candidates, c => c.Guid == watcher.Value && c.Asked); // the duel bot had a bystander to blame
                 duelFight.Observe(duelist, runtime, 11_500);
                 plainFight.Observe(plain, runtime, 11_500);
 
