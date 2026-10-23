@@ -183,7 +183,7 @@ internal sealed class PlayerbotGratitudeLane
         uint fight = (uint)(pass.NowMs / 1000);
         bool sameFaction = helper.Team == self.Team;
         bool person = !recorder.IsManaged(helper.Guid);
-        if (sameFaction && person && PlayerbotGratitude.SaysThanks(self.Guid.Value, helperGuid.Value, fight, traits.Chattiness) && Say(pass, bot, helper)) Lines++;
+        if (sameFaction && person && PlayerbotGratitude.SaysThanks(self.Guid.Value, helperGuid.Value, fight, traits.Chattiness * PlayerbotMood.ChanceMultiplier(recorder.Mood.Get(bot.Id))) && Say(pass, bot, helper)) Lines++;
         if (!sameFaction) return;
 
         int affinity = 0;

@@ -589,7 +589,8 @@ internal sealed class PlayerbotPartyAI
                 SpeakerInGroup = Services.Social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true,
             };
         return new Chat.BotChatPersona(player.Name, player.Race, player.Class, player.Gender, player.Level, zone, subzone, goal, quest,
-            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts, Relation: RelationWith(player, speaker));
+            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts, Relation: RelationWith(player, speaker),
+            Mood: Social?.Mood.Get(_botId) ?? 0f);
     }
 
     /// <summary>

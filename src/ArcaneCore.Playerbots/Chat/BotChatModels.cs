@@ -25,7 +25,8 @@ internal sealed record BotChatPersona(
     IReadOnlyList<string> RecentEvents,
     string? DebugSummary = null,
     BotChatFacts? Facts = null,
-    BotChatRelation? Relation = null);
+    BotChatRelation? Relation = null,
+    float Mood = 0f);
 
 /// <summary>How a bot feels about the person it is talking to (<see cref="BotChatRelation"/>.Affinity).</summary>
 internal enum BotChatAffinityBand : byte

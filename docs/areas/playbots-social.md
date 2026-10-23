@@ -266,6 +266,21 @@ The **tip** is a real trade over the existing handlers: `CMSG_INITIATE_TRADE` to
 once the helper opened the window, `CMSG_ACCEPT_TRADE`; it ends when the gold moved, the trade closed, the helper went away, the bot fought, or after 45 seconds. Its size is at most 1% of the bot's gold and
 at most `MaxTipCopper` (10000, one gold) at level 60, scaled down in proportion at lower levels. `MaxTipCopper` 0 turns tips off.
 
+## Mood (`World:Playerbots:Social:Mood`, live)
+
+Each bot has a short-term mood, -1 to +1, in memory only (`PlayerbotMood`, kept by the social recorder; a restart resets it to 0). It is nudged by
+events and decays toward 0 with a half-life of `HalfLifeMinutes` (default 30):
+
+- up: a level (+0.30), a better equipped item (+0.15, read from the equipped item levels every 10 seconds), a group success (+0.06 per member remembered),
+  help received (+0.20, `HelpedBy`);
+- down: a death (-0.25), a wipe (-0.10 per member remembered), a kick (-0.40), a rude emote (-0.15), a chat strike (-0.30), a PvP death (-0.30).
+
+The social-memory events move the mood where they are recorded (`PlayerbotSocialRecorder.Note` and `NoteById`); the bot's own level, death and gear are read on the pass
+(`PlayerbotMoodLane`). The mood multiplies the chance of the bot's own talk by 0.5 at -1 to 1.5 at +1 (`PlayerbotMood.ChanceMultiplier`; the thanks line uses it today and the
+initiative chances below use it too). At +0.3 or more the tone is cheerful, at -0.3 or less grumpy: a template key with `.mood.cheerful` or `.mood.grumpy` lines
+(`social.thanks`, `social.greet`, `help.sorry`) uses them instead of the plain lines, and the model prompt gets one mood sentence (`BotChatPersona.Mood`). The GM command
+`.playerbot social <bot>` shows the mood, its tone and the chance multiplier. `Enabled` false makes every mood 0.
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is
@@ -282,4 +297,4 @@ state is in memory or read back from it.
 `PlayerbotAnnounceTests`, `PlayerbotSocialListsWorldTests` (the list thresholds and spacing, never ignoring a game master, guild invitations
 by affinity and their weekly limit), `PlayerbotHelpRulesTests` (trouble, rolls, classes, help-call text), `PlayerbotHelpAnswerWorldTests`
 (a `/helpme` through the real packets to a bot that fights), `PlayerbotTroubleWorldTests` (the scan, the flag rule, rivals, switches),
-`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown), `PlayerbotGratitudeWorldTests` (the tip cap and favour rules, the thank emote across factions once per fight, a tip by a real trade).
+`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown), `PlayerbotMoodTests` (events, half-life, multiplier, tone templates, prompt fact, GM line, the level-up lane), `PlayerbotGratitudeWorldTests` (the tip cap and favour rules, the thank emote across factions once per fight, a tip by a real trade).

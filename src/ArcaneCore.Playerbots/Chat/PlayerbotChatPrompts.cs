@@ -57,6 +57,7 @@ internal static class PlayerbotChatPrompts
         text.Append(p.MasterName is { } master ? $" You are in a party led by {master}." : p.InGroup ? " You are in a party." : " You are travelling alone.");
         if (p.Facts is { } facts) AppendFacts(text, facts);
         if (p.Relation is { } relation) AppendRelation(text, relation, ask.SenderName);
+        AppendMood(text, p.Mood);
         if (p.RecentEvents.Count > 0) text.Append(" Recently: ").Append(string.Join("; ", p.RecentEvents)).Append('.');
         text.Append(c, $" You are speaking with {ask.SenderName} {ChannelWords(ask.Channel)}");
         text.Append(ask.FromMaster ? ", your party leader." : ".");
@@ -80,6 +81,7 @@ internal static class PlayerbotChatPrompts
             text.Append(c, $" You are in {zone}{(p.Subzone is { } sub ? $" ({sub})" : string.Empty)}.");
         if (DescribeGoal(p) is { } goal) text.Append(c, $" Right now you are {goal}.");
         if (p.Facts is { } facts) AppendFacts(text, facts);
+        AppendMood(text, p.Mood);
         if (ask.Speech is { Channel: not BotSpeechChannel.Guild } speech)
         {
             // A bot voice line (Chat/PlayerbotNeedsVoice): where it is said, and the 1.12 chat style it is said in.
@@ -134,6 +136,16 @@ internal static class PlayerbotChatPrompts
         if (f.SuitedDungeon is { } dungeon) text.Append(c, $" The dungeon for your level is {dungeon}.");
         if (f.Place is { } place)
             text.Append(c, $" The place asked about, {place.Name}, is {(place.Zone is { } zone ? "in " + zone + ", " : string.Empty)}{(place.Map is { } map ? "on " + map : "somewhere you do not know")}.");
+    }
+
+    /// <summary>The mood fact: a sentence when the bot's mood is clearly good or bad, nothing when it is middling.</summary>
+    internal static void AppendMood(StringBuilder text, float mood)
+    {
+        switch (BotSocial.PlayerbotMood.ToneOf(mood))
+        {
+            case BotSocial.PlayerbotTone.Cheerful: text.Append(" You are in a good mood today: warm and upbeat."); break;
+            case BotSocial.PlayerbotTone.Grumpy: text.Append(" You are in a bad mood today: curt and a little grumpy, though never rude."); break;
+        }
     }
 
     /// <summary>

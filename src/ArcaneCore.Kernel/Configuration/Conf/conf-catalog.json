@@ -20135,6 +20135,38 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Social:Mood:Enabled",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Let bots have a mood (on by default). Off: every mood reads 0 and events change nothing.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Social:Mood:HalfLifeMinutes",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "30",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The minutes in which a mood decays to half of itself (1..1440, default 30).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Social:WarMode:ClearOnDisable",
       "section": "World:Playerbots",
       "type": "bool",

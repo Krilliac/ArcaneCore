@@ -324,14 +324,19 @@ internal static partial class PlayerbotBuiltinChat
     {
         BotChatPersona p = ask.Persona;
         var candidates = new List<string>();
+        var toned = new List<string>();
+        string? tone = BotSocial.PlayerbotMood.ToneOf(p.Mood) switch { BotSocial.PlayerbotTone.Cheerful => ".mood.cheerful", BotSocial.PlayerbotTone.Grumpy => ".mood.grumpy", _ => null };
         foreach (string variant in Variants(key, p))
         {
+            // The tone variants (key.mood.cheerful, key.mood.grumpy) replace the plain lines when the bot's mood is clear and the key has some.
+            if (tone is not null && BotSocial.PlayerbotSocialTemplates.Lines.TryGetValue(variant + tone, out string[]? mooded)) AddFilled(toned, mooded, ask);
             // The chat templates, then the social ones (guild and greeting lines, BotSocial.PlayerbotSocialTemplates).
             if (PlayerbotChatTemplates.Lines.TryGetValue(variant, out string[]? lines)) AddFilled(candidates, lines, ask);
             if (BotSocial.PlayerbotSocialTemplates.Lines.TryGetValue(variant, out string[]? social)) AddFilled(candidates, social, ask);
             if (PlayerbotVoiceTemplates.Lines.TryGetValue(variant, out string[]? voice)) AddFilled(candidates, voice, ask);
         }
 
+        if (toned.Count > 0) candidates = toned;
         if (candidates.Count == 0) return null;
         List<string> fresh = candidates.Where(line => !string.Equals(line, lastLine, StringComparison.Ordinal)).ToList();
         List<string> from = fresh.Count > 0 ? fresh : candidates;

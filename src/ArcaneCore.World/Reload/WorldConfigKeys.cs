@@ -498,6 +498,8 @@ public static class WorldConfigKeys
         LivePlayerbots("Social:Gratitude:Enabled", o => o.Social.Gratitude.Enabled, (o, v) => o.Social.Gratitude.Enabled = v),
         LivePlayerbotsValue("Social:Gratitude:TipChance", o => o.Social.Gratitude.TipChance, (o, v) => o.Social.Gratitude.TipChance = v, v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Social:Gratitude:MaxTipCopper", o => o.Social.Gratitude.MaxTipCopper, (o, v) => o.Social.Gratitude.MaxTipCopper = v, v => v is >= 0 and <= 1000000 ? null : "must be 0..1000000"),
+        LivePlayerbots("Social:Mood:Enabled", o => o.Social.Mood.Enabled, (o, v) => o.Social.Mood.Enabled = v),
+        LivePlayerbotsValue("Social:Mood:HalfLifeMinutes", o => o.Social.Mood.HalfLifeMinutes, (o, v) => o.Social.Mood.HalfLifeMinutes = v, v => v is >= 1 and <= 1440 ? null : "must be 1..1440"),
         LivePlayerbots("Social:GuildChat:Enabled", o => o.Social.GuildChat.Enabled, (o, v) => o.Social.GuildChat.Enabled = v),
         LivePlayerbotsValue("Social:GuildChat:MessagesPerHour", o => o.Social.GuildChat.MessagesPerHour, (o, v) => o.Social.GuildChat.MessagesPerHour = v,
             v => v is >= 0 and <= Playerbots.BotSocial.PlayerbotSocialGuildChatOptions.MaxMessagesPerHour ? null : "must be 0..60"),

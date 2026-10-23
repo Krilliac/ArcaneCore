@@ -44,6 +44,11 @@ internal static class PlayerbotSocialTemplates
         ],
         ["help.sorry"] = ["Sorry, can't right now.", "Sorry, I can't help just now.", "I can't, sorry!", "Sorry, I'm not able to."],
         ["social.thanks"] = ["Thanks, {player}!", "Thank you, {player}.", "Much obliged, {player}!", "Thanks for the help, {player}.", "I owe you one, {player}!"],
+        ["social.thanks.mood.cheerful"] = ["Thank you so much, {player}!", "You are a star, {player}. Thanks!", "Thanks a million, {player}!"],
+        ["social.thanks.mood.grumpy"] = ["Hmph. Thanks, {player}.", "Fine. Thanks.", "Thanks, I suppose, {player}."],
+        ["help.sorry.mood.grumpy"] = ["Not now.", "Can't. Sorry.", "No time, sorry."],
+        ["social.greet.mood.cheerful"] = ["What a day! Hello, {player}!", "Hi {player}, lovely to see you!", "Well met, {player}! Great day!"],
+        ["social.greet.mood.grumpy"] = ["Hmm. {player}.", "Oh. Hello, {player}.", "Yes? Hello, {player}."],
         ["social.greet"] = ["Well met, {player}.", "Hello there, {player}!", "Greetings, {player}.", "Hi {player}, good to see you."],
     };
 }

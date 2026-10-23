@@ -22,6 +22,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
 
     public PlayerbotSocialMemory Memory { get; } = memory;
 
+    /// <summary>The bots' short-term moods; every social event that moves one is applied by <see cref="Note"/> and <see cref="NoteById"/>.</summary>
+    public PlayerbotMood Mood { get; } = new();
+
     public bool Enabled => Memory.Enabled;
 
     /// <summary>A managed bot logged in (or was adopted by this feature): its events are now recorded against its id.</summary>
@@ -56,14 +59,22 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     public void Note(ObjectGuid bot, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
         if (!Enabled || !other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
-        Guarded(() => Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction));
+        Guarded(() =>
+        {
+            Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction);
+            Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
+        });
     }
 
     /// <summary>Record <paramref name="e"/> for a bot whose id is already known (chat, the party AI).</summary>
     public void NoteById(Guid botId, ObjectGuid botGuid, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
         if (!Enabled || !other.IsPlayer || other == botGuid) return;
-        Guarded(() => Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction));
+        Guarded(() =>
+        {
+            Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction);
+            Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
+        });
     }
 
     /// <summary>Record <paramref name="e"/> both ways between two characters (each side that is a managed bot remembers the other).</summary>

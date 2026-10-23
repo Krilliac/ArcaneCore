@@ -46,6 +46,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Thanking whoever helped a bot: an emote, a line, a favour, a tip (<c>World:Playerbots:Social:Gratitude</c>).</summary>
     public PlayerbotSocialGratitudeOptions Gratitude { get; set; } = new();
 
+    /// <summary>The short-term mood of each bot (<c>World:Playerbots:Social:Mood</c>).</summary>
+    public PlayerbotSocialMoodOptions Mood { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
@@ -59,6 +62,8 @@ public sealed class PlayerbotSocialOptions
         if (Gratitude is null) throw new InvalidOperationException($"{section}:Gratitude is missing.");
         Helping.Validate();
         Gratitude.Validate();
+        if (Mood is null) throw new InvalidOperationException($"{section}:Mood is missing.");
+        Mood.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       715 keys
+#   WORLD                       717 keys
 #
 ###############################################################################
 
@@ -16151,6 +16151,29 @@ World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe = -30
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.TrustPerGroupSuccess = 30
+
+#
+#    World.Playerbots.Social.Mood.Enabled
+#        Description: Let bots have a mood (on by default). Off: every mood reads 0 and events
+#                     change nothing.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Mood.Enabled = true
+
+#
+#    World.Playerbots.Social.Mood.HalfLifeMinutes
+#        Description: The minutes in which a mood decays to half of itself (1..1440, default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Mood.HalfLifeMinutes = 30
 
 #
 #    World.Playerbots.Social.WarMode.ClearOnDisable

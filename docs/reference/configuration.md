@@ -1726,6 +1726,8 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:RivalHalfLifeDays` | `int` | `45` | live | The same half-life for a relation flagged Rival: a grudge fades slower (1..3650). |
 | `World:Playerbots:Social:Memory:TrustPerFirstDeathInWipe` | `int` | `-30` | live | Trust (permille) change toward the member who died first in a wipe (-500..500). |
 | `World:Playerbots:Social:Memory:TrustPerGroupSuccess` | `int` | `30` | live | Trust (permille) gained toward every member of a group that finished its run (-500..500). |
+| `World:Playerbots:Social:Mood:Enabled` | `bool` | `true` | live | Let bots have a mood (on by default). Off: every mood reads 0 and events change nothing. |
+| `World:Playerbots:Social:Mood:HalfLifeMinutes` | `int` | `30` | live | The minutes in which a mood decays to half of itself (1..1440, default 30). |
 | `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
 | `World:Playerbots:Social:WarMode:Enabled` | `bool` | `false` | live | Hold grudges harder and longer (off by default). |
 | `World:Playerbots:Social:WarMode:NegativeMultiplier` | `float` | `3` | live | While enabled, every negative affinity change is multiplied by this (1..10); positive changes are untouched. |
