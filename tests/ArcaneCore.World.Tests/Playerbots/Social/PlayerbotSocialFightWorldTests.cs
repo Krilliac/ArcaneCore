@@ -559,8 +559,8 @@ public sealed class PlayerbotSocialFightWorldTests
     [Fact]
     public async Task APvpKillInAnotherWorldOfTheSameProcess_IsNotRecordedInThisWorldsMemory()
     {
-        // The kill observer's event is process-wide and character ids restart at 1 in every world: a kill in world B between its characters 1
-        // and 2 must not be written into the memory of world A's bot, which also has character id 1.
+        // Two worlds share one process and character ids restart at 1 in every world: a kill in world B between its characters 1 and 2 must
+        // not be written into the memory of world A's bot, which also has character id 1 (each feature hears only its own world's maps).
         await using SocialWorld a = await SocialWorld.StartAsync(frozen: true);
         await using SocialWorld b = await SocialWorld.StartAsync(frozen: true);
         Guid bystander = await a.AddBotAsync("Leakbota");

@@ -119,7 +119,8 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// bot, KilledThem, each marking the other as of the other faction when the teams differ. Duels never count: a duel ends at 1 hp without a kill,
     /// and a death inside a started duel is skipped all the same. No record for an environmental death or a suicide.
     /// </summary>
-    public void NotePvpKill(Unit? killer, Unit victim) => Guarded(() => NotePvpKillCore(killer, victim));
+    public void NotePvpKill(Unit? killer, Unit victim)
+        => Guarded((Recorder: this, Killer: killer, Victim: victim), static s => s.Recorder.NotePvpKillCore(s.Killer, s.Victim)); // no closure: every player death on every map passes here
 
     private void NotePvpKillCore(Unit? killer, Unit victim)
     {
