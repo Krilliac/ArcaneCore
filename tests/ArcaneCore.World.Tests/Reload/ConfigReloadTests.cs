@@ -533,13 +533,13 @@ public sealed class ConfigReloadTests : IDisposable
         File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
         Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
         Assert.True(groups.Enabled);
-        Assert.Equal(4, groups.MaxGroups);
+        Assert.Equal(16, groups.MaxGroups);
         Assert.Equal(5, groups.LevelRange);
         Assert.Equal(1, groups.MinTank);
         Assert.Equal(1, groups.MinHealer);
         Assert.Equal(300, groups.FormationTimeoutSeconds);
         Assert.True(groups.RaidsEnabled);
-        Assert.False(groups.InvitePlayers);
+        Assert.True(groups.InvitePlayers);
     }
 
     [Fact]
@@ -666,9 +666,19 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Voice:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
-            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions)))
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:Cooperation:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialListsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Lists:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
