@@ -4,6 +4,7 @@
        Assembly name HotScripts. Built only through the test project's reference (not in ArcaneCore.slnx). HotScriptsV2 compiles the
        same source with V2. -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>HotScripts</AssemblyName>
     <RootNamespace>HotScripts</RootNamespace>
     <IsPackable>false</IsPackable>

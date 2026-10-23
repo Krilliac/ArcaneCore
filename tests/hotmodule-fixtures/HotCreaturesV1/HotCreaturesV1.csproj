@@ -3,6 +3,7 @@
   <!-- A module whose creature AI factory builds a real AI, for the creature swap tests. Assembly name HotCreatures.
        Built only through the test project's reference (not in ArcaneCore.slnx). -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>HotCreatures</AssemblyName>
     <RootNamespace>HotCreatures</RootNamespace>
     <IsPackable>false</IsPackable>

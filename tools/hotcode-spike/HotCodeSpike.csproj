@@ -4,6 +4,7 @@
        .NET process. Not part of ArcaneCore.slnx. Directory.Build.props next to this file keeps
        the repo-wide settings off it. -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <OutputType>Exe</OutputType>
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>

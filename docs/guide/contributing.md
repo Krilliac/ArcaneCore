@@ -81,6 +81,7 @@ that the recipe lists exactly those. A change in a library such as `ArcaneCore.D
 references it, so expect several files to change. The last line repeats CI's check. A new project gets its lock file from its
 first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
 `tools/hotcode-spike` opts out of the repository props (its own `Directory.Build.props`) and has no lock file.
+Package versions live in `Directory.Packages.props` (central package management): a `PackageReference` carries no `Version`, and a bump is one line there. `tools/hotcode-spike`, `tests/hotmodule-fixtures`, `tests/ThirdParty` and the `tools/ops/diag` probes set `ManagePackageVersionsCentrally` to false in their own `.csproj`; the probes keep their versions inline.
 
 ### Other checks on a pull request
 

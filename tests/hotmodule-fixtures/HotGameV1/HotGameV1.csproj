@@ -3,6 +3,7 @@
   <!-- A module that contributes creature AI and a script hook, for the module-host tests. Assembly name HotGame.
        Built only through the test project's reference (not in ArcaneCore.slnx). HotGameV2 compiles the same source with V2. -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>HotGame</AssemblyName>
     <RootNamespace>HotGame</RootNamespace>
     <IsPackable>false</IsPackable>

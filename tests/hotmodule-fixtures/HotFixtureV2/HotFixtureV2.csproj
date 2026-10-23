@@ -3,6 +3,7 @@
   <!-- Version 2 of the HotFixture module: the same source as V1 with the V2 symbol, so the
        tests can replace a loaded module with a genuinely different assembly. -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>HotFixture</AssemblyName>
     <RootNamespace>HotFixture</RootNamespace>
     <IsPackable>false</IsPackable>

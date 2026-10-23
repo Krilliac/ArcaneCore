@@ -35,6 +35,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
     <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />
+    <InternalsVisibleTo Include="ArcaneCore.ChatModelProbe" />
   </ItemGroup>
 
   <!-- Put the pack beside the world executable, so `dotnet ArcaneCore.World.dll` (deploy, Docker, the dev runner) finds it.

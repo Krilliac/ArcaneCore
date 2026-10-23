@@ -1,7 +1,4 @@
 using System.Net;
-using System.Runtime.CompilerServices;
-
-[assembly: InternalsVisibleTo("ArcaneCore.MockClient.Tests")]
 
 namespace ArcaneCore.MockClient.Protocol;
 

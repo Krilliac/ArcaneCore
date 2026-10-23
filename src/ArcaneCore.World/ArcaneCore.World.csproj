@@ -15,12 +15,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <!-- Microsoft-owned (nuget.org owner dotnetframework, MIT). .debug dump writes this process's own dump through the runtime's diagnostics IPC (docs/ops/diagnostics.md). net8.0 asset, runs on net11.0. -->
-    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
     <!-- Used by the Playerbots pack (src/ArcaneCore.Playerbots, the in-process chat model). It stays here because the pack loads into the
          default context of this executable, which resolves packages from this project's deps.json (docs/design/hot-reload-tiers.md, 4.6). -->
-    <PackageReference Include="System.Numerics.Tensors" Version="10.0.13" />
+    <PackageReference Include="System.Numerics.Tensors" />
   </ItemGroup>
 
   <ItemGroup>
@@ -42,6 +42,9 @@
        each entry into a public seam or a contract before the pack loads collectibly. -->
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.Playerbots" />
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />
+    <InternalsVisibleTo Include="ArcaneCore.Gateway.Tests" />
   </ItemGroup>
 
   <ItemGroup>

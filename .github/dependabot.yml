@@ -17,7 +17,7 @@ updates:
         update-types: [minor, patch]
     ignore:
       # EF Core and Microsoft.Extensions stay on 9.x until the Pomelo MySQL/MariaDB provider (the primary engine) ships for a newer
-      # major (Directory.Build.props). A major bump of these must be a deliberate change, not a weekly PR.
+      # major (Directory.Packages.props). A major bump of these must be a deliberate change, not a weekly PR.
       - dependency-name: "Microsoft.EntityFrameworkCore*"
         update-types: [version-update:semver-major]
       - dependency-name: "Microsoft.Extensions.*"
