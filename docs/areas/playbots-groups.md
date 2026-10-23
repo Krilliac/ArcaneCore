@@ -204,7 +204,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
   `LfgAnswerBonus`, passes) it is pledged and joins at the next scan without the wait, and only then replies in the channel ("inv me,
   I'll tank"). With no real match it says nothing. A hearer that is busy, of the other team, on another map or out of the level range
   is turned away at once, the post's candidates are worked out once for all its hearers however many ticks they hear it over, and at most `MaxLfgAnswersPerLine` (4) hearers
-  get a place from one post (the count lives as long as the post, `Chat:Voice:PostLifeSeconds`, 600 by default, up to 64 posts at a time).
+  get a place from one post (the count lives as long as the post, `World:Playerbots:Chat:Voice:PostLifeSeconds`, 600 by default, up to 64 posts at a time).
 * **Guild calls** (`GuildCalls`). When the coordinator really has a dungeon or raid group forming, its longest-waiting bot says
   "anyone for <dungeon>?" in guild chat (once per ten minutes per guild and goal, dropped if the group is gone by then). Guildmates that
   heard it are weighed at the next scan without the wait.
