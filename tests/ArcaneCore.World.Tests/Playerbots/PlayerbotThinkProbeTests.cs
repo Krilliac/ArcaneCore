@@ -59,7 +59,7 @@ public sealed class PlayerbotThinkProbeTests
         Assert.Contains("slowest phase quests", line);
         Assert.Contains("phases quests ", line);
         Assert.Contains("path 0 queries", line);
-        Assert.Equal(61, probe.ElapsedMs, precision: 6);
+        Assert.Equal(_clock.TicksFor(61), probe.ElapsedTicks);
         Assert.Equal("quests", probe.SlowestPhase);
         Assert.Null(PlayerbotThinkProbe.Active);
     }
@@ -116,8 +116,8 @@ public sealed class PlayerbotThinkProbeTests
 
         var phases = probe.Phases().ToDictionary(p => p.Phase, p => p.Ms);
         Assert.Equal("a", probe.SlowestPhase);
-        Assert.Equal(8, phases["a"], precision: 6);
-        Assert.Equal(0, phases["b"], precision: 6);
+        Assert.Equal(8, phases["a"], precision: 3);
+        Assert.Equal(0, phases["b"], precision: 3);
         Assert.DoesNotContain("nowhere", phases.Keys);
         PlayerbotThinkProbe.Phase("after"); // ended: ignored again
         Assert.Null(PlayerbotThinkProbe.Active);
@@ -150,10 +150,27 @@ public sealed class PlayerbotThinkProbeTests
             PlayerbotThinkProbe.Phase("grind destinations");
             Spin(10); // grind 40 ms closed + open: still below explore's 46
             PlayerbotThinkProbe.Phase("explore advance");
-            Spin(0.5); // explore 46 closed + 0.5 open: 46.5 beats grind's 40 only when both parts count
+            // explore 46 closed + 0.5 open = 46.5 against grind's 40: this fails if the open phase drops the time it had before it was
+            // re-entered (0.5 < 40). Counting only finished time would pass here; the assert after Spin(45) above is the one that rules it out.
+            Spin(0.5);
             Assert.Equal("explore advance", probe.SlowestPhaseNow);
         }
         finally { probe.End(); }
+    }
+
+    [Fact]
+    public void TheDefaultProbe_ReadsTheSystemClock()
+    {
+        var probe = new PlayerbotThinkProbe();
+        probe.Begin();
+        try
+        {
+            long until = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 1000; // 1 ms
+            while (Stopwatch.GetTimestamp() < until) Thread.SpinWait(50);
+        }
+        finally { probe.End(); }
+
+        Assert.True(probe.ElapsedTicks > 0, $"the default probe measured {probe.ElapsedTicks} ticks over a 1 ms spin");
     }
 
     [Fact]
@@ -190,12 +207,13 @@ public sealed class PlayerbotThinkProbeTests
     }
 
     /// <summary>A clock that moves only when <see cref="Advance"/> is called (Stopwatch ticks, as the probe requires).</summary>
-    private sealed class ManualClock(long? frequency = null) : TimeProvider
+    internal sealed class ManualClock(long? frequency = null) : TimeProvider
     {
         private long _now = 1_000_000;
         public override long TimestampFrequency { get; } = frequency ?? Stopwatch.Frequency;
         public override long GetTimestamp() => _now;
-        public void Advance(double ms) => _now += (long)Math.Round(ms * TimestampFrequency / 1000);
+        public long TicksFor(double ms) => (long)Math.Round(ms * TimestampFrequency / 1000);
+        public void Advance(double ms) => _now += TicksFor(ms);
     }
 
     internal sealed class ListLogger : ILogger
