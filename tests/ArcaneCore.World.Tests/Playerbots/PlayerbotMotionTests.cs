@@ -177,6 +177,39 @@ public sealed class PlayerbotMotionTests
     }
 
     [Fact]
+    public async Task FromBeside_WithRockUnderBot_PlansFromOneYardOut_AndStillRefusesM2WallAcrossTheHop()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            (bool rockPlanned, bool wallPlanned) = await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                var options = new PlayerbotOptions { Enabled = true, MoveSpeed = 7.0f };
+                player.Relocate(0f, 0f, Floor, 0f, host.World.NowMs);
+
+                // A rock under the bot blocks every doodad-aware sight that starts within a yard of it; one starting a yard out (OffStart) sees past it.
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new RockUnderBot(Floor, 0.9f, float.NaN),
+                    pathfinder: new FragmentAtOriginPathfinder(Floor));
+                bool rock = PlayerbotNavigation.TryPlanToward(player, new Vector3(20f, 0f, Floor), options, out _);
+
+                // The same rock with an M2 wall at X=1.25: the hop's sight from one yard out still crosses the wall, so no beside start is taken.
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new RockUnderBot(Floor, 0.9f, 1.25f),
+                    pathfinder: new FragmentAtOriginPathfinder(Floor));
+                bool wall = PlayerbotNavigation.TryPlanToward(player, new Vector3(20f, 0f, Floor), options, out _);
+                return (rock, wall);
+            });
+
+            Assert.True(rockPlanned);
+            Assert.False(wallPlanned);
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task ObserveAfterStep_IntermediateCornerInDoorwayWithLintelFourYardsAbove_DoesNotSnapCornerOntoLintel()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
@@ -269,6 +302,18 @@ public sealed class PlayerbotMotionTests
         public bool Enabled => true;
         public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
             => ignoreM2 || !((from.X < wallX && to.X > wallX) || (from.X > wallX && to.X < wallX));
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => floor;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }
+    }
+
+    /// <summary>A doodad (rock) of <paramref name="rockYards"/> flat radius around the origin blocks every ignoreM2:false sight starting inside it; an optional M2 wall at <paramref name="wallX"/> (NaN: none) blocks those crossing it.</summary>
+    private sealed class RockUnderBot(float floor, float rockYards, float wallX) : ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
+            => ignoreM2 || (MathF.Sqrt((from.X * from.X) + (from.Y * from.Y)) > rockYards
+                && (float.IsNaN(wallX) || !((from.X < wallX && to.X > wallX) || (from.X > wallX && to.X < wallX))));
         public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => floor;
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }
