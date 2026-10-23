@@ -189,6 +189,8 @@ public sealed class PlayerbotInitiativeTests
         long now = GreetingTime(pair);
         await PassAsync(world, now);
         Assert.Equal(1, Lane(world).Openings);
+        // The wait for the answer starts when the line is really said (the model's phrasing arrives in real time), not when it is queued.
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).PendingFor(pair.Bot, pair.PlayerGuid)).Result, "the opening to be said");
 
         await PassAsync(world, now + PlayerbotInitiativeLane.ReplyWaitMs + 1_000);
 
@@ -389,5 +391,80 @@ public sealed class PlayerbotInitiativeTests
         await PassAsync(world, Roll(first + 60_000));
         Assert.Equal(1, Lane(world).Comments);
         _ = bot;
+    }
+
+    [Fact]
+    public async Task AnOpeningThatWasNeverSaid_IsNotWaitedFor_AndNeverPenalisesOrBacksOffThePlayer()
+    {
+        // The speech limiter refuses every local line: the opening is queued and the model phrases it, but it is never said.
+        await using SocialWorld world = await StartAsync(options => options.Chat.Speech.LocalLinesPerMinute = 0);
+        await using WorldTestClient player = await world.AddPlayerAsync("Initmute");
+        Pair pair = await FamiliarAsync(world, "Initmuted", "Initmute");
+        PlayerbotSocialMemory memory = HelpTestKit.RecorderOf(world).Memory;
+        Assert.True(memory.TryGet(pair.Bot, pair.PlayerGuid.Value, out PlayerbotRelation before));
+        long now = GreetingTime(pair);
+        await PassAsync(world, now);
+        Assert.Equal(1, Lane(world).Openings);
+        await Task.Delay(1500); // long enough for the queued line to reach the speech path and be refused there
+
+        // The player says something: it is not the answer to a line nobody heard.
+        await player.SendChatAsync(ChatType.Say, Language.Common, "no thanks");
+        await Task.Delay(500);
+        await PassAsync(world, now + 1_000);
+        Assert.False(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid));
+        Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid));
+
+        await PassAsync(world, now + PlayerbotInitiativeLane.ReplyWaitMs + 1_000);
+        Assert.Equal(0, Lane(world).Ignored);
+        Assert.True(memory.TryGet(pair.Bot, pair.PlayerGuid.Value, out PlayerbotRelation after));
+        Assert.Equal(before.Affinity, after.Affinity);
+        Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid));
+    }
+
+    [Fact]
+    public async Task ALineThatNamesAnotherCharacter_IsNotTheAnswer_TheNextPlainOneIs()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient player = await world.AddPlayerAsync("Initnamer");
+        await using WorldTestClient other = await world.AddPlayerAsync("Initfriendb");
+        Pair pair = await FamiliarAsync(world, "Initnamed", "Initnamer");
+        long now = 10_000;
+        await world.Host.OnWorldAsync(() => Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now));
+
+        await player.SendChatAsync(ChatType.Say, Language.Common, "hey Initfriendb no thanks");
+        await Task.Delay(500);
+        await PassAsync(world, now + 1_000);
+        Assert.True(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid)); // still waiting
+        Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid));
+
+        await player.SendChatAsync(ChatType.Say, Language.Common, "hello there");
+        await AnswerTakenAsync(world, pair, now + 2_000);
+        Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid)); // a friendly answer
+    }
+
+    [Fact]
+    public async Task APendingOpeningsReply_IsNeverDropped_WhateverTheSharedQueueHolds()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient player = await world.AddPlayerAsync("Initbusy");
+        Pair pair = await FamiliarAsync(world, "Initbusybot", "Initbusy");
+        PlayerbotSocialRecorder recorder = HelpTestKit.RecorderOf(world);
+        long now = 10_000;
+        await world.Host.OnWorldAsync(() =>
+        {
+            // The shared reply queue is full of other characters' lines (its cap is 256).
+            for (int i = 0; i < 400; i++) recorder.NoteChatLine(pair.Bot, pair.BotGuid, ObjectGuid.Player((uint)(5_000 + i)), "hello");
+            Lane(world).Expect(recorder, pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now);
+        });
+
+        await player.SendChatAsync(ChatType.Say, Language.Common, "no thanks");
+        await Task.Delay(500);
+        // The lane drains 32 lines a pass: a few passes later it has reached the reply, which was kept although the queue was full.
+        for (int i = 0; i < 20 && Lane(world).PendingFor(pair.Bot, pair.PlayerGuid); i++) await PassAsync(world, now + 1_000 + i * 100);
+
+        Assert.False(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid));
+        Assert.Equal(1, Lane(world).BackoffOf(pair.PlayerGuid)); // answered ("no thanks"), so a back-off but not unanswered
+        await PassAsync(world, now + PlayerbotInitiativeLane.ReplyWaitMs + 1_000);
+        Assert.Equal(0, Lane(world).Ignored);
     }
 }

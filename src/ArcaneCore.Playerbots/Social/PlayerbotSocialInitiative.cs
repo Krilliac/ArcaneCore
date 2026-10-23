@@ -200,8 +200,11 @@ internal sealed class PlayerbotInitiativeLane
     /// <summary>The player's cooldown for openings ends at (world milliseconds), 0 when none runs (tests).</summary>
     internal long NextOpeningFor(ObjectGuid player) => _playerNext.GetValueOrDefault(player.Value);
 
+    private long _passNowMs;
+
     internal void Run(PlayerbotSocialPass pass)
     {
+        _passNowMs = pass.NowMs;
         PlayerbotSocialRecorder? recorder = pass.Recorder;
         if (recorder is null) return;
         PlayerbotSocialInitiativeOptions options = pass.Options.Initiative;
@@ -246,7 +249,15 @@ internal sealed class PlayerbotInitiativeLane
     {
         for (int budget = 32; budget > 0 && recorder.TryTakeReply(out Guid botId, out ObjectGuid sender, out string? text); budget--)
         {
-            if (!_pending.Remove((botId, sender.Value), out Pending? pending)) continue;
+            if (!_pending.TryGetValue((botId, sender.Value), out Pending? waiting)) continue;
+            if (NamesAnother(pass, text, sender, waiting.BotGuid))
+            {
+                recorder.Expect(botId, sender); // a line for someone else: keep listening for the real answer
+                continue;
+            }
+
+            _pending.Remove((botId, sender.Value));
+            Pending pending = waiting;
             recorder.Unexpect(botId, sender);
             PlayerbotInitiativeRules.Reply reply = PlayerbotInitiativeRules.Classify(text);
             // An offer to team up wants a yes; a greeting or a follow-up is answered by anything but a no.
@@ -267,6 +278,27 @@ internal sealed class PlayerbotInitiativeLane
             if (_follow.Count < Bound) _follow.Add(new Follow(bot.Id, Guid.Empty, sender, pass.NowMs + FollowMs));
             FollowThrough(pass);
         }
+    }
+
+    /// <summary>Whether the line names an online character other than the speaker and the bot ("hey Bob, sure"): it is for them, not the answer to this bot's opening.</summary>
+    private static bool NamesAnother(PlayerbotSocialPass pass, string? text, ObjectGuid speaker, ObjectGuid bot)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        int start = -1;
+        for (int i = 0; i <= text.Length; i++)
+        {
+            bool letter = i < text.Length && char.IsLetter(text[i]);
+            if (letter)
+            {
+                if (start < 0) start = i;
+                continue;
+            }
+
+            if (start >= 0 && i - start >= 3 && i - start <= 12 && pass.World.FindOnlinePlayer(text.Substring(start, i - start)) is { } named && named.Guid != speaker && named.Guid != bot) return true;
+            start = -1;
+        }
+
+        return false;
     }
 
     private static void RaiseSignal(PlayerbotSocialPass pass, PlayerbotSocialBot bot, uint entry, uint quest)
@@ -434,7 +466,32 @@ internal sealed class PlayerbotInitiativeLane
                 break;
         }
 
-        var speech = new BotSpeech(channel, string.Empty, "initiative-" + kind.ToString().ToLowerInvariant(), BotSpeechPriority.Low) { TargetGuid = other.Guid };
+        Action? sent = null;
+        // Everything that follows the line happens once it was really said (speech path, world thread): an opening the limiter or the place refused costs the player nothing.
+        Guid botId = bot.Id;
+        ObjectGuid botGuid = self.Guid, otherGuid = other.Guid;
+        PlayerbotSocialBot? answerer = null;
+        if (!real && kind == PlayerbotOpeningKind.Objective && entry != 0 && pass.ByCharacter.TryGetValue(otherGuid.Low, out PlayerbotSocialBot? found) && found.Brain is not null) answerer = found;
+        sent = () =>
+        {
+            long said = _passNowMs;
+            if (real)
+            {
+                Expect(recorder, botId, botGuid, otherGuid, kind, entry, quest, said);
+            }
+            else if (answerer is not null)
+            {
+                // The other bot answers the offer too: a hash of the two and the minute against its own sociability and mood. A yes is a recruit for this bot's group.
+                PlayerbotTraits theirs = PlayerbotTraits.For(otherGuid.Value);
+                if (PlayerbotInitiativeRules.Rolls(otherGuid.Value, botGuid.Value, said, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective) ^ 0xA25E12UL,
+                        PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, theirs.Sociability, recorder.Mood.Get(answerer.Id))))
+                {
+                    RaiseSignal(pass, bot, entry, quest);
+                    if (_follow.Count < Bound) _follow.Add(new Follow(botId, answerer.Id, otherGuid, said + FollowMs));
+                }
+            }
+        };
+        var speech = new BotSpeech(channel, string.Empty, "initiative-" + kind.ToString().ToLowerInvariant(), BotSpeechPriority.Low) { TargetGuid = other.Guid, Sent = () => sent?.Invoke() };
         var ask = new BotChatAsk(bot.Id, self.Guid, bot.Party.PersonaFor(self), other.Guid, other.Name, ChatType.Say, string.Empty, FromMaster: false, InviteAllowed: false,
             SenderAccountId: 0, Topic: new BotChatTopic(key, instruction, values, string.Empty), Speech: speech);
         if (chat.TryAnnounce(ask) != BotChatAdmission.Queued) return false;
@@ -443,22 +500,7 @@ internal sealed class PlayerbotInitiativeLane
         ByKind[(int)kind]++;
         if (channel == BotSpeechChannel.Whisper) Whispers++;
         _pairNext[(bot.Id, other.Guid.Value, kind)] = pass.NowMs + PairGapMs;
-        if (real)
-        {
-            _playerNext[other.Guid.Value] = pass.NowMs + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, _ignored.GetValueOrDefault(other.Guid.Value));
-            Expect(recorder, bot.Id, self.Guid, other.Guid, kind, entry, quest, pass.NowMs);
-        }
-        else if (kind == PlayerbotOpeningKind.Objective && entry != 0 && pass.ByCharacter.TryGetValue(other.Guid.Low, out PlayerbotSocialBot? answerer) && answerer.Brain is not null)
-        {
-            // The other bot answers the offer too: a hash of the two and the minute against its own sociability and mood. A yes is a recruit for this bot's group.
-            PlayerbotTraits theirs = PlayerbotTraits.For(other.Guid.Value);
-            if (PlayerbotInitiativeRules.Rolls(other.Guid.Value, self.Guid.Value, pass.NowMs, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective) ^ 0xA25E12UL,
-                    PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, theirs.Sociability, recorder.Mood.Get(answerer.Id))))
-            {
-                RaiseSignal(pass, bot, entry, quest);
-                if (_follow.Count < Bound) _follow.Add(new Follow(bot.Id, answerer.Id, other.Guid, pass.NowMs + FollowMs));
-            }
-        }
+        if (real) _playerNext[other.Guid.Value] = pass.NowMs + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, _ignored.GetValueOrDefault(other.Guid.Value));
 
         return true;
     }

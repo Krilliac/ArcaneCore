@@ -64,6 +64,7 @@ internal static class PlayerbotSpeechDelivery
         if (taken != BotSpeechAdmission.Queued) return taken;
         if (!Send(session, player, speech, place)) return BotSpeechAdmission.Unavailable;
         chat.NoteSpoken(player.Name, speech, speech.Channel == BotSpeechChannel.Emote ? 0 : speech.Text.Length);
+        speech.Sent?.Invoke();
         return BotSpeechAdmission.Queued;
     }
 

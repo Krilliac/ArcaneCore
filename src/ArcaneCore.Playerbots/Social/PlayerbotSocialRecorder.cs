@@ -179,7 +179,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// </summary>
     public void NoteChatLine(Guid botId, ObjectGuid botGuid, ObjectGuid sender, string? text)
     {
-        if (sender.IsPlayer && _replies.Count < 256) _replies.Enqueue((botId, sender, text));
+        if (sender.IsPlayer && (TakeExpected(botId, sender) || _replies.Count < 256)) _replies.Enqueue((botId, sender, text));
         if (PlayerbotApology.IsApology(text)) NoteById(botId, botGuid, sender, PlayerbotSocialEvent.Apologized);
         NoteById(botId, botGuid, sender, PlayerbotSocialEvent.ChatExchange);
     }
@@ -204,8 +204,11 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// <summary>The initiative lane opened with <paramref name="player"/> and waits for the answer: their next say within the bot's hearing is it, named or not.</summary>
     internal void Expect(Guid botId, ObjectGuid player)
     {
-        if (_expected.Count < 1024) _expected[(botId, player.Value)] = 1;
+        if (_expected.Count < 1024 || _expected.ContainsKey((botId, player.Value))) _expected[(botId, player.Value)] = 1;
     }
+
+    /// <summary>Whether <paramref name="player"/> is awaited by the bot and has not answered yet; the answer is then taken (a pending opening's reply is never dropped for a full queue).</summary>
+    private bool TakeExpected(Guid botId, ObjectGuid player) => _expected.TryUpdate((botId, player.Value), 2, 1);
 
     /// <summary>The answer came (or the wait is over): the bot no longer listens for it.</summary>
     internal void Unexpect(Guid botId, ObjectGuid player) => _expected.TryRemove((botId, player.Value), out _);
@@ -219,7 +222,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// </summary>
     public void NoteHeardSay(Guid botId, ObjectGuid sender, string? text)
     {
-        if (sender.IsPlayer && _replies.Count < 256 && _expected.ContainsKey((botId, sender.Value))) _replies.Enqueue((botId, sender, text));
+        if (sender.IsPlayer && TakeExpected(botId, sender)) _replies.Enqueue((botId, sender, text));
     }
 
     /// <summary>Take the oldest line a character addressed to a bot (the answer to an opening, <see cref="PlayerbotInitiativeLane"/>).</summary>
