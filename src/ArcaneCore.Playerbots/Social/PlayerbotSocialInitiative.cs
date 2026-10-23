@@ -110,12 +110,19 @@ internal static class PlayerbotInitiativeRules
     /// <summary>Whether a reply to an offer to team up is a yes.</summary>
     internal static bool IsPositiveReply(string? text) => Classify(text) == Reply.Yes;
 
-    /// <summary>Whether the word is one the reply rules read (a yes or no word, "not", a greeting or thanks): such a word is never taken for a character's name.</summary>
-    internal static bool IsReplyWord(string word)
+    /// <summary>
+    /// Whether the word is one the reply rules read or an ordinary reply filler: a yes or no word, "not", "cant"/"wont", a greeting, thanks, "why", or a filler
+    /// such as "now", "later", "maybe", "thx", "ty", "np". Such a word is never taken for a character's name, so a character called Sure or Maybe swallows no answer.
+    /// </summary>
+    internal static bool IsReplyWord(ReadOnlySpan<char> word)
     {
-        string w = word.ToLowerInvariant();
-        return Array.IndexOf(Yes, w) >= 0 || Array.IndexOf(No, w) >= 0 || w is "not" or "thanks" or "thank" or "hey" or "hello" or "hi";
+        foreach (string w in Yes) if (word.Equals(w, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (string w in No) if (word.Equals(w, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (string w in ReplyFillers) if (word.Equals(w, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
+
+    private static readonly string[] ReplyFillers = ["not", "cant", "wont", "why", "now", "later", "maybe", "thanks", "thank", "thx", "ty", "np", "hey", "hello", "hi"];
 }
 
 /// <summary>
@@ -199,9 +206,10 @@ internal sealed class PlayerbotInitiativeLane
     /// <summary>Surroundings comments made.</summary>
     internal int Comments { get; private set; }
 
-    /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
+    /// <summary>How many openings wait for their answer (tests).</summary>
     internal int PendingCount => _pending.Count;
 
+    /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
     internal bool PendingFor(Guid bot, ObjectGuid player) => _pending.ContainsKey((bot, player.Value));
 
     /// <summary>How many openings in a row the player has ignored or turned down (the cooldown doubles with each, tests).</summary>
@@ -297,7 +305,7 @@ internal sealed class PlayerbotInitiativeLane
     /// </summary>
     private static bool NamesAnother(PlayerbotSocialPass pass, string? text, ObjectGuid speaker, ObjectGuid botGuid)
     {
-        if (string.IsNullOrEmpty(text) || !pass.ByCharacter.TryGetValue(botGuid.Low, out PlayerbotSocialBot? bot)) return false;
+        if (string.IsNullOrEmpty(text) || !HasNameCandidate(text) || !pass.ByCharacter.TryGetValue(botGuid.Low, out PlayerbotSocialBot? bot)) return false; // a plain reply costs no scan
         Player self = bot.Player;
         HashSet<string>? near = null;
         int looked = 0;
@@ -310,8 +318,25 @@ internal sealed class PlayerbotInitiativeLane
         }
 
         if (near is null) return false;
-        foreach (string word in text.Split([' ', ',', '.', '!', '?', ';', ':'], StringSplitOptions.RemoveEmptyEntries))
-            if (word.Length is >= 3 and <= 12 && !PlayerbotInitiativeRules.IsReplyWord(word) && near.Contains(word)) return true;
+        HashSet<string>.AlternateLookup<ReadOnlySpan<char>> names = near.GetAlternateLookup<ReadOnlySpan<char>>();
+        foreach (Range range in text.AsSpan().SplitAny(NameSeparators))
+        {
+            ReadOnlySpan<char> word = text.AsSpan(range);
+            if (IsNameCandidate(word) && names.Contains(word)) return true;
+        }
+
+        return false;
+    }
+
+    private static readonly char[] NameSeparators = [' ', ',', '.', '!', '?', ';', ':'];
+
+    /// <summary>A word that could be a character's name: 3 to 12 letters long and not a reply word.</summary>
+    private static bool IsNameCandidate(ReadOnlySpan<char> word) => word.Length is >= 3 and <= 12 && !PlayerbotInitiativeRules.IsReplyWord(word);
+
+    private static bool HasNameCandidate(string text)
+    {
+        foreach (Range range in text.AsSpan().SplitAny(NameSeparators))
+            if (IsNameCandidate(text.AsSpan(range))) return true;
         return false;
     }
 

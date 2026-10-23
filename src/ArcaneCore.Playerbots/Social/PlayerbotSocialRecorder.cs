@@ -210,6 +210,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         _replies.Enqueue((botId, sender, text));
         Interlocked.Increment(ref _repliesHeard);
     }
+
     private readonly ConcurrentDictionary<(Guid Bot, ulong Player), byte> _expected = new();
 
     /// <summary>The initiative lane opened with <paramref name="player"/> and waits for the answer: their next say within the bot's hearing is it, named or not.</summary>

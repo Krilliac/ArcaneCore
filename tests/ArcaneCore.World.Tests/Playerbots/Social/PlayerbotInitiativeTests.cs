@@ -56,6 +56,8 @@ public sealed class PlayerbotInitiativeTests
         Assert.Equal(PlayerbotInitiativeRules.Reply.No, PlayerbotInitiativeRules.Classify("not sure"));
         Assert.Equal(PlayerbotInitiativeRules.Reply.Other, PlayerbotInitiativeRules.Classify("hello again"));
         Assert.Equal(PlayerbotInitiativeRules.Reply.Yes, PlayerbotInitiativeRules.Classify("sure"));
+        foreach (string word in new[] { "Sure", "no", "cant", "wont", "why", "now", "later", "maybe", "thx", "ty", "np", "thanks", "Hello" }) Assert.True(PlayerbotInitiativeRules.IsReplyWord(word), word);
+        Assert.False(PlayerbotInitiativeRules.IsReplyWord("Bobby"));
         for (long t = 0; t < 200_000; t += 60_000)
             Assert.Equal(PlayerbotInitiativeRules.Rolls(1, 2, t, 3, 0.5), PlayerbotInitiativeRules.Rolls(1, 2, t, 3, 0.5));
     }
@@ -512,6 +514,7 @@ public sealed class PlayerbotInitiativeTests
         await using WorldTestClient player = await world.AddPlayerAsync("Initnamer");
         await using WorldTestClient other = await world.AddPlayerAsync("Initfriendb");
         Pair pair = await FamiliarAsync(world, "Initnamed", "Initnamer");
+        await HelpTestKit.StandAsync(world, "Initnamed", ("Initfriendb", 8f)); // the named character stands within earshot, in the bot's sight
         long now = 10_000;
         await world.Host.OnWorldAsync(() => Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now));
 
