@@ -58,6 +58,9 @@ recorded real-client run unless its acceptance page says so.
 [Contributing](guide/contributing.md): the charter rules in practice, build and CI commands, the seams a feature plugs into, schema module rules, the
 hosted-CI database rule, the flake rule, repository hygiene, and how the generated documentation is regenerated.
 
+[Naming and style conventions](conventions.md): the naming standard (fields, role suffixes, AI casing, namespaces, files, tests), its
+documented exceptions, what `.editorconfig` encodes, the renames deliberately deferred, and the checks before any rename or move.
+
 ## For developers: areas
 
 Each area page has a Delivered section, its limits, and the references it follows. This list is maintained by hand.
