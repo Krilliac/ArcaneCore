@@ -40,15 +40,16 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
         (-1001104, Speaker.Tirion, 7000), (-1001105, Speaker.Tirion, 0),
     ];
 
+    private readonly DialogueRunner _dialogue = new(Array.ConvertAll(s_dialogue, d => d.Delay));
+
     private bool _fightStarted, _hasMount, _taelanDead;
     private Creature? _isillien, _tirion;
-    private uint _holyCleaveMs, _holyStrikeMs, _crusaderStrikeMs, _holyLightMs, _stepMs;
-    private int _step = -1;
+    private uint _holyCleaveMs, _holyStrikeMs, _crusaderStrikeMs, _holyLightMs;
 
     public bool TaelanDead => _taelanDead;
     public Creature? Isillien => _isillien;
     public Creature? Tirion => _tirion;
-    public int DialogueStep => _step;
+    public int DialogueStep => _dialogue.Step;
 
     protected override bool HoldAtEndWhilePaused => true;
 
@@ -185,8 +186,7 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
 
     private void StartDialogue(int index)
     {
-        _step = index;
-        _stepMs = s_dialogue[index].Delay;
+        _dialogue.Start(index);
         DoStep(s_dialogue[index]);
     }
 
@@ -341,27 +341,9 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
 
     protected override void UpdateEscortAI(uint diffMs)
     {
-        if (_step >= 0)
+        if (_dialogue.Advance(diffMs) is var due and >= 0)
         {
-            if (_stepMs == 0)
-            {
-                _step = -1;
-            }
-            else if (_stepMs <= diffMs)
-            {
-                if (_step + 1 < s_dialogue.Length)
-                {
-                    StartDialogue(_step + 1);
-                }
-                else
-                {
-                    _step = -1;
-                }
-            }
-            else
-            {
-                _stepMs -= diffMs;
-            }
+            DoStep(s_dialogue[due]);
         }
 
         if (!UpdateVictim() || Victim is not { } victim || _taelanDead)

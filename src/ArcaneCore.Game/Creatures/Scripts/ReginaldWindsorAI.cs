@@ -61,8 +61,8 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
         (-8448.279f, 338.398f, 121.329f),
     ];
 
-    private uint _guardCheckMs, _hammerMs, _cleaveMs, _stepMs;
-    private int _step = -1;
+    private readonly DialogueRunner _dialogue = new(Array.ConvertAll(s_dialogue, d => d.Delay));
+    private uint _guardCheckMs, _hammerMs, _cleaveMs;
     private bool _keepReady;
     private ObjectGuid _playerGuid;
     private readonly Creature?[] _guards = new Creature?[6];
@@ -70,7 +70,7 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
     private readonly Dictionary<Creature, (int Point, float X, float Y)> _guardMoves = new(ReferenceEqualityComparer.Instance);
 
     public bool KeepEventReady => _keepReady;
-    public int DialogueStep => _step;
+    public int DialogueStep => _dialogue.Step;
     public IReadOnlyList<Creature> RoyalGuards => _royalGuards;
 
     /// <summary>Kept at his last point until the throne room scene lets him go (SetEscortPaused(false) at NPC_GUARD_PATROLLER).</summary>
@@ -180,8 +180,7 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
 
     private void StartDialogue(int index)
     {
-        _step = index;
-        _stepMs = s_dialogue[index].Delay;
+        _dialogue.Start(index);
         DoStep(s_dialogue[index]);
     }
 
@@ -463,27 +462,9 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
             }
         }
 
-        if (_step >= 0)
+        if (_dialogue.Advance(diffMs) is var due and >= 0)
         {
-            if (_stepMs == 0)
-            {
-                _step = -1;
-            }
-            else if (_stepMs <= diffMs)
-            {
-                if (_step + 1 < s_dialogue.Length)
-                {
-                    StartDialogue(_step + 1);
-                }
-                else
-                {
-                    _step = -1;
-                }
-            }
-            else
-            {
-                _stepMs -= diffMs;
-            }
+            DoStep(s_dialogue[due]);
         }
 
         if (_guardCheckMs != 0)
