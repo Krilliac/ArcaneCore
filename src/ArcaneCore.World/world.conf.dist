@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       706 keys
+#   WORLD                       712 keys
 #
 ###############################################################################
 
@@ -15570,6 +15570,77 @@ World.Playerbots.Social.Guilds.MaxBotGuilds = 4
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Guilds.TargetSize = 25
+
+#
+#    World.Playerbots.Social.Helping.AnswerHelp
+#        Description: Let a bot that is asked for help (a targeted help emote, or a help yell or say
+#                     from someone close) decide whether to answer it (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.AnswerHelp = true
+
+#
+#    World.Playerbots.Social.Helping.BuffCooldownMinutes
+#        Description: The least minutes between two buffs a bot gives the same stranger (0..1440).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.BuffCooldownMinutes = 30
+
+#
+#    World.Playerbots.Social.Helping.BuffStrangers
+#        Description: Let a bot occasionally cast one of its class buffs (the ones it casts on
+#                     groupmates) on a same-faction stranger (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.BuffStrangers = true
+
+#
+#    World.Playerbots.Social.Helping.Enabled
+#        Description: Let bots look for strangers in trouble and help them (on by default). Off: no
+#                     scan, and no call for help is answered either.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.Enabled = true
+
+#
+#    World.Playerbots.Social.Helping.ResurrectStrangers
+#        Description: Let a bot whose class can resurrect resurrect a dead same-faction stranger
+#                     with a recent corpse, once per corpse (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.ResurrectStrangers = true
+
+#
+#    World.Playerbots.Social.Helping.TroubleRadiusYards
+#        Description: How far (yards) from an idle bot a unit in trouble may be and still be noticed
+#                     (1..100).
+#        Type: float
+#        Default: 30
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.TroubleRadiusYards = 30
 
 #
 #    World.Playerbots.Social.Lists.ChangeSpacingSeconds

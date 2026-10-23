@@ -165,6 +165,34 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         Guarded(() => Memory.SetTopic(botId, other.Value, topicKey, summary));
     }
 
+    private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Asker)> _helpCalls = new();
+
+    /// <summary>
+    /// <paramref name="asker"/> called for help within earshot of the managed bot <paramref name="botId"/> (a help emote aimed at it, or a help yell
+    /// or say it heard). The social pass answers the queue (<see cref="PlayerbotHelpLane"/>); at most 256 calls wait.
+    /// </summary>
+    public void NoteHelpCall(Guid botId, ObjectGuid asker)
+    {
+        if (_helpCalls.Count < 256) _helpCalls.Enqueue((botId, asker));
+    }
+
+    /// <summary>Calls for help waiting for the social pass (tests).</summary>
+    internal int PendingHelpCalls => _helpCalls.Count;
+
+    /// <summary>Take the oldest call for help that has not been answered.</summary>
+    internal bool TryTakeHelpCall(out Guid botId, out ObjectGuid asker)
+    {
+        if (_helpCalls.TryDequeue(out (Guid BotId, ObjectGuid Asker) call))
+        {
+            (botId, asker) = call;
+            return true;
+        }
+
+        botId = Guid.Empty;
+        asker = default;
+        return false;
+    }
+
     /// <summary>Run a recording step so that it can never throw into game logic.</summary>
     public void Guarded(Action step)
     {

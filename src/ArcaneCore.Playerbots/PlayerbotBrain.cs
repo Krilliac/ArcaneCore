@@ -1186,6 +1186,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 Rest(player);
                 return;
             }
+            // A request from the social pass to lend a hand to a stranger (docs/areas/playbots-social.md, Helping): carried out ahead of the goal ladder.
+            if (_helpKind != PlayerbotHelpKind.None)
+            {
+                PlayerbotThinkProbe.Phase("help");
+                int help = TakeHelpErrand(player);
+                if (help == 2) goto afterGoalLadder;
+                if (help == 1) return;
+            }
+
             PlayerbotThinkProbe.Phase("equipment");
             if (_equipment.Update(player))
             {

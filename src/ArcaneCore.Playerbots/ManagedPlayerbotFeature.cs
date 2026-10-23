@@ -391,6 +391,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _chat.LineHeard += line =>
             {
                 if (line.AddressesBot && line.SenderGuid != line.BotGuid) recorder.NoteChatLine(line.BotId, line.BotGuid, line.SenderGuid, line.Text);
+                // A yell or a say that calls for help is a call every bot in earshot may answer (BotSocial.PlayerbotHelpLane decides who).
+                if (line.SenderGuid != line.BotGuid && line.Type is ChatType.Yell or ChatType.Say && BotSocial.PlayerbotHelpRules.LooksLikeHelpCall(line.Text))
+                    recorder.NoteHelpCall(line.BotId, line.SenderGuid);
             };
         }
 
@@ -772,7 +775,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (active.Paused || active.Controller is not null || active.Record.State != ManagedPlayerbotState.Running) continue;
             if (active.Session is not { State: SessionState.InWorld, Player: { IsInWorld: true, Map: not null } player } session) continue;
             destination.Add(new BotSocial.PlayerbotSocialBot(active.Record.BotId, session, player, active.Party, active.PartyDriven,
-                groups?.Drives(active.Record.BotId) == true));
+                groups?.Drives(active.Record.BotId) == true, active.Brain));
         }
     }
 

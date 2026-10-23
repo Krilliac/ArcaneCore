@@ -1677,6 +1677,12 @@ How to read the tables:
 | `World:Playerbots:Social:Guilds:InvitePolicy` | `PlayerbotInvitePolicy` | `GuildOrFriends` | live | Who may invite a bot into a guild, and whose charter a bot signs (`PlayerbotInvitePolicy.GuildOrFriends` by default): the same rules as `World:Playerbots:Party:InvitePolicy`, and the names in `World:Playerbots:Party:Allowlist` are always accepted. Another bot's invitation into a guild the founding bots are building is always accepted. Values: `None`, `GuildOrFriends`, `Anyone`, `Affinity`. |
 | `World:Playerbots:Social:Guilds:MaxBotGuilds` | `int` | `4` | live | The most guilds led by a registered bot at once (0..64; 0 founds none). Lowering it disbands nothing: it only stops new foundings. |
 | `World:Playerbots:Social:Guilds:TargetSize` | `int` | `25` | live | The most members of a bot guild, pending invitations counted (2..500). |
+| `World:Playerbots:Social:Helping:AnswerHelp` | `bool` | `true` | live | Let a bot that is asked for help (a targeted help emote, or a help yell or say from someone close) decide whether to answer it (on by default). |
+| `World:Playerbots:Social:Helping:BuffCooldownMinutes` | `int` | `30` | live | The least minutes between two buffs a bot gives the same stranger (0..1440). |
+| `World:Playerbots:Social:Helping:BuffStrangers` | `bool` | `true` | live | Let a bot occasionally cast one of its class buffs (the ones it casts on groupmates) on a same-faction stranger (on by default). |
+| `World:Playerbots:Social:Helping:Enabled` | `bool` | `true` | live | Let bots look for strangers in trouble and help them (on by default). Off: no scan, and no call for help is answered either. |
+| `World:Playerbots:Social:Helping:ResurrectStrangers` | `bool` | `true` | live | Let a bot whose class can resurrect resurrect a dead same-faction stranger with a recent corpse, once per corpse (on by default). |
+| `World:Playerbots:Social:Helping:TroubleRadiusYards` | `float` | `30` | live | How far (yards) from an idle bot a unit in trouble may be and still be noticed (1..100). |
 | `World:Playerbots:Social:Lists:ChangeSpacingSeconds` | `int` | `60` | live | The least seconds between two list changes of one bot (1..3600). |
 | `World:Playerbots:Social:Lists:Enabled` | `bool` | `true` | live | Let bots manage their friend and ignore lists by affinity (on by default). |
 | `World:Playerbots:Social:Lists:FriendAffinity` | `int` | `50` | live | The affinity at or above which a bot befriends a character (with `FriendMinFamiliarity`; -100..100). |

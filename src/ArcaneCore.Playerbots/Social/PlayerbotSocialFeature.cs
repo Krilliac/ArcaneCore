@@ -28,7 +28,7 @@ using ArcaneCore.World.Bots;
 namespace ArcaneCore.World.Playerbots.BotSocial;
 
 /// <summary>One running, non-scripted managed bot as the social features see it for one pass (world thread).</summary>
-internal sealed record PlayerbotSocialBot(Guid Id, WorldSession Session, Player Player, PlayerbotPartyAI Party, bool PartyDriven, bool GroupDriven);
+internal sealed record PlayerbotSocialBot(Guid Id, WorldSession Session, Player Player, PlayerbotPartyAI Party, bool PartyDriven, bool GroupDriven, PlayerbotBrain? Brain = null);
 
 /// <summary>
 /// Every interval the social feature uses, in milliseconds of world time. The defaults are the documented ones (docs/areas/playbots-social.md);
@@ -226,6 +226,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildFounding _founding = new(logger);
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
+    private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotChannelMembership _channels = new();
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
@@ -271,6 +272,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     internal PlayerbotGuildChat GuildChat => _chat;
 
     internal PlayerbotSocialEmotes Emotes => _emotes;
+
+    /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
+    internal PlayerbotHelpLane Help => _help;
 
     /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
     internal PlayerbotChannelMembership Channels => _channels;
@@ -444,6 +448,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _membership.InviteByAffinity(pass);
         _membership.Promote(pass);
         _lists.Run(pass);
+        _help.Run(pass);
         _chat.Speak(pass);
         _emotes.Run(pass);
         RunChannels(pass);

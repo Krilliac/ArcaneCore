@@ -40,6 +40,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Friend and ignore lists driven by affinity (<c>World:Playerbots:Social:Lists</c>).</summary>
     public PlayerbotSocialListsOptions Lists { get; set; } = new();
 
+    /// <summary>Answering calls for help and lending a hand to strangers (<c>World:Playerbots:Social:Helping</c>).</summary>
+    public PlayerbotSocialHelpingOptions Helping { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
@@ -49,6 +52,8 @@ public sealed class PlayerbotSocialOptions
         if (Memory is null) throw new InvalidOperationException($"{section}:Memory is missing.");
         if (WarMode is null) throw new InvalidOperationException($"{section}:WarMode is missing.");
         if (Lists is null) throw new InvalidOperationException($"{section}:Lists is missing.");
+        if (Helping is null) throw new InvalidOperationException($"{section}:Helping is missing.");
+        Helping.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

@@ -539,7 +539,14 @@ internal sealed class PlayerbotPartyAI
         if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
         if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
         BotSocial.PlayerbotEmoteMood mood = BotSocial.PlayerbotEmoteMoods.Classify(emote.TextEmote);
-        if (mood is BotSocial.PlayerbotEmoteMood.Neutral or BotSocial.PlayerbotEmoteMood.Help) return;
+        if (mood == BotSocial.PlayerbotEmoteMood.Help)
+        {
+            // A call for help aimed at this bot: the social pass decides whether it answers (BotSocial.PlayerbotHelpLane).
+            social.NoteHelpCall(_botId, emote.Emoter);
+            return;
+        }
+
+        if (mood == BotSocial.PlayerbotEmoteMood.Neutral) return;
         BotSocial.PlayerbotSocialEvent noted = mood switch
         {
             BotSocial.PlayerbotEmoteMood.Friendly => BotSocial.PlayerbotSocialEvent.FriendlyEmote,

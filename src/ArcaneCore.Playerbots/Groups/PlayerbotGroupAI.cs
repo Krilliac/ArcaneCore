@@ -1289,9 +1289,15 @@ internal sealed class PlayerbotGroupAI
     }
 
     /// <summary>The resurrection spell the bot knows (its highest rank) and carries the reagents for (Rebirth's seed), or null.</summary>
-    internal SpellInfo? ResurrectionSpell(Player player)
+    internal SpellInfo? ResurrectionSpell(Player player) => FindResurrectionSpell(_session, player);
+
+    /// <summary>
+    /// The resurrection spell <paramref name="player"/> knows (its highest rank) and carries the reagents for, or null: what the group's healer
+    /// and a bot lending a hand to a stranger (<c>PlayerbotBrain.RequestResurrect</c>) cast.
+    /// </summary>
+    internal static SpellInfo? FindResurrectionSpell(WorldSession session, Player player)
     {
-        if (!PlayerbotGroupContent.CanHeal(player.Class) || _session.Services.GetService<SpellFeature>() is not { } feature) return null;
+        if (!PlayerbotGroupContent.CanHeal(player.Class) || session.Services.GetService<SpellFeature>() is not { } feature) return null;
         SpellInfo? best = null;
         foreach (uint id in feature.Spellbook.GetSpells(player))
             if (feature.System.Store.Get(id) is { } spell && ResurrectionSpells.Contains(spell.Name, StringComparer.Ordinal)

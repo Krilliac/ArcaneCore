@@ -209,6 +209,29 @@ relation exists. The built-in greeting says "welcome back" at familiarity 3 or m
 
 **GM command**: `.playerbot social $bot` (Administrator, read-only) shows the traits and the ten best-known relations.
 
+## Helping (`World:Playerbots:Social:Helping`, live)
+
+Design: `docs/design/playerbot-social.md` 4.4 and 4.9 (phase P2). Everything here goes through the bot's own session and the existing
+handlers (`CMSG_ATTACKSWING`, `CMSG_CAST_SPELL`); the lane that decides is `PlayerbotHelpLane` (social pass, world thread) and the lane that
+acts is the bot's own think (`PlayerbotBrain.Help.cs`), so a helping bot walks, fights and heals through the code every other bot uses.
+
+**Answering a call for help** (`AnswerHelp`, on by default). A bot that is asked decides with `PlayerbotCallForHelp.Answers`: its
+helpfulness (a stable trait of its guid) scaled by how it feels about the asker (`1 + affinity / 100`, through `EffectiveAffinity`), one hash
+roll per bot, asker and 15-second bucket. It is asked in two ways: a text emote `/helpme` aimed at it (the party intake sees
+`SMSG_TEXT_EMOTE`), or a help yell or say (the whole word "help") that the bot hears, from a same-faction player or bot within
+`World:Playerbots:Social:Memory:BystanderRadiusYards`. Only a *free* bot answers: its own brain drives it (not a party, not a coordinator group, so never a dungeon run),
+it is alive, out of combat, above 70% health, not in a duel, and on a low-priority goal (explore, quest, grind, vendor, train, home, mount;
+never combat, rest, recover, retreat, battleground). The asker must be alive, in a fight, and neither disliked (affinity below 0) nor a rival.
+On yes the bot takes the asker's nearest attacker through the assist lane that `DropIfSomeoneElses` uses (`PlayerbotContention.BeginAssist`): the
+attack is a normal attack, and a priest, paladin, druid or shaman heals the asker first (`TryHealTagger`). The help is recorded once as
+`HelpedThem` / `HelpedBy` (`PlayerbotSocialRecorder.NoteHelp` counts a pair once per fight). On no it stays and, about one time in six and never
+to someone it dislikes, says "Sorry, can't" through the announcement path. A bot decides about one asker once a minute.
+
+**Never against a fight that would flag the bot.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP:
+the bot takes such a fight only when it is flagged already or `World:Playerbots:Social:WarMode:Enabled` is on, and the brain's targets are
+creatures, so a player attacker is never taken. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an unflagged
+healer).
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is

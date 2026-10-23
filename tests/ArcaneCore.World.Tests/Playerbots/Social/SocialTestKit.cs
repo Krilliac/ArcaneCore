@@ -170,7 +170,7 @@ internal static class SocialTestKit
             if (status.State != ManagedPlayerbotState.Running || bots.IsScripted(status.BotId)) continue;
             if (bots.FindSession(status.BotId) is not { State: SessionState.InWorld, Player: { IsInWorld: true, Map: not null } player } session) continue;
             if (bots.FindPartyAI(status.BotId) is not { } party) continue;
-            list.Add(new PlayerbotSocialBot(status.BotId, session, player, party, partyDriven || bots.IsPartyDriven(status.BotId), GroupDriven: false));
+            list.Add(new PlayerbotSocialBot(status.BotId, session, player, party, partyDriven || bots.IsPartyDriven(status.BotId), GroupDriven: false, bots.FindBrain(status.BotId)));
         }
 
         return list;
