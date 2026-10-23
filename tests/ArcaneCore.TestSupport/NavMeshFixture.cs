@@ -2,14 +2,14 @@ using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 
-namespace ArcaneCore.Game.Tests.Collision;
+namespace ArcaneCore.TestSupport;
 
 /// <summary>
 /// Writes tiny repository-authored navmeshes (<c>.mmap</c> + <c>.mmtile</c>) into a temporary
 /// directory: a grid of square cells in world space, one quad polygon per walkable cell, laid out
 /// as a Detour tile. No client data is involved.
 /// </summary>
-internal sealed class NavMeshFixture : IDisposable
+public sealed class NavMeshFixture : IDisposable
 {
     public NavMeshFixture()
     {
@@ -61,7 +61,7 @@ internal sealed class NavMeshFixture : IDisposable
 /// A Detour tile made of square cells: cell (i, j) covers world X [X0 + i·Size, +Size) and
 /// Y [Y0 + j·Size, +Size). Border edges on <see cref="LinkedSides"/> are written as external links.
 /// </summary>
-internal sealed record CellTile(int DetourX, int DetourY, float X0, float Y0, int CellsX, int CellsY, float Size = 2)
+public sealed record CellTile(int DetourX, int DetourY, float X0, float Y0, int CellsX, int CellsY, float Size = 2)
 {
     public Func<int, int, bool> Walkable { get; init; } = (_, _) => true;
 

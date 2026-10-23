@@ -24,32 +24,7 @@
     <ProjectReference Include="..\..\src\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
     <ProjectReference Include="..\ThirdParty\WowWorldMessages\WowWorldMessages.Vanilla.csproj" />
     <ProjectReference Include="..\..\tools\ArcaneCore.Sniff\ArcaneCore.Sniff.csproj" />
-  </ItemGroup>
-
-  <!-- Codex-line databases (schema of commit 0e07c29b) for the renumbering migration's bot-load test, shared with ArcaneCore.Data.Tests. -->
-  <ItemGroup>
-    <Compile Include="..\ArcaneCore.Data.Tests\Upgrade\CodexLine\CodexLineDatabase.cs" Link="Playerbots\CodexLine\CodexLineDatabase.cs" />
-    <EmbeddedResource Include="..\ArcaneCore.Data.Tests\Upgrade\CodexLine\*.sql" LogicalName="CodexLine/%(Filename)%(Extension)" Link="Playerbots\CodexLine\%(Filename)%(Extension)" />
-  </ItemGroup>
-
-  <!-- Repository-authored navigation meshes (.mmap/.mmtile writer) for the playerbot region-leg tests, shared with ArcaneCore.Game.Tests. -->
-  <ItemGroup>
-    <Compile Include="..\ArcaneCore.Game.Tests\Collision\NavMeshFixture.cs" Link="Playerbots\NavMeshFixture.cs" />
-  </ItemGroup>
-
-  <!-- Repository-authored vmaps (.vmtree/.vmtile/.vmo writer) for the playerbot lift-stop tile tests, shared with ArcaneCore.Game.Tests. -->
-  <ItemGroup>
-    <Compile Include="..\ArcaneCore.Game.Tests\Collision\VMapFixture.cs" Link="Playerbots\VMapFixture.cs" />
-  </ItemGroup>
-
-  <!-- The original loot generator: the oracle of the loot plan equivalence tests on the real world.db, shared with ArcaneCore.Game.Tests. -->
-  <ItemGroup>
-    <Compile Include="..\ArcaneCore.Game.Tests\Memo\ReferenceLootGenerator.cs" Link="Memo\ReferenceLootGenerator.cs" />
-  </ItemGroup>
-
-  <!-- Steady-state allocation assertions that retry a window a cross-thread collection ran in, shared with ArcaneCore.Game.Tests. -->
-  <ItemGroup>
-    <Compile Include="..\ArcaneCore.Game.Tests\AllocationProbe.cs" Link="AllocationProbe.cs" />
+    <ProjectReference Include="..\ArcaneCore.TestSupport\ArcaneCore.TestSupport.csproj" />
   </ItemGroup>
 
   <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->

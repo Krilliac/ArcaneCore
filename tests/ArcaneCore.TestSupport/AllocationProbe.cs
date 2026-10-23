@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.TestSupport;
 
 /// <summary>
 /// Steady-state allocation assertions that tolerate cross-thread GC noise without hiding real growth.
@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Tests;
 /// fails instead of being averaged or minimised away. Each window runs inside a no-GC region when one can be entered (2026-10-13: CI runners
 /// discarded 18 of 20 windows), so cross-thread collections no longer starve the probe of clean windows. One unmeasured call first keeps one-off runtime work (JIT of the delegate) out of it.
 /// </summary>
-internal static class AllocationProbe
+public static class AllocationProbe
 {
     private const int MaxAttempts = 40;
 

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Shared test infrastructure: fixtures, doubles and locators the test projects used to copy or source-link from one another.
+       A library, not a test project: IsTestProject stays off so `dotnet test` on a solution filter does not run it, and it takes
+       xunit.assert only (no test SDK, no runner). Types are public; fixtures that touch Game internals use the InternalsVisibleTo
+       entry in ArcaneCore.Game.csproj. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <RootNamespace>ArcaneCore.TestSupport</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- AllocationProbe asserts through xunit. -->
+    <PackageReference Include="xunit.assert" Version="2.9.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ArcaneCore.Game\ArcaneCore.Game.csproj" />
+    <!-- Microsoft.Data.Sqlite (CodexLineDatabase, TempDirectory.ClearAllPools) arrives through Data with its SQLitePCLRaw pin. -->
+    <ProjectReference Include="..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />
+  </ItemGroup>
+
+  <!-- The Codex line's schema (commit 0e07c29b) for the renumbering migration tests. CodexLineDatabase.Ddl reads these through
+       Assembly.GetExecutingAssembly(), so they are embedded here, under the logical names it looks up. -->
+  <ItemGroup>
+    <EmbeddedResource Include="CodexLine/*.sql" LogicalName="CodexLine/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

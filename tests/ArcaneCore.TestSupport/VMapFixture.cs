@@ -3,13 +3,13 @@ using System.Text;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
 
-namespace ArcaneCore.Game.Tests.Collision;
+namespace ArcaneCore.TestSupport;
 
 /// <summary>
 /// Writes tiny repository-authored vmap data sets (vmtree, vmtile, vmo) into a temporary
 /// directory: boxes placed at world positions. No client data is involved.
 /// </summary>
-internal sealed class VMapFixture : IDisposable
+public sealed class VMapFixture : IDisposable
 {
     private readonly List<(ModelSpawn Spawn, WorldModel Model)> _spawns = [];
 

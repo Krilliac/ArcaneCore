@@ -2,16 +2,16 @@ using System.Globalization;
 using System.Reflection;
 using Microsoft.Data.Sqlite;
 
-namespace ArcaneCore.Data.Tests.Upgrade.CodexLine;
+namespace ArcaneCore.TestSupport;
 
 /// <summary>
 /// Synthetic databases of the Codex line: the SQLite schema its commit 0e07c29b created (codex-0e07c29b-*.sql, generated
 /// by running that commit's SchemaBootstrapper on empty files and reading sqlite_master; identical to the live Codex-line
 /// databases of 2026-10-07), optionally rolled back to an earlier Codex version by dropping the objects of the later
-/// Codex steps exactly as git show 0e07c29b defines them. Shared with ArcaneCore.World.Tests (linked source and resources),
-/// so it uses nothing but Microsoft.Data.Sqlite.
+/// Codex steps exactly as git show 0e07c29b defines them. Shared by ArcaneCore.Data.Tests and ArcaneCore.World.Tests; the
+/// .sql files are embedded in this assembly (Ddl reads them from it), so it uses nothing but Microsoft.Data.Sqlite.
 /// </summary>
-internal static class CodexLineDatabase
+public static class CodexLineDatabase
 {
     public const int AuthVersion = 4;
     public const int CharactersVersion = 25;

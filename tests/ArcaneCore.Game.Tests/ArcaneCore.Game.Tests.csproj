@@ -17,6 +17,12 @@
     <ProjectReference Include="..\..\src\ArcaneCore.Game\ArcaneCore.Game.csproj" />
     <ProjectReference Include="..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />
     <ProjectReference Include="..\ThirdParty\DotRecast\DotRecast.Detour\DotRecast.Detour.csproj" />
+    <ProjectReference Include="..\ArcaneCore.TestSupport\ArcaneCore.TestSupport.csproj" />
+  </ItemGroup>
+
+  <!-- FakeSession is the shared recording session (ArcaneCore.TestSupport), named as the test files here already call it. -->
+  <ItemGroup>
+    <Using Include="ArcaneCore.TestSupport.RecordingPlayerSession" Alias="FakeSession" />
   </ItemGroup>
 
   <ItemGroup>

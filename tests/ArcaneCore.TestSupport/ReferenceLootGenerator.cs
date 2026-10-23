@@ -1,15 +1,15 @@
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Kernel.WorldData.Loot;
 
-namespace ArcaneCore.Game.Tests.Memo;
+namespace ArcaneCore.TestSupport;
 
 /// <summary>
 /// <see cref="LootGenerator"/> as it was before its per-template plans (origin/main 89397354, src/ArcaneCore.Game/Loot/LootGenerator.cs): the
 /// groups were rebuilt by Where/GroupBy/OrderBy on every visit and the equal-chance pool on every pick. Kept verbatim as the oracle of the
-/// equivalence tests: same content, same seed, same rate, so every roll must come out identical, random draws included. Also linked into
-/// ArcaneCore.World.Tests for the real world.db comparison.
+/// equivalence tests: same content, same seed, same rate, so every roll must come out identical, random draws included. Shared by
+/// ArcaneCore.Game.Tests and ArcaneCore.World.Tests (the real world.db comparison).
 /// </summary>
-internal sealed class ReferenceLootGenerator(LootContent content, Random random)
+public sealed class ReferenceLootGenerator(LootContent content, Random random)
 {
     private readonly Random _random = random;
     private int _processCalls;
