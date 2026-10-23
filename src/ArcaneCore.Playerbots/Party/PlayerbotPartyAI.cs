@@ -789,12 +789,16 @@ internal sealed class PlayerbotPartyAI
     {
         if (payload.Length < 8) return;
         var caster = new ObjectGuid(BitConverter.ToUInt64(payload, 0));
-        bool member = caster != player.Guid && (Services.Social?.Groups.AreInSameGroup(player.Guid, caster) == true || AcceptsStrangersRez(player, caster));
+        bool groupMember = caster != player.Guid && Services.Social?.Groups.AreInSameGroup(player.Guid, caster) == true;
+        bool stranger = !groupMember && AcceptsStrangersRez(player, caster);
+        bool member = groupMember || stranger;
         var response = new PacketWriter(9);
         response.WriteUInt64(caster.Value);
         response.WriteByte(member ? (byte)1 : (byte)0);
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
         if (member) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks the caster once alive ("ty")
+        // A stranger's resurrection is help: remembered, and thanked by the social pass (BotSocial.PlayerbotGratitudeLane).
+        if (stranger && _session.World.FindOnlinePlayer(caster) is { } raiser) Social?.NoteHelp(raiser, player, BotSocial.PlayerbotThanksKind.Resurrect);
     }
 
     private bool AcceptsStrangersRez(Player player, ObjectGuid caster)

@@ -186,7 +186,7 @@ internal sealed partial class PlayerbotBrain
         bool cast = corpse is not null ? _combatSpells.CastAtCorpse(player, spell, corpse) : _combatSpells.CastAt(player, spell, target);
         if (cast)
         {
-            Social?.NoteHelp(player, target);
+            Social?.NoteHelp(player, target, kind == PlayerbotHelpKind.Resurrect ? PlayerbotThanksKind.Resurrect : PlayerbotThanksKind.Buff);
             DoneHelp(kind, target.Guid);
         }
         else

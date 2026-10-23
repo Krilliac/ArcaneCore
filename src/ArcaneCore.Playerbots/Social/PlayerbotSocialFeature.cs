@@ -227,6 +227,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
     private readonly PlayerbotHelpLane _help = new();
+    private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotChannelMembership _channels = new();
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
@@ -275,6 +276,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
     internal PlayerbotHelpLane Help => _help;
+
+    /// <summary>The gratitude lane (tests and status).</summary>
+    internal PlayerbotGratitudeLane Gratitude => _gratitude;
 
     /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
     internal PlayerbotChannelMembership Channels => _channels;
@@ -449,6 +453,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _membership.Promote(pass);
         _lists.Run(pass);
         _help.Run(pass);
+        _gratitude.Run(pass, _help);
         _chat.Speak(pass);
         _emotes.Run(pass);
         RunChannels(pass);

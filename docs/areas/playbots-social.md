@@ -248,6 +248,24 @@ the bot takes such a fight only when it is flagged already or `World:Playerbots:
 creatures, so a player attacker is never taken. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an unflagged
 healer).
 
+## Gratitude (`World:Playerbots:Social:Gratitude`, live)
+
+A bot thanks whoever helped it: a rescue in a fight (`PlayerbotSocialRecorder.NoteHelp` records `HelpedBy` and queues the thanks), a resurrection
+from a player outside its group (`PlayerbotPartyAI.OnResurrectRequest`) or a positive aura from a same-faction player outside its group
+(`SpellSystem.HolderAdded`, seen by `ManagedPlayerbotFeature`). `PlayerbotGratitudeLane` (social pass) takes up to 16 per pass, **once per helper
+per fight** (the same 60-second pair window as the help record):
+
+- a `thank` text emote (97) at the helper within 30 yards, **always**, across factions too (`CMSG_TEXT_EMOTE`);
+- for a same-faction real player, a short line (`social.thanks` templates, or the model) with the bot's Chattiness as the chance, through
+  `TryAnnounce` (limiter, safety screen, opt-in, disclosure);
+- with the Generosity trait at 0.6 or more and affinity 30 or more (never a rival), one favour, chosen by a hash: with the chance
+  `TipChance` x Generosity a tip, else a buff (the bot's class buff, through the help request) or a debt of resurrection (the help lane raises the helper without
+  a roll if they die within 30 minutes).
+
+The **tip** is a real trade over the existing handlers: `CMSG_INITIATE_TRADE` to the helper (a real player within 8 yards), `CMSG_SET_TRADE_GOLD`
+once the helper opened the window, `CMSG_ACCEPT_TRADE`; it ends when the gold moved, the trade closed, the helper went away, the bot fought, or after 45 seconds. Its size is at most 1% of the bot's gold and
+at most `MaxTipCopper` (10000, one gold) at level 60, scaled down in proportion at lower levels. `MaxTipCopper` 0 turns tips off.
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is
@@ -264,4 +282,4 @@ state is in memory or read back from it.
 `PlayerbotAnnounceTests`, `PlayerbotSocialListsWorldTests` (the list thresholds and spacing, never ignoring a game master, guild invitations
 by affinity and their weekly limit), `PlayerbotHelpRulesTests` (trouble, rolls, classes, help-call text), `PlayerbotHelpAnswerWorldTests`
 (a `/helpme` through the real packets to a bot that fights), `PlayerbotTroubleWorldTests` (the scan, the flag rule, rivals, switches),
-`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown).
+`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown), `PlayerbotGratitudeWorldTests` (the tip cap and favour rules, the thank emote across factions once per fight, a tip by a real trade).

@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       712 keys
+#   WORLD                       715 keys
 #
 ###############################################################################
 
@@ -15416,6 +15416,43 @@ World.Playerbots.SlowThinkLogMs = 50
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Emotes.Enabled = true
+
+#
+#    World.Playerbots.Social.Gratitude.Enabled
+#        Description: Let bots thank whoever helped them (on by default). Off: no emote, no line, no
+#                     favour.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Gratitude.Enabled = true
+
+#
+#    World.Playerbots.Social.Gratitude.MaxTipCopper
+#        Description: The most copper a tip may be for a level 60 bot (a lower level tips
+#                     proportionally less; never more than 1% of the bot's gold). 0 turns tips off
+#                     (default 10000, one gold).
+#        Type: int
+#        Default: 10000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Gratitude.MaxTipCopper = 10000
+
+#
+#    World.Playerbots.Social.Gratitude.TipChance
+#        Description: The chance (0..1), before the bot's Generosity trait scales it, that a thanks
+#                     to a well-liked human helper is a gold tip by trade (default 0.05).
+#        Type: float
+#        Default: 0.05
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Gratitude.TipChance = 0.05
 
 #
 #    World.Playerbots.Social.GuildChat.Enabled

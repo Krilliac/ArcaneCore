@@ -43,6 +43,7 @@ internal static class PlayerbotSocialTemplates
             "Welcome, friend. {guild} looks after its own.",
         ],
         ["help.sorry"] = ["Sorry, can't right now.", "Sorry, I can't help just now.", "I can't, sorry!", "Sorry, I'm not able to."],
+        ["social.thanks"] = ["Thanks, {player}!", "Thank you, {player}.", "Much obliged, {player}!", "Thanks for the help, {player}.", "I owe you one, {player}!"],
         ["social.greet"] = ["Well met, {player}.", "Hello there, {player}!", "Greetings, {player}.", "Hi {player}, good to see you."],
     };
 }

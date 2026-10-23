@@ -89,9 +89,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// <paramref name="helper"/> helped <paramref name="victim"/> in the current fight (an assist on a tagged mob, a heal, a hit on the mob that fights
     /// the victim): the victim, if a managed bot, records HelpedBy and the helper, if a managed bot, records HelpedThem. Once per pair of
     /// characters per fight, whichever source reports it first and in whichever direction, so a single assist is never counted twice (an assist
-    /// the helper bot reports and the same bot's own fight read of the tagger are one help).
+    /// the helper bot reports and the same bot's own fight read of the tagger are one help). <paramref name="kind"/> says how it helped, for the thanks.
     /// </summary>
-    public void NoteHelp(Unit helper, Unit victim)
+    public void NoteHelp(Unit helper, Unit victim, PlayerbotThanksKind kind = PlayerbotThanksKind.Help)
     {
         if (!Enabled || helper.Guid == victim.Guid || !helper.Guid.IsPlayer || !victim.Guid.IsPlayer) return;
         if (!IsManaged(helper.Guid) && !IsManaged(victim.Guid)) return;
@@ -111,7 +111,28 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
             bool crossFaction = helper is Player a && victim is Player b && a.Team != b.Team;
             Note(helper.Guid, victim.Guid, PlayerbotSocialEvent.HelpedThem, crossFaction);
             Note(victim.Guid, helper.Guid, PlayerbotSocialEvent.HelpedBy, crossFaction);
+            // A managed bot that was helped owes thanks (PlayerbotGratitudeLane); the pair window above makes it one per helper per fight.
+            if (IsManaged(victim.Guid) && _thanks.Count < 256) _thanks.Enqueue((victim.Guid, helper.Guid, kind));
         });
+    }
+
+    private readonly ConcurrentQueue<(ObjectGuid Bot, ObjectGuid Helper, PlayerbotThanksKind Kind)> _thanks = new();
+
+    /// <summary>Thanks waiting for the social pass (tests).</summary>
+    internal int PendingThanks => _thanks.Count;
+
+    /// <summary>Take the oldest thanks a bot owes: who was helped, who helped and how.</summary>
+    internal bool TryTakeThanks(out ObjectGuid bot, out ObjectGuid helper, out PlayerbotThanksKind kind)
+    {
+        if (_thanks.TryDequeue(out (ObjectGuid Bot, ObjectGuid Helper, PlayerbotThanksKind Kind) owed))
+        {
+            (bot, helper, kind) = owed;
+            return true;
+        }
+
+        bot = helper = default;
+        kind = PlayerbotThanksKind.Help;
+        return false;
     }
 
     /// <summary>

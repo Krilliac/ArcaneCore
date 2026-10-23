@@ -5,6 +5,8 @@ using System.Diagnostics;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Game.Teleport;
@@ -359,6 +361,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Whether the feature is being detached, or is detached: no update runs and every operation refuses (<see cref="PlayerbotsDetaching"/>). Any thread.</summary>
     internal bool IsDetaching => _detaching;
 
+    // World thread (the spell system raises it). A positive aura on a managed bot from another player of its team who is not in its group is
+    // help the bot thanks; the recorder counts a pair once per fight, so a buff that comes with a rescue is not thanked twice.
+    private void OnAuraAdded(WorldRuntime world, SpellAuraHolder holder)
+    {
+        if (!holder.CasterGuid.IsPlayer || holder.IsRemoved || holder.Spell.IsPassive || !holder.Spell.IsPositive) return;
+        if (holder.Target is not Player target || target.Guid == holder.CasterGuid || !Social.IsManaged(target.Guid)) return;
+        if (world.FindOnlinePlayer(holder.CasterGuid) is not { } caster || caster.Team != target.Team) return;
+        if (services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.AreInSameGroup(target.Guid, caster.Guid) == true) return;
+        Social.NoteHelp(caster, target, BotSocial.PlayerbotThanksKind.Buff);
+    }
+
     public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(ManagedPlayerbotFeature)));
 
     public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
@@ -413,6 +426,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 if (victim is Player dead && ReferenceEquals(world.FindOnlinePlayer(dead.Guid), dead)) Social.NotePvpKill(killer, victim);
             },
             h => PlayerbotKillObserver.PlayerKilled += h, h => PlayerbotKillObserver.PlayerKilled -= h);
+        // A buff on a managed bot from a same-faction player outside its group is help it will thank (BotSocial.PlayerbotGratitudeLane).
+        if (services.GetService<SpellFeature>() is { } spellFeature)
+            subscriptions.Subscribe<Action<SpellAuraHolder>>(
+                holder => OnAuraAdded(world, holder),
+                h => spellFeature.System.HolderAdded += h, h => spellFeature.System.HolderAdded -= h);
         if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;

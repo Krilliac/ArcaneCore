@@ -43,6 +43,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Answering calls for help and lending a hand to strangers (<c>World:Playerbots:Social:Helping</c>).</summary>
     public PlayerbotSocialHelpingOptions Helping { get; set; } = new();
 
+    /// <summary>Thanking whoever helped a bot: an emote, a line, a favour, a tip (<c>World:Playerbots:Social:Gratitude</c>).</summary>
+    public PlayerbotSocialGratitudeOptions Gratitude { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
@@ -53,7 +56,9 @@ public sealed class PlayerbotSocialOptions
         if (WarMode is null) throw new InvalidOperationException($"{section}:WarMode is missing.");
         if (Lists is null) throw new InvalidOperationException($"{section}:Lists is missing.");
         if (Helping is null) throw new InvalidOperationException($"{section}:Helping is missing.");
+        if (Gratitude is null) throw new InvalidOperationException($"{section}:Gratitude is missing.");
         Helping.Validate();
+        Gratitude.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();
