@@ -600,6 +600,32 @@ public sealed class TickMonitorTests
     }
 
     [Fact]
+    public void ActionHang_SuppressedWhenHostLoadBlamesGcPaging()
+    {
+        var actuator = new FakeTickHangActuator();
+        var probe = new FakeHostLoadProbe { Current = new HostLoadReading(0, true, 0, 0, 0, 0, 0, 0, 12, 0, 24) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, _clock, probe);
+        sampler.Check(_clock.NowMicros);
+
+        var options = new TickMonitorOptions { HangMs = 2000, ActionHangMs = 5000, Action = TickHangAction.FailFast };
+        var monitor = new TickMonitor(options, _clock, _counters, _log, actuator) { HostLoad = sampler };
+        monitor.StartTicking(50);
+        Tick(monitor, 2, 50);
+        monitor.OnTick(_clock.NowMicros);
+
+        // 6 s stuck in one GC pause (5.5 s) with the process idle and the machine at 95% memory load against a 90% threshold.
+        const long Gib = 1024L * 1024 * 1024;
+        _clock.AdvanceMs(6_000);
+        probe.Current = new HostLoadReading(0, true, 1 * 10_000_000L, 144 * 10_000_000L, 0, 0, 1, 5_500 * 10_000L, 12, 0, 24,
+            MemoryLoadBytes: 95 * Gib / 100 * 32, HighMemoryLoadThresholdBytes: 90 * Gib / 100 * 32, TotalAvailableMemoryBytes: 32 * Gib);
+        Assert.Equal(HostLoadVerdict.GcPaging, sampler.Report(6_000_000)!.Value.Verdict);
+        monitor.Check(_clock.NowMicros);
+
+        Assert.Empty(actuator.Calls);
+        Assert.Equal(0, monitor.ActionsFired);
+    }
+
+    [Fact]
     public void Hang_WithFrameDetail_ReportsTheHungFramesOwnSpan_NotTheWindowsSlowestBody()
     {
         TickMonitor monitor = Create(o => o.HangMs = 1000);

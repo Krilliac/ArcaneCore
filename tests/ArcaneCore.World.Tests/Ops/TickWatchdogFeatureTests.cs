@@ -216,14 +216,14 @@ public sealed class TickWatchdogFeatureTests
     {
         long now = 100L * System.Diagnostics.Stopwatch.Frequency;
         // A 4 s frame (96 s..100 s on the watchdog clock); the only recorded body is a 1.9 s one from 10 s ago (before the frame).
-        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000);
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000, now);
         SlowTickInfo earlier = Body(1, 10, now, 1_938_000, "EarlierFeature");
 
-        string text = TickWatchdogFeature.FormatCompletedFrame([earlier], span, now, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
+        string text = TickWatchdogFeature.FormatCompletedFrame([earlier], span, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
 
         Assert.StartsWith("hung frame 4000 ms: frame body 0 ms", text);
         Assert.Contains("4000 ms outside tick code", text);
-        Assert.Contains("slowest body in window at 12:00:00: 1938 ms", text);
+        Assert.Contains("slowest body in window at 12:00:00 UTC: 1938 ms", text);
         Assert.True(text.IndexOf("EarlierFeature", StringComparison.Ordinal) > text.IndexOf("slowest body in window", StringComparison.Ordinal), text);
         Assert.Equal(("OutsideTick", "none"), (facts.Phase, facts.Item));
     }
@@ -232,11 +232,11 @@ public sealed class TickWatchdogFeatureTests
     public void AHungFrameWithABody_ReportsThatBodyAndTheRestAsOutsideTickCode()
     {
         long now = 100L * System.Diagnostics.Stopwatch.Frequency;
-        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000);
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000, now);
         SlowTickInfo earlier = Body(1, 10, now, 1_938_000, "EarlierFeature");
         SlowTickInfo inFrame = Body(2, 2, now, 502_000, "FrameFeature");
 
-        string text = TickWatchdogFeature.FormatCompletedFrame([earlier, inFrame], span, now, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
+        string text = TickWatchdogFeature.FormatCompletedFrame([earlier, inFrame], span, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
 
         Assert.StartsWith("hung frame 4000 ms: frame body 502 ms", text);
         Assert.Contains("3498 ms outside tick code", text);
@@ -248,15 +248,125 @@ public sealed class TickWatchdogFeatureTests
     }
 
     [Fact]
+    public void AHungFramesSlowCommand_WhoseBodyIsRecordedAfterTheFrameEnds_IsStillTheFramesBody()
+    {
+        long now = 100L * System.Diagnostics.Stopwatch.Frequency;
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000, now);
+        // The watchdog's callback runs after the commands phase, so a 4 s command ends the frame; the tick's body (4005 ms) is recorded 5 ms later, after EndMicros.
+        var body = new SlowTickInfo(7, now + (5 * System.Diagnostics.Stopwatch.Frequency / 1000), 4_005_000, new TickPhases(4_000_000, 1_000, 4_000), [("Feature", 4_000)]);
+        SlowTickInfo earlier = Body(1, 10, now, 1_938_000, "EarlierFeature");
+
+        string text = TickWatchdogFeature.FormatCompletedFrame([body, earlier], span, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
+
+        Assert.StartsWith("hung frame 4000 ms: frame body 4005 ms", text);
+        Assert.Contains("0 ms outside tick code", text); // the 4000 ms of the body inside the frame fill it
+        Assert.DoesNotContain("frame body 0 ms", text);
+        Assert.Equal(("Commands", "commands"), (facts.Phase, facts.Item));
+    }
+
+    [Fact]
+    public void AHungFrame_PicksTheBodyThatOverlapsItMost()
+    {
+        long now = 100L * System.Diagnostics.Stopwatch.Frequency;
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000, now);
+        SlowTickInfo brief = Body(1, 3, now, 20_000, "BriefFeature");
+        SlowTickInfo longer = Body(2, 1, now, 900_000, "LongerFeature");
+
+        string text = TickWatchdogFeature.FormatCompletedFrame([longer, brief], span, new DateTime(2026, 10, 22, 12, 0, 10), out _);
+
+        Assert.Contains("frame body 900 ms", text);
+        Assert.Contains("LongerFeature", text);
+    }
+
+    [Fact]
     public void AHungFrameWhoseBodyIsTheWindowsSlowest_DoesNotRepeatItAsTheWindowBody()
     {
         long now = 100L * System.Diagnostics.Stopwatch.Frequency;
-        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000);
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000, now);
 
-        string text = TickWatchdogFeature.FormatCompletedFrame([Body(2, 2, now, 3_900_000, "FrameFeature")], span, now, new DateTime(2026, 10, 22, 12, 0, 10), out _);
+        string text = TickWatchdogFeature.FormatCompletedFrame([Body(2, 2, now, 3_900_000, "FrameFeature")], span, new DateTime(2026, 10, 22, 12, 0, 10), out _);
 
         Assert.DoesNotContain("slowest body in window", text);
         Assert.Contains("frame body 3900 ms", text);
+    }
+
+    /// <summary>Remembers each announcement's detail by dedup key (the completed-hang alert's detail is the TickHang line's suffix).</summary>
+    private sealed class DetailCapturingAnnouncer : IOpsAnnouncer
+    {
+        private readonly List<(string? Key, string? Detail)> _calls = [];
+
+        public string? DetailOf(string key)
+        {
+            lock (_calls)
+            {
+                return _calls.LastOrDefault(c => c.Key == key).Detail;
+            }
+        }
+
+        public void Announce(AnnounceCategory category, AnnounceSeverity severity, string shortText, string? gmDetail = null, IReadOnlyList<AnnounceField>? fields = null,
+            string? shortTextWithNames = null, bool gmOnly = false, string? dedupKey = null, bool staffHandled = false)
+        {
+            lock (_calls)
+            {
+                _calls.Add((dedupKey, gmDetail));
+            }
+        }
+    }
+
+    /// <summary>A world feature that stalls exactly one tick; the watchdog must name it by its class.</summary>
+    private sealed class OneShotSlowFeature(int sleepMs)
+    {
+        private int _fired;
+
+        public void OnUpdate(uint diffMs)
+        {
+            if (Interlocked.Exchange(ref _fired, 1) == 0)
+            {
+                Thread.Sleep(sleepMs);
+            }
+        }
+    }
+
+    private static async Task<string> CompletedHangDetail(Action<WorldTestHost> stall)
+    {
+        var announcer = new DetailCapturingAnnouncer();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
+        {
+            WatchdogOptions options = Options(o => o.HangMs = 200);
+            options.HostLoad.Enabled = false;
+            Register(s, options);
+            s.AddSingleton<IOpsAnnouncer>(announcer);
+        });
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        await WorldTestHost.WaitForAsync(() => monitor.Ring.Count >= 5, "frames");
+
+        stall(host);
+        await WorldTestHost.WaitForAsync(() => monitor.HangsCompleted >= 1, "the completed hang");
+        monitor.Check(WatchdogClock.System.NowMicros);
+        return announcer.DetailOf("tick-Hang-done") ?? throw new Xunit.Sdk.XunitException("no completed-hang alert was raised");
+    }
+
+    [Fact]
+    public async Task ACompletedHang_InTheFeaturePhase_ReportsThatFramesBodyAndFeature()
+    {
+        var slow = new OneShotSlowFeature(300);
+        string detail = await CompletedHangDetail(host => host.World.Updated += slow.OnUpdate);
+
+        var frameBody = System.Text.RegularExpressions.Regex.Match(detail, @"frame body (\d+) ms");
+        Assert.True(frameBody.Success && long.Parse(frameBody.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) >= 250, detail);
+        Assert.Contains("OneShotSlowFeature", detail);
+    }
+
+    [Fact]
+    public async Task ACompletedHang_InTheCommandsPhase_ReportsThatFramesBodyNotOutsideTickCode()
+    {
+        // The watchdog's OnTick runs after RunCommands, so a slow command of tick N+1 is inside frame N while body N+1 ends after frame N does.
+        string detail = await CompletedHangDetail(host => host.World.Post(() => Thread.Sleep(300)));
+
+        var frameBody = System.Text.RegularExpressions.Regex.Match(detail, @"frame body (\d+) ms");
+        Assert.True(frameBody.Success && long.Parse(frameBody.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) >= 250, detail);
+        var commands = System.Text.RegularExpressions.Regex.Match(detail, @"commands (\d+) ms");
+        Assert.True(commands.Success && long.Parse(commands.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) >= 250, detail);
     }
 
     [Fact]
@@ -328,6 +438,7 @@ public sealed class TickWatchdogFeatureTests
     [Theory]
     [InlineData(HostLoadVerdict.HostStarved, false)]
     [InlineData(HostLoadVerdict.GcPauses, false)]
+    [InlineData(HostLoadVerdict.GcPaging, false)]
     [InlineData(HostLoadVerdict.ProcessStalled, false)]
     [InlineData(HostLoadVerdict.ProcessBusy, true)]
     [InlineData(HostLoadVerdict.Quiet, true)]

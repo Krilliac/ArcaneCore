@@ -254,8 +254,11 @@ public sealed class HostLoadSampler : IWatchdogMonitor
     /// <summary>A GC pause share of the window at or above this ("most of the stall"), with an idle process and a short machine, is the paging verdict.</summary>
     public const double GcPagingShareThreshold = 0.50;
 
-    /// <summary>This process's share of the machine at or below this is "almost no cpu" for the paging verdict.</summary>
-    public const double IdleProcessThreshold = 5;
+    /// <summary>
+    /// The process may use at most this many cores' worth of cpu over the window for the paging verdict ("almost no cpu"). Counted in cores, not as a share of the
+    /// machine, so one busy core (a cpu-bound compaction) is not mistaken for waiting on paged-out memory however many cpus the host has.
+    /// </summary>
+    public const double IdleProcessCores = 0.5;
 
     /// <summary>The machine memory load (percent of available memory) that counts as short of memory when the runtime reports no high-memory threshold.</summary>
     public const double DefaultMemoryLoadThreshold = 90;
@@ -427,7 +430,7 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         else if (pauseMicros >= window * GcShareThreshold)
         {
             // Paging: the pause is most of the stall, the process burned no cpu during it and the machine is short of memory.
-            verdict = memoryThreshold > 0 && memoryLoad >= memoryThreshold && process <= IdleProcessThreshold && pauseMicros >= window * GcPagingShareThreshold
+            verdict = memoryThreshold > 0 && memoryLoad >= memoryThreshold && process * cpus / 100.0 <= IdleProcessCores && pauseMicros >= window * GcPagingShareThreshold
                 ? HostLoadVerdict.GcPaging
                 : HostLoadVerdict.GcPauses;
         }

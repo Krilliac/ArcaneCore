@@ -84,10 +84,10 @@ recorder are appended to each line so both views are on one line.
     interval was recorded in the last 60 s (the stall was outside the tick body)`: a frame can be long while the body is short, for example
     when the OS did not schedule the world thread or a collection paused it.
   - **The completion hang line** describes the hung frame itself, not the window: `hung frame <F> ms: frame body <N> ms: <phase split>;
-    top features: ...; <X> ms outside tick code` using the slow tick body recorded while that frame ran (the monitor passes the frame's start and end
-    through `TickMonitor.FrameDetail`). A frame with no such body reads `hung frame <F> ms: frame body 0 ms (no tick body over the interval ran in it);
+    top features: ...; <X> ms outside tick code` using the slow tick body that overlaps that frame the most (a slow command of the next tick starts inside the frame and its body is recorded after it; the monitor passes the frame's start and end
+    through `TickMonitor.FrameDetail`). A frame with no such body reads `hung frame <F> ms: frame body 0 ms (none recorded over the interval);
     <F> ms outside tick code` (a GC pause, paging, a suspended process). The window's slowest body, when it is a different tick, follows as
-    `; slowest body in window at HH:mm:ss: <N> ms: ...` so an earlier slow feature is never read as the cause of this frame. Bot QA's hang
+    `; slowest body in window at HH:mm:ss UTC: <N> ms: ...` so an earlier slow feature is never read as the cause of this frame. Bot QA's hang
     fingerprint uses the frame's own body (`OutsideTick` when there is none). The overrun line keeps the window-wide `slowest tick body` text.
   Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
   (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own

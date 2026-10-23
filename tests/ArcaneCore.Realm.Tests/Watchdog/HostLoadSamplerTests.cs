@@ -202,4 +202,13 @@ public sealed class HostLoadSamplerTests
         Assert.Equal(HostLoadVerdict.GcPauses, r.Verdict);
         Assert.DoesNotContain("machine memory", r.Format());
     }
+
+    [Fact]
+    public void GcPause_WithOneBusyCoreOnABigMachine_IsNotPaging()
+    {
+        // 4.2 cpu-seconds in a 4.2 s window on 24 cpus is 4% of the machine but a whole core: a cpu-bound compaction, not a wait for paged-out memory.
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 4, memoryLoad: 95).Verdict);
+        Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 3, memoryLoad: 95).Verdict); // 0.7 cores
+        Assert.Equal(HostLoadVerdict.GcPaging, Pause(processCpuSeconds: 2, memoryLoad: 95).Verdict); // 0.48 cores: under half a core
+    }
 }

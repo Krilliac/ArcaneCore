@@ -131,9 +131,9 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         => new(position.Phase.ToString(), position.Phase == TickPhase.Autosave ? "autosave" : WorkKind(position.Work), false);
 
     /// <summary>
-    /// The facts of a hang that ended, from the slowest recent tick: its dominant phase, and the work that belongs to that phase (<c>map</c> for the maps phase, a
+    /// The facts of a hang that ended, from the hung frame's own tick body (see <see cref="FormatCompletedFrame"/>; <paramref name="worst"/> is that body): its dominant phase, and the work that belongs to that phase (<c>map</c> for the maps phase, a
     /// fixed token for commands, world-tick handlers and autosave, the slowest feature only when the feature phase dominates), so the item never names code that
-    /// was not the slow part. No slow tick recorded: the stall was outside the tick body.
+    /// was not the slow part. No body recorded for the frame: the stall was outside the tick body.
     /// </summary>
     internal static HangFacts CompletedFacts(SlowTickInfo? worst)
     {
@@ -244,7 +244,9 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         {
             _facts = HangFacts.Unknown;
             IReadOnlyList<SlowTickInfo> slow = world.Stats.SlowTicks(DetailWindow);
-            string text = FormatCompletedFrame(slow, span, Stopwatch.GetTimestamp(), DateTime.Now, out _facts);
+            // The wall time of the report moment (span.NowStopwatch), so the label does not depend on how long this method took to get here.
+            DateTime wallAtReport = DateTime.UtcNow - Stopwatch.GetElapsedTime(span.NowStopwatch);
+            string text = FormatCompletedFrame(slow, span, wallAtReport, out _facts);
             return AppendSaveQueue(text);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -256,22 +258,27 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     }
 
     /// <summary>
-    /// The detail of a hang that ended, from the hung frame's own tick body: the slow tick bodies recorded inside <paramref name="span"/> (their stamps converted onto the
-    /// watchdog clock by their age at <paramref name="stopwatchNow"/>), the slowest of them being the frame's body. A frame with none was stuck outside tick code (a GC pause,
-    /// paging, a suspended process) and says so, instead of naming an earlier tick; the window's slowest body is still shown, labelled with the wall time it was recorded.
+    /// The detail of a hang that ended, from the hung frame's own tick body: the recorded slow tick bodies are placed on the watchdog clock by their age at
+    /// <see cref="TickFrameSpan.NowStopwatch"/> (a body runs from its stamp minus its duration to its stamp, the stamp being taken when it ended), and the one overlapping
+    /// <paramref name="span"/> the most is the frame's body. A body can start inside the frame and end after it: the watchdog's tick callback runs after the commands phase, so a
+    /// slow command of the next tick is inside this frame while that tick's body is recorded after it. With no overlapping body recorded (TickStats keeps only the eight slowest
+    /// over the interval) the report says none was recorded and that the time was outside tick code (a GC pause, paging, a suspended process), instead of naming an earlier
+    /// tick; the window's slowest body is still shown, labelled with the UTC time it was recorded (<paramref name="wallAtReport"/> is UTC at the report moment).
     /// <paramref name="facts"/> are the hang's identity for bot QA, taken from the frame's body (<c>OutsideTick</c> without one).
     /// </summary>
-    internal static string FormatCompletedFrame(IReadOnlyList<SlowTickInfo> slow, in TickFrameSpan span, long stopwatchNow, DateTime wallNow, out HangFacts facts)
+    internal static string FormatCompletedFrame(IReadOnlyList<SlowTickInfo> slow, in TickFrameSpan span, DateTime wallAtReport, out HangFacts facts)
     {
         double frameMs = span.DurationMicros / 1000.0;
         SlowTickInfo? body = null;
+        long bestOverlap = 0;
         foreach (SlowTickInfo info in slow)
         {
-            long ageMicros = (long)Stopwatch.GetElapsedTime(info.Timestamp, stopwatchNow).TotalMicroseconds;
-            long stampMicros = span.NowMicros - ageMicros;
-            if (stampMicros > span.StartMicros && stampMicros <= span.EndMicros && (body is null || info.DurationMicros > body.DurationMicros))
+            long endMicros = span.NowMicros - (long)Stopwatch.GetElapsedTime(info.Timestamp, span.NowStopwatch).TotalMicroseconds;
+            long overlap = Math.Min(endMicros, span.EndMicros) - Math.Max(endMicros - info.DurationMicros, span.StartMicros);
+            if (overlap > bestOverlap || (overlap > 0 && overlap == bestOverlap && body is not null && info.DurationMicros > body.DurationMicros))
             {
                 body = info;
+                bestOverlap = overlap;
             }
         }
 
@@ -280,11 +287,11 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         text.Append(CultureInfo.InvariantCulture, $"hung frame {frameMs:F0} ms: ");
         if (body is null)
         {
-            text.Append(CultureInfo.InvariantCulture, $"frame body 0 ms (no tick body over the interval ran in it); {frameMs:F0} ms outside tick code");
+            text.Append(CultureInfo.InvariantCulture, $"frame body 0 ms (none recorded over the interval); {frameMs:F0} ms outside tick code");
         }
         else
         {
-            double outside = Math.Max(0, frameMs - (body.DurationMicros / 1000.0));
+            double outside = Math.Max(0, frameMs - (bestOverlap / 1000.0));
             text.Append(CultureInfo.InvariantCulture, $"frame body {body.DurationMicros / 1000} ms: ");
             AppendBody(text, body);
             text.Append(CultureInfo.InvariantCulture, $"; {outside:F0} ms outside tick code");
@@ -293,8 +300,8 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         if (slow.Count > 0 && (body is null || slow[0].Sequence != body.Sequence))
         {
             SlowTickInfo worst = slow[0];
-            TimeSpan age = Stopwatch.GetElapsedTime(worst.Timestamp, stopwatchNow);
-            text.Append(CultureInfo.InvariantCulture, $"; slowest body in window at {(wallNow - age):HH:mm:ss}: {worst.DurationMicros / 1000} ms: ");
+            TimeSpan age = Stopwatch.GetElapsedTime(worst.Timestamp, span.NowStopwatch);
+            text.Append(CultureInfo.InvariantCulture, $"; slowest body in window at {(wallAtReport - age):HH:mm:ss} UTC: {worst.DurationMicros / 1000} ms: ");
             AppendBody(text, worst);
         }
 

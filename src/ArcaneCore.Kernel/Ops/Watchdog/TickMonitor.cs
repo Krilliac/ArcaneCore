@@ -70,9 +70,11 @@ public readonly record struct TickAlert(TickAlertKind Kind, string Text, string 
 
 /// <summary>
 /// A completed frame on the watchdog clock (microseconds): it began when the tick at <see cref="StartMicros"/> started and ended when the next tick started at
-/// <see cref="EndMicros"/>. <see cref="NowMicros"/> is the clock when the report is made, so a host can place its own records (which carry their own age) inside it.
+/// <see cref="EndMicros"/>. <see cref="NowMicros"/> is the clock when the report is made and <see cref="NowStopwatch"/> the <see cref="System.Diagnostics.Stopwatch"/> timestamp taken
+/// together with it (at the top of <see cref="TickMonitor.Check"/>), so a host can place its own records, which carry a Stopwatch stamp, inside the frame without a pause
+/// between two separate clock reads shifting them.
 /// </summary>
-public readonly record struct TickFrameSpan(long StartMicros, long EndMicros, long NowMicros)
+public readonly record struct TickFrameSpan(long StartMicros, long EndMicros, long NowMicros, long NowStopwatch)
 {
     /// <summary>The frame's length in microseconds.</summary>
     public long DurationMicros => EndMicros - StartMicros;
@@ -324,6 +326,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
     public void Check(long nowMicros)
     {
+        long nowStopwatch = System.Diagnostics.Stopwatch.GetTimestamp(); // read with nowMicros, before anything can pause this thread
         if (!_options.Enabled || !_started)
         {
             return;
@@ -390,7 +393,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         if (hangs > _hangsReported)
         {
             RingStats stats = Stats(out long[] buffer);
-            string after = HungFrameText(nowMicros);
+            string after = HungFrameText(nowMicros, nowStopwatch);
             string host = HostText(stats.Max);
             _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}{Host}",
                 Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, after, host);
@@ -498,14 +501,14 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// The detail of a completed hang: the hung frame's own breakdown from <see cref="FrameDetail"/> when set (taking the recorded span), else the window-wide
     /// <see cref="HangDetail"/>(false). Watchdog thread.
     /// </summary>
-    private string HungFrameText(long nowMicros)
+    private string HungFrameText(long nowMicros, long nowStopwatch)
     {
         TickFrameSpan? span = null;
         lock (_hangFrameGate)
         {
             if (_worstHangFrameMicros > 0)
             {
-                span = new TickFrameSpan(_worstHangStartMicros, _worstHangEndMicros, nowMicros);
+                span = new TickFrameSpan(_worstHangStartMicros, _worstHangEndMicros, nowMicros, nowStopwatch);
                 _worstHangFrameMicros = 0;
             }
         }
