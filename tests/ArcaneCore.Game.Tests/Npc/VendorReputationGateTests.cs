@@ -46,6 +46,13 @@ public sealed class VendorReputationGateTests
         return kit;
     }
 
+    // The vendor faction is queried by the NPC interaction gate (refuses at Unfriendly or worse), never by the item gate here.
+    private static void AssertQueriedItemFactionAndInteractionGateOnly(RecordingReputation reputation)
+    {
+        Assert.Contains(ItemFaction, reputation.Queried);
+        Assert.All(reputation.Queried, faction => Assert.True(faction == ItemFaction || faction == VendorFaction));
+    }
+
     private static void AssertRefusedEverywhere(NpcServiceKit kit, BuyResult expectedBuy)
     {
         Assert.Null(kit.Services.GetVendorPurchasePrice(kit.Player, kit.Npc, Bread));
@@ -73,17 +80,16 @@ public sealed class VendorReputationGateTests
         var reputation = new RecordingReputation(faction => faction == ItemFaction ? (byte)4 : (byte)7);
         using NpcServiceKit kit = Kit(ItemFaction, 5, reputation);
         AssertRefusedEverywhere(kit, BuyResult.ReputationRequire);
-        Assert.NotEmpty(reputation.Queried);
-        Assert.All(reputation.Queried, faction => Assert.Equal(ItemFaction, faction));
+        AssertQueriedItemFactionAndInteractionGateOnly(reputation);
     }
 
     [Fact]
     public void ItemFaction_RankEqualToRequired_PassesAllThreePaths()
     {
-        var reputation = new RecordingReputation(faction => faction == ItemFaction ? (byte)5 : (byte)0);
+        var reputation = new RecordingReputation(faction => faction == ItemFaction ? (byte)5 : (byte)4);
         using NpcServiceKit kit = Kit(ItemFaction, 5, reputation);
         AssertSoldEverywhere(kit);
-        Assert.All(reputation.Queried, faction => Assert.Equal(ItemFaction, faction));
+        AssertQueriedItemFactionAndInteractionGateOnly(reputation);
     }
 
     [Fact]
