@@ -140,14 +140,20 @@ public sealed class PlayerbotSocialListsWorldTests
         await RememberAsync(world, "Gcold", "Gleader", 5, 3);
         await RememberAsync(world, "Gleader", "Gfew", 90, 7);     // not met often enough
 
-        async Task StepAsync(long nowMs)
+        async Task StepAsync(long nowMs, string? invitee)
         {
             await world.Host.OnWorldAsync(() =>
             {
                 PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs);
                 membership.InviteByAffinity(pass);
             });
-            await Task.Delay(300); // the invitation reaches the invited bot's queue on the next ticks
+            // The invitation reaches the invited bot's capture queue on the next ticks: wait for it (when one was sent), then answer.
+            if (invitee is not null)
+                await world.Host.WaitForWorldAsync(() =>
+                {
+                    SocialTestKit.TakeInvites(SocialTestKit.BotPass(world.Host, nowMs), membership);
+                    return membership.HasSeenInvite(world.Bots[invitee]);
+                }, $"the invitation of {invitee} is noted");
             await world.Host.OnWorldAsync(() =>
             {
                 PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs);
@@ -157,23 +163,23 @@ public sealed class PlayerbotSocialListsWorldTests
         }
 
         // The leader likes Gcold best (90): it is asked first and declines, because it does not care for the leader (affinity 5 < 30).
-        await StepAsync(1_000);
+        await StepAsync(1_000, "Gcold");
         Assert.Equal(1, world.Log.Count("Gleader", WorldOpcode.CmsgGuildInvite));
         Assert.Equal(["Gcold"], world.Log.Who(WorldOpcode.CmsgGuildDecline));
         Assert.Null(await world.GuildOfAsync("Gcold"));
 
         // Then Gfriend (65), who likes the leader enough (35 >= 30) and accepts by affinity alone: no founding expected the invitation.
-        await StepAsync(1_000_000);
+        await StepAsync(1_000_000, "Gfriend");
         Assert.Equal(2, world.Log.Count("Gleader", WorldOpcode.CmsgGuildInvite));
         Assert.Equal(["Gfriend"], world.Log.Who(WorldOpcode.CmsgGuildAccept));
         await world.Host.WaitForWorldAsync(() => guild.MemberCount == 2, "Gfriend joins");
         Assert.Null(await world.GuildOfAsync("Gfew"));
 
         // A week has not passed: nobody is asked again (Gfew is below the familiarity bar, Gcold was asked).
-        await StepAsync(3 * 86_400_000L);
+        await StepAsync(3 * 86_400_000L, null);
         Assert.Equal(2, world.Log.Count("Gleader", WorldOpcode.CmsgGuildInvite));
         // After a week Gcold may be asked again.
-        await StepAsync(8 * 86_400_000L);
+        await StepAsync(8 * 86_400_000L, "Gcold");
         Assert.Equal(3, world.Log.Count("Gleader", WorldOpcode.CmsgGuildInvite));
     }
 

@@ -162,6 +162,9 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
     /// <summary>A packet of SMSG_GUILD_INVITE drained from a bot (the inviter's name and the guild's).</summary>
     internal void NoteInvite(Guid botId, string inviter, string guild) => _seenInvites[botId] = (inviter, guild);
 
+    /// <summary>Whether an invitation packet of <paramref name="botId"/> was noted and not yet answered (tests wait on it instead of a delay).</summary>
+    internal bool HasSeenInvite(Guid botId) => _seenInvites.ContainsKey(botId);
+
     // --- the world thread ---------------------------------------------------------------------------------------------
 
     /// <summary>Answer every pending invitation of the running bots (always, whatever <see cref="PlayerbotSocialGuildOptions.Enabled"/> says).</summary>
