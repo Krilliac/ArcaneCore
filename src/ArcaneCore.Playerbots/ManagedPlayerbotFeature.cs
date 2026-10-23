@@ -204,6 +204,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
     private BotSocial.PlayerbotSocialRecorder? _social;
+    private BotSocial.PlayerbotPvpKillFeed? _pvpKills;
+
+    /// <summary>The feed of this world's player deaths for the social memory (null before the attach; tests).</summary>
+    internal BotSocial.PlayerbotPvpKillFeed? PvpKills => _pvpKills;
 
     /// <summary>
     /// The bots' social memory and the one seam events are recorded through (docs/areas/playbots-social.md, "Social memory"). Created on first
@@ -398,8 +402,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         _world = world;
         _sharedSetAsides.World = world;
-        // A player killed by another player is rivalry for the managed bot on either side: each brain hears of it from the kill observer of its own
-        // map (PlayerbotBrain.NotePlayerKilled), so a kill reaches only the memory of the world the bot lives in.
+        // A player killed by another player (or its pet or totem) is rivalry for the managed bot on either side. The feed hears every map of this
+        // world, so a kill reaches only this world's memory, exactly once, whether or not a bot has thought since it changed maps; the detach takes it off.
+        BotSocial.PlayerbotSocialRecorder pvpRecorder = Social;
+        _pvpKills = new BotSocial.PlayerbotPvpKillFeed(world, pvpRecorder.NotePvpKill);
+        subscriptions.Add(_pvpKills);
         if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;
@@ -614,7 +621,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         };
         party.Social = Social;
         Social.Track(entry.BotId, entry.Record.CharacterId);
-        brain.Social = Social;
         var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId) };
         active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
         {
@@ -1856,7 +1862,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>A brain for the bot. <paramref name="restoreLoaded"/>: put back the set-asides read at startup (a start); a brain that replaces a running one gets the running one's state instead (<see cref="ReplaceBrain"/>), which the startup rows are older than.</summary>
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId, bool restoreLoaded = true)
     {
-        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
+        // Every brain records through the feature's recorder (kill steals, help), a replacement too (ReplaceBrain), and has it before it is
+        // registered anywhere below.
+        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy, Social = Social };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
         {
