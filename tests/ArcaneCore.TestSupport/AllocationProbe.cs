@@ -20,8 +20,12 @@ namespace ArcaneCore.TestSupport;
 /// thread's lookup misses while they are full, so the thread under test can pay for other threads' casts. CI 2026-10-23 (run 39992634375):
 /// HasQuestCandidate's GC-free window 3 allocated 98352 bytes, exactly the int[24582] the cast cache allocates when it grows from 2048 to
 /// 4096 entries (one <c>is</c> cast allocates that much on its own thread once other threads have filled the cache; the scan's
-/// <c>Map.FindUpdater&lt;T&gt;</c> casts through it with <c>is T</c>). The cache stops growing at 4096 entries, so only the first minutes
-/// of a process that runs many test classes at once can hit it.
+/// <c>Map.FindUpdater&lt;T&gt;</c> casts through it with <c>is T</c>). This recurs for the whole run, not only while the cache first
+/// fills: unloading a collectible load context flushes both caches (loaderallocator.cpp calls CastCache::FlushCurrentCache and
+/// FlushVirtualFunctionPointerCaches), the flush swaps in a placeholder table, and the next lookup that misses, on any thread, allocates
+/// the table again at its last size (98352 bytes for a full cast cache). The tests unload such contexts (ModuleRollbackTests,
+/// ModuleHostTests, FeatureLifecycleTests, SpellScriptHotSwapTests). The probe compares the tables' identity, so a flush and its
+/// re-allocation count as a replacement too.
 /// </para>
 /// </summary>
 public static class AllocationProbe
@@ -128,11 +132,18 @@ public static class AllocationProbe
     }
 
     /// <summary>
-    /// The runtime's process-wide managed caches whose table is replaced (grown) by the thread whose lookup missed: the cast cache
-    /// (<c>CastHelpers.s_table</c>, used by casts to interfaces, variant types and shared-generic type parameters) and the generic virtual
-    /// method cache (<c>VirtualDispatchHelpers.s_virtualFunctionPointerCache</c>). Found by private reflection: a runtime that renames
-    /// them leaves fewer <see cref="Readers"/>, the probe then fails such windows as it did before, and AllocationProbeTests fails on
-    /// the missing cast cache.
+    /// The runtime's process-wide managed caches whose table is replaced by the thread whose lookup missed (when the table is full, or
+    /// after a collectible load context's unload flushed it): the cast cache (<c>CastHelpers.s_table</c>, used by casts to interfaces,
+    /// variant types and shared-generic type parameters) and the generic virtual method cache
+    /// (<c>VirtualDispatchHelpers.s_virtualFunctionPointerCache</c>). Found by private reflection: a runtime that renames them leaves
+    /// fewer <see cref="Readers"/>, the probe then fails such windows as it did before, and AllocationProbeTests fails on the missing cache.
+    /// <para>
+    /// The allowance for a window with a replaced table is twice the table plus <see cref="DirtyWindowSlack"/>. Measured on .NET 11
+    /// (64-bit, <c>SizeOf(Readers[1]())</c> per entry): the cast cache tops out at 4096 entries, int[24582] = 98352 bytes, allowance
+    /// 213088 bytes; the GVM cache tops out at 8192 entries of 48 bytes, 8193 with its header entry = 393288 bytes, allowance 802960
+    /// bytes (both replaced in one window: 999664). Only a window in which a table was replaced gets it; every clean window is held to
+    /// the exact limit.
+    /// </para>
     /// </summary>
     internal static class RuntimeCaches
     {
