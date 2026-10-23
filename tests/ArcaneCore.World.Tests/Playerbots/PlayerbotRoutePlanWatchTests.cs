@@ -74,7 +74,7 @@ public sealed class PlayerbotRoutePlanWatchTests
                 return PlayerbotNavigation.PlanToward(player, goal, Options, ref wait[0], world.Host.World.NowMs, out _);
             });
 
-            if (i < PlayerbotRoutePlanWatch.MaxUnproductivePlans || i * 6_000u < PlayerbotRoutePlanWatch.MinLoopSpanMs)
+            if (i < PlayerbotRoutePlanWatch.MaxUnproductivePlans)
             {
                 Assert.Equal(PlanOutcome.Route, outcome);
             }
@@ -83,7 +83,8 @@ public sealed class PlayerbotRoutePlanWatchTests
                 Assert.Equal(PlanOutcome.Refused, outcome);
             }
 
-            await world.Host.World.AdvanceClockAsync(6_000);
+            // Three plans span MinLoopSpanMs by the fourth.
+            await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.MinLoopSpanMs / 3 + 1_000);
         }
 
         bool blacklisted = await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal));
