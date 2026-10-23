@@ -119,7 +119,7 @@ public sealed class OperationsGuideTests
         Assert.False(production.Allowed);
         Assert.Contains("Development or Staging", string.Join(" ", production.Refusals), StringComparison.Ordinal);
         Assert.True(HotCodeGuard.Evaluate(new HotCodeOptions { Enabled = true }, new FixtureProbe("Staging")).Allowed);
-        Assert.Contains("return 78; // EX_CONFIG", RepoRoot.ReadText("src/ArcaneCore.World/Program.cs"), StringComparison.Ordinal);
+        Assert.Contains("return ExitCodes.InvalidConfiguration; // EX_CONFIG", RepoRoot.ReadText("src/ArcaneCore.World/Program.cs"), StringComparison.Ordinal);
         Assert.Contains("Development or Staging", DeviationRegister.All.Single(d => d.Key == "World:HotCode:Enabled").Advice, StringComparison.Ordinal);
         Assert.Contains("78", DeviationRegister.All.Single(d => d.Key == "World:HotCode:Enabled").Advice, StringComparison.Ordinal);
     }

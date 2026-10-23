@@ -187,7 +187,15 @@ public sealed class InMemoryAccountSessionClaimStore : IAccountSessionClaimStore
         Action<AccountSessionClaim>[] snapshot = Volatile.Read(ref _subscribers);
         foreach (Action<AccountSessionClaim> subscriber in snapshot)
         {
-            subscriber(newer);
+            try
+            {
+                subscriber(newer);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // One faulting subscriber must not abort the already-committed Claim/Invalidate or starve the rest.
+                Diagnostics.FaultLedger.Shared.Record("accountclaims.subscriber", ex);
+            }
         }
     }
 

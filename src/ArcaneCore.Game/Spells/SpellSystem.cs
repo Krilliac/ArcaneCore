@@ -325,9 +325,8 @@ public sealed partial class SpellSystem
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("spell.script", ex);
-            SpellAuraHolder? activeHolder = state.Auras.FirstOrDefault(h => !h.IsRemoved);
-            Unit? auraCaster = activeHolder is not null ? Units.Find(state.Unit, activeHolder.CasterGuid) : null;
-            RecordSpellScriptFault("UpdateAuras", ex, activeHolder?.Spell, auraCaster ?? state.Unit, state.Unit);
+            // The throwing aura is unknown here, so don't blame an unrelated holder's spell.
+            RecordSpellScriptFault("UpdateAuras", ex, null, state.Unit, state.Unit);
         }
 
         ExpireCooldowns(state, now);

@@ -282,15 +282,17 @@ if (-not (Test-Path -LiteralPath $allowlist)) {
 }
 
 # The two window scripts. Each runs `dotnet watch` (hot reload) and tees its console to <run>\logs\*.log.
+# Every path is inlined into a single-quoted literal, so a ' in it (a profile named O'Brien) is doubled.
 function New-WindowScript([string]$label, [string]$project, [string[]]$extraEnv, [string]$logName) {
-    $watchArgs = "watch --project `"$project`" -c Debug --no-launch-profile"
+    $watchArgs = ("watch --project `"$project`" -c Debug --no-launch-profile").Replace("'", "''")
     if ($RestartOnRudeEdit) { $watchArgs += ' --non-interactive' }
-    $tee = Join-Path $PSScriptRoot 'dev-runner-tee.ps1'
+    $tee = (Join-Path $PSScriptRoot 'dev-runner-tee.ps1').Replace("'", "''")
+    $runQ = $run.Replace("'", "''")
     $lines = @(
         "`$Host.UI.RawUI.WindowTitle = 'ArcaneCore dev: $label (hot reload) - $Name'",
-        "Set-Location -LiteralPath '$run'",
+        "Set-Location -LiteralPath '$runQ'",
         "`$env:DOTNET_ENVIRONMENT = '$environmentName'",
-        "`$env:DOTNET_CONTENTROOT = '$run'",
+        "`$env:DOTNET_CONTENTROOT = '$runQ'",
         "`$env:DOTNET_WATCH_SUPPRESS_EMOJIS = '1'"
     ) + $extraEnv + @(
         "Write-Host 'ArcaneCore dev runner: $label under dotnet watch (hot reload). Edit and save a .cs file in the repo; this window says whether the change was applied.'",
@@ -298,26 +300,28 @@ function New-WindowScript([string]$label, [string]$project, [string[]]$extraEnv,
         # The output is shown live and appended to the log as UTF-8 by a wrapper that survives Ctrl+C / Ctrl+Break, so a
         # graceful shutdown (the world saving) is still logged and never cut off by the window script itself.
         ". '$tee'",
-        "`$code = Invoke-DevTee (Get-Command dotnet).Source '$watchArgs' '$run\logs\$logName'",
+        "`$code = Invoke-DevTee (Get-Command dotnet).Source '$watchArgs' '$runQ\logs\$logName'",
         "Write-Host `"$label exited (code `$code).`"",
-        "if (`$code -ne 0 -and -not (Test-Path -LiteralPath '$run\stop.flag')) { Write-Host 'Press Enter to close this window.'; [void][Console]::ReadLine() }"
+        "if (`$code -ne 0 -and -not (Test-Path -LiteralPath '$runQ\stop.flag')) { Write-Host 'Press Enter to close this window.'; [void][Console]::ReadLine() }"
     )
     $path = Join-Path $run "start-$label.ps1"
     Set-Content -LiteralPath $path -Encoding ascii -Value $lines
     return $path
 }
 
+$runQuoted = $run.Replace("'", "''")
+$allowlistQuoted = $allowlist.Replace("'", "''")
 $worldEnv = @(
     "`$env:World__HotCode__Enabled = 'true'",
-    "`$env:World__HotCode__AuditLogPath = '$run\logs\hotcode-audit.log'",
+    "`$env:World__HotCode__AuditLogPath = '$runQuoted\logs\hotcode-audit.log'",
     # Content reload (.reload spell_template, .reload all ...): off by default in the shipped config, a dev server turns it on.
     "`$env:HotReload__Commands = 'true'"
 )
 if (-not $NoModules) {
     $worldEnv += @(
         "`$env:World__HotCode__Modules__Enabled = 'true'",
-        "`$env:World__HotCode__Modules__Directory = '$run\modules'",
-        "`$env:World__HotCode__Modules__Allowlist = '$allowlist'"
+        "`$env:World__HotCode__Modules__Directory = '$runQuoted\modules'",
+        "`$env:World__HotCode__Modules__Allowlist = '$allowlistQuoted'"
     )
 }
 

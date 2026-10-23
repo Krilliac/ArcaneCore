@@ -34,7 +34,7 @@ try
 catch (Exception ex) when (ex is FileNotFoundException or FileLoadException or BadImageFormatException)
 {
     Console.Error.WriteLine($"ArcaneCore.World refuses to start: {ex.Message}");
-    return 78; // EX_CONFIG: an incomplete install, a supervisor must not restart it
+    return ExitCodes.InvalidConfiguration; // EX_CONFIG: an incomplete install, a supervisor must not restart it
 }
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder([.. command.HostArgs]);
@@ -85,7 +85,7 @@ try
 catch (HotCodeRefusedException ex)
 {
     Console.Error.WriteLine($"ArcaneCore.World refuses to start: {ex.Message}");
-    return 78; // EX_CONFIG
+    return ExitCodes.InvalidConfiguration; // EX_CONFIG
 }
 
 // Every registration the daemon runs with, in one place the CI guard also builds with scope and build validation on (WiringAuditTests).
