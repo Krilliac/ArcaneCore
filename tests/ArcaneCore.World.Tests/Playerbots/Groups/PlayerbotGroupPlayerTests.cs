@@ -12,6 +12,7 @@ using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
+using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
 using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Groups;
@@ -145,6 +146,52 @@ public sealed class PlayerbotGroupPlayerTests
 
         await RememberPlayerAsync(world, bot, "Grouprival", 0); // forgiven: the same opted-in player on the goal now qualifies
         Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+    }
+
+    /// <summary>"On the same quest" is the help-quest invite's reason, not a reason to open a trade: only a friend, a guildmate or a liked player gets one.</summary>
+    [Theory]
+    [InlineData(0, false)]  // a stranger on the same quest
+    [InlineData(15, true)]  // liked: at least AcceptInviteAffinity (10)
+    public async Task ATrade_IsOpenedForALikedPlayer_NotForAStrangerOnTheSameQuest(short affinity, bool opened)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Groups.InvitePlayers = false;
+            options.MoveSpeed = 0.1f; // the bot stays within trade reach of the player
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("TRADEPLAYER", "Tradeplayer", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Traderbot", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Tradeplayer", DuoQuest);
+        if (affinity != 0) await RememberPlayerAsync(world, bot, "Tradeplayer", affinity);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), await world.TraceAsync());
+
+        // Away from the creatures (a bot in a fight opens no trade), the player a few yards from the bot.
+        await world.OnWorldAsync(() =>
+        {
+            var far = new System.Numerics.Vector3(StartX - 1000f, StartY, StartZ);
+            uint now = world.World.Host.World.NowMs;
+            world.Player(bot.Id).Relocate(far.X, far.Y, far.Z, 0, now);
+            world.World.Host.World.FindOnlinePlayer("Tradeplayer")!.Relocate(far.X + 3f, far.Y, far.Z, 0, now);
+            return true;
+        });
+        await world.RunAsync(1_000);
+        await player.CollectAsync();
+
+        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
+        // The player keeps standing beside the bot, which drifts while it waits (the answer comes after a typing delay).
+        void Stick()
+        {
+            Player self = world.Player(bot.Id), other = world.World.Host.World.FindOnlinePlayer("Tradeplayer")!;
+            other.Relocate(self.X + 2f, self.Y, self.Z, 0, world.World.Host.World.NowMs);
+        }
+
+        Assert.True(await world.RunUntilAsync(60_000, () => { Stick(); return dispatched.Contains(WorldOpcode.CmsgMessagechat); }), "the bot answers the whisper");
+        await world.RunUntilAsync(3_000, () => { Stick(); return dispatched.Contains(WorldOpcode.CmsgInitiateTrade); }); // the trade follows the answer
+        Assert.Equal(opened, dispatched.Contains(WorldOpcode.CmsgInitiateTrade));
+        Assert.Equal(opened, (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgTradeStatus));
     }
 
     [Fact]

@@ -495,7 +495,7 @@ internal sealed class PlayerbotPartyAI
         };
         var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm, sender, line.Text), sender.Guid, sender.Name, line.Type, line.Text, fromMaster,
             !senderIsBot && InviteAllowed(player, sender), senderIsBot ? 0 : sender.AccountId, FromGm: isGm, Speech: speech, SenderIsBot: senderIsBot,
-            Addressed: addressed);
+            Addressed: addressed, TradeAllowed: !senderIsBot && TradeAllowed(player, sender));
         // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login); never to a bot.
         if (chat.TryAsk(ask) == Chat.BotChatAdmission.Queued && !senderIsBot
             && chat.TakeDisclosure(ask, Chat.PlayerbotChatSafety.LoginOf(sender)) is { } notice)
@@ -641,7 +641,7 @@ internal sealed class PlayerbotPartyAI
             case Chat.BotChatAction.OpenTrade:
             {
                 if (!player.IsAlive || player.Combat.IsInCombat || !ReferenceEquals(speaker.Map, player.Map) || Distance(speaker, player) > TradeReach) return;
-                bool trusted = social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true || InviteAllowed(player, speaker);
+                bool trusted = social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true || TradeAllowed(player, speaker);
                 if (trusted)
                 {
                     _tradePartner = speaker.Guid;
@@ -686,7 +686,11 @@ internal sealed class PlayerbotPartyAI
         }
     }
 
-    /// <summary>Whether the bot would accept an invitation from <paramref name="sender"/> (its invite policy).</summary>
+    /// <summary>
+    /// Whether the bot would accept an invitation from <paramref name="sender"/> (its invite policy). Under <see cref="PlayerbotInvitePolicy.Affinity"/>
+    /// this includes a sender on the bot's own quest or dungeon goal: right for a group invitation and the help-quest invite (the same goal is the
+    /// reason to group), not for a trade (<see cref="TradeAllowed"/>).
+    /// </summary>
     private bool InviteAllowed(Player player, Player sender)
     {
         if (Services.Social is not { } social) return false;
@@ -694,6 +698,22 @@ internal sealed class PlayerbotPartyAI
         return PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, sender.Name,
             PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender),
             InviteStanding?.Invoke(player, sender));
+    }
+
+    /// <summary>
+    /// Whether the bot would open a trade with <paramref name="sender"/> (who is not in its group): the invite policy's own grounds (the allowlist, a guild
+    /// mate, a friend of the bot's own list, a well-known player under <see cref="PlayerbotInvitePolicy.Affinity"/>, anyone under
+    /// <see cref="PlayerbotInvitePolicy.Anyone"/>) and never a rival, but NOT being on the same quest or dungeon goal: that is a reason to group, not to
+    /// hand items over.
+    /// </summary>
+    private bool TradeAllowed(Player player, Player sender)
+    {
+        if (Services.Social is not { } social) return false;
+        PlayerbotPartyOptions party = _options.Party;
+        PlayerbotGroupInvites.Standing? standing = InviteStanding?.Invoke(player, sender) is { } found ? found with { SharesGoal = false } : null;
+        if (standing is { Rival: true }) return party.Allowlist.Any(name => string.Equals(name, sender.Name, StringComparison.OrdinalIgnoreCase));
+        return PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, sender.Name,
+            PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender), standing);
     }
 
     /// <summary>
