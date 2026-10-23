@@ -14,7 +14,7 @@ public sealed class GuildEmblemTests
 {
     private const uint Success = 0, NoGuild = 2, NotGuildMaster = 3, NotEnoughMoney = 4, NoMessage = 5;
 
-    private static uint ReadResult(PetitionKit k, Player p)
+    private static uint ReadResult(PetitionTestKit k, Player p)
     {
         var reader = new PacketReader(Assert.Single(k.Sent(p, WorldOpcode.MsgSaveGuildEmblem)));
         uint result = reader.ReadUInt32();
@@ -22,7 +22,7 @@ public sealed class GuildEmblemTests
         return result;
     }
 
-    private static (Player Leader, Player Member, Guild Guild) Guild(PetitionKit k, uint leaderMoney = 200_000)
+    private static (Player Leader, Player Member, Guild Guild) Guild(PetitionTestKit k, uint leaderMoney = 200_000)
     {
         Player leader = k.Add(1, money: leaderMoney);
         Player member = k.Add(2);
@@ -36,7 +36,7 @@ public sealed class GuildEmblemTests
     [Fact] // :686-692: the silent variant is SENT as result 5 (the client prints nothing)
     public void NoTabardDesignerInReach_AnswersNoMessage()
     {
-        using var k = new PetitionKit(NpcFlags.Petitioner); // a petitioner that is not a tabard designer
+        using var k = new PetitionTestKit(NpcFlags.Petitioner); // a petitioner that is not a tabard designer
         (Player leader, _, _) = Guild(k);
 
         k.Guilds.SaveEmblem(leader, k.Npc.Guid, 1, 2, 3, 4, 5);
@@ -49,7 +49,7 @@ public sealed class GuildEmblemTests
     [Fact] // :686-692 out of range
     public void ADistantTabardDesigner_AnswersNoMessage()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player leader, _, _) = Guild(k);
         k.Npc = k.Npc with { X = 60 };
 
@@ -61,7 +61,7 @@ public sealed class GuildEmblemTests
     [Fact] // :698-703
     public void WithoutAGuild_AnswersNoGuild()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player loner = k.Add(1);
 
         k.Guilds.SaveEmblem(loner, k.Npc.Guid, 1, 2, 3, 4, 5);
@@ -72,7 +72,7 @@ public sealed class GuildEmblemTests
     [Fact] // :705-710
     public void ANonLeader_AnswersNotGuildMaster()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (_, Player member, Guild guild) = Guild(k);
         member.Money = 500_000;
 
@@ -86,7 +86,7 @@ public sealed class GuildEmblemTests
     [Fact] // :712-717 — 10 gold is 100000 copper
     public void ALeaderWith99999Copper_AnswersNotEnoughMoney_AndNothingIsCharged()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player leader, _, Guild guild) = Guild(k, leaderMoney: 99_999);
 
         k.Guilds.SaveEmblem(leader, k.Npc.Guid, 1, 2, 3, 4, 5);
@@ -99,7 +99,7 @@ public sealed class GuildEmblemTests
     [Fact] // :719-734
     public void ALeaderWith100000Copper_PaysExactlyTenGold_StoresTheFiveValues_AndOnlyTheLeaderGetsTheQuery()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player leader, Player member, Guild guild) = Guild(k, leaderMoney: 100_000);
 
         k.Guilds.SaveEmblem(leader, k.Npc.Guid, 7, 8, 9, 10, 11);
@@ -127,7 +127,7 @@ public sealed class GuildEmblemTests
     [Fact] // the values are raw int32s; vmangos neither validates ranges nor sends INVALID_TABARD_COLORS (1)
     public void NegativeAndHugeValues_AreStoredRaw_WithoutValidation()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player leader, _, Guild guild) = Guild(k);
 
         k.Guilds.SaveEmblem(leader, k.Npc.Guid, -1, int.MaxValue, int.MinValue, 0, 99999);
@@ -139,7 +139,7 @@ public sealed class GuildEmblemTests
     [Fact] // NPCHandler.cpp:49-69
     public void TabardVendorActivate_EchoesTheGuid_OnlyForAnInteractableTabardDesigner()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
 
         k.Guilds.ActivateTabardVendor(a, k.Npc.Guid);

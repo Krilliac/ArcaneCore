@@ -10,6 +10,7 @@ using ArcaneCore.Game.Tests.Locomotion;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -17,14 +18,14 @@ namespace ArcaneCore.Game.Tests.Collision;
 
 /// <summary>
 /// <see cref="MapCollision.ClassifyUnderMap"/> and the observer that uses it. The decision table runs on a real one-tile terrain (ground at
-/// <see cref="HazardKit.Ground"/>) with a scripted model service; the same query on a real extraction is checked at the bottom (gated on
+/// <see cref="HazardTestKit.Ground"/>) with a scripted model service; the same query on a real extraction is checked at the bottom (gated on
 /// <c>ARCANECORE_TEST_TERRAIN_DIR</c>).
 /// </summary>
 public sealed class UnderMapClassificationTests(ITestOutputHelper output)
 {
-    private const float X = HazardKit.X;
-    private const float Y = HazardKit.Y;
-    private const float Ground = HazardKit.Ground;
+    private const float X = HazardTestKit.X;
+    private const float Y = HazardTestKit.Y;
+    private const float Ground = HazardTestKit.Ground;
 
     /// <summary>A model service with scripted answers (floor below, surface above, WMO area) and a scripted tile coverage.</summary>
     private sealed class ScriptedModels(ModelCoverage coverage) : ILineOfSight, IModelCoverage
@@ -64,7 +65,7 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
 
     private static UnderMapVerdict Classify(ILineOfSight? models, float z, float minDepth = 0f)
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = new HazardTestKit(liquid: null);
         if (models is not null)
         {
             WorldCollision.Of(kit.Kit.World).Install(lineOfSight: models);
@@ -153,7 +154,7 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
         (int tx, int ty) = TerrainTile.TileOf(X, Y)!.Value;
         Assert.False(File.Exists(Path.Combine(fixture.Directory, VMapFormat.TileFileName(0, tx, ty))));
 
-        using var kit = new HazardKit(liquid: null);
+        using var kit = new HazardTestKit(liquid: null);
         WorldCollision.Of(kit.Kit.World).Install(lineOfSight: vmaps);
         MapCollision collision = kit.Map.Collision;
 
@@ -178,10 +179,10 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
 
     private static int CreatureReports(ILineOfSight models, uint entry)
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = new HazardTestKit(liquid: null);
         WorldCollision.Of(kit.Kit.World).Install(lineOfSight: models);
-        CreatureContent content = CreatureTestSupport.Content(
-            [CreatureTestSupport.Template(entry)], [CreatureTestSupport.Spawn(1, entry, X, Y, Ground - 30f)]);
+        CreatureContent content = CreatureTestKit.Content(
+            [CreatureTestKit.Template(entry)], [CreatureTestKit.Spawn(1, entry, X, Y, Ground - 30f)]);
         var system = new CreatureMapSystem(kit.Map, content, random: new Random(1));
         kit.Map.AddUpdater(system);
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
@@ -226,7 +227,7 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
 
     private static int ObserverReports(ILineOfSight models, float z)
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = new HazardTestKit(liquid: null);
         WorldCollision.Of(kit.Kit.World).Install(lineOfSight: models);
         Player player = kit.AddPlayer(4_105_050, 20f, out _);
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "move/under-map" && n.Subject.Contains("(guid 4105050)", StringComparison.Ordinal));

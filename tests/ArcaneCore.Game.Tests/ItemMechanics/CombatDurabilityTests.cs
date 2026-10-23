@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Stats;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Items;
 using Xunit;
 using static ArcaneCore.Game.Tests.ItemTestData;

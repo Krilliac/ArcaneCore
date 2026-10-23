@@ -4,6 +4,7 @@ using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.WorldData;
 using Xunit;
 

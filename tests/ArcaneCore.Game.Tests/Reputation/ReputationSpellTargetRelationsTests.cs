@@ -138,7 +138,7 @@ public sealed class ReputationSpellTargetRelationsTests
 
     private static Creature Npc(FactionTemplateRecord template)
     {
-        var content = CreatureTestSupport.Content([CreatureTestSupport.Template(template.Id)] , []);
+        var content = CreatureTestKit.Content([CreatureTestKit.Template(template.Id)] , []);
         var npc = new Creature(1, content.Templates.Single(), null, content, new Random(1));
         npc.FactionTemplate = template.Id;
         npc.Health = 100;

@@ -4,7 +4,7 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -87,7 +87,7 @@ public sealed class TrainerQuoteTests
                     new TrainerSpell { Entry = Entry, Spell = 7003, SpellCost = 10, ReqSkill = 1, ReqSkillValue = 10 },
                 ],
             };
-            Kit = new NpcServiceKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
+            Kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
                 new QuestNpcDependencies(Spells: learner, Reputation: new NpcVendorServiceTests.FixedReputation(discount)));
             Kit.Npc = Kit.Npc with { TrainerClass = (byte)Kit.Player.Class };
             Kit.Player.Money = 100;
@@ -103,7 +103,7 @@ public sealed class TrainerQuoteTests
 
         public MemorySpellbook Book { get; } = new();
         public SpellSystem System { get; }
-        public NpcServiceKit Kit { get; }
+        public NpcServiceTestKit Kit { get; }
         public void Dispose() => Kit.Dispose();
     }
 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Ops.Control;
 using ArcaneCore.World.Tests.Ops.Control;
 using ArcaneCore.World.Tests.Reload;
@@ -328,7 +329,7 @@ public sealed class RedeployPlanTests(ITestOutputHelper output)
         }
 
         await using var host = WorldTestHost.Start();
-        var logs = new WorldControlPipeTests.CapturingLoggerProvider();
+        var logs = new CapturingLoggerProvider();
         using var loggers = LoggerFactory.Create(b => b.AddProvider(logs));
         WorldControlPipe pipe = WorldControlPipeTests.NewPipe(host, new WorldControlPipeOptions { Enabled = true, Name = WorldControlPipeTests.UniqueName() }, loggers);
         await pipe.StartAsync(CancellationToken.None);
@@ -363,7 +364,7 @@ public sealed class RedeployPlanTests(ITestOutputHelper output)
         }
 
         await using var host = WorldTestHost.Start();
-        using var loggers = LoggerFactory.Create(b => b.AddProvider(new WorldControlPipeTests.CapturingLoggerProvider()));
+        using var loggers = LoggerFactory.Create(b => b.AddProvider(new CapturingLoggerProvider()));
         WorldControlPipe pipe = WorldControlPipeTests.NewPipe(host, new WorldControlPipeOptions { Enabled = true, Name = WorldControlPipeTests.UniqueName() }, loggers);
         await pipe.StartAsync(CancellationToken.None);
         try

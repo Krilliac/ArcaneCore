@@ -9,8 +9,8 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi;
 
@@ -110,11 +110,11 @@ public sealed class CreatureCrowdControlMovementTests
     public void FearAura_OnACreature_RecordsThatTheAuraHoldsTheFleeingFlag()
     {
         const uint fearSpell = 930_101;
-        using SpellTestKit kit = new(RuleTestSupport.Grant(fearSpell, AuraType.ModFear, 0));
+        using SpellTestKit kit = new(RuleTestKit.Grant(fearSpell, AuraType.ModFear, 0));
         CreatureTemplate template = Template();
         var creature = new Creature(1, template, null, Content([template], []), new Random(1));
 
-        RuleTestSupport.Apply(kit, creature, fearSpell);
+        RuleTestKit.Apply(kit, creature, fearSpell);
         Assert.True(creature.FearHeldByAura);
 
         kit.System.RemoveAuras(creature, fearSpell);

@@ -21,11 +21,11 @@ public sealed class HonorMaintenanceStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task WeeklyScores_CountKillsPerType_ExcludeDishonorFromCp_AndHonorBothBounds(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider,
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider,
             ("Hunter", 1, 60, 10), ("Quiet", 2, 40, 11), ("Ranked", 3, 55, 12), ("Idle", 4, 20, 13));
-        int hunter = await HonorTestSupport.IdOfAsync(cs, "Hunter");
-        int quiet = await HonorTestSupport.IdOfAsync(cs, "Quiet");
-        int ranked = await HonorTestSupport.IdOfAsync(cs, "Ranked");
+        int hunter = await HonorTestKit.IdOfAsync(cs, "Hunter");
+        int quiet = await HonorTestKit.IdOfAsync(cs, "Quiet");
+        int ranked = await HonorTestKit.IdOfAsync(cs, "Ranked");
 
         await WriteAsync(cs, s => s.AppendCpAsync(hunter,
         [
@@ -54,11 +54,11 @@ public sealed class HonorMaintenanceStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task Apply_WritesEverythingInOneStep_AndDropsOnlyOlderRows(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider,
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider,
             ("Winner", 1, 60, 1), ("Loser", 2, 60, 2), ("Fresh", 3, 60, 3));
-        int winner = await HonorTestSupport.IdOfAsync(cs, "Winner");
-        int loser = await HonorTestSupport.IdOfAsync(cs, "Loser");
-        int fresh = await HonorTestSupport.IdOfAsync(cs, "Fresh");
+        int winner = await HonorTestKit.IdOfAsync(cs, "Winner");
+        int loser = await HonorTestKit.IdOfAsync(cs, "Loser");
+        int fresh = await HonorTestKit.IdOfAsync(cs, "Fresh");
         await WriteAsync(cs, s => s.SaveStateAsync(winner, new CharacterHonorState(1000f, 6, 9, 3, 10f, 50, 4, 0x01, false)));
         await WriteAsync(cs, s => s.SaveStateAsync(loser, new CharacterHonorState(20000f, 12, 1, 3, 10f, 60, 5, 0, false)));
         await WriteAsync(cs, s => s.AppendCpAsync(winner,
@@ -90,8 +90,8 @@ public sealed class HonorMaintenanceStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task Apply_FailingAtTheEnd_ChangesNothing_AndARetrySucceeds(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Atomic", 1, 60, 1));
-        int id = await HonorTestSupport.IdOfAsync(cs, "Atomic");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Atomic", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Atomic");
         await WriteAsync(cs, s => s.SaveStateAsync(id, new CharacterHonorState(1000f, 6, 9, 0, 0f, 10, 1, 0, false)));
         await WriteAsync(cs, s => s.AppendCpAsync(id, [new HonorCpRecord(4, 1, 10f, 1, 1)]));
         await WriteAsync(cs, s => s.SaveMaintenanceAsync(new HonorMaintenanceState(100, 107, true)));
@@ -117,9 +117,9 @@ public sealed class HonorMaintenanceStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task CityProtectors_AreExactlyTheNamedCharacters_WhenGiven_AndUntouchedWhenNull(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("OldTitle", 1, 60, 1), ("NewTitle", 2, 60, 2));
-        int old = await HonorTestSupport.IdOfAsync(cs, "OldTitle");
-        int fresh = await HonorTestSupport.IdOfAsync(cs, "NewTitle");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("OldTitle", 1, 60, 1), ("NewTitle", 2, 60, 2));
+        int old = await HonorTestKit.IdOfAsync(cs, "OldTitle");
+        int fresh = await HonorTestKit.IdOfAsync(cs, "NewTitle");
         await WriteAsync(cs, s => s.SaveStateAsync(old, CharacterHonorState.Empty with { CityProtector = true }));
         var state = new HonorMaintenanceState(1, 8, false);
 
@@ -135,7 +135,7 @@ public sealed class HonorMaintenanceStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task MaintenanceState_RoundTripsLargeDays_AndStartsEmpty(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider);
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider);
         Assert.Null(await GetMaintenanceAsync(cs));
         var state = new HonorMaintenanceState(uint.MaxValue - 7, uint.MaxValue, true);
         await WriteAsync(cs, s => s.SaveMaintenanceAsync(state));

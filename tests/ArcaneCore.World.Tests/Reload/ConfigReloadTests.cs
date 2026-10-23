@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Reload;
@@ -799,12 +800,5 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp",
             "World:Parallel:CreatureSplinePass", "World:Parallel:GateAllStages", "World:Parallel:Gated", "World:Parallel:MapUpdateThreads", "World:Parallel:OwnerGuard",
             "World:Parallel:Ungated", "World:Playerbots:AsyncNavigationEnabled", "World:Port", "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }

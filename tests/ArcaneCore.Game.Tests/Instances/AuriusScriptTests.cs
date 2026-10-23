@@ -11,8 +11,8 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
-using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
+using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -74,7 +74,7 @@ public sealed class AuriusScriptTests
     }
 
     private static List<string> Said(DungeonNpcRig rig)
-        => [.. rig.Fixture.Sent(rig.Player, WorldOpcode.SmsgMessagechat).Select(CreatureAiTestSupport.ParseMonsterChat).Select(c => c.Message)];
+        => [.. rig.Fixture.Sent(rig.Player, WorldOpcode.SmsgMessagechat).Select(CreatureAiTestKit.ParseMonsterChat).Select(c => c.Message)];
 
     private static float Distance(WorldObject a, WorldObject b) => MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)) + ((a.Z - b.Z) * (a.Z - b.Z)));
 
@@ -113,7 +113,7 @@ public sealed class AuriusScriptTests
     public void QuestFiveOneTwoTwo_GoesThroughTheRealRewardPath_AndASecondRewardChangesNothing()
     {
         var factory = new CreatureAiFactory(); // carries the real registration
-        QuestFlowKit kit = new([Task(AuriusScript.QuestMedallionOfFaith)], [Row(AuriusScript.QuestMedallionOfFaith, QuestStatus.Complete, kills: 2)],
+        QuestFlowTestKit kit = new([Task(AuriusScript.QuestMedallionOfFaith)], [Row(AuriusScript.QuestMedallionOfFaith, QuestStatus.Complete, kills: 2)],
             starters: [AuriusScript.QuestMedallionOfFaith], enders: [AuriusScript.QuestMedallionOfFaith], rewardable: [AuriusScript.QuestMedallionOfFaith],
             npcFlags: 3, scriptName: AuriusScript.ScriptName);
         using (kit)

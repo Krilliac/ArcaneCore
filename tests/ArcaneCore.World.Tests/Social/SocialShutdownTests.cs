@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
@@ -157,7 +158,7 @@ public sealed class SocialShutdownTests
 
     private static WorldRuntime CreateWorld() => new(
         new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
-        new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
 
     private static SocialFeature CreateFeature(ServiceProvider provider, IServiceProvider? services = null)
     {
@@ -307,10 +308,5 @@ public sealed class SocialShutdownTests
         public void ProcessWorldPackets(Player player) { }
         public void Kick() { }
         public void OnLoggedOut() { }
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 }

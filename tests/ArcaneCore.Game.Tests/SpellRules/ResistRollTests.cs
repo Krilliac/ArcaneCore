@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 
@@ -24,7 +25,7 @@ public sealed class ResistRollTests
         return (kit, caster, target);
     }
 
-    private static SpellInfo Fire(uint id = 1) => RuleTestSupport.Magic(id, SpellSchool.Fire);
+    private static SpellInfo Fire(uint id = 1) => RuleTestKit.Magic(id, SpellSchool.Fire);
 
     private static ResistOutcomeTable Table(Func<int, string> row) =>
         ResistOutcomeTable.Parse(Enumerable.Range(0, ResistOutcomeTable.RowCount).Select(row));

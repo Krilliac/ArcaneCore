@@ -13,7 +13,7 @@ public sealed class PetExperienceTests
     private const uint BeastEntry = 5231;
     private const uint VictimEntry = 5232;
 
-    private static CreatureTemplate Beast(uint entry, byte level) => CreatureTestSupport.Template(entry, b =>
+    private static CreatureTemplate Beast(uint entry, byte level) => CreatureTestKit.Template(entry, b =>
     {
         b.MinLevel = level;
         b.MaxLevel = level;

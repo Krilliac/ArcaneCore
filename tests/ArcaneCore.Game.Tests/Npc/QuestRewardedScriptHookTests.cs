@@ -22,7 +22,7 @@ public sealed class QuestRewardedScriptHookTests
         public override void OnQuestRewarded(Player player, uint questId) => Rewarded.Add((player, questId));
     }
 
-    private static void Settle(QuestFlowKit kit, QuestRewardPlan plan)
+    private static void Settle(QuestFlowTestKit kit, QuestRewardPlan plan)
     {
         Guid operation = Guid.NewGuid();
         Assert.True(kit.Player.BeginQuestSettlement(operation));
@@ -37,7 +37,7 @@ public sealed class QuestRewardedScriptHookTests
     [Fact]
     public void RewardingAQuest_TellsTheGiversAi_WithThePlayerAndTheQuestId()
     {
-        using var kit = new QuestFlowKit([QuestFlowKit.Task(Id, method: 0)], starters: [Id], enders: [Id]);
+        using var kit = new QuestFlowTestKit([QuestFlowTestKit.Task(Id, method: 0)], starters: [Id], enders: [Id]);
         var ai = new RewardRecorderAI(kit.Creature);
         kit.Creature.AI = ai;
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null);
@@ -55,7 +55,7 @@ public sealed class QuestRewardedScriptHookTests
     [Fact]
     public void ACreatureWithoutAnAi_AndADetachedHook_AreHarmless()
     {
-        using var kit = new QuestFlowKit([QuestFlowKit.Task(Id, method: 0)], starters: [Id], enders: [Id]);
+        using var kit = new QuestFlowTestKit([QuestFlowTestKit.Task(Id, method: 0)], starters: [Id], enders: [Id]);
         var ai = new RewardRecorderAI(kit.Creature);
         kit.Creature.AI = ai;
         IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null);
@@ -69,7 +69,7 @@ public sealed class QuestRewardedScriptHookTests
     [Fact]
     public void AGiverWithoutAnAi_IsRewardedWithoutError()
     {
-        using var kit = new QuestFlowKit([QuestFlowKit.Task(Id, method: 0)], starters: [Id], enders: [Id]);
+        using var kit = new QuestFlowTestKit([QuestFlowTestKit.Task(Id, method: 0)], starters: [Id], enders: [Id]);
         Assert.Null(kit.Creature.AI);
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null);
 
@@ -78,7 +78,7 @@ public sealed class QuestRewardedScriptHookTests
         Assert.Equal(QuestStatusOf(kit), (QuestStatus.Complete, true));
     }
 
-    private static (QuestStatus, bool) QuestStatusOf(QuestFlowKit kit)
+    private static (QuestStatus, bool) QuestStatusOf(QuestFlowTestKit kit)
     {
         QuestStatusData data = kit.State.Quests.Get(Id)!;
         return (data.Status, data.Rewarded);

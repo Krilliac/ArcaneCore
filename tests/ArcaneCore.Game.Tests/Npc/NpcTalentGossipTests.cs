@@ -21,9 +21,9 @@ public sealed class NpcTalentGossipTests
     private static GossipMenuOption Unlearn(uint menu, uint id)
         => new() { MenuId = menu, Id = id, OptionId = (byte)GossipOption.UnlearnTalents, NpcOptionNpcFlag = (uint)NpcFlags.Trainer, OptionText = "Unlearn" };
 
-    private static NpcServiceKit Kit(NpcContent content, byte playerLevel = 10, TrainerType type = TrainerType.Class, Class trainerClass = Class.Warrior)
+    private static NpcServiceTestKit Kit(NpcContent content, byte playerLevel = 10, TrainerType type = TrainerType.Class, Class trainerClass = Class.Warrior)
     {
-        var kit = new NpcServiceKit(NpcFlags.Gossip | NpcFlags.Trainer, content);
+        var kit = new NpcServiceTestKit(NpcFlags.Gossip | NpcFlags.Trainer, content);
         kit.Player.Level = playerLevel;
         kit.Npc = kit.Npc with { TrainerType = type, TrainerClass = (byte)trainerClass };
         return kit;
@@ -47,7 +47,7 @@ public sealed class NpcTalentGossipTests
     [InlineData(60, TrainerType.Pets, Class.Warrior, false)]
     public void CanTrainAndResetTalentsOf_FollowsVmangos(byte level, TrainerType type, Class trainerClass, bool expected)
     {
-        using NpcServiceKit kit = Kit(NpcContent.Empty, level, type, trainerClass);
+        using NpcServiceTestKit kit = Kit(NpcContent.Empty, level, type, trainerClass);
         Assert.Equal(expected, TalentTrainerRules.CanTrainAndResetTalentsOf(kit.Player, kit.Npc));
     }
 
@@ -55,7 +55,7 @@ public sealed class NpcTalentGossipTests
     public void Option_StaysHiddenUntilAnOwnerSuppliesThePredicate()
     {
         NpcContent content = NpcContent.Empty with { GossipMenuOptions = [Unlearn(0, 0)] };
-        using NpcServiceKit kit = Kit(content);
+        using NpcServiceTestKit kit = Kit(content);
         Assert.Null(kit.Services.UnlearnTalentsOffered);
 
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
@@ -67,7 +67,7 @@ public sealed class NpcTalentGossipTests
     public void Option_IsShownWhenThePredicateAllows_AndHiddenWhenItDoesNot()
     {
         NpcContent content = NpcContent.Empty with { GossipMenuOptions = [Unlearn(0, 0)] };
-        using NpcServiceKit kit = Kit(content);
+        using NpcServiceTestKit kit = Kit(content);
         bool offer = true;
         kit.Services.UnlearnTalentsOffered = (_, _) => offer;
 
@@ -83,7 +83,7 @@ public sealed class NpcTalentGossipTests
     public void Predicate_ReceivesThePlayerAndTheNpc()
     {
         NpcContent content = NpcContent.Empty with { GossipMenuOptions = [Unlearn(0, 0)] };
-        using NpcServiceKit kit = Kit(content);
+        using NpcServiceTestKit kit = Kit(content);
         (Player, NpcInfo)? seen = null;
         kit.Services.UnlearnTalentsOffered = (p, n) =>
         {
@@ -102,7 +102,7 @@ public sealed class NpcTalentGossipTests
     public void Selecting_ClosesTheGossip_AndRaisesTheForeignOptionOnce()
     {
         NpcContent content = NpcContent.Empty with { GossipMenuOptions = [Unlearn(0, 0)] };
-        using NpcServiceKit kit = Kit(content);
+        using NpcServiceTestKit kit = Kit(content);
         kit.Services.UnlearnTalentsOffered = TalentTrainerRules.CanTrainAndResetTalentsOf;
         var raised = new List<(Player, NpcInfo, GossipOption)>();
         kit.Services.ForeignOptionSelected += (p, n, o) => raised.Add((p, n, o));
@@ -130,7 +130,7 @@ public sealed class NpcTalentGossipTests
                 Unlearn(UnlearnMenu, 0),
             ],
         };
-        using NpcServiceKit kit = Kit(content);
+        using NpcServiceTestKit kit = Kit(content);
         kit.Npc = kit.Npc with { GossipMenuId = TrainerMenu };
         kit.Services.UnlearnTalentsOffered = TalentTrainerRules.CanTrainAndResetTalentsOf;
 
@@ -159,7 +159,7 @@ public sealed class NpcTalentGossipTests
             OptionText = "I would like to go to the battleground.",
         };
         NpcContent content = NpcContent.Empty with { GossipMenuOptions = [battlefieldOption] };
-        using var kit = new NpcServiceKit(NpcFlags.Gossip | NpcFlags.BattleMaster, content);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip | NpcFlags.BattleMaster, content);
         kit.Npc = kit.Npc with { GossipMenuId = 6103 };
 
         // Hidden when BattlefieldOffered is unset (fail closed).

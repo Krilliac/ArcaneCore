@@ -244,13 +244,13 @@ public sealed class SpellDirectEffectModuleTests
     /// <summary>A wolf spawned into the kit's map (threat needs both units in the same map, vmangos Unit::AddThreat IsInMap).</summary>
     private static Creature MakeCreature(SpellTestKit kit)
     {
-        CreatureTemplate template = CreatureTestSupport.Template(CreatureTestSupport.WolfEntry, t =>
+        CreatureTemplate template = CreatureTestKit.Template(CreatureTestKit.WolfEntry, t =>
         {
             t.MinLevelHealth = 100;
             t.MaxLevelHealth = 100;
         });
-        CreatureSpawn spawn = CreatureTestSupport.Spawn(77, CreatureTestSupport.WolfEntry, 3, 0);
-        var system = new CreatureMapSystem(kit.World.GetMap(0), CreatureTestSupport.Content([template], [spawn]), null, random: new Random(1));
+        CreatureSpawn spawn = CreatureTestKit.Spawn(77, CreatureTestKit.WolfEntry, 3, 0);
+        var system = new CreatureMapSystem(kit.World.GetMap(0), CreatureTestKit.Content([template], [spawn]), null, random: new Random(1));
         kit.World.GetMap(0).AddUpdater(system);
         kit.World.RunTick(50);
         Creature creature = Assert.Single(system.Creatures);

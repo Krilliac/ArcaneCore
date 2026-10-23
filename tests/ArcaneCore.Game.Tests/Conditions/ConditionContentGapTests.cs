@@ -2,7 +2,7 @@ using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using Xunit;
-using static ArcaneCore.Game.Tests.Conditions.ConditionTestSupport;
+using static ArcaneCore.Game.Tests.Conditions.ConditionTestKit;
 
 namespace ArcaneCore.Game.Tests.Conditions;
 

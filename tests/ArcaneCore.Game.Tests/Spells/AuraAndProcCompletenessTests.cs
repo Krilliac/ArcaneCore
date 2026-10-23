@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.ClassScripts;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 

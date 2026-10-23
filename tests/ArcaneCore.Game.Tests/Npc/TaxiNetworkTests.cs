@@ -47,7 +47,7 @@ public sealed class TaxiNetworkTests
             TaxiPaths = [new TaxiPath { Id = 10, FromNode = 1, ToNode = 3 },
                 new TaxiPath { Id = 11, FromNode = 2, ToNode = 3 }],
         };
-        using var kit = new NpcServiceKit(NpcFlags.FlightMaster, content);
+        using var kit = new NpcServiceTestKit(NpcFlags.FlightMaster, content);
         kit.Services.ReplaceNpcs(new NpcStore(content, new HashSet<uint> { 10 }));
         kit.State.TaxiMask[0] = 0b10; // only the ordinary node is known
 

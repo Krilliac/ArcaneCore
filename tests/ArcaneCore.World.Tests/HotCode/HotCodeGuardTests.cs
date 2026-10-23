@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.HotCode;
 using Microsoft.Extensions.Configuration;
 using Xunit;

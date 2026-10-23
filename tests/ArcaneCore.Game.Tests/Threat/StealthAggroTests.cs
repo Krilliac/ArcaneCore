@@ -6,7 +6,7 @@ using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Threat;

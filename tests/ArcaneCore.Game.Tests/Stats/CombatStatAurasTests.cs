@@ -66,25 +66,25 @@ public sealed class CombatStatAurasTests
     };
 
     private static SpellTestKit Kit() => new(
-        RuleTestSupport.Grant(Crit5, AuraType.ModCritPercent, 5),
-        Weapon(RuleTestSupport.Grant(AxeCrit3, AuraType.ModCritPercent, 3), 1 << 0),
-        RuleTestSupport.Grant(Disarm, AuraType.ModDisarm, 0),
-        RuleTestSupport.Grant(Offhand50, AuraType.ModOffhandDamagePct, 50),
-        RuleTestSupport.Grant(PhysicalPct10, AuraType.ModDamagePercentDone, 10, misc: 1),
-        Weapon(RuleTestSupport.Grant(TwoHandPct5, AuraType.ModDamagePercentDone, 5, misc: 1), (1 << 1) | (1 << 5) | (1 << 8)),
-        RuleTestSupport.Grant(PhysicalFlat5, AuraType.ModDamageDone, 5, misc: 1),
-        RuleTestSupport.Grant(AttackPower100, AuraType.ModAttackPower, 100),
-        Weapon(RuleTestSupport.Grant(SwordParry2, AuraType.ModParryPercent, 2), 1 << 7),
-        RuleTestSupport.Grant(FireDamage20, AuraType.ModDamageDone, 20, misc: 1 << (int)SpellSchool.Fire),
-        RuleTestSupport.Grant(SpiritSpellDamage25, AuraType.ModSpellDamageOfStatPercent, 25, misc: 0x7E),
-        RuleTestSupport.Grant(Spirit40, AuraType.ModStat, 40, misc: 4),
-        RuleTestSupport.Grant(FirePct10, AuraType.ModDamagePercentDone, 10, misc: 1 << (int)SpellSchool.Fire),
-        RuleTestSupport.Grant(AttackPowerMinus150, AuraType.ModAttackPower, -150),
-        Weapon(RuleTestSupport.Grant(SwordDamage7, AuraType.ModDamageDone, 7, misc: 1), 1 << 7),
-        RuleTestSupport.Grant(TotalSpirit100, AuraType.ModTotalStatPercentage, 100, misc: 4),
-        RuleTestSupport.Grant(AttackPowerMinus50Stacking, AuraType.ModAttackPower, -50) with { StackAmount = 3 },
-        RuleTestSupport.Grant(SealOfTheCrusaderLike, AuraType.ModAttackspeed, 40) with { SpellFamilyName = 10, SpellFamilyFlags = 1UL << 9 },
-        RuleTestSupport.Grant(Haste40, AuraType.ModAttackspeed, 40));
+        RuleTestKit.Grant(Crit5, AuraType.ModCritPercent, 5),
+        Weapon(RuleTestKit.Grant(AxeCrit3, AuraType.ModCritPercent, 3), 1 << 0),
+        RuleTestKit.Grant(Disarm, AuraType.ModDisarm, 0),
+        RuleTestKit.Grant(Offhand50, AuraType.ModOffhandDamagePct, 50),
+        RuleTestKit.Grant(PhysicalPct10, AuraType.ModDamagePercentDone, 10, misc: 1),
+        Weapon(RuleTestKit.Grant(TwoHandPct5, AuraType.ModDamagePercentDone, 5, misc: 1), (1 << 1) | (1 << 5) | (1 << 8)),
+        RuleTestKit.Grant(PhysicalFlat5, AuraType.ModDamageDone, 5, misc: 1),
+        RuleTestKit.Grant(AttackPower100, AuraType.ModAttackPower, 100),
+        Weapon(RuleTestKit.Grant(SwordParry2, AuraType.ModParryPercent, 2), 1 << 7),
+        RuleTestKit.Grant(FireDamage20, AuraType.ModDamageDone, 20, misc: 1 << (int)SpellSchool.Fire),
+        RuleTestKit.Grant(SpiritSpellDamage25, AuraType.ModSpellDamageOfStatPercent, 25, misc: 0x7E),
+        RuleTestKit.Grant(Spirit40, AuraType.ModStat, 40, misc: 4),
+        RuleTestKit.Grant(FirePct10, AuraType.ModDamagePercentDone, 10, misc: 1 << (int)SpellSchool.Fire),
+        RuleTestKit.Grant(AttackPowerMinus150, AuraType.ModAttackPower, -150),
+        Weapon(RuleTestKit.Grant(SwordDamage7, AuraType.ModDamageDone, 7, misc: 1), 1 << 7),
+        RuleTestKit.Grant(TotalSpirit100, AuraType.ModTotalStatPercentage, 100, misc: 4),
+        RuleTestKit.Grant(AttackPowerMinus50Stacking, AuraType.ModAttackPower, -50) with { StackAmount = 3 },
+        RuleTestKit.Grant(SealOfTheCrusaderLike, AuraType.ModAttackspeed, 40) with { SpellFamilyName = 10, SpellFamilyFlags = 1UL << 9 },
+        RuleTestKit.Grant(Haste40, AuraType.ModAttackspeed, 40));
 
     /// <summary>A level 60 player with str 120, agi 80, sta 100, int 20, spi 100, attached to a stat system.</summary>
     private static Player Player(SpellTestKit kit, uint guid = 1)
@@ -119,7 +119,7 @@ public sealed class CombatStatAurasTests
         return item;
     }
 
-    private static void Apply(SpellTestKit kit, Unit unit, uint spell) => RuleTestSupport.Apply(kit, unit, spell);
+    private static void Apply(SpellTestKit kit, Unit unit, uint spell) => RuleTestKit.Apply(kit, unit, spell);
 
     private static float F(Unit unit, int field) => unit.GetFloat(field);
 

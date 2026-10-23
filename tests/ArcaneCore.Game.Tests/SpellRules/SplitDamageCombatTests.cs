@@ -24,12 +24,12 @@ public sealed class SplitDamageCombatTests
 
     private static SpellTestKit Kit()
     {
-        SpellInfo sacrifice = RuleTestSupport.Grant(Sacrifice, AuraType.SplitDamageFlat, 40, (int)SpellSchoolMasks.All);
+        SpellInfo sacrifice = RuleTestKit.Grant(Sacrifice, AuraType.SplitDamageFlat, 40, (int)SpellSchoolMasks.All);
         SpellEffectInfo onTarget = sacrifice.Effects[0] with { TargetA = SpellImplicitTarget.Unit };
         var kit = new SpellTestKit(
             sacrifice with { Effects = [onTarget], RangeIndex = 4, Range = new SpellRange(0, 30) },
-            RuleTestSupport.Magic(Bolt, SpellSchool.Fire),
-            RuleTestSupport.Grant(FireDot, AuraType.PeriodicDamage, 20) with
+            RuleTestKit.Magic(Bolt, SpellSchool.Fire),
+            RuleTestKit.Grant(FireDot, AuraType.PeriodicDamage, 20) with
             {
                 School = SpellSchool.Fire,
                 Attributes = SpellAttributes.AuraIsDebuff,

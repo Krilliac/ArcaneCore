@@ -14,6 +14,7 @@ using ArcaneCore.Data.Skills;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.Talents;
 using ArcaneCore.Data.Tests.Skills;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 using Xunit.Abstractions;
@@ -58,25 +59,6 @@ internal static class SyntheticDbc
         File.WriteAllBytes(path, Image(fields ?? layout.Fields, fields is null ? layout.RecordSize : null,
             [.. Enumerable.Range(1, rows).Select(id => new[] { (uint)id })]));
         return path;
-    }
-}
-
-/// <summary>A directory removed after the test.</summary>
-internal sealed class TempDirectory : IDisposable
-{
-    public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "arcane-clientdata-" + Guid.NewGuid().ToString("N"));
-
-    public TempDirectory() => Directory.CreateDirectory(Path);
-
-    public void Dispose()
-    {
-        try
-        {
-            Directory.Delete(Path, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
     }
 }
 
@@ -181,7 +163,7 @@ public sealed class ClientDataTests
     [Fact]
     public void TheHeaderCheck_TellsLoadedMissingMalformedAndMismatched()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         Assert.Equal(ClientDbcStatus.Loaded, ClientDbcInspector.Check(SyntheticDbc.Write(temp.Path, "Talent.dbc", rows: 4)).Status);
         Assert.Equal(4, ClientDbcInspector.Check(Path.Combine(temp.Path, "Talent.dbc")).Records);
         Assert.Equal(ClientDbcStatus.Missing, ClientDbcInspector.Check(Path.Combine(temp.Path, "TalentTab.dbc")).Status);
@@ -206,7 +188,7 @@ public sealed class ClientDataTests
     [Fact]
     public void TheDirectory_FillsEveryUnsetKey_AndAnExplicitKeyWins()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         WriteAllConsumerFiles(temp.Path);
         ClientDataReport report = ClientDataReport.Build(Config(
             ("ClientData:DbcDirectory", temp.Path),
@@ -229,7 +211,7 @@ public sealed class ClientDataTests
     [Fact]
     public void AMissingOrMismatchedFile_IsNotHandedOver_AndItsGroupStaysTogether()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         WriteAllConsumerFiles(temp.Path);
         File.Delete(Path.Combine(temp.Path, "SpellShapeshiftForm.dbc"));
         SyntheticDbc.Write(temp.Path, "TalentTab.dbc", fields: 16);
@@ -270,7 +252,7 @@ public sealed class ClientDataTests
     [Fact]
     public void ADirectoryFileThatNoConsumerReads_IsStillChecked()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         WriteAllConsumerFiles(temp.Path);
         SyntheticDbc.Write(temp.Path, "Map.dbc", fields: 41);
         SyntheticDbc.Write(temp.Path, "Spell.dbc");
@@ -296,7 +278,7 @@ public sealed class ClientDataTests
     [Fact]
     public void AFileNoConsumerReads_IsCheckedAgainstItsWoWDBDefsLayout_AndOnlyListedWhenMissing()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         WriteAllConsumerFiles(temp.Path);
         File.Delete(Path.Combine(temp.Path, "Map.dbc"));
         SyntheticDbc.Write(temp.Path, "WowError_Strings.dbc", fields: 10); // WoWDBDefs: ID, Name, Description_lang (9) = 11

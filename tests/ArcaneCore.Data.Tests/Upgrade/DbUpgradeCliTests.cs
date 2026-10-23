@@ -7,6 +7,7 @@ using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.TestSupport;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;

@@ -4,9 +4,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureAi.SmartAi.SmartRows;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi.SmartAi;
 
@@ -24,7 +24,7 @@ public sealed class SmartAiSlice3dTests
 
     private static Creature BySpawn(SmartRig rig, uint guid) => rig.Creatures.Creatures.Single(c => c.Spawn?.Guid == guid);
 
-    private static List<CreatureAiTestSupport.MonsterChat> Chats(SmartRig rig)
+    private static List<CreatureAiTestKit.MonsterChat> Chats(SmartRig rig)
         => [.. Packets(rig.Session, WorldOpcode.SmsgMessagechat).Select(ParseMonsterChat)];
 
     // ---- actions ----
@@ -41,7 +41,7 @@ public sealed class SmartAiSlice3dTests
         rig.World.RunTick(100);
 
         Assert.Equal(MovementGeneratorType.Point, wolf.Motion.CurrentType);
-        CreatureAiTestSupport.MonsterChat emote = Assert.Single(Chats(rig));
+        CreatureAiTestKit.MonsterChat emote = Assert.Single(Chats(rig));
         Assert.Equal(ChatType.MonsterEmote, emote.Type);
         Assert.Equal("%s attempts to run away in fear!", emote.Message);
     }

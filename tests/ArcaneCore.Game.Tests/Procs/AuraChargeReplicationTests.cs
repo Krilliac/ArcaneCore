@@ -2,10 +2,12 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
+using ScriptedRandom = ArcaneCore.Game.Tests.CombatCore.ScriptedRandom;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Procs;
@@ -79,7 +81,7 @@ public sealed class AuraChargeReplicationTests
         attacker.SetFloat(UpdateFields.UnitFieldMaxdamage, 10);
         attacker.Health = attacker.MaxHealth = 1000;
         victim.Health = victim.MaxHealth = 1000;
-        RuleTestSupport.Apply(kit, victim, ThreeCharges);
+        RuleTestKit.Apply(kit, victim, ThreeCharges);
         kit.Now++; // an aura does not proc from the event that applied it
 
         byte slot = Holder(kit, victim, ThreeCharges).Slot;
@@ -105,11 +107,11 @@ public sealed class AuraChargeReplicationTests
     {
         using SpellTestKit kit = NewKit();
         (Player player, _) = kit.AddPlayer(1);
-        RuleTestSupport.Apply(kit, player, StackingCharges);
+        RuleTestKit.Apply(kit, player, StackingCharges);
         byte slot = Holder(kit, player, StackingCharges).Slot;
         Assert.Equal(1, Applications(player, slot)); // 2 charges * 1 stack - 1
 
-        RuleTestSupport.Apply(kit, player, StackingCharges);
+        RuleTestKit.Apply(kit, player, StackingCharges);
 
         Assert.Equal(2, Holder(kit, player, StackingCharges).StackAmount);
         Assert.Equal(3, Applications(player, slot)); // 2 charges * 2 stacks - 1
@@ -120,11 +122,11 @@ public sealed class AuraChargeReplicationTests
     {
         using SpellTestKit kit = NewKit();
         (Player player, _) = kit.AddPlayer(1);
-        RuleTestSupport.Apply(kit, player, ManyCharges);
+        RuleTestKit.Apply(kit, player, ManyCharges);
         byte slot = Holder(kit, player, ManyCharges).Slot;
         Assert.Equal(199, Applications(player, slot)); // 200 * 1 - 1
 
-        RuleTestSupport.Apply(kit, player, ManyCharges);
+        RuleTestKit.Apply(kit, player, ManyCharges);
 
         Assert.Equal(254, Applications(player, slot)); // 400 clamps to 255, minus one
     }
@@ -136,7 +138,7 @@ public sealed class AuraChargeReplicationTests
         (Player caster, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         victim.Health = victim.MaxHealth = 1000;
-        RuleTestSupport.Apply(kit, victim, ChargedShield);
+        RuleTestKit.Apply(kit, victim, ChargedShield);
         byte slot = Holder(kit, victim, ChargedShield).Slot;
         Assert.Equal(1, Applications(victim, slot));
 

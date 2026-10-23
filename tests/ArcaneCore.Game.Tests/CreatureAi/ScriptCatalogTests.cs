@@ -3,7 +3,7 @@ using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Deadmines;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi;
 

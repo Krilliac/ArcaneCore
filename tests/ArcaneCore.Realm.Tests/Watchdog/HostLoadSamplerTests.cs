@@ -73,7 +73,7 @@ public sealed class HostLoadSamplerTests
         Assert.Equal(HostLoadVerdict.HostStarved, report.Verdict);
 
         var log = new RecordingLogger<TickMonitor>();
-        var monitor = new TickMonitor(new TickMonitorOptions { HangMs = 2000 }, clock, WatchdogTestSupport.NewRegistry(), log) { HostLoad = sampler };
+        var monitor = new TickMonitor(new TickMonitorOptions { HangMs = 2000 }, clock, WatchdogTestKit.NewRegistry(), log) { HostLoad = sampler };
         monitor.StartTicking(50);
         monitor.OnTick(clock.NowMicros);
         clock.AdvanceMs(3000);

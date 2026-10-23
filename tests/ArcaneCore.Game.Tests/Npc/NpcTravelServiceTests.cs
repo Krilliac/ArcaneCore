@@ -27,7 +27,7 @@ public sealed class NpcTravelServiceTests
     [Fact]
     public void BinderActivate_MovesTheHomeBindAndAnswers()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Innkeeper | NpcFlags.Gossip, extra: new QuestNpcDependencies(Maps: new FakeMaps(false, 12)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Innkeeper | NpcFlags.Gossip, extra: new QuestNpcDependencies(Maps: new FakeMaps(false, 12)));
         kit.Services.BinderActivate(kit.Player, kit.Npc.Guid);
         Assert.Equal(new HomeBind(0, 12, kit.Player.X, kit.Player.Y, kit.Player.Z), kit.Player.Home);
         Assert.True(kit.Sink.CharacterChanges > 0);
@@ -49,7 +49,7 @@ public sealed class NpcTravelServiceTests
     public void BinderActivate_InAnInstanceDeadOrOutOfRange_DoesNothing()
     {
         HomeBind before;
-        using (var instance = new NpcServiceKit(NpcFlags.Innkeeper, extra: new QuestNpcDependencies(Maps: new FakeMaps(true, 12))))
+        using (var instance = new NpcServiceTestKit(NpcFlags.Innkeeper, extra: new QuestNpcDependencies(Maps: new FakeMaps(true, 12))))
         {
             before = instance.Player.Home;
             instance.Services.BinderActivate(instance.Player, instance.Npc.Guid);
@@ -57,7 +57,7 @@ public sealed class NpcTravelServiceTests
             Assert.False(instance.Sent(WorldOpcode.SmsgPlayerbound));
         }
 
-        using (var dead = new NpcServiceKit(NpcFlags.Innkeeper))
+        using (var dead = new NpcServiceTestKit(NpcFlags.Innkeeper))
         {
             before = dead.Player.Home;
             dead.Player.Health = 0;
@@ -66,7 +66,7 @@ public sealed class NpcTravelServiceTests
             Assert.Empty(dead.Drain());
         }
 
-        using (var far = new NpcServiceKit(NpcFlags.Innkeeper, npcDistance: 8))
+        using (var far = new NpcServiceTestKit(NpcFlags.Innkeeper, npcDistance: 8))
         {
             before = far.Player.Home;
             far.Services.BinderActivate(far.Player, far.Npc.Guid);
@@ -74,7 +74,7 @@ public sealed class NpcTravelServiceTests
             Assert.Empty(far.Drain());
         }
 
-        using var notInnkeeper = new NpcServiceKit(NpcFlags.Vendor);
+        using var notInnkeeper = new NpcServiceTestKit(NpcFlags.Vendor);
         before = notInnkeeper.Player.Home;
         notInnkeeper.Services.BinderActivate(notInnkeeper.Player, notInnkeeper.Npc.Guid);
         Assert.Equal(before, notInnkeeper.Player.Home);
@@ -120,7 +120,7 @@ public sealed class NpcTravelServiceTests
             Flights = new TaxiFlightSystem(new NpcStore(content), PathNodes, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u,
                 beforeFlight: beforeFlight);
             Flights.Landed += (_, node) => Landings.Add(node);
-            Kit = new NpcServiceKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content,
+            Kit = new NpcServiceTestKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content,
                 new QuestNpcDependencies(Flights: Flights, Reputation: new NpcVendorServiceTests.FixedReputation(discount)));
             if (learnAll)
             {
@@ -130,7 +130,7 @@ public sealed class NpcTravelServiceTests
             Map = Kit.World.GetMap(0);
         }
 
-        public NpcServiceKit Kit { get; }
+        public NpcServiceTestKit Kit { get; }
 
         public TaxiFlightSystem Flights { get; }
 
@@ -143,7 +143,7 @@ public sealed class NpcTravelServiceTests
         public void Dispose() => Kit.Dispose();
     }
 
-    private static uint Reply(NpcServiceKit kit) => BitConverter.ToUInt32(kit.Single(WorldOpcode.SmsgActivatetaxireply));
+    private static uint Reply(NpcServiceTestKit kit) => BitConverter.ToUInt32(kit.Single(WorldOpcode.SmsgActivatetaxireply));
 
     [Fact]
     public void ScriptedTaxiStart_CallsMountCleanupBeforeApplyingTheFlightDisplay()
@@ -165,7 +165,7 @@ public sealed class NpcTravelServiceTests
     public void TaxiQueryAvailableNodes_LearnsTheNearestNodeFirstThenShowsTheMap()
     {
         using var rig = new TaxiRig(learnAll: false);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Services.TaxiQueryAvailableNodes(kit.Player, kit.Npc.Guid);
         var sent = kit.Drain();
         Assert.Contains(sent, p => p.Opcode == WorldOpcode.SmsgNewTaxiPath);
@@ -209,7 +209,7 @@ public sealed class NpcTravelServiceTests
     public void ActivateTaxi_ChargesMountsAndFliesThePathToTheDestination()
     {
         using var rig = new TaxiRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 150;
         kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
         Assert.Equal(50u, kit.Player.Money);
@@ -257,7 +257,7 @@ public sealed class NpcTravelServiceTests
         // Player.cpp:17977 and 17997: every leg is uint32(price × discount + 0.5f), paid when its path starts (taxi lane).
         // 100 -> 95 and 55 -> 52 = 147, where ceil(155 × 0.95f) = 148 would charge one copper too much.
         using var rig = new TaxiRig(discount: 0.95f, secondLegPrice: 55);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Services.ActivateTaxiExpress(kit.Player, kit.Npc.Guid, [1, 2, 3]);
         Assert.Equal(1000u - 95u, kit.Player.Money);
@@ -271,7 +271,7 @@ public sealed class NpcTravelServiceTests
     public void ActivateTaxiExpress_SumsEveryHopAndChainsTheSplines()
     {
         using var rig = new TaxiRig(discount: 0.95f);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Services.ActivateTaxiExpress(kit.Player, kit.Npc.Guid, [1, 2, 3]);
         Assert.Equal(905u, kit.Player.Money); // first leg: uint(100 * 0.95f + 0.5f)
@@ -300,7 +300,7 @@ public sealed class NpcTravelServiceTests
     {
         // vmangos Player::ActivateTaxiPathTo -> IsInDisallowedMountForm (Player.cpp:17872-17880): cat form is 1.
         using var rig = new TaxiRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, 1);
 
@@ -315,7 +315,7 @@ public sealed class NpcTravelServiceTests
     {
         // Battle stance (0x11) is an allowed form (Unit.cpp:5870-5878).
         using var rig = new TaxiRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0x11);
 
@@ -329,7 +329,7 @@ public sealed class NpcTravelServiceTests
     public void ActivateTaxi_Refusals_ChargeNothing()
     {
         using var rig = new TaxiRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 99;
         kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
         Assert.Equal((uint)ActivateTaxiReply.NotEnoughMoney, Reply(kit));
@@ -370,7 +370,7 @@ public sealed class NpcTravelServiceTests
     public void ActivateTaxi_DeadOutOfRangeOrAlreadyFlying_IsIgnored()
     {
         using var rig = new TaxiRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Npc = kit.Npc with { X = 20 };
         kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
@@ -533,7 +533,7 @@ public sealed class NpcTravelServiceTests
             ],
         };
 
-        using (var go = new NpcServiceKit(NpcFlags.QuestGiver, content))
+        using (var go = new NpcServiceTestKit(NpcFlags.QuestGiver, content))
         {
             go.Npc = go.Npc with { IsGameObject = true, GameObjectInteractionDistance = 5.55556f };
             Assert.True(go.Services.OpenGameObjectQuestMenu(go.Player, go.Npc.Guid));
@@ -541,7 +541,7 @@ public sealed class NpcTravelServiceTests
             Assert.False(go.Sent(WorldOpcode.SmsgNewTaxiPath));
         }
 
-        using var creature = new NpcServiceKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content);
+        using var creature = new NpcServiceTestKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content);
         creature.Services.GossipHello(creature.Player, creature.Npc.Guid);
         Assert.Contains(creature.State.TaxiMask, m => m != 0);
         Assert.True(creature.Sent(WorldOpcode.SmsgNewTaxiPath));
@@ -634,7 +634,7 @@ public sealed class NpcTravelServiceTests
     public void ActivateTaxiBySpell_FliesAnUnknownPathWithoutAFlightMasterAndPaysFullPrice()
     {
         using var rig = new TaxiRig(learnAll: false, discount: 0.5f);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 150;
         Assert.True(kit.Services.ActivateTaxiBySpell(kit.Player, 10));
         Assert.True(rig.Flights.IsFlying(kit.Player));
@@ -646,7 +646,7 @@ public sealed class NpcTravelServiceTests
     public void ActivateTaxiBySpell_RejectsUnknownPathsCombatAndDistantSourceNodes()
     {
         using var rig = new TaxiRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         Assert.False(kit.Services.ActivateTaxiBySpell(kit.Player, 999));
         Assert.Empty(kit.Drain());

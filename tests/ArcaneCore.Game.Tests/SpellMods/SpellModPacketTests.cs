@@ -5,7 +5,7 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
-using static ArcaneCore.Game.Tests.SpellMods.ModTestSupport;
+using static ArcaneCore.Game.Tests.SpellMods.ModTestKit;
 
 namespace ArcaneCore.Game.Tests.SpellMods;
 

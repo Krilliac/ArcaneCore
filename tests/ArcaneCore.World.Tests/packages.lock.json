@@ -486,6 +486,14 @@
           "ArcaneCore.Kernel": "[1.0.0, )"
         }
       },
+      "arcanecore.testsupport": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Data": "[1.0.0, )",
+          "ArcaneCore.Game": "[1.0.0, )",
+          "xunit.assert": "[2.9.2, )"
+        }
+      },
       "arcanecore.world": {
         "type": "Project",
         "dependencies": {

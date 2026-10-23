@@ -164,13 +164,13 @@ public sealed class FoundationTests
 
     internal static Creature MakeCreature(uint rank, byte level)
     {
-        CreatureTemplate template = CreatureTestSupport.Template(CreatureTestSupport.WolfEntry, b =>
+        CreatureTemplate template = CreatureTestKit.Template(CreatureTestKit.WolfEntry, b =>
         {
             b.Rank = rank;
             b.MinLevel = level;
             b.MaxLevel = level;
         });
-        var creature = new Creature(1, template, null, CreatureTestSupport.Content([template], []), new Random(1));
+        var creature = new Creature(1, template, null, CreatureTestKit.Content([template], []), new Random(1));
         creature.Level = level;
         return creature;
     }

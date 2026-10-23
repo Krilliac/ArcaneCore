@@ -14,7 +14,7 @@ using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Battlegrounds.AlteracValley;
 using static ArcaneCore.Game.Tests.Battlegrounds.AvScriptRig;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Battlegrounds;
 
@@ -470,7 +470,7 @@ public sealed class AlteracValleyAssaultScriptTests
                 new AvGossipLine(1, GossipTextBrowseGoods, GossipActionTrade),
             ],
             ready.Items);
-        Assert.Single(CreatureAiTestSupport.Packets(rig.Session, WorldOpcode.SmsgEmote)); // the bow
+        Assert.Single(CreatureAiTestKit.Packets(rig.Session, WorldOpcode.SmsgEmote)); // the bow
 
         AvCollectorHello hated = AvCollectorGossip.Hello(rig.Match, quartermaster, rig.Player, Team.Alliance, s_quartermasterQuests, _ => 0);
         Assert.True(hated.Silent);

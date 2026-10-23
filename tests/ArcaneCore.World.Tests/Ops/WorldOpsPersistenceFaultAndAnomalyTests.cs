@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.HotCode.Modules;
 using ArcaneCore.World.Ops.Announce;
@@ -136,13 +137,6 @@ public sealed class WorldOpsPersistenceFaultAndAnomalyTests
         finally
         {
             FaultLedger.Shared.FaultNoticed -= OnFault;
-        }
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
         }
     }
 

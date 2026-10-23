@@ -25,7 +25,7 @@ public sealed class TotemImmunityTests
     [InlineData(SpellEffectName.Energize)]
     public void ForeignDirectRegenerationAndTaunt_DropTheirEffect(SpellEffectName effect)
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         SpellInfo spell = IncomingSpell(Effect(effect, 10, SpellImplicitTarget.UnitFriend));
 
@@ -38,7 +38,7 @@ public sealed class TotemImmunityTests
     [InlineData(AuraType.PeriodicHealthFunnel)]
     public void ForeignPositivePeriodicRegeneration_DropsItsEffect(AuraType aura)
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         SpellInfo spell = IncomingSpell(Effect(SpellEffectName.ApplyAura, 10, SpellImplicitTarget.UnitFriend, aura));
 
@@ -54,7 +54,7 @@ public sealed class TotemImmunityTests
     [InlineData(SpellEffectName.ApplyAreaAuraEnemy)]
     public void ForeignNegativeAura_DropsAllAuraApplicationShapes(SpellEffectName effect)
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         SpellInfo spell = IncomingSpell(Effect(effect, 1, SpellImplicitTarget.UnitFriend, AuraType.Dummy))
             with { Attributes = SpellAttributes.AuraIsDebuff };
@@ -65,7 +65,7 @@ public sealed class TotemImmunityTests
     [Fact]
     public void MixedDamageAndDebuff_LandsDamageAndNeverAddsTheAura()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         totem.MaxHealth = totem.Health = 100;
         kit.Spells.ApplicationRules.Add(new ImmunityApplicationRule());
@@ -84,7 +84,7 @@ public sealed class TotemImmunityTests
     [Fact]
     public void ForeignHealIsBlocked_WhileSelfHealLands()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         totem.MaxHealth = 100;
         totem.Health = 30;
@@ -104,7 +104,7 @@ public sealed class TotemImmunityTests
     [InlineData(0x4000000UL)]
     public void ShamanStreamSpringAndTideFamilies_AllowForeignRegeneration(ulong flag)
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         totem.MaxHealth = 100;
         totem.Health = 30;
@@ -120,7 +120,7 @@ public sealed class TotemImmunityTests
     [Fact]
     public void ExceptionsBypassCreatureEffectImmunity_ButOtherFamiliesAndBitsDoNot()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         kit.Spells.CreatureImmunities = new MechanicProvider();
         SpellInfo spell = IncomingSpell(Effect(SpellEffectName.Dummy, 1) with { Mechanic = 1 });
@@ -135,7 +135,7 @@ public sealed class TotemImmunityTests
     [Fact]
     public void IntrinsicTotemImmunityPrecedesIgnoreFlags_AndCanBeDisabledByDeveloperOption()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
         SpellInfo spell = IncomingSpell(Effect(SpellEffectName.Heal, 10, SpellImplicitTarget.UnitFriend)) with
         {
@@ -151,9 +151,9 @@ public sealed class TotemImmunityTests
     [Fact]
     public void OrdinaryCreaturesAndNonRegenerationBuffs_RetainExistingBehavior()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player owner, Creature totem) = Summon(kit);
-        Creature ordinary = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(TotemKit.EarthEntry)!, owner.X + 3, owner.Y, owner.Z, 0);
+        Creature ordinary = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(TotemTestKit.EarthEntry)!, owner.X + 3, owner.Y, owner.Z, 0);
         SpellInfo heal = IncomingSpell(Effect(SpellEffectName.Heal, 10, SpellImplicitTarget.UnitFriend));
         SpellInfo buff = IncomingSpell(Effect(SpellEffectName.ApplyAura, 10, SpellImplicitTarget.UnitFriend, AuraType.ModStat));
 
@@ -172,11 +172,11 @@ public sealed class TotemImmunityTests
         Assert.Equal(1, ApplyRule(kit, owner, ordinary, ignoring, 1));
     }
 
-    private static (Player Owner, Creature Totem) Summon(TotemKit kit)
+    private static (Player Owner, Creature Totem) Summon(TotemTestKit kit)
     {
         kit.Spells.Units = new MapUnitResolver();
         (Player owner, _) = kit.AddPlayer(1);
-        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, TotemKit.EarthTotemSummon));
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, TotemTestKit.EarthTotemSummon));
         return (owner, Assert.IsType<Creature>(kit.Totems.GetTotem(owner, TotemSlot.Earth)));
     }
 
@@ -186,10 +186,10 @@ public sealed class TotemImmunityTests
         StartRecoveryCategory = 0, StartRecoveryTime = 0,
     };
 
-    private static void AddIncoming(TotemKit kit, SpellInfo spell)
+    private static void AddIncoming(TotemTestKit kit, SpellInfo spell)
         => kit.Spells.Store = new SpellStore([.. kit.Store.All, spell], [], []);
 
-    private static int ApplyRule(TotemKit kit, Unit caster, Unit target, SpellInfo spell, int mask)
+    private static int ApplyRule(TotemTestKit kit, Unit caster, Unit target, SpellInfo spell, int mask)
     {
         var cast = new SpellCast(spell, caster, SpellCastTargets.ForUnit(target.Guid), true, 0, 0, 0);
         var application = new SpellApplication(kit.Spells, cast, target, mask);

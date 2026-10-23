@@ -1,6 +1,7 @@
 using System.Reflection;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests.Upgrade;

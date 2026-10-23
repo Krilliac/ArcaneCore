@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Battlegrounds;
 using ArcaneCore.World.Reload;
@@ -163,13 +164,6 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         coordinator.Register(new ConfigContentReloadable(services.BuildServiceProvider()));
         _world.Start();
         return coordinator;
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 
     [Fact]

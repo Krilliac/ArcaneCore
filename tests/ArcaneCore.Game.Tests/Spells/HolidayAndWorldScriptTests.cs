@@ -118,7 +118,7 @@ public sealed class HolidayAndWorldScriptTests
     {
         using var kit = new PetTestKit([AtUnit(FaulkAI.SymbolOfLife, SpellEffectName.Dummy), Self(FaulkAI.QuestSelfHealing, SpellEffectName.Dummy)], creatureSpells: true, extraTemplates:
         [
-            CreatureTestSupport.Template(FaulkAI.HenzeEntry, b =>
+            CreatureTestKit.Template(FaulkAI.HenzeEntry, b =>
             {
                 b.MinLevel = 10;
                 b.MaxLevel = 10;

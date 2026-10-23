@@ -4,12 +4,12 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
-using ArcaneCore.Game.Tests.Memo;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Spells;
 using Microsoft.Data.Sqlite;
@@ -55,33 +55,10 @@ public sealed class MemoEquivalenceWorldTests(ITestOutputHelper output)
 {
     // ---- Spellbook: the per-character sorted snapshot ----
 
-    private sealed class NullSession(int accountId) : IPlayerSession
-    {
-        public int AccountId { get; } = accountId;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
-    }
-
     private static Player NewPlayer(int id) => new(
         new CharacterRecord { Id = id, AccountId = 1, Name = $"P{id}", Race = 1, Class = 1, Level = 1 },
         new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400),
-        new NullSession(id));
+        new NullPlayerSession(id));
 
     [Fact]
     public void SpellbookSnapshots_AreTheSortedBook_AfterEveryKindOfChange_AndEarlierSnapshotsNeverChange()

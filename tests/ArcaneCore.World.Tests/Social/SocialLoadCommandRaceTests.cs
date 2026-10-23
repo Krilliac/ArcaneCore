@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
@@ -146,7 +147,7 @@ public sealed class SocialLoadCommandRaceTests
         {
             _services = new ServiceCollection().AddSingleton<ISocialStore>(Store).BuildServiceProvider();
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
-                new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+                new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
             var directory = new CharacterDirectory();
             directory.Add(new CharacterIdentity(1, 1, "Alice", 1, 0, 1));
             directory.Add(new CharacterIdentity(2, 2, "Bob", 1, 0, 1));
@@ -216,11 +217,6 @@ public sealed class SocialLoadCommandRaceTests
         public void ProcessWorldPackets(Player player) { }
         public void Kick() => Kicked = true;
         public void OnLoggedOut() { }
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 
     private sealed class BlockingStore : ISocialStore

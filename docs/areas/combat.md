@@ -2,7 +2,7 @@
 
 Branch `feat/combat`. Code lives in `src/ArcaneCore.Game/Combat/` (rules, state and packets)
 and `src/ArcaneCore.World/Combat/` (opcode handlers). Tests are
-`tests/ArcaneCore.Game.Tests/Combat*.cs` and `tests/ArcaneCore.World.Tests/Combat*.cs`.
+`tests/ArcaneCore.Game.Tests/Combat/Combat*.cs` and `tests/ArcaneCore.World.Tests/Combat*.cs`.
 
 References used: vmangos (`src/game/Objects/Unit.cpp`, `SpellCaster.cpp`, `Player.cpp`,
 `Creature.cpp`, `Handlers/CombatHandler.cpp`, `Handlers/MiscHandler.cpp`, `QueryHandler.cpp`,

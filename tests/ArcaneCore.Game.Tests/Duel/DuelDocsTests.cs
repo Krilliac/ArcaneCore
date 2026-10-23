@@ -1,5 +1,6 @@
 using System.Reflection;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Duel;

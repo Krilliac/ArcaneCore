@@ -49,7 +49,7 @@ public sealed class QuestAcceptHookFaultTests
         ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1,
     };
 
-    private static CreatureMapSystem StartScriptSystem(QuestFlowKit kit)
+    private static CreatureMapSystem StartScriptSystem(QuestFlowTestKit kit)
     {
         // quest_template.StartScript = ScriptId: one step, emote state 13 on the source (the giver).
         var step = new RelayScriptStep(ScriptId, 0, 0, 1, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -59,7 +59,7 @@ public sealed class QuestAcceptHookFaultTests
         return system;
     }
 
-    private static void AssertAcceptContinued(QuestFlowKit kit, RecordingCaster caster, List<uint> later, string message)
+    private static void AssertAcceptContinued(QuestFlowTestKit kit, RecordingCaster caster, List<uint> later, string message)
     {
         Assert.Equal(13u, kit.Creature.GetUInt32(UpdateFields.UnitNpcEmotestate)); // StartScript ran
         Assert.Equal([Spell], caster.Casts); // SrcSpell cast
@@ -74,7 +74,7 @@ public sealed class QuestAcceptHookFaultTests
     {
         const string Message = "boom-accept-ai-77a1";
         var caster = new RecordingCaster();
-        using var kit = new QuestFlowKit([SpellAndScriptQuest()], starters: [Id], spellCaster: caster);
+        using var kit = new QuestFlowTestKit([SpellAndScriptQuest()], starters: [Id], spellCaster: caster);
         kit.Creature.AI = new ThrowingAcceptAi(kit.Creature, Message);
         CreatureMapSystem system = StartScriptSystem(kit);
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, m => ReferenceEquals(m, kit.Player.Map) ? system : null);
@@ -93,7 +93,7 @@ public sealed class QuestAcceptHookFaultTests
         var factory = new CreatureAiFactory();
         factory.RegisterNpcScript(Script, "ThrowingAccept", quest: new ThrowingAcceptScript(Message));
         var caster = new RecordingCaster();
-        using var kit = new QuestFlowKit([SpellAndScriptQuest()], starters: [Id], spellCaster: caster, scriptName: Script);
+        using var kit = new QuestFlowTestKit([SpellAndScriptQuest()], starters: [Id], spellCaster: caster, scriptName: Script);
         CreatureMapSystem system = StartScriptSystem(kit);
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, m => ReferenceEquals(m, kit.Player.Map) ? system : null, factory: () => factory);
         var later = new List<uint>();

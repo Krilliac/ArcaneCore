@@ -25,7 +25,7 @@ public sealed class PetTeachingTests
         petContent: new PetContent([], [new PetCreateSpells(BeastEntry, [LearnBite])]),
         extraTemplates:
         [
-            CreatureTestSupport.Template(BeastEntry, b =>
+            CreatureTestKit.Template(BeastEntry, b =>
             {
                 b.MinLevel = 20;
                 b.MaxLevel = 20;

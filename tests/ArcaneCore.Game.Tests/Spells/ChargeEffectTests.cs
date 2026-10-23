@@ -8,8 +8,9 @@ using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Spells;
@@ -338,15 +339,15 @@ public sealed class ChargeEffectTests
     [Fact]
     public void Charge_FromTheWater_IsNotRefused_ButTheSameNoPathOnLandIs()
     {
-        using var wet = new Locomotion.HazardKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water);
-        Player swimmer = wet.AddPlayer(1, Locomotion.HazardKit.Ground, out _);
-        Player wetTarget = wet.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
+        using var wet = new Locomotion.HazardTestKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water);
+        Player swimmer = wet.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player wetTarget = wet.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
         WorldCollision.Of(wet.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
         Assert.False(ForcedMovement.ChargeHasNoPath(swimmer, wetTarget));
 
-        using var dry = new Locomotion.HazardKit(null);
-        Player walker = dry.AddPlayer(1, Locomotion.HazardKit.Ground, out _);
-        Player dryTarget = dry.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
+        using var dry = new Locomotion.HazardTestKit(null);
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player dryTarget = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
         WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
         Assert.True(ForcedMovement.ChargeHasNoPath(walker, dryTarget));
     }
@@ -356,10 +357,10 @@ public sealed class ChargeEffectTests
     {
         // The mesh answers NoPath (a hole). In water the charge is exempt from the check AND ChargePath answers the swimming shortcut, the
         // straight line: the spline launches, the caster moves, and the melee start and the stun are not for nothing.
-        using var wet = new Locomotion.HazardKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water, ChargeSpells());
-        Player swimmer = wet.AddPlayer(1, Locomotion.HazardKit.Ground, out FakeSession swimmerSession);
-        Player prey = wet.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
-        prey.Relocate(Locomotion.HazardKit.X + 10, Locomotion.HazardKit.Y, Locomotion.HazardKit.Ground, 0, 1);
+        using var wet = new Locomotion.HazardTestKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water, ChargeSpells());
+        Player swimmer = wet.AddPlayer(1, Locomotion.HazardTestKit.Ground, out FakeSession swimmerSession);
+        Player prey = wet.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        prey.Relocate(Locomotion.HazardTestKit.X + 10, Locomotion.HazardTestKit.Y, Locomotion.HazardTestKit.Ground, 0, 1);
         wet.Kit.Spellbook.Teach(swimmer, Charge);
         WorldCollision.Of(wet.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
         float before = swimmer.X;
@@ -370,10 +371,10 @@ public sealed class ChargeEffectTests
         Assert.NotEmpty(Of(swimmerSession, WorldOpcode.SmsgMonsterMove));
         Assert.Same(prey, swimmer.Combat.Victim);
 
-        using var dry = new Locomotion.HazardKit(null, ChargeSpells());
-        Player walker = dry.AddPlayer(1, Locomotion.HazardKit.Ground, out _);
-        Player dryPrey = dry.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
-        dryPrey.Relocate(Locomotion.HazardKit.X + 10, Locomotion.HazardKit.Y, Locomotion.HazardKit.Ground, 0, 1);
+        using var dry = new Locomotion.HazardTestKit(null, ChargeSpells());
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player dryPrey = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        dryPrey.Relocate(Locomotion.HazardTestKit.X + 10, Locomotion.HazardTestKit.Y, Locomotion.HazardTestKit.Ground, 0, 1);
         dry.Kit.Spellbook.Teach(walker, Charge);
         WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
         Assert.Equal(SpellCastResult.Nopath, dry.Kit.System.HandleCastRequest(walker, Charge, SpellCastTargets.ForUnit(dryPrey.Guid)));

@@ -28,7 +28,7 @@ public sealed class AbsorbTests
 
     private static SpellInfo Shield(uint id, AuraType type, int amount, int misc, float multiple = 0f, uint charges = 0, bool onTarget = false)
     {
-        SpellInfo spell = RuleTestSupport.Grant(id, type, amount, misc);
+        SpellInfo spell = RuleTestKit.Grant(id, type, amount, misc);
         SpellEffectInfo effect = spell.Effects[0] with { MultipleValue = multiple, TargetA = onTarget ? SpellImplicitTarget.Unit : SpellImplicitTarget.UnitCaster };
         return spell with { Effects = [effect], ProcCharges = charges, RangeIndex = onTarget ? 4u : spell.RangeIndex, Range = onTarget ? new SpellRange(0, 30) : spell.Range };
     }
@@ -44,7 +44,7 @@ public sealed class AbsorbTests
         Shield(SplitFlat, AuraType.SplitDamageFlat, 40, (int)SpellSchoolMasks.All, onTarget: true),
         Shield(SplitPct, AuraType.SplitDamagePct, 50, (int)SpellSchoolMasks.All, onTarget: true),
         Shield(SchoolImmune, AuraType.SchoolImmunity, (int)SpellSchoolMasks.All, (int)SpellSchoolMasks.All),
-        RuleTestSupport.Grant(FireDot, AuraType.PeriodicDamage, 20) with
+        RuleTestKit.Grant(FireDot, AuraType.PeriodicDamage, 20) with
         {
             School = SpellSchool.Fire,
             Attributes = SpellAttributes.AuraIsDebuff,
@@ -71,7 +71,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, ShieldAll);
+        RuleTestKit.Apply(kit, victim, ShieldAll);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 60);
 
@@ -86,7 +86,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, ShieldAll);
+        RuleTestKit.Apply(kit, victim, ShieldAll);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 150);
 
@@ -101,7 +101,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, ShieldFire);
+        RuleTestKit.Apply(kit, victim, ShieldFire);
 
         Assert.Equal(40u, Hit(kit, caster, victim, FrostBolt, 40).Dealt);
         Assert.Equal(0u, Hit(kit, caster, victim, FireBolt, 40).Dealt);
@@ -113,8 +113,8 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, ShieldSmall);
-        RuleTestSupport.Apply(kit, victim, ShieldAll);
+        RuleTestKit.Apply(kit, victim, ShieldSmall);
+        RuleTestKit.Apply(kit, victim, ShieldAll);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 50);
 
@@ -128,7 +128,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, ShieldCharged);
+        RuleTestKit.Apply(kit, victim, ShieldCharged);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 10);
 
@@ -141,7 +141,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, SchoolImmune);
+        RuleTestKit.Apply(kit, victim, SchoolImmune);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 77);
 
@@ -155,8 +155,8 @@ public sealed class AbsorbTests
         (Player caster, Player victim) = Pair(kit);
         victim.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana, 100);
         victim.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana, 100);
-        RuleTestSupport.Apply(kit, victim, ManaShield);
-        RuleTestSupport.Apply(kit, victim, ShieldAll);
+        RuleTestKit.Apply(kit, victim, ManaShield);
+        RuleTestKit.Apply(kit, victim, ShieldAll);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 120);
 
@@ -174,8 +174,8 @@ public sealed class AbsorbTests
         (Player caster, Player victim) = Pair(kit);
         victim.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana, 100);
         victim.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana, 100);
-        RuleTestSupport.Apply(kit, victim, ShieldSmall);
-        RuleTestSupport.Apply(kit, victim, ManaShield);
+        RuleTestKit.Apply(kit, victim, ShieldSmall);
+        RuleTestKit.Apply(kit, victim, ManaShield);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 100);
 
@@ -194,7 +194,7 @@ public sealed class AbsorbTests
         (Player caster, Player victim) = Pair(kit);
         victim.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana, 100);
         victim.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana, 30);
-        RuleTestSupport.Apply(kit, victim, ManaShield);
+        RuleTestKit.Apply(kit, victim, ManaShield);
 
         SpellDamageResult result = Hit(kit, caster, victim, FireBolt, 40);
 
@@ -246,7 +246,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, SplitPct); // caster == target: nothing to split to
+        RuleTestKit.Apply(kit, victim, SplitPct); // caster == target: nothing to split to
 
         Assert.Equal(100u, Hit(kit, caster, victim, FireBolt, 100).Dealt);
     }
@@ -259,7 +259,7 @@ public sealed class AbsorbTests
         (Player victim, _) = kit.AddPlayer(2, 2);
         victim.Health = victim.MaxHealth = 1000;
         kit.System.Relations = new FakeRelations { Hostile = { victim.Guid } };
-        RuleTestSupport.Apply(kit, victim, ShieldAll);
+        RuleTestKit.Apply(kit, victim, ShieldAll);
         kit.System.CastSpell(caster, FireDot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
         session.Clear();
 
@@ -275,7 +275,7 @@ public sealed class AbsorbTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, ShieldSmall);
+        RuleTestKit.Apply(kit, victim, ShieldSmall);
 
         uint absorbed = kit.System.AbsorbDamage(caster, victim, SpellSchoolMasks.Of(SpellSchool.Normal), 50, spell: null);
 

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -22,30 +23,6 @@ public sealed class VisibilityPerformanceTests(ITestOutputHelper output)
     private const int MeasuredTicks = 60;
     private const uint TickMs = 100;
     private const int MovingPlayers = 2;
-
-    /// <summary>A session that drops everything (the benchmark sends hundreds of thousands of blocks).</summary>
-    private sealed class SilentSession(int accountId) : IPlayerSession
-    {
-        public int AccountId { get; } = accountId;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
-    }
 
     [Fact]
     public void Map0WithSixtySixThousandSpawns_VisibilityMatchesBruteForce_AndOnlyVisitsNearbyPlayersForMovers()
@@ -91,7 +68,7 @@ public sealed class VisibilityPerformanceTests(ITestOutputHelper output)
         var players = new Player[anchors.Length];
         for (int i = 0; i < anchors.Length; i++)
         {
-            players[i] = TestWorld.CreatePlayer((uint)(i + 1), anchors[i].X, anchors[i].Y, new SilentSession(i + 1));
+            players[i] = TestWorld.CreatePlayer((uint)(i + 1), anchors[i].X, anchors[i].Y, new NullPlayerSession(i + 1));
             world.AddPlayer(players[i]);
         }
 

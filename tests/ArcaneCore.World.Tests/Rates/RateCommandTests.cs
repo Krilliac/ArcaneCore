@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;

@@ -12,6 +12,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.MapFeed;
 using ArcaneCore.World.Tests.Creatures;
@@ -112,7 +113,7 @@ internal sealed class FeedWorld : IAsyncDisposable
     private readonly List<FeedClient> _clients = [];
     private bool _feedStopped;
 
-    private FeedWorld(WorldTestHost host, WorldMapFeed feed, WorldMapFeedOptions options, WorldControlPipeTests.CapturingLoggerProvider logs, ILoggerFactory loggers, string? terrainDirectory)
+    private FeedWorld(WorldTestHost host, WorldMapFeed feed, WorldMapFeedOptions options, CapturingLoggerProvider logs, ILoggerFactory loggers, string? terrainDirectory)
     {
         Host = host;
         Feed = feed;
@@ -128,7 +129,7 @@ internal sealed class FeedWorld : IAsyncDisposable
 
     public WorldMapFeedOptions Options { get; }
 
-    public WorldControlPipeTests.CapturingLoggerProvider Logs { get; }
+    public CapturingLoggerProvider Logs { get; }
 
     public static ulong ExtraWolfGuid(int index) => ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, ExtraSpawnBase + (uint)index).Value;
 
@@ -149,7 +150,7 @@ internal sealed class FeedWorld : IAsyncDisposable
 
         string? terrainDirectory = setup.Terrain && setup.DataRoot is null ? FeedTerrain.Write(GroundZ) : null;
         string? dataDirectory = setup.DataRoot ?? terrainDirectory;
-        var logs = new WorldControlPipeTests.CapturingLoggerProvider();
+        var logs = new CapturingLoggerProvider();
         ILoggerFactory loggers = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(logs));
 
         var options = new WorldMapFeedOptions { Enabled = true };
@@ -313,7 +314,7 @@ internal sealed class FeedWorld : IAsyncDisposable
     }
 
     /// <summary>Log lines of the feed (category <see cref="WorldMapFeed.LogCategory"/>).</summary>
-    public WorldControlPipeTests.LogEntry[] FeedLog => [.. Logs.Entries.Where(e => e.Category == WorldMapFeed.LogCategory)];
+    public CapturedCategoryLog[] FeedLog => [.. Logs.Entries.Where(e => e.Category == WorldMapFeed.LogCategory)];
 
     /// <summary>Stop the feed now, as the host does at shutdown (a test of the stop itself; disposing the world does not stop it twice).</summary>
     public async Task StopFeedAsync()

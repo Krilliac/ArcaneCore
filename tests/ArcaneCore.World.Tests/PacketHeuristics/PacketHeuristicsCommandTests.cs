@@ -30,8 +30,8 @@ public sealed class PacketHeuristicsCommandTests
     public async Task TheCommand_SwitchesTheChecksAtRuntime_AndStatusReportsEveryCheck()
     {
         await using var host = WorldTestHost.Start();
-        PacketHeuristicsFeature feature = PacketHeuristicsKit.FeatureOf(host);
-        (WorldTestClient admin, _) = await PacketHeuristicsKit.EnterClientAsync(host, "PHCMD", "Phcmdone", AccountSecurity.Administrator);
+        PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
+        (WorldTestClient admin, _) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHCMD", "Phcmdone", AccountSecurity.Administrator);
         await using (admin)
         {
             Assert.False(feature.Settings.Enabled);
@@ -73,8 +73,8 @@ public sealed class PacketHeuristicsCommandTests
     public async Task APlayerWithoutTheRank_CannotSwitchIt_AndABadArgumentGetsTheSyntax()
     {
         await using var host = WorldTestHost.Start();
-        PacketHeuristicsFeature feature = PacketHeuristicsKit.FeatureOf(host);
-        (WorldTestClient player, _) = await PacketHeuristicsKit.EnterClientAsync(host, "PHCMDP", "Phcmdplay");
+        PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
+        (WorldTestClient player, _) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHCMDP", "Phcmdplay");
         await using (player)
         {
             await player.SendChatAsync(ChatType.Say, Language.Common, ".packetcheck on");
@@ -82,7 +82,7 @@ public sealed class PacketHeuristicsCommandTests
             Assert.False(feature.Settings.Enabled);
         }
 
-        (WorldTestClient admin, _) = await PacketHeuristicsKit.EnterClientAsync(host, "PHCMDA", "Phcmdadmin", AccountSecurity.Administrator);
+        (WorldTestClient admin, _) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHCMDA", "Phcmdadmin", AccountSecurity.Administrator);
         await using (admin)
         {
             List<string> reply = await RunAsync(admin, ".packetcheck bots maybe", 1);
@@ -95,8 +95,8 @@ public sealed class PacketHeuristicsCommandTests
     public async Task TheConsoleRoute_RunsTheSameCommand()
     {
         await using var host = WorldTestHost.Start();
-        PacketHeuristicsFeature feature = PacketHeuristicsKit.FeatureOf(host);
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHCON", "Phconone", AccountSecurity.Administrator);
+        PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHCON", "Phconone", AccountSecurity.Administrator);
         await using (client)
         {
             var replies = new List<string>();

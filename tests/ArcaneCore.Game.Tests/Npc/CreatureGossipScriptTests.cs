@@ -40,14 +40,14 @@ public sealed class CreatureGossipScriptTests
     [Fact]
     public void CreatureScript_AnswersBeforeTheFallback_AndItsReplyReplacesTheMenu()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Gossip);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip);
         kit.Services.GossipScript = new FallbackScript();
         Map map = kit.World.GetMap(0);
-        var content = new CreatureContent([CreatureTestSupport.Template(NpcServiceKit.Entry)], [], [], [], []);
+        var content = new CreatureContent([CreatureTestKit.Template(NpcServiceTestKit.Entry)], [], [], [], []);
         var creatures = new CreatureMapSystem(map, content);
         map.AddUpdater(creatures);
-        creatures.RegisterEntryAi(NpcServiceKit.Entry, c => new StepAi(c));
-        Creature creature = creatures.SpawnTemporary(content.FindTemplate(NpcServiceKit.Entry)!, kit.Npc.X, kit.Npc.Y, kit.Npc.Z, 0);
+        creatures.RegisterEntryAi(NpcServiceTestKit.Entry, c => new StepAi(c));
+        Creature creature = creatures.SpawnTemporary(content.FindTemplate(NpcServiceTestKit.Entry)!, kit.Npc.X, kit.Npc.Y, kit.Npc.Z, 0);
         Assert.IsType<StepAi>(creature.AI);
         kit.Npc = kit.Npc with { Guid = creature.Guid };
 
@@ -61,7 +61,7 @@ public sealed class CreatureGossipScriptTests
     [Fact]
     public void WithoutACreatureScript_TheFallbackStillAnswers()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Gossip);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip);
         kit.Services.GossipScript = new FallbackScript();
 
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);

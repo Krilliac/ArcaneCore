@@ -414,7 +414,7 @@ public sealed class GameMovementCreaturesMapsFuzzAndExceptionTests
         Map map = world.GetMap(0);
         Map map1 = world.GetMap(1);
         Player player = TestWorld.CreatePlayer(1u, 0f, 0f, new FakeSession(1));
-        CreatureTemplate template = CreatureTestSupport.Template(entry: 100u);
+        CreatureTemplate template = CreatureTestKit.Template(entry: 100u);
 
         // Creature constructor & methods
         Assert.ThrowsAny<Exception>(() => new Creature(1u, null!, null, CreatureContent.Empty, new Random(1)));
@@ -510,7 +510,7 @@ public sealed class GameMovementCreaturesMapsFuzzAndExceptionTests
     public void Creatures_SeededFuzz_SplineEvaluationSmoothingFormationsWaypointsAndThreat(int seed)
     {
         var rng = new Random(seed);
-        CreatureTemplate template = CreatureTestSupport.Template(entry: 200u);
+        CreatureTemplate template = CreatureTestKit.Template(entry: 200u);
         var creature = new Creature((uint)(seed & 0xFFFF) + 1u, template, null, CreatureContent.Empty, new Random(seed));
 
         // 1. CreatureSpline & CreatureSplineSmoothing fuzzing
@@ -672,7 +672,7 @@ public sealed class GameMovementCreaturesMapsFuzzAndExceptionTests
         Map map0 = world.GetMap(0);
         Map map1 = world.GetMap(1);
         Player player = TestWorld.CreatePlayer(1u, 0f, 0f, new FakeSession(1));
-        CreatureTemplate cTemplate = CreatureTestSupport.Template(entry: 300u);
+        CreatureTemplate cTemplate = CreatureTestKit.Template(entry: 300u);
         var pet = new Creature(10u, cTemplate, null, CreatureContent.Empty, new Random(1), HighGuid.Pet, guidEntry: 1u);
 
         // SummonService / PetController / PetStableController / PetLoyalty / CharmService

@@ -8,6 +8,7 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Features;
@@ -31,7 +32,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task ASecondWorldOnTheSameCharactersFile_FailsToStart_BeforeAnyDatabaseRowIsTouched()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         ManagedPlayerbot bot = await SeedDesiredBotAsync(database);
 
@@ -54,7 +55,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task TheLockIsHeldAlsoWhenFencingIsOn_AndOutlivesTheHostStop_UntilTheGuardIsDisposed()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
 
         await using Kit first = Kit.Create(DatabaseOptions(database), fencing: true);
@@ -75,7 +76,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task TheProductionStartupOrder_RefusesASecondWorld_BeforeAnySchemaInitializerTouchesTheFile()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         using var first = new WorldWriterGuard(DatabaseOptions(database));
         using var second = new WorldWriterGuard(DatabaseOptions(database));
@@ -102,7 +103,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task TheWorldHostBuiltByAddWorldDaemon_ReceivesTheDatabaseOptions_AndTakesTheLock()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         Microsoft.Extensions.Configuration.IConfiguration configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -126,7 +127,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task RunToEnd_ACleanStop_ReturnsTheExitCodeOfTheRestart_AndTheContainerReleasesTheLock()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         IHost host = BuildHost(DatabaseOptions(database), lifetime => new StopsTheApplication(lifetime));
         int initializations = 0;
@@ -142,7 +143,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task RunToEnd_AFailedStart_SurfacesTheOriginalException_AndTheContainerStillReleasesTheLock()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         IHost host = BuildHost(DatabaseOptions(database), _ => new FailsToStart());
 
@@ -157,7 +158,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task RunToEnd_ALockThatCannotBeTakenOrCreated_IsOneLineAndTheRefusalCode_NotACrash()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         using var owner = new WorldWriterGuard(DatabaseOptions(database));
         owner.Acquire();
@@ -182,7 +183,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task TheProbeWorksWithTheProductionWiring_AWorldPortHeldByAnotherListener_RefusesTheStart()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         var taken = new TcpListener(IPAddress.Loopback, 0);
         taken.Start();
@@ -251,7 +252,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task APortAlreadyInUse_FailsTheStart_BeforeAnyWorldFeatureOrBotIsStarted()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         var taken = new TcpListener(IPAddress.Loopback, 0);
         taken.Start();
         try
@@ -319,21 +320,6 @@ public sealed class WorldHostSingleWriterTests
     {
         await using CharacterDbContext db = Context(database);
         return await new EfManagedPlayerbotStore(db).FindAsync(botId);
-    }
-
-    private sealed class TempDirectory : IDisposable
-    {
-        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "arcanecore-singlewriter-" + Guid.NewGuid().ToString("N"));
-
-        public TempDirectory() => Directory.CreateDirectory(Path);
-
-        public void Dispose()
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            try { Directory.Delete(Path, recursive: true); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
     }
 
     private sealed class Kit : IAsyncDisposable

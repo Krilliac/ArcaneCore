@@ -12,7 +12,7 @@ using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;

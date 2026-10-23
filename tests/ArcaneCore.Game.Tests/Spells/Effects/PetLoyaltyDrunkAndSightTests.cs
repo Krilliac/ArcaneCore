@@ -45,7 +45,7 @@ public sealed class PetLoyaltyDrunkAndSightTests
         petContent: new PetContent([], [new PetCreateSpells(BeastEntry, [LearnBite])]),
         extraTemplates:
         [
-            CreatureTestSupport.Template(BeastEntry, b =>
+            CreatureTestKit.Template(BeastEntry, b =>
             {
                 b.MinLevel = 5;
                 b.MaxLevel = 5;

@@ -96,14 +96,14 @@ public sealed class PlayerbotGuildNamesTests
     public async Task Screen_RejectsATakenName_CaseInsensitive()
     {
         // The rule is built from the live guild manager (vmangos GuildMgr::GetGuildByName compares without case).
-        await using WorldTestHost host = await SocialTestSupport.StartAsync();
+        await using WorldTestHost host = await SocialTestKit.StartAsync();
         await using WorldTestClient founder = await host.EnterWorldAsync("NAMETAKEN", "Nametaken");
-        uint leader = await SocialTestSupport.CharacterIdAsync(host, "Nametaken");
+        uint leader = await SocialTestKit.CharacterIdAsync(host, "Nametaken");
 
         await host.OnWorldAsync(() =>
         {
-            Assert.Equal(GuildAdminResult.Ok, SocialTestSupport.Social(host).Context.Guilds.Create(leader, Good, out _));
-            PlayerbotGuildNameRules rules = SocialTestSupport.NewPass(host).NameRules();
+            Assert.Equal(GuildAdminResult.Ok, SocialTestKit.Social(host).Context.Guilds.Create(leader, Good, out _));
+            PlayerbotGuildNameRules rules = SocialTestKit.NewPass(host).NameRules();
             Assert.Equal(PlayerbotGuildNameVerdict.Taken, PlayerbotGuildNames.Screen(rules, Good));
             Assert.Equal(PlayerbotGuildNameVerdict.Taken, PlayerbotGuildNames.Screen(rules, "SILVER WOLVES"));
             Assert.Equal(PlayerbotGuildNameVerdict.Taken, PlayerbotGuildNames.Screen(rules, "silver wolves"));
@@ -114,15 +114,15 @@ public sealed class PlayerbotGuildNamesTests
     [Fact]
     public async Task Screen_RejectsANameThatAPendingPetitionHolds()
     {
-        await using WorldTestHost host = await SocialTestSupport.StartAsync();
+        await using WorldTestHost host = await SocialTestKit.StartAsync();
         await using WorldTestClient owner = await host.EnterWorldAsync("NAMEPETITION", "Namepetition");
-        uint ownerId = await SocialTestSupport.CharacterIdAsync(host, "Namepetition");
+        uint ownerId = await SocialTestKit.CharacterIdAsync(host, "Namepetition");
 
         await host.OnWorldAsync(() =>
         {
-            SocialTestSupport.Social(host).Context.Petitions.Load([new PetitionData(990, (int)ownerId, 0, "Amber Foxes", [])]);
-            Assert.NotNull(SocialTestSupport.Social(host).Context.Petitions.GetByOwner(ownerId));
-            PlayerbotGuildNameRules rules = SocialTestSupport.NewPass(host).NameRules();
+            SocialTestKit.Social(host).Context.Petitions.Load([new PetitionData(990, (int)ownerId, 0, "Amber Foxes", [])]);
+            Assert.NotNull(SocialTestKit.Social(host).Context.Petitions.GetByOwner(ownerId));
+            PlayerbotGuildNameRules rules = SocialTestKit.NewPass(host).NameRules();
             Assert.Equal(PlayerbotGuildNameVerdict.PetitionHeld, PlayerbotGuildNames.Screen(rules, "Amber Foxes"));
             Assert.Equal(PlayerbotGuildNameVerdict.PetitionHeld, PlayerbotGuildNames.Screen(rules, "AMBER FOXES"));
             Assert.Equal(PlayerbotGuildNameVerdict.Ok, PlayerbotGuildNames.Screen(rules, "Amber Fox"));

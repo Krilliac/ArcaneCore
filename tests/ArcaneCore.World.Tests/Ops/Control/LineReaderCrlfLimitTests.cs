@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Ops.Control;
 using ArcaneCore.World.Ops.RemoteAdmin;
 using Microsoft.Extensions.Logging;
@@ -88,7 +89,7 @@ public sealed class LineReaderCrlfLimitTests
         }
 
         await using var host = WorldTestHost.Start();
-        var logs = new WorldControlPipeTests.CapturingLoggerProvider();
+        var logs = new CapturingLoggerProvider();
         using var loggers = LoggerFactory.Create(b => b.AddProvider(logs));
         WorldControlPipe pipe = WorldControlPipeTests.NewPipe(
             host, new WorldControlPipeOptions { Enabled = true, Name = WorldControlPipeTests.UniqueName(), MaxLineLength = 64 }, loggers);

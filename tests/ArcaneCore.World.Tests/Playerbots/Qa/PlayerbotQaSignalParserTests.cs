@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Tests.Docs;
@@ -383,6 +384,6 @@ public sealed class PlayerbotQaSignalParserTests
     {
         var character = new CharacterRecord { Id = 1, AccountId = 1, Name = "Ranked", Race = 1, Class = 1, Gender = 0, Level = 10, MapId = 0, ZoneId = 12, X = x, Y = y, Z = z };
         var appearance = new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400);
-        return new Player(character, appearance, new HonorNullSession());
+        return new Player(character, appearance, new NullPlayerSession());
     }
 }

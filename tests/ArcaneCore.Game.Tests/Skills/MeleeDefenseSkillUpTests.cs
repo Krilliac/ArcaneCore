@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Skills;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Skills;
 using Xunit;
 

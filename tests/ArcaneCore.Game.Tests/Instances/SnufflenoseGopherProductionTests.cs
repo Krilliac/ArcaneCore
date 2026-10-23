@@ -36,7 +36,7 @@ public sealed class SnufflenoseGopherProductionTests
                     Range = new SpellRange(0, 30),
                 },
             ],
-            extraTemplates: [CreatureTestSupport.Template(SnufflenoseGopherAi.Entry, b => b.Faction = 35)]);
+            extraTemplates: [CreatureTestKit.Template(SnufflenoseGopherAi.Entry, b => b.Faction = 35)]);
         kit.Map.AddUpdater(new RazorfenKraulInstance(kit.Map));
         var objects = new GameObjectMapSystem(kit.Map, new GameObjectContent(
             [GameObjectTestKit.GoTemplate(SnufflenoseGopherAi.BlueleafTubber, GameObjectType.Chest, (3, 1u))],

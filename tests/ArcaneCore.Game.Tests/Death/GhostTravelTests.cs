@@ -12,9 +12,11 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Tests.Collision;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.GridTerrain;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Death;

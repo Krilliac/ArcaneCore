@@ -9,7 +9,7 @@ namespace ArcaneCore.Data.Tests.Upgrade;
 /// <summary>
 /// The committed sql/updates files, with no database: a baseline and one file per later step for every provider, headers whose
 /// body hash matches, a frozen manifest, and the newest file plus the snapshot equal to a fresh regeneration. Regenerate with
-/// ARCANECORE_UPDATE_SQL=1 (see <see cref="SqlUpdateSupport.RegenerateCommand"/>). A missing file is a failure, never a skip.
+/// ARCANECORE_UPDATE_SQL=1 (see <see cref="SqlUpdateTestKit.RegenerateCommand"/>). A missing file is a failure, never a skip.
 /// </summary>
 public sealed class SqlUpdateGoldenTests
 {
@@ -19,8 +19,8 @@ public sealed class SqlUpdateGoldenTests
 
     private static string[] SqlFiles(string component, string folder)
     {
-        string dir = Path.Combine(SqlUpdateSupport.Root, component, folder);
-        Assert.True(Directory.Exists(dir), $"sql/updates/{component}/{folder} is missing. Generate it: {SqlUpdateSupport.RegenerateCommand}");
+        string dir = Path.Combine(SqlUpdateTestKit.Root, component, folder);
+        Assert.True(Directory.Exists(dir), $"sql/updates/{component}/{folder} is missing. Generate it: {SqlUpdateTestKit.RegenerateCommand}");
         return [.. Directory.GetFiles(dir, "*.sql").Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal)];
     }
 
@@ -28,9 +28,9 @@ public sealed class SqlUpdateGoldenTests
     [MemberData(nameof(Components))]
     public async Task EveryStepAboveTheBaseline_HasAFileForEveryProvider(string component)
     {
-        await SqlUpdateSupport.RegenerateIfRequestedAsync();
+        await SqlUpdateTestKit.RegenerateIfRequestedAsync();
         int current = UpdateComponent.For(component).Definition.CurrentVersion;
-        SchemaSnapshot snapshot = SqlUpdateSupport.ReadSnapshot(component);
+        SchemaSnapshot snapshot = SqlUpdateTestKit.ReadSnapshot(component);
         Assert.Equal(current, snapshot.Version);
         foreach (string folder in s_folders)
         {
@@ -43,14 +43,14 @@ public sealed class SqlUpdateGoldenTests
             {
                 string prefix = UpdateScriptWriter.StepPrefix(version);
                 Assert.True(files.Count(f => f.StartsWith(prefix, StringComparison.Ordinal)) == 1,
-                    $"{component}/{folder}: expected exactly one file for schema version {version} ({prefix}*.sql). Generate it: {SqlUpdateSupport.RegenerateCommand}");
+                    $"{component}/{folder}: expected exactly one file for schema version {version} ({prefix}*.sql). Generate it: {SqlUpdateTestKit.RegenerateCommand}");
             }
 
             Assert.Equal(1 + (current - baseline), files.Length);
 
             // The chain is unbroken: each file starts where the previous one ended.
             int at = 0;
-            foreach (string file in SqlUpdateSupport.OrderedFiles(component, folder == "sqlite" ? DatabaseProvider.Sqlite : folder == "mariadb" ? DatabaseProvider.MariaDb : DatabaseProvider.PostgreSql))
+            foreach (string file in SqlUpdateTestKit.OrderedFiles(component, folder == "sqlite" ? DatabaseProvider.Sqlite : folder == "mariadb" ? DatabaseProvider.MariaDb : DatabaseProvider.PostgreSql))
             {
                 UpdateFileHeader header = UpdateFileHeader.Parse(File.ReadAllText(file));
                 Assert.Equal(component, header.Component);
@@ -67,13 +67,13 @@ public sealed class SqlUpdateGoldenTests
     [MemberData(nameof(Components))]
     public async Task HeaderHashes_MatchTheBodies(string component)
     {
-        await SqlUpdateSupport.RegenerateIfRequestedAsync();
+        await SqlUpdateTestKit.RegenerateIfRequestedAsync();
         int checkedFiles = 0;
         foreach (string folder in s_folders)
         {
             foreach (string name in SqlFiles(component, folder))
             {
-                UpdateFileHeader header = UpdateFileHeader.Parse(File.ReadAllText(Path.Combine(SqlUpdateSupport.Root, component, folder, name)));
+                UpdateFileHeader header = UpdateFileHeader.Parse(File.ReadAllText(Path.Combine(SqlUpdateTestKit.Root, component, folder, name)));
                 Assert.True(header.BodySha256 == header.ActualBodySha256, $"{component}/{folder}/{name}: the header hash does not match the body (edited by hand?)");
                 checkedFiles++;
             }
@@ -86,13 +86,13 @@ public sealed class SqlUpdateGoldenTests
     [MemberData(nameof(Components))]
     public async Task ReleasedFiles_AreFrozen_ByTheSnapshotManifest(string component)
     {
-        await SqlUpdateSupport.RegenerateIfRequestedAsync();
-        SchemaSnapshot snapshot = SqlUpdateSupport.ReadSnapshot(component);
+        await SqlUpdateTestKit.RegenerateIfRequestedAsync();
+        SchemaSnapshot snapshot = SqlUpdateTestKit.ReadSnapshot(component);
         string[] onDisk = [.. s_folders.SelectMany(f => SqlFiles(component, f).Select(n => $"{f}/{n}"))];
         Assert.Equal(snapshot.Files.Keys.Order(StringComparer.Ordinal), onDisk.Order(StringComparer.Ordinal));
         foreach ((string path, string hash) in snapshot.Files)
         {
-            string actual = UpdateScriptWriter.Hash(File.ReadAllText(Path.Combine(SqlUpdateSupport.Root, component, path)));
+            string actual = UpdateScriptWriter.Hash(File.ReadAllText(Path.Combine(SqlUpdateTestKit.Root, component, path)));
             Assert.True(actual == hash, $"{component}/{path} differs from the released file (manifest {hash}, file {actual}). A released update file is never edited: ship a new step instead.");
         }
     }
@@ -101,19 +101,19 @@ public sealed class SqlUpdateGoldenTests
     [MemberData(nameof(Components))]
     public async Task NewestFileAndSnapshot_EqualAFreshRegeneration(string component)
     {
-        await SqlUpdateSupport.RegenerateIfRequestedAsync();
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot(component);
+        await SqlUpdateTestKit.RegenerateIfRequestedAsync();
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot(component);
         UpdateSet fresh = await UpdateScriptWriter.GenerateAsync(UpdateComponent.For(component), committed);
         Assert.Equal(3, fresh.Files.Count);
         foreach (UpdateFile file in fresh.Files)
         {
-            string path = Path.Combine(SqlUpdateSupport.Root, file.Path.Replace('/', Path.DirectorySeparatorChar));
-            Assert.True(File.Exists(path), $"{file.Path} does not exist. Generate it: {SqlUpdateSupport.RegenerateCommand}");
-            Assert.True(SqlUpdateSupport.ReadNormalized(path) == file.Content, $"{file.Path} is stale. Regenerate and review the diff: {SqlUpdateSupport.RegenerateCommand}");
+            string path = Path.Combine(SqlUpdateTestKit.Root, file.Path.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(path), $"{file.Path} does not exist. Generate it: {SqlUpdateTestKit.RegenerateCommand}");
+            Assert.True(SqlUpdateTestKit.ReadNormalized(path) == file.Content, $"{file.Path} is stale. Regenerate and review the diff: {SqlUpdateTestKit.RegenerateCommand}");
         }
 
-        string snapshotText = SqlUpdateSupport.ReadNormalized(Path.Combine(SqlUpdateSupport.Root, component, UpdateScriptWriter.SnapshotFileName));
-        Assert.True(snapshotText == fresh.Snapshot.ToJson(), $"{component}/{UpdateScriptWriter.SnapshotFileName} is stale. Regenerate: {SqlUpdateSupport.RegenerateCommand}");
+        string snapshotText = SqlUpdateTestKit.ReadNormalized(Path.Combine(SqlUpdateTestKit.Root, component, UpdateScriptWriter.SnapshotFileName));
+        Assert.True(snapshotText == fresh.Snapshot.ToJson(), $"{component}/{UpdateScriptWriter.SnapshotFileName} is stale. Regenerate: {SqlUpdateTestKit.RegenerateCommand}");
     }
 
     [Fact]
@@ -125,14 +125,14 @@ public sealed class SqlUpdateGoldenTests
             Component = "auth", CurrentVersion = auth.Definition.CurrentVersion, Version1Tables = auth.Definition.Version1Tables,
             Steps = auth.Definition.Steps, ReservedGapVersions = [3],
         } };
-        UpdateExportException ex = await Assert.ThrowsAsync<UpdateExportException>(() => UpdateScriptWriter.GenerateAsync(gapped, SqlUpdateSupport.ReadSnapshot("auth")));
+        UpdateExportException ex = await Assert.ThrowsAsync<UpdateExportException>(() => UpdateScriptWriter.GenerateAsync(gapped, SqlUpdateTestKit.ReadSnapshot("auth")));
         Assert.Contains("reserved", ex.Message);
     }
 
     [Fact]
     public async Task NonAdditiveModelDrift_IsRefusedLoudly()
     {
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("auth");
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot("auth");
         SchemaSnapshot retyped = Tamper(committed, tables => [.. tables.Select(t => t.Name != "account" ? t : t with
         {
             Columns = [.. t.Columns.Select(c => c.Name == "Username" ? c with { Nullable = true } : c)],
@@ -145,7 +145,7 @@ public sealed class SqlUpdateGoldenTests
     [Fact]
     public async Task ModelChangeWithoutAStep_IsRefused()
     {
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("auth");
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot("auth");
         SchemaSnapshot behind = Tamper(committed, tables => [.. tables.Select(t => t.Name != "account" ? t : t with
         {
             Columns = [.. t.Columns.Where(c => c.Name != "LastIp")],
@@ -215,8 +215,8 @@ public sealed class SqlUpdateGoldenTests
             string sqlite = Path.Combine(root, "auth", "sqlite", UpdateScriptWriter.BaselineFileName(UpdateComponent.For("auth").Definition.CurrentVersion));
             Assert.True(File.Exists(sqlite));
             Assert.Equal(
-                SqlUpdateSupport.ReadNormalized(Path.Combine(SqlUpdateSupport.Root, "auth", "sqlite", Path.GetFileName(sqlite))),
-                SqlUpdateSupport.ReadNormalized(sqlite));
+                SqlUpdateTestKit.ReadNormalized(Path.Combine(SqlUpdateTestKit.Root, "auth", "sqlite", Path.GetFileName(sqlite))),
+                SqlUpdateTestKit.ReadNormalized(sqlite));
 
             var err2 = new StringWriter();
             int usage = await DbUpgradeCli.RunAsync(["export-updates"], options, new StringWriter(), err2, CancellationToken.None);
@@ -244,7 +244,7 @@ public sealed class SqlUpdateGoldenTests
     /// </summary>
     internal static (UpdateComponent Component, SchemaSnapshot Snapshot) StandInStep()
     {
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("auth");
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot("auth");
         SchemaSnapshot without = Tamper(committed, tables => [.. tables.Select(t => t.Name != "account" ? t : t with { Indexes = [] })]);
         UpdateComponent auth = UpdateComponent.For("auth");
         return (auth with { Definition = UpgradeTestSupport.WithIndexRepairStep(AuthDbContext.Schema, "account") }, without);

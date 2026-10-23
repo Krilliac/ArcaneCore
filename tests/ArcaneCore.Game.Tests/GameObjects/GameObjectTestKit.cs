@@ -111,14 +111,14 @@ internal static class GameObjectTestKit
     public static List<(WorldOpcode Opcode, byte[] Payload)> Packets(FakeSession session, WorldOpcode opcode)
     {
         var all = new List<(WorldOpcode, byte[])>();
-        CreatureTestSupport.DrainBlocks(session, all);
+        CreatureTestKit.DrainBlocks(session, all);
         return [.. all.Where(p => p.Item1 == opcode)];
     }
 
     public static List<(WorldOpcode Opcode, byte[] Payload)> NonUpdatePackets(FakeSession session)
     {
         var all = new List<(WorldOpcode, byte[])>();
-        CreatureTestSupport.DrainBlocks(session, all);
+        CreatureTestKit.DrainBlocks(session, all);
         return all;
     }
 }

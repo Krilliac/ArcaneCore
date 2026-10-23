@@ -8,8 +8,8 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 
@@ -82,7 +82,7 @@ public sealed class CreatureOutcomeAnomalyTests
     {
         public void Dispose() => World.Dispose();
 
-        public void Run(uint ms, uint step = 100) => ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport.Run(World, ms, step);
+        public void Run(uint ms, uint step = 100) => ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit.Run(World, ms, step);
     }
 
     private static Scene Start(uint entry, Func<CreatureTemplate, CreatureTemplate>? shape = null, float z = 83.5f, byte movementType = 0,

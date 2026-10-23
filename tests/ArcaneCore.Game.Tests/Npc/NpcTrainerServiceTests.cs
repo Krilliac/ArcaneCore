@@ -4,7 +4,7 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -46,13 +46,13 @@ public sealed class NpcTrainerServiceTests
             {
                 TrainerSpells =
                 [
-                    new TrainerSpell { Entry = NpcServiceKit.Entry, Spell = TeachStrike, SpellCost = 10 },
-                    new TrainerSpell { Entry = NpcServiceKit.Entry, Spell = TeachSlam, SpellCost = 100 },
-                    new TrainerSpell { Entry = NpcServiceKit.Entry, Spell = TeachStrike2, SpellCost = 50 },
-                    new TrainerSpell { Entry = NpcServiceKit.Entry, Spell = TeachFireball, SpellCost = 10 },
+                    new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = TeachStrike, SpellCost = 10 },
+                    new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = TeachSlam, SpellCost = 100 },
+                    new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = TeachStrike2, SpellCost = 50 },
+                    new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = TeachFireball, SpellCost = 10 },
                 ],
             };
-            Kit = new NpcServiceKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
+            Kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
                 new QuestNpcDependencies(Spells: learner, Reputation: new NpcVendorServiceTests.FixedReputation(discount)),
                 npcDistance: distance);
             Kit.Npc = Kit.Npc with { TrainerType = type, TrainerClass = trainerClass };
@@ -62,7 +62,7 @@ public sealed class NpcTrainerServiceTests
 
         public SpellSystem System { get; }
 
-        public NpcServiceKit Kit { get; }
+        public NpcServiceTestKit Kit { get; }
 
         public void Dispose() => Kit.Dispose();
     }
@@ -114,7 +114,7 @@ public sealed class NpcTrainerServiceTests
     public void TrainerPrice_RoundsHalfCopperUpInListAndPurchase()
     {
         using var rig = new Rig(discount: 0.85f);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
         var rows = ReadList(kit.Single(WorldOpcode.SmsgTrainerList), out _);
         Assert.Equal(9u, rows.Single(r => r.Spell == TeachStrike).Cost);
@@ -129,7 +129,7 @@ public sealed class NpcTrainerServiceTests
     public void BuyTrainerSpell_LearnsTheTaughtSpellAndCharges()
     {
         using var rig = new Rig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 60;
         kit.Services.BuyTrainerSpell(kit.Player, kit.Npc.Guid, TeachStrike);
         Assert.True(rig.Book.HasSpell(kit.Player, 100));
@@ -153,7 +153,7 @@ public sealed class NpcTrainerServiceTests
         Assert.Equal((byte)TrainerSpellState.Gray, rows.Single(r => r.Spell == TeachStrike2).State);
     }
 
-    private static void AssertFailed(NpcServiceKit kit, uint spell, uint reason)
+    private static void AssertFailed(NpcServiceTestKit kit, uint spell, uint reason)
     {
         byte[] failed = kit.Single(WorldOpcode.SmsgTrainerBuyFailed);
         Assert.Equal(12 + 4, failed.Length);
@@ -165,7 +165,7 @@ public sealed class NpcTrainerServiceTests
     public void BuyTrainerSpell_Refusals_UseTheTrainingFailureReasons()
     {
         using var rig = new Rig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 9;
         kit.Services.BuyTrainerSpell(kit.Player, kit.Npc.Guid, TeachStrike);
         AssertFailed(kit, TeachStrike, 1); // not enough money
@@ -195,7 +195,7 @@ public sealed class NpcTrainerServiceTests
     public void ClassTrainer_RefusesOtherClasses_WithItsGossipText()
     {
         using var rig = new Rig(trainerClass: (byte)Class.Mage);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
         var sent = kit.Drain();
@@ -212,7 +212,7 @@ public sealed class NpcTrainerServiceTests
     public void TradeSkillTrainer_TeachesAnyClass()
     {
         using var rig = new Rig(type: TrainerType.TradeSkills, trainerClass: 0);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 100;
         kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
         ReadList(kit.Single(WorldOpcode.SmsgTrainerList), out uint type);
@@ -227,7 +227,7 @@ public sealed class NpcTrainerServiceTests
         // vmangos Creature::IsTrainerOf TRAINER_TYPE_TRADESKILLS: trainer_spell must be known (Creature.cpp:1471-1481).
         const uint Apprentice = 9001;
         using var rig = new Rig(type: TrainerType.TradeSkills, trainerClass: 0);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Npc = kit.Npc with { TrainerSpell = Apprentice };
         kit.Player.Money = 100;
         kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
@@ -252,7 +252,7 @@ public sealed class NpcTrainerServiceTests
     {
         // vmangos Creature::IsTrainerOf: default -> false (Creature.cpp:1482-1483).
         using var rig = new Rig(type: (TrainerType)7, trainerClass: (byte)Class.Warrior);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Player.Money = 100;
         kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
         Assert.DoesNotContain(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgTrainerList);

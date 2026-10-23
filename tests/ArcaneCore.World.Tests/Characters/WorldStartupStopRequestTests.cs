@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -21,7 +22,7 @@ public sealed class WorldStartupStopRequestTests
     [Fact]
     public async Task AStopRequestDuringTheDatabaseStep_IsLogged_TheStepFinishes_AndTheWorldDoesNotStart()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-startupstop-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         var log = new CapturingLoggerProvider();
         var started = new StartRecorder();
@@ -54,7 +55,7 @@ public sealed class WorldStartupStopRequestTests
     [Fact]
     public async Task ARefusedDatabaseStep_IsInTheLogAsWellAsOnStandardError()
     {
-        using var directory = new TempDirectory();
+        using var directory = new TempDirectory("arcanecore-startupstop-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
         using var owner = new WorldWriterGuard(DatabaseOptions(database));
         owner.Acquire();
@@ -150,21 +151,6 @@ public sealed class WorldStartupStopRequestTests
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
                 => lines.Enqueue(formatter(state, exception));
-        }
-    }
-
-    private sealed class TempDirectory : IDisposable
-    {
-        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "arcanecore-startupstop-" + Guid.NewGuid().ToString("N"));
-
-        public TempDirectory() => Directory.CreateDirectory(Path);
-
-        public void Dispose()
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            try { Directory.Delete(Path, recursive: true); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
         }
     }
 }

@@ -5,7 +5,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 using ItemsResult = ArcaneCore.Game.Items.InventoryResult;
 
 namespace ArcaneCore.Game.Tests.Npc;
@@ -16,12 +16,12 @@ public sealed class NpcVendorServiceTests
     private static NpcContent Vendor(params VendorItem[] items) => NpcContent.Empty with { VendorItems = items };
 
     private static VendorItem Row(uint item, uint maxCount = 0, uint incrTime = 0, uint slot = 0)
-        => new() { Entry = NpcServiceKit.Entry, Item = item, MaxCount = maxCount, IncrTime = incrTime, Slot = slot };
+        => new() { Entry = NpcServiceTestKit.Entry, Item = item, MaxCount = maxCount, IncrTime = incrTime, Slot = slot };
 
     [Fact]
     public void ListInventory_SendsTheVisibleRowsWithPricesAndStock()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread, slot: 1), Row(Sword, maxCount: 2, incrTime: 60, slot: 2)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread, slot: 1), Row(Sword, maxCount: 2, incrTime: 60, slot: 2)));
         kit.Services.ListInventory(kit.Player, kit.Npc.Guid);
         var r = new PacketReader(kit.Single(WorldOpcode.SmsgListInventory));
         Assert.Equal(kit.Npc.Guid.Value, r.ReadUInt64());
@@ -46,7 +46,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void BuyItem_ChargesStoresTheBuyCountAndAnswersWithTheClientSlot()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread)));
         kit.Player.Money = 100;
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Bread, 2);
         Assert.Equal(50u, kit.Player.Money);
@@ -62,7 +62,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void BuyItem_WithoutEnoughMoney_FailsAndChangesNothing()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Sword)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Sword)));
         kit.Player.Money = 999;
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Sword, 1);
         var r = new PacketReader(kit.Single(WorldOpcode.SmsgBuyFailed));
@@ -76,7 +76,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void BuyItem_OutOfRange_HostileDeadOrUnlisted_IsRefused()
     {
-        using (var far = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), npcDistance: 10))
+        using (var far = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread)), npcDistance: 10))
         {
             far.Player.Money = 1000;
             far.Services.BuyItem(far.Player, far.Npc.Guid, Bread, 1);
@@ -84,7 +84,7 @@ public sealed class NpcVendorServiceTests
             Assert.Equal(1000u, far.Player.Money);
         }
 
-        using (var hostile = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), hostile: true))
+        using (var hostile = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread)), hostile: true))
         {
             hostile.Player.Money = 1000;
             hostile.Services.BuyItem(hostile.Player, hostile.Npc.Guid, Bread, 1);
@@ -92,7 +92,7 @@ public sealed class NpcVendorServiceTests
             Assert.False(hostile.Sent(WorldOpcode.SmsgBuyItem));
         }
 
-        using (var dead = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread))))
+        using (var dead = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread))))
         {
             dead.Player.Money = 1000;
             dead.Player.Health = 0;
@@ -103,7 +103,7 @@ public sealed class NpcVendorServiceTests
             Assert.Equal(1000u, dead.Player.Money);
         }
 
-        using var unlisted = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)));
+        using var unlisted = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread)));
         unlisted.Player.Money = 1000;
         unlisted.Services.BuyItem(unlisted.Player, unlisted.Npc.Guid, Lantern, 1);
         Assert.Equal((byte)BuyResult.CantFindItem, unlisted.Single(WorldOpcode.SmsgBuyFailed)[12]);
@@ -114,7 +114,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void BuyItem_WithFullBags_SendsTheEquipErrorAndKeepsTheMoney()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Lantern)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Lantern)));
         for (int i = 0; i < 16; i++)
         {
             kit.Give(Lantern);
@@ -130,7 +130,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void LimitedStock_SellsOutThenRestocksByBuyCountAfterTheTimer()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Lantern, maxCount: 2, incrTime: 60)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Lantern, maxCount: 2, incrTime: 60)));
         kit.Player.Money = 10_000;
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Lantern, 1);
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Lantern, 1);
@@ -160,7 +160,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_PaysTheSellPriceAndKeepsTheItemInTheFirstBuybackSlot()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         kit.Session.Clear();
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
@@ -180,7 +180,7 @@ public sealed class NpcVendorServiceTests
     {
         // vmangos HandleSellItemOpcode (ItemHandler.cpp:523-537): negative template charges make the price relative to
         // the charges left; the buyback slot keeps the scaled price.
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item wand = kit.Give(Wand);
         wand.SetInt32(UpdateFields.ItemFieldSpellCharges, -4);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, wand.Guid, 0);
@@ -192,7 +192,7 @@ public sealed class NpcVendorServiceTests
     public void SellItem_LostDurability_SubtractsTheUndiscountedRepairCost()
     {
         // ItemHandler.cpp:539-575: uint32(lost × DurabilityCosts multiplier × DurabilityQuality factor) comes off the price.
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 40; // 10 lost × 3 × 1.0 = 30
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
@@ -205,7 +205,7 @@ public sealed class NpcVendorServiceTests
     {
         uint[] multipliers = new uint[RepairCostTable.MultiplierCount];
         multipliers[7] = 100;
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, repair: new RepairCostTable([(10u, multipliers)], [(6u, 1.0f)]));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, repair: new RepairCostTable([(10u, multipliers)], [(6u, 1.0f)]));
         Item sword = kit.Give(Sword);
         sword.Durability = 40; // 10 lost × 100 = 1000 > 250: "starter items can cost more to repair than vendorprice"
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
@@ -216,7 +216,7 @@ public sealed class NpcVendorServiceTests
     public void SellItem_DamagedItemWithoutARepairCostRow_IsRefused()
     {
         // ItemHandler.cpp:547-562: no DurabilityCosts/DurabilityQuality row for a damaged item answers SELL_ERR_CANT_SELL_ITEM.
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         sword.Durability = 49;
         kit.Session.Clear();
@@ -229,7 +229,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_NearTheMoneyCap_BuybackCostsWhatWasActuallyPaid()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         kit.Player.Money = QuestNpcServices.MaxMoneyAmount - 10;
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
@@ -245,7 +245,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_PartOfAStack_SplitsIt()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item bread = kit.Give(Bread, 10);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, bread.Guid, 4);
         Assert.Equal(24u, kit.Player.Money);
@@ -259,7 +259,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_Refusals_AnswerWithTheSellError()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item junk = kit.Give(Junk, 2);
         Item bread = kit.Give(Bread, 3);
         kit.Session.Clear();
@@ -283,7 +283,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void BuybackItem_ChargesTheSlotPriceAndReturnsTheSameItem()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
         kit.Player.Money = 300;
@@ -298,7 +298,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void BuybackItem_WithoutMoneyOrItemOrRange_IsRefused()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
         kit.Player.Money = 249;
@@ -324,7 +324,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void Buyback_WhenAllTwelveSlotsAreFull_ReplacesTheOldest()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         var sold = new List<Item>();
         for (int i = 0; i < 12; i++)
         {
@@ -350,7 +350,7 @@ public sealed class NpcVendorServiceTests
         // vmangos Player::AddItemToBuyBackSlot (Player.cpp:11429-11473): sales advance m_currentBuybackSlot.
         // Buying back an earlier slot does not rewind the cursor while it points at an empty slot, so the
         // next sale does not fill the hole.
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item first = kit.Give(Lantern);
         Item second = kit.Give(Lantern);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, first.Guid, 0);
@@ -378,7 +378,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_One_ChargesLostTimesMultiplierTimesQuality()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor | NpcFlags.Repair, repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor | NpcFlags.Repair, repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 40; // 10 lost × 3 × quality (2+1)×2=6 → 1.0
         kit.Player.Money = 100;
@@ -390,7 +390,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void LimitedStock_IsIndependentForTwoSpawnsOfTheSameVendorEntry()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Lantern, maxCount: 1, incrTime: 60)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Lantern, maxCount: 1, incrTime: 60)));
         kit.Player.Money = 1000;
         ObjectGuid first = kit.Npc.Guid;
         kit.Services.BuyItem(kit.Player, first, Lantern, 1);
@@ -406,7 +406,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_DiscountRoundsHalfCopperUp()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Repair,
+        using var kit = new NpcServiceTestKit(NpcFlags.Repair,
             extra: new QuestNpcDependencies(Reputation: new FixedReputation(0.75f)), repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 40; // base cost 30; discounted cost 22.5 rounds to 23
@@ -421,7 +421,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_All_RepairsWhatIsAffordableInOrder()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Repair, repair: Repair());
         Item helm = kit.Give(Helm);
         kit.Player.Inventory.AutoEquipItem(InventorySlots.Bag0, helm.Slot);
         Assert.Same(helm, kit.Player.Inventory.GetItem(InventorySlots.Bag0, 0));
@@ -438,7 +438,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_WithoutPricesFlagOrRange_RepairsNothing()
     {
-        using (var noPrices = new NpcServiceKit(NpcFlags.Repair))
+        using (var noPrices = new NpcServiceTestKit(NpcFlags.Repair))
         {
             Item sword = noPrices.Give(Sword);
             sword.Durability = 1;
@@ -448,7 +448,7 @@ public sealed class NpcVendorServiceTests
             Assert.Equal(1000u, noPrices.Player.Money);
         }
 
-        using (var notArmorer = new NpcServiceKit(NpcFlags.Vendor, repair: Repair()))
+        using (var notArmorer = new NpcServiceTestKit(NpcFlags.Vendor, repair: Repair()))
         {
             Item sword = notArmorer.Give(Sword);
             sword.Durability = 1;
@@ -457,7 +457,7 @@ public sealed class NpcVendorServiceTests
             Assert.Equal(1u, sword.Durability);
         }
 
-        using var far = new NpcServiceKit(NpcFlags.Repair, repair: Repair(), npcDistance: 12);
+        using var far = new NpcServiceTestKit(NpcFlags.Repair, repair: Repair(), npcDistance: 12);
         Item farSword = far.Give(Sword);
         farSword.Durability = 1;
         far.Player.Money = 1000;
@@ -469,7 +469,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_One_SnapshotContainsChargedMoneyAndRepairedDurability()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Repair, repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 40;
         kit.Player.Money = 100;
@@ -488,7 +488,7 @@ public sealed class NpcVendorServiceTests
     [InlineData(100u, 60u, 0u)]
     public void RepairItem_All_SnapshotIncludesEveryAffordableRepair(uint money, uint expectedMoney, uint swordDurability)
     {
-        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Repair, repair: Repair());
         Item helm = kit.Give(Helm);
         kit.Player.Inventory.AutoEquipItem(InventorySlots.Bag0, helm.Slot);
         helm.Durability = 0;
@@ -511,7 +511,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_Unaffordable_EmitsNoSnapshot()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Repair, repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 40;
         kit.Player.Money = 29;
@@ -524,7 +524,7 @@ public sealed class NpcVendorServiceTests
         Assert.Equal(40u, sword.Durability);
     }
 
-    private static List<CharacterState> CaptureRepairSnapshots(NpcServiceKit kit)
+    private static List<CharacterState> CaptureRepairSnapshots(NpcServiceTestKit kit)
     {
         var snapshots = new List<CharacterState>();
         kit.Sink.OnCharacterChanged = player => snapshots.Add(player.CreateSnapshot(kit.World.NowMs));
@@ -541,7 +541,7 @@ public sealed class NpcVendorServiceTests
     public void Discounts_RoundHalfUpAsVmangosDoes(float discount, uint expectedPrice)
     {
         var reputation = new FixedReputation(discount);
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: reputation));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: reputation));
         kit.Player.Money = 100;
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Bread, 1);
         Assert.Equal(100u - expectedPrice, kit.Player.Money);
@@ -550,7 +550,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void ListInventory_AtHonored_ShowsTheHalfUpRoundedPrice()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: new FixedReputation(0.9f)));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: new FixedReputation(0.9f)));
         kit.Services.ListInventory(kit.Player, kit.Npc.Guid);
         var r = new PacketReader(kit.Single(WorldOpcode.SmsgListInventory));
         r.ReadUInt64();
@@ -562,7 +562,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void RepairItem_AtHonored_RoundsHalfUp()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor | NpcFlags.Repair, null, new QuestNpcDependencies(Reputation: new FixedReputation(0.9f)), repair: Repair());
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor | NpcFlags.Repair, null, new QuestNpcDependencies(Reputation: new FixedReputation(0.9f)), repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 43; // 7 lost × 3 × 1.0 = 21; 21 × 0.9f = 18.9 -> 19 (Player.cpp:4955), the old floor charged 18
         kit.Player.Money = 100;

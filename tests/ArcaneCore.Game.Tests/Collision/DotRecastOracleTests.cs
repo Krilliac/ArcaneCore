@@ -4,6 +4,7 @@ using System.Text.Json;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.TestSupport;
 using DotRecast.Core;
 using DotRecast.Core.Numerics;
 using DotRecast.Detour;

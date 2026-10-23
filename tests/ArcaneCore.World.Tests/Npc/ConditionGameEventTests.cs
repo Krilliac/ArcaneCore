@@ -7,6 +7,7 @@ using ArcaneCore.Game.WorldState.Time;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.WorldState;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.WorldState;
@@ -92,30 +93,7 @@ public sealed class ConditionGameEventTests
     {
         var character = new CharacterRecord { Id = 1, AccountId = 1, Name = "Cond", Race = 1, Class = 1, Gender = 0, Level = 5, MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f };
         var appearance = new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400);
-        return new Player(character, appearance, new NullSession());
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public ArcaneCore.Kernel.Accounts.AccountSecurity Security => ArcaneCore.Kernel.Accounts.AccountSecurity.Player;
-
-        public void Send(ArcaneCore.Protocol.WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
+        return new Player(character, appearance, new NullPlayerSession());
     }
 
     [Fact]

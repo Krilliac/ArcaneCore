@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Progression;
 using Xunit;
 

@@ -5,7 +5,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 using ItemsResult = ArcaneCore.Game.Items.InventoryResult;
 
 namespace ArcaneCore.Game.Tests.Npc;
@@ -22,12 +22,12 @@ public sealed class ItemServiceResultMappingTests
         [.. Templates, new ItemTemplate { Entry = Relic, Class = 15, Name = "Relic", DisplayId = 18, Quality = 1, BuyPrice = 10, SellPrice = 2, MaxCount = 1 }], []);
 
     private static NpcContent Vendor(params uint[] items)
-        => NpcContent.Empty with { VendorItems = [.. items.Select(i => new VendorItem { Entry = NpcServiceKit.Entry, Item = i })] };
+        => NpcContent.Empty with { VendorItems = [.. items.Select(i => new VendorItem { Entry = NpcServiceTestKit.Entry, Item = i })] };
 
     [Fact]
     public void CanStoreNewItem_ReturnsTheWireValuesForOkAndInventoryFull()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         IItemService items = kit.Items;
         Assert.Equal((byte)0, (byte)items.CanStoreNewItem(kit.Player, Lantern, 1));
         for (int i = 0; i < 16; i++)
@@ -41,7 +41,7 @@ public sealed class ItemServiceResultMappingTests
     [Fact]
     public void CanStoreNewItem_ForAUniqueItemAlreadyOwned_ReturnsCantCarryMoreOfThis()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, itemStore: RelicStore);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, itemStore: RelicStore);
         IItemService items = kit.Items;
         Assert.Equal((byte)0, (byte)items.CanStoreNewItem(kit.Player, Relic, 1));
         kit.Give(Relic);
@@ -51,7 +51,7 @@ public sealed class ItemServiceResultMappingTests
     [Fact]
     public void BuyItem_OfAUniqueItemAlreadyOwned_SendsCantCarryMoreOfThisAndKeepsTheMoney()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Relic), itemStore: RelicStore);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(Relic), itemStore: RelicStore);
         kit.Give(Relic);
         kit.Player.Money = 1000;
         kit.Session.Clear();
@@ -64,7 +64,7 @@ public sealed class ItemServiceResultMappingTests
     [Fact]
     public void RestoreBuyback_ReturnsItemNotFoundForAnEmptySlotAndOkWhenItRestores()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         IItemService items = kit.Items;
         Assert.Equal((byte)23, (byte)items.RestoreBuyback(kit.Player, InventorySlots.BuybackStart));
 
@@ -79,7 +79,7 @@ public sealed class ItemServiceResultMappingTests
     [Fact]
     public void BuybackItem_WithFullBags_SendsInventoryFullAndKeepsTheMoneyAndTheBuybackSlot()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
         for (int i = 0; i < 16; i++)

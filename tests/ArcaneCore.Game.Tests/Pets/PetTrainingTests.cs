@@ -96,7 +96,7 @@ public sealed class PetTrainingTests
         ],
         petOptions: options);
 
-    private static CreatureTemplate BeastTemplate(uint entry) => CreatureTestSupport.Template(entry, b =>
+    private static CreatureTemplate BeastTemplate(uint entry) => CreatureTestKit.Template(entry, b =>
     {
         b.MinLevel = 5;
         b.MaxLevel = 5;

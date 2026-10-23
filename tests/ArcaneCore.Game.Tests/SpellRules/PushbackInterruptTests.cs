@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -61,8 +62,8 @@ public sealed class PushbackInterruptTests
         Base(FrostSilenceable, 3000, 1, SpellInterruptFlags.DamagePushback, SpellSchool.Frost),
         SpellTestKit.Spell(Kick, SpellTestKit.Effect(SpellEffectName.InterruptCast, 0, SpellImplicitTarget.UnitEnemy))
             with { Duration = new SpellDuration(4000, 0, 4000), School = SpellSchool.Normal, RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 },
-        RuleTestSupport.Grant(ResistAll, AuraType.ResistPushback, 100),
-        RuleTestSupport.Grant(ResistPartial, AuraType.ResistPushback, 35));
+        RuleTestKit.Grant(ResistAll, AuraType.ResistPushback, 100),
+        RuleTestKit.Grant(ResistPartial, AuraType.ResistPushback, 35));
 
     private static List<byte[]> Sent(FakeSession session, WorldOpcode opcode) =>
         [.. session.Sent.Where(p => p.Opcode == opcode).Select(p => p.Payload)];
@@ -158,14 +159,14 @@ public sealed class PushbackInterruptTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, Player caster, FakeSession session, SpellCast cast) = Casting(kit, Bolt);
-        RuleTestSupport.Apply(kit, caster, ResistAll);
+        RuleTestKit.Apply(kit, caster, ResistAll);
         cast.Timer = 1;
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
         Assert.Equal(1, cast.Timer);
         Assert.Empty(Sent(session, WorldOpcode.SmsgSpellDelayed));
 
         kit.System.RemoveAuras(caster, ResistAll);
-        RuleTestSupport.Apply(kit, caster, ResistPartial);
+        RuleTestKit.Apply(kit, caster, ResistPartial);
         kit.System.Random = new ScriptedRandom(34, 35);
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: false); // roll 34 < 35: resisted
         Assert.Equal(1, cast.Timer);

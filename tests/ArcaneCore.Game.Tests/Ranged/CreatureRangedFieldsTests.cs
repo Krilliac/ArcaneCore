@@ -3,7 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Ranged;
 
@@ -16,7 +16,7 @@ public sealed class CreatureRangedFieldsTests
 {
     private static Creature Spawn(CreatureTemplate template)
     {
-        CreatureSpawn spawn = CreatureTestSupport.Spawn(1, template.Entry, 10, 10);
+        CreatureSpawn spawn = CreatureTestKit.Spawn(1, template.Entry, 10, 10);
         CreatureContent content = Content([template], [spawn]);
         return new Creature(spawn.Guid, template, spawn, content, new Random(1));
     }

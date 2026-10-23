@@ -5,6 +5,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
@@ -41,9 +42,9 @@ public sealed class EnvironmentalDamageParityTests
         var kit = new SpellTestKit(
             Flames(NatureFlames, SpellSchool.Nature),
             Flames(FireFlames, SpellSchool.Fire),
-            RuleTestSupport.Grant(FireWard, AuraType.SchoolAbsorb, 30, Fire),
-            RuleTestSupport.Grant(NatureWard, AuraType.SchoolAbsorb, 30, Nature),
-            RuleTestSupport.Grant(SpellSystem.SpiritOfRedemptionSpell, AuraType.Dummy, 0));
+            RuleTestKit.Grant(FireWard, AuraType.SchoolAbsorb, 30, Fire),
+            RuleTestKit.Grant(NatureWard, AuraType.SchoolAbsorb, 30, Nature),
+            RuleTestKit.Grant(SpellSystem.SpiritOfRedemptionSpell, AuraType.Dummy, 0));
         LocomotionEnvironment.RegisterMitigation(kit.World, new SpellEnvironmentalMitigation(kit.System));
         return kit;
     }
@@ -67,8 +68,8 @@ public sealed class EnvironmentalDamageParityTests
         using SpellTestKit kit = Kit();
         (Player caster, FakeSession casterSession) = AddPlayer(kit, 1);
         (Player target, FakeSession targetSession) = AddPlayer(kit, 2, 2);
-        RuleTestSupport.Apply(kit, target, FireWard);
-        RuleTestSupport.Apply(kit, target, NatureWard);
+        RuleTestKit.Apply(kit, target, FireWard);
+        RuleTestKit.Apply(kit, target, NatureWard);
         casterSession.Clear();
         targetSession.Clear();
 
@@ -115,7 +116,7 @@ public sealed class EnvironmentalDamageParityTests
         creature.Relocate(3, 0, caster.Z, 0, 0);
         map.AddObject(creature);
         map.Combat.Track(creature);
-        RuleTestSupport.Apply(kit, creature, FireWard);
+        RuleTestKit.Apply(kit, creature, FireWard);
         casterSession.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, FireFlames, SpellCastTargets.ForUnit(creature.Guid), triggered: true));
@@ -135,7 +136,7 @@ public sealed class EnvironmentalDamageParityTests
     {
         using SpellTestKit kit = Kit();
         (Player player, FakeSession session) = AddPlayer(kit, 1);
-        RuleTestSupport.Apply(kit, player, FireWard);
+        RuleTestKit.Apply(kit, player, FireWard);
         player.UnitFlags |= UnitFlags.TaxiFlight;
         session.Clear();
 
@@ -153,7 +154,7 @@ public sealed class EnvironmentalDamageParityTests
         (Player player, FakeSession session) = AddPlayer(kit, 1);
         player.Map!.Combat.SpellMitigation = kit.System;
         player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Priest);
-        RuleTestSupport.Apply(kit, player, SpellSystem.SpiritOfRedemptionSpell);
+        RuleTestKit.Apply(kit, player, SpellSystem.SpiritOfRedemptionSpell);
         session.Clear();
 
         Assert.Equal(0u, EnvironmentalDamage.Apply(kit.World, player, EnvironmentalDamageType.Drowning, 100));

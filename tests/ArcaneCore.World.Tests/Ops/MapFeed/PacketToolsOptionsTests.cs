@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Ops.MapFeed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

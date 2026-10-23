@@ -62,8 +62,8 @@ public sealed class PetSpiritHealTests : IDisposable
                 StartRecoveryTime = 0,
             });
         _map = _spells.World.GetMap(0);
-        CreatureContent content = CreatureTestSupport.Content(
-            [.. new[] { Voidwalker, HunterPetEntry }.Select(entry => CreatureTestSupport.Template(entry, b =>
+        CreatureContent content = CreatureTestKit.Content(
+            [.. new[] { Voidwalker, HunterPetEntry }.Select(entry => CreatureTestKit.Template(entry, b =>
             {
                 b.Name = $"Pet {entry}";
                 b.Faction = 14;

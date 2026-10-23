@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -341,30 +342,7 @@ public sealed class NpcServicesFeatureTaxiTests
             var appearance = new PlayerAppearance(
                 DisplayId: 49, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,
                 MaxHealth: 60, MaxPower: 1000, StartPower: 0, NextLevelXp: 400);
-            return new Player(await RecordAsync(), appearance, new NullSession());
-        }
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
+            return new Player(await RecordAsync(), appearance, new NullPlayerSession());
         }
     }
 

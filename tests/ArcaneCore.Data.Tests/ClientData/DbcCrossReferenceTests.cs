@@ -1,6 +1,7 @@
 using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.Data.Tests.Skills;
+using ArcaneCore.TestSupport;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -15,7 +16,7 @@ public sealed class DbcCrossReferenceTests
     [Fact]
     public void DbdForeignKeys_CountDanglingIdsAndRepeatedRows()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         DbdLayout area = ClientDbcDbdLayouts.All["AreaTable.dbc"];
         int continent = area.Columns.Single(c => c.Name == "ContinentID").Offset / 4;
         uint[] first = new uint[area.Fields];
@@ -38,7 +39,7 @@ public sealed class DbcCrossReferenceTests
     [Fact]
     public void DbdArrayForeignKey_CountsRowsRatherThanRepeatedArrayElements()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         DbdLayout spell = ClientDbcDbdLayouts.All["Spell.dbc"];
         DbdField visual = spell.Columns.Single(c => c.Name == "SpellVisualID");
         Assert.Equal(2, visual.ArrayLength);
@@ -57,7 +58,7 @@ public sealed class DbcCrossReferenceTests
     [Fact]
     public void Build5875KnownClientGap_IsSeparatedFromUnexpectedDanglingIds()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         DbdLayout area = ClientDbcDbdLayouts.All["AreaTable.dbc"];
         int continent = area.Columns.Single(c => c.Name == "ContinentID").Offset / 4;
         uint[] row = new uint[area.Fields];
@@ -115,7 +116,7 @@ public sealed class DbcCrossReferenceTests
     [Fact]
     public async Task DanglingIds_AreCountedPerColumn_AndMissingTablesOrDbcsAreSkipped()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         SyntheticDbc.Write(temp.Path, "Spell.dbc", rows: 3); // ids 1, 2, 3
         SyntheticDbc.Write(temp.Path, "Map.dbc", rows: 1);   // id 1 (0 is never checked)
         string world = NewWorld(temp.Path, World);
@@ -173,7 +174,7 @@ public sealed class DbcCrossReferenceTests
     [Fact]
     public async Task ArcaneDbDbc_ReportsTheDirectoryAndTheDanglingIds_WithTheDriftExitCode()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         foreach (DbcReference reference in DbcCrossReferences.All.DistinctBy(r => r.Dbc))
         {
             SyntheticDbc.Write(temp.Path, reference.Dbc, rows: 3);
@@ -215,7 +216,7 @@ public sealed class DbcCrossReferenceTests
     [Fact]
     public async Task ArcaneDbDbc_ClientInternalDanglingIds_AreReportedButAreNotDrift()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-clientdata-");
         foreach (DbcReference reference in DbcCrossReferences.All.DistinctBy(r => r.Dbc))
         {
             SyntheticDbc.Write(temp.Path, reference.Dbc, rows: 3);

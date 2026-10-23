@@ -8,7 +8,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 

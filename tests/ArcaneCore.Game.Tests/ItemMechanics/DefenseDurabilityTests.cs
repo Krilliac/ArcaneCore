@@ -3,10 +3,12 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
 using Xunit;
+using ScriptedRandom = ArcaneCore.Game.Tests.CombatCore.ScriptedRandom;
 using static ArcaneCore.Game.Tests.ItemTestData;
 
 namespace ArcaneCore.Game.Tests.ItemMechanics;
@@ -51,7 +53,7 @@ public sealed class DefenseDurabilityTests
 
     private static Scene Create(bool parry, bool block, double parryChance, double blockChance, double absorbChance, int attackerDamage = 50)
     {
-        var kit = new SpellTestKit(RuleTestSupport.Grant(AbsorbAura, AuraType.SchoolAbsorb, 1000, (int)SpellSchoolMasks.Of(SpellSchool.Normal)));
+        var kit = new SpellTestKit(RuleTestKit.Grant(AbsorbAura, AuraType.SchoolAbsorb, 1000, (int)SpellSchoolMasks.Of(SpellSchool.Normal)));
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         MapCombat combat = attacker.Map!.Combat;
@@ -115,7 +117,7 @@ public sealed class DefenseDurabilityTests
     public void Absorb_WearsAWornArmorPiece()
     {
         using Scene s = Create(parry: false, block: false, parryChance: 100, blockChance: 100, absorbChance: 100);
-        RuleTestSupport.Apply(s.Kit, s.Victim, AbsorbAura);
+        RuleTestKit.Apply(s.Kit, s.Victim, AbsorbAura);
         MeleeDamageInfo info = Swing(s, 9999);
         Assert.Equal(MeleeHitOutcome.Normal, info.Outcome);
         Assert.True(info.Absorbed > 0);
@@ -167,7 +169,7 @@ public sealed class DefenseDurabilityTests
         using Scene s = Create(parry, block, defaults.DurabilityLossChanceParry, defaults.DurabilityLossChanceBlock, defaults.DurabilityLossChanceAbsorb);
         if (absorb)
         {
-            RuleTestSupport.Apply(s.Kit, s.Victim, AbsorbAura);
+            RuleTestKit.Apply(s.Kit, s.Victim, AbsorbAura);
         }
 
         MeleeDamageInfo info = Swing(s, absorb ? 9999 : 9000);

@@ -30,7 +30,7 @@ public sealed class CharterAntispamTests
     [Fact]
     public void BuyingACharterWithASpamName_IsRefusedAsAnInvalidName_AndCostsNothing()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         k.Guilds.Antispam = new PatternCharterAntispamFilter(["goldsellers"]);
         Player a = k.Add(1);
         string? refused = null;
@@ -51,7 +51,7 @@ public sealed class CharterAntispamTests
     [Fact]
     public void WithoutPatterns_NothingIsFiltered_AsInVmangos()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Assert.Null(k.Guilds.Antispam);
         Player a = k.Add(1);
         Assert.NotNull(k.Buy(a, "Gold Sellers"));
@@ -60,7 +60,7 @@ public sealed class CharterAntispamTests
     [Fact]
     public void GuildCreate_AndTheCharterTurnIn_RefuseASpamName()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         k.Guilds.Antispam = new PatternCharterAntispamFilter(["goldsellers"]);

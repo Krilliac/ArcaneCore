@@ -9,7 +9,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using Xunit.Abstractions;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.GridTerrain;
 

@@ -35,8 +35,8 @@ public sealed class AbsorbBreaksControlTests
 
     private static SpellTestKit Kit() => new(
         SpellTestKit.Spell(FireBolt, SpellTestKit.Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with { School = SpellSchool.Fire, DamageClass = SpellDamageClass.Magic },
-        RuleTestSupport.Grant(Shield, AuraType.SchoolAbsorb, 1000, (int)SpellSchoolMasks.All),
-        RuleTestSupport.Grant(Sleep, AuraType.ModStun, 0) with { AuraInterruptFlags = SpellAuraInterruptFlags.Damage },
+        RuleTestKit.Grant(Shield, AuraType.SchoolAbsorb, 1000, (int)SpellSchoolMasks.All),
+        RuleTestKit.Grant(Sleep, AuraType.ModStun, 0) with { AuraInterruptFlags = SpellAuraInterruptFlags.Damage },
         Cast(MountLike, SpellInterruptFlags.DamageCancels),
         Cast(PushbackBolt, SpellInterruptFlags.DamagePushback));
 
@@ -53,8 +53,8 @@ public sealed class AbsorbBreaksControlTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, Sleep);
-        RuleTestSupport.Apply(kit, victim, Shield);
+        RuleTestKit.Apply(kit, victim, Sleep);
+        RuleTestKit.Apply(kit, victim, Shield);
 
         SpellDamageResult result = kit.System.DealDirectDamage(attacker, victim, kit.Store.Get(FireBolt)!, 60, allowCrit: false);
 
@@ -68,7 +68,7 @@ public sealed class AbsorbBreaksControlTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, Sleep);
+        RuleTestKit.Apply(kit, victim, Sleep);
 
         kit.System.OnDamageTaken(victim, attacker, 0, periodic: false);
 
@@ -80,7 +80,7 @@ public sealed class AbsorbBreaksControlTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, Sleep);
+        RuleTestKit.Apply(kit, victim, Sleep);
 
         kit.System.OnDamageTaken(victim, attacker, 0, periodic: true, absorbed: 20); // Unit.cpp:741 does not look at the damage type
 
@@ -92,7 +92,7 @@ public sealed class AbsorbBreaksControlTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, Shield);
+        RuleTestKit.Apply(kit, victim, Shield);
         kit.Spellbook.Teach(victim, MountLike);
         kit.System.HandleCastRequest(victim, MountLike, SpellCastTargets.ForUnit(attacker.Guid));
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast);
@@ -120,7 +120,7 @@ public sealed class AbsorbBreaksControlTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, Shield);
+        RuleTestKit.Apply(kit, victim, Shield);
         kit.Spellbook.Teach(victim, PushbackBolt);
         kit.System.HandleCastRequest(victim, PushbackBolt, SpellCastTargets.ForUnit(attacker.Guid));
         SpellCast cast = kit.System.GetState(victim.Guid)!.CurrentCast!;

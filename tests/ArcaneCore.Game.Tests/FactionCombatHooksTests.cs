@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Npc;
 using Xunit;
 
@@ -98,7 +99,7 @@ public sealed class FactionCombatHooksTests
         foreach (uint template in new uint[] { 11, 14, 188, 35, 999, 0 })
         {
             var creature = new ArcaneCore.Game.Creatures.Creature(
-                template + 100, CreatureTestSupport.Template(template + 100, t => t.Faction = template), null,
+                template + 100, CreatureTestKit.Template(template + 100, t => t.Faction = template), null,
                 ArcaneCore.Kernel.WorldData.Creatures.CreatureContent.Empty, new Random(1));
             npc.FactionTemplate = template;
             bool hostile = hostility.IsHostile(creature, player);

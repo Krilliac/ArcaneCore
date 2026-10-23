@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.DebugTools;
 using Microsoft.Extensions.DependencyInjection;
@@ -74,7 +75,7 @@ public sealed class DebugToolsCommandTests
         var tracker = new MapCostTracker();
         Assert.Empty(tracker.Snapshot());
         // The tracker never dereferences the map beyond using it as a key, so the test needs no world.
-        using var world = new ArcaneCore.Game.Maps.WorldRuntime(new ArcaneCore.Game.Maps.WorldRuntimeOptions(), new NullSaves(), Microsoft.Extensions.Logging.Abstractions.NullLogger<ArcaneCore.Game.Maps.WorldRuntime>.Instance);
+        using var world = new ArcaneCore.Game.Maps.WorldRuntime(new ArcaneCore.Game.Maps.WorldRuntimeOptions(), new NullSaveQueue(), Microsoft.Extensions.Logging.Abstractions.NullLogger<ArcaneCore.Game.Maps.WorldRuntime>.Instance);
         ArcaneCore.Game.Maps.Map map = world.GetMap(0);
         tracker.OnMapUpdated(map, 1000);
         tracker.OnMapUpdated(map, 5000);
@@ -85,11 +86,6 @@ public sealed class DebugToolsCommandTests
         Assert.InRange(sample.MeanMicros, 1000, 5000);
         tracker.ResetMaxima();
         Assert.Equal(0, Assert.Single(tracker.Snapshot()).MaxMicros);
-    }
-
-    private sealed class NullSaves : ArcaneCore.Game.Maps.ICharacterSaveQueue
-    {
-        public void Enqueue(ArcaneCore.Kernel.Characters.CharacterState state) { }
     }
 
     private static async Task<string[]> RunAsync(WorldTestClient gm, string command)

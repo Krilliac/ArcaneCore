@@ -58,7 +58,7 @@ public sealed class HeartbeatTests
     }
 
     private HeartbeatWriter Writer(FakeSink sink, int intervalSeconds, params ILivenessSource[] sources)
-        => new(new HeartbeatOptions { WarnIntervalSeconds = 30 }, sources, WatchdogTestSupport.NewRegistry(), _log, () => new HeartbeatPlan(sink, intervalSeconds, null));
+        => new(new HeartbeatOptions { WarnIntervalSeconds = 30 }, sources, WatchdogTestKit.NewRegistry(), _log, () => new HeartbeatPlan(sink, intervalSeconds, null));
 
     [Fact]
     public void Writer_SendsReadyAtStart_BeatsEveryInterval_AndStoppingAtStop()
@@ -204,7 +204,7 @@ public sealed class HeartbeatTests
     [Fact]
     public void Writer_WithANullPlan_DoesNothingButLogIt()
     {
-        var writer = new HeartbeatWriter(new HeartbeatOptions { Mode = HeartbeatMode.None }, [], WatchdogTestSupport.NewRegistry(), _log, () => new HeartbeatPlan(NullHeartbeatSink.Instance, 0, null));
+        var writer = new HeartbeatWriter(new HeartbeatOptions { Mode = HeartbeatMode.None }, [], WatchdogTestKit.NewRegistry(), _log, () => new HeartbeatPlan(NullHeartbeatSink.Instance, 0, null));
         writer.Start();
         writer.Check(_clock.NowMicros);
         writer.Stop();
@@ -327,7 +327,7 @@ public sealed class HeartbeatTests
 
             // The beat itself does not allocate (one warm-up beat plus eight measured ones, then drained: the kernel's
             // unix datagram queue is short, and the sink is non-blocking so a full queue fails a beat instead of parking the thread).
-            Assert.Equal(0, WatchdogTestSupport.AllocatedBy(() => sink.Beat(), 8));
+            Assert.Equal(0, WatchdogTestKit.AllocatedBy(() => sink.Beat(), 8));
             for (int i = 0; i < 9; i++)
             {
                 Assert.Equal("WATCHDOG=1\n", Receive(server, buffer));

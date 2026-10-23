@@ -29,10 +29,10 @@ public sealed class PacketHeuristicsBotTests
     public async Task BotsAreExemptByDefault_AndRecordNothingEvenWhenTheFeatureIsOn()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHBOTX", "Phbotxone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHBOTX", "Phbotxone");
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host); // ExemptBots is true by default
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host); // ExemptBots is true by default
             using AnomalyCapture capture = ledger.Capture();
 
             await OnWorld(host, () =>
@@ -41,7 +41,7 @@ public sealed class PacketHeuristicsBotTests
                 {
                     Assert.False(bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
                     bot.TryManagedAction(WorldOpcode.CmsgStandstatechange, [0, 0, 0, 0, 9]);
-                    bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsKit.U32(3));
+                    bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(3));
                 }
 
                 return true;
@@ -50,7 +50,7 @@ public sealed class PacketHeuristicsBotTests
             Assert.Empty(capture.Notices);
             foreach (PacketCheck check in Enum.GetValues<PacketCheck>())
             {
-                Assert.Equal(0, PacketHeuristicsKit.Total(feature, check));
+                Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, check));
             }
 
             Assert.Null(bot.HeuristicsState);
@@ -65,10 +65,10 @@ public sealed class PacketHeuristicsBotTests
     public async Task OffByDefault_EvenWithBotsIncludedInTheOptions_NothingIsRecorded()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHBOTO", "Phbotoone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHBOTO", "Phbotoone");
         try
         {
-            PacketHeuristicsFeature feature = PacketHeuristicsKit.FeatureOf(host);
+            PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
             var ledger = new AnomalyLedger();
             feature.Ledger = ledger;
             Assert.True(feature.TryApply(new PacketHeuristicsOptions { Enabled = false, ExemptBots = false }, out _));
@@ -97,11 +97,11 @@ public sealed class PacketHeuristicsBotTests
     public async Task WithBotsIncluded_EveryCheckFiresOnTheBotPath_AndTheActionBehavesAsBefore()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHBOTA", "Phbotaone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHBOTA", "Phbotaone");
         long clock = 1_000_000;
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
             using AnomalyCapture capture = ledger.Capture();
             Player player = bot.Player!;
             byte[] teleportAck = new byte[16];
@@ -132,7 +132,7 @@ public sealed class PacketHeuristicsBotTests
                 // replay: the same emote five times in a second.
                 for (int i = 0; i < 5; i++)
                 {
-                    Assert.True(bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsKit.U32(2)));
+                    Assert.True(bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(2)));
                     Interlocked.Add(ref clock, 10);
                 }
 
@@ -140,7 +140,7 @@ public sealed class PacketHeuristicsBotTests
                 Interlocked.Add(ref clock, 5000);
                 for (uint i = 1; i <= 8; i++)
                 {
-                    Assert.True(bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsKit.U32(i)));
+                    Assert.True(bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(i)));
                     Interlocked.Add(ref clock, 10);
                 }
 
@@ -178,13 +178,13 @@ public sealed class PacketHeuristicsBotTests
     public async Task WrongState_ABotActionOutsideTheWorld_IsReported()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.NewBotAtCharacterScreenAsync(host, "PHBOTC");
+        WorldSession bot = await PacketHeuristicsTestKit.NewBotAtCharacterScreenAsync(host, "PHBOTC");
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false);
             using AnomalyCapture capture = ledger.Capture();
 
-            bool sent = await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsKit.U32(1)));
+            bool sent = await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(1)));
 
             Assert.False(sent); // refused as before
             AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
@@ -200,10 +200,10 @@ public sealed class PacketHeuristicsBotTests
     public async Task AChaosProbe_IsNeverChecked()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHBOTH", "Phbothone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHBOTH", "Phbothone");
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false);
             using AnomalyCapture capture = ledger.Capture();
             await OnWorld(host, () =>
             {
@@ -215,7 +215,7 @@ public sealed class PacketHeuristicsBotTests
             });
 
             Assert.Empty(capture.Notices);
-            Assert.Equal(0, PacketHeuristicsKit.Total(feature, PacketCheck.UnknownOpcode) + PacketHeuristicsKit.Total(feature, PacketCheck.Shape));
+            Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.UnknownOpcode) + PacketHeuristicsTestKit.Total(feature, PacketCheck.Shape));
         }
         finally
         {
@@ -227,11 +227,11 @@ public sealed class PacketHeuristicsBotTests
     public async Task TheThrottle_AHundredOccurrences_GiveOneLedgerReportAndACountOfAHundred()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHBOTT", "Phbottone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHBOTT", "Phbottone");
         long clock = 5_000_000;
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
             using AnomalyCapture capture = ledger.Capture();
 
             await OnWorld(host, () =>
@@ -271,11 +271,11 @@ public sealed class PacketHeuristicsBotTests
     public async Task Reset_ZeroesTheCounters_AndLetsASessionReportAgainAtOnce()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHBOTR", "Phbotrone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHBOTR", "Phbotrone");
         long clock = 9_000_000;
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
             using AnomalyCapture capture = ledger.Capture();
             await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
             await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgBootme, []));

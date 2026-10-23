@@ -41,7 +41,7 @@ when it inspects a prefix.
 | `src/ArcaneCore.Game/Creatures/CreatureMapSystem.cs` (now `partial`, plus the new `CreatureMapSystem.Ai.cs`) | Optional `CreatureAiServices` constructor argument. Movement goes through `MotionMaster`; multi-point splines and catch-up use `BuildPath`. Every tick runs the AI update (aggro scan, then script) before motion. Pending assists and summon despawns are processed. Spell state is dropped when a creature leaves the world. | AI host. |
 | `src/ArcaneCore.Game/Creatures/CreatureMovement.cs`, `CreatureMovePackets.cs`, `CreatureDefines.cs` | Generator interface, `ICreatureMover` growth, multi-point SMSG_MONSTER_MOVE (`BuildPath`, `PackXYZ`) and the new `CreatureOptions` entries. | Movement. |
 | `src/ArcaneCore.World/Creatures/CreatureWorldFeature.cs` | Builds `CreatureAiServices` from DI and options and passes them to every map system. | Wiring. |
-| `tests/ArcaneCore.Game.Tests/CreatureTestSupport.cs` | The template builder gains `AIName` and `Civilian`. | AI tests. |
+| `tests/ArcaneCore.Game.Tests/CreatureTestKit.cs` | The template builder gains `AIName` and `Civilian`. | AI tests. |
 | `tests/ArcaneCore.World.Tests/Creatures/CreatureWorldTests.cs` | One new test: the feature wires `AiServices` and spawned creatures get an AI. | Wiring test. |
 
 ## Seams

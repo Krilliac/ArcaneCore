@@ -42,7 +42,7 @@ public sealed class StartingQuestChainTests
             ReqCreatureOrGOCount1 = 10,
         };
 
-        using var kit = new QuestFlowKit([threatWithin, koboldCamp], starters: [783, 7], enders: [783, 7], rewardable: [783]);
+        using var kit = new QuestFlowTestKit([threatWithin, koboldCamp], starters: [783, 7], enders: [783, 7], rewardable: [783]);
 
         Assert.False(kit.Accept(7));
         Assert.Equal(QuestStatus.None, kit.State.Quests.GetStatus(7));

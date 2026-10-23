@@ -7,6 +7,7 @@ using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Casters;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Reputation;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.WorldData.GameObjects;

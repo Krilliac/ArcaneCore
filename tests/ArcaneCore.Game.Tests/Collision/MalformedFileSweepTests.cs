@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Tests.GridTerrain;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Collision;

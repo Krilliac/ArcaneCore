@@ -173,4 +173,4 @@ information line with the remaining empty count instead of the warning.
 `tests/ArcaneCore.Game.Tests/SpellMods/` (math, aura handlers, cast pipeline, amounts and combat, charges, packets, pets and totems,
 talent shapes, the talent coverage report, the TalentService end-to-end round trips), `tests/ArcaneCore.Data.Tests/SpellMods/`
 (importer and `class-masks` command), `tests/ArcaneCore.World.Tests/SpellMods/` (overlay file, feature). All are deterministic: the
-spell clock is stepped by the test and `SpellSystem.Random` is seeded. `ModTestSupport` builds synthetic talent-shaped spells.
+spell clock is stepped by the test and `SpellSystem.Random` is seeded. `ModTestKit` builds synthetic talent-shaped spells.

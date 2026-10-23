@@ -4,11 +4,12 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -20,7 +21,7 @@ public sealed class NpcBankSpiritServiceTests
     [Fact]
     public void BankerActivate_ShowsTheBankWhileTheBankerStaysInRange()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Banker);
+        using var kit = new NpcServiceTestKit(NpcFlags.Banker);
         Assert.False(kit.Player.Inventory.BankUsable);
         kit.Services.BankerActivate(kit.Player, kit.Npc.Guid);
         Assert.Equal(BitConverter.GetBytes(kit.Npc.Guid.Value), kit.Single(WorldOpcode.SmsgShowBank));
@@ -32,21 +33,21 @@ public sealed class NpcBankSpiritServiceTests
     [Fact]
     public void BankerActivate_OutOfRangeDeadOrNotABanker_ShowsNothing()
     {
-        using (var far = new NpcServiceKit(NpcFlags.Banker, npcDistance: 8))
+        using (var far = new NpcServiceTestKit(NpcFlags.Banker, npcDistance: 8))
         {
             far.Services.BankerActivate(far.Player, far.Npc.Guid);
             Assert.Empty(far.Drain());
             Assert.False(far.Player.Inventory.BankUsable);
         }
 
-        using (var dead = new NpcServiceKit(NpcFlags.Banker))
+        using (var dead = new NpcServiceTestKit(NpcFlags.Banker))
         {
             dead.Player.Health = 0;
             dead.Services.BankerActivate(dead.Player, dead.Npc.Guid);
             Assert.Empty(dead.Drain());
         }
 
-        using var vendor = new NpcServiceKit(NpcFlags.Vendor);
+        using var vendor = new NpcServiceTestKit(NpcFlags.Vendor);
         vendor.Services.BankerActivate(vendor.Player, vendor.Npc.Guid);
         Assert.Empty(vendor.Drain());
     }
@@ -57,7 +58,7 @@ public sealed class NpcBankSpiritServiceTests
     public void BuyBankSlot_ChargesTheNextSlotPriceOnceTheCountIsStored()
     {
         var stored = new List<byte>();
-        using var kit = new NpcServiceKit(NpcFlags.Banker, bankPrices: Prices(), persistBankSlots: (_, count) =>
+        using var kit = new NpcServiceTestKit(NpcFlags.Banker, bankPrices: Prices(), persistBankSlots: (_, count) =>
         {
             stored.Add(count);
             return true;
@@ -87,7 +88,7 @@ public sealed class NpcBankSpiritServiceTests
     [Fact]
     public void BuyBankSlot_WithoutPricesOrRange_BuysNothing()
     {
-        using (var unpersisted = new NpcServiceKit(NpcFlags.Banker, bankPrices: Prices()))
+        using (var unpersisted = new NpcServiceTestKit(NpcFlags.Banker, bankPrices: Prices()))
         {
             unpersisted.Player.Money = 9000;
             unpersisted.Services.BuyBankSlot(unpersisted.Player, unpersisted.Npc.Guid);
@@ -95,7 +96,7 @@ public sealed class NpcBankSpiritServiceTests
             Assert.Equal(8000u, unpersisted.Player.Money);
         }
 
-        using (var vetoed = new NpcServiceKit(NpcFlags.Banker, bankPrices: Prices(), persistBankSlots: (_, _) => false))
+        using (var vetoed = new NpcServiceTestKit(NpcFlags.Banker, bankPrices: Prices(), persistBankSlots: (_, _) => false))
         {
             vetoed.Player.Money = 9000;
             vetoed.Services.BuyBankSlot(vetoed.Player, vetoed.Npc.Guid);
@@ -103,7 +104,7 @@ public sealed class NpcBankSpiritServiceTests
             Assert.Equal(9000u, vetoed.Player.Money);
         }
 
-        using (var unpriced = new NpcServiceKit(NpcFlags.Banker, persistBankSlots: (_, _) => true))
+        using (var unpriced = new NpcServiceTestKit(NpcFlags.Banker, persistBankSlots: (_, _) => true))
         {
             unpriced.Player.Money = 9000;
             unpriced.Services.BuyBankSlot(unpriced.Player, unpriced.Npc.Guid);
@@ -112,7 +113,7 @@ public sealed class NpcBankSpiritServiceTests
             Assert.Equal(0u, BitConverter.ToUInt32(unpriced.Single(WorldOpcode.SmsgBuyBankSlotResult)));
         }
 
-        using var far = new NpcServiceKit(NpcFlags.Banker, npcDistance: 8, bankPrices: Prices(), persistBankSlots: (_, _) => true);
+        using var far = new NpcServiceTestKit(NpcFlags.Banker, npcDistance: 8, bankPrices: Prices(), persistBankSlots: (_, _) => true);
         far.Player.Money = 9000;
         far.Services.BuyBankSlot(far.Player, far.Npc.Guid);
         Assert.Equal(0, far.Player.Inventory.BankBagSlotCount);
@@ -133,7 +134,7 @@ public sealed class NpcBankSpiritServiceTests
         public SpiritRig(byte level = 15, bool withSpells = true, NpcContent? content = null)
         {
             Spells = new SpellSystem(new SpellStore([Sickness], [], []), () => 0u) { MapUpdateIntervalMs = 0 };
-            Kit = new NpcServiceKit(NpcFlags.SpiritHealer | NpcFlags.Gossip, content, new QuestNpcDependencies(
+            Kit = new NpcServiceTestKit(NpcFlags.SpiritHealer | NpcFlags.Gossip, content, new QuestNpcDependencies(
                 Resurrection: new DelegateResurrection(player => Inner!.ResurrectAtSpiritHealer(player))));
             Inner = new SpiritHealerResurrection(() => withSpells ? Spells : null, Kit.Items, Saved.Add);
             Player p = Kit.Player;
@@ -149,7 +150,7 @@ public sealed class NpcBankSpiritServiceTests
             Kit.World.RunTick(1);
         }
 
-        public NpcServiceKit Kit { get; }
+        public NpcServiceTestKit Kit { get; }
 
         public SpiritHealerResurrection? Inner { get; }
 
@@ -187,7 +188,7 @@ public sealed class NpcBankSpiritServiceTests
     public void SpiritHealerActivate_ResurrectsAGhostWithSicknessAndDurabilityLoss()
     {
         using var rig = new SpiritRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         Item helm = kit.Give(Helm);
         kit.Player.Inventory.AutoEquipItem(InventorySlots.Bag0, helm.Slot);
         rig.KillAndRelease();
@@ -218,7 +219,7 @@ public sealed class NpcBankSpiritServiceTests
     public void SpiritHealerActivate_RefusesTheLivingTheUnreleasedAndTheFar()
     {
         using var rig = new SpiritRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         kit.Services.SpiritHealerActivate(kit.Player, kit.Npc.Guid); // alive
         Assert.Empty(rig.Saved);
 
@@ -244,7 +245,7 @@ public sealed class NpcBankSpiritServiceTests
     public void GossipHello_ToASpiritGuide_SendsTheAreaSpiritHealerTime_BeforeTheMenu()
     {
         using var rig = new SpiritRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         rig.KillAndRelease();
         kit.Npc = kit.Npc with { NpcFlags = NpcFlags.SpiritGuide | NpcFlags.Gossip };
 
@@ -268,7 +269,7 @@ public sealed class NpcBankSpiritServiceTests
     public void Ghosts_CanOnlyUseSpiritServices()
     {
         using var rig = new SpiritRig();
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         rig.KillAndRelease();
         kit.Npc = kit.Npc with { NpcFlags = NpcFlags.Vendor | NpcFlags.Gossip };
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
@@ -287,7 +288,7 @@ public sealed class NpcBankSpiritServiceTests
             ],
         };
         using var rig = new SpiritRig(content: content);
-        NpcServiceKit kit = rig.Kit;
+        NpcServiceTestKit kit = rig.Kit;
         rig.KillAndRelease();
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
         Assert.True(kit.Sent(WorldOpcode.SmsgGossipMessage));
@@ -309,7 +310,7 @@ public sealed class NpcBankSpiritServiceTests
 
         NpcContent content = NpcContent.Empty with
         {
-            VendorItems = [new VendorItem { Entry = NpcServiceKit.Entry, Item = Bread }],
+            VendorItems = [new VendorItem { Entry = NpcServiceTestKit.Entry, Item = Bread }],
             GossipMenuOptions =
             [
                 Option(0, GossipOption.Vendor, NpcFlags.Vendor),
@@ -318,7 +319,7 @@ public sealed class NpcBankSpiritServiceTests
                 Option(3, GossipOption.SpiritHealer, NpcFlags.SpiritHealer), // hidden from the living
             ],
         };
-        using var kit = new NpcServiceKit(NpcFlags.Gossip | NpcFlags.Vendor | NpcFlags.Innkeeper | NpcFlags.Banker, content);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip | NpcFlags.Vendor | NpcFlags.Innkeeper | NpcFlags.Banker, content);
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
         var menu = new PacketReader(kit.Single(WorldOpcode.SmsgGossipMessage));
         menu.ReadUInt64();

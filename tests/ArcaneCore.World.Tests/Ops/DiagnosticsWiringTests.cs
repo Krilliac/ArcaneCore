@@ -2,6 +2,7 @@ using System.Text;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration.Validation;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Ops.Cli;
 using ArcaneCore.World.Ops.Diagnostics;
 using ArcaneCore.World.Ops.Validation;
@@ -59,7 +60,7 @@ public sealed class DiagnosticsWiringTests
     [Fact]
     public void WorldCrashContext_CountsTicksFromTheWorldTickHook_AndDescribesTheWorld()
     {
-        var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NoSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
         var context = new WorldCrashContext(world);
         Assert.Equal("world", context.Name);
         Assert.Equal(0, context.TickNumber);
@@ -77,12 +78,5 @@ public sealed class DiagnosticsWiringTests
         Assert.Contains("online players: 0\n", text, StringComparison.Ordinal);
         Assert.Contains("crashing thread is the world thread: yes\n", text, StringComparison.Ordinal); // no world thread is running: every thread counts as it
         Assert.Contains("uptime: ", text, StringComparison.Ordinal);
-    }
-
-    private sealed class NoSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }
