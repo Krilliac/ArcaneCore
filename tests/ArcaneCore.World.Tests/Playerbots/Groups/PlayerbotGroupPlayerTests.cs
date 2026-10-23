@@ -86,7 +86,7 @@ public sealed class PlayerbotGroupPlayerTests
 
         // The player declines: the group is given up and that player is not asked again for a while.
         await player.SendAsync(WorldOpcode.CmsgGroupDecline, []);
-        Assert.True(await world.RunUntilRealTimeAsync(() => world.Coordinator.Groups.Count == 0), await world.TraceAsync()); // the packet is read from the socket in real time
+        Assert.True(await world.RunUntilPacedAsync(() => world.Coordinator.Groups.Count == 0, 10_000), await world.TraceAsync()); // the packet is read from the socket in real time
         Assert.Contains(world.Coordinator.Events, e => e.Contains("Grouphelper did not join", StringComparison.Ordinal));
         await world.RunAsync(10_000);
         Assert.Empty(world.Coordinator.Groups);
@@ -267,7 +267,7 @@ public sealed class PlayerbotGroupPlayerTests
         var bot = await world.AddBotAsync("Askerrival", Human, Warrior, 1, []);
         await GivePlayerQuestAsync(world, "Grouprival", DuoQuest);
         await rival.SendChatAsync(ChatType.Whisper, Language.Common, "ai on", bot.Name);
-        Assert.True(await world.RunUntilRealTimeAsync(() => world.Bots.Chat!.Safety.Player("Grouprival")?.AiReplies == true), "the player opted in to AI chat");
+        Assert.True(await world.RunUntilPacedAsync(() => world.Bots.Chat!.Safety.Player("Grouprival")?.AiReplies == true, 10_000), $"the player opted in to AI chat{Environment.NewLine}{world.Bots.Chat!.Status()}{Environment.NewLine}{await world.TraceAsync()}");
 
         await RememberPlayerAsync(world, bot, "Grouprival", -80);
         Assert.True(await world.OnWorldAsync(() =>
@@ -322,7 +322,7 @@ public sealed class PlayerbotGroupPlayerTests
             other.Relocate(self.X + 2f, self.Y, self.Z, 0, world.World.Host.World.NowMs);
         }
 
-        Assert.True(await world.RunUntilRealTimeAsync(() => { Stick(); return dispatched.Contains(WorldOpcode.CmsgMessagechat); }), "the bot answers the whisper");
+        Assert.True(await world.RunUntilPacedAsync(() => { Stick(); return dispatched.Contains(WorldOpcode.CmsgMessagechat); }, 60_000), $"the bot answers the whisper{Environment.NewLine}{world.Bots.Chat!.Status()}{Environment.NewLine}{await world.TraceAsync()}");
         await world.RunUntilAsync(3_000, () => { Stick(); return dispatched.Contains(WorldOpcode.CmsgInitiateTrade); }); // the trade follows the answer
         Assert.Equal(opened, dispatched.Contains(WorldOpcode.CmsgInitiateTrade));
         Assert.Equal(opened, (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgTradeStatus));
@@ -417,7 +417,7 @@ public sealed class PlayerbotGroupPlayerTests
         ObjectGuid guid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer("Groupcool")!.Guid);
         Assert.True(await world.OnWorldAsync(() => world.Coordinator.InvitedRecently(guid)));
         await player.SendAsync(WorldOpcode.CmsgGroupDecline, []);
-        Assert.True(await world.RunUntilRealTimeAsync(() => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(await world.RunUntilPacedAsync(() => world.Coordinator.Groups.Count == 0, 10_000), await world.TraceAsync());
 
         // The decline's own hold (ten minutes) ends first; the thirty minute cooldown still keeps the bots from asking again.
         await world.RunAsync(11 * 60_000);
@@ -471,7 +471,7 @@ public sealed class PlayerbotGroupPlayerTests
 
         ArcaneCore.World.Playerbots.Chat.PlayerbotChat chat = world.Bots.Chat!;
         // The answer comes from a chat worker thread in real time, so the wait is bounded by real time, not by game ticks.
-        Assert.True(await world.RunUntilRealTimeAsync(() => chat.Status().Answered >= 1), $"{chat.Status()}{Environment.NewLine}{await world.TraceAsync()}");
+        Assert.True(await world.RunUntilPacedAsync(() => chat.Status().Answered >= 1, 10_000), $"{chat.Status()}{Environment.NewLine}{await world.TraceAsync()}");
         await world.RunAsync(500); // the reply is said on the world thread at the next tick
         ChatMessage reply;
         do reply = await player.ReadChatAsync(); while (reply.Type != ChatType.Whisper || reply.Sender != bot);

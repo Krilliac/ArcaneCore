@@ -189,21 +189,26 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     public Task<bool> RunUntilAsync(uint maxMs, Func<bool> condition) => World.Host.World.AdvanceClockUntilAsync(maxMs, condition);
 
     /// <summary>
-    /// Run the world (manual clock) in slices of 500 ms of game time until <paramref name="condition"/> holds after a tick, giving up after
-    /// <paramref name="timeout"/> (default 30 s) of <b>real</b> time. For a condition that waits on work outside the world thread (a chat worker,
-    /// a packet still on its way over the socket): the manual clock runs 200 ticks in well under a second, so a game-time budget alone can run out
-    /// before that work has had a chance on a loaded machine. The pause between slices lets it run.
+    /// Run the world (manual clock) one 50 ms tick at a time until <paramref name="condition"/> holds after a tick, pacing game time against real
+    /// time: game time never runs ahead of the wall clock, as in production. For a condition that waits on work outside the world thread (a chat
+    /// worker, a packet still on its way over the socket), which a free-running manual clock would outrun on a loaded machine. Returns false once
+    /// <paramref name="gameBudgetMs"/> of game time is used (keep the site's own budget, so game-time timeouts such as an invitation's still mean
+    /// what they did) or <paramref name="realTimeout"/> (default 60 s) of real time has passed.
     /// </summary>
-    public async Task<bool> RunUntilRealTimeAsync(Func<bool> condition, TimeSpan? timeout = null)
+    public async Task<bool> RunUntilPacedAsync(Func<bool> condition, int gameBudgetMs, TimeSpan? realTimeout = null)
     {
-        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
-        TimeSpan limit = timeout ?? TimeSpan.FromSeconds(30);
-        while (true)
+        const int StepMs = 50;
+        System.Diagnostics.Stopwatch wall = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan limit = realTimeout ?? TimeSpan.FromSeconds(60);
+        for (int advanced = 0; advanced < gameBudgetMs; advanced += StepMs)
         {
-            if (await RunUntilAsync(500, condition)) return true;
-            if (clock.Elapsed >= limit) return false;
-            await Task.Delay(20);
+            if (await RunUntilAsync(StepMs, condition)) return true;
+            if (wall.Elapsed >= limit) return false;
+            long ahead = advanced + StepMs - wall.ElapsedMilliseconds;
+            if (ahead > 0) await Task.Delay((int)ahead);
         }
+
+        return false;
     }
 
     public Task RunAsync(uint ms) => World.Host.World.AdvanceClockAsync(ms);
