@@ -66,7 +66,7 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
         }
     }
 
-    private void Add(Map map)
+    internal void Add(Map map)
     {
         lock (_gate)
         {
@@ -75,11 +75,13 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
         }
     }
 
-    private void Remove(Map map)
+    internal void Remove(Map map)
     {
         lock (_gate)
         {
-            if (_maps.Remove(map)) map.Combat.UnitKilled -= _onKilled;
+            if (!_maps.Remove(map)) return;
+            try { map.Combat.UnitKilled -= _onKilled; }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.pvp-feed", ex); } // the unload goes on
         }
     }
 

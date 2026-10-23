@@ -1,20 +1,21 @@
-using System.Reflection;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
-using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
-using ArcaneCore.World.Features;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
@@ -176,6 +177,8 @@ public sealed class PlayerbotPvpKillRoutingWorldTests
         ObjectGuid killerGuid = await world.Host.PlayerStateAsync("Inkiller", p => p.Guid);
         PlayerbotPvpKillFeed feed = feature.PvpKills!;
         int before = feed.MapCount;
+        // A controlled bot is not thought for: it cannot release its spirit or repop between the kill and the move back.
+        Assert.True(await feature.SetControllerAsync(victim, new IdleController()));
         Map? instance = null;
         Map? home = null;
 
@@ -220,30 +223,78 @@ public sealed class PlayerbotPvpKillRoutingWorldTests
     public async Task AMapHandedToTheFeedTwice_IsHeardOnce_AndADisposedFeedHearsNothing()
     {
         // A map can reach the feed twice (it is created while the feed enumerates the world's maps): the second Add must not subscribe again.
-        // The paths that do it race the constructor, so the test hands the map over twice itself, through the private Add.
+        // The paths that do it race the constructor, so the test hands the map over twice itself.
         await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
         await using WorldTestClient killer = await world.AddPlayerAsync("Dupkiller", SocialTestKit.Orc);
         await using WorldTestClient victim = await world.AddPlayerAsync("Dupvictim");
         await using WorldTestClient later = await world.AddPlayerAsync("Duplater");
-        MethodInfo add = typeof(PlayerbotPvpKillFeed).GetMethod("Add", BindingFlags.Instance | BindingFlags.NonPublic)!;
         int heard = 0;
 
         PlayerbotPvpKillFeed feed = await world.Host.OnWorldAsync(() => new PlayerbotPvpKillFeed(world.Host.World, (_, _) => heard++));
-        await world.Host.OnWorldAsync(() =>
+        try
         {
-            Map map = Online(world, "Dupvictim").Map!;
-            add.Invoke(feed, [map]);
-            add.Invoke(feed, [map]);
-            Slay(Online(world, "Dupkiller"), Online(world, "Dupvictim"));
-        });
-        Assert.Equal(1, heard);
+            await world.Host.OnWorldAsync(() =>
+            {
+                Map map = Online(world, "Dupvictim").Map!;
+                feed.Add(map);
+                feed.Add(map);
+                Slay(Online(world, "Dupkiller"), Online(world, "Dupvictim"));
+                Assert.False(Online(world, "Dupvictim").IsAlive);
+            });
+            Assert.Equal(1, heard);
+        }
+        finally
+        {
+            feed.Dispose();
+        }
 
-        feed.Dispose();
         feed.Dispose(); // harmless
         Assert.Equal(0, feed.MapCount);
-        await world.Host.OnWorldAsync(() => Slay(Online(world, "Dupkiller"), Online(world, "Duplater")));
+        await world.Host.OnWorldAsync(() =>
+        {
+            Slay(Online(world, "Dupkiller"), Online(world, "Duplater"));
+            Assert.False(Online(world, "Duplater").IsAlive); // the kill happened, and nobody heard it
+        });
         Assert.Equal(1, heard);
     }
+
+    [Fact]
+    public async Task AFeedDisposedWithAMapThatCannotBeDetached_StillDetachesTheOthers_AndRecordsTheFault()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        await using WorldTestClient killer = await world.AddPlayerAsync("Faultkiller", SocialTestKit.Orc);
+        await using WorldTestClient victim = await world.AddPlayerAsync("Faultvictim");
+        int heard = 0;
+        long faultsBefore = FaultsAt("playerbot.pvp-feed");
+
+        PlayerbotPvpKillFeed feed = await world.Host.OnWorldAsync(() =>
+        {
+            var feed = new PlayerbotPvpKillFeed(world.Host.World, (_, _) => heard++);
+            // A map built without DefaultMapUpdaters has no MapCombat: Combat throws. Put it first in the feed's set (a HashSet hands a freed slot
+            // to the next map added: the world's maps leave in reverse order, so the first slot is the last freed), so Dispose meets it before
+            // the real maps and a Dispose that stops at the first failure leaves them subscribed.
+            var broken = new Map(0, 9_999, world.Host.World, NullLogger.Instance);
+            Map[] real = [.. world.Host.World.Maps];
+            for (int i = real.Length - 1; i >= 0; i--) feed.Remove(real[i]);
+            Assert.ThrowsAny<Exception>(() => feed.Add(broken));
+            foreach (Map map in real) feed.Add(map);
+            Assert.Equal(real.Length + 1, feed.MapCount);
+            return feed;
+        });
+
+        feed.Dispose();
+
+        Assert.Equal(0, feed.MapCount);
+        Assert.True(FaultsAt("playerbot.pvp-feed") > faultsBefore, "the failed detach is in the fault ledger");
+        await world.Host.OnWorldAsync(() =>
+        {
+            Slay(Online(world, "Faultkiller"), Online(world, "Faultvictim"));
+            Assert.False(Online(world, "Faultvictim").IsAlive);
+        });
+        Assert.Equal(0, heard); // the real maps were detached although the broken one failed first
+    }
+
+    private static long FaultsAt(string site) => FaultLedger.Shared.Snapshot().Where(f => f.Site == site).Sum(f => f.Count);
 
     [Fact]
     public async Task AKillAfterTheFeatureWasDetachedAndAttachedAgain_IsRecordedOnce()
