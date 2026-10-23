@@ -83,6 +83,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private PlayerbotBattlegroundCoordinator? _battlegrounds;
     private bool _battlegroundsResolved;
     private static readonly Comparison<ActiveBot> CompareByBotId = static (a, b) => a.Record.BotId.CompareTo(b.Record.BotId);
+    private static readonly Func<ActiveBot, Guid> BotIdOf = static bot => bot.Record.BotId;
     private static readonly ManagedActionBudget EmptyActionBudget = new(0);
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly ConcurrentDictionary<Guid, ActiveBot> _active = new();
@@ -2307,6 +2308,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, starvedBoundMs);
         _lastBudgetMs = budgetMs;
         uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
+        _rotation.Track(bots, BotIdOf);
         var laneDriver = new TickLaneDriver(this, bots, now, combatIntervalMs, reserve, combatBudget, thinkStarted);
         _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare, ref laneDriver,
             PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, starvedBoundMs));
