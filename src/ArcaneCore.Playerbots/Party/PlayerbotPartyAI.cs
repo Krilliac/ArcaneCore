@@ -713,6 +713,7 @@ internal sealed class PlayerbotPartyAI
     {
         if (_chat is { } chat && SpeechOf(reply) is { } speech)
             Chat.PlayerbotSpeechDelivery.Deliver(chat, _botId, _session, player, speech);
+        else _chat?.Lost(reply.Speech); // nothing to say (the provider chain chose silence): a line waiting to be said is let go
         if (reply.Action != Chat.BotChatAction.None) PerformAction(player, reply);
 
         if (reply.Command is { } command)

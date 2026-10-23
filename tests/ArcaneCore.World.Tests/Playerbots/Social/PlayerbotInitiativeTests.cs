@@ -402,6 +402,79 @@ public sealed class PlayerbotInitiativeTests
         _ = bot;
     }
 
+    /// <summary>A world whose chat client is the one handed in (so a test can hold the model's answer back), and whose model may phrase an announcement (the opt-in is not required).</summary>
+    private static Task<SocialWorld> StartWithClientAsync(FakeBotChatClient client, Action<PlayerbotOptions>? configure = null) => SocialWorld.StartAsync(options =>
+    {
+        options.Chat.Enabled = true;
+        options.Chat.PerPlayerCooldownSeconds = 0;
+        options.Chat.Safety.RequireOptIn = false;
+        ChatSamples.NoScreeningDeadline(options.Chat);
+        options.Chat.Providers = [new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.Anthropic, ApiKeyEnvironmentVariable = "TEST_INITIATIVE_KEY" }];
+        configure?.Invoke(options);
+    }, frozen: true, services: services =>
+    {
+        services.AddSingleton<IBotChatClient>(client);
+        services.AddSingleton<IBotChatEnvironment>(new FakeBotChatEnvironment(new() { ["TEST_INITIATIVE_KEY"] = "sk-initiative" }));
+    });
+
+    [Fact]
+    public async Task ASlowModel_KeepsTheSecondBotFromOpeningToThePlayer_UntilTheFirstLineIsSaid()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new FakeBotChatClient();
+        client.Default = async (_, _) =>
+        {
+            await gate.Task;
+            return new BotChatResult(BotChatOutcome.Ok, "{\"reply\": \"hello there\", \"intent\": \"none\"}", 100, 10);
+        };
+        await using SocialWorld world = await StartWithClientAsync(client);
+        await using WorldTestClient player = await world.AddPlayerAsync("Initslowp");
+        Pair first = await FamiliarAsync(world, "Initslowa", "Initslowp");
+        long now = GreetingTime(first);
+        await PassAsync(world, now);
+        Assert.Equal(1, Lane(world).Openings);
+        await HelpTestKit.UntilAsync(() => !client.Calls.IsEmpty, "the model to be asked for the first line");
+
+        // The model has not answered: a second bot that has just met the player rolls yes far past the short bot gap, and must still not open to them.
+        Pair second = await FamiliarAsync(world, "Initslowb", "Initslowp");
+        long later = GreetingTime(second, now + PlayerbotInitiativeLane.BotGapMs + 5_000);
+        await PassAsync(world, later);
+        Assert.Equal(1, Lane(world).Openings); // the second bot opened while the first line was still being phrased
+
+        gate.SetResult();
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).PendingCount).Result == 1, "the first greeting to be said");
+        await PassAsync(world, later + 60_000);
+        Assert.Equal(1, Lane(world).Openings); // said: the player's cooldown holds
+    }
+
+    [Fact]
+    public async Task ALineTheSpeechPathRefusesAfterTheModelAnswered_ReleasesThePlayer_SoAnotherBotMayOpen()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new FakeBotChatClient();
+        client.Default = async (_, _) =>
+        {
+            await gate.Task;
+            return new BotChatResult(BotChatOutcome.Ok, "{\"reply\": \"hello there\", \"intent\": \"none\"}", 100, 10);
+        };
+        await using SocialWorld world = await StartWithClientAsync(client, options => options.Chat.Speech.LocalLinesPerMinute = 0);
+        await using WorldTestClient player = await world.AddPlayerAsync("Initfailp");
+        Pair first = await FamiliarAsync(world, "Initfaila", "Initfailp");
+        long now = GreetingTime(first);
+        await PassAsync(world, now);
+        Assert.Equal(1, Lane(world).Openings);
+        await HelpTestKit.UntilAsync(() => !client.Calls.IsEmpty, "the model to be asked for the first line");
+        Assert.True(Lane(world).NextOpeningFor(first.PlayerGuid) > now + PlayerbotInitiativeLane.BotGapMs, "held while the line is phrased");
+
+        // The model answers and the limiter refuses the line: nothing will be said, so the hold is given back at once.
+        gate.SetResult();
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).NextOpeningFor(first.PlayerGuid)).Result <= now, "the refused line to release the player");
+        Pair second = await FamiliarAsync(world, "Initfailb", "Initfailp");
+        long later = GreetingTime(second, now + PlayerbotInitiativeLane.BotGapMs + 5_000);
+        await PassAsync(world, later);
+        Assert.Equal(2, Lane(world).Openings);
+    }
+
     [Fact]
     public async Task AnOpeningThatWasNeverSaid_IsNotWaitedFor_AndNeverPenalisesOrBacksOffThePlayer()
     {

@@ -141,6 +141,9 @@ internal sealed class PlayerbotInitiativeLane
     internal const int SightLimit = 48;
     internal const float TalkYards = 20f;
     internal const long BotGapMs = 20_000;
+
+    /// <summary>The longest a queued real-player opening holds that player for other bots when neither <see cref="BotSpeech.Sent"/> nor <see cref="BotSpeech.Dropped"/> is ever called (a safety net only: the chat worker takes up to the provider timeout per provider, with a queue in front of it).</summary>
+    internal const long UnsaidHoldMs = 10 * 60_000;
     internal const long PairGapMs = 6 * 3_600_000L;
     internal const long ReplyWaitMs = 120_000;
     internal const long ArrivalGapMs = 10 * 60_000L;
@@ -490,12 +493,14 @@ internal sealed class PlayerbotInitiativeLane
         ObjectGuid botGuid = self.Guid, otherGuid = other.Guid;
         PlayerbotSocialBot? answerer = null;
         if (!real && kind == PlayerbotOpeningKind.Objective && entry != 0 && pass.ByCharacter.TryGetValue(otherGuid.Low, out PlayerbotSocialBot? found) && found.Brain is not null) answerer = found;
+        long held = 0, heldFrom = 0;
+        Action? dropped = null;
         Action sent = () =>
         {
             long said = _passNowMs;
             if (real)
             {
-                if (pass.World.FindOnlinePlayer(otherGuid) is null) return; // gone since the line was queued
+                if (pass.World.FindOnlinePlayer(otherGuid) is null) { dropped!(); return; } // gone since the line was queued: nobody to wait for
                 _playerNext[otherGuid.Value] = said + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, _ignored.GetValueOrDefault(otherGuid.Value));
                 Expect(recorder, botId, botGuid, otherGuid, kind, entry, quest, said);
             }
@@ -511,7 +516,12 @@ internal sealed class PlayerbotInitiativeLane
                 }
             }
         };
-        var speech = new BotSpeech(channel, string.Empty, "initiative-" + kind.ToString().ToLowerInvariant(), BotSpeechPriority.Low) { TargetGuid = other.Guid, Sent = sent };
+        dropped = () =>
+        {
+            // Give the player back unless something else has set their next opening since (the hold is still exactly what this opening put there).
+            if (real && _playerNext.TryGetValue(otherGuid.Value, out long current) && current == held) _playerNext[otherGuid.Value] = heldFrom;
+        };
+        var speech = new BotSpeech(channel, string.Empty, "initiative-" + kind.ToString().ToLowerInvariant(), BotSpeechPriority.Low) { TargetGuid = other.Guid, Sent = sent, Dropped = dropped };
         var ask = new BotChatAsk(bot.Id, self.Guid, bot.Party.PersonaFor(self), other.Guid, other.Name, ChatType.Say, string.Empty, FromMaster: false, InviteAllowed: false,
             SenderAccountId: 0, Topic: new BotChatTopic(key, instruction, values, string.Empty), Speech: speech);
         if (chat.TryAnnounce(ask) != BotChatAdmission.Queued) return false;
@@ -520,8 +530,13 @@ internal sealed class PlayerbotInitiativeLane
         ByKind[(int)kind]++;
         if (channel == BotSpeechChannel.Whisper) Whispers++;
         _pairNext[(bot.Id, other.Guid.Value, kind)] = pass.NowMs + PairGapMs;
-        // Until the line is said (or found never to be) a second bot must not pile on: a short hold; saying the line sets the real cooldown.
-        if (real) _playerNext[other.Guid.Value] = Math.Max(_playerNext.GetValueOrDefault(other.Guid.Value), pass.NowMs + BotGapMs);
+        // Until the line is said or found never to be (BotSpeech.Dropped), a second bot must not pile on: the player is held. Saying the line sets the real cooldown; a dropped line gives the hold back.
+        if (real)
+        {
+            heldFrom = _playerNext.GetValueOrDefault(other.Guid.Value);
+            held = Math.Max(heldFrom, pass.NowMs + UnsaidHoldMs);
+            _playerNext[other.Guid.Value] = held;
+        }
 
         return true;
     }

@@ -2808,7 +2808,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         foreach (Chat.BotChatReply reply in chat.DrainReplies())
         {
             if (!_active.TryGetValue(reply.BotId, out ActiveBot? active) || active.Paused || active.Controller is not null
-                || active.Session.State != SessionState.InWorld || active.Session.Player is not { } speaker) continue;
+                || active.Session.State != SessionState.InWorld || active.Session.Player is not { } speaker)
+            {
+                chat.Lost(reply.Speech); // the bot is gone: the line will never be said
+                continue;
+            }
+
             try { active.Party.DeliverChat(speaker, reply); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
