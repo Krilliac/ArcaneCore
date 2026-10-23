@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
@@ -214,6 +213,8 @@ public sealed class PlayerbotBrainStallTests
 
     /// <summary>
     /// Bot QA #787: the overrun report named only the last phase of the think. It now also names the slowest phase so far.
+    /// The probe runs on a manual clock: on the wall clock a preemption of more than 20 ms between the "explore advance" mark and the
+    /// report made the open phase the slowest.
     /// </summary>
     [Fact]
     public async Task AnOverrunThink_NamesItsSlowestPhase_NotOnlyItsLast()
@@ -226,12 +227,13 @@ public sealed class PlayerbotBrainStallTests
             using AnomalyCapture cap = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(session.Player!));
             await host.OnWorldAsync(() =>
             {
-                var probe = new PlayerbotThinkProbe();
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                var probe = new PlayerbotThinkProbe(clock);
                 probe.Begin();
                 try
                 {
                     PlayerbotThinkProbe.Phase("grind destinations");
-                    Spin(20);
+                    clock.Advance(20);
                     PlayerbotThinkProbe.Phase("explore advance");
                     brain.CheckThinkOverran(session.Player!, 900, 2000);
                 }
@@ -242,12 +244,6 @@ public sealed class PlayerbotBrainStallTests
             Assert.Contains("slowest phase grind destinations", cap.Describe());
         }
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
-    }
-
-    private static void Spin(double ms)
-    {
-        long until = Stopwatch.GetTimestamp() + (long)(ms * Stopwatch.Frequency / 1000);
-        while (Stopwatch.GetTimestamp() < until) Thread.SpinWait(50);
     }
 
     /// <summary>
