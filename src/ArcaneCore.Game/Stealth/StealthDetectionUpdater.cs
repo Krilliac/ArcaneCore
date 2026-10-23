@@ -46,7 +46,7 @@ public sealed class StealthDetectionUpdater : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("map-stealth", ex);
+            FaultLedger.Shared.Record("map.stealth", ex);
         }
 
         if (_registry.Count == 0)
@@ -100,7 +100,7 @@ public sealed class StealthDetectionUpdater : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-stealth", ex);
+                FaultLedger.Shared.Record("map.stealth", ex);
             }
         }
     }
@@ -137,7 +137,7 @@ public sealed class StealthDetectionUpdater : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-stealth", ex);
+                FaultLedger.Shared.Record("map.stealth", ex);
             }
         }
     }

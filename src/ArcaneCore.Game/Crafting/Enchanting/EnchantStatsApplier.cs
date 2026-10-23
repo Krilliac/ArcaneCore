@@ -58,7 +58,7 @@ public sealed class EnchantUpdater : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-enchant-stats", ex);
+                FaultLedger.Shared.Record("map.enchant-stats", ex);
             }
         }
     }

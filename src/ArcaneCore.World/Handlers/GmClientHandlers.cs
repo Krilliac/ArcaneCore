@@ -126,7 +126,7 @@ public sealed class GmClientHandlers : IOpcodeHandlerGroup
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("handlers.whois", ex);
+                FaultLedger.Shared.Record("handler.whois", ex);
                 session.Logger.LogError(ex, "[{Endpoint}] whois '{Name}' failed", session.RemoteEndpoint, name);
             }
         });
@@ -188,7 +188,7 @@ public sealed class GmClientHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("handlers.teleport-to-unit", ex);
+            FaultLedger.Shared.Record("handler.teleport-to-unit", ex);
             session.Logger.LogError(ex, "[{Endpoint}] teleport-to-unit '{Name}' by {Player} failed", session.RemoteEndpoint, name, player.Name);
         }
     }

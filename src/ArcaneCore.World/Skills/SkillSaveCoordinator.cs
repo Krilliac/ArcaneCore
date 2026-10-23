@@ -131,7 +131,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             {
                 FaultLedger.Shared.Record("persist.skills", ex);
                 AnomalyLedger.Shared.Report("persist", "save-failed", "SkillSaveCoordinator", $"phase=dispose error={ex.GetType().Name}", AnomalySeverity.Warning);
-                _logger.LogFault("writequeue-skill-dispose", ex, "Skill save coordinator failed while draining on dispose");
+                _logger.LogFault("writequeue.skill-dispose", ex, "Skill save coordinator failed while draining on dispose");
             }
         }
 
@@ -174,7 +174,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         }
         catch (TimeoutException ex)
         {
-            FaultLedger.Shared.Record("writequeue-skill-flush-timeout", ex);
+            FaultLedger.Shared.Record("writequeue.skill-flush-timeout", ex);
             lock (_waitersLock)
             {
                 _waiters.RemoveAll(w => ReferenceEquals(w.Done, done));
@@ -217,7 +217,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-skill-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.skill-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -318,7 +318,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
             catch (CharacterOwnershipRejectedException ex)
             {
-                FaultLedger.Shared.Record("writequeue-skill-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.skill-ownership", ex);
                 lock (_waitersLock)
                 {
                     _lastFailure[characterId] = ex;
@@ -342,7 +342,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
                 _lastFailure[characterId] = ex;
             }
 
-            _logger.LogFault("writequeue-skill", ex, "Saving the skills of character {Character} failed; it is retried", characterId);
+            _logger.LogFault("writequeue.skill", ex, "Saving the skills of character {Character} failed; it is retried", characterId);
             return false;
         }
     }

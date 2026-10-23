@@ -472,7 +472,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             {
                 FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass faulted: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
-                logger.LogFault("playerbot-population", ex, "Playerbot population pass faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                logger.LogFault("playerbot.population", ex, "Playerbot population pass faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
             }
         });
     }
@@ -680,7 +680,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             {
                 FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"graveyard terrain lookup or creature survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
-                logger.LogFault("playerbot-population", ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
+                logger.LogFault("playerbot.population", ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
                 result = null;
             }
 
@@ -938,7 +938,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         {
             FaultLedger.Shared.Record("playerbot.population", ex);
             AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
-            logger.LogFault("playerbot-population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            logger.LogFault("playerbot.population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
             _lastError = $"{ex.GetType().Name}: {ex.Message}";
             decision = decision with { State = "error", Reason = "the pass failed: " + ex.Message };
             if (input.RushCount > 0) _rush.Report(input.RushCount, 0, null, _lastError, ClockMs);
@@ -1898,7 +1898,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             Backoff(botId);
             FaultLedger.Shared.Record("playerbot.population", ex);
             AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}: {ex.Message})", origin: _world?.Identity);
-            logger.LogFault("playerbot-population", ex, "Playerbot population: deleting the unplaced bot {Bot} failed", name ?? botId.ToString());
+            logger.LogFault("playerbot.population", ex, "Playerbot population: deleting the unplaced bot {Bot} failed", name ?? botId.ToString());
             Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
             return false;
         }

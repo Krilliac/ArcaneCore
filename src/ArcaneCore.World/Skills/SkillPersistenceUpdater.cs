@@ -30,7 +30,7 @@ internal sealed class SkillPersistenceUpdater(SkillsFeature feature, uint interv
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("skills.persistence-updater", ex);
+                FaultLedger.Shared.Record("skill.persistence-updater", ex);
             }
         }
     }

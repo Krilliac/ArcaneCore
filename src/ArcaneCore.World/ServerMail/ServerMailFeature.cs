@@ -80,7 +80,7 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
         }
         catch (Exception ex)
         {
-            FaultLedger.Shared.Record("server-mail.load-templates", ex);
+            FaultLedger.Shared.Record("mail.load-templates", ex);
             AnomalyLedger.Shared.Report("mail", "delivery-failed", "server-mail-templates", $"load error={ex.GetType().Name}: {ex.Message}");
             logger.LogError(ex, "could not load the server mail templates");
         }
@@ -130,7 +130,7 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
             }
             catch (Exception ex)
             {
-                FaultLedger.Shared.Record("server-mail.read-sent", ex);
+                FaultLedger.Shared.Record("mail.read-sent", ex);
                 AnomalyLedger.Shared.Report("mail", "delivery-failed", $"character {id}", $"read-sent error={ex.GetType().Name}: {ex.Message}");
                 logger.LogError(ex, "could not read the server mail sent to character {Id}", id);
             }

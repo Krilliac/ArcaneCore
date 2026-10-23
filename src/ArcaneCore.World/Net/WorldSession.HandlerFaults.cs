@@ -50,7 +50,7 @@ public sealed partial class WorldSession
         if (_kick.IsCancellationRequested)
         {
             // Dropped anyway: nobody will read a reply. Still a fault worth counting.
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("packet-handling", exception);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("packet.handling", exception);
             return false;
         }
 

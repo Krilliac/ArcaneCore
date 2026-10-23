@@ -671,7 +671,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-social-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.social-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -754,7 +754,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             {
                 // Store failures are handled where they happen; this is a queue bug and must not kill the consumer.
                 FaultLedger.Shared.Record("persist.social-write-queue", ex);
-                _logger.LogFault("writequeue-social-consume", ex, "social write queue item {Kind} failed unexpectedly", work.Kind);
+                _logger.LogFault("writequeue.social-consume", ex, "social write queue item {Kind} failed unexpectedly", work.Kind);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -794,7 +794,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
                 newEpisode = !_retained.ContainsKey(work.Key); // a retained write failing again is the same episode
                 SetRetained(work.Key, value, failure);
-                _logger.LogFault("writequeue-social", failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
+                _logger.LogFault("writequeue.social", failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
             }
 
             ReleaseKey(work.Key);
@@ -997,19 +997,19 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             }
             catch (CharacterOwnershipRejectedException ex)
             {
-                FaultLedger.Shared.Record("writequeue-social-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.social-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 return ex;
             }
             catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("writequeue-social-attempt", ex);
+                FaultLedger.Shared.Record("writequeue.social-attempt", ex);
                 _logger.LogWarning(ex, "social write for {Kind} {Id} failed (attempt {Attempt}); retrying", key.Kind, key.A, attempt);
                 await Task.Delay(Math.Max(0, _options.RetryDelayMs) * attempt).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("writequeue-social-failure", ex);
+                FaultLedger.Shared.Record("writequeue.social-failure", ex);
                 return ex;
             }
         }

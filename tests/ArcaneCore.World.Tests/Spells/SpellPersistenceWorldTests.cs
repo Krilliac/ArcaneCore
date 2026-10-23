@@ -160,7 +160,7 @@ public sealed class SpellPersistenceWorldTests
             .AddScoped<ICharacterSpellStateStore>(_ => store)
             .BuildServiceProvider();
         var persistence = new SpellStatePersistence(provider.GetRequiredService<IServiceScopeFactory>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
-        long faultsBefore = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue-spellstate")?.Count ?? 0;
+        long faultsBefore = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue.spellstate")?.Count ?? 0;
 
         for (int id = 1; id <= 8; id++)
         {
@@ -169,7 +169,7 @@ public sealed class SpellPersistenceWorldTests
 
         await persistence.FlushAsync();
 
-        long faultsAfter = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue-spellstate")?.Count ?? 0;
+        long faultsAfter = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue.spellstate")?.Count ?? 0;
         Assert.Equal(faultsBefore, faultsAfter);
         for (int id = 1; id <= 8; id++)
         {

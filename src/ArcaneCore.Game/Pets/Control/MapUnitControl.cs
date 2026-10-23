@@ -105,7 +105,7 @@ public sealed class MapUnitControl : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-unit-control", ex);
+                FaultLedger.Shared.Record("map.unit-control", ex);
             }
         }
     }
@@ -182,7 +182,7 @@ public sealed class MapUnitControl : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-unit-control", ex);
+                FaultLedger.Shared.Record("map.unit-control", ex);
             }
         }
     }
@@ -364,7 +364,7 @@ public sealed class MapUnitControl : IMapUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-unit-control", ex);
+                FaultLedger.Shared.Record("map.unit-control", ex);
             }
         }
 

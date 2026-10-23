@@ -245,7 +245,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot-chat", error);
+            FaultLedger.Shared.Record("playerbot.chat", error);
             _logger.LogWarning(error, "Bot chat: a speech-settled handler failed");
         }
     }
@@ -300,7 +300,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot-chat", error);
+            FaultLedger.Shared.Record("playerbot.chat", error);
             _logger.LogWarning(error, "Bot chat: a heard-line handler failed");
             return false;
         }
@@ -600,7 +600,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                     {
                         // Never the key: the request carries it, the exception text does not.
                         Interlocked.Increment(ref _dropped);
-                        FaultLedger.Shared.Record("playerbot-chat", error);
+                        FaultLedger.Shared.Record("playerbot.chat", error);
                         _logger.LogWarning("Bot chat: a reply failed ({Error})", error.GetType().Name); // type only, by design: the exception text may carry the request URL or key
                     }
                 }
@@ -612,7 +612,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot-chat", ex);
+            FaultLedger.Shared.Record("playerbot.chat", ex);
             _logger.LogWarning("Bot chat worker faulted ({Error})", ex.GetType().Name);
         }
     }
@@ -1120,7 +1120,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot-chat", ex);
+            FaultLedger.Shared.Record("playerbot.chat", ex);
             _logger.LogWarning("Bot chat worker faulted during dispose ({Error})", ex.GetType().Name);
         }
     }

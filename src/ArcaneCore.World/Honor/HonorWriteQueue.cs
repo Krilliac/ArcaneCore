@@ -392,7 +392,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-honor-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.honor-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -472,7 +472,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             {
                 // ExecuteAsync reports store failures itself; this is a queue bug and must not kill the consumer.
                 FaultLedger.Shared.Record("persist.honor-write-queue", ex);
-                logger.LogFault("writequeue-honor-consume", ex, "honor write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue.honor-consume", ex, "honor write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -587,11 +587,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                         AnomalySeverity.Error);
                 }
 
-                logger.LogFault("writequeue-honor", ex, "honor write for character {Character} failed; retained for retry", characterId);
+                logger.LogFault("writequeue.honor", ex, "honor write for character {Character} failed; retained for retry", characterId);
             }
             else
             {
-                FaultLedger.Shared.Record("writequeue-honor-sweep", ex);
+                FaultLedger.Shared.Record("writequeue.honor-sweep", ex);
             }
 
             return ex;
@@ -677,13 +677,13 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             }
             catch (CharacterOwnershipRejectedException ex)
             {
-                FaultLedger.Shared.Record("writequeue-honor-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.honor-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 throw;
             }
             catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("writequeue-honor-attempt", ex);
+                FaultLedger.Shared.Record("writequeue.honor-attempt", ex);
                 logger.LogWarning(ex, "honor write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }

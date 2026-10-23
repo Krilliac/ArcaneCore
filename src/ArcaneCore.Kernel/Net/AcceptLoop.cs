@@ -46,7 +46,7 @@ public static class AcceptLoop
                 }
 
                 suppressed++;
-                Diagnostics.FaultLedger.Shared.Record("net-accept-loop", ex);
+                Diagnostics.FaultLedger.Shared.Record("net.accept-loop", ex);
                 if (DateTime.UtcNow - lastLog >= LogInterval)
                 {
                     logger.LogWarning(ex, "accept failed ({Count} error(s) since the last report); retrying", suppressed);
@@ -74,7 +74,7 @@ public static class AcceptLoop
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // a failure admitting one client must never end the loop
-                Diagnostics.FaultLedger.Shared.Record("net-accept-admit", ex);
+                Diagnostics.FaultLedger.Shared.Record("net.accept-admit", ex);
                 logger.LogError(ex, "failed to start a connection handler");
                 client.Dispose();
             }

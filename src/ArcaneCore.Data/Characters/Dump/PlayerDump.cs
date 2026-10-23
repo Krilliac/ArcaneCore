@@ -456,7 +456,7 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
         catch (DbUpdateException ex)
         {
             // Duplicate rows in a hand-edited dump: the whole load goes, as vmangos ROLLBACK(DUMP_FILE_BROKEN).
-            FaultLedger.Shared.Record("data-playerdump.save", ex);
+            FaultLedger.Shared.Record("data.playerdump-save", ex);
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
             db.ChangeTracker.Clear();
             return new(DumpReturn.FileBroken);
@@ -499,7 +499,7 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
             catch (JsonException ex)
             {
                 // a row that does not parse makes the dump invalid; the caller returns the failure to the operator
-                FaultLedger.Shared.Record("data-playerdump.parse", ex);
+                FaultLedger.Shared.Record("data.playerdump-parse", ex);
                 return false;
             }
 

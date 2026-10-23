@@ -295,7 +295,7 @@ public sealed class TalentPersistence : IAsyncDisposable
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-talent-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.talent-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -342,7 +342,7 @@ public sealed class TalentPersistence : IAsyncDisposable
                 }
                 catch (CharacterOwnershipRejectedException ex)
                 {
-                    FaultLedger.Shared.Record("writequeue-talent-ownership", ex);
+                    FaultLedger.Shared.Record("writequeue.talent-ownership", ex);
                     if (pending.CharacterId is { } characterId)
                     {
                         lock (_lock)
@@ -369,7 +369,7 @@ public sealed class TalentPersistence : IAsyncDisposable
                 pending.Done?.TrySetException(ex);
                 FaultLedger.Shared.Record("talents.persistence", ex);
                 AnomalyLedger.Shared.Report("talents", "persistence-failed", pending.CharacterId is { } cid ? $"character {cid}" : "talent-write", $"error={ex.GetType().Name}: {ex.Message}");
-                _logger.LogFault("writequeue-talent", ex, "Saving talent state failed");
+                _logger.LogFault("writequeue.talent", ex, "Saving talent state failed");
             }
         }
     }

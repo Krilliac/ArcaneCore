@@ -195,7 +195,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("handlers.char-create", ex);
+            FaultLedger.Shared.Record("handler.char-create", ex);
             AnomalyLedger.Shared.Report("character", "create-failed", $"character {name}", $"error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not create character '{Name}'", session.RemoteEndpoint, name);
             SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateError);
@@ -217,7 +217,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("handlers.char-create-setup", ex);
+            FaultLedger.Shared.Record("handler.char-create-setup", ex);
             AnomalyLedger.Shared.Report("character", "create-failed", $"character {name} (id {created.Id})", $"setup error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to set up new character '{Name}'", session.RemoteEndpoint, name);
             if (options.Mode == CharacterCreationMode.Retail)
@@ -245,7 +245,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("handlers.char-create-rollback", ex);
+            FaultLedger.Shared.Record("handler.char-create-rollback", ex);
             AnomalyLedger.Shared.Report("character", "create-failed", $"character {created.Name} (id {created.Id})", $"rollback error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not roll back character {Id}", session.RemoteEndpoint, created.Id);
         }
@@ -347,7 +347,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("handlers.char-login-drain", ex);
+            FaultLedger.Shared.Record("handler.char-login-drain", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character?.Id ?? (int)guid.Low}", $"drain error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] character saves did not drain before login", session.RemoteEndpoint);
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
@@ -395,7 +395,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("handlers.char-login-load", ex);
+            FaultLedger.Shared.Record("handler.char-login-load", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"load error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to load character {Guid}", session.RemoteEndpoint, character.Id);
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
@@ -444,7 +444,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
         catch (Exception ex)
         {
-            FaultLedger.Shared.Record("handlers.char-login-map", ex);
+            FaultLedger.Shared.Record("handler.char-login-map", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"resolve map error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not resolve the login map of '{Name}'", session.RemoteEndpoint, player.Name);
             session.Kick("login map could not be resolved");
@@ -461,7 +461,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         catch (Exception ex)
         {
             // Never leave a session "in world" with a player that is not in a map.
-            FaultLedger.Shared.Record("handlers.char-login-add", ex);
+            FaultLedger.Shared.Record("handler.char-login-add", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"add to world error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not add '{Name}' to the world", session.RemoteEndpoint, player.Name);
             session.Kick();

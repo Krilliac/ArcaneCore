@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Commands;
 /// <summary>
 /// <c>.server faults [top N | show ID | summary | reset]</c>: the server's fault ledger (<see cref="FaultLedger"/>) from the console or in game. Without arguments it
 /// lists the ten most frequent faults; <c>show</c> prints one fault in full (its id may be abbreviated to four or more characters); <c>summary</c> (or <c>subsystems</c>)
-/// groups recorded faults by subsystem prefix and lists invariant failures; <c>reset</c> clears the ledger and needs Administrator authority (the console has it).
+/// groups recorded faults by canonical subsystem, then faults and anomalies together per subsystem (<see cref="DiagnosticOverview"/>), and lists invariant failures; <c>reset</c> clears the ledger and needs Administrator authority (the console has it).
 /// Viewing needs GameMaster. The ledger is process-wide state read under its own locks, so the command is safe from the world thread. Output is plain lines (no colour
 /// codes) so the console and the chat show it alike. Also formats the one-line summary <c>.server info</c> adds (<see cref="InfoLine"/>).
 /// </summary>
@@ -46,7 +46,7 @@ public sealed class ServerFaultCommands : ICommandExtension
         => RunAnomalies(args, context.Security, AnomalyLedger.Shared, DateTimeOffset.UtcNow, context.Reply);
 
     /// <summary>The command's logic apart from the invoker (tests call it with their own ledger). False means a usage error.</summary>
-    internal static bool Run(string args, AccountSecurity security, FaultLedger ledger, DateTimeOffset now, Action<string> reply)
+    internal static bool Run(string args, AccountSecurity security, FaultLedger ledger, DateTimeOffset now, Action<string> reply, AnomalyLedger? anomalies = null)
     {
         string[] words = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length == 0)
@@ -78,7 +78,7 @@ public sealed class ServerFaultCommands : ICommandExtension
                     return false;
                 }
 
-                Summary(ledger, now, reply);
+                Summary(ledger, anomalies ?? AnomalyLedger.Shared, now, reply);
                 return true;
 
             case "reset":
@@ -198,19 +198,10 @@ public sealed class ServerFaultCommands : ICommandExtension
         return CutText(joined, max);
     }
 
-    /// <summary>Extracts the subsystem prefix of a fault site (the prefix before the first <c>'-'</c> or <c>':'</c>, or the whole site when neither separator is present).</summary>
-    internal static string SubsystemOf(string site)
-    {
-        if (string.IsNullOrWhiteSpace(site))
-        {
-            return "unknown";
-        }
+    /// <summary>The canonical subsystem of a fault site (<see cref="DiagnosticSubsystem.OfSite"/>), the same grouping the ledger's own summary uses.</summary>
+    internal static string SubsystemOf(string site) => DiagnosticSubsystem.OfSite(site);
 
-        int sep = site.IndexOfAny(['-', ':']);
-        return sep > 0 ? site[..sep] : site;
-    }
-
-    private static void Summary(FaultLedger ledger, DateTimeOffset now, Action<string> reply)
+    private static void Summary(FaultLedger ledger, AnomalyLedger anomalies, DateTimeOffset now, Action<string> reply)
     {
         reply(InfoLine(ledger, now));
         IReadOnlyList<FaultSnapshot> all = ledger.Snapshot();
@@ -238,6 +229,21 @@ public sealed class ServerFaultCommands : ICommandExtension
             {
                 reply(string.Create(CultureInfo.InvariantCulture,
                     $"  {group.Subsystem}: {group.Total} total ({group.Distinct} distinct), latest {group.Latest.Id} at {group.Latest.Site} ({group.Latest.ExceptionType}, {Age(now - group.Latest.LastSeen)} ago)"));
+            }
+        }
+
+        // The one view across both ledgers: each canonical subsystem with its faults and its anomalies.
+        IReadOnlyList<DiagnosticSubsystemSummary> combined = DiagnosticOverview.BySubsystem(all, anomalies.Snapshot());
+        if (combined.Count > 0)
+        {
+            reply(string.Create(CultureInfo.InvariantCulture, $"Faults and anomalies by subsystem ({combined.Count}):"));
+            foreach (DiagnosticSubsystemSummary row in combined)
+            {
+                string anomalyText = row.Anomalies == 0
+                    ? "0 anomalies"
+                    : string.Create(CultureInfo.InvariantCulture, $"{row.Anomalies} anomalies ({row.AnomalyKeys} keys, worst {row.WorstAnomaly})");
+                reply(string.Create(CultureInfo.InvariantCulture,
+                    $"  {row.Subsystem}: {row.Faults} faults ({row.FaultSignatures} signatures), {anomalyText}, last {Age(now - row.LastSeen)} ago"));
             }
         }
 

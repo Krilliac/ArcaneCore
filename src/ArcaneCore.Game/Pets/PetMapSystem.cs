@@ -146,7 +146,7 @@ public sealed class PetMapSystem : IMapUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-pet", ex);
+                    FaultLedger.Shared.Record("map.pet", ex);
                 }
             }
         }
@@ -221,7 +221,7 @@ public sealed class PetMapSystem : IMapUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-pet", ex);
+                    FaultLedger.Shared.Record("map.pet", ex);
                 }
             }
         }
@@ -302,7 +302,7 @@ public sealed class PetMapSystem : IMapUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-pet", ex);
+                    FaultLedger.Shared.Record("map.pet", ex);
                 }
             }
         }

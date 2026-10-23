@@ -305,7 +305,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         }
         catch (Exception ex)
         {
-            FaultLedger.Shared.Record("gameobjects.loot", ex);
+            FaultLedger.Shared.Record("gameobject.loot", ex);
             logger.LogError(ex, "corpse loot for {Victim} failed", victim.Guid);
         }
     }

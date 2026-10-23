@@ -351,7 +351,7 @@ public sealed class SqliteCheckpointService : BackgroundService
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // RunOnce reports SQLite and I/O failures itself; anything else must not end the loop.
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("sqlite-checkpoint", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("sqlite.checkpoint", ex);
             _logger.LogError(ex, "SQLite WAL checkpoint for {Database} failed unexpectedly", checkpointer.DatabasePath);
         }
     }

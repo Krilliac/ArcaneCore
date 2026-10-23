@@ -307,7 +307,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         }
         catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("writequeue-exploredzones-stop-host", stopEx);
+            FaultLedger.Shared.Record("writequeue.exploredzones-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -386,7 +386,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("persist.explored-zones", ex);
-                logger.LogFault("writequeue-exploredzones-consume", ex, "explored-zones queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue.exploredzones-consume", ex, "explored-zones queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -488,14 +488,14 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             catch (CharacterOwnershipRejectedException ex)
             {
                 failure = ex;
-                FaultLedger.Shared.Record("writequeue-exploredzones-ownership", ex);
+                FaultLedger.Shared.Record("writequeue.exploredzones-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 break;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 failure = ex;
-                FaultLedger.Shared.Record("writequeue-exploredzones-attempt", ex);
+                FaultLedger.Shared.Record("writequeue.exploredzones-attempt", ex);
                 if (!sweep)
                 {
                     logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
@@ -536,7 +536,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
                     AnomalySeverity.Error);
             }
 
-            logger.LogFault("writequeue-exploredzones", failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
+            logger.LogFault("writequeue.exploredzones", failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 
         return failure;

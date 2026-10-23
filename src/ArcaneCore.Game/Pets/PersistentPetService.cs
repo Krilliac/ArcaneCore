@@ -96,7 +96,7 @@ public sealed partial class SummonService
         try { await SaveDetachedPetAsync(owner).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {owner.Guid.Low}", ex.Message);
             _logger.LogError(ex, "detached hunter pet save failed for character {CharacterId}", owner.Guid.Low);
         }
@@ -144,7 +144,7 @@ public sealed partial class SummonService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("pets.persistence", ex);
+                FaultLedger.Shared.Record("pet.persistence", ex);
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
                 _logger.LogWarning(ex, "previous persistent pet write failed for character {CharacterId}; continuing with abandon delete", characterId);
             }
@@ -161,7 +161,7 @@ public sealed partial class SummonService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
             _logger.LogError(ex, "persistent hunter pet delete failed for character {CharacterId}", characterId);
             done.SetException(ex);
@@ -173,7 +173,7 @@ public sealed partial class SummonService
         try { await PersistSerializedAsync(snapshot, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
             _logger.LogError(ex, "persistent pet save failed for character {CharacterId}", snapshot.CharacterId);
         }
@@ -217,7 +217,7 @@ public sealed partial class SummonService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("pets.persistence", ex);
+                FaultLedger.Shared.Record("pet.persistence", ex);
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
                 // A failed predecessor is retained (or superseded by this snapshot) and logged by its caller; it must not
                 // poison the next authoritative snapshot for this character.
@@ -247,7 +247,7 @@ public sealed partial class SummonService
         }
         catch (Exception ex)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
             lock (_cacheGate)
             {
@@ -280,7 +280,7 @@ public sealed partial class SummonService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("pets.persistence", ex);
+                FaultLedger.Shared.Record("pet.persistence", ex);
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
                 failed.Add(characterId);
                 failures.Add(ex);
@@ -309,7 +309,7 @@ public sealed partial class SummonService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
             bool retainedOrNewer;
             lock (_cacheGate)
@@ -482,7 +482,7 @@ public sealed partial class SummonService
         try { await PersistSerializedAsync(snapshot, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
             _logger.LogError(ex, "promoting detached hunter pet failed for character {CharacterId}", snapshot.CharacterId);
         }
@@ -496,7 +496,7 @@ public sealed partial class SummonService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pets.persistence", ex);
+            FaultLedger.Shared.Record("pet.persistence", ex);
             AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {owner.Guid.Low}", ex.Message);
             _logger.LogError(ex, "persistent pet save failed for character {CharacterId}", owner.Guid.Low);
         }

@@ -97,7 +97,7 @@ public sealed partial class InstanceManager
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("instances.script-save-data", ex);
+            FaultLedger.Shared.Record("instance.script-save-data", ex);
             return null;
         }
     }

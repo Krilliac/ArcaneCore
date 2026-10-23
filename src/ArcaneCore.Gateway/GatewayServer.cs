@@ -195,7 +195,7 @@ public sealed class GatewayServer : BackgroundService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogFault("gateway-session", ex, "[{Endpoint}] gateway connection error", connection.RemoteEndpoint);
+            _logger.LogFault("gateway.session", ex, "[{Endpoint}] gateway connection error", connection.RemoteEndpoint);
         }
         finally
         {

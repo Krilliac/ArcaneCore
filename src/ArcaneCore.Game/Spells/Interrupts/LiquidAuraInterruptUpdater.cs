@@ -59,7 +59,7 @@ public sealed class LiquidAuraInterruptUpdater(Func<SpellSystem?> spells, ILiqui
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-liquid-interrupt", ex);
+                    FaultLedger.Shared.Record("map.liquid-interrupt", ex);
                 }
             }
         }

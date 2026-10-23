@@ -61,7 +61,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("watchdog-body-stats", ex);
+                FaultLedger.Shared.Record("watchdog.body-stats", ex);
                 return default;
             }
         };
@@ -97,7 +97,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("watchdog-alert", ex);
+                    FaultLedger.Shared.Record("watchdog.alert", ex);
                 }
             };
         }
@@ -186,7 +186,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("watchdog-qa", ex);
+            FaultLedger.Shared.Record("watchdog.qa", ex);
             logger.LogDebug(ex, "the tick hang could not be reported to bot QA");
         }
     }
@@ -232,7 +232,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _facts = HangFacts.Unknown;
-            FaultLedger.Shared.Record("watchdog-describe", ex);
+            FaultLedger.Shared.Record("watchdog.describe", ex);
             return "watchdog detail unavailable: " + ex.GetType().Name;
         }
     }
@@ -303,7 +303,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("watchdog-tick", ex);
+            FaultLedger.Shared.Record("watchdog.tick", ex);
         }
     }
 }

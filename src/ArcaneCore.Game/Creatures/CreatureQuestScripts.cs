@@ -113,7 +113,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("creature-quest-script", ex);
+                    FaultLedger.Shared.Record("creature.quest-script", ex);
                     log.LogError(ex, "quest start script {ScriptId} failed for item quest {QuestId}", quest.Template.StartScript, quest.Id);
                 }
             }
@@ -136,7 +136,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("creatures.quest-script", ex);
+                FaultLedger.Shared.Record("creature.quest-script", ex);
                 LogHookFault(log, AcceptSite, ex, script.GetType().Name, aiCreature, quest.Id);
             }
         }
@@ -149,7 +149,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("creatures.quest-script", ex);
+                FaultLedger.Shared.Record("creature.quest-script", ex);
                 LogHookFault(log, AcceptSite, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
             }
         }
@@ -162,7 +162,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("creature-quest-script", ex);
+                FaultLedger.Shared.Record("creature.quest-script", ex);
                 log.LogError(ex, "quest start script {ScriptId} failed for quest {QuestId}", quest.Template.StartScript, quest.Id);
             }
         }
@@ -187,7 +187,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("creatures.quest-script", ex);
+                    FaultLedger.Shared.Record("creature.quest-script", ex);
                     LogHookFault(log, RewardSite, ex, script.GetType().Name, creature, quest.Id);
                 }
             }
@@ -200,7 +200,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("creatures.quest-script", ex);
+                    FaultLedger.Shared.Record("creature.quest-script", ex);
                     LogHookFault(log, RewardSite, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
                 }
             }
@@ -214,7 +214,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("gameobject-quest-script", ex);
+                FaultLedger.Shared.Record("gameobject.quest-script", ex);
                 log.LogError(ex, "{Site} hook of instance {Instance} failed (quest {Quest}, object entry {Entry}); the quest carries on",
                     RewardSite, instanceData.GetType().Name, quest.Id, go.Entry);
             }
@@ -229,7 +229,7 @@ public static class CreatureQuestScripts
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("creature-quest-script", ex);
+                FaultLedger.Shared.Record("creature.quest-script", ex);
                 log.LogError(ex, "quest complete script {ScriptId} failed for quest {QuestId}", quest.Template.CompleteScript, quest.Id);
             }
         }
@@ -262,7 +262,7 @@ public static class CreatureQuestScripts
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("creature-quest-script", ex);
+            FaultLedger.Shared.Record("creature.quest-script", ex);
             log.LogError(ex, "gossip script {ScriptId} failed for npc {NpcGuid}", scriptId, npcGuid);
         }
     }

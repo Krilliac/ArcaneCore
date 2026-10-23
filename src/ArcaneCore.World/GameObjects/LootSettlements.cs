@@ -285,15 +285,15 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
             if (ex is OperationCanceledException && !_stop.IsCancellationRequested)
             {
                 // The caller answers the client with its ordinary failure reply (or the actors are kicked when the outcome is unknown).
-                FaultLedger.Shared.Record("loot-settlement-timeout", ex);
+                FaultLedger.Shared.Record("loot.settlement-timeout", ex);
                 logger.LogWarning("loot operation {Operation} ran out of its {Budget}s budget after {Elapsed} ms (transaction started: {Started})",
                     operation.Id, allowed.TotalSeconds, clock.ElapsedMilliseconds, transactionStarted);
             }
             else
             {
-                FaultLedger.Shared.Record("gameobjects.loot", ex);
+                FaultLedger.Shared.Record("gameobject.loot", ex);
                 AnomalyLedger.Shared.Report("loot", "settlement-failed", $"operation {operation.Id}", $"error={ex.GetType().Name}: {ex.Message}");
-                logger.LogFault("loot-settlement", ex, "loot operation {Operation} failed", operation.Id);
+                logger.LogFault("loot.settlement", ex, "loot operation {Operation} failed", operation.Id);
             }
             if (transactionStarted && outcome != LootOutcome.After)
             {
@@ -308,9 +308,9 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
                 }
                 catch (Exception reconciliation) when (reconciliation is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("gameobjects.loot", reconciliation);
+                    FaultLedger.Shared.Record("gameobject.loot", reconciliation);
                     AnomalyLedger.Shared.Report("loot", "settlement-reconcile-failed", $"operation {operation.Id}", $"reconcile error={reconciliation.GetType().Name}: {reconciliation.Message}", AnomalySeverity.Error);
-                    logger.LogFault("loot-settlement-reconcile", reconciliation, "could not reconcile loot operation {Operation}", operation.Id);
+                    logger.LogFault("loot.settlement-reconcile", reconciliation, "could not reconcile loot operation {Operation}", operation.Id);
                 }
             }
         }
@@ -371,9 +371,9 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("gameobjects.loot", ex);
+            FaultLedger.Shared.Record("gameobject.loot", ex);
             AnomalyLedger.Shared.Report("loot", "settlement-failed", $"operation {operation.Id}", $"callback error={ex.GetType().Name}: {ex.Message}");
-            logger.LogFault("loot-settlement-callback", ex, "loot operation {Operation} callback failed", operation.Id);
+            logger.LogFault("loot.settlement-callback", ex, "loot operation {Operation} callback failed", operation.Id);
         }
         finally
         {
@@ -431,9 +431,9 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
                 savesQuarantine.QuarantineCharacter(id);
             }
 
-            FaultLedger.Shared.Record("gameobjects.loot", ex);
+            FaultLedger.Shared.Record("gameobject.loot", ex);
             AnomalyLedger.Shared.Report("loot", "settlement-reconcile-failed", $"character {id}", $"operation={operation.Id} publish error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
-            logger.LogFault("loot-settlement-publish", ex, "loot publication failed for character {Character}; fresh login is required", id);
+            logger.LogFault("loot.settlement-publish", ex, "loot publication failed for character {Character}; fresh login is required", id);
             if (current)
             {
                 (player.Session as WorldSession)?.Kick();

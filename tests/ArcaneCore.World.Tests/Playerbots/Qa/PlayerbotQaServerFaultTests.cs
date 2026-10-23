@@ -62,6 +62,23 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         Assert.Equal(1, feed.Pull().Sum(s => s.Occurrences));
     }
 
+    [Fact]
+    public void TheFeed_CountsEveryOccurrenceAfterAReset_EvenWhenTheCountGrewPastTheOldOne()
+    {
+        var ledger = new FaultLedger();
+        var feed = new PlayerbotQaFaultFeed(ledger);
+        ledger.Record("worldtick", One("a"));
+        ledger.Record("worldtick", One("a"));
+        Assert.Equal(2, feed.Pull().Sum(s => s.Occurrences));
+
+        // Before the ledger had an epoch, three occurrences after a reset (count 3, above the 2 already sent) were sent as one.
+        ledger.Reset();
+        ledger.Record("worldtick", One("a"));
+        ledger.Record("worldtick", One("a"));
+        ledger.Record("worldtick", One("a"));
+        Assert.Equal(3, feed.Pull().Sum(s => s.Occurrences));
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static Exception Socket()
     {

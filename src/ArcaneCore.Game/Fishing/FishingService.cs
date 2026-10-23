@@ -230,7 +230,7 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-fishing", ex);
+                FaultLedger.Shared.Record("map.fishing", ex);
             }
         }
     }

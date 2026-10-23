@@ -372,7 +372,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell-update", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell.update", ex);
             _logger.LogError(ex, "spell update failed");
         }
     }
@@ -455,7 +455,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell-logout-capture", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell.logout-capture", ex);
             _logger.LogError(ex, "Capturing the spell state of {Player} failed", player.Guid);
         }
 

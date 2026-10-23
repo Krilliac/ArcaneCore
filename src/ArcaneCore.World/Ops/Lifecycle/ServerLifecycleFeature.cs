@@ -149,7 +149,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("lifecycle-announce", ex);
+                FaultLedger.Shared.Record("lifecycle.announce", ex);
             }
 
             try
@@ -158,7 +158,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("lifecycle-stop-requested", ex);
+                FaultLedger.Shared.Record("lifecycle.stop-requested", ex);
             }
 
             services.GetService<IHostApplicationLifetime>()?.StopApplication();
@@ -219,7 +219,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("lifecycle-timer", ex);
+            FaultLedger.Shared.Record("lifecycle.timer", ex);
         }
         finally
         {

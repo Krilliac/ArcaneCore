@@ -345,7 +345,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-gameobject", ex);
+                    FaultLedger.Shared.Record("map.gameobject", ex);
                 }
             }
 
@@ -542,7 +542,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-gameobject", ex);
+                FaultLedger.Shared.Record("map.gameobject", ex);
             }
         }
     }
@@ -2054,7 +2054,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-gameobject", ex);
+                    FaultLedger.Shared.Record("map.gameobject", ex);
                 }
             }
         }

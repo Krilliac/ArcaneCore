@@ -133,7 +133,7 @@ public sealed partial class SpellSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("spell-proc", ex);
+            FaultLedger.Shared.Record("spell.proc", ex);
         }
         finally
         {
@@ -147,7 +147,7 @@ public sealed partial class SpellSystem
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("spell-proc", ex);
+            FaultLedger.Shared.Record("spell.proc", ex);
         }
     }
 
@@ -258,7 +258,7 @@ public sealed partial class SpellSystem
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("spell-proc", ex);
+                    FaultLedger.Shared.Record("spell.proc", ex);
                 }
             }
         }
@@ -308,7 +308,7 @@ public sealed partial class SpellSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("spell-proc", ex);
+                FaultLedger.Shared.Record("spell.proc", ex);
                 return ProcTriggerCheck.Failed;
             }
         }
@@ -616,7 +616,7 @@ public sealed partial class SpellSystem
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("spell-proc", ex);
+                        FaultLedger.Shared.Record("spell.proc", ex);
                         continue;
                     }
 
@@ -647,7 +647,7 @@ public sealed partial class SpellSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("spell-proc", ex);
+                FaultLedger.Shared.Record("spell.proc", ex);
             }
         }
 
@@ -664,7 +664,7 @@ public sealed partial class SpellSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("spell-proc", ex);
+                FaultLedger.Shared.Record("spell.proc", ex);
             }
         }
     }

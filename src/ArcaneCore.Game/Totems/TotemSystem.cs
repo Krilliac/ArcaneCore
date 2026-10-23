@@ -444,7 +444,7 @@ public sealed partial class TotemSystem
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-totem", ex);
+                FaultLedger.Shared.Record("map.totem", ex);
             }
         }
     }

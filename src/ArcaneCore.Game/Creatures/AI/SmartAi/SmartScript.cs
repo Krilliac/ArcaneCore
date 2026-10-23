@@ -385,7 +385,7 @@ public sealed class SmartScript
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("smartai-action", ex);
+            FaultLedger.Shared.Record("smartai.action", ex);
         }
     }
 
@@ -631,7 +631,7 @@ public sealed class SmartScript
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("smartai-action", ex);
+            FaultLedger.Shared.Record("smartai.action", ex);
         }
         finally
         {

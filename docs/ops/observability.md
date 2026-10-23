@@ -115,6 +115,21 @@ Swallowed catches that carry no logger (static helpers, stores, the ban cache, t
 capture, the hot-code audit write, the word filter, the name catalog) now count the exception in `FaultLedger.Shared` under a
 site name (`bans.effective-read`, `realm.ipban-reload`, `net.packet-capture`, ...). Control flow is unchanged.
 
+## Diagnostics naming and the shared ledger core
+
+A fault site is written `subsystem.code` (`writequeue.character-retry`, `instance.manager`); a site built at run time may use
+`subsystem:detail` or `subsystem/detail`. An anomaly passes its subsystem separately. `DiagnosticSubsystem` (Kernel) is the one rule that
+turns either into a canonical subsystem: the part before the first `.`, `:` or `/` (older dash-only sites are cut at the first `-`), with
+variant spellings folded together (`instances` -> `instance`, `outdoorpvp` -> `outdoor-pvp`, `bg` -> `battleground`, `worldtick` -> `world`).
+`FaultLedger.BySubsystem`, `AnomalyLedger.BySubsystem`, `.server faults summary` and the self-diagnosis report all group by it, and
+`.server faults summary` ends with one line per subsystem that carries its faults and its anomalies together (`DiagnosticOverview`).
+Use a canonical subsystem name for a new site or anomaly.
+
+`FaultLedger` and `AnomalyLedger` keep their per-key counts, timing, tallies and log throttle in one shared `LedgerEntryCore`. Both, and
+`Invariant`, expose an `Epoch` that changes on reset; `DiagnosticDeltaTracker` turns repeated snapshots into per-key deltas and starts every
+key over on a new epoch, which is how bot QA reads faults, invariant failures and anomalies (occurrences after a `.server faults reset` are no
+longer lost when a key grows past its old count before the next QA pass). Invariant failures carry first and last seen.
+
 ## Skipped navmesh tiles
 
 `NavRegionGraph.Build` lists every `.mmtile` it could not read in `SkippedTiles`. The pathfinder writes one Warning per

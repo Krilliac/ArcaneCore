@@ -87,7 +87,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("map-loot-audit", ex);
+                FaultLedger.Shared.Record("map.loot-audit", ex);
             }
         }
 
@@ -112,7 +112,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             {
                 _rolls.Remove(roll);
                 roll.Item.RollActive = false;
-                FaultLedger.Shared.Record("map-loot-roll", ex);
+                FaultLedger.Shared.Record("map.loot-roll", ex);
             }
         }
     }
@@ -144,7 +144,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             {
                 _rolls.Remove(roll);
                 roll.Item.RollActive = false;
-                FaultLedger.Shared.Record("map-loot-roll", ex);
+                FaultLedger.Shared.Record("map.loot-roll", ex);
             }
         }
     }

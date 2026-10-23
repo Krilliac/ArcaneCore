@@ -73,6 +73,7 @@ public sealed class AnomalyLedger
     private volatile int _logLimit;
     private volatile ILogger? _logger;
     private long _total;
+    private long _epoch;
     private readonly RateWindow _rate = new();
     private long _firstTicks;
     private long _lastTicks;
@@ -111,6 +112,9 @@ public sealed class AnomalyLedger
 
     /// <summary>Reports since start or the last <see cref="Reset"/> (every occurrence, logged or not).</summary>
     public long Total => Volatile.Read(ref _total);
+
+    /// <summary>Changes each time <see cref="Reset"/> forgets the ledger, so a reader comparing two snapshots can tell a reset from a key that stopped firing.</summary>
+    public long Epoch => Volatile.Read(ref _epoch);
 
     /// <summary>Distinct keys held (the overflow bucket is not counted).</summary>
     public int Distinct => _entries.Count;
@@ -207,13 +211,14 @@ public sealed class AnomalyLedger
         return Snapshot().Where(s => string.Equals(s.Subsystem, wanted, StringComparison.Ordinal)).ToList();
     }
 
-    /// <summary>Per subsystem: how many keys and how many reports.</summary>
+    /// <summary>Per canonical subsystem (<see cref="DiagnosticSubsystem.Canonical"/>): how many keys and how many reports.</summary>
     public IReadOnlyDictionary<string, (int Codes, long Total)> BySubsystem()
     {
         var result = new SortedDictionary<string, (int Codes, long Total)>(StringComparer.Ordinal);
         foreach (AnomalySnapshot snap in Snapshot())
         {
-            result[snap.Subsystem] = result.TryGetValue(snap.Subsystem, out (int Codes, long Total) agg)
+            string subsystem = DiagnosticSubsystem.Canonical(snap.Subsystem);
+            result[subsystem] = result.TryGetValue(subsystem, out (int Codes, long Total) agg)
                 ? (agg.Codes + 1, agg.Total + snap.Count)
                 : (1, snap.Count);
         }
@@ -248,6 +253,7 @@ public sealed class AnomalyLedger
             _entries.Clear();
             _overflow.Clear();
             Interlocked.Exchange(ref _total, 0);
+            Interlocked.Increment(ref _epoch);
             Interlocked.Exchange(ref _firstTicks, 0);
             Interlocked.Exchange(ref _lastTicks, 0);
             _rate.Clear();
@@ -371,69 +377,31 @@ public sealed class AnomalyLedger
         }
     }
 
+    /// <summary>Mutable per-key state: the shared <see cref="LedgerEntryCore"/> plus the worst severity and the latest subject and detail; guarded by <c>this</c>.</summary>
     private sealed class AnomalyEntry(string key, string subsystem, string code)
     {
-        private readonly SubjectTally _subjects = new(MaxTrackedSubjects);
-        private readonly RecentDistinct _recent = new(RecentDetailCount);
-        private readonly RateWindow _rate = new();
-        private GapRing? _gaps;
-        private DateTimeOffset _first;
-        private DateTimeOffset _last;
-        private DateTimeOffset _lastLog = DateTimeOffset.MinValue;
+        private readonly LedgerEntryCore _core = new(MaxTrackedSubjects, RecentDetailCount);
         private AnomalySeverity _worst;
         private string _subject = string.Empty;
         private string _detail = string.Empty;
-        private long _count;
-        private long _sinceLog;
 
         public AnomalyRecording Note(DateTimeOffset now, int logLimit, AnomalySeverity severity, string subject, string detail)
         {
             lock (this)
             {
-                _count++;
-                DateTimeOffset previous = _last;
-                _last = now;
-                _rate.Add(now);
-                if (_count == 1)
+                long count = _core.Occur(now);
+                if (count == 1 || severity > _worst)
                 {
-                    _first = now;
                     _worst = severity;
-                }
-                else
-                {
-                    (_gaps ??= new GapRing()).Add(now - previous);
-                    if (severity > _worst)
-                    {
-                        _worst = severity;
-                    }
                 }
 
                 _subject = subject;
                 _detail = detail;
-                if (subject.Length != 0) _subjects.Add(subject);
-                if (detail.Length != 0) _recent.Add(detail);
+                if (subject.Length != 0) _core.Tally.Add(subject);
+                if (detail.Length != 0) _core.Recent.Add(detail);
 
-                bool log;
-                long suppressed = 0;
-                if (_count <= logLimit)
-                {
-                    log = true;
-                    _lastLog = now;
-                }
-                else if (_lastLog == DateTimeOffset.MinValue || now - _lastLog >= TimeSpan.FromMinutes(1))
-                {
-                    log = true;
-                    suppressed = _sinceLog;
-                    _sinceLog = 0;
-                    _lastLog = now;
-                }
-                else
-                {
-                    log = false;
-                    _sinceLog++;
-                }
-
-                return new AnomalyRecording(key, _count, log, suppressed) { Timing = log ? TimingAt(now) : null };
+                (bool log, long suppressed) = _core.Throttle(now, logLimit);
+                return new AnomalyRecording(key, count, log, suppressed) { Timing = log ? _core.TimingAt(now) : null };
             }
         }
 
@@ -441,15 +409,7 @@ public sealed class AnomalyLedger
         {
             lock (this)
             {
-                _count = 0;
-                _sinceLog = 0;
-                _lastLog = DateTimeOffset.MinValue;
-                _subjects.Clear();
-                _recent.Clear();
-                _rate.Clear();
-                _gaps?.Clear();
-                _first = default;
-                _last = default;
+                _core.Clear();
                 _subject = string.Empty;
                 _detail = string.Empty;
                 _worst = AnomalySeverity.Info;
@@ -460,20 +420,13 @@ public sealed class AnomalyLedger
         {
             lock (this)
             {
-                return new AnomalySnapshot(key, subsystem, code, _worst, _count, _first, _last, _subject, _detail, _subjects.Count)
+                return new AnomalySnapshot(key, subsystem, code, _worst, _core.Count, _core.First, _core.Last, _subject, _detail, _core.Tally.Count)
                 {
-                    Timing = TimingAt(now),
-                    TopSubjects = _subjects.Top(SnapshotTopSubjects),
-                    RecentDetails = _recent.ToList(),
+                    Timing = _core.TimingAt(now),
+                    TopSubjects = _core.Tally.Top(SnapshotTopSubjects),
+                    RecentDetails = _core.Recent.ToList(),
                 };
             }
-        }
-
-        /// <summary>Caller holds the entry lock.</summary>
-        private LedgerTiming TimingAt(DateTimeOffset now)
-        {
-            (TimeSpan? p50, TimeSpan? p99) = _gaps?.Percentiles() ?? (null, null);
-            return new LedgerTiming(_count == 0 ? null : _first, _count == 0 ? null : _last, _rate.CountSince(now, 15), _rate.CountSince(now, 60), p50, p99);
         }
     }
 }

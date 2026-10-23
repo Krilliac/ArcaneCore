@@ -409,7 +409,7 @@ public sealed class DurableIdBlockAllocator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            Diagnostics.FaultLedger.Shared.Record($"id-range-prefetch:{Scope}", ex);
+            Diagnostics.FaultLedger.Shared.Record($"character.id-range-prefetch:{Scope}", ex);
             lock (_gate)
             {
                 _lastPrefetchError = ex;

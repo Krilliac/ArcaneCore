@@ -93,7 +93,7 @@ public static class CharacterRename
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("characters.rename", ex);
+            FaultLedger.Shared.Record("character.rename", ex);
             AnomalyLedger.Shared.Report("character", "rename-failed", $"character {request.Value.Guid}", $"error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] rename of character {Guid} failed", session.RemoteEndpoint, request.Value.Guid);
             session.Send(WorldOpcode.SmsgCharRename, CharacterRenamePackets.BuildFailure(CharResult.CharCreateError));
@@ -157,7 +157,7 @@ public static class CharacterRename
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("characters.rename-flags", ex);
+            FaultLedger.Shared.Record("character.rename-flags", ex);
             AnomalyLedger.Shared.Report("character", "rename-failed", $"account {session.AccountId}", $"at-login flags error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] the at-login flags of account '{Account}' could not be read; the character list shows none",
                 session.RemoteEndpoint, session.AccountName);

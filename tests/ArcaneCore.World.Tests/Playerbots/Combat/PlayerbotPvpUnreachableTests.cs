@@ -164,8 +164,8 @@ public sealed class PlayerbotPvpUnreachableTests
 
                 Prepare(bot);
                 ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
-                Assert.Equal("fighting", ai.Activity);
-                Assert.Equal(nearNpc.Entry, ai.TargetEntry);
+                // The chase is refused (no ground loaded), so the bot gives the NPC up within this think and goes on to its objectives.
+                Assert.Same(nearNpc, ai.EngagedThisThink);
 
                 // 2. Player candidates: an in-range player on another level (distance ~25.3 <= 30) followed by an out-of-range player on the bot's level (50 > 30).
                 nearOtherLevel.Relocate(player.X + 4f, player.Y, player.Z + 25f, 0, host.World.NowMs);
@@ -176,11 +176,12 @@ public sealed class PlayerbotPvpUnreachableTests
 
                 Prepare(bot);
                 ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
-                Assert.Equal("fighting", ai.Activity);
+                Assert.Same(nearOtherLevel, ai.EngagedThisThink);
                 // The first think tried nearOtherLevel and refused the walk; the next think finds no in-range target (farSameLevel at 50 yd is out of range).
                 Prepare(bot);
                 ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
                 Assert.NotEqual("fighting", ai.Activity);
+                Assert.NotSame(farSameLevel, ai.EngagedThisThink);
                 return true;
             });
         }
@@ -212,9 +213,8 @@ public sealed class PlayerbotPvpUnreachableTests
 
         Prepare(bot);
         ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
-        Assert.Equal("fighting", ai.Activity);
-        // TargetEntry is 0 for a player and npc.Entry for a creature: the player won over the creature despite being on another level.
-        Assert.Equal(0u, ai.TargetEntry);
+        // The player won over the creature despite being on another level.
+        Assert.Same(enemy, ai.EngagedThisThink);
     }));
 
     [Fact]
@@ -229,12 +229,12 @@ public sealed class PlayerbotPvpUnreachableTests
         player.VisibleObjects.Add(guard.Guid);
         Prepare(bot);
         ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
-        Assert.Equal("fighting", ai.Activity);
-        Assert.Equal(guard.Entry, ai.TargetEntry);
+        Assert.Same(guard, ai.EngagedThisThink);
 
         Prepare(bot);
         ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
         Assert.NotEqual("fighting", ai.Activity);
+        Assert.NotSame(guard, ai.EngagedThisThink);
 
         // An AV boss (the enemy captain) 20 yards away: Play -> SelectEnemy engages it with mustPursue and never skips it on subsequent thinks.
         Creature captain = SpawnNpc(host, player, 994105, dx: 20f, civilian: true);
@@ -244,13 +244,12 @@ public sealed class PlayerbotPvpUnreachableTests
 
         Prepare(bot);
         ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
-        Assert.Equal("fighting", ai.Activity);
-        Assert.Equal(captain.Entry, ai.TargetEntry);
+        Assert.Same(captain, ai.EngagedThisThink);
 
+        // Must-pursue: the refused chase does not mark the captain unreachable, so the next think engages it again.
         Prepare(bot);
         ai.Play(player, av, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 500);
-        Assert.Equal("fighting", ai.Activity);
-        Assert.Equal(captain.Entry, ai.TargetEntry);
+        Assert.Same(captain, ai.EngagedThisThink);
     }));
 
     [Fact]

@@ -289,7 +289,7 @@ public sealed class ItemMaintenanceUpdater(ItemMechanicsOptions options, TimePro
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // One player's failure must not starve the rest of the map or trip the map updater 3-strike circuit breaker.
-                FaultLedger.Shared.Record("map-item-maintenance", ex);
+                FaultLedger.Shared.Record("map.item-maintenance", ex);
             }
         }
     }

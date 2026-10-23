@@ -89,7 +89,7 @@ public abstract partial class InstanceData : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultRecording recording = FaultLedger.Shared.Record("instance-data.save-to-db", ex);
+            FaultRecording recording = FaultLedger.Shared.Record("instance.data-save-to-db", ex);
             if (recording.ShouldLog)
             {
                 Logger.LogError(ex, "Instance script SaveToDB failed on map {MapId} instance {InstanceId} (fault {FaultId}, count {Count})",
@@ -243,7 +243,7 @@ public abstract partial class InstanceData : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultRecording recording = FaultLedger.Shared.Record("instance-data.update", ex);
+            FaultRecording recording = FaultLedger.Shared.Record("instance.data-update", ex);
             if (recording.ShouldLog)
             {
                 Logger.LogError(ex, "Instance script Update failed on map {MapId} instance {InstanceId} (fault {FaultId}, count {Count})",
@@ -260,7 +260,7 @@ public abstract partial class InstanceData : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultRecording recording = FaultLedger.Shared.Record("instance-data.player-enter", ex);
+            FaultRecording recording = FaultLedger.Shared.Record("instance.data-player-enter", ex);
             if (recording.ShouldLog)
             {
                 Logger.LogError(ex, "Instance script OnPlayerEnter failed on map {MapId} instance {InstanceId} for player {PlayerGuid} (fault {FaultId}, count {Count})",
@@ -277,7 +277,7 @@ public abstract partial class InstanceData : IMapUpdater
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultRecording recording = FaultLedger.Shared.Record("instance-data.player-leave", ex);
+            FaultRecording recording = FaultLedger.Shared.Record("instance.data-player-leave", ex);
             if (recording.ShouldLog)
             {
                 Logger.LogError(ex, "Instance script OnPlayerLeave failed on map {MapId} instance {InstanceId} for player {PlayerGuid} (fault {FaultId}, count {Count})",

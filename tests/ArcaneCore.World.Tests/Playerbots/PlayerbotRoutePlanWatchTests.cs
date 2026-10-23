@@ -76,7 +76,8 @@ public sealed class PlayerbotRoutePlanWatchTests
                 Assert.Equal(PlanOutcome.Refused, outcome);
             }
 
-            await world.Host.World.AdvanceClockAsync(6_000);
+            // Three plans span MinLoopSpanMs by the fourth.
+            await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.MinLoopSpanMs / 3 + 1_000);
         }
 
         bool blacklisted = await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal));

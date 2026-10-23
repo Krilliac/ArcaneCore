@@ -130,7 +130,7 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("map-trap", ex);
+                    FaultLedger.Shared.Record("map.trap", ex);
                 }
             }
         }

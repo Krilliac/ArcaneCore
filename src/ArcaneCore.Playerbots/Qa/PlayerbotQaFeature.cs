@@ -217,7 +217,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             _faultFeed = new PlayerbotQaFaultFeed(
                 faultLedger ?? new FaultLedger(),
                 invariantSource,
-                FaultSource is null ? anomalyLedger : null);
+                FaultSource is null ? anomalyLedger : null,
+                InvariantSource is null && FaultSource is null ? (Func<long>)(static () => Invariant.Epoch) : null);
         }
 
         if (anomalyLedger is not null) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);
@@ -434,7 +435,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot-qa", ex);
+            FaultLedger.Shared.Record("playerbot.qa", ex);
             _log.LogError(ex, "Bot QA publishing failed; the findings stay pending and the next pass tries again");
         }
     }
@@ -506,7 +507,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot-qa", ex);
+                FaultLedger.Shared.Record("playerbot.qa", ex);
                 _log.LogError(ex, "Bot QA pass failed; its findings are unchanged and the next pass tries again");
             }
         }

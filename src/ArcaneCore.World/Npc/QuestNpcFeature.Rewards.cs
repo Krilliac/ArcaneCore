@@ -178,7 +178,7 @@ public sealed partial class QuestNpcFeature
         {
             if (budget.IsCancellationRequested && !_settlementStop.IsCancellationRequested)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement-timeout", ex);
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest.settlement-timeout", ex);
                 // Timings in ms since the settlement began; -1: that phase was not reached.
                 _logger.LogWarning("quest reward settlement for character {Character}, quest {Quest} ran out of its {Budget}s budget after "
                     + "{Elapsed} ms (saved at {Saved} ms, drains done at {Drained} ms, transaction started: {Started}); the reward is refused "
@@ -187,7 +187,7 @@ public sealed partial class QuestNpcFeature
             }
             else if (!_settlementStop.IsCancellationRequested)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement", ex);
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest.settlement", ex);
                 _logger.LogError(ex, "quest reward settlement failed for character {Character}, quest {Quest}", id, operation.Plan.QuestId);
             }
             else
@@ -204,7 +204,7 @@ public sealed partial class QuestNpcFeature
                 }
                 catch (Exception reconciliationError) when (reconciliationError is not OutOfMemoryException)
                 {
-                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement-reconcile", reconciliationError);
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest.settlement-reconcile", reconciliationError);
                     _logger.LogError(reconciliationError, "could not reconcile quest reward for character {Character}", id);
                 }
             }
@@ -289,7 +289,7 @@ public sealed partial class QuestNpcFeature
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement-publish", ex);
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest.settlement-publish", ex);
             operation.Saves.QuarantineCharacter(id);
             Persistence.QuarantineCharacter(id);
             _logger.LogError(ex, "quest reward publication failed for character {Character}; fresh login is required", id);
