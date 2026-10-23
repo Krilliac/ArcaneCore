@@ -83,6 +83,12 @@ recorder are appended to each line so both views are on one line.
     60 s, recorded by the world thread without allocating once its ring is full. When none was recorded the suffix says `no tick body over the
     interval was recorded in the last 60 s (the stall was outside the tick body)`: a frame can be long while the body is short, for example
     when the OS did not schedule the world thread or a collection paused it.
+  - **The completion hang line** describes the hung frame itself, not the window: `hung frame <F> ms: frame body <N> ms: <phase split>;
+    top features: ...; <X> ms outside tick code` using the slow tick body recorded while that frame ran (the monitor passes the frame's start and end
+    through `TickMonitor.FrameDetail`). A frame with no such body reads `hung frame <F> ms: frame body 0 ms (no tick body over the interval ran in it);
+    <F> ms outside tick code` (a GC pause, paging, a suspended process). The window's slowest body, when it is a different tick, follows as
+    `; slowest body in window at HH:mm:ss: <N> ms: ...` so an earlier slow feature is never read as the cause of this frame. Bot QA's hang
+    fingerprint uses the frame's own body (`OutsideTick` when there is none). The overrun line keeps the window-wide `slowest tick body` text.
   Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
   (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own
   `Slow world update` performance-log line. Cost on the world thread: a few stores per phase change and per handler, a top-five insertion
@@ -94,7 +100,7 @@ recorder are appended to each line so both views are on one line.
   tick (database load, feature attach) and after the world stopped on purpose (`StopAsync`, so a long final save drain is not killed) the
   source reports alive.
 - **Terminal hang action** (opt-in): when a single tick remains wedged for `ActionHangMs` (0 = never, whatever `Action` says; must be at least
-  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`), GC pauses (`GcPauses`) or a stopped process (`ProcessStalled`),
+  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`), GC pauses (`GcPauses`, `GcPaging`) or a stopped process (`ProcessStalled`),
   the configured `Action` fires at most once for that hung tick, always with a `Critical` line (event `TickAction`, 7104) carrying the
   in-progress hang detail (`phase=<Phase>, running=<work>`): `Log` only logs; `Stop` sets `ExitCodes.Current = 1` and signals
   `IHostApplicationLifetime.StopApplication()`; `FailFast` writes a synchronous crash report to `Console.Error` and calls

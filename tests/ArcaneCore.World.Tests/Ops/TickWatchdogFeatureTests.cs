@@ -208,6 +208,57 @@ public sealed class TickWatchdogFeatureTests
             s.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PlayerbotQaOptions { TickHangWarmupMinutes = warmupMinutes }));
         });
 
+    private static SlowTickInfo Body(long sequence, long ageSeconds, long stopwatchNow, long durationMicros, string feature)
+        => new(sequence, stopwatchNow - (ageSeconds * System.Diagnostics.Stopwatch.Frequency), durationMicros, new TickPhases(1_000, 1_000, durationMicros - 2_000), [(feature, durationMicros - 2_000)]);
+
+    [Fact]
+    public void AHungFrameWithNoBody_SaysTheTimeWasOutsideTickCode_AndLabelsTheEarlierWindowBody()
+    {
+        long now = 100L * System.Diagnostics.Stopwatch.Frequency;
+        // A 4 s frame (96 s..100 s on the watchdog clock); the only recorded body is a 1.9 s one from 10 s ago (before the frame).
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000);
+        SlowTickInfo earlier = Body(1, 10, now, 1_938_000, "EarlierFeature");
+
+        string text = TickWatchdogFeature.FormatCompletedFrame([earlier], span, now, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
+
+        Assert.StartsWith("hung frame 4000 ms: frame body 0 ms", text);
+        Assert.Contains("4000 ms outside tick code", text);
+        Assert.Contains("slowest body in window at 12:00:00: 1938 ms", text);
+        Assert.True(text.IndexOf("EarlierFeature", StringComparison.Ordinal) > text.IndexOf("slowest body in window", StringComparison.Ordinal), text);
+        Assert.Equal(("OutsideTick", "none"), (facts.Phase, facts.Item));
+    }
+
+    [Fact]
+    public void AHungFrameWithABody_ReportsThatBodyAndTheRestAsOutsideTickCode()
+    {
+        long now = 100L * System.Diagnostics.Stopwatch.Frequency;
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000);
+        SlowTickInfo earlier = Body(1, 10, now, 1_938_000, "EarlierFeature");
+        SlowTickInfo inFrame = Body(2, 2, now, 502_000, "FrameFeature");
+
+        string text = TickWatchdogFeature.FormatCompletedFrame([earlier, inFrame], span, now, new DateTime(2026, 10, 22, 12, 0, 10), out TickWatchdogFeature.HangFacts facts);
+
+        Assert.StartsWith("hung frame 4000 ms: frame body 502 ms", text);
+        Assert.Contains("3498 ms outside tick code", text);
+        Assert.Equal("FrameFeature", facts.Item);
+        int label = text.IndexOf("slowest body in window", StringComparison.Ordinal);
+        int frameFeature = text.IndexOf("FrameFeature", StringComparison.Ordinal);
+        Assert.True(frameFeature > 0 && frameFeature < label, text);
+        Assert.Contains("EarlierFeature", text[label..]);
+    }
+
+    [Fact]
+    public void AHungFrameWhoseBodyIsTheWindowsSlowest_DoesNotRepeatItAsTheWindowBody()
+    {
+        long now = 100L * System.Diagnostics.Stopwatch.Frequency;
+        var span = new TickFrameSpan(96_000_000, 100_000_000, 100_000_000);
+
+        string text = TickWatchdogFeature.FormatCompletedFrame([Body(2, 2, now, 3_900_000, "FrameFeature")], span, now, new DateTime(2026, 10, 22, 12, 0, 10), out _);
+
+        Assert.DoesNotContain("slowest body in window", text);
+        Assert.Contains("frame body 3900 ms", text);
+    }
+
     [Fact]
     public void ACompletedHang_NamesTheWorkOfItsDominantPhase_NotTheTopFeature()
     {

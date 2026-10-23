@@ -598,4 +598,40 @@ public sealed class TickMonitorTests
         Assert.Empty(actuator.Calls);
         Assert.Equal(0, monitor.ActionsFired);
     }
+
+    [Fact]
+    public void Hang_WithFrameDetail_ReportsTheHungFramesOwnSpan_NotTheWindowsSlowestBody()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 1000);
+        var spans = new List<TickFrameSpan>();
+        // The window-wide detail still names an earlier 1.9 s body; it must not be what the completed-hang line carries.
+        monitor.HangDetail = inProgress => inProgress ? "running" : "slowest tick body 1938 ms: features SyntheticSlowFeature";
+        monitor.FrameDetail = span =>
+        {
+            spans.Add(span);
+            return $"hung frame {span.DurationMicros / 1000} ms: frame body 0 ms; {span.DurationMicros / 1000} ms outside tick code";
+        };
+
+        Tick(monitor, 5, 50);
+        Tick(monitor, 1, 1_900); // an earlier 1.9 s frame (a body)
+        long fourSecondStart = _clock.NowMicros;
+        Tick(monitor, 1, 4_000); // the body-less 4 s frame
+        monitor.OnTick(_clock.NowMicros); // it ends
+        monitor.Check(_clock.NowMicros);
+
+        TickFrameSpan span = Assert.Single(spans);
+        Assert.Equal(4_000_000, span.DurationMicros);
+        Assert.Equal(fourSecondStart, span.StartMicros);
+        Assert.Equal(_clock.NowMicros, span.EndMicros);
+        LogLine done = _log.Of(WatchdogEvents.TickHang).Last();
+        Assert.Contains("hung frame 4000 ms: frame body 0 ms; 4000 ms outside tick code", done.Message);
+        Assert.DoesNotContain("1938", done.Message);
+
+        // The next hang is its own frame: the previous span was consumed.
+        Tick(monitor, 1, 1_200);
+        monitor.OnTick(_clock.NowMicros);
+        monitor.Check(_clock.NowMicros);
+        Assert.Equal(1_200_000, spans[^1].DurationMicros);
+        Assert.Equal(2, spans.Count);
+    }
 }
