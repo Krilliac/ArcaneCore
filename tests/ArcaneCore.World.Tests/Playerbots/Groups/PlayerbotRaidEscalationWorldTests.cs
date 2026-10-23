@@ -40,6 +40,58 @@ public sealed class PlayerbotRaidEscalationWorldTests
         return tank;
     }
 
+    /// <summary>
+    /// A rare elite (rank 2) beside the tank, too strong for a party: the tank's real risk estimate (PlayerbotRisk.Assess for a quest
+    /// objective) raises the group signal, as it does when the brain pulls. Returns the signal's size.
+    /// </summary>
+    private static async Task<(Guid Id, string Name)> TankAssessesAsync(GroupTestWorld world, uint health, Action<int>? size = null)
+    {
+        var tank = await world.AddBotAsync("Raidtank", Human, Warrior, 10, [Taunt]);
+        int needed = await world.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player player = world.Player(tank.Id);
+            var system = player.Map!.FindUpdater<ArcaneCore.Game.Creatures.CreatureMapSystem>()!;
+            var template = new ArcaneCore.Kernel.WorldData.Creatures.CreatureTemplate
+            {
+                Entry = 992100, Name = "Group Warlord", Faction = 14, CreatureType = 7, MinLevel = 10, MaxLevel = 10, DisplayIds = [903],
+                MinLevelHealth = health, MaxLevelHealth = health, MinMeleeDamage = 10, MaxMeleeDamage = 14, MeleeBaseAttackTime = 2000, Rank = 2,
+            };
+            ArcaneCore.Game.Creatures.Creature mob = system.SpawnTemporary(template, player.X + 25f, player.Y, player.Z, 0);
+            PlayerbotRisk risk = world.Bots.FindBrain(tank.Id)!.Risk;
+            risk.Assess(player, mob, true, out _);
+            return risk.GroupSignal?.Size ?? 0;
+        });
+        size?.Invoke(needed);
+        return tank;
+    }
+
+    /// <summary>A rare elite that needs eight (found through the tank's own risk estimate) becomes a raid goal, converts, and recruits enough bots.</summary>
+    [Fact]
+    public async Task ARareEliteNeedingEight_ThroughTheRealRiskEstimate_BecomesARaid()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
+        int needed = 0;
+        await TankAssessesAsync(world, 10_000, n => needed = n);
+        Assert.Equal(8, needed);
+        await AddRaidersAsync(world, 6);
+
+        Assert.True(await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Goal.Size == 8);
+        Assert.True(await world.RunUntilAsync(60_000, () => group.Raid), await world.TraceAsync());
+    }
+
+    /// <summary>The same raid goal with too few bots nearby gives up after FormationTimeoutSeconds, as a party goal does.</summary>
+    [Fact]
+    public async Task ARaidGoalFromTheRealRiskEstimate_WithTooFewBots_GivesUpAfterTheFormationTimeout()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options); // FormationTimeoutSeconds 60
+        await TankAssessesAsync(world, 10_000);
+        await AddRaidersAsync(world, 1);
+
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Events.Any(e => e.Contains("found no partners", StringComparison.Ordinal))), await world.TraceAsync());
+        Assert.DoesNotContain(world.Coordinator.Groups, g => g.Goal.Size == 8);
+    }
+
     private static async Task AddRaidersAsync(GroupTestWorld world, int mages)
     {
         await world.AddBotAsync("Raidpriest", Human, Priest, 10, [LesserHeal, Smite]);
