@@ -137,7 +137,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
         => DoCast(target, spell, triggered) == CreatureCastResult.Ok;
 
     /// <summary>Health at or below <paramref name="percent"/> (ScriptDev2 <c>GetHealthPercent() &lt;= pct</c>).</summary>
-    protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
+    protected bool Below(uint percent) => CombatActionHelpers.Below(Me, percent);
 
     /// <summary>
     /// cmangos UnitAI::SetMeleeEnabled: the flag for later AttackStart calls and the swing already running at the victim (a bare
@@ -146,10 +146,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
     protected void SetMeleeEnabled(bool enabled)
     {
         MeleeEnabled = enabled;
-        if (Victim is { } victim)
-        {
-            System?.SetMelee(Me, victim, enabled);
-        }
+        CombatActionHelpers.ApplyMeleeToVictim(Me, System, Victim, enabled);
     }
 
     /// <summary>
@@ -164,14 +161,12 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
 
 
     /// <summary>Health strictly below <paramref name="percent"/>: exactly ScriptDev2's <c>GetHealthPercent() &lt; pct</c>, in integers.</summary>
-    protected bool HealthBelowPct(uint percent) => (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * percent;
+    protected bool HealthBelowPct(uint percent) => CombatActionHelpers.HealthBelowPct(Me, percent);
 
     protected Unit? RandomTarget()
-    {
-        Unit[] targets = [.. Me.Combat.Threat.Entries.Select(e => e.Target)
-            .Where(t => t.IsAlive && t.IsInWorld && ReferenceEquals(t.Map, Me.Map))];
-        return targets.Length == 0 ? null : targets[System!.RandomInt(0, targets.Length - 1)];
-    }
+        => CombatActionHelpers.RandomThreatTarget(Me,
+            t => t.IsAlive && t.IsInWorld && ReferenceEquals(t.Map, Me.Map),
+            max => System!.RandomInt(0, max));
 
     protected void ResetThreat()
     {

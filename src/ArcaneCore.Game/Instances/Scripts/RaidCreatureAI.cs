@@ -18,18 +18,16 @@ public abstract class RaidCreatureAI(Creature creature, ScriptedInstance instanc
     protected ScriptedInstance Raid { get; } = instance;
     public override bool AggroesOnSight => true;
     protected uint Random(uint min, uint max) => (uint)(System?.RandomInt((int)min, (int)max) ?? (int)min);
-    protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
+    protected bool Below(uint percent) => CombatActionHelpers.Below(Me, percent);
     protected void Say(int text) => System?.SayText(Me, text);
     /// <summary>Unit::IsNonMeleeSpellCasted(false): CombatAI does not run its combat actions while the creature prepares a spell.</summary>
     protected bool IsCasting => System?.AiServices.Spells?.IsCasting(Me) ?? false;
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target ?? Me, spell, triggered) == CreatureCastResult.Ok;
     protected Unit? RandomTarget(Func<Unit, bool>? predicate = null)
-    {
-        Unit[] targets = Me.Combat.Threat.Entries.Select(e => e.Target)
-            .Where(u => u.IsAlive && ReferenceEquals(u.Map, Me.Map) && (predicate?.Invoke(u) ?? true)).ToArray();
-        return targets.Length == 0 ? null : targets[Random(0, (uint)targets.Length - 1)];
-    }
+        => CombatActionHelpers.RandomThreatTarget(Me,
+            u => u.IsAlive && ReferenceEquals(u.Map, Me.Map) && (predicate?.Invoke(u) ?? true),
+            max => (int)Random(0, (uint)max));
     protected Unit? Friendly(float range, Func<Creature, bool> predicate, bool random = false)
     {
         Creature[] candidates = System?.Creatures.Where(c => c.IsAlive && c.FactionTemplate == Me.FactionTemplate
@@ -54,7 +52,7 @@ public abstract class RaidCreatureAI(Creature creature, ScriptedInstance instanc
     protected void SetMeleeEnabled(bool enabled)
     {
         MeleeEnabled = enabled;
-        if (Victim is { } victim) System?.SetMelee(Me, victim, enabled);
+        CombatActionHelpers.ApplyMeleeToVictim(Me, System, Victim, enabled);
     }
     protected virtual void Reset()
     {
@@ -94,11 +92,5 @@ public abstract class RaidCreatureAI(Creature creature, ScriptedInstance instanc
                 if (timer.Action()) timer.Remaining = timer.Repeat();
             }
         }
-    }
-    protected static bool Due(ref uint timer, uint diffMs)
-    {
-        if (timer > diffMs) { timer -= diffMs; return false; }
-        timer = 0;
-        return true;
     }
 }
