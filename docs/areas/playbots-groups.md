@@ -200,7 +200,9 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
 * **Answering calls** (`AnswerBotCalls`). A bot that hears another bot's looking-for-group line in a channel offers itself to the
   coordinator; if the coordinator can build the group with it (the caller is waiting, the hearer is eligible and the roll, with the
   `LfgAnswerBonus`, passes) it is pledged and joins at the next scan without the wait, and only then replies in the channel ("inv me,
-  I'll tank"). With no real match it says nothing.
+  I'll tank"). With no real match it says nothing. A hearer that is busy, of the other team, on another map or out of the level range
+  is turned away at once, the line's candidates are worked out once for all its hearers, and at most `MaxLfgAnswersPerLine` (4) hearers
+  get a place from one line.
 * **Guild calls** (`GuildCalls`). When the coordinator really has a dungeon or raid group forming, its longest-waiting bot says
   "anyone for <dungeon>?" in guild chat (once per ten minutes per guild and goal, dropped if the group is gone by then). Guildmates that
   heard it are weighed at the next scan without the wait.
@@ -225,6 +227,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
 | `LfgAnswerBonus` | 0.15 | chance bonus for a bot that answered the call (0..1) |
 | `RefuseAffinity` | -40 | affinity at or below which a bot never joins (-100..0) |
 | `AnswerBotCalls` | true | bots answer other bots' looking-for-group lines |
+| `MaxLfgAnswersPerLine` | 4 | the most bots that may take a place from one looking-for-group line (1..64) |
 | `GuildCalls` | true | the guild call for a forming group |
 | `Mentoring` | true | mentoring |
 | `MentorChance` | 0.3 | mentoring chance before Helpfulness (0..1) |

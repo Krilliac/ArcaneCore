@@ -1513,6 +1513,7 @@ How to read the tables:
 | `World:Playerbots:Groups:Cooperation:GuildBonus` | `float` | `0.2` | live | The chance and the preference a guildmate of a group's member gains (0..1). |
 | `World:Playerbots:Groups:Cooperation:GuildCalls` | `bool` | `true` | live | Let a guild's bot say "anyone for the dungeon?" in guild chat while a group of the guild's members is forming for it, and let the guildmates who hear it join at once (on by default). The line is said only when such a group exists. |
 | `World:Playerbots:Groups:Cooperation:LfgAnswerBonus` | `float` | `0.15` | live | The chance a bot that answered another bot's LFG or LFM line gains (0..1). |
+| `World:Playerbots:Groups:Cooperation:MaxLfgAnswersPerLine` | `int` | `4` | live | The most bots that may answer one LFG or LFM line of another bot (1..64, default 4): once that many hold a place in the group, the rest of the hearers of the line are not weighed at all. |
 | `World:Playerbots:Groups:Cooperation:MaxRaidSize` | `int` | `40` | live | The most members a raid made from a risk signal recruits (6..40). |
 | `World:Playerbots:Groups:Cooperation:MentorAffinity` | `int` | `30` | live | The affinity a mentor needs toward the friend (-100..100). |
 | `World:Playerbots:Groups:Cooperation:MentorChance` | `float` | `0.3` | live | The chance, times the mentor's helpfulness trait, that a bot able to mentor does (0..1). |

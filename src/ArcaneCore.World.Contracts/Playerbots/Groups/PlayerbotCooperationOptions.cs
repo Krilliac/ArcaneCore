@@ -40,6 +40,12 @@ public sealed class PlayerbotCooperationOptions
     public bool AnswerBotCalls { get; set; } = true;
 
     /// <summary>
+    /// The most bots that may answer one LFG or LFM line of another bot (1..64, default 4): once that many hold a place in the group, the
+    /// rest of the hearers of the line are not weighed at all.
+    /// </summary>
+    public int MaxLfgAnswersPerLine { get; set; } = 4;
+
+    /// <summary>
     /// Let a guild's bot say "anyone for the dungeon?" in guild chat while a group of the guild's members is forming for it, and let the
     /// guildmates who hear it join at once (on by default). The line is said only when such a group exists.
     /// </summary>
@@ -81,6 +87,7 @@ public sealed class PlayerbotCooperationOptions
         CheckUnit(GuildBonus, nameof(GuildBonus));
         CheckUnit(LfgAnswerBonus, nameof(LfgAnswerBonus));
         Check(RefuseAffinity, -100, 0, nameof(RefuseAffinity));
+        Check(MaxLfgAnswersPerLine, 1, 64, nameof(MaxLfgAnswersPerLine));
         CheckUnit(MentorChance, nameof(MentorChance));
         Check(MentorMaxMinutes, 1, 240, nameof(MentorMaxMinutes));
         Check(MentorLevelGap, 1, 60, nameof(MentorLevelGap));

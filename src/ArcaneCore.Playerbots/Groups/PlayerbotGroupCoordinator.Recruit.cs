@@ -137,7 +137,16 @@ public sealed partial class PlayerbotGroupCoordinator
     internal void NoteGuildCall(int guildId, (PlayerbotGroupGoalKind, uint) key)
     {
         if (guildId <= 0 || !Coop.GuildCalls) return;
-        if (_guildCalls.Count >= MaxPledges) _guildCalls.Clear();
+        if (_guildCalls.Count >= MaxPledges && !_guildCalls.ContainsKey((guildId, key)))
+        {
+            (int, (PlayerbotGroupGoalKind, uint)) oldest = default;
+            uint oldestUntil = 0;
+            bool any = false;
+            foreach (var (callKey, until) in _guildCalls)
+                if (!any || unchecked((int)(until - oldestUntil)) < 0) { oldest = callKey; oldestUntil = until; any = true; }
+            _guildCalls.Remove(oldest);
+        }
+
         _guildCalls[(guildId, key)] = unchecked(Now + PledgeLifeMs);
     }
 
@@ -322,10 +331,19 @@ public sealed partial class PlayerbotGroupCoordinator
         var anchorAt = new Vector3(anchor.X, anchor.Y, anchor.Z);
         int groupId = _waiting.TryGetValue(anchorCandidate.BotId, out Waiting? anchorWaiting) ? anchorWaiting.GroupId : 0; // stable while the group waits
         var ranked = new List<PlayerbotRecruitment.Ranked>();
-        for (int i = 0; i < _orderedBots.Count; i++)
+        int botCount = offer ? 1 : _orderedBots.Count; // an offer weighs the one bot that made it, found directly
+        for (int i = 0; i < botCount; i++)
         {
-            PlayerbotGroupBot bot = _orderedBots[i];
-            if (offer && bot.BotId != offerBy) continue;
+            PlayerbotGroupBot bot;
+            if (offer)
+            {
+                if (!_bots.TryGetValue(offerBy, out bot)) break;
+            }
+            else
+            {
+                bot = _orderedBots[i];
+            }
+
             if (!bot.Free || bot.Scripted || bot.Brain.Stay is not null || _memberOf.ContainsKey(bot.BotId) || _waiting.ContainsKey(bot.BotId)) continue;
             if (bot.Session.Player is not { IsInWorld: true, IsAlive: true } player || player.Combat.IsInCombat) continue;
             if (player.Team != team || player.MapId != goal.MeetingMap || player.Level < goal.MinLevel) continue;
@@ -402,31 +420,115 @@ public sealed partial class PlayerbotGroupCoordinator
     /// </summary>
     internal PlayerbotLfgOffer OfferLfg(Guid hearerBotId, Guid posterBotId)
     {
+        try
+        {
+            return OfferLfgCore(hearerBotId, posterBotId);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
+            logger.LogFault("playerbot.group-lfg", ex, "Playerbot LFG answer failed");
+            return new(PlayerbotLfgOfferOutcome.Declined);
+        }
+    }
+
+    /// <summary>
+    /// What one LFG line costs, computed once for all its hearers (keyed by the poster and the tick the line was heard in): the caller, the
+    /// waiting bots of its goal and team as candidates, and the anchor's level. <see cref="Answers"/> counts the places held so far.
+    /// </summary>
+    private sealed class LfgLine
+    {
+        internal Guid Poster;
+        internal uint Tick;
+        internal bool Valid;
+        internal Waiting? Caller;
+        internal Team Team;
+        internal int Size;
+        internal int AnchorLevel;
+        internal int Answers;
+        internal List<PlayerbotGroupCandidate> Candidates = [];
+    }
+
+    private readonly LfgLine _lfgLine = new();
+
+    /// <summary>How many times an LFG line's shared data was built (tests: one line heard by many bots builds it once).</summary>
+    internal int LfgLineBuilds { get; private set; }
+
+    private PlayerbotLfgOffer OfferLfgCore(Guid hearerBotId, Guid posterBotId)
+    {
         PlayerbotCooperationOptions coop = Coop;
         if (_world is null || !_options.Groups.Enabled || !coop.Recruit || !coop.AnswerBotCalls || hearerBotId == posterBotId
-            || !_waiting.TryGetValue(posterBotId, out Waiting? caller) || !TryPlayer(posterBotId, out Player? poster))
+            || !_waiting.TryGetValue(posterBotId, out Waiting? caller) || !_bots.TryGetValue(posterBotId, out PlayerbotGroupBot posterBot) || posterBot.Session.Player is not { } poster)
             return new(PlayerbotLfgOfferOutcome.NotWaiting);
         uint now = Now;
         if (IsPledged(hearerBotId, caller.Goal.Key, now)) return new(PlayerbotLfgOfferOutcome.AlreadyPledged);
-        Team team = poster.Team;
-        var wanting = new List<(Guid BotId, Waiting Waiting)>();
-        int size = 0;
-        foreach ((Guid botId, Waiting waiting) in _waiting)
-        {
-            if (waiting.Goal.Key != caller.Goal.Key || !TryPlayer(botId, out Player? other) || other.Team != team) continue;
-            wanting.Add((botId, waiting));
-            size = Math.Max(size, waiting.Goal.Size);
-        }
 
-        List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, caller.Goal);
-        PlayerbotGroupPlan? plan = PlanWithRecruits(candidates, size, caller.Goal, team, hearerBotId, out List<Guid> recruited);
+        // The hearer's own cheap rejects first, with nothing allocated: free, alive and out of combat, of the poster's team, on the meeting map, high enough.
+        if (!_bots.TryGetValue(hearerBotId, out PlayerbotGroupBot hearer) || !hearer.Free || hearer.Scripted || hearer.Brain.Stay is not null
+            || _memberOf.ContainsKey(hearerBotId) || _waiting.ContainsKey(hearerBotId)
+            || hearer.Session.Player is not { IsInWorld: true, IsAlive: true } hearerPlayer || hearerPlayer.Combat.IsInCombat
+            || hearerPlayer.Team != poster.Team || hearerPlayer.MapId != caller.Goal.MeetingMap || hearerPlayer.Level < caller.Goal.MinLevel)
+            return new(PlayerbotLfgOfferOutcome.Declined);
+
+        LfgLine line = _lfgLine;
+        if (!line.Valid || line.Poster != posterBotId || line.Tick != now || !ReferenceEquals(line.Caller, caller))
+            BuildLfgLine(line, posterBotId, caller, poster, now);
+        if (line.Candidates.Count == 0 || line.Answers >= coop.MaxLfgAnswersPerLine || Math.Abs(hearerPlayer.Level - line.AnchorLevel) > _options.Groups.LevelRange)
+            return new(PlayerbotLfgOfferOutcome.Declined);
+
+        PlayerbotGroupPlan? plan = PlanWithRecruits(line.Candidates, line.Size, caller.Goal, line.Team, hearerBotId, out List<Guid> recruited);
         if (plan is null || !recruited.Contains(hearerBotId)) return new(PlayerbotLfgOfferOutcome.Declined);
-        if (_pledges.Count >= MaxPledges) _pledges.Clear();
+        if (_pledges.Count >= MaxPledges && !MakeRoomForPledge()) return new(PlayerbotLfgOfferOutcome.Declined);
         _pledges[hearerBotId] = (caller.Goal.Key, unchecked(now + PledgeLifeMs));
+        line.Answers++;
         PlayerbotGroupRole role = PlayerbotGroupRole.Damage;
         foreach ((PlayerbotGroupCandidate member, PlayerbotGroupRole memberRole, byte _) in plan.Members)
             if (member.BotId == hearerBotId) role = memberRole;
         return new(PlayerbotLfgOfferOutcome.Pledged, role);
+    }
+
+    private void BuildLfgLine(LfgLine line, Guid posterBotId, Waiting caller, Player poster, uint now)
+    {
+        LfgLineBuilds++;
+        line.Valid = true;
+        line.Poster = posterBotId;
+        line.Tick = now;
+        line.Caller = caller;
+        line.Team = poster.Team;
+        line.Answers = 0;
+        line.AnchorLevel = 0;
+        var wanting = new List<(Guid BotId, Waiting Waiting)>();
+        int size = 0;
+        foreach ((Guid botId, Waiting waiting) in _waiting)
+        {
+            if (waiting.Goal.Key != caller.Goal.Key || !TryPlayer(botId, out Player? other) || other.Team != line.Team) continue;
+            wanting.Add((botId, waiting));
+            size = Math.Max(size, waiting.Goal.Size);
+        }
+
+        line.Size = size;
+        line.Candidates = BuildCandidates(wanting, caller.Goal);
+        if (line.Candidates.Count > 0 && TryPlayer(Oldest(line.Candidates).BotId, out Player? anchor)) line.AnchorLevel = anchor.Level;
+        else line.Candidates = [];
+    }
+
+    /// <summary>
+    /// The pledge table is full: drops the oldest pledge whose goal has no waiting group any more (nothing for it to join). False when
+    /// every pledge still has a live group: the new offer is not taken.
+    /// </summary>
+    private bool MakeRoomForPledge()
+    {
+        var live = new HashSet<(PlayerbotGroupGoalKind, uint)>();
+        foreach (Waiting waiting in _waiting.Values) live.Add(waiting.Goal.Key);
+        Guid oldest = Guid.Empty;
+        uint oldestUntil = 0;
+        foreach (var (botId, pledge) in _pledges)
+        {
+            if (live.Contains(pledge.Key)) continue;
+            if (oldest == Guid.Empty || unchecked((int)(pledge.Until - oldestUntil)) < 0) { oldest = botId; oldestUntil = pledge.Until; }
+        }
+
+        return oldest != Guid.Empty && _pledges.Remove(oldest);
     }
 
     /// <summary>

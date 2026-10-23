@@ -16561,6 +16561,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Groups:Cooperation:MaxLfgAnswersPerLine",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "4",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most bots that may answer one LFG or LFM line of another bot (1..64, default 4): once that many hold a place in the group, the rest of the hearers of the line are not weighed at all.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Groups:Cooperation:MaxRaidSize",
       "section": "World:Playerbots",
       "type": "int",

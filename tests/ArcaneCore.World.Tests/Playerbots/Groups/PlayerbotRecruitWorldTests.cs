@@ -324,6 +324,64 @@ public sealed class PlayerbotRecruitWorldTests
         Assert.Empty(world.Coordinator.TakeRecruitSays()); // a bot that answered the call already said so
     }
 
+    /// <summary>One LFG line heard by many free bots: the line's data is built once, and no more than MaxLfgAnswersPerLine of the hearers get a place.</summary>
+    [Fact]
+    public async Task OneLfgLineHeardByManyBots_IsBuiltOnce_AndAnsweredByAtMostTheCap()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Still(options);
+            options.Groups.Cooperation.RecruitRadiusYards = 1500;
+            options.Groups.Cooperation.RecruitBaseChance = 1f;
+            options.MaxBots = 40;
+            options.MaxRegisteredBots = 60;
+            options.Groups.Cooperation.MaxLfgAnswersPerLine = 4;
+        });
+        var (tank, _) = await WaitingPairAsync(world);
+        var hearers = new List<(Guid Id, string Name)>();
+        for (int i = 0; i < 24; i++)
+            hearers.Add(await world.AddBotAsync("Hearer" + (char)('a' + (i / 5)) + (char)('a' + (i % 5)), Human, Priest, 10, [LesserHeal, Smite], South + new Vector3(i % 5, i / 5, 0)));
+
+        (int builds, int pledged) = await world.OnWorldAsync(() =>
+        {
+            int before = world.Coordinator.LfgLineBuilds, answers = 0;
+            foreach ((Guid id, string _) in hearers) // one line, one tick
+                if (world.Coordinator.OfferLfg(id, tank.Id).Outcome == PlayerbotLfgOfferOutcome.Pledged) answers++;
+            return (world.Coordinator.LfgLineBuilds - before, answers);
+        });
+        Assert.Equal(1, builds);
+        Assert.Equal(4, pledged);
+    }
+
+    /// <summary>A hearer that cannot answer (busy, or out of the group's level range) is turned away without a single allocation.</summary>
+    [Fact]
+    public async Task ARejectedLfgHearer_CostsNoAllocation()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Still(options);
+            options.Groups.Cooperation.RecruitRadiusYards = 1500;
+            options.Groups.Cooperation.RecruitBaseChance = 1f;
+        });
+        var (tank, mage) = await WaitingPairAsync(world);
+        var high = await world.AddBotAsync("Hearerhigh", Human, Priest, 30, [LesserHeal, Smite], South);
+
+        long bytes = await world.OnWorldAsync(() =>
+        {
+            Assert.Equal(PlayerbotLfgOfferOutcome.Declined, world.Coordinator.OfferLfg(mage.Id, tank.Id).Outcome); // warm up: it waits itself
+            Assert.Equal(PlayerbotLfgOfferOutcome.Declined, world.Coordinator.OfferLfg(high.Id, tank.Id).Outcome); // builds the line's data once
+            long start = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++)
+            {
+                world.Coordinator.OfferLfg(mage.Id, tank.Id);  // a waiting bot: not free
+                world.Coordinator.OfferLfg(high.Id, tank.Id);  // 20 levels above the group's anchor
+            }
+
+            return GC.GetAllocatedBytesForCurrentThread() - start;
+        });
+        Assert.True(bytes < 1024, $"2000 rejected hearers allocated {bytes} bytes");
+    }
+
     [Fact]
     public async Task AnswerBotCallsOff_NoBotOffers()
     {
