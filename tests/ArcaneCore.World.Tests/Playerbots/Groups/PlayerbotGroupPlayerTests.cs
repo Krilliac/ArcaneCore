@@ -290,7 +290,8 @@ public sealed class PlayerbotGroupPlayerTests
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
-    public async Task AnEmoteFromAnIgnoredPlayer_ChangesNothingAndGetsNoReply(bool ignored, bool noticed)
+    [InlineData(true, true, AccountSecurity.GameMaster)] // a game master is never dropped, as in OnChat
+    public async Task AnEmoteFromAnIgnoredPlayer_ChangesNothingAndGetsNoReply(bool ignored, bool noticed, AccountSecurity security = AccountSecurity.Player)
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
         {
@@ -298,7 +299,7 @@ public sealed class PlayerbotGroupPlayerTests
             options.Chat.Speech.EmoteReplies = true;
             options.Chat.Speech.EmoteReplyGapSeconds = 1;
         });
-        await using WorldTestClient player = await world.World.EnterWorldAsync("EMOTEONE", "Emoteone", AccountSecurity.Player);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("EMOTEONE", "Emoteone", security);
         var bot = await world.AddBotAsync("Emotebot", Human, Warrior, 1, []);
         await world.OnWorldAsync(() =>
         {
@@ -315,12 +316,14 @@ public sealed class PlayerbotGroupPlayerTests
             });
         var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
         world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
-        ulong botGuid = await world.OnWorldAsync(() => world.Player(bot.Id).Guid.Value);
-        var emote = new PacketWriter(16);
-        emote.WriteUInt32(101); // WAVE
-        emote.WriteUInt32(0);
-        emote.WriteUInt64(botGuid);
-        await player.SendAsync(WorldOpcode.CmsgTextEmote, emote.ToArray());
+        // The server's SMSG_TEXT_EMOTE is handed to the bot's session as it would be by the broadcast: the bot walks off on its errands, and a
+        // broadcast from a player left behind would not reach it.
+        await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Emoteone")!;
+            world.Session(bot.Id).Send(WorldOpcode.SmsgTextEmote, ArcaneCore.World.Packets.ChatPackets.BuildTextEmote(them.Guid, 101 /* WAVE */, 0, bot.Name));
+            return true;
+        });
         await world.RunAsync(20_000);
 
         bool remembered = await world.OnWorldAsync(() =>

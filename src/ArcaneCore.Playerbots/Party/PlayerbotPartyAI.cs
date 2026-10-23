@@ -517,15 +517,16 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     private void OnTextEmote(Player player, byte[] payload)
     {
-        // As in OnChat: an emote from a player on the bot's ignore list is not noticed (no memory change, no reply); the master is never dropped.
-        if (PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote heard) && heard.Emoter != player.Guid && heard.Emoter != ResolveMaster(player)
-            && Services.Social?.Friends.HasIgnore(player, heard.Emoter) == true)
-            return;
-        RecordEmote(player, payload);
-        if (_chat is not { IsActive: true } chat || chat.SpeechOptions is not { Enabled: true, EmoteReplies: true } options) return;
         if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
+        Player? emoter = _session.World.FindOnlinePlayer(emote.Emoter);
+        // As in OnChat: an emote from a player on the bot's ignore list is not noticed (no memory change, no reply); the master and a game master are never dropped.
+        if (emote.Emoter != ResolveMaster(player) && !(emoter is not null && IsGm(emoter))
+            && Services.Social?.Friends.HasIgnore(player, emote.Emoter) == true)
+            return;
+        RecordEmote(player, in emote);
+        if (_chat is not { IsActive: true } chat || chat.SpeechOptions is not { Enabled: true, EmoteReplies: true } options) return;
         if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
-        if (!player.IsAlive || player.Combat.IsInCombat || _session.World.FindOnlinePlayer(emote.Emoter) is not { } emoter) return;
+        if (!player.IsAlive || player.Combat.IsInCombat || emoter is null) return;
         bool fromBot = emoter.Session is WorldSession { IsManaged: true };
         long now = Now;
         long gap = options.EmoteReplyGapSeconds * 1000L;
@@ -543,10 +544,9 @@ internal sealed class PlayerbotPartyAI
     /// A text emote aimed at this bot by name, from any faction, moves its memory of the emoter: friendly raises affinity, rude lowers it, the
     /// rest is ignored. Independent of the chat service, so a bot with chat off still remembers.
     /// </summary>
-    private void RecordEmote(Player player, byte[] payload)
+    private void RecordEmote(Player player, in PlayerbotTextEmote emote)
     {
         if (Social is not { Enabled: true } social) return;
-        if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
         if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
         BotSocial.PlayerbotEmoteMood mood = BotSocial.PlayerbotEmoteMoods.Classify(emote.TextEmote);
         if (mood is BotSocial.PlayerbotEmoteMood.Neutral or BotSocial.PlayerbotEmoteMood.Help) return;
@@ -557,10 +557,11 @@ internal sealed class PlayerbotPartyAI
             _ => BotSocial.PlayerbotSocialEvent.RudeEmote,
         };
         // The world lookup is part of the recording step: a fault in it is recorded at the social-memory site, never thrown into the packet handler.
+        ObjectGuid emoterGuid = emote.Emoter; // an in parameter cannot be captured
         social.Guarded(() =>
         {
-            bool otherFaction = _session.World.FindOnlinePlayer(emote.Emoter) is { } emoter && emoter.Team != player.Team;
-            social.NoteById(_botId, player.Guid, emote.Emoter, noted, otherFaction);
+            bool otherFaction = _session.World.FindOnlinePlayer(emoterGuid) is { } emoter && emoter.Team != player.Team;
+            social.NoteById(_botId, player.Guid, emoterGuid, noted, otherFaction);
         });
     }
 
