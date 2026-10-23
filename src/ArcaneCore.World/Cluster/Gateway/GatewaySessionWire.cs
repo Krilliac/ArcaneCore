@@ -1,10 +1,7 @@
 using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Protocol;
-
-[assembly: InternalsVisibleTo("ArcaneCore.Gateway.Tests")]
 
 namespace ArcaneCore.World.Cluster.Gateway;
 

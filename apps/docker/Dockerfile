@@ -12,7 +12,7 @@ FROM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:bfabf51e74c5a7cf2fc4eac85
 ARG CONFIGURATION=Release
 WORKDIR /src
 # .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
-COPY global.json Directory.Build.props ArcaneCore.slnx .editorconfig ./
+COPY global.json Directory.Build.props Directory.Packages.props ArcaneCore.slnx .editorconfig ./
 COPY src/ src/
 COPY tools/ tools/
 # Locked mode: the restore must match the packages.lock.json committed beside each project (exact versions and content hashes),

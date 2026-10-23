@@ -1,11 +1,7 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using Microsoft.Extensions.Logging;
-
-[assembly: InternalsVisibleTo("ArcaneCore.World.Tests")]
-[assembly: InternalsVisibleTo("ArcaneCore.Benchmarks")]
 
 namespace ArcaneCore.World.Economy;
 

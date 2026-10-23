@@ -3,6 +3,7 @@
   <!-- Compiles tools/hotmodule-template/GmCommands (the documented template module) against the current ArcaneCore.World, so a template that
        stops building or stops loading fails a test. Assembly name GmCommands. Not in ArcaneCore.slnx; built through the test project's reference. -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>GmCommands</AssemblyName>
     <RootNamespace>GmCommands</RootNamespace>
     <IsPackable>false</IsPackable>
