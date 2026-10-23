@@ -475,6 +475,65 @@ public sealed class PlayerbotRecruitWorldTests
         Assert.Equal(0, Heard(healer.Id, tank.Id));      // answered once
     }
 
+    /// <summary>
+    /// Many free bots hear two bots' LFG posts through the chat service, over several ticks (their thinks are staggered as in production):
+    /// each post is built once, and at most MaxLfgAnswersPerLine hearers pledge and reply for each post, whatever tick they hear it in.
+    /// </summary>
+    [Fact]
+    public async Task TwoLfgPosts_HeardByManyBotsOverSeveralTicks_AreBuiltOnceAndAnsweredWithinTheCapEach()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Still(options);
+            options.MaxBots = 60;
+            options.MaxRegisteredBots = 80;
+            options.Chat.Enabled = true;
+            options.Groups.Cooperation.RecruitBaseChance = 1f;
+            options.Groups.Cooperation.RecruitRadiusYards = 1500;
+            options.Groups.Cooperation.MaxLfgAnswersPerLine = 4;
+        });
+        var (tank, mage) = await WaitingPairAsync(world);
+        var healers = new List<(Guid Id, string Name)>();
+        for (int i = 0; i < 32; i++)
+            healers.Add(await world.AddBotAsync("Lfghear" + (char)('a' + (i / 8)) + (char)('a' + (i % 8)), Human, Priest, 10, [LesserHeal, Smite], South + new Vector3(i % 8, i / 8, 0)));
+        PlayerbotSocialFeature feature = world.World.Services.GetRequiredService<PlayerbotSocialFeature>();
+        PlayerbotChat chat = world.Bots.Chat!;
+        Assert.True(await world.RunUntilAsync(10_000, () => chat.Responder is not null), await world.TraceAsync());
+        long buildsBefore = await world.OnWorldAsync(() => (long)world.Coordinator.LfgLineBuilds);
+
+        // Each post is said once (the voice board holds it); then every hearer hears it, a few per tick.
+        await world.OnWorldAsync(() =>
+        {
+            foreach (var poster in new[] { tank, mage })
+                chat.Voice.Post(poster.Id, new PlayerbotVoicePost(PlayerbotVoicePostKind.LookingForGroup, chat.NowMs, "the ogre", MinLevel: 1));
+            return true;
+        });
+        long Hear(Guid hearer, (Guid Id, string Name) poster) => world.OnWorldAsync(() =>
+        {
+            Player hearing = world.Player(hearer), speaking = world.Player(poster.Id);
+            long before = feature.Voice.Asked;
+            chat.Hear(new BotHeardLine(hearer, hearing.Guid, hearing.Name, ChatType.Channel, "LookingForGroup", speaking.Guid, speaking.Name,
+                SenderIsBot: true, "LFM the ogre need heals", AddressesBot: false, FirstHearing: true));
+            return feature.Voice.Asked - before;
+        }).GetAwaiter().GetResult();
+
+        long fromTank = 0, fromMage = 0;
+        for (int batch = 0; batch < 4; batch++)
+        {
+            foreach (var hearer in healers.Skip(batch * 8).Take(8))
+            {
+                fromTank += Hear(hearer.Id, tank);
+                fromMage += Hear(hearer.Id, mage); // the second poster is interleaved with the first
+            }
+
+            await world.RunAsync(100); // the next hearers think in a later tick
+        }
+
+        Assert.InRange(fromTank, 1, 4);
+        Assert.InRange(fromMage, 1, 4);
+        Assert.Equal(2, await world.OnWorldAsync(() => (long)world.Coordinator.LfgLineBuilds) - buildsBefore); // once per post
+    }
+
     [Fact]
     public async Task AGuildCall_ForADungeonGroup_BringsAGuildmateWithoutTheWait_AndOnlyThen()
     {

@@ -198,6 +198,7 @@ public sealed partial class PlayerbotGroupCoordinator
         _invitedPlayers.Clear();
         _recruitTried.Clear();
         _recruitRefused.Clear();
+        _lfgPosts.Clear();
         _guildCalls.Clear();
         _recruitSays.Clear();
         _capLoggedMs = 0;
@@ -426,11 +427,11 @@ public sealed partial class PlayerbotGroupCoordinator
     /// and the coordinator can build a group with it. Pledged: the bot is held for the group and joins at the next scan without the wait or a
     /// second roll; the voice then answers "inv me". Anything else: no answer is given.
     /// </summary>
-    internal PlayerbotLfgOffer OfferLfg(Guid hearerBotId, Guid posterBotId)
+    internal PlayerbotLfgOffer OfferLfg(Guid hearerBotId, Guid posterBotId, long postId = 0)
     {
         try
         {
-            return OfferLfgCore(hearerBotId, posterBotId);
+            return OfferLfgCore(hearerBotId, posterBotId, postId);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -441,14 +442,15 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>
-    /// What one LFG line costs, computed once for all its hearers (keyed by the poster and the tick the line was heard in): the caller, the
-    /// waiting bots of its goal and team as candidates, and the anchor's level. <see cref="Answers"/> counts the places held so far.
+    /// What one LFG post costs, computed once for all its hearers however many ticks they hear it over (keyed by the poster and the post's
+    /// own identity, <c>postId</c>: the voice board's time of the post): the caller, the waiting bots of its goal and team as candidates, and
+    /// the anchor's level. <see cref="Answers"/> counts the places held for the post, for the post's life (<see cref="LfgPostLifeMs"/>).
     /// </summary>
     private sealed class LfgLine
     {
         internal Guid Poster;
-        internal uint Tick;
-        internal bool Valid;
+        internal long PostId;
+        internal uint CreatedMs;
         internal Waiting? Caller;
         internal Team Team;
         internal int Size;
@@ -457,12 +459,14 @@ public sealed partial class PlayerbotGroupCoordinator
         internal List<PlayerbotGroupCandidate> Candidates = [];
     }
 
-    private readonly LfgLine _lfgLine = new();
+    private const int MaxLfgPosts = 64;
+    private const uint LfgPostLifeMs = 30_000;
+    private readonly List<LfgLine> _lfgPosts = [];
 
     /// <summary>How many times an LFG line's shared data was built (tests: one line heard by many bots builds it once).</summary>
     internal int LfgLineBuilds { get; private set; }
 
-    private PlayerbotLfgOffer OfferLfgCore(Guid hearerBotId, Guid posterBotId)
+    private PlayerbotLfgOffer OfferLfgCore(Guid hearerBotId, Guid posterBotId, long postId)
     {
         PlayerbotCooperationOptions coop = Coop;
         if (_world is null || !_options.Groups.Enabled || !coop.Recruit || !coop.AnswerBotCalls || hearerBotId == posterBotId
@@ -478,9 +482,7 @@ public sealed partial class PlayerbotGroupCoordinator
             || hearerPlayer.Team != poster.Team || hearerPlayer.MapId != caller.Goal.MeetingMap || hearerPlayer.Level < caller.Goal.MinLevel)
             return new(PlayerbotLfgOfferOutcome.Declined);
 
-        LfgLine line = _lfgLine;
-        if (!line.Valid || line.Poster != posterBotId || line.Tick != now || !ReferenceEquals(line.Caller, caller))
-            BuildLfgLine(line, posterBotId, caller, poster, now);
+        LfgLine line = LfgPostFor(posterBotId, postId, caller, poster, now);
         if (line.Candidates.Count == 0 || line.Answers >= coop.MaxLfgAnswersPerLine || Math.Abs(hearerPlayer.Level - line.AnchorLevel) > _options.Groups.LevelRange)
             return new(PlayerbotLfgOfferOutcome.Declined);
 
@@ -495,15 +497,41 @@ public sealed partial class PlayerbotGroupCoordinator
         return new(PlayerbotLfgOfferOutcome.Pledged, role);
     }
 
-    private void BuildLfgLine(LfgLine line, Guid posterBotId, Waiting caller, Player poster, uint now)
+    /// <summary>
+    /// The entry of the post (at most <see cref="MaxLfgPosts"/>, the oldest dropped): found without allocating; made, or its data built again
+    /// (the answer count kept), when the caller's waiting entry is another or a candidate has stopped waiting.
+    /// </summary>
+    private LfgLine LfgPostFor(Guid posterBotId, long postId, Waiting caller, Player poster, uint now)
+    {
+        LfgLine? line = null;
+        for (int i = _lfgPosts.Count - 1; i >= 0; i--)
+        {
+            LfgLine entry = _lfgPosts[i];
+            if (unchecked(now - entry.CreatedMs) > LfgPostLifeMs) { _lfgPosts.RemoveAt(i); continue; }
+            if (entry.Poster == posterBotId && entry.PostId == postId) line = entry;
+        }
+
+        if (line is null)
+        {
+            if (_lfgPosts.Count >= MaxLfgPosts) _lfgPosts.RemoveAt(0);
+            line = new LfgLine { Poster = posterBotId, PostId = postId, CreatedMs = now };
+            _lfgPosts.Add(line);
+            BuildLfgLine(line, caller, poster);
+            return line;
+        }
+
+        bool stale = !ReferenceEquals(line.Caller, caller);
+        for (int i = 0; !stale && i < line.Candidates.Count; i++)
+            stale = !_waiting.ContainsKey(line.Candidates[i].BotId);
+        if (stale) BuildLfgLine(line, caller, poster);
+        return line;
+    }
+
+    private void BuildLfgLine(LfgLine line, Waiting caller, Player poster)
     {
         LfgLineBuilds++;
-        line.Valid = true;
-        line.Poster = posterBotId;
-        line.Tick = now;
         line.Caller = caller;
         line.Team = poster.Team;
-        line.Answers = 0;
         line.AnchorLevel = 0;
         var wanting = new List<(Guid BotId, Waiting Waiting)>();
         int size = 0;
