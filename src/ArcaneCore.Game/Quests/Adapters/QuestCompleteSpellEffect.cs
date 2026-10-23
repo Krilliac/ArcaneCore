@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
@@ -11,18 +10,18 @@ namespace ArcaneCore.Game.Quests.Adapters;
 /// </summary>
 public static class QuestSpellEvents
 {
-    private static readonly ConditionalWeakTable<SpellSystem, Action<Player, uint>> s_sinks = new();
+    private static readonly InstanceAttachments<SpellSystem, Action<Player, uint>> s_sinks = new();
 
     /// <summary>Route SPELL_EFFECT_QUEST_COMPLETE of <paramref name="spells"/> to <paramref name="sink"/> (player, quest id).</summary>
     public static void Install(SpellSystem spells, Action<Player, uint> sink)
     {
         ArgumentNullException.ThrowIfNull(spells);
         ArgumentNullException.ThrowIfNull(sink);
-        s_sinks.AddOrUpdate(spells, sink);
+        s_sinks.Attach(spells, sink);
     }
 
     /// <summary>The sink installed on <paramref name="spells"/>, or null.</summary>
-    public static Action<Player, uint>? For(SpellSystem spells) => s_sinks.TryGetValue(spells, out Action<Player, uint>? sink) ? sink : null;
+    public static Action<Player, uint>? For(SpellSystem spells) => s_sinks.Find(spells);
 }
 
 /// <summary>

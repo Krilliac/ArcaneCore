@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Reputation;
@@ -10,14 +9,14 @@ namespace ArcaneCore.Game.Reputation;
 /// </summary>
 public static class ReputationEnvironment
 {
-    private static readonly ConditionalWeakTable<SpellSystem, ReputationService> s_services = new();
+    private static readonly InstanceAttachments<SpellSystem, ReputationService> s_services = new();
 
     public static void Register(SpellSystem system, ReputationService service)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(service);
-        s_services.AddOrUpdate(system, service);
+        s_services.Attach(system, service);
     }
 
-    public static ReputationService? For(SpellSystem system) => s_services.TryGetValue(system, out ReputationService? service) ? service : null;
+    public static ReputationService? For(SpellSystem system) => s_services.Find(system);
 }
