@@ -61,12 +61,15 @@ public sealed partial class PlayerbotGroupCoordinator
     private readonly List<(Guid BotId, PlayerbotGroupRole Role)> _recruitSays = [];
 
     /// <summary>
-    /// The candidates that refused a waiting group (its <see cref="Waiting.GroupId"/>), with the refusal window of the refusal
-    /// (<see cref="PlayerbotCooperationOptions.RefusalMemoryMinutes"/>): not asked again inside that window, rolled afresh in a later one.
+    /// The candidates that refused a waiting group (its <see cref="Waiting.GroupId"/>), with the time of the refusal (world ms): not asked again
+    /// for <see cref="PlayerbotCooperationOptions.RefusalMemoryMinutes"/> from then, rolled afresh (in the pair's next refusal window) after it.
     /// </summary>
     private readonly Dictionary<(int GroupId, Guid BotId), uint> _recruitRefused = [];
 
-    private uint RefusalWindow(uint now) => now / ((uint)Coop.RefusalMemoryMinutes * 60_000u);
+    private uint RefusalPeriodMs => (uint)Coop.RefusalMemoryMinutes * 60_000u;
+
+    /// <summary>When the candidate refused the waiting group (world ms), 0 when it holds no refusal (tests).</summary>
+    internal uint RefusedAtMs(Guid botId, int groupId) => _recruitRefused.GetValueOrDefault((groupId, botId));
 
     private const int MaxRefusals = 16_384;
     private uint _capLoggedMs;
@@ -184,9 +187,9 @@ public sealed partial class PlayerbotGroupCoordinator
             // A refusal lives as long as its waiting group: once no bot waits in that group any more it is forgotten.
             var live = new HashSet<int>();
             foreach (Waiting waiting in _waiting.Values) live.Add(waiting.GroupId);
-            uint window = RefusalWindow(now);
-            foreach (var (refusal, refusedIn) in _recruitRefused)
-                if (!live.Contains(refusal.GroupId) || refusedIn != window) _recruitRefused.Remove(refusal);
+            uint period = RefusalPeriodMs;
+            foreach (var (refusal, refusedAt) in _recruitRefused)
+                if (!live.Contains(refusal.GroupId) || unchecked(now - refusedAt) >= period) _recruitRefused.Remove(refusal);
             if (_recruitRefused.Count > MaxRefusals) _recruitRefused.Clear();
         }
     }
@@ -338,7 +341,7 @@ public sealed partial class PlayerbotGroupCoordinator
         float radiusSq = radius * radius;
         var anchorAt = new Vector3(anchor.X, anchor.Y, anchor.Z);
         int groupId = _waiting.TryGetValue(anchorCandidate.BotId, out Waiting? anchorWaiting) ? anchorWaiting.GroupId : 0; // stable while the group waits
-        uint window = RefusalWindow(now);
+        uint refusalPeriod = RefusalPeriodMs;
         var ranked = new List<PlayerbotRecruitment.Ranked>();
         int botCount = offer ? 1 : _orderedBots.Count; // an offer weighs the one bot that made it, found directly
         for (int i = 0; i < botCount; i++)
@@ -365,7 +368,7 @@ public sealed partial class PlayerbotGroupCoordinator
             bool called = guildId != 0 && callGuilds is not null && callGuilds.Contains(guildId);
             if (!offer && !waited && !pledged && !called) continue;
             if (PlayerbotMageService.IsServing(player) || PlayerbotMageService.IsActive(player)) continue;
-            if (IsSetAside(bot.BotId, goal.Key) || (!offer && _recruitRefused.TryGetValue((groupId, bot.BotId), out uint refusedIn) && refusedIn == window)) continue;
+            if (IsSetAside(bot.BotId, goal.Key) || (!offer && _recruitRefused.TryGetValue((groupId, bot.BotId), out uint refusedAt) && unchecked(now - refusedAt) < refusalPeriod)) continue;
             if (!PlayerbotRecruitment.GoalYields(bot.Brain.Goal, bot.Brain.Goal == PlayerbotGoalKind.Quest ? RemainingObjectives(player, bot.Brain.QuestId) : 0)) continue;
             if (groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null) continue;
 
@@ -398,9 +401,9 @@ public sealed partial class PlayerbotGroupCoordinator
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, affinityToAnchor, worst, rival, fillsRole, guildmate,
                 AnsweredCall: offer || pledged || called);
             if (PlayerbotRecruitment.Refuses(coop, facts)) continue;
-            if (!pledged && !PlayerbotRecruitment.Accepts(coop, player.Guid.Value, PlayerbotRecruitment.RollGroup(groupId, window), facts))
+            if (!pledged && !PlayerbotRecruitment.Accepts(coop, player.Guid.Value, PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow(now, refusalPeriod, bot.BotId, groupId)), facts))
             {
-                if (!offer) _recruitRefused[(groupId, bot.BotId)] = window; // decided: not asked again for this group
+                if (!offer) _recruitRefused[(groupId, bot.BotId)] = now; // decided: not asked again for this group
                 continue;
             }
 

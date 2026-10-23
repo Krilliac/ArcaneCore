@@ -72,10 +72,21 @@ internal static class PlayerbotRecruitment
     }
 
     /// <summary>
-    /// The seed a candidate rolls on for a waiting group in one refusal window (<paramref name="window"/>: time divided by the refusal memory):
+    /// The seed a candidate rolls on for a waiting group in one refusal window (<paramref name="window"/>: see <see cref="RefusalWindow"/>):
     /// the group's id in the first window, a different one in each later window.
     /// </summary>
     internal static int RollGroup(int groupId, uint window) => unchecked(groupId ^ (int)(window * 0x9E3779B1u));
+
+    /// <summary>
+    /// The offset of one (candidate, group) pair's refusal windows, in [0, <paramref name="periodMs"/>): a hash of the pair, so the windows of
+    /// different pairs do not all start at the same instant.
+    /// </summary>
+    internal static uint RefusalPhase(uint periodMs, Guid botId, int groupId)
+        => (uint)(PlayerbotContention.Mix((ulong)(uint)botId.GetHashCode(), (ulong)(uint)groupId) % periodMs);
+
+    /// <summary>The refusal window of the pair at <paramref name="nowMs"/>: time plus the pair's phase, divided by the period (<see cref="RollGroup"/>'s <c>window</c>).</summary>
+    internal static uint RefusalWindow(uint nowMs, uint periodMs, Guid botId, int groupId)
+        => unchecked(nowMs + RefusalPhase(periodMs, botId, groupId)) / periodMs;
 
     /// <summary>The candidate's roll for the group: a fixed number in [0, 1) for the pair, whoever asks and whenever.</summary>
     internal static double Roll(ulong candidateGuid, int groupId)
