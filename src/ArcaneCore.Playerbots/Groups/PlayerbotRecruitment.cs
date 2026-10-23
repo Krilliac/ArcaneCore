@@ -73,7 +73,8 @@ internal static class PlayerbotRecruitment
 
     /// <summary>
     /// The seed a candidate rolls on for a waiting group in one refusal window (<paramref name="window"/>: see <see cref="RefusalWindow"/>):
-    /// the group's id in the first window, a different one in each later window.
+    /// window 0 rolls on the group's id, every other window on a different seed. The pair's windows are phase-shifted ("RefusalPhase"), so
+    /// the window number is not the same for every pair at one instant.
     /// </summary>
     internal static int RollGroup(int groupId, uint window) => unchecked(groupId ^ (int)(window * 0x9E3779B1u));
 

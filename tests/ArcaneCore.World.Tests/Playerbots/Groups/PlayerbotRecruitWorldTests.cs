@@ -254,7 +254,9 @@ public sealed class PlayerbotRecruitWorldTests
         Assert.InRange(next, 0.0, 0.9);
         uint refusedAt = await world.OnWorldAsync(() => world.Coordinator.RefusedAtMs(healer.Id, gid));
         Assert.InRange(refusedAt, 10_000u, (uint)world.World.Host.World.NowMs); // the time of the refusal, not a window number
-        await world.RunAsync(await world.OnWorldAsync(() => refusedAt + period - 6_000 - (uint)world.World.Host.World.NowMs));
+        long untilExpiry = await world.OnWorldAsync(() => (long)refusedAt + period - 6_000 - world.World.Host.World.NowMs);
+        Assert.True(untilExpiry > 0, $"the refusal memory ran out before the check ({untilExpiry} ms left)");
+        await world.RunAsync((uint)untilExpiry);
         Assert.False(world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null), "asked again before the refusal memory ran out: " + await world.TraceAsync());
         bool walkedIn = false; // the healer must be recruited, not arrive at the quest and wait for a group itself
         Assert.True(await world.RunUntilAsync(30_000, () =>
@@ -501,41 +503,46 @@ public sealed class PlayerbotRecruitWorldTests
         var healers = new List<(Guid Id, string Name)>();
         for (int i = 0; i < 32; i++)
             healers.Add(await world.AddBotAsync("Lfghear" + (char)('a' + (i / 8)) + (char)('a' + (i % 8)), Human, Priest, 10, [LesserHeal, Smite], South + new Vector3(i % 8, i / 8, 0)));
-        PlayerbotSocialFeature feature = world.World.Services.GetRequiredService<PlayerbotSocialFeature>();
         PlayerbotChat chat = world.Bots.Chat!;
         Assert.True(await world.RunUntilAsync(10_000, () => chat.Responder is not null), await world.TraceAsync());
         long buildsBefore = await world.OnWorldAsync(() => (long)world.Coordinator.LfgLineBuilds);
 
         // Each post is said once (the voice board holds it); then every hearer hears it, a few per tick.
-        await world.OnWorldAsync(() =>
+        long postedMs = await world.OnWorldAsync(() =>
         {
+            long at = chat.NowMs;
             foreach (var poster in new[] { tank, mage })
-                chat.Voice.Post(poster.Id, new PlayerbotVoicePost(PlayerbotVoicePostKind.LookingForGroup, chat.NowMs, "the ogre", MinLevel: 1));
-            return true;
+                chat.Voice.Post(poster.Id, new PlayerbotVoicePost(PlayerbotVoicePostKind.LookingForGroup, at, "the ogre", MinLevel: 1));
+            return at;
         });
-        long Hear(Guid hearer, (Guid Id, string Name) poster) => world.OnWorldAsync(() =>
+        void Hear(Guid hearer, (Guid Id, string Name) poster) => world.OnWorldAsync(() =>
         {
             Player hearing = world.Player(hearer), speaking = world.Player(poster.Id);
-            long before = feature.Voice.Asked;
             chat.Hear(new BotHeardLine(hearer, hearing.Guid, hearing.Name, ChatType.Channel, "LookingForGroup", speaking.Guid, speaking.Name,
                 SenderIsBot: true, "LFM the ogre need heals", AddressesBot: false, FirstHearing: true));
-            return feature.Voice.Asked - before;
+            return true;
         }).GetAwaiter().GetResult();
 
-        long fromTank = 0, fromMage = 0;
         for (int batch = 0; batch < 4; batch++)
         {
             foreach (var hearer in healers.Skip(batch * 8).Take(8))
             {
-                fromTank += Hear(hearer.Id, tank);
-                fromMage += Hear(hearer.Id, mage); // the second poster is interleaved with the first
+                Hear(hearer.Id, tank);
+                Hear(hearer.Id, mage); // the second poster is interleaved with the first
             }
 
             await world.RunAsync(100); // the next hearers think in a later tick
         }
 
+        // The places held (pledges, not replies): each post holds between one and the cap, and the pledged hearers are exactly those places.
+        (int fromTank, int fromMage, int pledgedHealers) = await world.OnWorldAsync(() =>
+        {
+            var goalKey = world.Coordinator.WaitingBots.Single(w => w.BotId == tank.Id).Goal.Key;
+            return (world.Coordinator.LfgAnswersOf(tank.Id, postedMs), world.Coordinator.LfgAnswersOf(mage.Id, postedMs), healers.Count(h => world.Coordinator.IsPledged(h.Id, goalKey)));
+        });
         Assert.InRange(fromTank, 1, 4);
         Assert.InRange(fromMage, 1, 4);
+        Assert.Equal(fromTank + fromMage, pledgedHealers);
         Assert.Equal(2, await world.OnWorldAsync(() => (long)world.Coordinator.LfgLineBuilds) - buildsBefore); // once per post
     }
 
