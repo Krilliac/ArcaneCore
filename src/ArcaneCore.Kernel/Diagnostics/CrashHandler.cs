@@ -218,7 +218,8 @@ public sealed class CrashHandler : IDisposable
         }
 
         // A cancelled or timed-out HTTP request surfaces as IOException -> SocketException (e.g. 995), which is
-        // the same expected cancellation signal as the bare exceptions above.
+        // the same expected cancellation signal as the bare exceptions above. Like the bare-SocketException rule this also hides genuine
+        // connection resets (10054) from the first-chance log; unhandled and fatal reports are unaffected.
         if (exception is IOException && InnerChainContainsCancellationOrSocket(exception))
         {
             return true;

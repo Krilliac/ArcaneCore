@@ -170,6 +170,24 @@ public sealed class CrashReportTests
         Assert.False(CrashHandler.ShouldIgnoreFirstChance(new IOException("wrapped", new InvalidOperationException("not a socket"))));
     }
 
+    [Fact]
+    public void ShouldIgnoreFirstChance_IoExceptionInnerChainIsDepthCapped()
+    {
+        static IOException Wrap(int wrappers)
+        {
+            Exception cur = new System.Net.Sockets.SocketException(995);
+            for (int i = 0; i < wrappers; i++)
+            {
+                cur = new InvalidOperationException("layer", cur);
+            }
+
+            return new IOException("outer", cur);
+        }
+
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(Wrap(7))); // the socket is the 8th inner exception: inside the cap
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(Wrap(8))); // the 9th: past the cap, so reported
+    }
+
     private static void ThrowDeep() => throw new InvalidOperationException("deep failure");
 
     private sealed class FixedProvider : ICrashContextProvider
