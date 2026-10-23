@@ -131,6 +131,8 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (PlayerbotGroupCandidate bot in bots)
         {
             if (!memory.TryGet(bot.BotId, real.Guid.Value, out PlayerbotRelation relation)) continue;
+            // NoWhispers is a normal-layer flag on purpose: a player the bot has muted ("stop whispering me") is not invited into its group
+            // either; it is the player's own say over contact, not a War Mode or rival state.
             if (memory.IsRival(relation) || relation.Flags.HasFlag(PlayerbotRelationFlags.NoWhispers)) return false;
             if (memory.EffectiveAffinity(relation) >= groups.InvitePlayerAffinity) liked = true;
             role |= relation.Flags & roles;

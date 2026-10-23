@@ -543,6 +543,23 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotSocialLists_ARuleThatTiesTwoValuesTogether_IsEnforcedOnAReload()
+    {
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Lists": { "FriendAffinity": 40, "UnfriendAffinity": 10 } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(40, playerbots.Social.Lists.FriendAffinity);
+
+        // Each value alone is in range; together UnfriendAffinity (50) is above FriendAffinity (40).
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Lists": { "FriendAffinity": 40, "UnfriendAffinity": 50 } } } } }""");
+        ReloadResult refused = await coordinator.ReloadAsync("config");
+        Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+        Assert.Equal(10, playerbots.Social.Lists.UnfriendAffinity);
+        Assert.Equal(40, playerbots.Social.Lists.FriendAffinity);
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
