@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using ArcaneCore.Atlas.Core;
 
@@ -49,121 +48,20 @@ public sealed class ParseCache<TKey, TValue>(long maxCost)
     where TKey : notnull
     where TValue : class
 {
-    private readonly ConcurrentDictionary<TKey, Lazy<Entry>> _entries = new();
-    private readonly LinkedList<TKey> _lru = new();
-    private readonly Dictionary<TKey, Slot> _slots = new();
-    private readonly Lock _lruGate = new();
-    private long _cost;
-    private long _hits;
-    private long _loads;
-
-    private sealed class Slot(LinkedListNode<TKey> node, long cost)
-    {
-        public LinkedListNode<TKey> Node { get; } = node;
-
-        public long Cost { get; } = cost;
-    }
-
-    private sealed record Entry(ParsedFile<TValue> File, long Cost);
+    private readonly CostBoundedLazyCache<TKey, ParsedFile<TValue>> _cache = new(maxCost);
 
     /// <summary>Counters for status reports.</summary>
-    public ParseCacheStats Stats => new(_entries.Count, Interlocked.Read(ref _cost), Interlocked.Read(ref _hits), Interlocked.Read(ref _loads));
+    public ParseCacheStats Stats => new(_cache.Count, _cache.Cost, _cache.Hits, _cache.Loads);
 
     /// <summary>The cached result when a load for <paramref name="key"/> has finished; never loads.</summary>
-    public bool TryPeek(TKey key, out ParsedFile<TValue> file)
-    {
-        if (_entries.TryGetValue(key, out Lazy<Entry>? lazy) && lazy.IsValueCreated)
-        {
-            file = lazy.Value.File;
-            return true;
-        }
-
-        file = default;
-        return false;
-    }
+    public bool TryPeek(TKey key, out ParsedFile<TValue> file) => _cache.TryPeek(key, out file);
 
     /// <summary>The result for <paramref name="key"/>, from the cache or from <paramref name="load"/> (which returns the result and its cost).</summary>
-    public ParsedFile<TValue> GetOrLoad(TKey key, Func<(ParsedFile<TValue> File, long Cost)> load)
-    {
-        ArgumentNullException.ThrowIfNull(load);
-        Lazy<Entry> lazy = _entries.GetOrAdd(key, _ => new Lazy<Entry>(
-            () =>
-            {
-                (ParsedFile<TValue> file, long cost) = load();
-                Interlocked.Increment(ref _loads);
-                return new Entry(file, cost);
-            },
-            LazyThreadSafetyMode.ExecutionAndPublication));
-        bool hit = lazy.IsValueCreated;
-        try
-        {
-            Entry entry = lazy.Value;
-            if (hit)
-            {
-                Interlocked.Increment(ref _hits);
-            }
-
-            Touch(key, lazy, entry.Cost);
-            return entry.File;
-        }
-        catch
-        {
-            // A failed load is not cached; the next caller loads again.
-            _entries.TryRemove(new KeyValuePair<TKey, Lazy<Entry>>(key, lazy));
-            throw;
-        }
-    }
+    public ParsedFile<TValue> GetOrLoad(TKey key, Func<(ParsedFile<TValue> File, long Cost)> load) => _cache.GetOrLoad(key, load);
 
     /// <summary>
     /// Forgets every entry. A load still in flight finishes for its own callers but is not cached and is not counted in the
     /// cost, so the cost never drifts.
     /// </summary>
-    public void Clear()
-    {
-        lock (_lruGate)
-        {
-            _entries.Clear();
-            _slots.Clear();
-            _lru.Clear();
-            Interlocked.Exchange(ref _cost, 0);
-        }
-    }
-
-    /// <summary>
-    /// Marks <paramref name="key"/> most recently used and evicts from the cold end while over budget. The cost of an entry
-    /// is counted here, under the gate, and only while that exact entry is still the cached one.
-    /// </summary>
-    private void Touch(TKey key, Lazy<Entry> lazy, long cost)
-    {
-        lock (_lruGate)
-        {
-            if (!_entries.TryGetValue(key, out Lazy<Entry>? current) || !ReferenceEquals(current, lazy))
-            {
-                return;
-            }
-
-            if (_slots.TryGetValue(key, out Slot? slot))
-            {
-                _lru.Remove(slot.Node);
-                _lru.AddFirst(slot.Node);
-            }
-            else
-            {
-                _slots[key] = new Slot(_lru.AddFirst(key), cost);
-                Interlocked.Add(ref _cost, cost);
-            }
-
-            while (Interlocked.Read(ref _cost) > maxCost && _lru.Last is { } last && last != _lru.First)
-            {
-                TKey victim = last.Value;
-                _lru.Remove(last);
-                if (_slots.Remove(victim, out Slot? gone))
-                {
-                    Interlocked.Add(ref _cost, -gone.Cost);
-                }
-
-                _entries.TryRemove(victim, out _);
-            }
-        }
-    }
+    public void Clear() => _cache.Clear();
 }

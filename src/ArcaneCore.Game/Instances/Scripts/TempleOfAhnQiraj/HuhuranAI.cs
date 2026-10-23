@@ -40,28 +40,22 @@ public sealed class HuhuranAI : RaidBossAI
         base.MoveInLineOfSight(who);
     }
 
-    private static bool Due(ref uint timer, uint diffMs)
-    {
-        timer = timer > diffMs ? timer - diffMs : 0;
-        return timer == 0;
-    }
-
     protected override void UpdateCombat(uint diffMs)
     {
-        if (Due(ref _frenzy, diffMs) && Me.Map?.Combat.SpellMitigation?.HasAura(Me, 26051) != true
+        if (ScriptTimers.Due(ref _frenzy, diffMs) && Me.Map?.Combat.SpellMitigation?.HasAura(Me, 26051) != true
             && Cast(26051, Me))
         {
             System?.SayText(Me, 7797);
             _frenzy = RandomDelay(25_000, 35_000);
         }
 
-        if (!_berserk && Due(ref _wyvern, diffMs) && Cast(26180, Me))
+        if (!_berserk && ScriptTimers.Due(ref _wyvern, diffMs) && Cast(26180, Me))
             _wyvern = RandomDelay(15_000, 32_000);
 
-        if (Due(ref _spit, diffMs) && Cast(26050, Victim))
+        if (ScriptTimers.Due(ref _spit, diffMs) && Cast(26050, Victim))
             _spit = RandomDelay(5_000, 10_000);
 
-        if (Due(ref _poison, diffMs) && RandomTarget() is { } target && Cast(26053, target))
+        if (ScriptTimers.Due(ref _poison, diffMs) && RandomTarget() is { } target && Cast(26053, target))
             _poison = RandomDelay(12_000, 24_000);
 
         if (_berserk)
@@ -71,7 +65,7 @@ public sealed class HuhuranAI : RaidBossAI
                 && Cast(26068, Me))
                 _berserkApplied = true;
         }
-        else if (HealthBelowPct(31) || Due(ref _berserkTimer, diffMs))
+        else if (HealthBelowPct(31) || ScriptTimers.Due(ref _berserkTimer, diffMs))
         {
             System?.SayText(Me, 4428);
             _berserk = true;

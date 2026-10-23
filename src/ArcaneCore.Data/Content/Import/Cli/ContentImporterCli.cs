@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;

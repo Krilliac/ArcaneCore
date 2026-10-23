@@ -244,19 +244,13 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                 FaultLedger.Shared.Record("data-quest-reward.commit", rewardError);
             }
 
-            try
-            {
-                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception rollbackError)
+            await StoreTransactionRollback.RollbackAfterFailureAsync(transaction, rewardError, "Quest reward and rollback failed; discard the context.", rollbackError =>
             {
                 if (rollbackError is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("data-quest-reward.rollback", rollbackError);
                 }
-
-                throw new AggregateException("Quest reward and rollback failed; discard the context.", rewardError, rollbackError);
-            }
+            }).ConfigureAwait(false);
 
             throw;
         }

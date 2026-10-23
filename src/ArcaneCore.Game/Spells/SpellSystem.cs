@@ -2217,15 +2217,14 @@ public sealed partial class SpellSystem
     public static uint GetPower(Unit unit, PowerType power)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return unit.GetUInt32(UpdateFields.UnitFieldPower1 + (int)power);
+        return ArcaneCore.Game.Combat.MapCombat.GetPower(unit, power);
     }
 
     /// <summary>vmangos Unit::SetPower: clamped to UNIT_FIELD_MAXPOWER1 + power type.</summary>
     public static void SetPower(Unit unit, PowerType power, uint value)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        uint max = unit.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power);
-        unit.SetUInt32(UpdateFields.UnitFieldPower1 + (int)power, Math.Min(value, max));
+        ArcaneCore.Game.Combat.MapCombat.SetPower(unit, power, value);
     }
 
     private void ReportUnsupported(string kind, uint value, uint spellId)

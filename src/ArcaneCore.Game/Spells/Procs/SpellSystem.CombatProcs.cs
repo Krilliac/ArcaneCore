@@ -83,7 +83,7 @@ public sealed partial class SpellSystem
                 amount = bonus.Modify(SpellAmountStage.DirectDamage, victim, attacker, spell, aura.EffectIndex, amount, holder.StackAmount);
             }
 
-            uint damage = (uint)Math.Floor(Math.Max(amount, 0f) + Random.NextSingle()); // rand_ditheru
+            uint damage = SpellRounding.DitherUnsignedSingle(amount, Random); // rand_ditheru
             SendToSet(victim, WorldOpcode.SmsgSpelldamageshield, ProcPackets.BuildSpellDamageShield(victim.Guid, attacker.Guid, damage, (uint)spell.School), includeSelf: true);
             if (damage > 0)
             {

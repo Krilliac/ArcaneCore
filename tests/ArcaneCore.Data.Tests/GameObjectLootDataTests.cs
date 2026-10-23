@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Data.Content;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Kernel.WorldData.GameObjects;

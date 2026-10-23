@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
@@ -12,7 +11,7 @@ public sealed partial class DuelService
     /// <summary>AREA_FLAG_DUEL (vmangos Database/DBCEnums.h:61; wow_messages world/external/area_flags.wowm:9 CITY_ALLOW_DUELS): duels are allowed in the area.</summary>
     public const uint AreaFlagDuel = 0x40;
 
-    private static readonly ConditionalWeakTable<SpellSystem, DuelService> s_bySpells = new();
+    private static readonly InstanceAttachments<SpellSystem, DuelService> s_bySpells = new();
 
     /// <summary>The AreaTable row of the area a player stands in, or null when unknown. Without it every area counts as unknown.</summary>
     public Func<Player, AreaTemplate?>? AreaOf { get; set; }
@@ -28,13 +27,13 @@ public sealed partial class DuelService
     {
         ArgumentNullException.ThrowIfNull(spells);
         Spells = spells;
-        s_bySpells.AddOrUpdate(spells, this);
+        s_bySpells.Attach(spells, this);
         spells.RegisterCastCheck(new DuelCastCheck(this));
     }
 
     /// <summary>The service installed on <paramref name="spells"/>, or null.</summary>
     public static DuelService? ForSpells(SpellSystem spells)
-        => s_bySpells.TryGetValue(spells, out DuelService? service) ? service : null;
+        => s_bySpells.Find(spells);
 
     /// <summary>
     /// The cast-time rules of a duel challenge (vmangos Spell::CheckCast SPELL_EFFECT_DUEL, Spell.cpp:6187-6203): the caster and the target

@@ -92,7 +92,7 @@ public sealed partial class CreatureMapSystem
             case ConditionType.CreatureInRange:
                 // NearestCreatureEntryWithLiveStateInObjectRangeCheck(target, entry, onlyAlive, excludeSelf): a living one within value2.
                 result = _creatures.Values.Any(creature => creature.Template.Entry == c.Value1 && creature.IsAlive
-                    && !ReferenceEquals(creature, target) && DistanceSquared(creature, target!) < c.Value2 * (float)c.Value2);
+                    && !ReferenceEquals(creature, target) && WorldGeometry.DistanceSq3D(creature, target!) < c.Value2 * (float)c.Value2);
                 break;
             case ConditionType.SpawnCount:
                 // Map::SpawnedCountForEntry (Maps/Map.cpp:2988-2991): creatures of the entry in the world that count their spawns
@@ -170,7 +170,7 @@ public sealed partial class CreatureMapSystem
         }
 
         float reach = distance + CombatReach(a) + CombatReach(b);
-        return DistanceSquared(a, b) < reach * reach;
+        return WorldGeometry.DistanceSq3D(a, b) < reach * reach;
     }
 
     private static float CombatReach(WorldObject o) => o is Unit unit ? unit.GetFloat(UpdateFields.UnitFieldCombatreach) : 0f;

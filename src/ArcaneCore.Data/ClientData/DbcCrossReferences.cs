@@ -1,6 +1,5 @@
 using System.Data.Common;
 using System.Globalization;
-using ArcaneCore.Data.Content.Spells;
 
 namespace ArcaneCore.Data.ClientData;
 

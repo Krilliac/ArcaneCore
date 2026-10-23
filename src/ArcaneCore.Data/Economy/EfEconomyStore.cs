@@ -163,19 +163,13 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                 FaultLedger.Shared.Record("data-economy.commit", commitError);
             }
 
-            try
-            {
-                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception rollbackError)
+            await StoreTransactionRollback.RollbackAfterFailureAsync(transaction, commitError, "Economy commit and rollback failed; discard the context.", rollbackError =>
             {
                 if (rollbackError is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("data-economy.commit-rollback", rollbackError);
                 }
-
-                throw new AggregateException("Economy commit and rollback failed; discard the context.", commitError, rollbackError);
-            }
+            }).ConfigureAwait(false);
 
             throw;
         }

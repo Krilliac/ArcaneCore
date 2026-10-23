@@ -52,17 +52,11 @@ public sealed class CthunTentacleAI(Creature creature) : CreatureAI(creature)
         return candidates.Length == 0 ? null : candidates[System?.RandomInt(0, candidates.Length - 1) ?? 0];
     }
 
-    private static bool Due(ref uint timer, uint diff)
-    {
-        timer = timer > diff ? timer - diff : 0;
-        return timer == 0;
-    }
-
     public override void OnUpdate(uint diffMs)
     {
         if (_birthMs != 0)
         {
-            if (Due(ref _birthMs, diffMs))
+            if (ScriptTimers.Due(ref _birthMs, diffMs))
             {
                 Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.Spawning);
                 if (IsClaw) DoCast(Me, IsGiant ? 26478u : 26139u, triggered: true);
@@ -72,25 +66,25 @@ public sealed class CthunTentacleAI(Creature creature) : CreatureAI(creature)
         switch (Me.Entry)
         {
             case 15726: // small eye: channel Mind Flay
-                if (Due(ref _abilityMs, diffMs) && RandomOutside() is { } eyeTarget
+                if (ScriptTimers.Due(ref _abilityMs, diffMs) && RandomOutside() is { } eyeTarget
                     && DoCast(eyeTarget, 26143) == CreatureCastResult.Ok) _abilityMs = 1500;
                 break;
             case 15334: // giant eye: Green Eye Beam
-                if (Due(ref _abilityMs, diffMs) && RandomOutside() is { } beamTarget
+                if (ScriptTimers.Due(ref _abilityMs, diffMs) && RandomOutside() is { } beamTarget
                     && DoCast(beamTarget, 26134) == CreatureCastResult.Ok) _abilityMs = 2500;
                 break;
             case 15725:
             case 15728:
                 if (Victim is null && RandomOutside() is { } clawTarget) AttackStart(clawTarget);
-                if (Due(ref _abilityMs, diffMs) && Victim is { } victim
+                if (ScriptTimers.Due(ref _abilityMs, diffMs) && Victim is { } victim
                     && DoCast(victim, 26141) == CreatureCastResult.Ok) _abilityMs = 5000;
-                if (IsGiant && Due(ref _secondaryMs, diffMs))
+                if (IsGiant && ScriptTimers.Due(ref _secondaryMs, diffMs))
                 {
                     DoCast(Me, 6524, triggered: true);
                     DoCast(Me, 3391, triggered: true);
                     _secondaryMs = (uint)(System?.RandomInt(6000, 12_000) ?? 9000);
                 }
-                if (Due(ref _relocateMs, diffMs) && Victim is { } target
+                if (ScriptTimers.Due(ref _relocateMs, diffMs) && Victim is { } target
                     && !MapCombat.CanReachWithMeleeAutoAttack(Me, target))
                 {
                     DoCast(Me, 26234, triggered: true);

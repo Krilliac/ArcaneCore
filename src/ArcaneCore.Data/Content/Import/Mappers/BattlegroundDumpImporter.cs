@@ -176,11 +176,7 @@ public sealed class BattlegroundDumpImporter
 
     private static uint Required(DumpRow row, string table, params string[] columns)
     {
-        if (!row.TryGet(out string? raw, columns) || raw is null)
-        {
-            throw new ImportSchemaException(table, columns[0], $"table `{table}`: the column `{columns[0]}` is missing or NULL");
-        }
-
+        string raw = DumpRowReader.Required(row, column => DumpRowReader.SchemaMissing(table, column), columns);
         return ParseUInt(table, columns[0], raw);
     }
 
@@ -188,7 +184,5 @@ public sealed class BattlegroundDumpImporter
         => row.TryGet(out string? raw, columns) && raw is not null ? ParseUInt(table, columns[0], raw) : 0;
 
     private static uint ParseUInt(string table, string column, string raw)
-        => uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out uint value)
-            ? value
-            : throw new ImportSchemaException(table, column, $"table `{table}`, column `{column}`: value '{raw}' is not an unsigned number");
+        => DumpRowReader.ParseUnsigned(raw, column, NumberStyles.None, (c, r) => DumpRowReader.SchemaNotUnsigned(table, c, r));
 }

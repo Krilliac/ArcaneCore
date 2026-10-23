@@ -35,8 +35,8 @@ public sealed class HolidayScriptsThreeTests
     [Fact]
     public void Reindeer_speed_follows_the_mount()
     {
-        Assert.Equal(ReindeerTransformationScript.ReindeerFast, ReindeerTransformationScript.ReindeerFor(Entities.Unit.BaseRunSpeed * 2f));
-        Assert.Equal(ReindeerTransformationScript.ReindeerSlow, ReindeerTransformationScript.ReindeerFor(Entities.Unit.BaseRunSpeed * 1.6f));
+        Assert.Equal(ReindeerTransformationScript.ReindeerFast, ReindeerTransformationScript.ReindeerFor(ArcaneCore.Game.Entities.Unit.BaseRunSpeed * 2f));
+        Assert.Equal(ReindeerTransformationScript.ReindeerSlow, ReindeerTransformationScript.ReindeerFor(ArcaneCore.Game.Entities.Unit.BaseRunSpeed * 1.6f));
     }
 
     [Fact]

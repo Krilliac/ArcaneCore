@@ -165,15 +165,7 @@ public sealed class TradeSession(Player initiator, Player target)
     /// <summary>Whether two players stand close enough to trade (3D, as vmangos GetDistance3dToCenter).</summary>
     public static bool InRange(Player a, Player b)
     {
-        if (a.MapId != b.MapId)
-        {
-            return false;
-        }
-
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        return (dx * dx) + (dy * dy) + (dz * dz) <= TradeRules.MaxDistance * TradeRules.MaxDistance;
+        return WorldGeometry.IsWithinDist(a, b, TradeRules.MaxDistance, inclusive: true, addRadii: false, MapCheck.Id);
     }
 
     /// <summary>
@@ -190,9 +182,6 @@ public sealed class TradeSession(Player initiator, Player target)
             || b.X != _anchorB.X || b.Y != _anchorB.Y || b.Z != _anchorB.Z;
         _anchorA = (a.X, a.Y, a.Z);
         _anchorB = (b.X, b.Y, b.Z);
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        return TradeRules.MovementEndsTrade(moved, (dx * dx) + (dy * dy) + (dz * dz), a.BoundingRadius + b.BoundingRadius);
+        return TradeRules.MovementEndsTrade(moved, WorldGeometry.DistanceSq3D(a, b), a.BoundingRadius + b.BoundingRadius);
     }
 }

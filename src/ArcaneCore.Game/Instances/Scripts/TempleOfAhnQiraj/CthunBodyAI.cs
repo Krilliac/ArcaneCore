@@ -93,12 +93,6 @@ public sealed class CthunBodyAI : RaidBossAI
         _phaseMs = 4000;
     }
 
-    private static bool Due(ref uint timer, uint diff)
-    {
-        timer = timer > diff ? timer - diff : 0;
-        return timer == 0;
-    }
-
     private Creature? SummonTentacle(uint entry, float x, float y, float z, Unit? target = null)
         => System?.SummonCorpseTimedDespawn(Me, entry, x, y, z, 0, target, 1500);
 
@@ -179,23 +173,23 @@ public sealed class CthunBodyAI : RaidBossAI
 
     private void UpdateTentacles(uint diffMs, bool phaseTwo)
     {
-        if (!phaseTwo && Due(ref _clawMs, diffMs))
+        if (!phaseTwo && ScriptTimers.Due(ref _clawMs, diffMs))
         {
             SpawnClaw(15725);
             _clawMs = 5000;
         }
-        if (Due(ref _eyesMs, diffMs))
+        if (ScriptTimers.Due(ref _eyesMs, diffMs))
         {
             SpawnEyeRing();
             _eyesMs = phaseTwo ? 30_000u : 45_000u;
         }
         if (!phaseTwo) return;
-        if (Due(ref _giantClawMs, diffMs))
+        if (ScriptTimers.Due(ref _giantClawMs, diffMs))
         {
             SpawnClaw(15728);
             _giantClawMs = 60_000;
         }
-        if (Due(ref _giantEyeMs, diffMs))
+        if (ScriptTimers.Due(ref _giantEyeMs, diffMs))
         {
             SpawnClaw(15334);
             _giantEyeMs = 60_000;
@@ -206,14 +200,14 @@ public sealed class CthunBodyAI : RaidBossAI
     {
         if (_grabbed is { } player)
         {
-            if (Due(ref _grabPortMs, diffMs))
+            if (ScriptTimers.Due(ref _grabPortMs, diffMs))
             {
                 if (player.IsAlive) Temple?.SendToCthunStomach(player);
                 Me.Map?.Combat.SpellMitigation?.RemoveAuras(player, 26332);
                 _grabbed = null;
             }
         }
-        if (Due(ref _grabMs, diffMs))
+        if (ScriptTimers.Due(ref _grabMs, diffMs))
         {
             if (RandomOutsidePlayer() is { } target && Me.Map?.Combat.SpellMitigation is { } spells)
             {
@@ -262,7 +256,7 @@ public sealed class CthunBodyAI : RaidBossAI
         }
         if (_phase is BodyPhase.Eye or BodyPhase.EyeDead)
         {
-            if (_phase == BodyPhase.EyeDead && Due(ref _phaseMs, diffMs)) BeginTransition();
+            if (_phase == BodyPhase.EyeDead && ScriptTimers.Due(ref _phaseMs, diffMs)) BeginTransition();
             else if (_phase == BodyPhase.Eye) UpdateTentacles(diffMs, phaseTwo: false);
             return;
         }
@@ -270,7 +264,7 @@ public sealed class CthunBodyAI : RaidBossAI
         {
             UpdateTentacles(diffMs, phaseTwo: true);
             UpdateStomachGrab(diffMs);
-            if (Due(ref _phaseMs, diffMs))
+            if (ScriptTimers.Due(ref _phaseMs, diffMs))
             {
                 Me.UnitFlags &= ~UnitFlags.Spawning;
                 System?.SetInCombatWithZone(Me);
@@ -280,7 +274,7 @@ public sealed class CthunBodyAI : RaidBossAI
         }
         if (_phase == BodyPhase.Weakened)
         {
-            if (Due(ref _phaseMs, diffMs)) RestoreCarapace();
+            if (ScriptTimers.Due(ref _phaseMs, diffMs)) RestoreCarapace();
             return;
         }
         if (_flesh.Count == 0) { Weaken(); return; }

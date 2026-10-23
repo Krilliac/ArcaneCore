@@ -320,7 +320,7 @@ public sealed partial class CreatureMapSystem
             {
                 bool wantAlive = (step.DataFlags & FlagBuddyIsDespawned) == 0;
                 buddies.AddRange(_creatures.Values.Where(c => c.Template.Entry == step.BuddyEntry && c.IsAlive == wantAlive
-                    && DistanceSquared(c, origin) <= range));
+                    && WorldGeometry.DistanceSq3D(c, origin) <= range));
             }
             else if (FindRelayBuddy(step, origin) is { } nearest)
             {
@@ -329,12 +329,12 @@ public sealed partial class CreatureMapSystem
         }
         else if (objects is not null)
         {
-            GameObjects.GameObject[] inRange = [.. objects.GameObjects.Where(g => g.Entry == step.BuddyEntry && DistanceSquared(g, origin) <= range)];
+            GameObjects.GameObject[] inRange = [.. objects.GameObjects.Where(g => g.Entry == step.BuddyEntry && WorldGeometry.DistanceSq3D(g, origin) <= range)];
             if (all)
             {
                 buddies.AddRange(inRange);
             }
-            else if (inRange.MinBy(g => DistanceSquared(g, origin)) is { } nearestObject)
+            else if (inRange.MinBy(g => WorldGeometry.DistanceSq3D(g, origin)) is { } nearestObject)
             {
                 buddies.Add(nearestObject);
             }
@@ -372,7 +372,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            float distance = DistanceSquared(candidate, origin);
+            float distance = WorldGeometry.DistanceSq3D(candidate, origin);
             if (distance <= best)
             {
                 best = distance;

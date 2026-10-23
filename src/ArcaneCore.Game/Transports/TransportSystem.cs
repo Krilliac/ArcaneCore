@@ -298,7 +298,7 @@ public sealed class TransportSystem
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("transport.player-added", ex);
-            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
+            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", TransportAnomalies.PlayerSubject(player), ex.Message);
             _logger.LogFault(
                 "map.transport",
                 ex,
@@ -331,7 +331,7 @@ public sealed class TransportSystem
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("transport.self-block", ex);
-            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
+            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", TransportAnomalies.PlayerSubject(player), ex.Message);
             _logger.LogFault(
                 "map.transport",
                 ex,
@@ -355,7 +355,7 @@ public sealed class TransportSystem
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("transport.player-removed", ex);
-            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", $"player {player.Name} (guid {player.Guid.Low})", ex.Message);
+            AnomalyLedger.Shared.Report("transport", "lifecycle-fault", TransportAnomalies.PlayerSubject(player), ex.Message);
             _logger.LogFault(
                 "map.transport",
                 ex,
@@ -488,12 +488,10 @@ public sealed class TransportSystem
         {
             if (!player.IsLoggingOut && !player.Locomotion.SuppressAnomalies)
             {
-                AnomalyLedger.Shared.Report(
-                    "transport",
+                TransportAnomalies.Report(
                     "passenger-left-behind",
-                    $"player {player.Name} (guid {player.Guid.Low})",
-                    $"Passenger had null Map when transport entry {ship.Entry} transitioned to map {newMapId}; removed from transport.",
-                    AnomalySeverity.Warning);
+                    player,
+                    $"Passenger had null Map when transport entry {ship.Entry} transitioned to map {newMapId}; removed from transport.");
             }
             ship.RemovePassenger(player); // not in the world (in transit, logging in)
             return;
@@ -525,12 +523,10 @@ public sealed class TransportSystem
             _logger.LogWarning("{Player} could not travel with transport {Entry} to map {MapId}; left at the dock", player.Name, ship.Entry, newMapId);
             if (!player.IsLoggingOut && !player.Locomotion.SuppressAnomalies)
             {
-                AnomalyLedger.Shared.Report(
-                    "transport",
+                TransportAnomalies.Report(
                     "passenger-left-behind",
-                    $"player {player.Name} (guid {player.Guid.Low})",
-                    $"Passenger could not be carried with transport entry {ship.Entry} from map {player.MapId} to map {newMapId} at ({x:F2}, {y:F2}, {z:F2}); left behind at dock.",
-                    AnomalySeverity.Warning);
+                    player,
+                    $"Passenger could not be carried with transport entry {ship.Entry} from map {player.MapId} to map {newMapId} at ({x:F2}, {y:F2}, {z:F2}); left behind at dock.");
             }
             ship.RemovePassenger(player);
             player.RemoveMovementFlags(MovementFlags.OnTransport);
@@ -675,12 +671,10 @@ public sealed class TransportSystem
             }
             else if (!player.Locomotion.SuppressAnomalies)
             {
-                AnomalyLedger.Shared.Report(
-                    "transport",
+                TransportAnomalies.Report(
                     "passenger-left-behind",
-                    $"player {player.Name} (guid {player.Guid.Low})",
-                    $"Player logged in with out-of-bounds saved offset ({seat.X:F2}, {seat.Y:F2}, {seat.Z:F2}) on transport entry {ship.Entry} on map {map.MapId}; relocating to homebind.",
-                    AnomalySeverity.Warning);
+                    player,
+                    $"Player logged in with out-of-bounds saved offset ({seat.X:F2}, {seat.Y:F2}, {seat.Z:F2}) on transport entry {ship.Entry} on map {map.MapId}; relocating to homebind.");
             }
             map.RunAfterUpdate(() => TeleportToHomebind?.Invoke(player));
             return;
@@ -735,12 +729,10 @@ public sealed class TransportSystem
 
         if (!player.IsLoggingOut && !player.Locomotion.SuppressAnomalies)
         {
-            AnomalyLedger.Shared.Report(
-                "transport",
+            TransportAnomalies.Report(
                 "passenger-left-behind",
-                $"player {player.Name} (guid {player.Guid.Low})",
-                $"Deferred login seat restore could not carry player to transport entry {ship.Entry} on map {ship.CurrentMap?.MapId.ToString() ?? "null"}; relocating to homebind.",
-                AnomalySeverity.Warning);
+                player,
+                $"Deferred login seat restore could not carry player to transport entry {ship.Entry} on map {ship.CurrentMap?.MapId.ToString() ?? "null"}; relocating to homebind.");
         }
         player.RemoveMovementFlags(MovementFlags.OnTransport);
         player.ClearTransportData();

@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.World.Creatures;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -102,79 +103,41 @@ public sealed class ConditionsDumpImporter
             throw new InvalidOperationException("The caller's transaction does not support savepoints; the import cannot protect its existing work.");
         }
 
-        await using IDbContextTransaction? ownedTransaction = callerTransaction is null
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-        IDbContextTransaction transaction = callerTransaction ?? ownedTransaction!;
-        string? savepoint = callerTransaction is not null ? "ArcaneConditionsImport_" + Guid.NewGuid().ToString("N") : null;
-        if (savepoint is not null)
+        await ImportTransaction.RunAsync(db, "Conditions", "ArcaneConditionsImport_", async ct =>
         {
-            await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-        }
-
-        bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
-        db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
-        {
-            if (replace)
-            {
-                await db.Set<ConditionRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            const int BatchSize = 2000;
-            int pending = 0;
-            foreach (ConditionRow row in _rows.Values.OrderBy(r => r.ConditionEntry))
-            {
-                db.Add(row);
-                if (++pending == BatchSize)
-                {
-                    await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                    db.ChangeTracker.Clear();
-                    pending = 0;
-                }
-            }
-
-            if (pending > 0)
-            {
-                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                db.ChangeTracker.Clear();
-            }
-
-            if (savepoint is not null)
-            {
-                await transaction.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (Exception importError)
-        {
+            bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
-                if (savepoint is not null)
+                if (replace)
                 {
-                    await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
-                    await transaction.ReleaseSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                    await db.Set<ConditionRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                 }
-                else
-                {
-                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (Exception rollbackError)
-            {
-                throw new AggregateException("Conditions import and rollback failed; discard the context and transaction.", importError, rollbackError);
-            }
 
-            throw;
-        }
-        finally
-        {
-            db.ChangeTracker.Clear();
-            db.ChangeTracker.AutoDetectChangesEnabled = detect;
-        }
+                const int BatchSize = 2000;
+                int pending = 0;
+                foreach (ConditionRow row in _rows.Values.OrderBy(r => r.ConditionEntry))
+                {
+                    db.Add(row);
+                    if (++pending == BatchSize)
+                    {
+                        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                        db.ChangeTracker.Clear();
+                        pending = 0;
+                    }
+                }
+
+                if (pending > 0)
+                {
+                    await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                    db.ChangeTracker.Clear();
+                }
+            }
+            finally
+            {
+                db.ChangeTracker.AutoDetectChangesEnabled = detect;
+            }
+        }, cancellationToken).ConfigureAwait(false);
 
         return BuildReport();
     }
@@ -182,23 +145,13 @@ public sealed class ConditionsDumpImporter
     private static uint Unsigned(DumpRow row, string column)
     {
         string raw = Raw(row, column);
-        if (!uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out uint value))
-        {
-            throw new InvalidDataException($"conditions.{column} \"{raw}\" is not an unsigned integer");
-        }
-
-        return value;
+        return DumpRowReader.ParseUnsigned(raw, column, NumberStyles.None, static (c, r) => new InvalidDataException($"conditions.{c} \"{r}\" is not an unsigned integer"));
     }
 
     private static int Signed(DumpRow row, string column)
     {
         string raw = Raw(row, column);
-        if (!int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int value))
-        {
-            throw new InvalidDataException($"conditions.{column} \"{raw}\" is not an integer");
-        }
-
-        return value;
+        return DumpRowReader.ParseSigned(raw, column, NumberStyles.AllowLeadingSign, static (c, r) => new InvalidDataException($"conditions.{c} \"{r}\" is not an integer"));
     }
 
     private static string Raw(DumpRow row, string column)

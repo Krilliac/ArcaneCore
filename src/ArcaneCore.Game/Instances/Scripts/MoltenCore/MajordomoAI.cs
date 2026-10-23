@@ -123,7 +123,7 @@ public sealed partial class MajordomoAI(Creature creature, MoltenCoreInstance in
     }
     public override void OnUpdate(uint diffMs)
     {
-        if (_stage != 0 && Due(ref _speechTimer, diffMs)) AdvanceSpeech();
+        if (_stage != 0 && ScriptTimers.Due(ref _speechTimer, diffMs)) AdvanceSpeech();
         if (!Defeated) base.OnUpdate(diffMs);
     }
     private void AdvanceSpeech()

@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Names;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Tests.Skills;
 using Xunit;
 using Xunit.Abstractions;

@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.ClientEffects;
 

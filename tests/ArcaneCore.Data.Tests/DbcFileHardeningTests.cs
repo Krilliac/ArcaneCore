@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;

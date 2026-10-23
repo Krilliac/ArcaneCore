@@ -70,7 +70,7 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Data/Content/Names/NamesDbcReader.cs:79` | NotSupportedException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
 | `src/ArcaneCore.Data/Content/Names/NamesDbcReader.cs:193` | Exception | by-design | documented in place: "an uncompilable combined pattern falls back to compiling each row on its own just below" |
 | `src/ArcaneCore.Data/Content/Names/NamesDbcReader.cs:231` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed); "a timeout while warming up only means the machine was busy; the next attempt continues the work" |
-| `src/ArcaneCore.Data/Content/Spells/DbcFile.cs:121` | DecoderFallbackException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Data/ClientData/DbcFile.cs:121` | DecoderFallbackException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
 | `src/ArcaneCore.Data/Content/Spells/ShapeshiftFormDbcReader.cs:40` | ArgumentException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
 | `src/ArcaneCore.Data/Economy/EfEconomyStore.cs:155` | Exception | propagated | rethrows |
 | `src/ArcaneCore.Data/Economy/EfEconomyStore.cs:161` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |

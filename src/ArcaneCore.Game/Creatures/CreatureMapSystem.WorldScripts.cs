@@ -32,7 +32,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            float sq = DistanceSquared3D(center, c);
+            float sq = WorldGeometry.DistanceSq3D(center, c);
             if (sq <= bestSq)
             {
                 best = c;

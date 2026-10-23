@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.SpecialLoot;
 using Microsoft.EntityFrameworkCore;
@@ -127,10 +128,7 @@ public sealed class GameObjectLootDumpImporter
     public void ReadLocks(DbcFile dbc)
     {
         ArgumentNullException.ThrowIfNull(dbc);
-        if (dbc.FieldCount != LockFieldCount)
-        {
-            throw new InvalidDataException($"Lock.dbc has {dbc.FieldCount} fields; build 5875 has {LockFieldCount}");
-        }
+        dbc.RequireFields(LockFieldCount, static table => $"Lock.dbc has {table.FieldCount} fields; build 5875 has {LockFieldCount}");
 
         for (int r = 0; r < dbc.RecordCount; r++)
         {
@@ -177,85 +175,47 @@ public sealed class GameObjectLootDumpImporter
             throw new InvalidOperationException("The caller's transaction does not support savepoints; the import cannot protect its existing work.");
         }
 
-        await using IDbContextTransaction? ownedTransaction = callerTransaction is null
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-        IDbContextTransaction transaction = callerTransaction ?? ownedTransaction!;
-        string? savepoint = callerTransaction is not null ? "ArcaneGoLootImport_" + Guid.NewGuid().ToString("N") : null;
-        if (savepoint is not null)
+        await ImportTransaction.RunAsync(db, "Game object/loot", "ArcaneGoLootImport_", async ct =>
         {
-            await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-        }
-
-        bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
-        db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
-        {
-            if (replace)
-            {
-                await db.Set<GameObjectSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<GameObjectTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<GameObjectQuestStarterRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<GameObjectQuestEnderRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<LockTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<GameObjectLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<ItemLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<SkinningLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<ReferenceLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureLootInfoRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<FishingLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<PickpocketingLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<DisenchantLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<SkillFishingBaseLevelRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreaturePickpocketLootRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            await InsertBatchedAsync(db, _templates.Values.Select(t => t.Row), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _starters.Select(r => new GameObjectQuestStarterRow { Id = r.Item1, Quest = r.Item2 }), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _enders.Select(r => new GameObjectQuestEnderRow { Id = r.Item1, Quest = r.Item2 }), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _locks.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync<LootTemplateRowBase>(db, _loot.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _creatureLoot.Values.Select(c => c.Row), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _fishingBase.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _pickpocket.Values.Select(p => p.Row), cancellationToken).ConfigureAwait(false);
-
-            if (savepoint is not null)
-            {
-                await transaction.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (Exception importError)
-        {
+            bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
-                if (savepoint is not null)
+                if (replace)
                 {
-                    await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
-                    await transaction.ReleaseSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                    await db.Set<GameObjectSpawnRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<GameObjectTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<GameObjectQuestStarterRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<GameObjectQuestEnderRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<LockTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<GameObjectLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<ItemLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<SkinningLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<ReferenceLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureLootInfoRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<FishingLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<PickpocketingLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<DisenchantLootTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<SkillFishingBaseLevelRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreaturePickpocketLootRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                 }
-                else
-                {
-                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (Exception rollbackError)
-            {
-                throw new AggregateException("Game object/loot import and rollback failed; discard the context and transaction.", importError, rollbackError);
-            }
 
-            throw;
-        }
-        finally
-        {
-            db.ChangeTracker.Clear();
-            db.ChangeTracker.AutoDetectChangesEnabled = detect;
-        }
+                await InsertBatchedAsync(db, _templates.Values.Select(t => t.Row), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _spawns.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _starters.Select(r => new GameObjectQuestStarterRow { Id = r.Item1, Quest = r.Item2 }), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _enders.Select(r => new GameObjectQuestEnderRow { Id = r.Item1, Quest = r.Item2 }), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _locks.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync<LootTemplateRowBase>(db, _loot.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _creatureLoot.Values.Select(c => c.Row), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _fishingBase.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _pickpocket.Values.Select(p => p.Row), ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                db.ChangeTracker.AutoDetectChangesEnabled = detect;
+            }
+        }, cancellationToken).ConfigureAwait(false);
 
         return BuildReport();
     }

@@ -101,7 +101,7 @@ internal static class ClientTerrainRealData
 /// </summary>
 internal sealed class DbcMapDirectory : IMapDirectory
 {
-    // ref: src/ArcaneCore.Data/Content/Spells/DbcFile.cs:40-64 (WDBC header: magic, records, fields, record size, string block size; 20 bytes)
+    // ref: src/ArcaneCore.Data/ClientData/DbcFile.cs:40-64 (WDBC header: magic, records, fields, record size, string block size; 20 bytes)
     // ref: D:\refs\vmangos\contrib\extractor\dbcfile.cpp:33-59 (the same five header words; records follow, then the string block)
     private const uint WdbcMagic = 0x43424457;
     private const int HeaderBytes = 20;

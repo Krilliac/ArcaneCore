@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.GameObjects;
 
@@ -23,10 +23,7 @@ public static class GameObjectDisplayInfoDbcReader
     public static DbcTable<GameObjectDisplayInfoEntry> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"{FileName} of build 5875 has {FieldCount} fields, this file has {file.FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"{FileName} of build 5875 has {FieldCount} fields, this file has {table.FieldCount}");
 
         var rows = new List<GameObjectDisplayInfoEntry>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Items;
 
@@ -23,10 +23,7 @@ public static class ItemRandomPropertiesDbcReader
     public static IReadOnlyList<ItemRandomPropertyRecord> Build(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"ItemRandomProperties.dbc has {file.FieldCount} fields, expected {FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"ItemRandomProperties.dbc has {table.FieldCount} fields, expected {FieldCount}");
 
         var rows = new List<ItemRandomPropertyRecord>(file.RecordCount);
         HashSet<uint> seen = [];

@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.Maps;
 
@@ -17,10 +17,7 @@ public static class AreaTriggerDbcReader
     public static IReadOnlyList<AreaTriggerTemplateRow> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
-        {
-            throw new InvalidDataException($"build-5875 AreaTrigger.dbc requires {FieldCount} four-byte fields, found {file.FieldCount} ({file.RecordSize}-byte records)");
-        }
+        file.RequireFields(FieldCount, static table => $"build-5875 AreaTrigger.dbc requires {FieldCount} four-byte fields, found {table.FieldCount} ({table.RecordSize}-byte records)");
 
         var rows = new Dictionary<uint, AreaTriggerTemplateRow>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

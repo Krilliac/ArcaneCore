@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Collections.Concurrent;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Npc;
 using Microsoft.EntityFrameworkCore;
@@ -164,48 +165,36 @@ public sealed class NpcDumpImporter
         IDbContextTransaction? caller = db.Database.CurrentTransaction;
         if (caller is null && System.Transactions.Transaction.Current is not null) throw new InvalidOperationException("NPC imports require an explicit transaction.");
         if (caller is { SupportsSavepoints: false }) throw new InvalidOperationException("The caller's transaction does not support savepoints; the import cannot protect its existing work.");
-        await using IDbContextTransaction? owned = caller is null ? await db.Database.BeginTransactionAsync(cancellationToken) : null;
-        IDbContextTransaction tx = caller ?? owned!;
-        string? savepoint = caller is not null ? "ArcaneNpcImport_" + Guid.NewGuid().ToString("N") : null;
-        if (savepoint is not null) await tx.CreateSavepointAsync(savepoint, cancellationToken);
-        bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
-        db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
+        await ImportTransaction.RunAsync(db, "NPC", "ArcaneNpcImport_", async ct =>
         {
-            if (replace)
-            {
-                await db.Set<NpcGossip>().ExecuteDeleteAsync(cancellationToken);
-                await db.Set<GossipMenu>().ExecuteDeleteAsync(cancellationToken);
-                await db.Set<GossipMenuOption>().ExecuteDeleteAsync(cancellationToken);
-                await db.Set<NpcTextRow>().ExecuteDeleteAsync(cancellationToken);
-                await db.Set<VendorItem>().ExecuteDeleteAsync(cancellationToken);
-                await db.Set<VendorTemplateItemRow>().ExecuteDeleteAsync(cancellationToken);
-                await db.Set<TrainerSpell>().ExecuteDeleteAsync(cancellationToken);
-            }
-            const int batchSize = 2000;
-            await InsertBatchedAsync(db, _gossip.Values, batchSize, cancellationToken);
-            await InsertBatchedAsync(db, _menus.Values, batchSize, cancellationToken);
-            await InsertBatchedAsync(db, _options.Values, batchSize, cancellationToken);
-            await InsertBatchedAsync(db, _texts.Values, batchSize, cancellationToken);
-            await InsertBatchedAsync(db, _vendors.Values, batchSize, cancellationToken);
-            await InsertBatchedAsync(db, _vendorTemplates.Values, batchSize, cancellationToken);
-            await InsertBatchedAsync(db, _trainers.Values, batchSize, cancellationToken);
-            if (savepoint is not null) await tx.ReleaseSavepointAsync(savepoint, cancellationToken); else await tx.CommitAsync(cancellationToken);
-        }
-        catch (Exception importError)
-        {
+            bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
-                if (savepoint is not null) { await tx.RollbackToSavepointAsync(savepoint, CancellationToken.None); await tx.ReleaseSavepointAsync(savepoint, CancellationToken.None); }
-                else await tx.RollbackAsync(CancellationToken.None);
+                if (replace)
+                {
+                    await db.Set<NpcGossip>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<GossipMenu>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<GossipMenuOption>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<NpcTextRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<VendorItem>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<VendorTemplateItemRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<TrainerSpell>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                }
+                const int batchSize = 2000;
+                await InsertBatchedAsync(db, _gossip.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _menus.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _options.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _texts.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _vendors.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _vendorTemplates.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _trainers.Values, batchSize, ct).ConfigureAwait(false);
             }
-            catch (Exception rollbackError)
+            finally
             {
-                throw new AggregateException("NPC import and rollback failed; discard the context and transaction.", importError, rollbackError);
+                db.ChangeTracker.AutoDetectChangesEnabled = detect;
             }
-            throw;
-        }
-        finally { db.ChangeTracker.Clear(); db.ChangeTracker.AutoDetectChangesEnabled = detect; }
+        }, cancellationToken).ConfigureAwait(false);
         return BuildReport();
     }
 

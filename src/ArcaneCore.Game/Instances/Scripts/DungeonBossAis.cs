@@ -62,12 +62,10 @@ public abstract class ScriptDevBossAI(Creature creature) : AggressorAI(creature)
     }
 
     protected Unit? RandomThreatTarget(bool skipVictim = false, bool playerOnly = false, Func<Unit, bool>? filter = null)
-    {
-        Unit[] targets = [.. Me.Combat.Threat.Entries.Select(e => e.Target)
-            .Where(u => u.IsAlive && (!skipVictim || !ReferenceEquals(u, Victim)) && (!playerOnly || u is Player)
-                && (filter?.Invoke(u) ?? true))];
-        return targets.Length == 0 ? null : targets[System?.RandomInt(0, targets.Length - 1) ?? 0];
-    }
+        => CombatActionHelpers.RandomThreatTarget(Me,
+            u => u.IsAlive && (!skipVictim || !ReferenceEquals(u, Victim)) && (!playerOnly || u is Player)
+                && (filter?.Invoke(u) ?? true),
+            max => System?.RandomInt(0, max) ?? 0);
 
     protected bool InCombat() => UpdateVictim() && Victim is not null;
 }

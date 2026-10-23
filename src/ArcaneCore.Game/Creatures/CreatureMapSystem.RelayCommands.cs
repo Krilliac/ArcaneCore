@@ -325,7 +325,7 @@ public sealed partial class CreatureMapSystem
         foreach (Creature creature in _creatures.Values)
         {
             if (!creature.IsAlive || !HasStrippedTemplateFlags(creature)
-                || (!ReferenceEquals(creature, mover) && DistanceSquared(creature, mover) > RestoreRadiusSq))
+                || (!ReferenceEquals(creature, mover) && WorldGeometry.DistanceSq3D(creature, mover) > RestoreRadiusSq))
             {
                 continue;
             }
@@ -439,8 +439,5 @@ public sealed partial class CreatureMapSystem
     }
 
     private static bool WithinDistInMap(WorldObject a, WorldObject b, float range)
-    {
-        float reach = range + a.BoundingRadius + b.BoundingRadius;
-        return a.MapId == b.MapId && DistanceSquared(a, b) <= reach * reach;
-    }
+        => WorldGeometry.IsWithinDist(a, b, range, inclusive: true, addRadii: true, MapCheck.Id);
 }

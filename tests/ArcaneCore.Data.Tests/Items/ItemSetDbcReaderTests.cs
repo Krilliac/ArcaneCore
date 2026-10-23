@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Items;
 using ArcaneCore.Kernel.Items;
 using Xunit;

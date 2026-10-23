@@ -7,7 +7,7 @@ using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
 namespace ArcaneCore.Game.Tests.Npc;
 
 /// <summary>
-/// vmangos Player::CanTakeQuest (Player.cpp:12565-12577) through <see cref="QuestNpcServices.CanTakeQuest(Entities.Player, uint)"/>:
+/// vmangos Player::CanTakeQuest (Player.cpp:12565-12577) through <see cref="QuestNpcServices.CanTakeQuest(ArcaneCore.Game.Entities.Player, uint)"/>:
 /// the relation checks a bot's quest-candidate scan runs per quest every think (exclusive groups, signed previous quests, chains and
 /// breadcrumbs), and that the check and <see cref="QuestNpcServices.IsRewardable"/> allocate nothing on that path (the perf-tick lane's
 /// allocation trace, 2026-10-19: closures and a visited set per call, about 0.5 KB per check).
@@ -117,7 +117,7 @@ public sealed class QuestTakeCheckTests
         QuestTemplate[] quests = [Task(A, nextInChain: B), Task(B, previous: (int)A, exclusiveGroup: 9), Task(C, exclusiveGroup: 9), Breadcrumb(D, B)];
         using var kit = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
         QuestNpcServices services = kit.Services;
-        Entities.Player player = kit.Player;
+        ArcaneCore.Game.Entities.Player player = kit.Player;
         Assert.True(services.CanTakeQuest(player, B));
         Assert.True(services.CanTakeQuest(player, D));
 
@@ -136,7 +136,7 @@ public sealed class QuestTakeCheckTests
         QuestTemplate[] quests = [Task(A, exclusiveGroup: -5), Task(B, exclusiveGroup: -5), Task(C, previous: (int)A)];
         using var kit = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true), Row(B, QuestStatus.Complete, rewarded: true)]);
         QuestNpcServices services = kit.Services;
-        Entities.Player player = kit.Player;
+        ArcaneCore.Game.Entities.Player player = kit.Player;
         Assert.True(services.CanTakeQuest(player, C));
 
         AllocationProbe.AssertEveryCleanWindowAtMost(() =>

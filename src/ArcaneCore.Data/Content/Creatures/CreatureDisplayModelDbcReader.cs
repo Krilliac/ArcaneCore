@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using System.Security.Cryptography;
 
@@ -65,8 +65,7 @@ public static class CreatureDisplayModelDbcReader
 
     private static void Require(DbcFile file, int fields, string name)
     {
-        if (file.FieldCount != fields || file.RecordSize != fields * 4)
-            throw new InvalidDataException($"{name} requires {fields} four-byte fields, found {file.FieldCount}/{file.RecordSize}");
+        file.RequireFields(fields, table => $"{name} requires {fields} four-byte fields, found {table.FieldCount}/{table.RecordSize}");
         if (file.RecordCount > MaxRecords) throw new InvalidDataException($"{name} exceeds the record limit");
     }
 

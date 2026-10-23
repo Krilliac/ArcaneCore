@@ -1,5 +1,5 @@
 using ArcaneCore.Data.Content.ClientEffects;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Gm.Core;

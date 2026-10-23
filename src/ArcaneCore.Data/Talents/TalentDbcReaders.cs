@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Talents;
 
 namespace ArcaneCore.Data.Talents;
@@ -74,9 +74,6 @@ public static class TalentDbcReaders
     private static void Require(DbcFile file, int fields, string name)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != fields || file.RecordSize != fields * 4)
-        {
-            throw new InvalidDataException($"build-5875 {name} requires {fields} four-byte fields");
-        }
+        file.RequireFields(fields, _ => $"build-5875 {name} requires {fields} four-byte fields");
     }
 }

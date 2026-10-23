@@ -49,13 +49,13 @@ public sealed class RanshallaAI(Creature creature) : EscortAI(creature), IQuestS
 
     protected override bool HoldAtEndWhilePaused => true;
 
-    private uint _delayMs, _currentWaypoint, _stepMs;
-    private int _step = -1;
+    private readonly DialogueRunner _dialogue = new(Array.ConvertAll(s_dialogue, d => d.Delay));
+    private uint _delayMs, _currentWaypoint;
     private bool _waitingForPriestess;
     private Creature? _priestess1, _priestess2, _guardian, _voice;
     private GameObject? _altar;
 
-    public int DialogueStep => _step;
+    public int DialogueStep => _dialogue.Step;
 
     public void OnQuestAccept(Player player, uint questId)
     {
@@ -213,8 +213,7 @@ public sealed class RanshallaAI(Creature creature) : EscortAI(creature), IQuestS
 
     private void StartDialogue(int index)
     {
-        _step = index;
-        _stepMs = s_dialogue[index].Delay;
+        _dialogue.Start(index);
         DoDialogueStep(s_dialogue[index]);
     }
 
@@ -344,27 +343,9 @@ public sealed class RanshallaAI(Creature creature) : EscortAI(creature), IQuestS
         }
 
         // DialogueUpdate: a step with delay 0 ends the run of steps until the next StartNextDialogueText.
-        if (_step >= 0)
+        if (_dialogue.Advance(diffMs) is var due and >= 0)
         {
-            if (_stepMs == 0)
-            {
-                _step = -1;
-            }
-            else if (_stepMs <= diffMs)
-            {
-                if (_step + 1 < s_dialogue.Length)
-                {
-                    StartDialogue(_step + 1);
-                }
-                else
-                {
-                    _step = -1;
-                }
-            }
-            else
-            {
-                _stepMs -= diffMs;
-            }
+            DoDialogueStep(s_dialogue[due]);
         }
 
         if (_delayMs != 0)

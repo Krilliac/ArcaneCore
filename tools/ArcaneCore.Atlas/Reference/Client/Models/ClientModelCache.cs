@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using ArcaneCore.Atlas.Core;
 
 namespace ArcaneCore.Atlas.Reference.Client.Models;
@@ -125,11 +124,7 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
     // A corrupt MOHD must not make the loader try millions of group files.
     private const uint MaxGroups = 4096;
 
-    private readonly ConcurrentDictionary<(IClientFileSource Source, string Key), Lazy<Entry>> _entries = new();
-    // Guards byte accounting: Clear, counting a finished load and Evict all take it, so _bytes only ever holds counted, still-cached entries.
-    private readonly Lock _evictGate = new();
-    private long _bytes;
-    private long _clock;
+    private readonly CostBoundedLazyCache<(IClientFileSource Source, string Key), Entry> _cache = new(maxBytes);
 
     private sealed class Entry(object? model, ModelProblem? problem, long bytes)
     {
@@ -138,16 +133,11 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
         public ModelProblem? Problem { get; } = problem;
 
         public long Bytes { get; } = bytes;
-
-        public long LastUse;
-
-        // Set under _evictGate once Bytes are in _bytes.
-        public bool Counted;
     }
 
-    public long Bytes => Interlocked.Read(ref _bytes);
+    public long Bytes => _cache.Cost;
 
-    public int Count => _entries.Count;
+    public int Count => _cache.Count;
 
     /// <summary>Loads a WMO (root plus every group file) by client path.</summary>
     public ModelLoad<WmoModel> GetWmo(IClientFileSource files, string clientPath)
@@ -170,13 +160,7 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
 
     /// <summary>Drops every cached model.</summary>
     public void Clear()
-    {
-        lock (_evictGate)
-        {
-            _entries.Clear();
-            Interlocked.Exchange(ref _bytes, 0);
-        }
-    }
+        => _cache.Clear();
 
     private static Entry LoadWmo(IClientFileSource files, string clientPath)
     {
@@ -246,71 +230,9 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
         => new(null, new ModelProblem(kind, path, message), 256);
 
     private Entry Resolve(IClientFileSource files, string key, Func<Entry> load)
-    {
-        (IClientFileSource, string) id = (files, key);
-        Lazy<Entry> lazy = _entries.GetOrAdd(id, _ => new Lazy<Entry>(
-            load,
-            LazyThreadSafetyMode.ExecutionAndPublication));
-        Entry entry;
-        try
+        => _cache.GetOrLoad((files, key), () =>
         {
-            entry = lazy.Value;
-        }
-        catch
-        {
-            // An I/O failure is not cached: the next caller loads again.
-            _entries.TryRemove(new KeyValuePair<(IClientFileSource, string), Lazy<Entry>>(id, lazy));
-            throw;
-        }
-
-        entry.LastUse = Interlocked.Increment(ref _clock);
-        lock (_evictGate)
-        {
-            // A Clear that ran while this load was in flight already dropped the entry; counting it now would leak bytes.
-            if (!entry.Counted && _entries.TryGetValue(id, out Lazy<Entry>? current) && ReferenceEquals(current, lazy))
-            {
-                entry.Counted = true;
-                Interlocked.Add(ref _bytes, entry.Bytes);
-            }
-        }
-
-        Evict(id);
-        return entry;
-    }
-
-    private void Evict((IClientFileSource, string) keep)
-    {
-        if (Interlocked.Read(ref _bytes) <= maxBytes)
-        {
-            return;
-        }
-
-        lock (_evictGate)
-        {
-            long over = Interlocked.Read(ref _bytes) - maxBytes;
-            if (over <= 0)
-            {
-                return;
-            }
-
-            var candidates = _entries
-                .Where(p => p.Value.IsValueCreated && !p.Key.Equals(keep) && p.Value.Value.Counted)
-                .Select(p => (p.Key, Lazy: p.Value, Entry: p.Value.Value))
-                .OrderBy(c => c.Entry.LastUse)
-                .ToList();
-            foreach ((var key, Lazy<Entry> lazy, Entry entry) in candidates)
-            {
-                if (over <= 0)
-                {
-                    break;
-                }
-
-                if (_entries.TryRemove(new KeyValuePair<(IClientFileSource, string), Lazy<Entry>>(key, lazy)))
-                {
-                    Interlocked.Add(ref _bytes, -entry.Bytes);
-                    over -= entry.Bytes;
-                }
-            }
-        }
-    }
+            Entry created = load();
+            return (created, created.Bytes);
+        });
 }

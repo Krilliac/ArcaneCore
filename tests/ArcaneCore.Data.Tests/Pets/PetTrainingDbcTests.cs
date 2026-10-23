@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Data.Content.Pets;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Tests.Skills;
 using ArcaneCore.Kernel.Npc;

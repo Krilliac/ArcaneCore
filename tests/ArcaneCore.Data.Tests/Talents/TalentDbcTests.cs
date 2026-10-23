@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Talents;
 using ArcaneCore.Kernel.Talents;
 using Xunit;

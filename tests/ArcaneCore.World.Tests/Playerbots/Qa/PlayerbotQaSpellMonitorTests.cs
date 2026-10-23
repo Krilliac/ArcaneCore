@@ -1,3 +1,4 @@
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;

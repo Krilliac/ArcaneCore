@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Characters;
 
 namespace ArcaneCore.Data.Characters;
@@ -30,10 +30,7 @@ public static class CharacterAppearanceDbcReader
     public static IReadOnlyList<CharSectionRecord> ReadSections(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != CharSectionsFieldCount)
-        {
-            throw new InvalidDataException($"CharSections.dbc has {file.FieldCount} fields, expected {CharSectionsFieldCount}");
-        }
+        file.RequireFields(CharSectionsFieldCount, static table => $"CharSections.dbc has {table.FieldCount} fields, expected {CharSectionsFieldCount}");
 
         var rows = new List<CharSectionRecord>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)
@@ -58,10 +55,7 @@ public static class CharacterAppearanceDbcReader
     public static IReadOnlyList<CharFacialHairStyleRecord> ReadFacialHairStyles(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FacialHairStylesFieldCount)
-        {
-            throw new InvalidDataException($"CharacterFacialHairStyles.dbc has {file.FieldCount} fields, expected {FacialHairStylesFieldCount}");
-        }
+        file.RequireFields(FacialHairStylesFieldCount, static table => $"CharacterFacialHairStyles.dbc has {table.FieldCount} fields, expected {FacialHairStylesFieldCount}");
 
         var rows = new List<CharFacialHairStyleRecord>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

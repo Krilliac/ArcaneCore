@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.Maps;
 
@@ -18,8 +18,7 @@ public static class WmoAreaTableDbcReader
     public static IReadOnlyList<WmoAreaTemplateRow> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
-            throw new InvalidDataException($"WMOAreaTable.dbc requires {FieldCount} four-byte fields, found {file.FieldCount}/{file.RecordSize}");
+        file.RequireFields(FieldCount, static table => $"WMOAreaTable.dbc requires {FieldCount} four-byte fields, found {table.FieldCount}/{table.RecordSize}");
 
         var rows = new List<WmoAreaTemplateRow>(file.RecordCount);
         var ids = new HashSet<uint>();

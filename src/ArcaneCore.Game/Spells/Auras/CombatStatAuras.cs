@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Stats;
@@ -35,7 +34,7 @@ namespace ArcaneCore.Game.Spells;
 public sealed class CombatStatAuras : ISpellHandlerModule
 {
     /// <summary>What an aura applied to a non-player's ledger, so its removal takes back the same amount.</summary>
-    private static readonly ConditionalWeakTable<SpellAura, StrongBox<int>> s_ledgerAmounts = new();
+    private static readonly AppliedLedger<int> s_ledgerAmounts = new();
 
     private static readonly UnitMods[] s_damageGroups = [UnitMods.DamageMainHand, UnitMods.DamageOffHand, UnitMods.DamageRanged];
 
@@ -199,17 +198,11 @@ public sealed class CombatStatAuras : ISpellHandlerModule
     {
         if (apply)
         {
-            s_ledgerAmounts.AddOrUpdate(aura, new StrongBox<int>(aura.Amount));
+            s_ledgerAmounts.Record(aura, aura.Amount);
             return aura.Amount;
         }
 
-        if (!s_ledgerAmounts.TryGetValue(aura, out StrongBox<int>? box))
-        {
-            return null;
-        }
-
-        s_ledgerAmounts.Remove(aura);
-        return box.Value;
+        return s_ledgerAmounts.TryTake(aura, out int amount) ? amount : null;
     }
 
     private static void ApplyToDamageGroups(UnitModLedger ledger, int amount, bool apply)

@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.WorldData.Transports;
 
 namespace ArcaneCore.Data.Content.Transports;
@@ -17,10 +17,7 @@ public static class TransportAnimationDbcReader
     public static TransportAnimationCatalog Read(DbcFile dbc)
     {
         ArgumentNullException.ThrowIfNull(dbc);
-        if (dbc.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"TransportAnimation.dbc has {dbc.FieldCount} fields, build 5875 has {FieldCount}");
-        }
+        dbc.RequireFields(FieldCount, static table => $"TransportAnimation.dbc has {table.FieldCount} fields, build 5875 has {FieldCount}");
 
         var rows = new List<(uint, TransportAnimationNode)>(dbc.RecordCount);
         for (int i = 0; i < dbc.RecordCount; i++)

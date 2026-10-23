@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Protocol;
 
@@ -46,7 +47,7 @@ public sealed class LifeTapScript : ISpellScript
         Unit caster = context.Caster;
         SpellSystem system = context.System;
         float damage = Bonus(system, caster, context.Spell, context.Value > 0 ? context.Value : 0);
-        int integral = (int)Math.Floor(damage + system.Random.NextSingle()); // rand_dither
+        int integral = SpellRounding.DitherFloor(damage, system.Random); // rand_dither
         if (caster.Health > integral)
         {
             caster.Health -= (uint)integral; // shouldn't appear in the combat log

@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Data.Graveyards;
@@ -18,10 +18,7 @@ public static class WorldSafeLocsDbcReader
     public static IReadOnlyList<WorldSafeLoc> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"build-5875 WorldSafeLocs.dbc requires {FieldCount} four-byte fields, found {file.FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"build-5875 WorldSafeLocs.dbc requires {FieldCount} four-byte fields, found {table.FieldCount}");
 
         var rows = new Dictionary<uint, WorldSafeLoc>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>An implementation of SPELL_EFFECT_SCRIPT_EFFECT (77) for one spell.</summary>
@@ -14,7 +12,7 @@ public delegate void ScriptEffectHandler(SpellEffectContext context);
 /// </summary>
 public sealed class ScriptEffectRegistry
 {
-    private static readonly ConditionalWeakTable<SpellSystem, ScriptEffectRegistry> s_registries = new();
+    private static readonly InstanceAttachments<SpellSystem, ScriptEffectRegistry> s_registries = new();
 
     private readonly Dictionary<uint, ScriptEffectHandler> _handlers = [];
 
@@ -22,7 +20,7 @@ public sealed class ScriptEffectRegistry
     public static ScriptEffectRegistry For(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        return s_registries.GetValue(system, static _ => new ScriptEffectRegistry());
+        return s_registries.GetOrCreate(system, static _ => new ScriptEffectRegistry());
     }
 
     /// <summary>The spell ids with a script, in no particular order.</summary>

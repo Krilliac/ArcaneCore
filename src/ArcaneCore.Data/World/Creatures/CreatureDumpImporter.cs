@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -355,98 +356,58 @@ public sealed class CreatureDumpImporter
         }
 
         FinishTemplates();
-        await using IDbContextTransaction? ownedTransaction = callerTransaction is null
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-        IDbContextTransaction transaction = callerTransaction ?? ownedTransaction!;
-        string? savepoint = callerTransaction is not null ? "ArcaneCreatureImport_" + Guid.NewGuid().ToString("N") : null;
-        if (savepoint is not null)
+        await ImportTransaction.RunAsync(db, "Creature", "ArcaneCreatureImport_", async ct =>
         {
-            await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-        }
-
-        bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
-        db.ChangeTracker.AutoDetectChangesEnabled = false;
-        try
-        {
-            if (replace)
-            {
-                await db.Set<CreatureAiScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureAiTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<BroadcastTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureTextTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<RelayScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<RelayScriptTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await DbScriptDumpImporter.DeleteAllAsync(db, cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureTemplateLinkRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureSpawnEntryRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureModelInfoRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-                await db.Set<CreatureTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            await InsertBatchedAsync(db, _templates.Values.Select(t => t.Row), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _movement.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _spellScriptTargets.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _links.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _templateLinks.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _movementTemplates.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _spawnEntries.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _aiScripts.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _aiTexts.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _broadcastTexts.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _aiSummons.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _textTemplates.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _relayTemplates.Values, cancellationToken).ConfigureAwait(false);
-            await _dbScripts.InsertAllAsync(db, cancellationToken).ConfigureAwait(false);
-
-            if (savepoint is not null)
-            {
-                await transaction.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (Exception importError)
-        {
+            bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
-                // Cancellation interrupts the import, not the rollback that preserves the
-                // previous content. Never roll back a transaction owned by the caller.
-                if (savepoint is not null)
+                if (replace)
                 {
-                    await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
-                    await transaction.ReleaseSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                    await db.Set<CreatureAiScriptRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureAiTextRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<BroadcastTextRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureTextTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<RelayScriptRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<RelayScriptTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await DbScriptDumpImporter.DeleteAllAsync(db, ct).ConfigureAwait(false);
+                    await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureTemplateLinkRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureSpawnEntryRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureModelInfoRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                 }
-                else
-                {
-                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (Exception rollbackError)
-            {
-                throw new AggregateException("Creature import and rollback failed; discard the context and transaction.", importError, rollbackError);
-            }
 
-            throw;
-        }
-        finally
-        {
-            db.ChangeTracker.Clear();
-            db.ChangeTracker.AutoDetectChangesEnabled = detect;
-        }
+                await InsertBatchedAsync(db, _templates.Values.Select(t => t.Row), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _spawns.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _movement.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _spellScriptTargets.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _links.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _templateLinks.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _movementTemplates.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _spawnEntries.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _addons.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _aiScripts.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _aiTexts.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _broadcastTexts.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _aiSummons.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _textTemplates.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _relayTemplates.Values, ct).ConfigureAwait(false);
+                await _dbScripts.InsertAllAsync(db, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                db.ChangeTracker.AutoDetectChangesEnabled = detect;
+            }
+        }, cancellationToken).ConfigureAwait(false);
 
         return BuildReport();
     }

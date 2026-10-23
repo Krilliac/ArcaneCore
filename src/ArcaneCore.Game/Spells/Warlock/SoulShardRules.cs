@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Progression;
@@ -24,7 +23,7 @@ public static class SoulShardRules
     /// <summary>SPELLFAMILY_WARLOCK.</summary>
     public const uint WarlockFamily = 5;
 
-    private static readonly ConditionalWeakTable<SpellSystem, ISoulShardTapSource> TapSources = [];
+    private static readonly InstanceAttachments<SpellSystem, ISoulShardTapSource> TapSources = new();
 
     /// <summary>Install (or replace, or with null remove) the tap source of <paramref name="system"/>.</summary>
     public static void UseTapSource(SpellSystem system, ISoulShardTapSource? source)
@@ -33,11 +32,11 @@ public static class SoulShardRules
         TapSources.Remove(system);
         if (source is not null)
         {
-            TapSources.Add(system, source);
+            TapSources.Attach(system, source);
         }
     }
 
-    internal static ISoulShardTapSource? TapSourceOf(SpellSystem system) => TapSources.TryGetValue(system, out ISoulShardTapSource? source) ? source : null;
+    internal static ISoulShardTapSource? TapSourceOf(SpellSystem system) => TapSources.Find(system);
 
     /// <summary>
     /// vmangos Player::IsHonorOrXPTarget: a victim at or below the gray level of the player gives nothing, and neither does a totem or a pet.

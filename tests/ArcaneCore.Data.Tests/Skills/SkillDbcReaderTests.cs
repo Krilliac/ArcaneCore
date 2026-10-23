@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Skills;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;

@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.Pets;
 
@@ -30,10 +30,7 @@ public static class CreatureFamilyDbcReader
     private static Dictionary<uint, uint> ReadColumn(DbcFile file, int field)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount)
-        {
-            throw new InvalidDataException($"build-5875 CreatureFamily.dbc requires {FieldCount} four-byte fields, found {file.FieldCount}");
-        }
+        file.RequireFields(FieldCount, static table => $"build-5875 CreatureFamily.dbc requires {FieldCount} four-byte fields, found {table.FieldCount}");
 
         var values = new Dictionary<uint, uint>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)
