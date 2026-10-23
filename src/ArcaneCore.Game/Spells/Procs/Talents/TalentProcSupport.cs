@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells.Procs.Talents;
 
@@ -15,7 +16,7 @@ internal static class TalentProcSupport
     private const float SearchSlack = 10f;
 
     /// <summary>vmangos <c>rand_dither</c> (Utilities/Random.cpp:80-83): the integer part, plus one with the probability of the fraction, sign kept.</summary>
-    public static int Dither(float value, Random random) => (int)MathF.CopySign(MathF.Floor(MathF.Abs(value) + random.NextSingle()), value);
+    public static int Dither(float value, Random random) => SpellRounding.DitherSingle(value, random);
 
     /// <summary>vmangos <c>rand_ditheru</c>: <see cref="Dither"/> of a value clamped to 0.</summary>
     public static int DitherUnsigned(float value, Random random) => Dither(MathF.Max(value, 0f), random);

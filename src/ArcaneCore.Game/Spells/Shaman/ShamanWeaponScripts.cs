@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Combat.Threat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
 
 namespace ArcaneCore.Game.Spells.Shaman;
@@ -35,7 +36,7 @@ public sealed class FlametongueProcScript : ISpellScript
         float spellDamage = system.GetTotalAuraModifier(context.Caster, AuraType.ModDamageDone, a => (a.MiscValue & mask) != 0);
         float weaponSpeed = item.Template.Delay / 1000.0f;
         float total = Damage(context.Value, spellDamage, weaponSpeed);
-        int dithered = (int)Math.Floor(Math.Max(total, 0f) + system.Random.NextSingle()); // rand_dither
+        int dithered = SpellRounding.DitherFloor(Math.Max(total, 0f), system.Random); // rand_dither
         system.CastCustomSpell(context.Caster, FlametongueAttack, SpellCastTargets.ForUnit(context.Target.Guid), dithered, castItem: item);
     }
 

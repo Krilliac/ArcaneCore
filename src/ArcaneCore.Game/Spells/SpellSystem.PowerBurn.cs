@@ -118,5 +118,5 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>vmangos rand_dither / rand_ditheru: the whole part plus one with the probability of the fraction.</summary>
-    private uint Dither(float value) => value <= 0f ? 0u : (uint)Math.Floor(value + Random.NextSingle());
+    private uint Dither(float value) => value <= 0f ? 0u : SpellRounding.DitherUnsignedSingle(value, Random);
 }

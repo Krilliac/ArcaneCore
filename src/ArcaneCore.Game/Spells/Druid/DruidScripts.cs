@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells.Druid;
 
@@ -55,7 +56,7 @@ public sealed class DruidScriptsModule : ISpellHandlerModule
         uint rage = Math.Min(SpellSystem.GetPower(target, PowerType.Rage), MaxRageConverted);
         SpellSystem.SetPower(target, PowerType.Rage, SpellSystem.GetPower(target, PowerType.Rage) - rage);
         float basePoints = rage * (float)aura.Amount / 10.0f;
-        int dithered = (int)MathF.Floor(basePoints + system.Random.NextSingle());      // vmangos rand_dither
+        int dithered = SpellRounding.DitherFloor(basePoints, system.Random);      // vmangos rand_dither
         system.CastCustomSpell(target, FrenziedRegenerationHeal, SpellCastTargets.ForSelf(), dithered);
     }
 

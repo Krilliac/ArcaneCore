@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells.Utility;
 
@@ -64,7 +65,7 @@ public sealed class PowerDrainEffect : ISpellHandlerModule
         {
             float multiplier = context.Effect.MultipleValue == 0 ? 1f : context.Effect.MultipleValue;
             float gain = drained * multiplier;
-            uint dithered = (uint)Math.Floor(Math.Max(gain, 0f) + context.System.Random.NextSingle());
+            uint dithered = SpellRounding.DitherUnsignedSingle(gain, context.System.Random);
             SpellSystem.SetPower(caster, PowerType.Mana, SpellSystem.GetPower(caster, PowerType.Mana) + dithered);
         }
     }

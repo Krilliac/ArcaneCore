@@ -232,7 +232,7 @@ internal static class BuiltInProcHandlers
                     return AuraProcResult.Failed;
                 }
 
-                basePoints0 = NonZero(Dither(c.Amount * (float)c.Aura.Amount / 100f / 3f, system.Random));
+                basePoints0 = NonZero(SpellRounding.DitherSingle(c.Amount * (float)c.Aura.Amount / 100f / 3f, system.Random));
                 target = c.Owner;
                 break;
             case FamilyHunter when aura.Id is 5118 or 13159:
@@ -378,9 +378,6 @@ internal static class BuiltInProcHandlers
         return c.System.Random.NextDouble() * 100d < chance ? PyroclasmStunSpell : null; // roll_chance_f
     }
 
-    /// <summary>vmangos <c>rand_dither</c> (Utilities/Random.cpp:80-83).</summary>
-    private static int Dither(float value, Random random) => (int)MathF.CopySign(MathF.Floor(MathF.Abs(value) + random.NextSingle()), value);
-
     /// <summary>A base point of 0 is none: vmangos TriggerProccedSpell casts the plain spell when every base point is 0.</summary>
     private static int? NonZero(int value) => value != 0 ? value : null;
 
@@ -409,7 +406,7 @@ internal static class BuiltInProcHandlers
             damage = bonus.Modify(SpellAmountStage.DirectDamage, c.Owner, victim, spell, c.Aura.EffectIndex, damage, 1);
         }
 
-        uint amount = (uint)Math.Floor(Math.Max(damage, 0f) + system.Random.NextSingle()); // rand_ditheru
+        uint amount = SpellRounding.DitherUnsignedSingle(damage, system.Random); // rand_ditheru
         if (amount > 0)
         {
             system.DealDirectDamage(c.Owner, victim, spell, amount, allowCrit: false);

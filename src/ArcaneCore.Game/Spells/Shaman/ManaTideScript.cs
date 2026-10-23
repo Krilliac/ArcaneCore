@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells.Shaman;
 
@@ -35,7 +36,7 @@ public sealed class ManaTideModule : ISpellHandlerModule
         }
 
         Unit target = holder.Target;
-        int dithered = (int)MathF.Floor(aura.Amount + system.Random.NextSingle()); // vmangos rand_dither (an integer amount stays as it is)
+        int dithered = SpellRounding.DitherFloor(aura.Amount, system.Random); // vmangos rand_dither (an integer amount stays as it is)
         system.CastCustomSpell(target, trigger, SpellCastTargets.ForUnit(target.Guid), dithered);
     }
 }

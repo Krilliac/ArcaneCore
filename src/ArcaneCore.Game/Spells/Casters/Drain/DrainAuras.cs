@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells.Casters.Drain;
@@ -140,7 +141,7 @@ public static class DrainAuras
             amount = modifier.Modify(SpellAmountStage.DamageOverTimeTick, caster, target, talent, 0, amount, 1);
         }
 
-        uint damage = (uint)Math.Floor(Math.Max(amount, 0f) + spells.Random.NextSingle());
+        uint damage = SpellRounding.DitherUnsignedSingle(amount, spells.Random);
         uint rolled = damage;
         uint resisted = spells.ApplyResist(caster, target, talent, ref damage, periodic: true); // a PERIODIC_DAMAGE tick: the signed DOT resist
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,

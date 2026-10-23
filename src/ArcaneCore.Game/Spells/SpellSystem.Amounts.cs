@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -43,7 +44,7 @@ public sealed partial class SpellSystem
         }
 
         float modified = AmountModifier.Modify(stage, caster, holder.Target, holder.Spell, aura.EffectIndex, amount, holder.StackAmount);
-        return (uint)Math.Floor(Math.Max(modified, 0f) + Random.NextSingle());
+        return SpellRounding.DitherUnsignedSingle(modified, Random);
     }
 
     /// <summary>
@@ -55,7 +56,7 @@ public sealed partial class SpellSystem
         float modified = AmountModifier is null
             ? amount
             : AmountModifier.Modify(stage, caster, holder.Target, holder.Spell, aura.EffectIndex, amount, holder.StackAmount);
-        return (uint)Math.Floor(Math.Max(modified, 0f) + Random.NextSingle());
+        return SpellRounding.DitherUnsignedSingle(modified, Random);
     }
 
     /// <summary>The unit that cast an aura while it is still in the world and the aura's target's map (null otherwise); the caster of a tick.</summary>
