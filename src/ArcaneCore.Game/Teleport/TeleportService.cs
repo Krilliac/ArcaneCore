@@ -86,7 +86,9 @@ public sealed class TeleportService
     /// H1 outcome check: a teleport that sat in one stage past its budget never completed (the client's MSG_MOVE_TELEPORT_ACK or
     /// MSG_MOVE_WORLDPORT_ACK did not arrive, or the scheduled far teleport never ran). One report per teleport
     /// (<c>teleport/ack-timeout</c>, <c>teleport/far-stuck</c>); the entry stays so a late ack still completes, and if it remains
-    /// unacknowledged past the post-report recovery grace it is enforced or cleaned up so the player does not stay wedged. A playerbot
+    /// unacknowledged past the post-report recovery grace, Near is re-acknowledged and FarScheduled is cleared. Far and Arriving stalls
+    /// are report-only: the anomaly is reported but no recovery runs, so the entry waits for a late ack or for <c>IsOrphaned</c>
+    /// (the player disconnects or reaches a map). A playerbot
     /// whose brain has not acknowledged a same-map teleport within <see cref="BotNearAckFallbackMs"/> completes it on the sweep.
     /// Runs once a second from the world tick; cost is a walk over the pending teleports (normally none). World thread.
     /// </summary>
