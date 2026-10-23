@@ -219,6 +219,33 @@ public sealed class FriendsServiceTests
         Assert.Empty(f.Sent(a, WorldOpcode.SmsgFriendStatus));
     }
 
+    /// <summary>The rows of a player arrive after it is in the world: a change made on its list before they do (an ignore added, a friend dropped) is kept, not replaced by the stored rows.</summary>
+    [Fact]
+    public void Load_KeepsTheChangesMadeBeforeTheRowsArrived()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        f.AddPlayer(2);
+        f.AddPlayer(3);
+        f.AddPlayer(4);
+        f.Context.Friends.Unload(a);
+        PlayerSocial early = f.Context.Friends.Get(a); // not loaded yet
+        early.Set(2, SocialFlags.Ignored, true);       // added before the load
+        early.Set(3, SocialFlags.Friend, false);       // dropped before the load (stored as a friend)
+
+        f.Context.Friends.Load(a, [new SocialEntry(3, SocialFlags.Friend), new SocialEntry(4, SocialFlags.Friend)]);
+
+        PlayerSocial loaded = f.Context.Friends.Get(a);
+        Assert.True(loaded.Has(2, SocialFlags.Ignored));
+        Assert.False(loaded.Has(3, SocialFlags.Friend));
+        Assert.True(loaded.Has(4, SocialFlags.Friend));
+        Assert.True(f.Context.Friends.HasIgnore(a, ObjectGuid.Player(2)));
+
+        // Changes after the load are plain changes: a later load does not resurrect them.
+        loaded.Set(4, SocialFlags.Friend, false);
+        Assert.False(f.Context.Friends.Get(a).Has(4, SocialFlags.Friend));
+    }
+
     [Fact]
     public void FriendList_ListsOnlineFriendsWithDetails_AndOfflineWithStatusOnly()
     {

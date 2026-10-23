@@ -207,18 +207,18 @@ public sealed class PlayerbotGroupPlayerTests
         });
         await using WorldTestClient player = await world.World.EnterWorldAsync("IGNOREDONE", "Ignoredone", AccountSecurity.Player);
         var bot = await world.AddBotAsync("Ignorerbot", Human, Warrior, 1, []);
-        await world.RunAsync(3_000); // the bot's lists have loaded
         if (ignored)
             await world.OnWorldAsync(() =>
             {
                 Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Set(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored, true);
                 return true;
             });
-        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
-        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        await player.CollectAsync();
         await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
-        bool replied = await world.RunUntilAsync(ignored ? 20_000u : 60_000u, () => dispatched.Contains(WorldOpcode.CmsgMessagechat));
-        Assert.True(answered == replied, string.Join(",", dispatched));
+        await world.RunAsync(30_000);
+        // The bot's answer reaches the player as a whisper (the player's own whisper comes back as WhisperInform; other bot talk is not a whisper).
+        bool replied = (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgMessagechat && packet.Payload.Length > 0 && packet.Payload[0] == (byte)ChatType.Whisper);
+        Assert.True(answered == replied, "ignoreHas=" + await world.OnWorldAsync(() => Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Has(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored)));
     }
 
     [Fact]

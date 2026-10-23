@@ -48,6 +48,17 @@ public sealed class PlayerSocial
 
     private readonly Dictionary<uint, SocialFlags> _entries = [];
 
+    /// <summary>
+    /// The entries changed before the player's rows arrived (a list made by <see cref="FriendsService.Get"/> before <see cref="FriendsService.Load"/>),
+    /// with the flags each ended on (none: removed): the load applies them over the stored rows instead of dropping them.
+    /// </summary>
+    private Dictionary<uint, SocialFlags>? _pending;
+
+    /// <summary>Whether the stored rows are in (a list that is not yet loaded keeps its changes in <see cref="_pending"/>).</summary>
+    internal bool Loaded { get; init; }
+
+    internal IReadOnlyDictionary<uint, SocialFlags>? Pending => _pending;
+
     public IReadOnlyDictionary<uint, SocialFlags> Entries => _entries;
 
     public int Count(SocialFlags flag) => _entries.Values.Count(f => (f & flag) != 0);
@@ -68,6 +79,7 @@ public sealed class PlayerSocial
             _entries[other] = flags;
         }
 
+        if (!Loaded) (_pending ??= [])[other] = flags;
         return flags;
     }
 }
@@ -98,12 +110,22 @@ public sealed class FriendsService(SocialContext context)
     /// <summary>Install a player's rows (entries of deleted characters are skipped).</summary>
     public void Load(Player player, IEnumerable<SocialEntry> entries)
     {
-        var social = new PlayerSocial();
+        var social = new PlayerSocial { Loaded = true };
         foreach (SocialEntry entry in entries)
         {
             if (entry.OtherId > 0 && context.Characters.Find((uint)entry.OtherId) is not null)
             {
                 social.Set((uint)entry.OtherId, entry.Flags & (SocialFlags.Friend | SocialFlags.Ignored), true);
+            }
+        }
+
+        // Changes made on the empty list before the rows arrived (they were written through, too) win over the stored rows.
+        if (_socials.TryGetValue(player.Guid, out PlayerSocial? early) && early.Pending is { } pending)
+        {
+            foreach ((uint other, SocialFlags flags) in pending)
+            {
+                social.Set(other, SocialFlags.Friend | SocialFlags.Ignored, false);
+                if (flags != SocialFlags.None) social.Set(other, flags, true);
             }
         }
 
