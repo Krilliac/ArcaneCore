@@ -1186,8 +1186,9 @@ where the master goes.
   invitation is also read from the group state, so one whose packet the 128-entry drop-oldest capture queue evicted is still
   answered; an evicted SMSG_LOOT_START_ROLL is not (that roll waits out its timer).
 - **Invitations** are accepted (CMSG_GROUP_ACCEPT) or declined (CMSG_GROUP_DECLINE, which tells the inviter) by
-  `World:Playerbots:Party:InvitePolicy`: `None` (only the `Allowlist`), `GuildOrFriends` (default: the allowlist, the bot's guild
-  mates and players on the bot's own friend list) or `Anyone`. A player's own friend list does not count: anyone can put any bot
+  `World:Playerbots:Party:InvitePolicy`: `None` (only the `Allowlist`), `GuildOrFriends` (the allowlist, the bot's guild
+  mates and players on the bot's own friend list), `Anyone` or `Affinity` (default: the allowlist, guild mates and friends, a player the
+  bot likes (affinity at least `AcceptInviteAffinity`, 10) or one on the bot's own quest or dungeon goal; a rival is always declined). A player's own friend list does not count: anyone can put any bot
   on it with one CMSG_ADD_FRIEND, so it shows no consent. `.playerbot invite <bot>` (GameMaster; the
   vmangos `.partybot add` analogue) invites a running autonomous bot into the GM's group through the ordinary invite and makes it
   accept whatever its policy says; the invite keeps every ordinary rule (faction, full group, leader or assistant).
