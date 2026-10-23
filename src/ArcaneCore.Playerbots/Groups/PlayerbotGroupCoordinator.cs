@@ -1723,11 +1723,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
     private void Finish(BotGroup group, bool success, string reason, bool setAside = true)
     {
-        if (success && !group.Succeeded)
-        {
-            NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupSucceeded);
-            NoteRoles(group);
-        }
+        if (success) NoteSuccess(group);
 
         // A handed-over group never walks out or disbands (that would take the bots out of the player's group): it is released in place.
         if (group.Handoff is { } handoff)
@@ -1754,9 +1750,23 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (group.State == PlayerbotGroupState.Disbanding) Disband(group);
     }
 
+    /// <summary>
+    /// The group succeeded: every member pair remembers it (trust, affinity) and the roles played. Once per group, from whichever end of a success
+    /// reaches it first: the ordinary completions set <see cref="BotGroup.Succeeded"/> and walk to <see cref="Disband"/> without going through
+    /// <see cref="Finish"/>, so the disband and the handoff end note it too.
+    /// </summary>
+    private void NoteSuccess(BotGroup group)
+    {
+        if (group.SuccessNoted) return;
+        group.SuccessNoted = true;
+        NotePairs(group, BotSocial.PlayerbotSocialEvent.GroupSucceeded);
+        NoteRoles(group);
+    }
+
     /// <summary>Every bot member leaves the group (CMSG_GROUP_DISBAND, the client's leave) and goes back to its brain.</summary>
     private void Disband(BotGroup group)
     {
+        if (group.Succeeded) NoteSuccess(group);
         if (!group.Succeeded && group.Reason is null) group.Reason = "disbanded";
         if (group.Succeeded && group.Reason is null)
         {
@@ -2044,6 +2054,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public uint MissingSinceMs { get; set; }
         public ObjectGuid Objective { get; private set; }
         public bool Succeeded { get; set; }
+
+        /// <summary>The success has been recorded in the members' social memory (once per group).</summary>
+        public bool SuccessNoted { get; set; }
 
         /// <summary>The first member seen dead in the current fight (empty while nobody is dead); the social memory blames it for a wipe.</summary>
         public ObjectGuid FirstDeath { get; set; }

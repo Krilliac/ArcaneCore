@@ -321,6 +321,7 @@ public sealed partial class PlayerbotGroupCoordinator
         if (group.Handoff is not { } handoff || !_groups.Contains(group)) return;
         group.Succeeded = success;
         group.Reason = success ? "completed" : reason;
+        if (success) NoteSuccess(group);
         if (!success) group.Run?.Apply(PlayerbotRunSignal.Abort(reason));
         if (!_shuttingDown && _world is { } world && group.LeaderPlayer(world) is { } leader
             && _bots.TryGetValue(group.LeaderBotId, out PlayerbotGroupBot bot) && bot.Session.Player?.Guid == leader.Guid)

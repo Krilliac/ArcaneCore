@@ -396,8 +396,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         _world = world;
         _sharedSetAsides.World = world;
-        // A player killed by another player (or its pet) is rivalry for the managed bot on either side.
-        subscriptions.Subscribe<Action<Unit?, Unit>>(Social.NotePvpKill, h => PlayerbotKillObserver.PlayerKilled += h, h => PlayerbotKillObserver.PlayerKilled -= h);
+        // A player killed by another player (or its pet) is rivalry for the managed bot on either side. The observer's event is process-wide and
+        // character ids restart in every world, so only a kill of a player of this world counts (a second host in one process must not write into this memory).
+        subscriptions.Subscribe<Action<Unit?, Unit>>(
+            (killer, victim) =>
+            {
+                if (victim is Player dead && ReferenceEquals(world.FindOnlinePlayer(dead.Guid), dead)) Social.NotePvpKill(killer, victim);
+            },
+            h => PlayerbotKillObserver.PlayerKilled += h, h => PlayerbotKillObserver.PlayerKilled -= h);
         if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;

@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Social;
 /// <summary>The social memory survives a bot stop and a server restart, the way set-asides do.</summary>
 public sealed class PlayerbotSocialMemoryPersistenceTests
 {
-    private sealed class MemoryRelationStore : IPlayerbotRelationStore
+    internal sealed class MemoryRelationStore : IPlayerbotRelationStore
     {
         private readonly Dictionary<Guid, PlayerbotRelation[]> _rows = [];
         public bool ThrowOnReplace { get; set; }
