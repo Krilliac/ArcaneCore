@@ -30,7 +30,7 @@ namespace ArcaneCore.Game.Spells;
 public sealed class AttackSpeedAuras : ISpellHandlerModule
 {
     /// <summary>The percent each applied aura contributed (after the haste spell modifier); presence means "applied".</summary>
-    private static readonly ConditionalWeakTable<SpellAura, StrongBox<float>> s_applied = new();
+    private static readonly AppliedLedger<float> s_applied = new();
     private static readonly ConditionalWeakTable<Unit, List<SpellAura>> s_castSpeedAuras = new();
 
     public void Register(SpellSystem system)
@@ -61,7 +61,7 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
                 aura.Amount = (int)percent;
             }
 
-            s_applied.AddOrUpdate(aura, new StrongBox<float>(percent));
+            s_applied.Record(aura, percent);
             if (!active.Contains(aura))
             {
                 active.Add(aura);
@@ -69,24 +69,22 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
         }
         else
         {
-            if (!s_applied.TryGetValue(aura, out _))
+            if (!s_applied.TryTake(aura, out _))
             {
                 return;
             }
 
-            s_applied.Remove(aura);
             active.Remove(aura);
         }
 
         float total = 1.0f;
         for (int i = 0; i < active.Count; i++)
         {
-            if (!s_applied.TryGetValue(active[i], out StrongBox<float>? box))
+            if (!s_applied.TryGet(active[i], out float val))
             {
                 continue;
             }
 
-            float val = box.Value;
             if (val == -100.0f)
             {
                 val = -99.99f;
@@ -111,7 +109,7 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
     /// <summary>vmangos HandleModAttackSpeed (SpellAuras.cpp:5093-5112): all three slots, and Seal of the Crusader's damage reduction.</summary>
     private static void ApplyAttackSpeed(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
     {
-        bool wasApplied = s_applied.TryGetValue(aura, out _);
+        bool wasApplied = s_applied.TryGet(aura, out _);
         Apply(system, holder, aura, apply, WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack, WeaponAttackType.RangedAttack);
         if (apply == wasApplied || !holder.Spell.IsFitToFamily(PaladinSpells.Family, SealOfTheCrusaderBit))
         {
@@ -169,17 +167,11 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
                 aura.Amount = (int)percent; // m_amount is what removal reverses
             }
 
-            s_applied.AddOrUpdate(aura, new StrongBox<float>(percent));
+            s_applied.Record(aura, percent);
         }
-        else
+        else if (!s_applied.TryTake(aura, out percent))
         {
-            if (!s_applied.TryGetValue(aura, out StrongBox<float>? box))
-            {
-                return; // never applied (a refused quiver aura, or already removed)
-            }
-
-            s_applied.Remove(aura);
-            percent = box.Value;
+            return; // never applied (a refused quiver aura, or already removed)
         }
 
         foreach (WeaponAttackType slot in slots)

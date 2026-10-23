@@ -194,15 +194,12 @@ public sealed class ShipTransport : WorldObject
                 && !LocomotionEnvironment.For(CurrentMap).IsBeingTeleported(stranded)
                 && !stranded.IsLoggingOut
                 && !stranded.Locomotion.SuppressAnomalies
-                && !stranded.Locomotion.PassengerLeftBehindReportedInEpisode)
+                && TransportAnomalies.TryLatch(stranded.Locomotion, TransportAnomalyLatch.PassengerLeftBehind))
             {
-                stranded.Locomotion.PassengerLeftBehindReportedInEpisode = true;
-                AnomalyLedger.Shared.Report(
-                    "transport",
+                TransportAnomalies.Report(
                     "passenger-left-behind",
-                    $"player {stranded.Name} (guid {stranded.Guid.Low})",
-                    $"Passenger is still attached to transport entry {Entry} on map {CurrentMap.MapId} while player map is {stranded.Map?.MapId.ToString() ?? "null"} without a pending teleport.",
-                    AnomalySeverity.Warning);
+                    stranded,
+                    $"Passenger is still attached to transport entry {Entry} on map {CurrentMap.MapId} while player map is {stranded.Map?.MapId.ToString() ?? "null"} without a pending teleport.");
             }
             return;
         }
@@ -236,18 +233,12 @@ public sealed class ShipTransport : WorldObject
     {
         if (passenger is Player player)
         {
-            if (player.Locomotion.SuppressAnomalies || player.Locomotion.PassengerLeftBehindReportedInEpisode)
+            if (player.Locomotion.SuppressAnomalies || !TransportAnomalies.TryLatch(player.Locomotion, TransportAnomalyLatch.PassengerLeftBehind))
             {
                 return;
             }
 
-            player.Locomotion.PassengerLeftBehindReportedInEpisode = true;
-            AnomalyLedger.Shared.Report(
-                "transport",
-                "passenger-left-behind",
-                $"player {player.Name} (guid {player.Guid.Low})",
-                detail,
-                AnomalySeverity.Warning);
+            TransportAnomalies.Report("passenger-left-behind", player, detail);
         }
         else
         {
@@ -264,18 +255,12 @@ public sealed class ShipTransport : WorldObject
     {
         if (passenger is Player player)
         {
-            if (player.Locomotion.SuppressAnomalies || player.Locomotion.TransportDesyncReportedInEpisode)
+            if (player.Locomotion.SuppressAnomalies || !TransportAnomalies.TryLatch(player.Locomotion, TransportAnomalyLatch.TransportDesync))
             {
                 return;
             }
 
-            player.Locomotion.TransportDesyncReportedInEpisode = true;
-            AnomalyLedger.Shared.Report(
-                "transport",
-                "passenger-desync",
-                $"player {player.Name} (guid {player.Guid.Low})",
-                detail,
-                AnomalySeverity.Warning);
+            TransportAnomalies.Report("passenger-desync", player, detail);
         }
         else
         {

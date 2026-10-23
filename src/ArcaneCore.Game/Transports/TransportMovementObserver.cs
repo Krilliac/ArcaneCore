@@ -2,7 +2,6 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 
@@ -41,15 +40,12 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
             {
                 if (!TransportSystem.IsOffsetWithinBounds(tx, ty, tz))
                 {
-                    if (!state.PassengerLeftBehindReportedInEpisode)
+                    if (TransportAnomalies.TryLatch(state, TransportAnomalyLatch.PassengerLeftBehind))
                     {
-                        state.PassengerLeftBehindReportedInEpisode = true;
-                        AnomalyLedger.Shared.Report(
-                            "transport",
+                        TransportAnomalies.Report(
                             "passenger-left-behind",
-                            $"player {player.Name} (guid {player.Guid.Low})",
-                            $"Passenger offset ({tx:F2}, {ty:F2}, {tz:F2}) on transport entry {ship.Entry} exceeds max passenger offset {TransportSystem.MaxPassengerOffset:F0}yd on map {player.MapId}.",
-                            AnomalySeverity.Warning);
+                            player,
+                            $"Passenger offset ({tx:F2}, {ty:F2}, {tz:F2}) on transport entry {ship.Entry} exceeds max passenger offset {TransportSystem.MaxPassengerOffset:F0}yd on map {player.MapId}.");
                     }
                 }
                 else
@@ -61,16 +57,13 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
                     float distSq = (dx * dx) + (dy * dy) + (dz * dz);
                     if (!float.IsFinite(distSq) || distSq > PassengerDesyncThresholdYards * PassengerDesyncThresholdYards)
                     {
-                        if (!state.TransportDesyncReportedInEpisode)
+                        if (TransportAnomalies.TryLatch(state, TransportAnomalyLatch.TransportDesync))
                         {
-                            state.TransportDesyncReportedInEpisode = true;
                             float dist = float.IsFinite(distSq) ? MathF.Sqrt(distSq) : float.PositiveInfinity;
-                            AnomalyLedger.Shared.Report(
-                                "transport",
+                            TransportAnomalies.Report(
                                 "passenger-desync",
-                                $"player {player.Name} (guid {player.Guid.Low})",
-                                $"Client world position ({incoming.X:F2}, {incoming.Y:F2}, {incoming.Z:F2}) diverged by {dist:F2}yd from transport entry {ship.Entry} transformed offset ({expectedX:F2}, {expectedY:F2}, {expectedZ:F2}) on map {player.MapId}.",
-                                AnomalySeverity.Warning);
+                                player,
+                                $"Client world position ({incoming.X:F2}, {incoming.Y:F2}, {incoming.Z:F2}) diverged by {dist:F2}yd from transport entry {ship.Entry} transformed offset ({expectedX:F2}, {expectedY:F2}, {expectedZ:F2}) on map {player.MapId}.");
                         }
                     }
                     else
@@ -98,15 +91,12 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
                 float tx = incoming.TransportX, ty = incoming.TransportY, tz = incoming.TransportZ;
                 if (!TransportSystem.IsOffsetWithinBounds(tx, ty, tz))
                 {
-                    if (!state.PassengerLeftBehindReportedInEpisode)
+                    if (TransportAnomalies.TryLatch(state, TransportAnomalyLatch.PassengerLeftBehind))
                     {
-                        state.PassengerLeftBehindReportedInEpisode = true;
-                        AnomalyLedger.Shared.Report(
-                            "transport",
+                        TransportAnomalies.Report(
                             "passenger-left-behind",
-                            $"player {player.Name} (guid {player.Guid.Low})",
-                            $"Passenger offset ({tx:F2}, {ty:F2}, {tz:F2}) on elevator transport entry {elevator.Entry} exceeds max passenger offset {TransportSystem.MaxPassengerOffset:F0}yd on map {player.MapId}.",
-                            AnomalySeverity.Warning);
+                            player,
+                            $"Passenger offset ({tx:F2}, {ty:F2}, {tz:F2}) on elevator transport entry {elevator.Entry} exceeds max passenger offset {TransportSystem.MaxPassengerOffset:F0}yd on map {player.MapId}.");
                     }
                 }
                 else
@@ -122,15 +112,12 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
                         float diff = MathF.Abs(worldDist - offsetLen);
                         if (!float.IsFinite(diff) || diff > PassengerDesyncThresholdYards)
                         {
-                            if (!state.TransportDesyncReportedInEpisode)
+                            if (TransportAnomalies.TryLatch(state, TransportAnomalyLatch.TransportDesync))
                             {
-                                state.TransportDesyncReportedInEpisode = true;
-                                AnomalyLedger.Shared.Report(
-                                    "transport",
+                                TransportAnomalies.Report(
                                     "passenger-desync",
-                                    $"player {player.Name} (guid {player.Guid.Low})",
-                                    $"Client world position ({incoming.X:F2}, {incoming.Y:F2}, {incoming.Z:F2}) diverged by {diff:F2}yd from elevator transport entry {elevator.Entry} position ({elevPos.X:F2}, {elevPos.Y:F2}, {elevPos.Z:F2}) on map {player.MapId}.",
-                                    AnomalySeverity.Warning);
+                                    player,
+                                    $"Client world position ({incoming.X:F2}, {incoming.Y:F2}, {incoming.Z:F2}) diverged by {diff:F2}yd from elevator transport entry {elevator.Entry} position ({elevPos.X:F2}, {elevPos.Y:F2}, {elevPos.Z:F2}) on map {player.MapId}.");
                             }
                         }
                         else
@@ -162,15 +149,12 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
                         float tz = player.Movement.TransportZ;
                         if (!TransportSystem.IsOffsetWithinBounds(tx, ty, tz))
                         {
-                            if (!state.SuppressAnomalies && !state.PassengerLeftBehindReportedInEpisode)
+                            if (!state.SuppressAnomalies && TransportAnomalies.TryLatch(state, TransportAnomalyLatch.PassengerLeftBehind))
                             {
-                                state.PassengerLeftBehindReportedInEpisode = true;
-                                AnomalyLedger.Shared.Report(
-                                    "transport",
+                                TransportAnomalies.Report(
                                     "passenger-left-behind",
-                                    $"player {player.Name} (guid {player.Guid.Low})",
-                                    $"Client attempted to board transport entry {ship.Entry} with out-of-bounds offset ({tx:F2}, {ty:F2}, {tz:F2}) on map {map.MapId}.",
-                                    AnomalySeverity.Warning);
+                                    player,
+                                    $"Client attempted to board transport entry {ship.Entry} with out-of-bounds offset ({tx:F2}, {ty:F2}, {tz:F2}) on map {map.MapId}.");
                             }
                         }
                         else
@@ -192,12 +176,11 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
                         if (state.LastUnknownTransportGuid != claim)
                         {
                             state.LastUnknownTransportGuid = claim;
-                            AnomalyLedger.Shared.Report(
+                            TransportAnomalies.Report(
                                 "move",
                                 "client-transport-unknown",
-                                $"player {player.Name} (guid {player.Guid.Low})",
-                                $"Client claimed OnTransport for unknown transport guid 0x{rawGuid:X} ({transportGuid}) on map {map.MapId} at ({player.X:F2}, {player.Y:F2}, {player.Z:F2}).",
-                                AnomalySeverity.Warning);
+                                player,
+                                $"Client claimed OnTransport for unknown transport guid 0x{rawGuid:X} ({transportGuid}) on map {map.MapId} at ({player.X:F2}, {player.Y:F2}, {player.Z:F2}).");
                         }
                     }
                 }

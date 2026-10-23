@@ -414,12 +414,4 @@ public sealed partial class CreatureMapSystem
     /// <paramref name="from"/>'s collision height to 1 yd above <paramref name="to"/>, so the order matters; open without vmaps).
     /// </summary>
     private bool InLineOfSight(WorldObject from, WorldObject to) => Map.Collision.IsWithinLineOfSight(from, to);
-
-    private static float DistanceSquared(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        return (dx * dx) + (dy * dy) + (dz * dz);
-    }
 }

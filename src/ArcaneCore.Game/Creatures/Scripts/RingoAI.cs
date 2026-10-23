@@ -103,7 +103,7 @@ public sealed class RingoAI : FollowerAI, IQuestScriptAI
             SetFollowPaused(true);
             if (System is { } system)
             {
-                system.SayText(Me, FaintSays[system.RandomInt(0, 3)]);
+                system.SayText(Me, FaintSays[system.RandomInt(0, FaintSays.Length - 1)]);
             }
         }
 
@@ -121,7 +121,7 @@ public sealed class RingoAI : FollowerAI, IQuestScriptAI
 
         if (System is { } system)
         {
-            system.SayText(Me, WakeSays[system.RandomInt(0, 3)]);
+            system.SayText(Me, WakeSays[system.RandomInt(0, WakeSays.Length - 1)]);
         }
 
         SetFollowPaused(false);

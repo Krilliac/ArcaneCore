@@ -18,7 +18,17 @@ namespace ArcaneCore.Data.Content.Import;
 /// </summary>
 public static class ImportTransaction
 {
-    public static async Task RunAsync(DbContext db, Func<CancellationToken, Task> work, CancellationToken cancellationToken = default)
+    public static Task RunAsync(DbContext db, Func<CancellationToken, Task> work, CancellationToken cancellationToken = default)
+        => RunAsync(db, "Content", "ArcaneContentImport_", work, cancellationToken);
+
+    /// <summary>
+    /// Same boundary with a caller-chosen <paramref name="label"/> (the subject of the
+    /// rollback-failure message, e.g. <c>Creature</c>) and an identifier-safe
+    /// <paramref name="savepointPrefix"/> for the savepoint name. The importers run their own
+    /// precondition checks (with their own wording) before calling this, so the generic checks
+    /// below are no-ops for them.
+    /// </summary>
+    public static async Task RunAsync(DbContext db, string label, string savepointPrefix, Func<CancellationToken, Task> work, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(work);
@@ -42,7 +52,7 @@ public static class ImportTransaction
             ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
             : null;
         IDbContextTransaction transaction = callerTransaction ?? ownedTransaction!;
-        string? savepoint = callerTransaction is not null ? "ArcaneContentImport_" + Guid.NewGuid().ToString("N") : null;
+        string? savepoint = callerTransaction is not null ? savepointPrefix + Guid.NewGuid().ToString("N") : null;
         if (savepoint is not null)
         {
             await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
@@ -78,7 +88,7 @@ public static class ImportTransaction
             }
             catch (Exception rollbackError)
             {
-                throw new AggregateException("Content import and rollback failed; discard the context and transaction.", importError, rollbackError);
+                throw new AggregateException(label + " import and rollback failed; discard the context and transaction.", importError, rollbackError);
             }
 
             throw;

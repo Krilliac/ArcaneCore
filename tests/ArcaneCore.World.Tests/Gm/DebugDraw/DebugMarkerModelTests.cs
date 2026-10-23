@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using ArcaneCore.Data.Content.GameObjects;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Game.DebugDraw;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Gm.DebugDraw;

@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.World.Tests.ClientData;
 using Xunit;

@@ -176,7 +176,7 @@ public sealed class DaphneStilwellAI(Creature creature) : EscortAI(creature), IQ
             }
             else
             {
-                system.SayText(Me, s_waveDown[system.RandomInt(0, 2)]);
+                system.SayText(Me, s_waveDown[system.RandomInt(0, s_waveDown.Length - 1)]);
             }
         }
     }

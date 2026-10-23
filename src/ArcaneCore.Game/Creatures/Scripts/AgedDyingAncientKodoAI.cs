@@ -51,7 +51,7 @@ public sealed class AgedDyingAncientKodoAI(Creature creature) : ScriptedAI(creat
             return;
         }
 
-        system.SayText(smeed, SmeedSays[system.RandomInt(0, 2)]);
+        system.SayText(smeed, SmeedSays[system.RandomInt(0, SmeedSays.Length - 1)]);
         DoCast(Me, SpellKodoKomboGossip, triggered: true); // a dummy aura, cast to reach SpellHit
     }
 

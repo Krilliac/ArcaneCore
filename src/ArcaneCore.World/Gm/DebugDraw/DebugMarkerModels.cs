@@ -1,5 +1,5 @@
 using ArcaneCore.Data.Content.GameObjects;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Game.DebugDraw;
 using Microsoft.Extensions.Logging;
 

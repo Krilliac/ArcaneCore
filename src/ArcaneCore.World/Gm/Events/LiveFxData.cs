@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using ArcaneCore.Data.Content.ClientEffects;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Game.Maps;
 
 namespace ArcaneCore.World.Gm.Events;

@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Maps;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Graveyards;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Schema;

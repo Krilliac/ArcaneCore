@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Graveyards;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.WorldData;

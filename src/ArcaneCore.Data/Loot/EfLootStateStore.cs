@@ -122,16 +122,11 @@ public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
         {
             FaultLedger.Shared.Record("data.loot-store", commitError);
             AnomalyLedger.Shared.Report("database", "loot-commit-failed", request.Key.ToString(), commitError.Message, AnomalySeverity.Warning);
-            try
-            {
-                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception rollbackError)
+            await StoreTransactionRollback.RollbackAfterFailureAsync(transaction, commitError, "Loot commit and rollback failed; discard the context.", rollbackError =>
             {
                 FaultLedger.Shared.Record("data.loot-store", rollbackError);
                 AnomalyLedger.Shared.Report("database", "loot-rollback-failed", request.Key.ToString(), rollbackError.Message, AnomalySeverity.Error);
-                throw new AggregateException("Loot commit and rollback failed; discard the context.", commitError, rollbackError);
-            }
+            }).ConfigureAwait(false);
 
             throw;
         }

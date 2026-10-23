@@ -1,6 +1,6 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Stats;
 
 namespace ArcaneCore.Game.Spells;
@@ -32,11 +32,8 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class StatAuras : ISpellHandlerModule
 {
-    /// <summary>vmangos CLASSMASK_WAND_USERS (SharedDefines.h:112): priest, mage and warlock take no ranged attack power.</summary>
-    private static readonly Class[] s_wandUsers = [Class.Priest, Class.Mage, Class.Warlock];
-
     /// <summary>What an aura contributed when it was applied, so removal subtracts the same amount.</summary>
-    private static readonly ConditionalWeakTable<SpellAura, Applied> s_applied = new();
+    private static readonly AppliedLedger<Applied> s_applied = new();
 
     private sealed record Applied(int Amount, bool Positive);
 
@@ -55,17 +52,11 @@ public sealed class StatAuras : ISpellHandlerModule
         if (apply)
         {
             var record = new Applied(aura.Amount, positive);
-            s_applied.AddOrUpdate(aura, record);
+            s_applied.Record(aura, record);
             return record;
         }
 
-        if (!s_applied.TryGetValue(aura, out Applied? previous))
-        {
-            return null;
-        }
-
-        s_applied.Remove(aura);
-        return previous;
+        return s_applied.TryTake(aura, out Applied? previous) ? previous : null;
     }
 
     // --- SPELL_AURA_MOD_STAT -------------------------------------------------------------------
@@ -248,7 +239,7 @@ public sealed class StatAuras : ISpellHandlerModule
     private static void ApplyAttackPower(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply, bool ranged)
     {
         Unit target = holder.Target;
-        if (ranged && Array.IndexOf(s_wandUsers, target.Class) >= 0)
+        if (ranged && RangedSpellFacts.IsWandUser(target.Class))
         {
             return;
         }
