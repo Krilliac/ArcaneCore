@@ -1166,7 +1166,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             int botMembers = 0;
             for (int i = 0; i < group.Members.Count; i++)
                 if (!group.Members[i].Real) botMembers++;
-            if (botMembers < 2 && group.Goal.Size >= 2 && !group.Solo)
+            if ((botMembers < 1 || group.Members.Count < 2) && group.Goal.Size >= 2 && !group.Solo) // a real player counts toward the two: one bot and one player is a group
             {
                 Finish(group, success: false, "too-few");
                 return;

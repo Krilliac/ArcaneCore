@@ -92,6 +92,30 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.Empty(world.Coordinator.Groups);
     }
 
+    /// <summary>One bot and one real player are a group: the player counts toward the two members, so the coordinator keeps it and goes on to work the objective.</summary>
+    [Fact]
+    public async Task OneBotAndOneRealPlayer_AreAGroup_TheCoordinatorKeeps_AndWorksTheObjectiveWith()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPPAIR", "Grouppair", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askerpair", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Grouppair", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Grouppair", 30);
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+
+        await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Joined))), await world.TraceAsync());
+
+        // Several coordinator passes later (each 2 s) the pair is still one group, and it has moved on from forming.
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)), await world.TraceAsync());
+        await world.RunAsync(20_000);
+        PlayerbotGroupCoordinator.BotGroup group = Assert.Single(world.Coordinator.Groups);
+        Assert.Equal(2, group.Members.Count);
+        Assert.Contains(group.Members, m => m.Real && m.Joined);
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task AStranger_OnTheSameGoal_IsInvitedOnlyOnceTheBotsLikeThem()
     {
