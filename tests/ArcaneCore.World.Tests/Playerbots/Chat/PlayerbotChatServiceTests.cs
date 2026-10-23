@@ -154,6 +154,44 @@ public sealed class PlayerbotChatServiceTests
         Assert.Equal(1, status.Providers[2].Replies);
     }
 
+    [Theory]
+    [InlineData(BotChatOutcome.BadResponse, "bad-response")]
+    [InlineData(BotChatOutcome.ReasoningOnly, "reasoning-only")]
+    public async Task RepeatedBadResponses_BackOff_SoTheModelIsNotAskedEveryTime(BotChatOutcome outcome, string error)
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(outcome));
+        Assert.Equal("Builtin", (await rig.AskAsync(ChatSamples.Ask("one")))!.Provider);
+        Assert.Equal(error, rig.Chat.Status().Providers[0].LastError);
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds); // a single bad answer is not punished
+
+        rig.Client.ThenReturn(BotChatResult.Fail(outcome));
+        Assert.Equal("Builtin", (await rig.AskAsync(ChatSamples.Ask("two")))!.Provider);
+        Assert.Equal(2, rig.Client.Calls.Count);
+        Assert.True(rig.Chat.Status().Providers[0].CooldownSeconds > 0);
+
+        // Cooling down: the model is not asked, the fallback answers.
+        Assert.Equal("Builtin", (await rig.AskAsync(ChatSamples.Ask("three")))!.Provider);
+        Assert.Equal(2, rig.Client.Calls.Count);
+
+        // Past the cooldown it is asked again, and a good answer clears the streak.
+        rig.Time.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal("OpenAICompatible qwen3:0.6b", (await rig.AskAsync(ChatSamples.Ask("four")))!.Provider);
+        Assert.Equal(3, rig.Client.Calls.Count);
+        rig.Client.ThenReturn(BotChatResult.Fail(outcome));
+        await rig.AskAsync(ChatSamples.Ask("five"));
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds);
+    }
+
+    [Fact]
+    public async Task TheFirstReasoningOnlyAnswer_LogsTheHint()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.ReasoningOnly));
+        await rig.AskAsync(ChatSamples.Ask("one"));
+        Assert.Contains(rig.Log.Lines, line => line.Contains("set ReasoningEffort=none for this provider"));
+    }
+
     [Fact]
     public async Task AHungRequest_TimesOut_AndTheNextProviderAnswers()
     {

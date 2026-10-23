@@ -154,6 +154,45 @@ public sealed class HttpBotChatClientTests
     }
 
     [Fact]
+    public void OpenAIBody_CarriesReasoningEffort_OnlyWhenSet()
+    {
+        var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = "http://localhost:11434/v1", Model = "qwen3.5:4b" };
+        Assert.False(HttpBotChatClient.OpenAIBody(provider, Prompt).ContainsKey("reasoning_effort"));
+        provider.ReasoningEffort = "none";
+        Assert.Equal("none", HttpBotChatClient.OpenAIBody(provider, Prompt)["reasoning_effort"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("none", true)]
+    [InlineData("LOW", true)]
+    [InlineData("medium", true)]
+    [InlineData("High", true)]
+    [InlineData("bogus", false)]
+    public void ReasoningEffort_IsValidated(string value, bool valid)
+    {
+        var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = "http://localhost:11434/v1", Model = "m", ReasoningEffort = value };
+        Assert.Equal(valid, provider.Problem() is null);
+        Assert.Equal(value, provider.Clone().ReasoningEffort);
+        Assert.NotEqual(provider.Signature, new PlayerbotChatProviderOptions { Kind = provider.Kind, BaseUrl = provider.BaseUrl, Model = "m", ReasoningEffort = value + "x" }.Signature);
+    }
+
+    [Fact]
+    public void OpenAI_AThinkingModelThatSpentItsTokensThinking_IsReasoningOnly_NotBadResponse()
+    {
+        byte[] truncated = Encoding.UTF8.GetBytes("""{"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning":"Thinking Process:\n\n1. ..."},"finish_reason":"length"}],"usage":{"prompt_tokens":54,"completion_tokens":150}}""");
+        BotChatResult result = HttpBotChatClient.ParseOpenAI(truncated);
+        Assert.Equal(BotChatOutcome.ReasoningOnly, result.Outcome);
+        Assert.Equal((54, 150), (result.InputTokens, result.OutputTokens));
+        Assert.Equal("reasoning-only", PlayerbotChat.ErrorClass(result.Outcome));
+
+        Assert.Equal(BotChatOutcome.ReasoningOnly, HttpBotChatClient.ParseOpenAI(Encoding.UTF8.GetBytes("""{"choices":[{"message":{"content":"  ","reasoning_content":"hmm"},"finish_reason":"stop"}]}""")).Outcome);
+        Assert.Equal(BotChatOutcome.ReasoningOnly, HttpBotChatClient.ParseOpenAI(Encoding.UTF8.GetBytes("""{"choices":[{"message":{"content":""},"finish_reason":"length"}]}""")).Outcome);
+        Assert.Equal(BotChatOutcome.BadResponse, HttpBotChatClient.ParseOpenAI(Encoding.UTF8.GetBytes("""{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}""")).Outcome);
+        Assert.Equal(BotChatOutcome.Ok, HttpBotChatClient.ParseOpenAI(Encoding.UTF8.GetBytes("""{"choices":[{"message":{"content":"Hi.","reasoning":"x"},"finish_reason":"stop"}]}""")).Outcome);
+    }
+
+    [Fact]
     public async Task OpenAICompatible_AContentFilter_AnEmptyChoice_AndAnOversizedBody_AreNotReplies()
     {
         var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = "http://127.0.0.1:1234/v1", Model = "m" };

@@ -1511,8 +1511,20 @@ itself and plain game mechanics, never invented lore.
 | `MaxRepliesPerHour` | 1..100000 (120). |
 | `MaxTokens` | The reply limit, 16..1024 (150). |
 | `TokenLimitParameter` | OpenAICompatible: `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
+| `ReasoningEffort` | OpenAICompatible: sent as `reasoning_effort` when set: `none`, `low`, `medium` or `high` (any case); empty (default) sends nothing. Set `none` for a thinking model (below). The `Classify` moderation call inherits it, and defaults to `none` for a server on this machine when it is empty. |
 | `InputUsdPerMillionTokens`, `OutputUsdPerMillionTokens` | Prices for the spend estimate. Unset: the built-in Anthropic price of a known model (Claude Haiku 4.5 $1/$5), otherwise unpriced. Set 0 for a local model. |
 | `Moderation`, `ModerationBaseUrl`, `ModerationModel`, `ModerationApiKeyEnvironmentVariable` | The optional moderation step before a line is sent to this provider: `None` (default), `Endpoint` or `Classify` (see Safety and provider policies). |
+
+A thinking model (qwen3.5 on Ollama, for one) puts every generated token in `message.reasoning` and answers with
+`content: ""` and `finish_reason: "length"`, even at `MaxTokens` 1024. That is not a reply: it is reported as `reasoning-only` (not
+`bad-response`), the log says "the model spent its tokens thinking; set ReasoningEffort=none for this provider", and a second one in
+a row backs the provider off (15 s, doubling to 5 min) instead of asking the model on every line. Fix it by turning reasoning off for
+that provider:
+
+```json
+{ "Kind": "OpenAICompatible", "BaseUrl": "http://localhost:11434/v1", "Model": "qwen3.5:4b",
+  "ApiKeyEnvironmentVariable": "", "ReasoningEffort": "none" }
+```
 
 The prompt's system part comes in two pieces: the rules (1.12 setting, short in-game chat style, nothing outside the game, no
 claim of being an AI unless asked directly, a brush-off for abuse, the JSON answer format), identical for every bot and request,

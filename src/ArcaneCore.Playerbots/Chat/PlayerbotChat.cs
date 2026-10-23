@@ -942,6 +942,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
             PlayerbotChatProviderOptions classifier = provider.Clone();
             classifier.MaxTokens = 16;
+            classifier.ReasoningEffort = provider.ClassifierReasoningEffort;
             BotChatResult result = await _client.CompleteAsync(classifier, key, PlayerbotChatPrompts.Classifier(text), deadline.Token).ConfigureAwait(false);
             lock (_gate)
             {
@@ -988,14 +989,19 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     private void Record(PlayerbotChatProviderOptions provider, int index, BotChatResult result)
     {
         DateTimeOffset now = _time.GetUtcNow();
+        bool badRepeat;
         lock (_gate)
         {
             AddSpend(provider, result, now);
+            ProviderState state = StateOf(provider);
             if (result.Outcome == BotChatOutcome.Ok)
             {
-                StateOf(provider).Succeed(now);
+                state.Succeed(now);
                 return;
             }
+
+            state.BadStreak = result.Outcome is BotChatOutcome.BadResponse or BotChatOutcome.ReasoningOnly ? state.BadStreak + 1 : 0;
+            badRepeat = state.BadStreak >= 2;
         }
 
         TimeSpan? cooldown = result.Outcome switch
@@ -1005,7 +1011,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             BotChatOutcome.Rejected => TimeSpan.FromMinutes(5),
             _ => null,
         };
-        bool backOff = result.Outcome is BotChatOutcome.RateLimited or BotChatOutcome.Unavailable or BotChatOutcome.Timeout or BotChatOutcome.NetworkError;
+        // A single unreadable or empty answer costs nothing, but the second in a row backs off like any other provider failure.
+        bool backOff = badRepeat || result.Outcome is BotChatOutcome.RateLimited or BotChatOutcome.Unavailable or BotChatOutcome.Timeout or BotChatOutcome.NetworkError;
         Fail(provider, index, ErrorClass(result.Outcome), cooldown ?? (backOff ? null : TimeSpan.Zero));
     }
 
@@ -1042,7 +1049,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             AnomalySeverity.Warning);
 
         if (changed)
-            _logger.LogWarning("Bot chat provider #{Index} ({Provider}) failed: {Error}; the next provider answers", index, provider.Label, error);
+            _logger.LogWarning("Bot chat provider #{Index} ({Provider}) failed: {Error}; the next provider answers{Hint}", index, provider.Label, error,
+                error == "reasoning-only" ? " (the model spent its tokens thinking; set ReasoningEffort=none for this provider)" : string.Empty);
     }
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
@@ -1056,6 +1064,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         BotChatOutcome.Refused => "refused",
         BotChatOutcome.Timeout => "timeout",
         BotChatOutcome.NetworkError => "network",
+        BotChatOutcome.ReasoningOnly => "reasoning-only",
         _ => "bad-response",
     };
 
@@ -1140,6 +1149,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         public long Replies;
         public long Errors;
         public int Strikes;
+        public int BadStreak;
         public string? LastError;
         public DateTimeOffset CooldownUntil;
 
@@ -1153,6 +1163,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             Hour.Enqueue(now);
             Replies++;
             Strikes = 0;
+            BadStreak = 0;
             CooldownUntil = default;
         }
     }

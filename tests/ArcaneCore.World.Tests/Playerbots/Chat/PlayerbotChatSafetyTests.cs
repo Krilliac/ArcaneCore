@@ -416,6 +416,26 @@ public sealed class PlayerbotChatSafetyTests
     }
 
     [Fact]
+    public async Task ClassifyModeration_TurnsReasoningOffForALocalServer_AndKeepsAnExplicitChoice()
+    {
+        PlayerbotChatProviderOptions local = Model(PlayerbotChatModerationKind.Classify);
+        local.Kind = PlayerbotChatProviderKind.OpenAICompatible;
+        local.BaseUrl = "http://localhost:11434/v1";
+        local.Model = "qwen3.5:4b";
+        local.ApiKeyEnvironmentVariable = "";
+        await using var rig = new Rig(chat => chat.Providers = [local]);
+        rig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "SAFE"));
+        await rig.AnswerAsync("hello");
+        Assert.Equal("none", rig.Client.Calls.First().Provider.ReasoningEffort);
+
+        local.ReasoningEffort = "low";
+        await using var explicitRig = new Rig(chat => chat.Providers = [local]);
+        explicitRig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "SAFE"));
+        await explicitRig.AnswerAsync("hello");
+        Assert.Equal("low", explicitRig.Client.Calls.First().Provider.ReasoningEffort);
+    }
+
+    [Fact]
     public async Task TheModerationStep_RunsOnlyWithScreeningOn()
     {
         await using var rig = new Rig(chat => { chat.Providers = [Model(PlayerbotChatModerationKind.Endpoint)]; chat.Safety.Enabled = false; });
