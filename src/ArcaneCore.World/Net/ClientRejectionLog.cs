@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.ClientErrors;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Protocol;
