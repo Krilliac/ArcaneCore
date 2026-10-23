@@ -84,6 +84,57 @@ internal sealed class PackReferenceScanner
         return (scanner, found);
     }
 
+    public static (PackReferenceScanner Scanner, SortedDictionary<string, SortedSet<string>> Edges) ScanSegmentEdges(string assemblyPath, string rootNamespace)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new PEReader(stream);
+        MetadataReader md = pe.GetMetadataReader();
+        var scanner = new PackReferenceScanner(md, rootNamespace);
+        var edges = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        foreach (TypeDefinitionHandle handle in md.TypeDefinitions)
+        {
+            string? from = scanner.Segment(handle, rootNamespace);
+            if (from is null)
+            {
+                continue;
+            }
+
+            scanner.TypesScanned++;
+            var refs = new HashSet<TypeDefinitionHandle>();
+            scanner.CollectType(pe, handle, refs);
+            foreach (TypeDefinitionHandle r in refs)
+            {
+                string? to = scanner.Segment(r, rootNamespace);
+                if (to is null || to == from)
+                {
+                    continue;
+                }
+
+                if (!edges.TryGetValue(from, out SortedSet<string>? set))
+                {
+                    edges[from] = set = new SortedSet<string>(StringComparer.Ordinal);
+                }
+
+                set.Add(to);
+            }
+        }
+
+        return (scanner, edges);
+    }
+
+    private string? Segment(TypeDefinitionHandle handle, string root)
+    {
+        string ns = _md.GetString(_md.GetTypeDefinition(Outermost(handle)).Namespace);
+        if (!ns.StartsWith(root + ".", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        string rest = ns[(root.Length + 1)..];
+        int dot = rest.IndexOf('.');
+        return dot < 0 ? rest : rest[..dot];
+    }
+
     private bool IsPack(TypeDefinitionHandle handle)
     {
         string ns = _md.GetString(_md.GetTypeDefinition(Outermost(handle)).Namespace);
