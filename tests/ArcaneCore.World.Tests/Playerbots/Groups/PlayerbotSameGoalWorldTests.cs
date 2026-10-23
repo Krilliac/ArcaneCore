@@ -63,16 +63,28 @@ public sealed class PlayerbotSameGoalWorldTests
             return true;
         });
 
-    /// <summary>The player invites the bot; true when the bot accepted (they stand in one group), false when it declined.</summary>
+    /// <summary>
+    /// The player invites the bot; true when the bot accepted (they stand in one group), false when it declined. The outcome is the bot's own
+    /// answer (the packet its party intake sends), awaited from before the invite is sent: a poll of the group state alone could read "no
+    /// invite, no group" before the server had even processed the invitation.
+    /// </summary>
     private static async Task<bool> InviteAcceptedAsync(GroupTestWorld world, WorldTestClient player, string playerName, (Guid Id, string Name) bot)
     {
+        var answers = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode =>
+        {
+            if (opcode is WorldOpcode.CmsgGroupAccept or WorldOpcode.CmsgGroupDecline) answers.Enqueue(opcode);
+        };
         await player.SendAsync(WorldOpcode.CmsgGroupInvite, CString(bot.Name));
+        bool answered = await world.RunUntilAsync(15_000, () => !answers.IsEmpty);
+        Assert.True(answered, "the bot never answered the invitation" + Environment.NewLine + await world.TraceAsync());
+        await world.RunAsync(500);
         ObjectGuid botGuid = await world.OnWorldAsync(() => world.Player(bot.Id).Guid);
         ObjectGuid playerGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(playerName)!.Guid);
-        bool answered = await world.RunUntilAsync(15_000, () => world.GroupManager.GetInvite(botGuid) is null && world.GroupManager.GetGroup(botGuid) is not null
-            || world.GroupManager.GetInvite(botGuid) is null && world.GroupManager.GetGroup(playerGuid) is null);
-        Assert.True(answered, await world.TraceAsync());
-        return await world.OnWorldAsync(() => world.GroupManager.GetGroup(botGuid) is { } group && group.IsMember(playerGuid));
+        bool accepted = answers.Contains(WorldOpcode.CmsgGroupAccept);
+        bool grouped = await world.OnWorldAsync(() => world.GroupManager.GetGroup(botGuid) is { } group && group.IsMember(playerGuid));
+        Assert.Equal(accepted, grouped);
+        return accepted;
     }
 
     [Fact]
