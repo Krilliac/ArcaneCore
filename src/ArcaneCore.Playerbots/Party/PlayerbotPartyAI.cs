@@ -498,9 +498,10 @@ internal sealed class PlayerbotPartyAI
         {
             Target = sender.Name, TargetGuid = sender.Guid, ChannelName = line.ChannelName, IsReply = true, ToBot = senderIsBot, Turn = turn,
         };
+        PlayerbotGroupInvites.Standing? standingOfSender = senderIsBot ? null : InviteStanding?.Invoke(player, sender); // once per line, for the invite and the trade
         var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm, sender, line.Text), sender.Guid, sender.Name, line.Type, line.Text, fromMaster,
-            !senderIsBot && InviteAllowed(player, sender), senderIsBot ? 0 : sender.AccountId, FromGm: isGm, Speech: speech, SenderIsBot: senderIsBot,
-            Addressed: addressed, TradeAllowed: !senderIsBot && TradeAllowed(player, sender));
+            !senderIsBot && InviteAllowed(player, sender, standingOfSender), senderIsBot ? 0 : sender.AccountId, FromGm: isGm, Speech: speech, SenderIsBot: senderIsBot,
+            Addressed: addressed, TradeAllowed: !senderIsBot && TradeAllowed(player, sender, standingOfSender));
         // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login); never to a bot.
         if (chat.TryAsk(ask) == Chat.BotChatAdmission.Queued && !senderIsBot
             && chat.TakeDisclosure(ask, Chat.PlayerbotChatSafety.LoginOf(sender)) is { } notice)
@@ -516,6 +517,10 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     private void OnTextEmote(Player player, byte[] payload)
     {
+        // As in OnChat: an emote from a player on the bot's ignore list is not noticed (no memory change, no reply); the master is never dropped.
+        if (PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote heard) && heard.Emoter != player.Guid && heard.Emoter != ResolveMaster(player)
+            && Services.Social?.Friends.HasIgnore(player, heard.Emoter) == true)
+            return;
         RecordEmote(player, payload);
         if (_chat is not { IsActive: true } chat || chat.SpeechOptions is not { Enabled: true, EmoteReplies: true } options) return;
         if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
@@ -696,13 +701,15 @@ internal sealed class PlayerbotPartyAI
     /// this includes a sender on the bot's own quest or dungeon goal: right for a group invitation and the help-quest invite (the same goal is the
     /// reason to group), not for a trade (<see cref="TradeAllowed"/>).
     /// </summary>
-    private bool InviteAllowed(Player player, Player sender)
+    private bool InviteAllowed(Player player, Player sender) => InviteAllowed(player, sender, InviteStanding?.Invoke(player, sender));
+
+    /// <summary><see cref="InviteAllowed(Player, Player)"/> with the sender's standing already worked out (once per line, for the invite and the trade).</summary>
+    private bool InviteAllowed(Player player, Player sender, PlayerbotGroupInvites.Standing? standing)
     {
         if (Services.Social is not { } social) return false;
         PlayerbotPartyOptions party = _options.Party;
         return PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, sender.Name,
-            PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender),
-            InviteStanding?.Invoke(player, sender));
+            PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender), standing);
     }
 
     /// <summary>
@@ -711,11 +718,13 @@ internal sealed class PlayerbotPartyAI
     /// <see cref="PlayerbotInvitePolicy.Anyone"/>) and never a rival, but NOT being on the same quest or dungeon goal: that is a reason to group, not to
     /// hand items over.
     /// </summary>
-    private bool TradeAllowed(Player player, Player sender)
+    private bool TradeAllowed(Player player, Player sender) => TradeAllowed(player, sender, InviteStanding?.Invoke(player, sender));
+
+    private bool TradeAllowed(Player player, Player sender, PlayerbotGroupInvites.Standing? invite)
     {
         if (Services.Social is not { } social) return false;
         PlayerbotPartyOptions party = _options.Party;
-        PlayerbotGroupInvites.Standing? standing = InviteStanding?.Invoke(player, sender) is { } found ? found with { SharesGoal = false } : null;
+        PlayerbotGroupInvites.Standing? standing = invite is { } found ? found with { SharesGoal = false } : null;
         if (standing is { Rival: true }) return party.Allowlist.Any(name => string.Equals(name, sender.Name, StringComparison.OrdinalIgnoreCase));
         return PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, sender.Name,
             PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender), standing);

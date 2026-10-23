@@ -221,6 +221,52 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.True(answered == replied, "ignoreHas=" + await world.OnWorldAsync(() => Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Has(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored)));
     }
 
+    /// <summary>A friendly emote at a bot moves its memory of the emoter and is answered; from a player on its ignore list it does neither.</summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task AnEmoteFromAnIgnoredPlayer_ChangesNothingAndGetsNoReply(bool ignored, bool noticed)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Groups.InvitePlayers = false;
+            options.Chat.Speech.EmoteReplies = true;
+            options.Chat.Speech.EmoteReplyGapSeconds = 1;
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("EMOTEONE", "Emoteone", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Emotebot", Human, Warrior, 1, []);
+        await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Emoteone")!;
+            them.Relocate(world.Player(bot.Id).X + 2f, world.Player(bot.Id).Y, world.Player(bot.Id).Z, 0, world.World.Host.World.NowMs);
+            return true;
+        });
+        await world.RunAsync(3_000);
+        if (ignored)
+            await world.OnWorldAsync(() =>
+            {
+                Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Set(world.World.Host.World.FindOnlinePlayer("Emoteone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored, true);
+                return true;
+            });
+        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        ulong botGuid = await world.OnWorldAsync(() => world.Player(bot.Id).Guid.Value);
+        var emote = new PacketWriter(16);
+        emote.WriteUInt32(101); // WAVE
+        emote.WriteUInt32(0);
+        emote.WriteUInt64(botGuid);
+        await player.SendAsync(WorldOpcode.CmsgTextEmote, emote.ToArray());
+        await world.RunAsync(20_000);
+
+        bool remembered = await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Emoteone")!;
+            return world.Bots.Social.Memory.TryGet(bot.Id, them.Guid.Value, out PlayerbotRelation relation) && world.Bots.Social.Memory.EffectiveAffinity(relation) != 0;
+        });
+        Assert.Equal(noticed, remembered);
+        Assert.Equal(noticed, dispatched.Contains(WorldOpcode.CmsgTextEmote));
+    }
+
     [Fact]
     public async Task APlayerInvitedOnce_IsNotInvitedAgainWithinTheCooldown()
     {
