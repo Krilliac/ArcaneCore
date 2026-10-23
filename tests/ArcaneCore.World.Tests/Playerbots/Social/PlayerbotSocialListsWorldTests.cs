@@ -215,4 +215,43 @@ public sealed class PlayerbotSocialListsWorldTests
         Assert.Equal(0, world.Log.Count("Pofficer", WorldOpcode.CmsgGuildInvite));
         Assert.Null(await world.GuildOfAsync("Pfriend"));
     }
+
+    /// <summary>A real player leading a guild invites a guildless bot; the bot answers by the guild invite policy and its affinity.</summary>
+    private static async Task<bool> PlayerInvitesBotAsync(SocialWorld world, WorldTestClient leader, string bot, Guild guild, short affinityToLeader, string leaderName)
+    {
+        await RememberAsync(world, bot, leaderName, affinityToLeader, 6);
+        await leader.SendAsync(WorldOpcode.CmsgGuildInvite, SocialTestKit.CString(bot));
+        var membership = new PlayerbotGuildMembership(NullLogger.Instance);
+        await world.Host.WaitForWorldAsync(() =>
+        {
+            SocialTestKit.TakeInvites(SocialTestKit.BotPass(world.Host, 1_000), membership);
+            return membership.HasSeenInvite(world.Bots[bot]);
+        }, $"the invitation of {bot} is noted");
+        await world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, 1_000);
+            membership.AnswerInvites(pass);
+        });
+        return world.Log.Count(bot, WorldOpcode.CmsgGuildAccept) == 1;
+    }
+
+    [Theory]
+    [InlineData(PlayerbotInvitePolicy.None, false)]          // the operator said nobody: a liked player's invitation is declined
+    [InlineData(PlayerbotInvitePolicy.GuildOrFriends, true)] // the default: affinity alone accepts
+    public async Task TheGuildInvitePolicyNone_DeclinesEvenALikedPlayer_OtherPoliciesAcceptByAffinity(PlayerbotInvitePolicy policy, bool accepted)
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(options => options.Social.Guilds.InvitePolicy = policy, frozen: true);
+        await using WorldTestClient leader = await world.AddPlayerAsync("Likedleader");
+        await world.AddBotAsync("Policybot");
+        Guild guild = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.Equal(GuildAdminResult.Ok, world.Guilds.Create(world.Host.World.FindOnlinePlayer("Likedleader")!.Guid.Low, "Liked Guild", out Guild? created));
+            return created!;
+        });
+
+        Assert.Equal(accepted, await PlayerInvitesBotAsync(world, leader, "Policybot", guild, 50, "Likedleader"));
+        Assert.Equal(accepted ? 1 : 0, world.Log.Count("Policybot", WorldOpcode.CmsgGuildAccept));
+        Assert.Equal(accepted ? 0 : 1, world.Log.Count("Policybot", WorldOpcode.CmsgGuildDecline));
+        Assert.Equal(accepted, (await world.GuildOfAsync("Policybot")) is not null);
+    }
 }

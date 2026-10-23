@@ -202,7 +202,8 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         if (!_seenInvites.TryGetValue(bot.Id, out (string Inviter, string Guild) seen)) return false; // no packet, no expectation: decline
         if (pass.Social.Guilds.Get(guildId) is not { } guild || !string.Equals(guild.Name, seen.Guild, StringComparison.OrdinalIgnoreCase)) return false;
         if (pass.World.FindOnlinePlayer(seen.Inviter) is not { } inviter) return false;
-        if (pass.Options.Guilds.AffinityInvites && pass.Recorder is { Enabled: true } recorder
+        // The operator's policy comes first: None declines everyone (the allowlist apart); affinity only widens a policy that allows something.
+        if (pass.Options.Guilds.InvitePolicy != PlayerbotInvitePolicy.None && pass.Options.Guilds.AffinityInvites && pass.Recorder is { Enabled: true } recorder
             && AcceptsByAffinity(recorder.Memory, bot.Id, inviter.Guid.Value, pass.Options.Guilds.GuildAcceptAffinity)) return true;
         if (inviter.Session is WorldSession { IsManaged: true }) return false; // another managed bot that no founding of ours expected
         return AcceptsRealPlayer(pass.Options.Guilds.InvitePolicy, pass.Bot.Party.Allowlist, inviter.Name,

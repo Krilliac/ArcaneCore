@@ -48,7 +48,9 @@ the day from a template (`CMSG_GUILD_MOTD`), screened like every other line.
   least `GuildInviteMinFamiliarity` (8), never a rival or a game master, and at most one invitation per character per
   `GuildInviteCooldownDays` (7), within `TargetSize` as above. A guildless bot accepts an invitation, from a player or a bot, whose sender it
   likes: affinity at least `GuildAcceptAffinity` (30) and no rival (affinity read through `EffectiveAffinity`); otherwise the rules above
-  decide. With the switch off bots invite and accept as before.
+  decide. The operator's `InvitePolicy` comes first: with `None` a bot declines every guild invitation of a player or bot it was not
+  expecting, however much it likes the inviter (only the `World:Playerbots:Party:Allowlist` names still get in); the affinity acceptance
+  widens `GuildOrFriends`, `Anyone` and `Affinity`, never `None`. With the switch off bots invite and accept as before.
 * **Fail-closed declines.** With no invitation packet seen (the bounded capture queue may have dropped it) and no expectation, the
   answer is a decline; so it is when the inviter is offline, the guild name differs from the packet's, or the policy refuses.
 
