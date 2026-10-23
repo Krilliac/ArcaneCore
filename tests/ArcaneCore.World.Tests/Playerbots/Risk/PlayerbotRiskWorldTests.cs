@@ -50,7 +50,7 @@ public sealed class PlayerbotRiskWorldTests
     [Fact]
     public async Task AnEliteThreeLevelsAbove_IsAvoided_UnlessItIsAQuestObjectiveTheBotCanSolo()
     {
-        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Groups.Enabled = false); // alone: with groups on, a too-strong quest elite asks for a group instead (PlayerbotRaidRiskWorldTests)
         Creature weak = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(991011, level: 4, health: 20, minDamage: 1, maxDamage: 1, rank: 1), 25, 0));
         Creature strong = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(991012, level: 4, health: 4000, minDamage: 30, maxDamage: 40, rank: 1), -25, 0));
         await world.SeeAsync(weak, strong);
