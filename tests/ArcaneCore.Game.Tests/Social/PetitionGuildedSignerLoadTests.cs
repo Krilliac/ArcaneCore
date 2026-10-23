@@ -15,7 +15,7 @@ public sealed class PetitionGuildedSignerLoadTests
     [Fact]
     public void Load_DropsSignaturesOfCharactersAlreadyInAGuild_AndPersistsTheTrim()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         k.Add(1);
         k.Add(2);
         Player guilded = k.Add(3);
@@ -33,7 +33,7 @@ public sealed class PetitionGuildedSignerLoadTests
     [Fact]
     public void GuildedSignatureFromStorage_DoesNotCompleteThePetition()
     {
-        using var k = new PetitionKit(options: new GuildOptions { MinPetitionSigns = 2 });
+        using var k = new PetitionTestKit(options: new GuildOptions { MinPetitionSigns = 2 });
         k.Add(1);
         k.Add(2);
         Player guilded = k.Add(3);

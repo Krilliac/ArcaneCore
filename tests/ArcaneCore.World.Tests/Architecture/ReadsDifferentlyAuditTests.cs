@@ -1,3 +1,4 @@
+using ArcaneCore.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 

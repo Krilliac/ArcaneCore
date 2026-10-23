@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat.Threat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Combat;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
@@ -19,7 +20,7 @@ public sealed class ThreatFeatureTests
     public async Task Attach_BindsTheSpellSystemsThreatModifiersAndTheCatalog_ToEveryMap()
     {
         await using ServiceProvider scopes = new ServiceCollection().BuildServiceProvider();
-        using var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        using var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
         await using var spells = new SpellFeature(scopes.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance);
         var catalog = new EmptyCatalog();
         var feature = new ThreatFeature(new Services(spells, catalog));
@@ -53,12 +54,5 @@ public sealed class ThreatFeatureTests
     private sealed class EmptyCatalog : ISpellThreatCatalog
     {
         public SpellThreatEntry? Find(uint spellId) => null;
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }

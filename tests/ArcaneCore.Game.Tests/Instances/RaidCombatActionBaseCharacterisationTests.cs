@@ -6,7 +6,7 @@ using ArcaneCore.Game.Instances.Scripts.MoltenCore;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.CreatureAi;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -72,7 +72,7 @@ public sealed class RaidCombatActionBaseCharacterisationTests
             Creatures = new CreatureMapSystem(map, content, random: random ?? new Random(1),
                 aiServices: new CreatureAiServices { Spells = Spells });
             map.AddUpdater(Creatures);
-            (Player, _) = CreatureAiTestSupport.AddPlayer(World, 1, 0, 0);
+            (Player, _) = CreatureAiTestKit.AddPlayer(World, 1, 0, 0);
             Player.MaxHealth = Player.Health = 100000;
         }
 

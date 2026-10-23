@@ -9,7 +9,7 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Pools;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 using static ArcaneCore.Game.Tests.Pools.ClassicDbPoolRows;
 

@@ -6,7 +6,7 @@ using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.WorldState;
 

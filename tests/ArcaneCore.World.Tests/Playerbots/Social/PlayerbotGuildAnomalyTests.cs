@@ -41,7 +41,7 @@ public sealed class PlayerbotGuildAnomalyTests
         await SwitchAsync(world, true);
         await world.Host.WaitForWorldAsync(() => world.Log.Count(WorldOpcode.CmsgGuildCreate) >= 1, "the bot to try CMSG_GUILD_CREATE");
         await SwitchAsync(world, false);
-        await SocialTestSupport.WaitPassesAsync(world.Host, 5);
+        await SocialTestKit.WaitPassesAsync(world.Host, 5);
 
         int creates = world.Log.Count(WorldOpcode.CmsgGuildCreate);
         Assert.Equal(0, await world.GuildCountAsync());
@@ -63,11 +63,11 @@ public sealed class PlayerbotGuildAnomalyTests
         await SwitchAsync(world, true);
         await world.Host.WaitForWorldAsync(() => world.Guilds.All.Any(guild => guild.MemberCount == 2 && guild.Motd != Guild.DefaultMotd), "the two-bot guild");
         Guild guild = Assert.Single(await world.Host.OnWorldAsync(() => world.Guilds.All.ToList()));
-        string member = guild.LeaderId == await SocialTestSupport.CharacterIdAsync(world.Host, bots[0]) ? bots[1] : bots[0];
-        uint memberId = await SocialTestSupport.CharacterIdAsync(world.Host, member);
+        string member = guild.LeaderId == await SocialTestKit.CharacterIdAsync(world.Host, bots[0]) ? bots[1] : bots[0];
+        uint memberId = await SocialTestKit.CharacterIdAsync(world.Host, member);
         await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer(member)!.Level = 10);
         await world.Host.WaitForWorldAsync(() => guild.Find(memberId)!.Rank == Guild.OfficerRank, "the member to reach Officer");
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10);
+        await SocialTestKit.WaitPassesAsync(world.Host, 10);
 
         Assert.True(world.Log.Count(WorldOpcode.CmsgGuildCreate) == 1 && world.Log.Count(WorldOpcode.CmsgGuildPromote) == 3);
         Assert.False(capture.Any(GuildFailed), capture.Describe());
@@ -84,15 +84,15 @@ public sealed class PlayerbotGuildAnomalyTests
         await SwitchAsync(world, true);
         await world.Host.WaitForWorldAsync(() => world.Guilds.All.Any(guild => guild.MemberCount == 2), "the two-bot guild");
         Guild guild = Assert.Single(await world.Host.OnWorldAsync(() => world.Guilds.All.ToList()));
-        string member = guild.LeaderId == await SocialTestSupport.CharacterIdAsync(world.Host, bots[0]) ? bots[1] : bots[0];
-        uint memberId = await SocialTestSupport.CharacterIdAsync(world.Host, member);
+        string member = guild.LeaderId == await SocialTestKit.CharacterIdAsync(world.Host, bots[0]) ? bots[1] : bots[0];
+        uint memberId = await SocialTestKit.CharacterIdAsync(world.Host, member);
 
         // The master loses the right to promote (the Promote handler reads the rank's rights), so each CMSG_GUILD_PROMOTE is refused.
         await world.Host.OnWorldAsync(() => guild.Ranks[Guild.GuildMasterRank].Rights = GuildRights.Empty);
         await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer(member)!.Level = 10);
         await world.Host.WaitForWorldAsync(() => world.Log.Count(WorldOpcode.CmsgGuildPromote) >= 1, "the master to try a promotion");
         await SwitchAsync(world, false);
-        await SocialTestSupport.WaitPassesAsync(world.Host, 5);
+        await SocialTestKit.WaitPassesAsync(world.Host, 5);
 
         Assert.Equal(PlayerbotGuildMembership.RankInitiate, await world.Host.OnWorldAsync(() => guild.Find(memberId)!.Rank));
         Assert.Equal(world.Log.Count(WorldOpcode.CmsgGuildPromote), capture.Count(GuildFailed));
@@ -109,13 +109,13 @@ public sealed class PlayerbotGuildAnomalyTests
         foreach (string name in bots) await world.AddBotAsync(name);
         Guild guild = await world.FoundGuildAsync(bots[0], "Anomaly Rangers");
         // The only candidate ignores the leader: the Invite handler refuses (IgnoringYouS) although the bot sees nothing wrong beforehand.
-        await world.Host.OnWorldAsync(() => SocialTestSupport.Social(world.Host).Context.Friends.AddIgnore(world.Host.World.FindOnlinePlayer(bots[1])!, bots[0]));
+        await world.Host.OnWorldAsync(() => SocialTestKit.Social(world.Host).Context.Friends.AddIgnore(world.Host.World.FindOnlinePlayer(bots[1])!, bots[0]));
         using AnomalyCapture capture = CaptureOf(bots);
 
         await SwitchAsync(world, true);
         await world.Host.WaitForWorldAsync(() => world.Log.Count(bots[0], WorldOpcode.CmsgGuildInvite) >= 1, "the leader to try a recruit invite");
         await SwitchAsync(world, false);
-        await SocialTestSupport.WaitPassesAsync(world.Host, 5);
+        await SocialTestKit.WaitPassesAsync(world.Host, 5);
 
         Assert.Equal(1, guild.MemberCount);
         Assert.True(capture.Count(GuildFailed) >= 1);
@@ -153,7 +153,7 @@ public sealed class PlayerbotGuildAnomalyTests
         using AnomalyCapture quiet = CaptureOf(fine);
         await SwitchAsync(healthy, true);
         await healthy.Host.WaitForWorldAsync(() => healthy.Guilds.All.Any(guild => guild.MemberCount == 3), "the charter guild with its three members");
-        await SocialTestSupport.WaitPassesAsync(healthy.Host, 5);
+        await SocialTestKit.WaitPassesAsync(healthy.Host, 5);
         Assert.False(quiet.Any(GuildFailed), quiet.Describe());
     }
 
@@ -169,24 +169,24 @@ public sealed class PlayerbotGuildAnomalyTests
         await world.AddBotAsync(bots[0], race: 2); // an Orc: the other side
         await world.AddBotAsync(bots[1]);
         WorldTestClient player = await world.AddPlayerAsync("Annoymaker");
-        await world.Host.OnWorldAsync(() => SocialTestSupport.Social(world.Host).Context.Options.AllowTwoSideGuild = true);
-        await player.SendAsync(WorldOpcode.CmsgGuildCreate, SocialTestSupport.CString("Anomaly Mixed"));
+        await world.Host.OnWorldAsync(() => SocialTestKit.Social(world.Host).Context.Options.AllowTwoSideGuild = true);
+        await player.SendAsync(WorldOpcode.CmsgGuildCreate, SocialTestKit.CString("Anomaly Mixed"));
         await world.Host.WaitForWorldAsync(() => world.Guilds.GetByName("Anomaly Mixed") is not null, "the player's guild");
         using AnomalyCapture capture = CaptureOf(bots);
 
         foreach (string bot in bots)
         {
-            await player.SendAsync(WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(bot));
+            await player.SendAsync(WorldOpcode.CmsgGuildInvite, SocialTestKit.CString(bot));
             await world.Host.WaitForWorldAsync(() => world.Guilds.InvitedTo(world.Host.World.FindOnlinePlayer(bot)!) != 0, $"{bot} to be invited");
         }
 
         // Between the invitation and the answer the server stops allowing two-side guilds: the Orc's accept is refused, the human's is not.
         await world.Host.OnWorldAsync(() =>
         {
-            SocialTestSupport.Social(world.Host).Context.Options.AllowTwoSideGuild = false;
+            SocialTestKit.Social(world.Host).Context.Options.AllowTwoSideGuild = false;
             var membership = new PlayerbotGuildMembership(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
-            PlayerbotSocialPass pass = SocialTestSupport.BotPass(world.Host, nowMs: 0);
-            SocialTestSupport.TakeInvites(pass, membership);
+            PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs: 0);
+            SocialTestKit.TakeInvites(pass, membership);
             membership.AnswerInvites(pass);
         });
 
@@ -228,7 +228,7 @@ public sealed class PlayerbotGuildAnomalyTests
 
         await world.Host.OnWorldAsync(() =>
         {
-            SocialTestSupport.Feature(world.Host).Random = null!;
+            SocialTestKit.Feature(world.Host).Random = null!;
             world.Options.Social.Guilds.Enabled = true;
         });
 

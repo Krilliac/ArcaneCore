@@ -24,7 +24,7 @@ public sealed class HazardPulseTests
         SpellVisual = 1,
     };
 
-    private static HazardKit Kit(LiquidTypeFlags? liquid) => new(
+    private static HazardTestKit Kit(LiquidTypeFlags? liquid) => new(
         liquid,
         Perm(WaterBreathing, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.WaterBreathing)),
         Perm(UnendingBreath, Effect(SpellEffectName.ApplyAura, 300, aura: AuraType.ModWaterBreathing)));
@@ -46,7 +46,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void GoingUnderwater_StartsTheBreathBar_AndItPulsesDrowningDamage()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.MoveTo(player, Submerged);
         kit.Tick(50);
@@ -72,7 +72,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void Surfacing_RestartsTheBarRegenerating_AndStopsItWhenFull()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.MoveTo(player, Submerged);
         kit.Tick(50);                             // the bar starts
@@ -94,7 +94,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void WaterBreathing_MeansTheBreathNeverStarts_AndRemovingItBringsTheBarBack()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.Kit.System.CastSpell(player, WaterBreathing, SpellCastTargets.ForSelf(), triggered: true);
         Assert.Equal(0.0f, player.Locomotion.BreathingMultiplier);
@@ -115,7 +115,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void UnendingBreath_MultipliesTheBreathTime()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.Kit.System.CastSpell(player, UnendingBreath, SpellCastTargets.ForSelf(), triggered: true);
         Assert.Equal(4.0f, player.Locomotion.BreathingMultiplier);
@@ -129,7 +129,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void WaterBreathing_UnderwaterAlready_StopsTheBreathBar()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.MoveTo(player, Submerged);
         kit.Tick(50);
@@ -150,7 +150,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void DeepWater_StartsTheFatigueBar_AndExhaustsAfterAMinute()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session); // on the surface of the deep sea
         kit.Tick(50);
 
@@ -168,7 +168,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void AGhostThatKeepsSwimming_IsSentToTheGraveyardByTheFatiguePulse()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.Tick(50);
         kit.Map.Combat.Kill(null, player);
@@ -185,7 +185,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void ADeadPlayer_LosesItsTimers()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out FakeSession session);
         kit.MoveTo(player, Submerged);
         kit.Tick(50);
@@ -202,7 +202,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void Lava_BurnsOnceASecond_ThenEveryTwoSeconds_AndTheEnvironmentalBarIsNeverSent()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Magma);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Magma);
         Player player = kit.AddPlayer(1, 99.95f, out FakeSession session); // standing on the lava
         Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.InMagma));
 
@@ -223,7 +223,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void LavaDamage_FollowsTheConfiguredRange()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Magma);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Magma);
         LocomotionEnvironment.Register(kit.Kit.World, new LocomotionEnvironment(new LocomotionOptions { EnvironmentalDamageMin = 100, EnvironmentalDamageMax = 120, MirrorTimerEnvironmentalMaxSec = 3 }));
         Player player = kit.AddPlayer(1, 99.95f, out FakeSession session);
 
@@ -237,7 +237,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void Slime_DoesNothing_UnlessTheDeviationIsSwitchedOn()
     {
-        using (HazardKit kit = Kit(LiquidTypeFlags.Slime))
+        using (HazardTestKit kit = Kit(LiquidTypeFlags.Slime))
         {
             Player player = kit.AddPlayer(1, 99.95f, out FakeSession session);
             Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.InSlime));
@@ -246,7 +246,7 @@ public sealed class HazardPulseTests
             Assert.Equal(3000u, player.Health);
         }
 
-        using HazardKit deviating = Kit(LiquidTypeFlags.Slime);
+        using HazardTestKit deviating = Kit(LiquidTypeFlags.Slime);
         LocomotionEnvironment.Register(deviating.Kit.World, new LocomotionEnvironment(new LocomotionOptions { SlimeDamage = true }));
         Player slimed = deviating.AddPlayer(1, 99.95f, out FakeSession slimedSession);
         deviating.Random.Ints.Enqueue(606);
@@ -260,7 +260,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void LeavingTheLava_StopsTheBurning()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Magma);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Magma);
         Player player = kit.AddPlayer(1, 99.95f, out FakeSession session);
         kit.Tick(50);
 
@@ -276,7 +276,7 @@ public sealed class HazardPulseTests
     [Fact]
     public void AGameMastersTimers_StandStill()
     {
-        using HazardKit kit = Kit(LiquidTypeFlags.Water);
+        using HazardTestKit kit = Kit(LiquidTypeFlags.Water);
         Player gm = kit.AddPlayer(1, 110f, out FakeSession session, AccountSecurity.GameMaster);
         gm.SetGameMaster(true);
         kit.MoveTo(gm, Submerged);

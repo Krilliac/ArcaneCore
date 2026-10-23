@@ -1,8 +1,9 @@
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.TestSupport;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
+using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -29,12 +30,12 @@ public sealed class QuestTakeCheckTests
     {
         // SatisfyQuestPreviousQuest (13345-13435): a previous quest in a negative exclusive group needs the whole group rewarded
         QuestTemplate[] quests = [Task(A, exclusiveGroup: -5), Task(B, exclusiveGroup: -5), Task(C, previous: (int)A)];
-        using (var one = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]))
+        using (var one = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]))
         {
             Assert.False(one.Services.CanTakeQuest(one.Player, C));
         }
 
-        using var both = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true), Row(B, QuestStatus.Complete, rewarded: true)]);
+        using var both = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Complete, rewarded: true), Row(B, QuestStatus.Complete, rewarded: true)]);
         Assert.True(both.Services.CanTakeQuest(both.Player, C));
     }
 
@@ -42,12 +43,12 @@ public sealed class QuestTakeCheckTests
     public void ANegativePreviousQuest_MustBeCurrent()
     {
         QuestTemplate[] quests = [Task(A), Task(C, previous: -(int)A)];
-        using (var current = new QuestFlowKit(quests, [Row(A, QuestStatus.Incomplete)]))
+        using (var current = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Incomplete)]))
         {
             Assert.True(current.Services.CanTakeQuest(current.Player, C));
         }
 
-        using var rewarded = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
+        using var rewarded = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
         Assert.False(rewarded.Services.CanTakeQuest(rewarded.Player, C));
     }
 
@@ -56,17 +57,17 @@ public sealed class QuestTakeCheckTests
     {
         // SatisfyQuestExclusiveGroup (13560-13592): a sibling in progress or done (a rewarded quest keeps status Complete) refuses.
         QuestTemplate[] quests = [Task(A, exclusiveGroup: 7), Task(B, exclusiveGroup: 7)];
-        using (var busy = new QuestFlowKit(quests, [Row(B, QuestStatus.Incomplete)]))
+        using (var busy = new QuestFlowTestKit(quests, [Row(B, QuestStatus.Incomplete)]))
         {
             Assert.False(busy.Services.CanTakeQuest(busy.Player, A));
         }
 
-        using (var done = new QuestFlowKit(quests, [Row(B, QuestStatus.Complete, rewarded: true)]))
+        using (var done = new QuestFlowTestKit(quests, [Row(B, QuestStatus.Complete, rewarded: true)]))
         {
             Assert.False(done.Services.CanTakeQuest(done.Player, A));
         }
 
-        using var fresh = new QuestFlowKit(quests);
+        using var fresh = new QuestFlowTestKit(quests);
         Assert.True(fresh.Services.CanTakeQuest(fresh.Player, A));
     }
 
@@ -75,12 +76,12 @@ public sealed class QuestTakeCheckTests
     {
         // SatisfyQuestPrevChain (13616-13644)
         QuestTemplate[] quests = [Task(A, nextInChain: B), Task(B)];
-        using (var current = new QuestFlowKit(quests, [Row(A, QuestStatus.Incomplete)]))
+        using (var current = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Incomplete)]))
         {
             Assert.False(current.Services.CanTakeQuest(current.Player, B));
         }
 
-        using var rewarded = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
+        using var rewarded = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
         Assert.True(rewarded.Services.CanTakeQuest(rewarded.Player, B));
     }
 
@@ -90,7 +91,7 @@ public sealed class QuestTakeCheckTests
         // SatisfyQuestBreadcrumbQuest (13437-13453): A leads to B leads to C; each is takeable only while the quest it leads to is.
         // SatisfyQuestDependentBreadcrumbQuests (13455-13471): C is refused while a breadcrumb to it is in progress.
         QuestTemplate[] open = [Breadcrumb(A, B), Breadcrumb(B, C), Task(C)];
-        using (var fresh = new QuestFlowKit(open))
+        using (var fresh = new QuestFlowTestKit(open))
         {
             Assert.True(fresh.Services.CanTakeQuest(fresh.Player, A));
             Assert.True(fresh.Services.CanTakeQuest(fresh.Player, B));
@@ -98,13 +99,13 @@ public sealed class QuestTakeCheckTests
         }
 
         QuestTemplate[] gated = [Breadcrumb(A, B), Breadcrumb(B, C), Task(C, minLevel: 60)];
-        using (var low = new QuestFlowKit(gated))
+        using (var low = new QuestFlowTestKit(gated))
         {
             Assert.False(low.Services.CanTakeQuest(low.Player, A));
             Assert.False(low.Services.CanTakeQuest(low.Player, B));
         }
 
-        using var onBreadcrumb = new QuestFlowKit(open, [Row(A, QuestStatus.Incomplete)]);
+        using var onBreadcrumb = new QuestFlowTestKit(open, [Row(A, QuestStatus.Incomplete)]);
         Assert.False(onBreadcrumb.Services.CanTakeQuest(onBreadcrumb.Player, C));
     }
 
@@ -115,7 +116,7 @@ public sealed class QuestTakeCheckTests
         // breadcrumb's own check (D) recurses into its target with a set of the quests on the path, so only the target is measured.
         const uint D = 930004;
         QuestTemplate[] quests = [Task(A, nextInChain: B), Task(B, previous: (int)A, exclusiveGroup: 9), Task(C, exclusiveGroup: 9), Breadcrumb(D, B)];
-        using var kit = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
+        using var kit = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Complete, rewarded: true)]);
         QuestNpcServices services = kit.Services;
         ArcaneCore.Game.Entities.Player player = kit.Player;
         Assert.True(services.CanTakeQuest(player, B));
@@ -134,7 +135,7 @@ public sealed class QuestTakeCheckTests
     public void CanTakeQuest_ThroughANegativeExclusiveGroup_AllocatesNothing()
     {
         QuestTemplate[] quests = [Task(A, exclusiveGroup: -5), Task(B, exclusiveGroup: -5), Task(C, previous: (int)A)];
-        using var kit = new QuestFlowKit(quests, [Row(A, QuestStatus.Complete, rewarded: true), Row(B, QuestStatus.Complete, rewarded: true)]);
+        using var kit = new QuestFlowTestKit(quests, [Row(A, QuestStatus.Complete, rewarded: true), Row(B, QuestStatus.Complete, rewarded: true)]);
         QuestNpcServices services = kit.Services;
         ArcaneCore.Game.Entities.Player player = kit.Player;
         Assert.True(services.CanTakeQuest(player, C));
@@ -151,7 +152,7 @@ public sealed class QuestTakeCheckTests
     [Fact]
     public void IsRewardable_AllocatesNothing()
     {
-        using var kit = new QuestFlowKit([Task(A), Task(B, special: (byte)QuestSpecialFlags.ExplorationOrEvent)]);
+        using var kit = new QuestFlowTestKit([Task(A), Task(B, special: (byte)QuestSpecialFlags.ExplorationOrEvent)]);
         QuestNpcServices services = kit.Services;
         Assert.True(services.IsRewardable(A));
         Assert.False(services.IsRewardable(B)); // an event quest no adapter covers stays unsupported

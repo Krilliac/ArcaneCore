@@ -7,7 +7,8 @@
       "tests/ArcaneCore.Kernel.Tests/ArcaneCore.Kernel.Tests.csproj",
       "tests/ArcaneCore.Cryptography.Tests/ArcaneCore.Cryptography.Tests.csproj",
       "tests/ArcaneCore.Gateway.Tests/ArcaneCore.Gateway.Tests.csproj",
-      "tests/ArcaneCore.Atlas.Tests/ArcaneCore.Atlas.Tests.csproj"
+      "tests/ArcaneCore.Atlas.Tests/ArcaneCore.Atlas.Tests.csproj",
+      "tests/ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj"
     ]
   }
 }

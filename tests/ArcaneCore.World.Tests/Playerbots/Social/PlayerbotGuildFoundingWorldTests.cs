@@ -51,7 +51,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
         Assert.True(CharterNameRules.CodePointCount(guild.Motd) <= Guild.MaxMotdLength);
 
         // The packets a client sends, from the right bots: the leader created it and set the motd, the other joined by its own accept.
-        string leader = guild.LeaderId == await SocialTestSupport.CharacterIdAsync(world.Host, "Oakleaf") ? "Oakleaf" : "Pinecone";
+        string leader = guild.LeaderId == await SocialTestKit.CharacterIdAsync(world.Host, "Oakleaf") ? "Oakleaf" : "Pinecone";
         string other = leader == "Oakleaf" ? "Pinecone" : "Oakleaf";
         Assert.Equal([leader], world.Log.Who(WorldOpcode.CmsgGuildCreate));
         Assert.Equal([leader], world.Log.Who(WorldOpcode.CmsgGuildMotd));
@@ -61,7 +61,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgTurnInPetition));
 
         // Nothing more happens: no second founding, no growth past the two bots there are.
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10);
+        await SocialTestKit.WaitPassesAsync(world.Host, 10);
         Assert.Equal(1, await world.GuildCountAsync());
         Assert.Equal(1, world.Log.Count(WorldOpcode.CmsgGuildCreate));
     }
@@ -80,7 +80,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
 
         await SwitchOnAsync(world);
         await world.Host.WaitForWorldAsync(() => world.Guilds.All.Any(guild => guild.MemberCount == 3), "the one bot guild filled to its target size");
-        await SocialTestSupport.WaitPassesAsync(world.Host, 25); // ~6 founding attempts' worth of passes
+        await SocialTestKit.WaitPassesAsync(world.Host, 25); // ~6 founding attempts' worth of passes
 
         Guild guild = Assert.Single(await GuildsAsync(world));
         Assert.Equal(3, guild.MemberCount); // TargetSize holds as well: three bots stay free
@@ -108,7 +108,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
 
         await SwitchOnAsync(world);
         await world.Host.WaitForWorldAsync(() => world.Guilds.All.Count() == 2 && world.Guilds.All.All(guild => guild.MemberCount == 3), "two bot guilds of three");
-        await SocialTestSupport.WaitPassesAsync(world.Host, 15);
+        await SocialTestKit.WaitPassesAsync(world.Host, 15);
 
         List<Guild> guilds = await GuildsAsync(world);
         Assert.Equal(2, guilds.Count);
@@ -123,7 +123,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
         foreach (string name in SixBots.Take(3)) await world.AddBotAsync(name);
 
         await SwitchOnAsync(world);
-        await SocialTestSupport.WaitPassesAsync(world.Host, 20);
+        await SocialTestKit.WaitPassesAsync(world.Host, 20);
 
         Assert.Equal(0, await world.GuildCountAsync());
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgGuildCreate));
@@ -135,7 +135,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
         await using SocialWorld world = await StartAsync(guilds => guilds.Creation = PlayerbotGuildCreation.ClientCreate);
         foreach (string name in SixBots.Take(3)) await world.AddBotAsync(name);
 
-        await SocialTestSupport.WaitPassesAsync(world.Host, 20); // Enabled = false from the start
+        await SocialTestKit.WaitPassesAsync(world.Host, 20); // Enabled = false from the start
         Assert.Equal(0, await world.GuildCountAsync());
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgGuildCreate));
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgGuildInvite));
@@ -154,15 +154,15 @@ public sealed class PlayerbotGuildFoundingWorldTests
 
         await SwitchOnAsync(world);
         await world.Host.WaitForWorldAsync(() => world.Log.Count(WorldOpcode.CmsgGuildCreate) >= 1, "the bot to try CMSG_GUILD_CREATE");
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10);
+        await SocialTestKit.WaitPassesAsync(world.Host, 10);
         Assert.Equal(0, await world.GuildCountAsync()); // the server ignored it (World:Guild:AllowClientGuildCreate), and the bot founds nothing else
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgGuildInvite));
 
         // Auto reads the same server option: with it off the bots take the charter way and never send CMSG_GUILD_CREATE again.
         await world.Host.OnWorldAsync(() => world.Options.Social.Guilds.Creation = PlayerbotGuildCreation.Auto);
-        await SocialTestSupport.WaitPassesAsync(world.Host, 3);
+        await SocialTestKit.WaitPassesAsync(world.Host, 3);
         int creates = world.Log.Count(WorldOpcode.CmsgGuildCreate);
-        await SocialTestSupport.WaitPassesAsync(world.Host, 15);
+        await SocialTestKit.WaitPassesAsync(world.Host, 15);
         Assert.Equal(creates, world.Log.Count(WorldOpcode.CmsgGuildCreate));
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgPetitionBuy)); // and with no petitioner in reach, no charter is bought
         Assert.Equal(0, await world.GuildCountAsync());
@@ -186,7 +186,7 @@ public sealed class PlayerbotGuildFoundingWorldTests
 
         // The founder alone bought (1000 copper), offered to both signers, turned in, and set the motd; each signer signed once.
         string founder = Assert.Single(world.Log.Who(WorldOpcode.CmsgPetitionBuy));
-        Assert.Equal(guild.LeaderId, await SocialTestSupport.CharacterIdAsync(world.Host, founder));
+        Assert.Equal(guild.LeaderId, await SocialTestKit.CharacterIdAsync(world.Host, founder));
         Assert.Equal([founder], world.Log.Who(WorldOpcode.CmsgTurnInPetition));
         Assert.Equal([founder], world.Log.Who(WorldOpcode.CmsgGuildMotd));
         Assert.Equal(2, world.Log.Count(WorldOpcode.CmsgPetitionSign));
@@ -198,8 +198,8 @@ public sealed class PlayerbotGuildFoundingWorldTests
             Assert.Equal(5000u, await world.Host.PlayerStateAsync(name, p => p.Money));
 
         // The charter is used up: no petition is left, and no second founding starts (no bot is free).
-        Assert.Empty(await world.Host.OnWorldAsync(() => SocialTestSupport.Social(world.Host).Context.Petitions.All.ToList()));
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10);
+        Assert.Empty(await world.Host.OnWorldAsync(() => SocialTestKit.Social(world.Host).Context.Petitions.All.ToList()));
+        await SocialTestKit.WaitPassesAsync(world.Host, 10);
         Assert.Equal(1, await world.GuildCountAsync());
         Assert.Equal(1, world.Log.Count(WorldOpcode.CmsgPetitionBuy));
     }
@@ -212,19 +212,19 @@ public sealed class PlayerbotGuildFoundingWorldTests
         {
             foreach (string name in SixBots.Take(3)) await bare.AddBotAsync(name, money: 5000);
             await SwitchOnAsync(bare);
-            await SocialTestSupport.WaitPassesAsync(bare.Host, 20);
+            await SocialTestKit.WaitPassesAsync(bare.Host, 20);
 
             Assert.Equal(0, bare.Log.Count(WorldOpcode.CmsgPetitionBuy));
             Assert.Equal(0, bare.Log.Count(WorldOpcode.CmsgGuildCreate));
             Assert.Equal(0, await bare.GuildCountAsync());
-            Assert.Empty(await bare.Host.OnWorldAsync(() => SocialTestSupport.Social(bare.Host).Context.Petitions.All.ToList()));
+            Assert.Empty(await bare.Host.OnWorldAsync(() => SocialTestKit.Social(bare.Host).Context.Petitions.All.ToList()));
         }
 
         // A petitioner at hand but 999 copper per bot: no purchase. One more copper for one bot and the charter is bought.
         await using SocialWorld poor = await StartAsync(guilds => guilds.Creation = PlayerbotGuildCreation.Charter, petitioner: true, minPetitionSigns: 2);
         foreach (string name in SixBots.Take(3)) await poor.AddBotAsync(name, money: 999);
         await SwitchOnAsync(poor);
-        await SocialTestSupport.WaitPassesAsync(poor.Host, 20);
+        await SocialTestKit.WaitPassesAsync(poor.Host, 20);
         Assert.Equal(0, poor.Log.Count(WorldOpcode.CmsgPetitionBuy));
         Assert.Equal(0, await poor.GuildCountAsync());
 
@@ -242,18 +242,18 @@ public sealed class PlayerbotGuildFoundingWorldTests
         await SwitchOnAsync(world);
         await world.Host.WaitForWorldAsync(() => world.Guilds.All.Any(guild => guild.MemberCount == 2), "the two-bot guild");
         Guild guild = Assert.Single(await GuildsAsync(world));
-        string member = guild.LeaderId == await SocialTestSupport.CharacterIdAsync(world.Host, "Oakleaf") ? "Pinecone" : "Oakleaf";
-        uint memberId = await SocialTestSupport.CharacterIdAsync(world.Host, member);
+        string member = guild.LeaderId == await SocialTestKit.CharacterIdAsync(world.Host, "Oakleaf") ? "Pinecone" : "Oakleaf";
+        uint memberId = await SocialTestKit.CharacterIdAsync(world.Host, member);
 
         // A level 1 Initiate is not promoted (the control: the master has had passes to do it).
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10);
+        await SocialTestKit.WaitPassesAsync(world.Host, 10);
         Assert.Equal(PlayerbotGuildMembership.RankInitiate, await world.Host.OnWorldAsync(() => guild.Find(memberId)!.Rank));
         Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgGuildPromote));
 
         // At level 10 the one wanted officer is the member, and the server moves it up one rank per CMSG_GUILD_PROMOTE: 4 -> 3 -> 2 -> 1.
         await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer(member)!.Level = 10);
         await world.Host.WaitForWorldAsync(() => guild.Find(memberId)!.Rank == Guild.OfficerRank, "the member to reach Officer");
-        await SocialTestSupport.WaitPassesAsync(world.Host, 15);
+        await SocialTestKit.WaitPassesAsync(world.Host, 15);
 
         Assert.Equal(Guild.OfficerRank, await world.Host.OnWorldAsync(() => guild.Find(memberId)!.Rank));
         Assert.Equal(Guild.GuildMasterRank, await world.Host.OnWorldAsync(() => guild.Find(guild.LeaderId)!.Rank));

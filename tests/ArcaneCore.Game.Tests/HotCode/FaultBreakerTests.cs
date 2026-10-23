@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

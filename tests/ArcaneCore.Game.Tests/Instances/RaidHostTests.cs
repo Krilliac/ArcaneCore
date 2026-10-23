@@ -27,7 +27,7 @@ public sealed class RaidHostTests
         var template = GoTemplate(176956, GameObjectType.Button, (1, 1459));
         var locks = new LockEntry(1459, [2, 0, 0, 0, 0, 0, 0, 0], [(uint)LockType.Open, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]);
         var objects = new GameObjectMapSystem(map, new GameObjectContent([template], [], [locks], [], [])); map.AddUpdater(objects);
-        (Player player, _) = CreatureAiTestSupport.AddPlayer(world, 1, 0, 0);
+        (Player player, _) = CreatureAiTestKit.AddPlayer(world, 1, 0, 0);
         GameObject rune = objects.Summon(176956, 1, 0, 83.5f, 0)!;
         raid.SetData(1, EncounterState.Done);
         objects.Use(player, rune.Guid); Assert.Equal(EncounterState.Done, raid.GetData(1));
@@ -104,7 +104,7 @@ public sealed class RaidHostTests
         using var kit = new SpellTestKit(heal);
         Map map = kit.World.GetMap(0); map.AddUpdater(new MoltenCoreInstance(map));
         uint[] entries = [12018, 11663, 11664, 12057, 12099];
-        var content = new CreatureContent(entries.Select(e => CreatureTestSupport.Template(e)), [], [], [], []);
+        var content = new CreatureContent(entries.Select(e => CreatureTestKit.Template(e)), [], [], [], []);
         var creatures = new CreatureMapSystem(map, content); map.AddUpdater(creatures);
         var targets = entries.ToDictionary(e => e, e => creatures.SpawnTemporary(content.FindTemplate(e)!, 5, 0, 83.5f, 0));
         foreach (Creature creature in targets.Values) creature.Health = 10;
@@ -122,7 +122,7 @@ public sealed class RaidHostTests
         kit.System.Units = new MapObjectResolver(); // ArcaneCore.World's WorldSpellUnitResolver: creatures resolve as explicit targets
         Map map = kit.World.GetMap(0); var raid = new MoltenCoreInstance(map); map.AddUpdater(raid);
         raid.SetData(MoltenCoreInstance.Majordomo, EncounterState.Done);
-        var content = new CreatureContent([CreatureTestSupport.Template(12018), CreatureTestSupport.Template(11502)], [], [], [], []);
+        var content = new CreatureContent([CreatureTestKit.Template(12018), CreatureTestKit.Template(11502)], [], [], [], []);
         var creatures = new CreatureMapSystem(map, content, random: new Random(1),
             aiServices: new CreatureAiServices { Spells = new SpellSystemCreatureCaster(kit.System) });
         map.AddUpdater(creatures);
@@ -151,7 +151,7 @@ public sealed class RaidHostTests
         using var kit = new SpellTestKit(heal);
         kit.System.Units = new MapObjectResolver();
         Map map = kit.World.GetMap(0); map.AddUpdater(new MoltenCoreInstance(map));
-        var content = new CreatureContent([CreatureTestSupport.Template(12099), CreatureTestSupport.Template(12057)], [], [], [], []);
+        var content = new CreatureContent([CreatureTestKit.Template(12099), CreatureTestKit.Template(12057)], [], [], [], []);
         var creatures = new CreatureMapSystem(map, content); map.AddUpdater(creatures);
         Creature caster = creatures.SpawnTemporary(content.FindTemplate(12099)!, 0, 0, 83.5f, 0);
         Creature near = creatures.SpawnTemporary(content.FindTemplate(12057)!, 5, 0, 83.5f, 0);
@@ -164,7 +164,7 @@ public sealed class RaidHostTests
     public void RaidDatabaseDestination_UsesStoredPosition_AndRefusesMissingRows()
     {
         using WorldRuntime world = TestWorld.CreateRuntime(); Map map = world.GetMap(0);
-        var content = new CreatureContent([CreatureTestSupport.Template(11502)], [], [], [], []);
+        var content = new CreatureContent([CreatureTestKit.Template(11502)], [], [], [], []);
         var creatures = new CreatureMapSystem(map, content); map.AddUpdater(creatures);
         Creature caster = creatures.SpawnTemporary(content.FindTemplate(11502)!, 5, 0, 83.5f, 0);
         SpellInfo spell = SpellTestKit.Spell(21110, SpellTestKit.Effect(SpellEffectName.SummonWild, 1, SpellImplicitTarget.LocationDatabase));

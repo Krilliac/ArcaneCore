@@ -43,7 +43,7 @@ public sealed class HangStackCaptureTests : IDisposable
         TickMonitorOptions options = Options();
         var log = new RecordingLogger<TickMonitor>();
         var capture = new HangStackCapture(options, log, runner, fileExists: _ => true, processId: 4242);
-        var monitor = new TickMonitor(options, clock, WatchdogTestSupport.NewRegistry(), log) { StackCapture = capture };
+        var monitor = new TickMonitor(options, clock, WatchdogTestKit.NewRegistry(), log) { StackCapture = capture };
         monitor.StartTicking(50);
 
         monitor.OnTick(clock.NowMicros);

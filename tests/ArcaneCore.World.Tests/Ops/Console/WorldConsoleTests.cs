@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
@@ -127,31 +128,6 @@ public sealed class WorldConsoleTests
         {
             Interlocked.Increment(ref _reads);
             return _lines.Take();
-        }
-    }
-
-    private sealed record LogEntry(string Category, LogLevel Level, string Message);
-
-    private sealed class CapturingLoggerProvider : ILoggerProvider
-    {
-        private readonly ConcurrentQueue<LogEntry> _entries = new();
-
-        public LogEntry[] Entries => [.. _entries];
-
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, _entries);
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class CapturingLogger(string category, ConcurrentQueue<LogEntry> sink) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-                => sink.Enqueue(new LogEntry(category, logLevel, formatter(state, exception)));
         }
     }
 
@@ -526,10 +502,10 @@ public sealed class WorldConsoleTests
             await console.StopAsync(CancellationToken.None);
         }
 
-        LogEntry[] entries = provider.Entries;
-        LogEntry typed = Assert.Single(entries, e => e.Category == WorldConsole.LogCategory && e.Message.StartsWith("Console command:", StringComparison.Ordinal));
+        CapturedCategoryLog[] entries = provider.Entries;
+        CapturedCategoryLog typed = Assert.Single(entries, e => e.Category == WorldConsole.LogCategory && e.Message.StartsWith("Console command:", StringComparison.Ordinal));
         Assert.Equal("Console command: announce password ***", typed.Message);
-        LogEntry audit = Assert.Single(entries, e => e.Category == GmCommandLog.Category);
+        CapturedCategoryLog audit = Assert.Single(entries, e => e.Category == GmCommandLog.Category);
         Assert.Contains("[Console]", audit.Message, StringComparison.Ordinal);
         Assert.Contains("password ***", audit.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(entries, e => e.Message.Contains("hunter2", StringComparison.Ordinal));

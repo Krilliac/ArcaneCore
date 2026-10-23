@@ -1,3 +1,5 @@
+using ArcaneCore.TestSupport;
+
 namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>

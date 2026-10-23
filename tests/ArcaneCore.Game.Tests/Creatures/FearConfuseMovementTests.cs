@@ -9,8 +9,8 @@ using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 
@@ -375,9 +375,9 @@ public sealed class FearConfuseMovementTests
     private const uint StunSpell = 930_003;
 
     private static SpellTestKit AuraKit() => new(
-        RuleTestSupport.Grant(FearSpell, AuraType.ModFear, 0),
-        RuleTestSupport.Grant(RootSpell, AuraType.ModRoot, 0),
-        RuleTestSupport.Grant(StunSpell, AuraType.ModStun, 0));
+        RuleTestKit.Grant(FearSpell, AuraType.ModFear, 0),
+        RuleTestKit.Grant(RootSpell, AuraType.ModRoot, 0),
+        RuleTestKit.Grant(StunSpell, AuraType.ModStun, 0));
 
     private static Creature LooseWolf()
     {
@@ -391,9 +391,9 @@ public sealed class FearConfuseMovementTests
         using SpellTestKit kit = AuraKit();
         Creature creature = LooseWolf();
 
-        RuleTestSupport.Apply(kit, creature, RootSpell);
+        RuleTestKit.Apply(kit, creature, RootSpell);
         Assert.True(creature.Movement.HasFlag(MovementFlags.Root));
-        RuleTestSupport.Apply(kit, creature, StunSpell);
+        RuleTestKit.Apply(kit, creature, StunSpell);
         kit.System.RemoveAuras(creature, RootSpell);
         Assert.True(creature.Movement.HasFlag(MovementFlags.Root)); // the stun still roots it
         kit.System.RemoveAuras(creature, StunSpell);
@@ -406,7 +406,7 @@ public sealed class FearConfuseMovementTests
         using SpellTestKit kit = AuraKit();
         Creature creature = LooseWolf();
 
-        RuleTestSupport.Apply(kit, creature, FearSpell);
+        RuleTestKit.Apply(kit, creature, FearSpell);
         Assert.NotEqual(0u, (uint)(creature.UnitFlags & UnitFlags.Fleeing));
         Assert.Null(CcState.FearSource(creature)); // it feared itself: nothing to run from
 

@@ -3,20 +3,11 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Tests.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Tests.Duel;
-
-/// <summary>A clock a test steps by hand (whole Unix seconds).</summary>
-internal sealed class ManualTimeProvider(long unixSeconds) : TimeProvider
-{
-    private long _unix = unixSeconds;
-
-    public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(Interlocked.Read(ref _unix));
-
-    public void Advance(long seconds) => Interlocked.Add(ref _unix, seconds);
-}
 
 /// <summary>
 /// A world host whose human warrior knows spell 7266 "Duel" (classic-db spell_template: Effect1 83, TargetA 25, EffectMiscValue 21680; range and duration are

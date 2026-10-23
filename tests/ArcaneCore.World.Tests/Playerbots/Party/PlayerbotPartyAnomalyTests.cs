@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Party;
@@ -62,30 +63,7 @@ public sealed class PlayerbotPartyAnomalyTests
             Id = id, AccountId = 1, Name = name, Race = 1, Class = 1, Gender = 0, Level = 10, MapId = mapId, ZoneId = 12, X = 0, Y = 0, Z = 80f,
         };
         var appearance = new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400);
-        return new Player(character, appearance, new NullSession());
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
+        return new Player(character, appearance, new NullPlayerSession());
     }
 
     /// <summary>A follower in Follow mode, the leader in the world on the same map, <paramref name="distance"/> yards away, free to teleport.</summary>

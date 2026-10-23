@@ -14,7 +14,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -54,7 +54,7 @@ public sealed class RaidBossTests
             Caster = new FailableCaster(Spells);
             Creatures = new CreatureMapSystem(Map, content, random: random ?? new Random(1), aiServices: new CreatureAiServices { Spells = Caster });
             Map.AddUpdater(Creatures);
-            (Player, _) = CreatureAiTestSupport.AddPlayer(World, 1, 0, 0);
+            (Player, _) = CreatureAiTestKit.AddPlayer(World, 1, 0, 0);
             Player.MaxHealth = Player.Health = 100000;
         }
         public Creature Spawn(uint entry) => Creatures.SpawnTemporary(Creatures.Content.FindTemplate(entry)!, 5, 0, 83.5f, 0);
@@ -329,7 +329,7 @@ public sealed class RaidBossTests
     [Fact]
     public void Onyxia_DeadWardersRespawnAtPull()
     {
-        using var a = new Arena(true, spawns: [CreatureTestSupport.Spawn(100, 12129, 5, 0)]); Creature warder = Assert.Single(a.Creatures.Creatures, c => c.Entry == 12129);
+        using var a = new Arena(true, spawns: [CreatureTestKit.Spawn(100, 12129, 5, 0)]); Creature warder = Assert.Single(a.Creatures.Creatures, c => c.Entry == 12129);
         a.Map.Combat.Kill(a.Player, warder); Assert.False(warder.IsAlive);
         a.Raid.SetData(0, EncounterState.InProgress); Assert.True(warder.IsAlive);
     }

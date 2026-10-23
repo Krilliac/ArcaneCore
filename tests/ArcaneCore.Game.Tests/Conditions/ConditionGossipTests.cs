@@ -6,7 +6,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Tests.Npc;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
-using static ArcaneCore.Game.Tests.Conditions.ConditionTestSupport;
+using static ArcaneCore.Game.Tests.Conditions.ConditionTestKit;
 
 namespace ArcaneCore.Game.Tests.Conditions;
 
@@ -60,16 +60,16 @@ public sealed class ConditionGossipTests
         ],
     };
 
-    private static NpcServiceKit Kit(Class cls, ConditionEvaluator? evaluator)
+    private static NpcServiceTestKit Kit(Class cls, ConditionEvaluator? evaluator)
     {
-        var kit = new NpcServiceKit(NpcFlags.Gossip | NpcFlags.Vendor, Content(),
+        var kit = new NpcServiceTestKit(NpcFlags.Gossip | NpcFlags.Vendor, Content(),
             new QuestNpcDependencies(Conditions: evaluator, Items: null));
         kit.Player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)cls);
         kit.Npc = kit.Npc with { GossipMenuId = Menu };
         return kit;
     }
 
-    private static (uint TextId, string[] Options) Open(NpcServiceKit kit)
+    private static (uint TextId, string[] Options) Open(NpcServiceTestKit kit)
     {
         kit.Drain();
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
@@ -92,7 +92,7 @@ public sealed class ConditionGossipTests
     [Fact]
     public void WithoutAnEvaluator_EveryConditionedOptionVanishes_TheBaselineThisSliceFixes()
     {
-        using NpcServiceKit kit = Kit(Class.Warrior, null);
+        using NpcServiceTestKit kit = Kit(Class.Warrior, null);
         (uint text, string[] options) = Open(kit);
         Assert.Equal(["Everyone"], options);
         Assert.Equal(1u, text);
@@ -103,14 +103,14 @@ public sealed class ConditionGossipTests
     {
         var evaluator = new ConditionEvaluator(ConditionTable.Build(Rows), new ConditionContext());
 
-        using (NpcServiceKit warrior = Kit(Class.Warrior, evaluator))
+        using (NpcServiceTestKit warrior = Kit(Class.Warrior, evaluator))
         {
             (uint text, string[] options) = Open(warrior);
             Assert.Equal(["Train me, warrior", "Anything but a mage", "Everyone"], options);
             Assert.Equal(2u, text);
         }
 
-        using (NpcServiceKit mage = Kit(Class.Mage, evaluator))
+        using (NpcServiceTestKit mage = Kit(Class.Mage, evaluator))
         {
             (uint text, string[] options) = Open(mage);
             Assert.Equal(["Train me, mage", "Everyone"], options);
@@ -122,7 +122,7 @@ public sealed class ConditionGossipTests
     public void AnUnsupportedConditionHidesItsOption_AndIsCounted()
     {
         var evaluator = new ConditionEvaluator(ConditionTable.Build(Rows), new ConditionContext());
-        using NpcServiceKit kit = Kit(Class.Warrior, evaluator);
+        using NpcServiceTestKit kit = Kit(Class.Warrior, evaluator);
         Open(kit);
         Assert.DoesNotContain("Quest script", Open(kit).Options);
         Assert.True(evaluator.Unavailable[(int)ConditionType.WorldScript] >= 2);
@@ -139,15 +139,15 @@ public sealed class ConditionGossipTests
         {
             VendorItems =
             [
-                new VendorItem { Entry = NpcServiceKit.Entry, Item = NpcServiceKit.Bread },
-                new VendorItem { Entry = NpcServiceKit.Entry, Item = NpcServiceKit.Lantern, ConditionId = Gate },
+                new VendorItem { Entry = NpcServiceTestKit.Entry, Item = NpcServiceTestKit.Bread },
+                new VendorItem { Entry = NpcServiceTestKit.Entry, Item = NpcServiceTestKit.Lantern, ConditionId = Gate },
             ],
         };
-        using var low = new NpcServiceKit(NpcFlags.Vendor | NpcFlags.Gossip, content, new QuestNpcDependencies(Conditions: evaluator));
+        using var low = new NpcServiceTestKit(NpcFlags.Vendor | NpcFlags.Gossip, content, new QuestNpcDependencies(Conditions: evaluator));
         low.Services.ListInventory(low.Player, low.Npc.Guid);
         Assert.Equal(1u, ListedItems(low.Single(WorldOpcode.SmsgListInventory)));
 
-        using var high = new NpcServiceKit(NpcFlags.Vendor | NpcFlags.Gossip, content, new QuestNpcDependencies(Conditions: evaluator));
+        using var high = new NpcServiceTestKit(NpcFlags.Vendor | NpcFlags.Gossip, content, new QuestNpcDependencies(Conditions: evaluator));
         high.Player.Level = 5;
         high.Services.ListInventory(high.Player, high.Npc.Guid);
         Assert.Equal(2u, ListedItems(high.Single(WorldOpcode.SmsgListInventory)));

@@ -53,7 +53,7 @@ public sealed class TickRingTests
     {
         var ring = new TickRing(64);
         long value = 0;
-        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(() => ring.Record(value++), 100_000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(() => ring.Record(value++), 100_000));
     }
 
     [Fact]

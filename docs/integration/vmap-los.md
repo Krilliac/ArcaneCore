@@ -110,7 +110,7 @@ Implemented from the file format descriptions and standard algorithms (BIH after
 as used by Sunflow; Möller–Trumbore; A*; the "simple stupid funnel" string-pulling). cMaNGOS /
 vmangos (GPL) and Recast/Detour sources were read only to confirm byte layouts and query
 semantics; no code was copied. Test data is synthetic and authored in the repository
-(`tests/ArcaneCore.Game.Tests/Collision/VMapFixture.cs`, `NavMeshFixture.cs`); no client data.
+(`tests/ArcaneCore.TestSupport/VMapFixture.cs`, `NavMeshFixture.cs`); no client data.
 
 Real-data verification (2026-10-07, `RealTerrainDataTests`, gated on `ARCANECORE_TEST_TERRAIN_DIR`;
 recipe in [maps-vmaps-mmaps.md](maps-vmaps-mmaps.md)): every file of a vmangos extraction parses,

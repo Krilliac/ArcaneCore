@@ -1,7 +1,7 @@
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -10,7 +10,7 @@ public sealed class VendorQuoteTests
     [Fact]
     public void DiscoveryUsesDiscountedPriceBeyondInteractionRangeWithoutPurchasing()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Content(Bread),
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Content(Bread),
             new QuestNpcDependencies(Reputation: new NpcVendorServiceTests.FixedReputation(0.9f)), npcDistance: 20);
         // 25 at a 0.9 discount: vmangos BuyItemFromVendor rounds, uint32(price * discount + 0.5f) (Player.cpp:18445), so 23.
         kit.Player.Money = 23;
@@ -28,7 +28,7 @@ public sealed class VendorQuoteTests
     [Fact]
     public void SoldOutOfferReturnsOnlyAfterOrdinaryRestock()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Content(Lantern, maxCount: 1, incrTime: 60));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Content(Lantern, maxCount: 1, incrTime: 60));
         kit.Player.Money = 1000;
         Assert.Equal(300u, kit.Services.GetVendorPurchasePrice(kit.Player, kit.Npc, Lantern));
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Lantern, 1);
@@ -42,10 +42,10 @@ public sealed class VendorQuoteTests
     [Fact]
     public void HiddenUnknownOrUnaffordableRowsDoNotProduceQuotes()
     {
-        using var hidden = new NpcServiceKit(NpcFlags.Vendor, Content(Bread, condition: 99));
+        using var hidden = new NpcServiceTestKit(NpcFlags.Vendor, Content(Bread, condition: 99));
         hidden.Player.Money = 1000;
         Assert.Null(hidden.Services.GetVendorPurchasePrice(hidden.Player, hidden.Npc, Bread));
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Content(Bread));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Content(Bread));
         kit.Player.Money = 24;
         Assert.Null(kit.Services.GetVendorPurchasePrice(kit.Player, kit.Npc, Bread));
         Assert.Null(kit.Services.GetVendorPurchasePrice(kit.Player, kit.Npc, Sword));
@@ -55,7 +55,7 @@ public sealed class VendorQuoteTests
     [Fact]
     public void FullBagsOrUnloadedPlayerDoNotProduceQuotes()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Content(Bread));
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Content(Bread));
         kit.Player.Money = 1000;
         for (int i = 0; i < 16; i++) kit.Give(Lantern);
         kit.Session.Clear();

@@ -8,6 +8,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Effects;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Tests.ClientData;
 using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Spells;
@@ -52,7 +53,7 @@ internal sealed class QaSpellKit : IDisposable
 
     public QaSpellKit(IPlayerbotQaSink? sink = null, bool brokenHeal = false, bool brokenDamage = false, SpellInfo[]? extra = null)
     {
-        World = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 }, new NoSaves(),
+        World = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 }, new NullSaveQueue(),
             NullLogger<WorldRuntime>.Instance);
         UnsupportedAuraType = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Unsupported).Type;
         // AuraSupportBaseline has no Referenced entries since 69f0044b promoted them to Handler; any supported type the bare system has no handler for is the same case.
@@ -118,7 +119,7 @@ internal sealed class QaSpellKit : IDisposable
             Id = (int)guid, AccountId = (int)guid, Name = $"P{guid}", Race = (byte)Race.Human, Class = (byte)playerClass, Gender = 0, Level = 10, MapId = 0,
             ZoneId = 12, X = guid * 3, Y = 0, Z = 83.5f,
         };
-        var player = new Player(character, new PlayerAppearance(49, 1, PowerType.Mana, 100, 100, 100, 1000, 1000, 400), new Honor.HonorNullSession());
+        var player = new Player(character, new PlayerAppearance(49, 1, PowerType.Mana, 100, 100, 100, 1000, 1000, 400), new NullPlayerSession());
         World.AddPlayer(player);
         World.RunTick(0);
         return player;
@@ -132,13 +133,6 @@ internal sealed class QaSpellKit : IDisposable
     {
         Id = id, Name = $"Spell {id}", Rank = "Rank 2", RangeIndex = SpellConstants.RangeIndexSelfOnly, Range = new SpellRange(0, 0), Effects = effects,
     };
-
-    private sealed class NoSaves : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
-    }
 }
 
 /// <summary>The QA spell monitor: unsupported spells, implicit targets, spells that land with no effect and refused casts, of bots only.</summary>

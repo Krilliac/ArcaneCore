@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
@@ -49,12 +50,5 @@ public sealed class GuildConfigBindingTests
 
         Assert.False(manager.AllowClientGuildCreate);
         Assert.Equal(4, manager.MinPetitionSigns);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }

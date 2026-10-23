@@ -59,9 +59,9 @@ internal sealed class PetTestKit : IDisposable
     {
         Spells = new SpellTestKit([.. DefaultPetSpells(), .. extraSpells ?? []]);
         Map = Spells.World.GetMap(0);
-        Content = CreatureTestSupport.Content(
+        Content = CreatureTestKit.Content(
             [
-                .. new[] { TotemEntry, PetEntry, GuardianEntry, MiniPetEntry, WildEntry, MiniPetEntry2, ImpEntry }.Select(entry => CreatureTestSupport.Template(entry, b =>
+                .. new[] { TotemEntry, PetEntry, GuardianEntry, MiniPetEntry, WildEntry, MiniPetEntry2, ImpEntry }.Select(entry => CreatureTestKit.Template(entry, b =>
                 {
                     b.Name = $"Summon {entry}";
                     b.Faction = 14;
@@ -72,7 +72,7 @@ internal sealed class PetTestKit : IDisposable
                     b.NpcFlags = entry == MiniPetEntry ? 2u : 0u; // some mini pets have quests
                     b.UnitFlags = entry == PetEntry ? (uint)UnitFlags.ServerControlled : 0u; // a summoned pet starts with its flags cleared
                 })),
-                CreatureTestSupport.Template(NpcCasterEntry, b =>
+                CreatureTestKit.Template(NpcCasterEntry, b =>
                 {
                     b.Name = "Summoner";
                     b.Faction = 14;

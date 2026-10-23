@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots.Scenarios;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -10,7 +11,7 @@ public sealed class ManualWorldClockTests
 {
     private static WorldRuntime Start(uint stepMs = 50)
     {
-        var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NoSaves(),
+        var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NullSaveQueue(),
             NullLogger<WorldRuntime>.Instance);
         world.UseManualClock(stepMs);
         world.Start();
@@ -58,7 +59,7 @@ public sealed class ManualWorldClockTests
     [Fact]
     public void TheManualClock_IsChosenBeforeStart_AndOnlyThere()
     {
-        using var world = new WorldRuntime(new WorldRuntimeOptions(), new NoSaves(), NullLogger<WorldRuntime>.Instance);
+        using var world = new WorldRuntime(new WorldRuntimeOptions(), new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
         Assert.Throws<InvalidOperationException>(() => { _ = world.AdvanceClockAsync(10); }); // thrown synchronously
         world.Start();
         Assert.Throws<InvalidOperationException>(() => world.UseManualClock());
@@ -77,12 +78,5 @@ public sealed class ManualWorldClockTests
         time.Advance(TimeSpan.FromHours(1));
         Assert.Equal(1_003 + 3600, time.GetUtcNow().ToUnixTimeSeconds());
         Assert.Equal(TimeSpan.FromSeconds(3), clock.Advanced);
-    }
-
-    private sealed class NoSaves : ICharacterSaveQueue
-    {
-        public void Enqueue(Kernel.Characters.CharacterState state)
-        {
-        }
     }
 }

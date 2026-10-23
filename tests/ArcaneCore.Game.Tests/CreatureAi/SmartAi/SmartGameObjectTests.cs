@@ -7,9 +7,9 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureAi.SmartAi.SmartRows;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi.SmartAi;
 
@@ -328,7 +328,7 @@ public sealed class SmartGameObjectTests
 
         rig.Session.Clear();
         rig.Objects!.UseByUnit(rig.Player, go);
-        MonsterChat say = ParseMonsterChat(Assert.Single(CreatureAiTestSupport.Packets(rig.Session, WorldOpcode.SmsgMessagechat)));
+        MonsterChat say = ParseMonsterChat(Assert.Single(CreatureAiTestKit.Packets(rig.Session, WorldOpcode.SmsgMessagechat)));
         Assert.Equal(speaker.Template.Name, say.Name);                 // not the pet, which is nearer
         Assert.NotEqual(pet.Template.Name, say.Name);
         Assert.Contains(rig.Player.Name, say.Message, StringComparison.Ordinal); // the text target is the last invoker, the player who used it
@@ -345,7 +345,7 @@ public sealed class SmartGameObjectTests
         ]);
         rig.Session.Clear();
         rig.Objects!.UseByUnit(rig.Player, rig.ObjectBySpawn(1));
-        Assert.Empty(CreatureAiTestSupport.Packets(rig.Session, WorldOpcode.SmsgMessagechat));
+        Assert.Empty(CreatureAiTestKit.Packets(rig.Session, WorldOpcode.SmsgMessagechat));
     }
 
     [Fact]

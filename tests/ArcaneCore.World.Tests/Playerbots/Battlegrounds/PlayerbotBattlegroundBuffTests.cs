@@ -6,6 +6,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Playerbots.Battlegrounds;
 using ArcaneCore.World.Playerbots.Scenarios;
@@ -189,13 +190,6 @@ public sealed class PlayerbotBattlegroundBuffTests
 
         board.Current(map, 1_000 + PlayerbotBattlegroundBuffBoard.RefreshMs);
         Assert.Equal(2, board.Scans);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 
     [Fact]

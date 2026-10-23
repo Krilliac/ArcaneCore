@@ -1,4 +1,5 @@
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Net;
@@ -160,7 +161,7 @@ public sealed class PacketReaderTests
     }
 
     /// <remarks>
-    /// Measured through <see cref="ArcaneCore.Game.Tests.AllocationProbe"/>: a bare before/after window read one allocation quantum
+    /// Measured through <see cref="ArcaneCore.TestSupport.AllocationProbe"/>: a bare before/after window read one allocation quantum
     /// (7952 bytes) under the full World suite while the reader allocated nothing, the GC-correlated noise the probe documents and
     /// retries past (slot log spd-1-10, 2026-10-21; passed alone). A real allocation in the Try surface still fails every window.
     /// </remarks>
@@ -189,7 +190,7 @@ public sealed class PacketReaderTests
             }
         };
 
-        ArcaneCore.Game.Tests.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "PacketReader Try surface x20000");
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "PacketReader Try surface x20000");
         Assert.True(total > 0);
     }
 

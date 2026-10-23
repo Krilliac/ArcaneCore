@@ -6,7 +6,7 @@ using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Protocol;
-using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
+using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 using ItemsResult = ArcaneCore.Game.Items.InventoryResult;
 
 namespace ArcaneCore.Game.Tests.Npc;
@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Tests.Npc;
 /// </summary>
 public sealed class QuestRefusalTests
 {
-    private static uint InvalidReason(QuestFlowKit kit)
+    private static uint InvalidReason(QuestFlowTestKit kit)
     {
         var drained = kit.Drain();
         (WorldOpcode Opcode, byte[] Payload) invalid = Assert.Single(drained, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestInvalid);
@@ -27,7 +27,7 @@ public sealed class QuestRefusalTests
         return BitConverter.ToUInt32(invalid.Payload);
     }
 
-    private static void AssertNoInvalid(QuestFlowKit kit)
+    private static void AssertNoInvalid(QuestFlowTestKit kit)
     {
         var drained = kit.Drain();
         Assert.DoesNotContain(drained, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestInvalid);
@@ -60,7 +60,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void AcceptingAQuestYouAreOn_SendsAlreadyOn_AndLeavesTheJournalAlone()
     {
-        using var kit = new QuestFlowKit([Task(10)], [Row(10, QuestStatus.Incomplete)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10)], [Row(10, QuestStatus.Incomplete)], starters: [10]);
         Assert.False(kit.Accept(10));
         Assert.Equal((uint)QuestInvalidReason.AlreadyOn, InvalidReason(kit));
         Assert.Empty(kit.Sink.Rows);
@@ -70,7 +70,7 @@ public sealed class QuestRefusalTests
     public void AcceptingARewardedQuest_IsAlsoAlreadyOn()
     {
         // vmangos keeps a rewarded quest at COMPLETE, and SatisfyQuestStatus refuses any status but NONE (Player.cpp:13532-13545).
-        using var kit = new QuestFlowKit([Task(10)], [Row(10, QuestStatus.Complete, rewarded: true)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10)], [Row(10, QuestStatus.Complete, rewarded: true)], starters: [10]);
         Assert.False(kit.Accept(10));
         Assert.Equal((uint)QuestInvalidReason.AlreadyOn, InvalidReason(kit));
     }
@@ -78,7 +78,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void AWrongRaceQuest_SendsWrongRace()
     {
-        using var kit = new QuestFlowKit([Task(10, races: 2)], starters: [10]);   // orc only
+        using var kit = new QuestFlowTestKit([Task(10, races: 2)], starters: [10]);   // orc only
         Assert.False(kit.Accept(10));
         Assert.Equal((uint)QuestInvalidReason.WrongRace, InvalidReason(kit));
     }
@@ -99,7 +99,7 @@ public sealed class QuestRefusalTests
             _ => [Task(10, exclusiveGroup: 5), Task(11, exclusiveGroup: 5)],
         };
         CharacterQuestStatus[] rows = kind == "exclusive" ? [Row(11, QuestStatus.Incomplete)] : [];
-        using var kit = new QuestFlowKit(quests, rows, starters: [10]);
+        using var kit = new QuestFlowTestKit(quests, rows, starters: [10]);
         Assert.False(kit.Accept(10));
         Assert.Equal((uint)QuestInvalidReason.DontHaveReq, InvalidReason(kit));
     }
@@ -107,7 +107,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void ASecondTimedQuest_SendsOnlyOneTimed()
     {
-        using var kit = new QuestFlowKit([Task(10, limitTime: 600, special: (byte)QuestSpecialFlags.Timed), Task(11, limitTime: 600, special: (byte)QuestSpecialFlags.Timed)],
+        using var kit = new QuestFlowTestKit([Task(10, limitTime: 600, special: (byte)QuestSpecialFlags.Timed), Task(11, limitTime: 600, special: (byte)QuestSpecialFlags.Timed)],
             [Row(11, QuestStatus.Incomplete, timer: 100 + 300)], starters: [10]);
         Assert.False(kit.Accept(10));
         Assert.Equal((uint)QuestInvalidReason.OnlyOneTimed, InvalidReason(kit));
@@ -118,20 +118,20 @@ public sealed class QuestRefusalTests
     {
         // CanTakeQuest order (Player.cpp:12570-12575): status, exclusive group, class, race, level ... so a quest
         // that is wrong-race and too-high-level answers WRONG_RACE, and one already taken answers ALREADY_ON.
-        using (var kit = new QuestFlowKit([Task(10, minLevel: 20, races: 2)], starters: [10]))
+        using (var kit = new QuestFlowTestKit([Task(10, minLevel: 20, races: 2)], starters: [10]))
         {
             kit.Accept(10);
             Assert.Equal((uint)QuestInvalidReason.WrongRace, InvalidReason(kit));
         }
 
-        using (var kit = new QuestFlowKit([Task(10, races: 2)], [Row(10, QuestStatus.Incomplete)], starters: [10]))
+        using (var kit = new QuestFlowTestKit([Task(10, races: 2)], [Row(10, QuestStatus.Incomplete)], starters: [10]))
         {
             kit.Accept(10);
             Assert.Equal((uint)QuestInvalidReason.AlreadyOn, InvalidReason(kit));
         }
 
         // class (DONT_HAVE_REQ) comes before race (WRONG_RACE)
-        using (var kit = new QuestFlowKit([Task(10, races: 2, classes: 1 << 7)], starters: [10]))
+        using (var kit = new QuestFlowTestKit([Task(10, races: 2, classes: 1 << 7)], starters: [10]))
         {
             kit.Accept(10);
             Assert.Equal((uint)QuestInvalidReason.DontHaveReq, InvalidReason(kit));
@@ -142,13 +142,13 @@ public sealed class QuestRefusalTests
     public void SilentRefusals_SendNoInvalidPacket()
     {
         // Player.cpp:12567-12568 (MaxLevel) and :12576 (IsActive) return false without a message.
-        using (var kit = new QuestFlowKit([Task(10, maxLevel: 3)], starters: [10], level: 5))
+        using (var kit = new QuestFlowTestKit([Task(10, maxLevel: 3)], starters: [10], level: 5))
         {
             Assert.False(kit.Accept(10));
             AssertNoInvalid(kit);
         }
 
-        using (var kit = new QuestFlowKit([Task(10, method: 2 | QuestConstants.MethodDisabled)], starters: [10]))
+        using (var kit = new QuestFlowTestKit([Task(10, method: 2 | QuestConstants.MethodDisabled)], starters: [10]))
         {
             Assert.False(kit.Accept(10));
             AssertNoInvalid(kit);
@@ -160,7 +160,7 @@ public sealed class QuestRefusalTests
     {
         QuestTemplate[] quests = [.. Enumerable.Range(0, QuestConstants.MaxQuestLogSize + 1).Select(i => Task(100 + (uint)i))];
         CharacterQuestStatus[] rows = [.. quests.Take(QuestConstants.MaxQuestLogSize).Select(q => Row(q.Entry, QuestStatus.Incomplete))];
-        using var kit = new QuestFlowKit(quests, rows, starters: [100 + (uint)QuestConstants.MaxQuestLogSize]);
+        using var kit = new QuestFlowTestKit(quests, rows, starters: [100 + (uint)QuestConstants.MaxQuestLogSize]);
         Assert.False(kit.Accept(100 + (uint)QuestConstants.MaxQuestLogSize));
         var sent = kit.Drain();
         Assert.Contains(sent, p => p.Opcode == WorldOpcode.SmsgQuestlogFull);
@@ -170,7 +170,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void AnAvailableQuest_StillAccepts_WithoutAnyRefusalPacket()
     {
-        using var kit = new QuestFlowKit([Task(10)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10)], starters: [10]);
         Assert.True(kit.Accept(10));
         Assert.DoesNotContain(kit.Drain(), p => p.Opcode is WorldOpcode.SmsgQuestgiverQuestInvalid or WorldOpcode.SmsgQuestgiverQuestFailed);
         Assert.Equal(QuestStatus.Incomplete, kit.State.Quests.GetStatus(10));
@@ -181,7 +181,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void ASourceItemTheBankAlreadyHolds_IsNotGivenAgain()
     {
-        using var kit = new QuestFlowKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 3)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 3)], starters: [10]);
         kit.Player.Inventory.Load([new InventoryItemData(0, InventorySlots.BankItemStart,
             new ItemInstanceData { Guid = 100, Entry = ItemTestData.ToughJerky, Count = 3 })]);
         kit.Player.Inventory.GuidAllocator!.Seed(100);
@@ -196,7 +196,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void APartlyOwnedSourceItem_IsToppedUpToTheCount()
     {
-        using var kit = new QuestFlowKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 3)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 3)], starters: [10]);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky, 1);
         kit.Drain();
 
@@ -208,7 +208,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void AFullBackpack_RefusesWithQuestFailedInventoryFull()
     {
-        using var kit = new QuestFlowKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 3)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 3)], starters: [10]);
         for (int i = 0; i < InventorySlots.ItemEnd - InventorySlots.ItemStart; i++)
         {
             ItemTestData.Give(kit.Player.Inventory, ItemTestData.IndestructibleRock);
@@ -228,7 +228,7 @@ public sealed class QuestRefusalTests
     public void AUniqueSourceItemWeAlreadyCarry_RefusesWithQuestFailedDuplicate()
     {
         // has 1 of a unique item, needs 2: the missing 1 cannot be carried (EQUIP_ERR_CANT_CARRY_MORE_OF_THIS -> 17).
-        using var kit = new QuestFlowKit([Task(10, srcItem: ItemTestData.UniqueKey, srcCount: 2)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10, srcItem: ItemTestData.UniqueKey, srcCount: 2)], starters: [10]);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.UniqueKey, 1);
         kit.Drain();
 
@@ -243,7 +243,7 @@ public sealed class QuestRefusalTests
     public void AbandoningDestroysQuestBoundRequiredItems_BankIncluded()
     {
         // Destroying them on abandon was added with 1.12.1 (Player.cpp:13046-13062).
-        using var kit = new QuestFlowKit([Task(10, reqItem: ItemTestData.QuestPelt, reqItemCount: 4)],
+        using var kit = new QuestFlowTestKit([Task(10, reqItem: ItemTestData.QuestPelt, reqItemCount: 4)],
             [Row(10, QuestStatus.Incomplete)], starters: [10]);
         kit.Player.Inventory.Load([new InventoryItemData(0, InventorySlots.BankItemStart,
             new ItemInstanceData { Guid = 100, Entry = ItemTestData.QuestPelt, Count = 3 })]);
@@ -263,7 +263,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void AbandoningKeepsOrdinaryRequiredItems()
     {
-        using var kit = new QuestFlowKit([Task(10, reqItem: ItemTestData.ToughJerky, reqItemCount: 4)],
+        using var kit = new QuestFlowTestKit([Task(10, reqItem: ItemTestData.ToughJerky, reqItemCount: 4)],
             [Row(10, QuestStatus.Incomplete)], starters: [10]);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky, 4);
 
@@ -277,7 +277,7 @@ public sealed class QuestRefusalTests
     {
         // TakeOrReplaceQuestStartItems (Player.cpp:13696-13760): destroys SrcItemCount when owned (bank included),
         // with no "also required" exception.
-        using var kit = new QuestFlowKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 2, reqItem: ItemTestData.ToughJerky, reqItemCount: 5)],
+        using var kit = new QuestFlowTestKit([Task(10, srcItem: ItemTestData.ToughJerky, srcCount: 2, reqItem: ItemTestData.ToughJerky, reqItemCount: 5)],
             [Row(10, QuestStatus.Incomplete)], starters: [10]);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky, 6);
 
@@ -290,7 +290,7 @@ public sealed class QuestRefusalTests
     public void AbandoningLeavesAStartItemThatIsTheQuestsOwnStartItem()
     {
         // giveQuestStartItem && questId == item.StartQuest: "Just leave it" (Player.cpp:13716-13721).
-        using var kit = new QuestFlowKit([Task(ItemTestData.QuestNoteQuest, srcItem: ItemTestData.QuestNote, srcCount: 1)],
+        using var kit = new QuestFlowTestKit([Task(ItemTestData.QuestNoteQuest, srcItem: ItemTestData.QuestNote, srcCount: 1)],
             [Row(ItemTestData.QuestNoteQuest, QuestStatus.Incomplete)], starters: [ItemTestData.QuestNoteQuest]);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.QuestNote, 1);
 
@@ -307,7 +307,7 @@ public sealed class QuestRefusalTests
         Assert.Equal(ItemTestData.QuestLetter, ItemTestData.Store.QuestStartingItem(ItemTestData.QuestLetterQuest));
         Assert.Equal(0u, ItemTestData.Store.QuestStartingItem(99999));
 
-        using var kit = new QuestFlowKit([Task(ItemTestData.QuestLetterQuest, srcItem: ItemTestData.ToughJerky, srcCount: 2)],
+        using var kit = new QuestFlowTestKit([Task(ItemTestData.QuestLetterQuest, srcItem: ItemTestData.ToughJerky, srcCount: 2)],
             [Row(ItemTestData.QuestLetterQuest, QuestStatus.Incomplete)], starters: [ItemTestData.QuestLetterQuest]);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky, 2);
 
@@ -322,7 +322,7 @@ public sealed class QuestRefusalTests
     public void AbandoningIsRefusedWhileTheSourceItemCannotBeUnequipped()
     {
         // CanUnequipItems (Player.cpp:8326-8397): a worn copy that cannot come off in combat blocks the abandon.
-        using var kit = new QuestFlowKit([Task(10, srcItem: ItemTestData.RecruitsShirt, srcCount: 1)],
+        using var kit = new QuestFlowTestKit([Task(10, srcItem: ItemTestData.RecruitsShirt, srcCount: 1)],
             [Row(10, QuestStatus.Incomplete)], starters: [10]);
         Item shirt = ItemTestData.Give(kit.Player.Inventory, ItemTestData.RecruitsShirt);
         kit.Player.Inventory.AutoEquipItem(shirt.BagSlot, shirt.Slot);
@@ -342,7 +342,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void QuestgiverCancel_ClosesTheGossipWindow()
     {
-        using var kit = new QuestFlowKit([Task(10)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10)], starters: [10]);
         kit.Services.QuestgiverCancel(kit.Player);
         Assert.Equal(WorldOpcode.SmsgGossipComplete, Assert.Single(kit.Drain()).Opcode);
     }
@@ -350,7 +350,7 @@ public sealed class QuestRefusalTests
     [Fact]
     public void SwappingQuestSlots_ExchangesAllThreeFields_AndIgnoresBadRequests()
     {
-        using var kit = new QuestFlowKit([Task(10), Task(11)], [Row(10, QuestStatus.Incomplete), Row(11, QuestStatus.Incomplete)], starters: [10]);
+        using var kit = new QuestFlowTestKit([Task(10), Task(11)], [Row(10, QuestStatus.Incomplete), Row(11, QuestStatus.Incomplete)], starters: [10]);
         uint first = kit.State.Quests.SlotQuestId(0);
         uint second = kit.State.Quests.SlotQuestId(1);
         Assert.NotEqual(first, second);

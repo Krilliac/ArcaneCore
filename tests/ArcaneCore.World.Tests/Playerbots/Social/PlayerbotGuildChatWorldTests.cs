@@ -110,7 +110,7 @@ public sealed class PlayerbotGuildChatWorldTests
 
         public Task QueueAsync(PlayerbotGuildTopic topic) => World.Host.OnWorldAsync(() => Chat.Queue(Guild.Id, topic));
 
-        public Task SpeakAsync(long nowMs) => World.Host.OnWorldAsync(() => Chat.Speak(SocialTestSupport.BotPass(World.Host, nowMs, Timings)));
+        public Task SpeakAsync(long nowMs) => World.Host.OnWorldAsync(() => Chat.Speak(SocialTestKit.BotPass(World.Host, nowMs, Timings)));
 
         public Task<int> WaitingAsync() => World.Host.OnWorldAsync(() => Chat.Waiting(Guild.Id));
 
@@ -152,7 +152,7 @@ public sealed class PlayerbotGuildChatWorldTests
         });
         await world.AddBotAsync("Quilla");
         await world.AddBotAsync("Quillb");
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10); // the registry of bots is read
+        await SocialTestKit.WaitPassesAsync(world.Host, 10); // the registry of bots is read
         Guild guild = await world.FoundGuildAsync("Quilla", GuildName);
         await world.BotJoinsAsync("Quilla", "Quillb", guild);
         WorldTestClient listener = await world.AddPlayerAsync("Listener");
@@ -169,7 +169,7 @@ public sealed class PlayerbotGuildChatWorldTests
         Assert.Contains(PlayerbotSocialTemplates.Lines["guild.welcome"], line => line.Replace("{who}", "Listener").Replace("{guild}", GuildName) == welcome.Text);
 
         // One line, from one bot, once: the topic is used up and the bot speaks no more for its gap.
-        await SocialTestSupport.WaitPassesAsync(world.Host, 10);
+        await SocialTestKit.WaitPassesAsync(world.Host, 10);
         Assert.Equal(1, world.Log.Count(WorldOpcode.CmsgMessagechat));
         Assert.DoesNotContain(await listener.CollectAsync(TimeSpan.FromMilliseconds(200)), p => p.Opcode == WorldOpcode.SmsgMessagechat);
     }
@@ -388,13 +388,13 @@ public sealed class PlayerbotGuildChatWorldTests
         const ulong bossGuid = 0xF130_0000_0042_0001UL; // the guid is the same in every instance of the dungeon
         (bool First, bool SameInstanceAgain, bool OtherInstance, bool AfterWindow, int Waiting) result = await rig.World.Host.OnWorldAsync(() =>
         {
-            PlayerbotSocialPass pass = SocialTestSupport.BotPass(rig.World.Host, 1_000, rig.Timings);
+            PlayerbotSocialPass pass = SocialTestKit.BotPass(rig.World.Host, 1_000, rig.Timings);
             Guild guild = rig.Guild;
             bool first = rig.Chat.QueueBoss(pass, guild, 7, bossGuid, "Edwin", "The Deadmines", "Quilla");
             bool again = rig.Chat.QueueBoss(pass, guild, 7, bossGuid, "Edwin", "The Deadmines", "Quilla");
             bool other = rig.Chat.QueueBoss(pass, guild, 8, bossGuid, "Edwin", "The Deadmines", "Quilla");
             int waiting = rig.Chat.Waiting(guild.Id);
-            PlayerbotSocialPass later = SocialTestSupport.BotPass(rig.World.Host, 1_000 + PlayerbotGuildChat.BossSeenLifeMs, rig.Timings);
+            PlayerbotSocialPass later = SocialTestKit.BotPass(rig.World.Host, 1_000 + PlayerbotGuildChat.BossSeenLifeMs, rig.Timings);
             bool afterWindow = rig.Chat.QueueBoss(later, guild, 7, bossGuid, "Edwin", "The Deadmines", "Quilla");
             return (first, again, other, afterWindow, waiting);
         });

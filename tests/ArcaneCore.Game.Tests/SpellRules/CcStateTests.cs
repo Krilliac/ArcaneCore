@@ -37,7 +37,7 @@ public sealed class CcStateTests
         with { Duration = new SpellDuration(20_000, 0, 20_000), SpellVisual = 1, RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
 
     private static SpellInfo Cast(uint id, uint prevention) =>
-        RuleTestSupport.Magic(id, SpellSchool.Fire) with
+        RuleTestKit.Magic(id, SpellSchool.Fire) with
         {
             CastTime = new SpellCastTime(3000, 0, 0),
             PreventionType = prevention,
@@ -48,17 +48,17 @@ public sealed class CcStateTests
         };
 
     private static SpellTestKit Kit() => new(
-        RuleTestSupport.Grant(Silence, AuraType.ModSilence, 0),
-        RuleTestSupport.Grant(SilenceTwo, AuraType.ModSilence, 0),
-        RuleTestSupport.Grant(Pacify, AuraType.ModPacify, 0),
-        RuleTestSupport.Grant(PacifySilence, AuraType.ModPacifySilence, 0),
-        RuleTestSupport.Grant(Disarm, AuraType.ModDisarm, 0),
-        RuleTestSupport.Grant(Fear, AuraType.ModFear, 0),
-        RuleTestSupport.Grant(Confuse, AuraType.ModConfuse, 0),
-        RuleTestSupport.Grant(Stun, AuraType.ModStun, 0),
-        RuleTestSupport.Grant(StunTwo, AuraType.ModStun, 0),
-        RuleTestSupport.Grant(Root, AuraType.ModRoot, 0),
-        RuleTestSupport.Grant(NoFlee, AuraType.PreventsFleeing, 0),
+        RuleTestKit.Grant(Silence, AuraType.ModSilence, 0),
+        RuleTestKit.Grant(SilenceTwo, AuraType.ModSilence, 0),
+        RuleTestKit.Grant(Pacify, AuraType.ModPacify, 0),
+        RuleTestKit.Grant(PacifySilence, AuraType.ModPacifySilence, 0),
+        RuleTestKit.Grant(Disarm, AuraType.ModDisarm, 0),
+        RuleTestKit.Grant(Fear, AuraType.ModFear, 0),
+        RuleTestKit.Grant(Confuse, AuraType.ModConfuse, 0),
+        RuleTestKit.Grant(Stun, AuraType.ModStun, 0),
+        RuleTestKit.Grant(StunTwo, AuraType.ModStun, 0),
+        RuleTestKit.Grant(Root, AuraType.ModRoot, 0),
+        RuleTestKit.Grant(NoFlee, AuraType.PreventsFleeing, 0),
         Cast(SilenceableCast, 1),
         Cast(PlainCast, 0),
         Hostile(HostileSilence, AuraType.ModSilence),
@@ -80,8 +80,8 @@ public sealed class CcStateTests
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
 
-        RuleTestSupport.Apply(kit, victim, Silence);
-        RuleTestSupport.Apply(kit, victim, SilenceTwo);
+        RuleTestKit.Apply(kit, victim, Silence);
+        RuleTestKit.Apply(kit, victim, SilenceTwo);
         Assert.True((victim.UnitFlags & UnitFlags.Silenced) != 0);
         kit.System.RemoveAuras(victim, Silence);
         Assert.True((victim.UnitFlags & UnitFlags.Silenced) != 0);
@@ -95,14 +95,14 @@ public sealed class CcStateTests
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
 
-        RuleTestSupport.Apply(kit, victim, Pacify);
+        RuleTestKit.Apply(kit, victim, Pacify);
         Assert.True((victim.UnitFlags & UnitFlags.Pacified) != 0);
         kit.System.RemoveAuras(victim, Pacify);
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Pacified);
 
-        RuleTestSupport.Apply(kit, victim, PacifySilence);
+        RuleTestKit.Apply(kit, victim, PacifySilence);
         Assert.Equal(UnitFlags.Pacified | UnitFlags.Silenced, victim.UnitFlags & (UnitFlags.Pacified | UnitFlags.Silenced));
-        RuleTestSupport.Apply(kit, victim, Silence);
+        RuleTestKit.Apply(kit, victim, Silence);
         kit.System.RemoveAuras(victim, Silence);
         Assert.True((victim.UnitFlags & UnitFlags.Silenced) != 0); // the pacify+silence aura still holds the silence
         kit.System.RemoveAuras(victim, PacifySilence);
@@ -115,7 +115,7 @@ public sealed class CcStateTests
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
 
-        RuleTestSupport.Apply(kit, victim, Disarm);
+        RuleTestKit.Apply(kit, victim, Disarm);
         Assert.True((victim.UnitFlags & UnitFlags.Disarmed) != 0);
         kit.System.RemoveAuras(victim, Disarm);
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Disarmed);
@@ -127,16 +127,16 @@ public sealed class CcStateTests
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
 
-        RuleTestSupport.Apply(kit, victim, Fear);
-        RuleTestSupport.Apply(kit, victim, Confuse);
+        RuleTestKit.Apply(kit, victim, Fear);
+        RuleTestKit.Apply(kit, victim, Confuse);
         Assert.Equal(UnitFlags.Fleeing | UnitFlags.Confused, victim.UnitFlags & (UnitFlags.Fleeing | UnitFlags.Confused));
         kit.System.RemoveAuras(victim, Fear);
         Assert.Equal(UnitFlags.Confused, victim.UnitFlags & (UnitFlags.Fleeing | UnitFlags.Confused));
         kit.System.RemoveAuras(victim, Confuse);
         Assert.Equal(UnitFlags.None, victim.UnitFlags & (UnitFlags.Fleeing | UnitFlags.Confused));
 
-        RuleTestSupport.Apply(kit, victim, NoFlee);
-        RuleTestSupport.Apply(kit, victim, Fear);
+        RuleTestKit.Apply(kit, victim, NoFlee);
+        RuleTestKit.Apply(kit, victim, Fear);
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Fleeing); // vmangos Unit::SetFeared: PREVENTS_FLEEING wins
     }
 
@@ -144,11 +144,11 @@ public sealed class CcStateTests
     public void Totems_IgnoreFearAndConfuse()
     {
         using SpellTestKit kit = Kit();
-        CreatureTemplate template = CreatureTestSupport.Template(CreatureTestSupport.WolfEntry, b => b.Rank = 0) with { CreatureType = 11 };
-        var totem = new Creature(1, template, null, CreatureTestSupport.Content([template], []), new Random(1));
+        CreatureTemplate template = CreatureTestKit.Template(CreatureTestKit.WolfEntry, b => b.Rank = 0) with { CreatureType = 11 };
+        var totem = new Creature(1, template, null, CreatureTestKit.Content([template], []), new Random(1));
 
-        RuleTestSupport.Apply(kit, totem, Fear);
-        RuleTestSupport.Apply(kit, totem, Confuse);
+        RuleTestKit.Apply(kit, totem, Fear);
+        RuleTestKit.Apply(kit, totem, Confuse);
 
         Assert.Equal(UnitFlags.None, totem.UnitFlags & (UnitFlags.Fleeing | UnitFlags.Confused));
     }
@@ -159,8 +159,8 @@ public sealed class CcStateTests
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
 
-        RuleTestSupport.Apply(kit, victim, Stun);
-        RuleTestSupport.Apply(kit, victim, StunTwo);
+        RuleTestKit.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, StunTwo);
         Assert.True((victim.UnitFlags & UnitFlags.Stunned) != 0);
         Assert.True(victim.IsRooted);
         Assert.True(kit.System.IsRooted(victim));
@@ -180,7 +180,7 @@ public sealed class CcStateTests
         (_, Player victim) = Pair(kit);
         victim.UnitFlags |= UnitFlags.TaxiFlight;
 
-        RuleTestSupport.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, Stun);
 
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Stunned);
         Assert.False(victim.IsRooted);
@@ -192,10 +192,10 @@ public sealed class CcStateTests
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
 
-        RuleTestSupport.Apply(kit, victim, Root);
+        RuleTestKit.Apply(kit, victim, Root);
         Assert.True(victim.IsRooted);
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Stunned);
-        RuleTestSupport.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, Stun);
         kit.System.RemoveAuras(victim, Root);
         Assert.True(victim.IsRooted); // the stun still roots
         kit.System.RemoveAuras(victim, Stun);
@@ -211,7 +211,7 @@ public sealed class CcStateTests
         kit.System.ReleaseLoot = released.Add;
         victim.SetStandState(StandState.Sit);
 
-        RuleTestSupport.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, Stun);
 
         Assert.Equal(StandState.Stand, victim.StandState);
         Assert.Equal([victim], released);
@@ -219,7 +219,7 @@ public sealed class CcStateTests
         kit.System.RemoveAuras(victim, Stun);
         victim.SetStandState(StandState.Sit);
         victim.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 1234);
-        RuleTestSupport.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, Stun);
         Assert.Equal(StandState.Sit, victim.StandState); // vmangos: only when not mounted
     }
 
@@ -230,7 +230,7 @@ public sealed class CcStateTests
         (_, Player victim) = Pair(kit);
 
         victim.BeginLogout(kit.Now);
-        RuleTestSupport.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, Stun);
         kit.System.RemoveAuras(victim, Stun);
         Assert.True((victim.UnitFlags & UnitFlags.Stunned) != 0); // the logout still holds it
         Assert.True(victim.IsRooted);
@@ -245,7 +245,7 @@ public sealed class CcStateTests
     {
         using SpellTestKit kit = Kit();
         (_, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, Stun);
+        RuleTestKit.Apply(kit, victim, Stun);
         victim.BeginLogout(kit.Now);
 
         victim.CancelLogout();
@@ -264,13 +264,13 @@ public sealed class CcStateTests
         (Player other, Player victim) = Pair(kit);
         kit.System.HandleCastRequest(victim, SilenceableCast, SpellCastTargets.ForUnit(other.Guid));
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast);
-        RuleTestSupport.Apply(kit, victim, Silence);
+        RuleTestKit.Apply(kit, victim, Silence);
         Assert.Null(kit.System.GetState(victim.Guid)!.CurrentCast);
 
         kit.System.RemoveAuras(victim, Silence);
         kit.System.HandleCastRequest(victim, PlainCast, SpellCastTargets.ForUnit(other.Guid));
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast);
-        RuleTestSupport.Apply(kit, victim, Silence);
+        RuleTestKit.Apply(kit, victim, Silence);
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast); // PreventionType 0 is not silenced
     }
 
@@ -281,7 +281,7 @@ public sealed class CcStateTests
         (Player other, Player victim) = Pair(kit);
         kit.System.HandleCastRequest(victim, SilenceableCast, SpellCastTargets.ForUnit(other.Guid));
 
-        RuleTestSupport.Apply(kit, victim, Pacify);
+        RuleTestKit.Apply(kit, victim, Pacify);
 
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast);
     }
@@ -308,7 +308,7 @@ public sealed class CcStateTests
         (Player other, Player victim) = Pair(kit);
         kit.System.HandleCastRequest(victim, PlainCast, SpellCastTargets.ForUnit(other.Guid));
 
-        RuleTestSupport.Apply(kit, victim, Stun); // caster == target (SpellAuras.cpp:3573-3576)
+        RuleTestKit.Apply(kit, victim, Stun); // caster == target (SpellAuras.cpp:3573-3576)
 
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast);
     }

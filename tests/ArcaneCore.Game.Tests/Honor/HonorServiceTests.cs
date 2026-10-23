@@ -38,7 +38,7 @@ public sealed class HonorServiceTests
 
     private static Creature MakeCreature(uint entry, bool racialLeader = false, byte level = 60)
     {
-        CreatureTemplate template = CreatureTestSupport.Template(entry, b => { b.MinLevel = level; b.MaxLevel = level; }) with { RacialLeader = racialLeader };
+        CreatureTemplate template = CreatureTestKit.Template(entry, b => { b.MinLevel = level; b.MaxLevel = level; }) with { RacialLeader = racialLeader };
         return new Creature(entry, template, null, CreatureContent.Empty, new Random(1));
     }
 

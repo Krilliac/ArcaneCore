@@ -1,8 +1,8 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Scripting;
-using ArcaneCore.Game.Tests;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;

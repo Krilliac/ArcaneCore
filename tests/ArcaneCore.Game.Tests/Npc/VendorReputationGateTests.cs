@@ -5,7 +5,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -34,13 +34,13 @@ public sealed class VendorReputationGateTests
         public float GetPriceDiscount(Player player, NpcInfo npc) => 1f;
     }
 
-    private static NpcServiceKit Kit(uint itemFaction, uint itemRank, IPlayerReputation? reputation)
+    private static NpcServiceTestKit Kit(uint itemFaction, uint itemRank, IPlayerReputation? reputation)
     {
         ItemTemplate bread = Templates[0] with { RequiredReputationFaction = itemFaction, RequiredReputationRank = itemRank };
         var store = new ItemTemplateStore([bread, .. Templates.Skip(1)], []);
         var content = NpcContent.Empty with { VendorItems = [new VendorItem { Entry = Entry, Item = Bread }] };
         QuestNpcDependencies? extra = reputation is null ? null : new QuestNpcDependencies(Reputation: reputation);
-        var kit = new NpcServiceKit(NpcFlags.Vendor, content, extra, itemStore: store);
+        var kit = new NpcServiceTestKit(NpcFlags.Vendor, content, extra, itemStore: store);
         kit.Npc = kit.Npc with { FactionId = VendorFaction };
         kit.Player.Money = 1000;
         return kit;
@@ -53,7 +53,7 @@ public sealed class VendorReputationGateTests
         Assert.All(reputation.Queried, faction => Assert.True(faction == ItemFaction || faction == VendorFaction));
     }
 
-    private static void AssertRefusedEverywhere(NpcServiceKit kit, BuyResult expectedBuy)
+    private static void AssertRefusedEverywhere(NpcServiceTestKit kit, BuyResult expectedBuy)
     {
         Assert.Null(kit.Services.GetVendorPurchasePrice(kit.Player, kit.Npc, Bread));
         Assert.Null(kit.Services.QuoteVendorPrice(kit.Player, kit.Npc, Bread));
@@ -64,7 +64,7 @@ public sealed class VendorReputationGateTests
         Assert.Equal(0u, kit.Player.Inventory.GetItemCount(Bread));
     }
 
-    private static void AssertSoldEverywhere(NpcServiceKit kit)
+    private static void AssertSoldEverywhere(NpcServiceTestKit kit)
     {
         Assert.Equal(25u, kit.Services.GetVendorPurchasePrice(kit.Player, kit.Npc, Bread));
         Assert.Equal(25u, kit.Services.QuoteVendorPrice(kit.Player, kit.Npc, Bread));
@@ -78,7 +78,7 @@ public sealed class VendorReputationGateTests
     public void ItemFaction_RankBelowRequired_RefusesAllThreePaths_BuyReportsReputationRequire()
     {
         var reputation = new RecordingReputation(faction => faction == ItemFaction ? (byte)4 : (byte)7);
-        using NpcServiceKit kit = Kit(ItemFaction, 5, reputation);
+        using NpcServiceTestKit kit = Kit(ItemFaction, 5, reputation);
         AssertRefusedEverywhere(kit, BuyResult.ReputationRequire);
         AssertQueriedItemFactionAndInteractionGateOnly(reputation);
     }
@@ -87,7 +87,7 @@ public sealed class VendorReputationGateTests
     public void ItemFaction_RankEqualToRequired_PassesAllThreePaths()
     {
         var reputation = new RecordingReputation(faction => faction == ItemFaction ? (byte)5 : (byte)4);
-        using NpcServiceKit kit = Kit(ItemFaction, 5, reputation);
+        using NpcServiceTestKit kit = Kit(ItemFaction, 5, reputation);
         AssertSoldEverywhere(kit);
         AssertQueriedItemFactionAndInteractionGateOnly(reputation);
     }
@@ -96,7 +96,7 @@ public sealed class VendorReputationGateTests
     public void ItemWithoutFaction_UsesVendorFaction_RankMetPassesAllThreePaths()
     {
         var reputation = new RecordingReputation(faction => faction == VendorFaction ? (byte)5 : (byte)0);
-        using NpcServiceKit kit = Kit(0, 5, reputation);
+        using NpcServiceTestKit kit = Kit(0, 5, reputation);
         AssertSoldEverywhere(kit);
         Assert.NotEmpty(reputation.Queried);
         Assert.All(reputation.Queried, faction => Assert.Equal(VendorFaction, faction));
@@ -106,21 +106,21 @@ public sealed class VendorReputationGateTests
     public void ItemWithoutFaction_VendorFactionRankTooLow_RowIsHiddenSoBuyReportsCantFindItem()
     {
         var reputation = new RecordingReputation(faction => faction == VendorFaction ? (byte)4 : (byte)7);
-        using NpcServiceKit kit = Kit(0, 5, reputation);
+        using NpcServiceTestKit kit = Kit(0, 5, reputation);
         AssertRefusedEverywhere(kit, BuyResult.CantFindItem);
     }
 
     [Fact]
     public void RankZero_IsNotGated_EvenWithAFactionAndNoReputationOwner()
     {
-        using NpcServiceKit kit = Kit(ItemFaction, 0, reputation: null);
+        using NpcServiceTestKit kit = Kit(ItemFaction, 0, reputation: null);
         AssertSoldEverywhere(kit);
     }
 
     [Fact]
     public void NoReputationOwner_FailsClosedOnAllThreePaths()
     {
-        using NpcServiceKit kit = Kit(ItemFaction, 5, reputation: null);
+        using NpcServiceTestKit kit = Kit(ItemFaction, 5, reputation: null);
         AssertRefusedEverywhere(kit, BuyResult.ReputationRequire);
     }
 }

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Honor;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
@@ -56,7 +57,7 @@ public sealed class HonorConsumersTests
     {
         var character = new CharacterRecord { Id = 1, AccountId = 1, Name = "Ranked", Race = 1, Class = 1, Gender = 0, Level = 60, MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f };
         var appearance = new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400);
-        return new Player(character, appearance, new HonorNullSession());
+        return new Player(character, appearance, new NullPlayerSession());
     }
 
     private static void Rank(HonorFeature feature, Player player, float rankPoints)
@@ -152,25 +153,3 @@ public sealed class HonorConsumersTests
     }
 }
 
-internal sealed class HonorNullSession : IPlayerSession
-{
-    public int AccountId => 1;
-
-    public ArcaneCore.Kernel.Accounts.AccountSecurity Security => ArcaneCore.Kernel.Accounts.AccountSecurity.Player;
-
-    public void Send(ArcaneCore.Protocol.WorldOpcode opcode, ReadOnlySpan<byte> payload)
-    {
-    }
-
-    public void ProcessWorldPackets(Player player)
-    {
-    }
-
-    public void Kick()
-    {
-    }
-
-    public void OnLoggedOut()
-    {
-    }
-}

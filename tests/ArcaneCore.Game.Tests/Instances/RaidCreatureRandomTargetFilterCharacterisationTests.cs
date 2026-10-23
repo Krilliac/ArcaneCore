@@ -4,7 +4,7 @@ using ArcaneCore.Game.Instances.Scripts.MoltenCore;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.CreatureAi;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -30,7 +30,7 @@ public sealed class RaidCreatureRandomTargetFilterCharacterisationTests
         var spells = new FakeCaster();
         var creatures = new CreatureMapSystem(map, content, random: new Random(1), aiServices: new CreatureAiServices { Spells = spells });
         map.AddUpdater(creatures);
-        (Player player, _) = CreatureAiTestSupport.AddPlayer(world, 1, 0, 0);
+        (Player player, _) = CreatureAiTestKit.AddPlayer(world, 1, 0, 0);
         player.MaxHealth = player.Health = 100000;
         player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)power);
 

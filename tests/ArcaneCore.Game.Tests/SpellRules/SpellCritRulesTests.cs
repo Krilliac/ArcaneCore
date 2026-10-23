@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 
@@ -25,19 +26,19 @@ public sealed class SpellCritRulesTests
     private const uint CritPercent = 900_116;
 
     private static SpellTestKit Kit() => new(
-        RuleTestSupport.Magic(Bolt, SpellSchool.Fire),
+        RuleTestKit.Magic(Bolt, SpellSchool.Fire),
         SpellTestKit.Spell(DummyOnly, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Magic, School = SpellSchool.Fire },
-        RuleTestSupport.Magic(Potion, SpellSchool.Fire) with { SpellFamilyName = 13 },
-        RuleTestSupport.Magic(Healthstone, SpellSchool.Fire) with { SpellFamilyName = 5, SpellFamilyFlags = 0x10000 },
+        RuleTestKit.Magic(Potion, SpellSchool.Fire) with { SpellFamilyName = 13 },
+        RuleTestKit.Magic(Healthstone, SpellSchool.Fire) with { SpellFamilyName = 5, SpellFamilyFlags = 0x10000 },
         SpellTestKit.Spell(Heal, SpellTestKit.Effect(SpellEffectName.Heal, 10, SpellImplicitTarget.UnitFriend)) with { DamageClass = SpellDamageClass.Magic, School = SpellSchool.Holy },
         SpellTestKit.Spell(Strike, SpellTestKit.Effect(SpellEffectName.WeaponDamage, 5, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Melee },
-        RuleTestSupport.Grant(SchoolCrit, AuraType.ModSpellCritChanceSchool, 7, 1 << (int)SpellSchool.Fire),
-        RuleTestSupport.Grant(AttackerCrit, AuraType.ModAttackerSpellCritChance, 12, 1 << (int)SpellSchool.Fire),
-        RuleTestSupport.Grant(VersusBeast, AuraType.ModCritPercentVersus, 10, 1),
-        RuleTestSupport.Grant(GenericCrit, AuraType.ModSpellCritChance, 3),
-        RuleTestSupport.Grant(MeleeAttackerCrit, AuraType.ModAttackerMeleeCritChance, 4),
-        RuleTestSupport.Grant(RangedAttackerCrit, AuraType.ModAttackerRangedCritChance, 6),
-        RuleTestSupport.Grant(CritPercent, AuraType.ModCritPercent, 3));
+        RuleTestKit.Grant(SchoolCrit, AuraType.ModSpellCritChanceSchool, 7, 1 << (int)SpellSchool.Fire),
+        RuleTestKit.Grant(AttackerCrit, AuraType.ModAttackerSpellCritChance, 12, 1 << (int)SpellSchool.Fire),
+        RuleTestKit.Grant(VersusBeast, AuraType.ModCritPercentVersus, 10, 1),
+        RuleTestKit.Grant(GenericCrit, AuraType.ModSpellCritChance, 3),
+        RuleTestKit.Grant(MeleeAttackerCrit, AuraType.ModAttackerMeleeCritChance, 4),
+        RuleTestKit.Grant(RangedAttackerCrit, AuraType.ModAttackerRangedCritChance, 6),
+        RuleTestKit.Grant(CritPercent, AuraType.ModCritPercent, 3));
 
     [Fact]
     public void Creatures_NeverCritWithSpells_UnlessTheOptionRestoresIt()
@@ -85,7 +86,7 @@ public sealed class SpellCritRulesTests
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 2);
-        RuleTestSupport.Apply(kit, target, AttackerCrit);
+        RuleTestKit.Apply(kit, target, AttackerCrit);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(17f, rules.CritChance(kit.System, caster, target, kit.Store.Get(Bolt)!));
@@ -98,8 +99,8 @@ public sealed class SpellCritRulesTests
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 2);
-        RuleTestSupport.Apply(kit, caster, SchoolCrit);
-        RuleTestSupport.Apply(kit, caster, GenericCrit);
+        RuleTestKit.Apply(kit, caster, SchoolCrit);
+        RuleTestKit.Apply(kit, caster, GenericCrit);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(15f, rules.CritChance(kit.System, caster, target, kit.Store.Get(Bolt)!)); // 5 + 7 + 3
@@ -145,7 +146,7 @@ public sealed class SpellCritRulesTests
         Assert.Equal(151u, rules.CriticalDamage(kit.System, caster, target, bolt, 101));  // 101 + 101/2
         Assert.Equal(202u, rules.CriticalDamage(kit.System, caster, target, strike, 101)); // 101 + 101
 
-        RuleTestSupport.Apply(kit, caster, VersusBeast);
+        RuleTestKit.Apply(kit, caster, VersusBeast);
         Assert.Equal(151u, rules.CriticalDamage(kit.System, caster, target, bolt, 101)); // a player target is humanoid
         Assert.Equal(166u, rules.CriticalDamage(kit.System, caster, beast, bolt, 101));  // (101 + 50) * 1.1 truncated
     }
@@ -187,12 +188,12 @@ public sealed class SpellCritRulesTests
         var rules = new VanillaSpellCombatRules();
         SpellInfo strike = kit.Store.Get(Strike)!;
         SpellInfo shot = strike with { DamageClass = SpellDamageClass.Ranged };
-        RuleTestSupport.Apply(kit, target, MeleeAttackerCrit);
+        RuleTestKit.Apply(kit, target, MeleeAttackerCrit);
 
         Assert.Equal(14f, rules.CritChance(kit.System, caster, target, strike), 3); // 10 + 4, equal skills add nothing (Unit.cpp:2580-2590)
         float rangedBase = rules.CritChance(kit.System, caster, plain, shot);       // a player with no ranged weapon has weapon skill 0 (SpellCaster.cpp GetWeaponSkillValue)
         Assert.Equal(rangedBase, rules.CritChance(kit.System, caster, target, shot), 3); // the melee aura does not count for a ranged spell
-        RuleTestSupport.Apply(kit, target, RangedAttackerCrit);
+        RuleTestKit.Apply(kit, target, RangedAttackerCrit);
         Assert.Equal(rangedBase + 6f, rules.CritChance(kit.System, caster, target, shot), 3);
     }
 
@@ -232,7 +233,7 @@ public sealed class SpellCritRulesTests
         caster.Level = 60;
         target.Level = 60;
         caster.SetFloat(UpdateFields.PlayerCritPercentage, 10f);
-        RuleTestSupport.Apply(kit, caster, CritPercent);
+        RuleTestKit.Apply(kit, caster, CritPercent);
 
         Assert.Equal(10f, new VanillaSpellCombatRules().CritChance(kit.System, caster, target, kit.Store.Get(Strike)!), 3); // the field already includes auras (Unit.cpp:2556-2577)
     }

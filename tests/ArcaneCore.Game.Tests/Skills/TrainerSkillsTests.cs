@@ -85,9 +85,9 @@ public sealed class TrainerSkillsTests
             Learner = learner;
             NpcContent content = NpcContent.Empty with
             {
-                TrainerSpells = [.. rows.Select(r => new TrainerSpell { Entry = NpcServiceKit.Entry, Spell = r.Spell, SpellCost = 10, ReqSkill = r.ReqSkill, ReqSkillValue = r.ReqSkillValue })],
+                TrainerSpells = [.. rows.Select(r => new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = r.Spell, SpellCost = 10, ReqSkill = r.ReqSkill, ReqSkillValue = r.ReqSkillValue })],
             };
-            Kit = new NpcServiceKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
+            Kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
                 new QuestNpcDependencies(Spells: learner, Reputation: new NpcVendorServiceTests.FixedReputation(1f)));
             Kit.Npc = Kit.Npc with { TrainerType = TrainerType.TradeSkills, TrainerClass = 0 };
             var host = new FakeSkillSpellHost { Cascade = Kit.Player };
@@ -104,7 +104,7 @@ public sealed class TrainerSkillsTests
 
         public SpellSystemLearner Learner { get; }
 
-        public NpcServiceKit Kit { get; }
+        public NpcServiceTestKit Kit { get; }
 
         public PlayerSkills Skills { get; }
 

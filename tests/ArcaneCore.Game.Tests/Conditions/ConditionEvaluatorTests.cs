@@ -4,7 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
-using static ArcaneCore.Game.Tests.Conditions.ConditionTestSupport;
+using static ArcaneCore.Game.Tests.Conditions.ConditionTestKit;
 
 namespace ArcaneCore.Game.Tests.Conditions;
 

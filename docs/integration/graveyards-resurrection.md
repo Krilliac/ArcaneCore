@@ -25,7 +25,7 @@ For the integrator of wave 4. The behaviour is in `docs/areas/graveyards-resurre
 | `World/Teleport/TeleportHandlers.cs` | the ghost check before the level check | battlegrounds |
 | `Data/Content/Import/Spec/ContentTableSpecs.cs`, `Cli/ContentImporterCli.cs` | three table specs; the importer in the import run | content-import lanes |
 | `Npc/SpiritHealerResurrection.cs`, `MapCombat.SpiritHealer.cs` | corpse-graveyard teleport, `SicknessLevel` | npc/quest lanes |
-| `tests/.../CombatTestKit.cs` | `AckPendingMovement` (answers the water-walk and speed orders) | every combat test |
+| `tests/.../Combat/CombatTestKit.cs` | `AckPendingMovement` (answers the water-walk and speed orders) | every combat test |
 
 ## Collisions to resolve at the merge
 

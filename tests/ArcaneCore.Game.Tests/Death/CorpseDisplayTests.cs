@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.WorldData;
 using Xunit;
 

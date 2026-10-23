@@ -8,6 +8,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Items;
@@ -99,7 +100,7 @@ public sealed class DurableIdBlockAllocatorTests
     [Fact]
     public void GroupGuildAndInstanceManagers_ConsumeReservedBlocks_AndFailClosedWhenExhausted()
     {
-        using var world = new WorldRuntime(new WorldRuntimeOptions(), new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        using var world = new WorldRuntime(new WorldRuntimeOptions(), new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
         var lookup = new SocialCustomerLookup();
         var socialContext = new SocialContext(world, lookup, new NoopSocialPersistence(), new SocialOptions());
         lookup.Upsert(new CharacterInfo(1, 1, "Leader", Race.Human, Class.Warrior, 60, 0));
@@ -157,11 +158,6 @@ public sealed class DurableIdBlockAllocatorTests
             uint firstItemGuid = items.GuidAllocator.Next();
             Assert.Equal(run * 10u + 1u, firstItemGuid);
         }
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 
     private sealed class SocialCustomerLookup : ICharacterLookup

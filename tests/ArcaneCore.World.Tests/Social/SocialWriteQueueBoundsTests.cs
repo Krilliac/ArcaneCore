@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Social;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -198,7 +199,7 @@ public sealed class SocialWriteQueueBoundsTests
         await using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();
         using var world = new ArcaneCore.Game.Maps.WorldRuntime(
             new ArcaneCore.Game.Maps.WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
-            new NoopQueue(), NullLogger<ArcaneCore.Game.Maps.WorldRuntime>.Instance);
+            new NullSaveQueue(), NullLogger<ArcaneCore.Game.Maps.WorldRuntime>.Instance);
         await using var feature = new SocialFeature(directory, provider.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance, configuration);
         feature.Attach(world);
         Assert.Equal(7, feature.WriteQueueOptions.MaxPendingPerCharacter);
@@ -210,13 +211,6 @@ public sealed class SocialWriteQueueBoundsTests
     private static GuildData Guild(int id, int tag) => new(
         id, $"G{id}", 1, $"motd{tag}", "", 0, 0, 0, 0, 0, 0,
         [new GuildRankData(0, "Leader", 0xFF)], [new GuildMemberData(1, 0, "", "", 1, 0, 0)]);
-
-    private sealed class NoopQueue : ArcaneCore.Game.Maps.ICharacterSaveQueue
-    {
-        public void Enqueue(ArcaneCore.Kernel.Characters.CharacterState state)
-        {
-        }
-    }
 
     private sealed class Rig : IAsyncDisposable
     {

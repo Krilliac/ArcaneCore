@@ -11,7 +11,7 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
-using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
+using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -91,7 +91,7 @@ public sealed class GameObjectQuestGiverTests
         public List<(WorldOpcode Opcode, byte[] Payload)> Drain()
         {
             var list = new List<(WorldOpcode, byte[])>();
-            CreatureTestSupport.DrainBlocks(Session, list);
+            CreatureTestKit.DrainBlocks(Session, list);
             return list;
         }
 

@@ -32,7 +32,7 @@ public sealed class CastBarStunInterruptTests
     private static SpellTestKit Kit() => new(
         Bolt(Flagged, SpellInterruptFlags.Stun),
         Bolt(Unflagged, SpellInterruptFlags.Movement),
-        RuleTestSupport.Grant(SelfStun, AuraType.ModStun, 0));
+        RuleTestKit.Grant(SelfStun, AuraType.ModStun, 0));
 
     private static (Player Caster, Player Victim) Pair(SpellTestKit kit)
     {
@@ -52,7 +52,7 @@ public sealed class CastBarStunInterruptTests
 
         // A self stun does not interrupt at apply (SpellAuras.cpp:3573-3576). The cast bar must still stop
         // on the next update because the spell carries SPELL_INTERRUPT_FLAG_STUN.
-        RuleTestSupport.Apply(kit, caster, SelfStun);
+        RuleTestKit.Apply(kit, caster, SelfStun);
         Assert.NotNull(kit.System.GetState(caster.Guid)!.CurrentCast);
         Assert.True((caster.UnitFlags & UnitFlags.Stunned) != 0);
 
@@ -69,7 +69,7 @@ public sealed class CastBarStunInterruptTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Unflagged, SpellCastTargets.ForUnit(victim.Guid)));
         SpellCast cast = kit.System.GetState(caster.Guid)!.CurrentCast!;
 
-        RuleTestSupport.Apply(kit, caster, SelfStun);
+        RuleTestKit.Apply(kit, caster, SelfStun);
         kit.Advance(100);
 
         Assert.Same(cast, kit.System.GetState(caster.Guid)!.CurrentCast);

@@ -4,7 +4,7 @@ using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -24,9 +24,9 @@ public sealed class NpcMetadataMergeTests
         var learner = new SpellSystemLearner(() => system, new SkillLineAbilityCatalog([]));
         NpcContent content = NpcContent.Empty with
         {
-            TrainerSpells = [new TrainerSpell { Entry = NpcServiceKit.Entry, Spell = teacher, SpellCost = 10 }],
+            TrainerSpells = [new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = teacher, SpellCost = 10 }],
         };
-        using var kit = new NpcServiceKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
+        using var kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
             new QuestNpcDependencies(Spells: learner));
         var lookup = new NpcTemplateMetadataLookup(kit.Lookup,
             [new NpcTemplateMetadata { Entry = Entry, TrainerType = TrainerType.Class, TrainerClass = (byte)Class.Warrior }]);

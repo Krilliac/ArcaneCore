@@ -5,6 +5,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Loot;

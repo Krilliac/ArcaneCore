@@ -15,6 +15,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Combat.Duel;
 using ArcaneCore.World.Spells.Casters;
 using ArcaneCore.World.Spells.Mods;
@@ -1619,29 +1620,6 @@ public sealed class WorldCombatSpellsMovementFuzzAndExceptionTests
         };
         var appearance = new PlayerAppearance(49, 1, powerType, 60, 0, 60, maxHealth, maxPower, maxPower);
         return new Player(record, appearance, new NullPlayerSession());
-    }
-
-    private sealed class NullPlayerSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
     }
 
     private sealed class FaultableSpellStore : ICharacterSpellStore

@@ -10,7 +10,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
+using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -48,7 +48,7 @@ public sealed class NpcScriptNameBindingTests
     }
 
     /// <summary>Records the quest status and the NPC emote state (what the CompleteScript sets) the moment the hook runs.</summary>
-    private sealed class OrderProbeAi(Creature creature, QuestFlowKit kit, List<string> log) : CreatureAI(creature)
+    private sealed class OrderProbeAi(Creature creature, QuestFlowTestKit kit, List<string> log) : CreatureAI(creature)
     {
         public override void OnQuestRewarded(Player player, uint questId)
         {
@@ -69,11 +69,11 @@ public sealed class NpcScriptNameBindingTests
             => Lines.Add(formatter(state, exception));
     }
 
-    private static QuestFlowKit ChainKit(string scriptName = "", uint completeScript = 0)
+    private static QuestFlowTestKit ChainKit(string scriptName = "", uint completeScript = 0)
         => new([Task(First, nextInChain: Second, completeScript: completeScript), Task(Second)], [Row(First, QuestStatus.Complete, kills: 2)],
             starters: [First, Second], enders: [First], rewardable: [First], scriptName: scriptName);
 
-    private static CreatureMapSystem CompleteScriptSystem(QuestFlowKit kit)
+    private static CreatureMapSystem CompleteScriptSystem(QuestFlowTestKit kit)
     {
         // quest_template.CompleteScript = ScriptId: one step, emote state 13 on the source (the giver).
         var step = new RelayScriptStep(ScriptId, 0, 0, 1, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -83,14 +83,14 @@ public sealed class NpcScriptNameBindingTests
         return system;
     }
 
-    private static void TurnIn(QuestFlowKit kit)
+    private static void TurnIn(QuestFlowTestKit kit)
     {
         Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, First, 0, out QuestRewardPlan? plan));
         kit.Drain();
         kit.Services.ApplyReward(plan!);
     }
 
-    private static uint Emote(QuestFlowKit kit) => kit.Creature.GetUInt32(UpdateFields.UnitNpcEmotestate);
+    private static uint Emote(QuestFlowTestKit kit) => kit.Creature.GetUInt32(UpdateFields.UnitNpcEmotestate);
 
     // --- blocker 1: a registered handler is invoked -----------------------------------------------------------
 
@@ -100,7 +100,7 @@ public sealed class NpcScriptNameBindingTests
         var factory = new CreatureAiFactory();
         var script = new RecordingQuestScript();
         factory.RegisterNpcScript(Script, "TestQuestScript", quest: script);
-        using QuestFlowKit kit = ChainKit(Script);
+        using QuestFlowTestKit kit = ChainKit(Script);
         Assert.Null(kit.Creature.AI); // no AI of its own: the script is bound by ScriptName alone
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null, factory: () => factory);
 
@@ -119,7 +119,7 @@ public sealed class NpcScriptNameBindingTests
         var factory = new CreatureAiFactory();
         var script = new RecordingQuestScript();
         factory.RegisterNpcScript(Script, "TestQuestScript", quest: script);
-        using QuestFlowKit kit = new([Task(First, method: 0)], starters: [First], enders: [First], scriptName: Script);
+        using QuestFlowTestKit kit = new([Task(First, method: 0)], starters: [First], enders: [First], scriptName: Script);
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null, factory: () => factory);
 
         Assert.True(kit.Accept(First));
@@ -133,7 +133,7 @@ public sealed class NpcScriptNameBindingTests
         var factory = new CreatureAiFactory();
         var script = new RecordingQuestScript();
         factory.RegisterNpcScript("npc_some_other_script", "Other", quest: script);
-        using QuestFlowKit kit = ChainKit(Script);
+        using QuestFlowTestKit kit = ChainKit(Script);
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null, factory: () => factory);
 
         TurnIn(kit);
@@ -149,14 +149,14 @@ public sealed class NpcScriptNameBindingTests
         var gossip = new ScriptNameGossip();
         factory.RegisterNpcScript(Name, "TestGossipScript", gossip: gossip);
 
-        using var kit = new NpcServiceKit(NpcFlags.Gossip);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip);
         using IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null, factory: () => factory);
         Map map = kit.World.GetMap(0);
-        uint[] entries = [NpcServiceKit.Entry, NpcServiceKit.Entry + 1, NpcServiceKit.Entry + 2];
+        uint[] entries = [NpcServiceTestKit.Entry, NpcServiceTestKit.Entry + 1, NpcServiceTestKit.Entry + 2];
         CreatureTemplate[] templates =
         [
-            .. entries.Take(2).Select(e => CreatureTestSupport.Template(e) with { ScriptName = Name }),
-            CreatureTestSupport.Template(entries[2]) with { ScriptName = "npc_unregistered" },
+            .. entries.Take(2).Select(e => CreatureTestKit.Template(e) with { ScriptName = Name }),
+            CreatureTestKit.Template(entries[2]) with { ScriptName = "npc_unregistered" },
         ];
         var content = new CreatureContent(templates, [], [], [], []);
         var creatures = new CreatureMapSystem(map, content);
@@ -208,7 +208,7 @@ public sealed class NpcScriptNameBindingTests
     {
         var factory = new CreatureAiFactory();
         factory.RegisterNpcScript("npc_x", "X", gossip: new ScriptNameGossip());
-        using var kit = new NpcServiceKit(NpcFlags.Gossip);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip);
         IDisposable hooks = CreatureQuestScripts.Attach(kit.Services, _ => null, factory: () => factory);
         Assert.NotNull(kit.Services.GossipByScriptName);
         hooks.Dispose();
@@ -221,7 +221,7 @@ public sealed class NpcScriptNameBindingTests
     public void AThrowingAiHook_DoesNotStopTheCompleteScript_TheSubscribers_OrTheNextQuestOffer()
     {
         const string Message = "boom-ai-hook-1d1b";
-        using QuestFlowKit kit = ChainKit(completeScript: ScriptId);
+        using QuestFlowTestKit kit = ChainKit(completeScript: ScriptId);
         kit.Creature.AI = new ThrowingAi(kit.Creature, Message);
         CreatureMapSystem system = CompleteScriptSystem(kit);
         var logger = new CapturingLogger();
@@ -240,7 +240,7 @@ public sealed class NpcScriptNameBindingTests
         AssertFaultRecorded(Message);
         string line = Assert.Single(logger.Lines, l => l.Contains(nameof(ThrowingAi), StringComparison.Ordinal));
         Assert.Contains(First.ToString(), line);
-        Assert.Contains(QuestFlowKit.CreatureEntry.ToString(), line);
+        Assert.Contains(QuestFlowTestKit.CreatureEntry.ToString(), line);
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public sealed class NpcScriptNameBindingTests
         const string Message = "boom-script-hook-9c42";
         var factory = new CreatureAiFactory();
         factory.RegisterNpcScript(Script, "Throwing", quest: new ThrowingQuestScript(Message));
-        using QuestFlowKit kit = ChainKit(Script, completeScript: ScriptId);
+        using QuestFlowTestKit kit = ChainKit(Script, completeScript: ScriptId);
         var order = new List<string>();
         kit.Creature.AI = new OrderProbeAi(kit.Creature, kit, order);
         CreatureMapSystem system = CompleteScriptSystem(kit);
@@ -275,7 +275,7 @@ public sealed class NpcScriptNameBindingTests
     [Fact]
     public void TheHook_RunsAfterTheCommit_AndBeforeTheCompleteScript()
     {
-        using QuestFlowKit kit = ChainKit(completeScript: ScriptId);
+        using QuestFlowTestKit kit = ChainKit(completeScript: ScriptId);
         var order = new List<string>();
         kit.Creature.AI = new OrderProbeAi(kit.Creature, kit, order);
         CreatureMapSystem system = CompleteScriptSystem(kit);

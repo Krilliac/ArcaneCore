@@ -12,8 +12,8 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using Xunit.Abstractions;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 

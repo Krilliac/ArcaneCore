@@ -9,7 +9,7 @@ public sealed class NpcChargeTests
     [Fact]
     public void TryCharge_RefusesWhenThePlayerCannotPay_AndChangesNothing()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Petitioner);
+        using var kit = new NpcServiceTestKit(NpcFlags.Petitioner);
         kit.Player.Money = 999;
         int saves = kit.Sink.CharacterChanges;
 
@@ -22,7 +22,7 @@ public sealed class NpcChargeTests
     [Fact]
     public void TryCharge_SubtractsExactly_AndSavesTheCharacter()
     {
-        using var kit = new NpcServiceKit(NpcFlags.Petitioner);
+        using var kit = new NpcServiceTestKit(NpcFlags.Petitioner);
         kit.Player.Money = 1000;
 
         Assert.True(kit.Services.TryCharge(kit.Player, 1000));

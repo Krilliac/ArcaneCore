@@ -10,8 +10,8 @@ using ArcaneCore.Kernel.WorldData.Pools;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Xunit;
 using Xunit.Abstractions;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 
 namespace ArcaneCore.Game.Tests.GridTerrain;

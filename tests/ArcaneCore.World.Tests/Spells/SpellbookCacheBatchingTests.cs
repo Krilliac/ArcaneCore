@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -206,7 +207,7 @@ public sealed class SpellbookCacheBatchingTests
     private static Player NewPlayer(int id) => new(
         new CharacterRecord { Id = id, AccountId = 1, Name = $"P{id}", Race = 1, Class = 1, Level = 1 },
         new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400),
-        new NullSession());
+        new NullPlayerSession());
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -314,15 +315,5 @@ public sealed class SpellbookCacheBatchingTests
 
             return Task.CompletedTask;
         }
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-        public AccountSecurity Security => AccountSecurity.Player;
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) { }
-        public void ProcessWorldPackets(Player player) { }
-        public void Kick() { }
-        public void OnLoggedOut() { }
     }
 }

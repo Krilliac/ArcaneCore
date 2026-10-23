@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Tests.GridTerrain;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

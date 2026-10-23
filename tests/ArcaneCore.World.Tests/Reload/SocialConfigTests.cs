@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
@@ -64,12 +65,5 @@ public sealed class SocialConfigTests
         Assert.True(options.AllowTwoSideAddFriend);
         Assert.False(options.AllowTwoSideGroup);
         Assert.False(options.AllowTwoSideChannel);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }

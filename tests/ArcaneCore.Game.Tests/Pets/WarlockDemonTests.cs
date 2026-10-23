@@ -74,8 +74,8 @@ public sealed class WarlockDemonTests : IDisposable
             Sacrifice(TouchOfShadow),
             Sacrifice(FelEnergy));
         _map = _spells.World.GetMap(0);
-        _content = CreatureTestSupport.Content(
-            [.. new[] { Imp, Felhunter, Voidwalker, Succubus, Other }.Select(entry => CreatureTestSupport.Template(entry, b =>
+        _content = CreatureTestKit.Content(
+            [.. new[] { Imp, Felhunter, Voidwalker, Succubus, Other }.Select(entry => CreatureTestKit.Template(entry, b =>
             {
                 b.Name = $"Demon {entry}";
                 b.Faction = 14;
@@ -84,7 +84,7 @@ public sealed class WarlockDemonTests : IDisposable
                 b.MinLevelHealth = 100;
                 b.MaxLevelHealth = 100;
             })),
-            CreatureTestSupport.Template(NpcWarlock, b =>
+            CreatureTestKit.Template(NpcWarlock, b =>
             {
                 b.Name = "Warlock NPC";
                 b.Faction = 14;

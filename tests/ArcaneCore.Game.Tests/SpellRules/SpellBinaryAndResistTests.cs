@@ -63,7 +63,7 @@ public sealed class SpellBinaryAndResistTests
     [InlineData(26478u)]
     public void IsBinary_TheTwoHardcodedCthunSpells(uint id)
     {
-        SpellInfo plainDamage = RuleTestSupport.Magic(id, SpellSchool.Shadow);
+        SpellInfo plainDamage = RuleTestKit.Magic(id, SpellSchool.Shadow);
 
         Assert.True(VanillaSpellCombatRules.IsBinary(plainDamage));
         Assert.False(VanillaSpellCombatRules.IsBinary(plainDamage with { Id = id + 1 }));
@@ -74,7 +74,7 @@ public sealed class SpellBinaryAndResistTests
     {
         Assert.True(VanillaSpellCombatRules.IsBinary(WithAura(AuraType.ModDecreaseSpeed, withDamage: true)));
         Assert.False(VanillaSpellCombatRules.IsBinary(WithAura(AuraType.PeriodicDamage, SpellSchool.Fire, withDamage: true)));
-        Assert.False(VanillaSpellCombatRules.IsBinary(RuleTestSupport.Magic(1, SpellSchool.Shadow)));
+        Assert.False(VanillaSpellCombatRules.IsBinary(RuleTestKit.Magic(1, SpellSchool.Shadow)));
     }
 
     [Fact]
@@ -122,12 +122,12 @@ public sealed class SpellBinaryAndResistTests
     [Fact]
     public void Penetration_SubtractsFromTheVictimsResistance_ButNeverGoesNegative()
     {
-        using var kit = new SpellTestKit(RuleTestSupport.Grant(Penetration, AuraType.ModTargetResistance, -100, 1 << (int)SpellSchool.Fire));
+        using var kit = new SpellTestKit(RuleTestKit.Grant(Penetration, AuraType.ModTargetResistance, -100, 1 << (int)SpellSchool.Fire));
         (Player caster, _) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 2);
         caster.Level = 60;
         target.Level = 60;
-        RuleTestSupport.Apply(kit, caster, Penetration);
+        RuleTestKit.Apply(kit, caster, Penetration);
         var rules = new VanillaSpellCombatRules();
 
         target.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, 200);
@@ -145,7 +145,7 @@ public sealed class SpellBinaryAndResistTests
         caster.Level = 60;
         target.Level = 60;
         target.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Holy, 200);
-        SpellInfo holy = RuleTestSupport.Magic(1, SpellSchool.Holy);
+        SpellInfo holy = RuleTestKit.Magic(1, SpellSchool.Holy);
 
         Assert.Equal(50u, new VanillaSpellCombatRules().RollPartialResist(kit.System, caster, target, holy, 100));
         var cmangos = new VanillaSpellCombatRules { Options = new SpellRuleOptions { IgnoreHolyResistance = true } };
@@ -162,7 +162,7 @@ public sealed class SpellBinaryAndResistTests
         target.Level = 60;
         target.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, 200);
         var rules = new VanillaSpellCombatRules();
-        SpellInfo dot = RuleTestSupport.Magic(1, SpellSchool.Fire) with { DamageClass = SpellDamageClass.None };
+        SpellInfo dot = RuleTestKit.Magic(1, SpellSchool.Fire) with { DamageClass = SpellDamageClass.None };
 
         Assert.Equal(50u, rules.RollPartialResist(kit.System, caster, target, dot, 100)); // Unit.cpp:1936-1946 tests the school, not the class
         Assert.Equal(0u, rules.RollPartialResist(kit.System, caster, target, dot with { AttributesEx4 = SpellRuleFlags.Ex4IgnoreResistances }, 100));

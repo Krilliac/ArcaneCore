@@ -10,7 +10,7 @@ public sealed class TickMonitorTests
 {
     private readonly FakeClock _clock = new();
     private readonly RecordingLogger<TickMonitor> _log = new();
-    private readonly CounterRegistry _counters = WatchdogTestSupport.NewRegistry();
+    private readonly CounterRegistry _counters = WatchdogTestKit.NewRegistry();
 
     private TickMonitor Create(Action<TickMonitorOptions>? configure = null, int tickMs = 50)
     {
@@ -353,7 +353,7 @@ public sealed class TickMonitorTests
         Assert.EndsWith("interval 50 ms)", Assert.Single(_log.Of(WatchdogEvents.TickHang)).Message);
 
         var log = new RecordingLogger<TickMonitor>();
-        var empty = new TickMonitor(new TickMonitorOptions { HangMs = 2000 }, _clock, WatchdogTestSupport.NewRegistry(), log);
+        var empty = new TickMonitor(new TickMonitorOptions { HangMs = 2000 }, _clock, WatchdogTestKit.NewRegistry(), log);
         empty.StartTicking(50);
         empty.HangDetail = _ => string.Empty;
         empty.OnTick(_clock.NowMicros);
@@ -482,13 +482,13 @@ public sealed class TickMonitorTests
     public void OnTick_DoesNotAllocate()
     {
         TickMonitor monitor = Create();
-        long bytes = WatchdogTestSupport.AllocatedBy(() =>
+        long bytes = WatchdogTestKit.AllocatedBy(() =>
         {
             monitor.OnTick(_clock.NowMicros);
             _clock.AdvanceMs(50);
         }, 100_000);
         Assert.Equal(0, bytes);
-        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(monitor.OnTick, 100_000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(monitor.OnTick, 100_000));
     }
 
     [Fact]
@@ -498,7 +498,7 @@ public sealed class TickMonitorTests
         Tick(monitor, 10, 50);
         // AllocatedBy warms up, then takes the least of three runs: a one-off runtime allocation on this thread (tiered JIT / OSR
         // type loading, a few KB once) lands in one run only, a per-call allocation in Check shows in every run.
-        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(() => monitor.Check(_clock.NowMicros), 1000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(() => monitor.Check(_clock.NowMicros), 1000));
     }
 
     private sealed class FakeTickHangActuator : ITickHangActuator

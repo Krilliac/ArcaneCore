@@ -10,9 +10,10 @@ using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Game.Tests.GridTerrain;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 

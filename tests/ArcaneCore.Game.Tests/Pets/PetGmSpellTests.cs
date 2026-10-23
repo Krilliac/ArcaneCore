@@ -27,7 +27,7 @@ public sealed class PetGmSpellTests
         ],
         extraTemplates:
         [
-            CreatureTestSupport.Template(BeastEntry, b =>
+            CreatureTestKit.Template(BeastEntry, b =>
             {
                 b.MinLevel = 20;
                 b.MaxLevel = 20;

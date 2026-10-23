@@ -23,7 +23,7 @@ public sealed class HunterAndMiscEffectTests
     private const uint BeastLore = 920004;
     private const SpellEffectName ProbeEffect = (SpellEffectName)240;
 
-    private static CreatureTemplate Wild(uint entry, uint type) => CreatureTestSupport.Template(entry, b =>
+    private static CreatureTemplate Wild(uint entry, uint type) => CreatureTestKit.Template(entry, b =>
     {
         b.MinLevel = 5;
         b.MaxLevel = 5;

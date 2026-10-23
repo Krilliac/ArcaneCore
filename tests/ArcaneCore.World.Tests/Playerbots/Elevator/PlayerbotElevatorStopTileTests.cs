@@ -3,7 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
-using ArcaneCore.Game.Tests.Collision;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;

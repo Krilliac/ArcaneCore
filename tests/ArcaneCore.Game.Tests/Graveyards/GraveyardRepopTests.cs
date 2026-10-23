@@ -6,6 +6,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Death;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;

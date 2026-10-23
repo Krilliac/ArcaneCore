@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 
@@ -27,24 +28,24 @@ public sealed class MagicHitChanceTests
     private const uint CasterHit = 900_014;
 
     private static SpellTestKit Kit() => new(
-        RuleTestSupport.Magic(Bolt),
-        RuleTestSupport.Magic(StunBolt) with { Mechanic = (uint)SpellMechanic.Stun },
-        RuleTestSupport.Magic(SnareDebuff) with { Dispel = (uint)DispelType.Magic },
-        RuleTestSupport.Magic(Aoe) with
+        RuleTestKit.Magic(Bolt),
+        RuleTestKit.Magic(StunBolt) with { Mechanic = (uint)SpellMechanic.Stun },
+        RuleTestKit.Magic(SnareDebuff) with { Dispel = (uint)DispelType.Magic },
+        RuleTestKit.Magic(Aoe) with
         {
             Effects = [SpellTestKit.Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy, targetB: SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc)],
         },
-        RuleTestSupport.Magic(AlwaysHit) with { AttributesEx3 = SpellRuleFlags.Ex3AlwaysHit },
-        RuleTestSupport.Magic(NoResist) with { AttributesEx4 = SpellRuleFlags.Ex4IgnoreResistances },
-        RuleTestSupport.Magic(Binary) with
+        RuleTestKit.Magic(AlwaysHit) with { AttributesEx3 = SpellRuleFlags.Ex3AlwaysHit },
+        RuleTestKit.Magic(NoResist) with { AttributesEx4 = SpellRuleFlags.Ex4IgnoreResistances },
+        RuleTestKit.Magic(Binary) with
         {
             Effects = [SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.ModStun)],
         },
-        RuleTestSupport.Grant(MechanicResist, AuraType.ModMechanicResistance, 25, (int)SpellMechanic.Stun),
-        RuleTestSupport.Grant(DebuffResist, AuraType.ModDebuffResistance, 15, (int)DispelType.Magic),
-        RuleTestSupport.Grant(AttackerHit, AuraType.ModAttackerSpellHitChance, -10, 1 << (int)SpellSchool.Frost),
-        RuleTestSupport.Grant(AoeAvoid, AuraType.ModAoeAvoidance, 30),
-        RuleTestSupport.Grant(CasterHit, AuraType.ModSpellHitChance, 3));
+        RuleTestKit.Grant(MechanicResist, AuraType.ModMechanicResistance, 25, (int)SpellMechanic.Stun),
+        RuleTestKit.Grant(DebuffResist, AuraType.ModDebuffResistance, 15, (int)DispelType.Magic),
+        RuleTestKit.Grant(AttackerHit, AuraType.ModAttackerSpellHitChance, -10, 1 << (int)SpellSchool.Frost),
+        RuleTestKit.Grant(AoeAvoid, AuraType.ModAoeAvoidance, 30),
+        RuleTestKit.Grant(CasterHit, AuraType.ModSpellHitChance, 3));
 
     private static (Player Caster, Player Target) Players(SpellTestKit kit, byte casterLevel = 60, byte targetLevel = 60)
     {
@@ -133,7 +134,7 @@ public sealed class MagicHitChanceTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player target) = Players(kit);
-        RuleTestSupport.Apply(kit, target, MechanicResist);
+        RuleTestKit.Apply(kit, target, MechanicResist);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(71f, rules.MagicHitPercent(kit.System, caster, target, kit.Store.Get(StunBolt)!)); // 96 - 25
@@ -145,7 +146,7 @@ public sealed class MagicHitChanceTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player target) = Players(kit);
-        RuleTestSupport.Apply(kit, target, DebuffResist);
+        RuleTestKit.Apply(kit, target, DebuffResist);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(81f, rules.MagicHitPercent(kit.System, caster, target, kit.Store.Get(SnareDebuff)!));
@@ -157,7 +158,7 @@ public sealed class MagicHitChanceTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player target) = Players(kit);
-        RuleTestSupport.Apply(kit, target, AttackerHit);
+        RuleTestKit.Apply(kit, target, AttackerHit);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(86f, rules.MagicHitPercent(kit.System, caster, target, kit.Store.Get(Bolt)!)); // frost bolt
@@ -169,7 +170,7 @@ public sealed class MagicHitChanceTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player target) = Players(kit);
-        RuleTestSupport.Apply(kit, target, AoeAvoid);
+        RuleTestKit.Apply(kit, target, AoeAvoid);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(66f, rules.MagicHitPercent(kit.System, caster, target, kit.Store.Get(Aoe)!));
@@ -181,7 +182,7 @@ public sealed class MagicHitChanceTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player target) = Players(kit, 60, 62);
-        RuleTestSupport.Apply(kit, caster, CasterHit);
+        RuleTestKit.Apply(kit, caster, CasterHit);
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(97f, rules.MagicHitPercent(kit.System, caster, target, kit.Store.Get(Bolt)!)); // 94 + 3

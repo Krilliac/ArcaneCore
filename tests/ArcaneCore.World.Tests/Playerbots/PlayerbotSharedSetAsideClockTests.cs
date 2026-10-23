@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -15,7 +16,7 @@ public sealed class PlayerbotSharedSetAsideClockTests
     [Fact]
     public async Task AnEndedSetAside_StaysEnded_WhenTheWorldClockMovesTwoToThe31OrMoreMillisecondsOn()
     {
-        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
         world.UseManualClock(uint.MaxValue);
         world.Start();
         var shared = new PlayerbotSharedSetAsides { World = world };
@@ -47,10 +48,5 @@ public sealed class PlayerbotSharedSetAsideClockTests
         for (ulong bot = 1; bot <= PlayerbotSharedSetAsides.BotsToShare; bot++)
             shared.Report(PlayerbotGoalKind.Quest, 0, quest, bot, world.NowMs);
         Assert.True(shared.IsQuestSetAside(quest, world.NowMs));
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 }

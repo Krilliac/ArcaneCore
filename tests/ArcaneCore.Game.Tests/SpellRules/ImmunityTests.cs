@@ -4,6 +4,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -40,7 +41,7 @@ public sealed class ImmunityTests
 
     private static SpellInfo Immunity(uint id, AuraType type, int misc, bool purges = false, bool both = false, bool negative = false)
     {
-        SpellInfo spell = RuleTestSupport.Grant(id, type, 0, misc);
+        SpellInfo spell = RuleTestKit.Grant(id, type, 0, misc);
         uint ex = (purges ? PurgesEffect : 0) | (both ? HostileAndFriendly : 0);
         return spell with
         {
@@ -122,7 +123,7 @@ public sealed class ImmunityTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, IceBlock);
+        RuleTestKit.Apply(kit, victim, IceBlock);
 
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, FireBolt));
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, FrostBolt));
@@ -134,7 +135,7 @@ public sealed class ImmunityTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, DivineShield);
+        RuleTestKit.Apply(kit, victim, DivineShield);
 
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, Heal));
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, FireBolt));
@@ -145,7 +146,7 @@ public sealed class ImmunityTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, IceBlock);
+        RuleTestKit.Apply(kit, victim, IceBlock);
 
         Assert.Equal(SpellMissInfo.None, Roll(kit, caster, victim, NoImmunitiesBolt));
         Assert.Equal(SpellMissInfo.None, Roll(kit, caster, victim, NoSchoolImmunitiesBolt));
@@ -157,7 +158,7 @@ public sealed class ImmunityTests
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
         kit.System.Random = new ScriptedRandom(9999, 9999);
-        RuleTestSupport.Apply(kit, victim, DamageImmunity);
+        RuleTestKit.Apply(kit, victim, DamageImmunity);
 
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, FireBolt));
         Assert.Equal(SpellMissInfo.None, Roll(kit, caster, victim, Heal));
@@ -169,10 +170,10 @@ public sealed class ImmunityTests
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
         kit.System.CastSpell(caster, FrostDot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
-        RuleTestSupport.Apply(kit, victim, FrostBuff);
+        RuleTestKit.Apply(kit, victim, FrostBuff);
         Assert.True(kit.System.HasAura(victim, FrostDot));
 
-        RuleTestSupport.Apply(kit, victim, IceBlock);
+        RuleTestKit.Apply(kit, victim, IceBlock);
 
         Assert.False(kit.System.HasAura(victim, FrostDot));
         Assert.True(kit.System.HasAura(victim, FrostBuff));
@@ -190,7 +191,7 @@ public sealed class ImmunityTests
         (Player caster, Player victim) = Pair(kit);
         kit.System.CastSpell(caster, FrostDot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
 
-        RuleTestSupport.Apply(kit, victim, HarmfulImmunity);
+        RuleTestKit.Apply(kit, victim, HarmfulImmunity);
 
         Assert.True(kit.System.HasAura(victim, FrostDot));
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Immune);
@@ -202,7 +203,7 @@ public sealed class ImmunityTests
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
         kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
-        RuleTestSupport.Apply(kit, victim, StunImmunity);
+        RuleTestKit.Apply(kit, victim, StunImmunity);
         uint before = victim.Health;
 
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, StunSpell));
@@ -218,7 +219,7 @@ public sealed class ImmunityTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, MaskImmunity);
+        RuleTestKit.Apply(kit, victim, MaskImmunity);
         SpellInfo stun = kit.Store.Get(StunSpell)!;
 
         Assert.Equal(SpellMissInfo.Immune, new VanillaSpellCombatRules().RollHit(kit.System, caster, victim, stun));
@@ -231,7 +232,7 @@ public sealed class ImmunityTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, DispelImmunity);
+        RuleTestKit.Apply(kit, victim, DispelImmunity);
 
         Assert.Equal(SpellMissInfo.Immune, Roll(kit, caster, victim, MagicDebuff));
         Assert.Equal(SpellMissInfo.None, Roll(kit, caster, victim, StunSpell));
@@ -243,7 +244,7 @@ public sealed class ImmunityTests
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
         kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
-        RuleTestSupport.Apply(kit, victim, EffectImmunity);
+        RuleTestKit.Apply(kit, victim, EffectImmunity);
         uint before = victim.Health;
 
         kit.System.CastSpell(caster, DamageAndStun, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
@@ -252,7 +253,7 @@ public sealed class ImmunityTests
 
         kit.System.RemoveAuras(victim, DamageAndStun);
         kit.System.RemoveAuras(victim, EffectImmunity);
-        RuleTestSupport.Apply(kit, victim, StateImmunity);
+        RuleTestKit.Apply(kit, victim, StateImmunity);
         kit.System.CastSpell(caster, DamageAndStun, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
         Assert.Equal(before - 6, victim.Health);
         Assert.Equal(UnitFlags.None, victim.UnitFlags & UnitFlags.Stunned); // the stun aura is immune
@@ -266,13 +267,13 @@ public sealed class ImmunityTests
         kit.System.CastSpell(caster, StunSpell, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
         Assert.True((victim.UnitFlags & UnitFlags.Stunned) != 0);
 
-        RuleTestSupport.Apply(kit, victim, StateImmunity);
+        RuleTestKit.Apply(kit, victim, StateImmunity);
         Assert.True((victim.UnitFlags & UnitFlags.Stunned) != 0); // no purge attribute: the stun stays
 
         using SpellTestKit purging = new(Hostile(StunSpell, SpellSchool.Nature, StunAura()), Immunity(StateImmunity, AuraType.StateImmunity, (int)AuraType.ModStun, purges: true));
         (Player c2, Player v2) = Pair(purging);
         purging.System.CastSpell(c2, StunSpell, SpellCastTargets.ForUnit(v2.Guid), triggered: true);
-        RuleTestSupport.Apply(purging, v2, StateImmunity);
+        RuleTestKit.Apply(purging, v2, StateImmunity);
         Assert.Equal(UnitFlags.None, v2.UnitFlags & UnitFlags.Stunned);
     }
 
@@ -281,7 +282,7 @@ public sealed class ImmunityTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Pair(kit);
-        RuleTestSupport.Apply(kit, victim, IceBlock);
+        RuleTestKit.Apply(kit, victim, IceBlock);
         kit.System.ImmunityEnforcement = false;
         kit.System.Random = new ScriptedRandom(9999);
 
@@ -296,7 +297,7 @@ public sealed class ImmunityTests
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.Relations = new FakeRelations { Hostile = { victim.Guid } };
         kit.System.CastSpell(caster, FrostDot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
-        RuleTestSupport.Apply(kit, victim, DamageImmunity); // no purge: the DoT stays on
+        RuleTestKit.Apply(kit, victim, DamageImmunity); // no purge: the DoT stays on
         uint before = victim.Health;
         casterSession.Clear();
 
@@ -314,7 +315,7 @@ public sealed class ImmunityTests
         (Player target, FakeSession session) = kit.AddPlayer(1);
         target.Health = 10;
         kit.System.CastSpell(target, Renew, SpellCastTargets.ForSelf(), triggered: true);
-        RuleTestSupport.Apply(kit, target, immunity);
+        RuleTestKit.Apply(kit, target, immunity);
         Assert.True(kit.System.HasAura(target, Renew));
         Assert.True(kit.System.HasAura(target, immunity));
         session.Clear();
@@ -366,7 +367,7 @@ public sealed class ImmunityTests
         target.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
         SpellSystem.SetPower(target, PowerType.Mana, 0);
         kit.System.CastSpell(target, ManaTide, SpellCastTargets.ForSelf(), triggered: true);
-        RuleTestSupport.Apply(kit, target, immunity);
+        RuleTestKit.Apply(kit, target, immunity);
         session.Clear();
 
         kit.Advance(1100);

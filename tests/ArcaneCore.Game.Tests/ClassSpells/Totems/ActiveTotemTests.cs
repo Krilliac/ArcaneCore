@@ -17,7 +17,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void ActiveTotem_CastsNormallyAtNearestEnemy_WithoutRestartingOrMoving()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         Player near = Enemy(kit, 2, 10);
         Player far = Enemy(kit, 3, 18);
@@ -48,7 +48,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void OwnerCombatTarget_IsPreferredToNearerEnemy_ThenVictimRemainsSticky()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         Player near = Enemy(kit, 2, 8);
         Player far = Enemy(kit, 3, 18);
@@ -65,7 +65,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void OwnerAttacker_IsPreferred_WhenOwnerHasNoVictim()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         _ = Enemy(kit, 2, 8);
         Player attacker = Enemy(kit, 3, 18);
@@ -82,7 +82,7 @@ public sealed class ActiveTotemTests
     [InlineData("map")]
     public void InvalidOldVictim_IsReplaced_AfterCurrentCastFinishes(string reason)
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         Player near = Enemy(kit, 2, 8);
         Player far = Enemy(kit, 3, 18);
@@ -103,7 +103,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void FriendlyUnflaggedAndHiddenPlayers_AreSkipped_AndNearestBlockedEnemyPreventsCast()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         _ = kit.AddPlayer(2, 4).Player;
         Player unflagged = Enemy(kit, 3, 6);
@@ -128,7 +128,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void NormalStealthPlayer_IsNotDetectedEvenAtPointBlankRange()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         Creature totem = Summon(kit, owner);
         Player hidden = Enemy(kit, 2, totem.X, totem.Y);
@@ -143,7 +143,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void DeadOwner_PreventsBoltLandingWhenSpellUpdateRunsBeforeLifecycleOnLongTick()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         Player enemy = Enemy(kit, 2, 8);
         Creature totem = Summon(kit, owner);
@@ -159,7 +159,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void UnflaggedOwner_DoesNotAcquireFlaggedEnemyPlayerAutomatically()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         owner.Flags &= ~PlayerFlags.PvpDesired;
         owner.UnitFlags &= ~UnitFlags.Pvp;
@@ -172,7 +172,7 @@ public sealed class ActiveTotemTests
     [Fact]
     public void RangeBoundary_IsStrictAndIncludesBoundingRadii()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
         Creature totem = Summon(kit, owner);
         Player enemy = Enemy(kit, 2, 100);
@@ -188,9 +188,9 @@ public sealed class ActiveTotemTests
     [Fact]
     public void ActiveTotem_CanCastAtCreatureTargets_ThroughConfiguredResolver()
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         Player owner = Owner(kit);
-        Creature enemy = kit.Creatures.SpawnTemporary(CreatureTestSupport.Template(CreatureTestSupport.WolfEntry), 8, 0, owner.Z, 0);
+        Creature enemy = kit.Creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 8, 0, owner.Z, 0);
         enemy.MaxHealth = enemy.Health = 100;
         kit.Relations.Hostile.Add(enemy.Guid);
         kit.Spells.Units = new AllMapUnits();
@@ -207,7 +207,7 @@ public sealed class ActiveTotemTests
     [InlineData("expiry")]
     public void Unsummon_CancelsInFlightCast_WithoutLateDamage(string reason)
     {
-        using var kit = new TotemKit(summonDurationMs: reason == "expiry" ? 500 : 60_000);
+        using var kit = new TotemTestKit(summonDurationMs: reason == "expiry" ? 500 : 60_000);
         Player owner = Owner(kit);
         Player enemy = Enemy(kit, 2, 8);
         Creature totem = Summon(kit, owner);
@@ -217,7 +217,7 @@ public sealed class ActiveTotemTests
         {
             case "death": owner.Health = 0; break;
             case "logout": kit.World.RemovePlayer(owner); break;
-            case "replace": kit.Cast(owner, TotemKit.FireTotemSummon); break;
+            case "replace": kit.Cast(owner, TotemTestKit.FireTotemSummon); break;
         }
 
         kit.Advance(1500);
@@ -226,14 +226,14 @@ public sealed class ActiveTotemTests
         Assert.Equal(100u, enemy.Health);
     }
 
-    private static Player Owner(TotemKit kit)
+    private static Player Owner(TotemTestKit kit)
     {
         Player owner = kit.AddPlayer(1).Player;
         kit.Map.Combat.TogglePvp(owner, desired: true);
         return owner;
     }
 
-    private static Player Enemy(TotemKit kit, uint guid, float x, float y = 0)
+    private static Player Enemy(TotemTestKit kit, uint guid, float x, float y = 0)
     {
         Player enemy = kit.AddPlayer(guid, x, y).Player;
         enemy.SetByte(UpdateFields.UnitFieldBytes0, 0, 2); // orc: opposite faction from TestWorld's human
@@ -243,9 +243,9 @@ public sealed class ActiveTotemTests
         return enemy;
     }
 
-    private static Creature Summon(TotemKit kit, Player owner)
+    private static Creature Summon(TotemTestKit kit, Player owner)
     {
-        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, TotemKit.ActiveSummon));
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, TotemTestKit.ActiveSummon));
         return Assert.IsType<Creature>(kit.Totems.GetTotem(owner, TotemSlot.Fire));
     }
 

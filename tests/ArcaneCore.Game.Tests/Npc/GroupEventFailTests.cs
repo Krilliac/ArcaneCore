@@ -15,8 +15,8 @@ public sealed class GroupEventFailTests
     [Fact]
     public void GroupEventFail_FailsAnIncompleteQuest_AndKeepsACompleteOne()
     {
-        using var kit = new QuestFlowKit([QuestFlowKit.Task(Incomplete), QuestFlowKit.Task(Complete)],
-            [QuestFlowKit.Row(Incomplete, QuestStatus.Incomplete), QuestFlowKit.Row(Complete, QuestStatus.Complete, kills: 2)]);
+        using var kit = new QuestFlowTestKit([QuestFlowTestKit.Task(Incomplete), QuestFlowTestKit.Task(Complete)],
+            [QuestFlowTestKit.Row(Incomplete, QuestStatus.Incomplete), QuestFlowTestKit.Row(Complete, QuestStatus.Complete, kills: 2)]);
 
         kit.Services.GroupEventFailHappens(kit.Player, Incomplete);
         kit.Services.GroupEventFailHappens(kit.Player, Complete);

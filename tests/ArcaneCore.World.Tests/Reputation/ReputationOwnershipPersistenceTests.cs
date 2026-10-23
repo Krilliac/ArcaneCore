@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Reputation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -175,7 +176,7 @@ public sealed class ReputationOwnershipPersistenceTests
         ReputationFeature feature = provider.GetRequiredService<ReputationFeature>();
         using var world = new WorldRuntime(
             new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 },
-            new NoopSaveQueue(),
+            new NullSaveQueue(),
             NullLogger<WorldRuntime>.Instance);
         feature.Attach(world);
 
@@ -319,12 +320,6 @@ public sealed class ReputationOwnershipPersistenceTests
         public void ProcessWorldPackets(Player player) { }
         public void Kick() { }
         public void OnLoggedOut() { }
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
-        public bool IsPending(int characterId) => false;
     }
 
     private sealed class RecordingReputationStore : ICharacterReputationStore

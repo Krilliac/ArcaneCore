@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -153,10 +154,10 @@ public sealed class PlayerbotElevatorVaultPitTests
     [Fact]
     public async Task LandingBeside_WhenAllRingsAreInSteepVestibuleFragment_FallsBackToWalkableMeshInsteadOfReturningNull()
     {
-        using var fixture = new ArcaneCore.Game.Tests.Collision.NavMeshFixture();
-        (int X, int Y, ArcaneCore.Game.Tests.Collision.CellTile Tile)[] vestibule =
+        using var fixture = new ArcaneCore.TestSupport.NavMeshFixture();
+        (int X, int Y, ArcaneCore.TestSupport.CellTile Tile)[] vestibule =
         [
-            (10, 10, new ArcaneCore.Game.Tests.Collision.CellTile(0, 0, 0, 0, 8, 8, Size: 5)),
+            (10, 10, new ArcaneCore.TestSupport.CellTile(0, 0, 0, 0, 8, 8, Size: 5)),
         ];
         await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(fixture, vestibule, new FloorLineOfSight());
         var stop = new Vector3(20f, 20f, 0f);

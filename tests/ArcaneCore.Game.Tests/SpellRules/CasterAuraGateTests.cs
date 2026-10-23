@@ -36,9 +36,9 @@ public sealed class CasterAuraGateTests
             SpellTestKit.Effect(SpellEffectName.ApplyAura, (int)(SpellMechanics.Mask(SpellMechanic.Stun) | SpellMechanics.Mask(SpellMechanic.Fear)), aura: AuraType.MechanicImmunityMask, misc: (int)(SpellMechanics.Mask(SpellMechanic.Stun) | SpellMechanics.Mask(SpellMechanic.Fear)))),
         ImmunityGrant(DivineShieldShape, prevention: 2,
             SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.SchoolImmunity, misc: (int)SpellSchoolMasks.All)),
-        RuleTestSupport.Grant(StunAuraSource, AuraType.ModStun, 0) with { Mechanic = (uint)SpellMechanic.Stun },
-        RuleTestSupport.Grant(SilenceAuraSource, AuraType.ModSilence, 0),
-        RuleTestSupport.Grant(PacifyAuraSource, AuraType.ModPacify, 0));
+        RuleTestKit.Grant(StunAuraSource, AuraType.ModStun, 0) with { Mechanic = (uint)SpellMechanic.Stun },
+        RuleTestKit.Grant(SilenceAuraSource, AuraType.ModSilence, 0),
+        RuleTestKit.Grant(PacifyAuraSource, AuraType.ModPacify, 0));
 
     private static Player Caster(SpellTestKit kit) => kit.AddPlayer(1).Player;
 
@@ -117,7 +117,7 @@ public sealed class CasterAuraGateTests
     {
         using SpellTestKit kit = Kit();
         Player caster = Caster(kit);
-        RuleTestSupport.Apply(kit, caster, StunAuraSource);
+        RuleTestKit.Apply(kit, caster, StunAuraSource);
         Assert.True((caster.UnitFlags & UnitFlags.Stunned) != 0);
 
         // The trinket shape covers stun and fear: castable although stunned (instant).
@@ -132,7 +132,7 @@ public sealed class CasterAuraGateTests
     {
         using SpellTestKit kit = Kit();
         Player caster = Caster(kit);
-        RuleTestSupport.Apply(kit, caster, PacifyAuraSource);
+        RuleTestKit.Apply(kit, caster, PacifyAuraSource);
         Assert.True((caster.UnitFlags & UnitFlags.Pacified) != 0);
 
         Assert.Equal(SpellCastResult.CastOk, Check(kit, caster, DivineShieldShape));
@@ -144,8 +144,8 @@ public sealed class CasterAuraGateTests
     {
         using SpellTestKit kit = Kit();
         Player caster = Caster(kit);
-        RuleTestSupport.Apply(kit, caster, PacifyAuraSource);
-        RuleTestSupport.Apply(kit, caster, SilenceAuraSource);
+        RuleTestKit.Apply(kit, caster, PacifyAuraSource);
+        RuleTestKit.Apply(kit, caster, SilenceAuraSource);
         SpellInfo shield = kit.Store.Get(DivineShieldShape)!;
 
         // Both auras come from spells whose school mask is physical (covered by the all-schools immunity): castable.
@@ -172,7 +172,7 @@ public sealed class CasterAuraGateTests
         using SpellTestKit kit = Kit();
         Player caster = Caster(kit);
         kit.Spellbook.Teach(caster, SpellTestKit.InstantHeal);
-        RuleTestSupport.Apply(kit, caster, StunAuraSource);
+        RuleTestKit.Apply(kit, caster, StunAuraSource);
 
         Assert.Equal(SpellCastResult.Stunned, kit.System.HandleCastRequest(caster, SpellTestKit.InstantHeal, SpellCastTargets.ForSelf()));
     }

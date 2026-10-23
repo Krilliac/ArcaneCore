@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Contracts;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.HotCode;
@@ -23,7 +24,7 @@ namespace ArcaneCore.World.Tests.FeatureLifecycle;
 /// </summary>
 public sealed class FeatureLifecycleTests : IDisposable
 {
-    private readonly WorldRuntime _world = new(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NoSaves(), NullLogger<WorldRuntime>.Instance);
+    private readonly WorldRuntime _world = new(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
     private readonly SpellSystem _spells = new(SpellStore.Empty, () => 0);
     private readonly GatedWorld _poster = new();
     private readonly RecordingReporter _reporter = new();
@@ -321,13 +322,6 @@ public sealed class FeatureLifecycleTests : IDisposable
         Assert.Equal(ContractsVersion.Current, new FeatureHandover().ContractsVersion);
         Assert.Equal("ArcaneCore.World.Contracts", typeof(IWorldFeature).Assembly.GetName().Name);
         Assert.Equal("ArcaneCore.World.Contracts", typeof(IDetachableWorldFeature).Assembly.GetName().Name);
-    }
-
-    internal sealed class NoSaves : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 
     /// <summary>A plain (pinned) feature.</summary>

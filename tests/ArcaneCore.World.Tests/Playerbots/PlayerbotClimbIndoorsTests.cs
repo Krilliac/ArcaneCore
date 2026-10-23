@@ -1,6 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
-using ArcaneCore.Game.Tests.Collision;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 

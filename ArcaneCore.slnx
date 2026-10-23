@@ -21,6 +21,7 @@
     <Project Path="tests/ArcaneCore.Kernel.Tests/ArcaneCore.Kernel.Tests.csproj" />
     <Project Path="tests/ArcaneCore.MockClient.Tests/ArcaneCore.MockClient.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj" />
+    <Project Path="tests/ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj" />
     <Project Path="tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">

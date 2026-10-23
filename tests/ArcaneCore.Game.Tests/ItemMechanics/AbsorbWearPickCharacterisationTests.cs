@@ -3,10 +3,12 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
 using Xunit;
+using ScriptedRandom = ArcaneCore.Game.Tests.CombatCore.ScriptedRandom;
 using static ArcaneCore.Game.Tests.ItemTestData;
 
 namespace ArcaneCore.Game.Tests.ItemMechanics;
@@ -50,7 +52,7 @@ public sealed class AbsorbWearPickCharacterisationTests
 
     private static Scene Create(params (byte Slot, uint Entry)[] worn)
     {
-        var kit = new SpellTestKit(RuleTestSupport.Grant(AbsorbAura, AuraType.SchoolAbsorb, 1000, (int)SpellSchoolMasks.Of(SpellSchool.Normal)));
+        var kit = new SpellTestKit(RuleTestKit.Grant(AbsorbAura, AuraType.SchoolAbsorb, 1000, (int)SpellSchoolMasks.Of(SpellSchool.Normal)));
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         MapCombat combat = attacker.Map!.Combat;
@@ -82,7 +84,7 @@ public sealed class AbsorbWearPickCharacterisationTests
 
     private static MeleeDamageInfo AbsorbedSwing(Scene s, params int[] draws)
     {
-        RuleTestSupport.Apply(s.Kit, s.Victim, AbsorbAura);
+        RuleTestKit.Apply(s.Kit, s.Victim, AbsorbAura);
         foreach (int draw in draws)
         {
             s.Random.Ints.Enqueue(draw);

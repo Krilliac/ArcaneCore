@@ -6,7 +6,7 @@ using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.Extensions.Logging.Abstractions;
-using static ArcaneCore.Game.Tests.Conditions.ConditionTestSupport;
+using static ArcaneCore.Game.Tests.Conditions.ConditionTestKit;
 
 namespace ArcaneCore.Game.Tests.Conditions;
 

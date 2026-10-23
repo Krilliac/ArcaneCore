@@ -95,7 +95,7 @@ public sealed class ProfessionSpecializationGossipTests
     [Fact]
     public void GossipPacketSelection_TeachesTheSpecialization_AndClosesTheMenu()
     {
-        using var npc = new NpcServiceKit(NpcFlags.Gossip);
+        using var npc = new NpcServiceTestKit(NpcFlags.Gossip);
         npc.Npc = npc.Npc with { Entry = 11145, Guid = ObjectGuid.WithEntry(HighGuid.Unit, 11145, 77) };
         npc.Player.Level = 60;
         var book = new MemorySpellbook();
@@ -128,7 +128,7 @@ public sealed class ProfessionSpecializationGossipTests
         {
             TrainerSpells = [new TrainerSpell { Entry = 11146, Spell = teaching, SpellCost = 10 }],
         };
-        using var npc = new NpcServiceKit(NpcFlags.Gossip | NpcFlags.Trainer, content,
+        using var npc = new NpcServiceTestKit(NpcFlags.Gossip | NpcFlags.Trainer, content,
             new QuestNpcDependencies(Spells: new SpellSystemLearner(() => system, new SkillLineAbilityCatalog([]))));
         npc.Npc = npc.Npc with
         {

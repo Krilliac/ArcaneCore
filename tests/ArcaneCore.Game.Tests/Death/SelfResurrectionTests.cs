@@ -4,6 +4,7 @@ using ArcaneCore.Game.Death.Resurrection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
 using Xunit;

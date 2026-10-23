@@ -45,7 +45,7 @@ public sealed class PetUnlearnTests
             extraSpells: [Spell(Bite1, Effect(SpellEffectName.Dummy, 1)), Spell(Bite2, Effect(SpellEffectName.Dummy, 1)), Passive(FreePassive), Passive(CostedPassive)],
             extraTemplates:
             [
-                CreatureTestSupport.Template(BeastEntry, b =>
+                CreatureTestKit.Template(BeastEntry, b =>
                 {
                     b.MinLevel = 20;
                     b.MaxLevel = 20;

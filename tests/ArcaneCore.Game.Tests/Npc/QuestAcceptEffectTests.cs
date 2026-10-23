@@ -24,7 +24,7 @@ public sealed class QuestAcceptEffectTests
     [Fact]
     public void AcceptedQuest_IsPublishedOnceWithItsGiver_ForDatabaseStartScripts()
     {
-        using var kit = new QuestFlowKit([QuestFlowKit.Task(Id)], starters: [Id]);
+        using var kit = new QuestFlowTestKit([QuestFlowTestKit.Task(Id)], starters: [Id]);
         var accepted = new List<(Player Player, ObjectGuid Giver, uint Quest)>();
         kit.Services.QuestAccepted += (player, giver, quest) => accepted.Add((player, giver, quest.Id));
 
@@ -37,7 +37,7 @@ public sealed class QuestAcceptEffectTests
     public void AcceptingAQuestWithASourceSpell_CastsItOnThePlayerAfterTheQuestIsLogged()
     {
         var caster = new RecordingCaster();
-        using var kit = new QuestFlowKit([SpellQuest()], starters: [Id], spellCaster: caster);
+        using var kit = new QuestFlowTestKit([SpellQuest()], starters: [Id], spellCaster: caster);
         caster.OnCast = () => Assert.Equal(QuestStatus.Incomplete, kit.State.Quests.GetStatus(Id));
         Assert.True(kit.Accept(Id));
         Assert.Equal([(kit.Player, Spell)], caster.Casts);
@@ -47,7 +47,7 @@ public sealed class QuestAcceptEffectTests
     public void SourceSpellIsNotCast_WhenTheAcceptIsRefused()
     {
         var caster = new RecordingCaster();
-        using var kit = new QuestFlowKit([SpellQuest(minLevel: 20)], starters: [Id], spellCaster: caster);
+        using var kit = new QuestFlowTestKit([SpellQuest(minLevel: 20)], starters: [Id], spellCaster: caster);
         Assert.False(kit.Accept(Id));
         Assert.Empty(caster.Casts);
     }
@@ -55,17 +55,17 @@ public sealed class QuestAcceptEffectTests
     [Fact]
     public void WithoutASpellCaster_TheSourceSpellQuestIsWithheld()
     {
-        using var kit = new QuestFlowKit([SpellQuest()], starters: [Id]);
+        using var kit = new QuestFlowTestKit([SpellQuest()], starters: [Id]);
         Assert.Equal(QuestAdapter.SrcSpell, kit.Services.MissingAdapters(kit.Services.Quests.Get(Id)!));
         Assert.False(kit.Accept(Id));
-        using var with = new QuestFlowKit([SpellQuest()], starters: [Id], spellCaster: new RecordingCaster());
+        using var with = new QuestFlowTestKit([SpellQuest()], starters: [Id], spellCaster: new RecordingCaster());
         Assert.Equal(QuestAdapter.None, with.Services.MissingAdapters(with.Services.Quests.Get(Id)!));
     }
 
     [Fact]
     public void PvpQuest_SetsThePvpFlagAndItsTimer_AndAnOrdinaryQuestDoesNot()
     {
-        using var kit = new QuestFlowKit([QuestFlowKit.Task(Id, type: 41), QuestFlowKit.Task(Id + 1)], starters: [Id, Id + 1]);
+        using var kit = new QuestFlowTestKit([QuestFlowTestKit.Task(Id, type: 41), QuestFlowTestKit.Task(Id + 1)], starters: [Id, Id + 1]);
         Assert.True(kit.Accept(Id + 1));
         Assert.Equal(0u, (uint)(kit.Player.UnitFlags & UnitFlags.Pvp));
         Assert.True(kit.Accept(Id));
@@ -76,8 +76,8 @@ public sealed class QuestAcceptEffectTests
     [Fact]
     public void LootSourceQuest_IsOfferedBecauseHasQuestForItemAlreadyImplementsItsOnlyRetailUse()
     {
-        QuestTemplate quest = QuestFlowKit.Task(Id, reqSource: ItemTestData.ToughJerky, reqSourceCount: 2);
-        using var kit = new QuestFlowKit([quest], starters: [Id]);
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, reqSource: ItemTestData.ToughJerky, reqSourceCount: 2);
+        using var kit = new QuestFlowTestKit([quest], starters: [Id]);
         Assert.True(kit.Services.Supported(kit.Services.Quests.Get(Id)!));
         Assert.True(kit.Accept(Id));
         // vmangos Player::HasQuestForItem (Player.cpp:14298-14316): the source item drops while fewer than ReqSourceCount are owned.

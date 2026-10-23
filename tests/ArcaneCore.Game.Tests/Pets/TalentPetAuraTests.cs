@@ -75,9 +75,9 @@ public sealed class TalentPetAuraTests : IDisposable
             Passive(OtherHunterTalent),
             PetAura(SpiritBondHeal, PetArea(AuraType.ObsModHealth, 1) with { Amplitude = 10_000 }));
         _map = _spells.World.GetMap(0);
-        CreatureContent content = CreatureTestSupport.Content(
+        CreatureContent content = CreatureTestKit.Content(
             [
-                .. new[] { Imp, Voidwalker }.Select(entry => CreatureTestSupport.Template(entry, b =>
+                .. new[] { Imp, Voidwalker }.Select(entry => CreatureTestKit.Template(entry, b =>
                 {
                     b.Name = $"Demon {entry}";
                     b.Faction = 14;
@@ -86,7 +86,7 @@ public sealed class TalentPetAuraTests : IDisposable
                     b.MinLevelHealth = 100;
                     b.MaxLevelHealth = 100;
                 }) with { CreatureType = 3 }),
-                CreatureTestSupport.Template(Wolf, b =>
+                CreatureTestKit.Template(Wolf, b =>
                 {
                     b.Name = "Wolf";
                     b.Faction = 14;

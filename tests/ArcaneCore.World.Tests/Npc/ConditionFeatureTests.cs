@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.Configuration;
@@ -309,29 +310,6 @@ public sealed class ConditionFeatureTests
         var appearance = new PlayerAppearance(
             DisplayId: 49, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,
             MaxHealth: 60, MaxPower: 1000, StartPower: 0, NextLevelXp: 400);
-        return new Player(character, appearance, new NullSession());
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public ArcaneCore.Kernel.Accounts.AccountSecurity Security => ArcaneCore.Kernel.Accounts.AccountSecurity.Player;
-
-        public void Send(ArcaneCore.Protocol.WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
+        return new Player(character, appearance, new NullPlayerSession());
     }
 }

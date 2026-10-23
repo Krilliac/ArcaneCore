@@ -37,11 +37,11 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         SchemaDefinition schema = SchemaProbe.SchemaOf(component);
         await CreateEmptyAsync(db);
 
-        IReadOnlyList<string> files = SqlUpdateSupport.OrderedFiles(component, provider);
+        IReadOnlyList<string> files = SqlUpdateTestKit.OrderedFiles(component, provider);
         Assert.NotEmpty(files);
         foreach (string file in files)
         {
-            await SqlUpdateSupport.ExecuteAsync(db, provider, File.ReadAllText(file));
+            await SqlUpdateTestKit.ExecuteAsync(db, provider, File.ReadAllText(file));
         }
 
         Assert.Equal(schema.CurrentVersion, await UpgradeTestSupport.ReadVersionAsync(db, component));
@@ -50,26 +50,26 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         Assert.True(drift.IsClean, string.Join("; ", drift.Errors));
         Assert.True(drift.TablesExamined > 0 && drift.ColumnsExamined > 0 && drift.IndexesExamined > 0);
 
-        string before = await SqlUpdateSupport.CatalogDumpAsync(db, schema);
+        string before = await SqlUpdateTestKit.CatalogDumpAsync(db, schema);
         await SchemaBootstrapper.EnsureAsync(db, schema, new SchemaUpgradeOptions { Policy = SchemaPolicy.Never });
-        Assert.Equal(before, await SqlUpdateSupport.CatalogDumpAsync(db, schema));
+        Assert.Equal(before, await SqlUpdateTestKit.CatalogDumpAsync(db, schema));
 
         DatabaseConnectionOptions fresh = await _databases.CreateAsync(provider);
         await SchemaProbe.EnsureCurrentAsync(component, fresh);
         await using DbContext freshDb = SchemaProbe.CreateContext(component, fresh);
-        string expected = await SqlUpdateSupport.CatalogDumpAsync(freshDb, schema);
+        string expected = await SqlUpdateTestKit.CatalogDumpAsync(freshDb, schema);
 
         Assert.Contains("  column ", before);
         Assert.Contains("  index ", before);
         Assert.Equal(expected, before);
 
-        string expectedSeeds = await SqlUpdateSupport.SeedRowsAsync(freshDb, schema);
+        string expectedSeeds = await SqlUpdateTestKit.SeedRowsAsync(freshDb, schema);
         if (component == "characters")
         {
             Assert.Contains("seed table character_ownership", expectedSeeds);
         }
 
-        Assert.Equal(expectedSeeds, await SqlUpdateSupport.SeedRowsAsync(db, schema));
+        Assert.Equal(expectedSeeds, await SqlUpdateTestKit.SeedRowsAsync(db, schema));
     }
 
     [Theory]
@@ -78,7 +78,7 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
     {
         (UpdateComponent component, SchemaSnapshot snapshot) = SqlUpdateGoldenTests.StandInStep();
         UpdateSet set = await UpdateScriptWriter.GenerateAsync(component, snapshot);
-        string step = set.Files.Single(f => f.Path.Contains("/" + SqlUpdateSupport.Folder(provider) + "/")).Content;
+        string step = set.Files.Single(f => f.Path.Contains("/" + SqlUpdateTestKit.Folder(provider) + "/")).Content;
         SchemaDefinition schema = component.Definition;
 
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
@@ -86,13 +86,13 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         await CreateEmptyAsync(db);
 
         // An empty database has no version table: refused, nothing created.
-        string empty = await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true);
-        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateSupport.ExecuteAsync(db, provider, step));
-        Assert.Equal(empty, await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
+        string empty = await SqlUpdateTestKit.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true);
+        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, step));
+        Assert.Equal(empty, await SqlUpdateTestKit.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
 
-        foreach (string file in SqlUpdateSupport.OrderedFiles("auth", provider))
+        foreach (string file in SqlUpdateTestKit.OrderedFiles("auth", provider))
         {
-            await SqlUpdateSupport.ExecuteAsync(db, provider, File.ReadAllText(file));
+            await SqlUpdateTestKit.ExecuteAsync(db, provider, File.ReadAllText(file));
         }
 
         // The account index is missing, as in a database whose index was lost; the step puts it back.
@@ -100,21 +100,21 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
 
         // Recorded at the wrong version (4, not 5): refused, nothing changes.
         await UpgradeTestSupport.SetVersionAsync(db, "auth", 4);
-        string wrong = await SqlUpdateSupport.CatalogDumpAsync(db, schema);
-        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateSupport.ExecuteAsync(db, provider, step));
-        Assert.Equal(wrong, await SqlUpdateSupport.CatalogDumpAsync(db, schema));
+        string wrong = await SqlUpdateTestKit.CatalogDumpAsync(db, schema);
+        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, step));
+        Assert.Equal(wrong, await SqlUpdateTestKit.CatalogDumpAsync(db, schema));
         Assert.Empty(await SchemaProbe.ActualIndexesAsync(db, ["account"]));
 
         // At version 5: applies, creates the index, records 6.
         await UpgradeTestSupport.SetVersionAsync(db, "auth", 5);
-        await SqlUpdateSupport.ExecuteAsync(db, provider, step);
+        await SqlUpdateTestKit.ExecuteAsync(db, provider, step);
         Assert.Equal(6, await UpgradeTestSupport.ReadVersionAsync(db, "auth"));
         Assert.Contains(await SchemaProbe.ActualIndexesAsync(db, ["account"]), i => i.Name == "IX_account_Username");
 
         // Again: now at 6, refused, nothing changes.
-        string applied = await SqlUpdateSupport.CatalogDumpAsync(db, schema);
-        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateSupport.ExecuteAsync(db, provider, step));
-        Assert.Equal(applied, await SqlUpdateSupport.CatalogDumpAsync(db, schema));
+        string applied = await SqlUpdateTestKit.CatalogDumpAsync(db, schema);
+        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, step));
+        Assert.Equal(applied, await SqlUpdateTestKit.CatalogDumpAsync(db, schema));
     }
 
     public static IEnumerable<object[]> NonPostgresProviders()
@@ -130,7 +130,7 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
     {
         const string component = "auth";
         SchemaDefinition schema = SchemaProbe.SchemaOf(component);
-        string text = File.ReadAllText(SqlUpdateSupport.OrderedFiles(component, provider)[0]);
+        string text = File.ReadAllText(SqlUpdateTestKit.OrderedFiles(component, provider)[0]);
         string[] all = [.. MysqlClientSplitter.Split(text)];
         int first = Array.FindIndex(all, s => s.StartsWith("ALTER DATABASE", StringComparison.Ordinal) || s.StartsWith("CREATE TABLE", StringComparison.Ordinal));
         int last = Array.FindLastIndex(all, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
@@ -141,7 +141,7 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         DatabaseConnectionOptions fresh = await _databases.CreateAsync(provider);
         await SchemaProbe.EnsureCurrentAsync(component, fresh);
         await using DbContext freshDb = SchemaProbe.CreateContext(component, fresh);
-        string expected = await SqlUpdateSupport.CatalogDumpAsync(freshDb, schema);
+        string expected = await SqlUpdateTestKit.CatalogDumpAsync(freshDb, schema);
 
         foreach (int cut in new[] { 1, 2, 3, work.Length / 2, work.Length - 1 }.Distinct().Where(k => k >= 1 && k < work.Length))
         {
@@ -150,18 +150,18 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
             await CreateEmptyAsync(db);
             foreach (string statement in work[..cut])
             {
-                await SqlUpdateSupport.ExecuteAsync(db, provider, statement);
+                await SqlUpdateTestKit.ExecuteAsync(db, provider, statement);
             }
 
             if (await SchemaCatalog.TableExistsAsync(db, schema.VersionTable))
             {
-                string interrupted = await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true);
-                await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateSupport.ExecuteAsync(db, provider, text));
-                Assert.Equal(interrupted, await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
+                string interrupted = await SqlUpdateTestKit.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true);
+                await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, text));
+                Assert.Equal(interrupted, await SqlUpdateTestKit.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
             }
 
             await SchemaUpgrader.ApplyAsync(db, schema); // the README's recovery route: 'arcane-db upgrade' plans (and could refuse) first
-            Assert.True(expected == await SqlUpdateSupport.CatalogDumpAsync(db, schema), $"a baseline interrupted after {cut} change(s) did not converge");
+            Assert.True(expected == await SqlUpdateTestKit.CatalogDumpAsync(db, schema), $"a baseline interrupted after {cut} change(s) did not converge");
         }
     }
 
@@ -178,10 +178,10 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         }
 
         await using DbContext db = SchemaProbe.CreateContext("characters", connection);
-        string before = await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true);
+        string before = await SqlUpdateTestKit.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true);
         Assert.Contains("table characters", before);
-        string baseline = File.ReadAllText(SqlUpdateSupport.OrderedFiles("characters", provider)[0]);
-        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateSupport.ExecuteAsync(db, provider, baseline));
-        Assert.Equal(before, await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
+        string baseline = File.ReadAllText(SqlUpdateTestKit.OrderedFiles("characters", provider)[0]);
+        await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, baseline));
+        Assert.Equal(before, await SqlUpdateTestKit.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
     }
 }

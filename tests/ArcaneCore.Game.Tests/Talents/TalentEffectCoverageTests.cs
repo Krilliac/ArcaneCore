@@ -7,6 +7,7 @@ using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Talents;
+using ArcaneCore.TestSupport;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 

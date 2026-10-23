@@ -1,3 +1,4 @@
+using ArcaneCore.TestSupport;
 using Microsoft.Data.Sqlite;
 using Xunit;
 

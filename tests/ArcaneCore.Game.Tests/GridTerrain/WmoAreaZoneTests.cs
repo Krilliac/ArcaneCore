@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

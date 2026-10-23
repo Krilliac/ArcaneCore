@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 

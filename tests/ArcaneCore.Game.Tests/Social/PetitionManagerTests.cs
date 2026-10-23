@@ -28,15 +28,15 @@ public sealed class PetitionManagerTests
         return (reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt32());
     }
 
-    private static (uint Command, string Text, uint Error) OnlyResult(PetitionKit k, Player p)
+    private static (uint Command, string Text, uint Error) OnlyResult(PetitionTestKit k, Player p)
         => ReadResult(Assert.Single(k.Sent(p, WorldOpcode.SmsgGuildCommandResult)));
 
-    private static void Quiet(PetitionKit k, Player p)
+    private static void Quiet(PetitionTestKit k, Player p)
     {
         Assert.Empty(k.F.Session(p).Sent);
     }
 
-    private static Guild FoundGuild(PetitionKit k, Player leader, string name)
+    private static Guild FoundGuild(PetitionTestKit k, Player leader, string name)
     {
         Assert.Equal(GuildAdminResult.Ok, k.Guilds.Create(leader.Guid.Low, name, out Guild? guild));
         return guild!;
@@ -47,7 +47,7 @@ public sealed class PetitionManagerTests
     [Fact] // PetitionsHandler.cpp:481-507
     public void ShowList_SendsTheCharterEntry_AndOnlyFromAnInteractablePetitioner()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
 
         k.Petitions.ShowList(a, k.Npc.Guid);
@@ -70,7 +70,7 @@ public sealed class PetitionManagerTests
     [Fact] // PetitionsHandler.cpp:41-135
     public void Buy_Charges1000Copper_StoresTheCharterWithThePetitionId_AndCreatesThePetition()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1, money: 5000);
 
         Item charter = k.Buy(a);
@@ -91,18 +91,18 @@ public sealed class PetitionManagerTests
     [Fact] // :44-52 — the NPC must be a petitioner AND a tabard designer
     public void Buy_RequiresAPetitionerThatIsAlsoATabardDesigner()
     {
-        using var petitionerOnly = new PetitionKit(NpcFlags.Petitioner);
+        using var petitionerOnly = new PetitionTestKit(NpcFlags.Petitioner);
         Player a = petitionerOnly.Add(1);
         petitionerOnly.Petitions.Buy(a, petitionerOnly.Npc.Guid, "Arcane Order");
         Assert.Equal(10_000u, a.Money);
         Assert.Empty(petitionerOnly.Persistence.PetitionWrites);
 
-        using var designerOnly = new PetitionKit(NpcFlags.TabardDesigner);
+        using var designerOnly = new PetitionTestKit(NpcFlags.TabardDesigner);
         Player b = designerOnly.Add(1);
         designerOnly.Petitions.Buy(b, designerOnly.Npc.Guid, "Arcane Order");
         Assert.Equal(10_000u, b.Money);
 
-        using var far = new PetitionKit();
+        using var far = new PetitionTestKit();
         Player c = far.Add(1);
         far.Npc = far.Npc with { X = 40 };
         far.Petitions.Buy(c, far.Npc.Guid, "Arcane Order");
@@ -112,7 +112,7 @@ public sealed class PetitionManagerTests
     [Fact] // :66 guilded, :70-71 already owning a petition: silent, nothing charged
     public void Buy_IsSilentWhenGuildedOrAlreadyOwningAPetition()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         FoundGuild(k, b, "Existing");
@@ -132,7 +132,7 @@ public sealed class PetitionManagerTests
     [Fact] // :76-80
     public void Buy_WithATakenGuildName_AnswersNameExists_CaseInsensitively()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         FoundGuild(k, b, "Arcane Order");
@@ -151,7 +151,7 @@ public sealed class PetitionManagerTests
     [InlineData("")]
     public void Buy_WithAnInvalidName_AnswersNameInvalid(string name)
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
 
         k.Petitions.Buy(a, k.Npc.Guid, name);
@@ -164,7 +164,7 @@ public sealed class PetitionManagerTests
     [Fact] // :81-85 reserved names
     public void Buy_WithAReservedName_AnswersNameInvalid()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         k.Petitions.Blacklist = new Reserved();
         Player a = k.Add(1);
 
@@ -176,7 +176,7 @@ public sealed class PetitionManagerTests
     [Fact] // :105-110
     public void Buy_WithTooLittleMoney_AnswersBuyFailedNotEnoughMoney()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1, money: 999);
 
         k.Petitions.Buy(a, k.Npc.Guid, "Arcane Order");
@@ -190,7 +190,7 @@ public sealed class PetitionManagerTests
     [Fact] // vmangos charges, then stores (:116-125); an uncharged buy (NPC state not Loaded yet) must hand out nothing
     public void Buy_WhenTheChargeCannotBeTaken_GivesNoCharterAndCreatesNoPetition()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1, loadNpcState: false);
 
         k.Petitions.Buy(a, k.Npc.Guid, "Arcane Order");
@@ -204,7 +204,7 @@ public sealed class PetitionManagerTests
     [Fact] // :98-103
     public void Buy_WithoutACharterTemplate_AnswersBuyFailedCantFindItem()
     {
-        using var k = new PetitionKit(withTemplates: false);
+        using var k = new PetitionTestKit(withTemplates: false);
         Player a = k.Add(1);
 
         k.Petitions.Buy(a, k.Npc.Guid, "Arcane Order");
@@ -217,11 +217,11 @@ public sealed class PetitionManagerTests
     [Fact] // :112-118
     public void Buy_WithFullBags_AnswersAnEquipError_AndChargesNothing()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         for (int i = 0; i < 16; i++)
         {
-            ItemTestData.Give(a.Inventory, PetitionKit.Filler, 1);
+            ItemTestData.Give(a.Inventory, PetitionTestKit.Filler, 1);
         }
 
         k.ClearAll();
@@ -236,7 +236,7 @@ public sealed class PetitionManagerTests
     [Fact] // petition ids come from a counter that starts above the stored ones (GeneratePetitionID)
     public void PetitionIds_StartAboveTheStoredOnes()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player b = k.Add(2);
         k.Petitions.Load([new PetitionData(41, 2, 9, "Old", [])]);
         Player a = k.Add(1);
@@ -251,7 +251,7 @@ public sealed class PetitionManagerTests
     [Fact] // :137-169
     public void ShowSignatures_ListsTheSignersInOrder_ToTheHolder()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Player c = k.Add(3);
@@ -272,7 +272,7 @@ public sealed class PetitionManagerTests
     [Fact] // :141-142 guilded players get nothing; :144-146 an item that is not in the bags either
     public void ShowSignatures_IsSilentWhenGuildedOrTheItemIsNotHeld()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item charter = k.Buy(a);
@@ -289,7 +289,7 @@ public sealed class PetitionManagerTests
     [Fact] // :171-185 and wow_messages smsg_petition_query_response (1.12)
     public void Query_AnswersTheFixedFields_ByPetitionId_ForAnyone()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         k.Buy(a, "Arcane Order");
@@ -317,7 +317,7 @@ public sealed class PetitionManagerTests
     [Fact] // :187-216
     public void Rename_ChecksTheNameFirst_ThenEchoesTheNewName()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         FoundGuild(k, b, "Taken Name");
@@ -344,7 +344,7 @@ public sealed class PetitionManagerTests
     [Fact] // :276-286 ok: signer and an online owner get SIGN_RESULTS OK
     public void Sign_AddsTheSignature_AndTellsTheSignerAndTheOnlineOwner()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item charter = k.Buy(a);
@@ -361,7 +361,7 @@ public sealed class PetitionManagerTests
     [Fact] // :232-240
     public void Sign_ByTheOwner_AnswersCantSignOwn()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Item charter = k.Buy(a);
         k.ClearAll();
@@ -375,7 +375,7 @@ public sealed class PetitionManagerTests
     [Fact] // :249-254
     public void Sign_ByTheEnemyFaction_AnswersNotAllied_UnlessTwoSideGuildsAreAllowed()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player orc = k.Add(2, Race.Orc);
         Item charter = k.Buy(a);
@@ -394,7 +394,7 @@ public sealed class PetitionManagerTests
     [Fact] // :256-260 — the error carries the SIGNER's name
     public void Sign_WhileGuilded_AnswersAlreadyInGuildS()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item charter = k.Buy(a);
@@ -410,7 +410,7 @@ public sealed class PetitionManagerTests
     [Fact] // :261-265
     public void Sign_WithAPendingGuildInvite_AnswersAlreadyInvitedToGuildS()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Player leader = k.Add(3);
@@ -427,7 +427,7 @@ public sealed class PetitionManagerTests
     [Fact] // :275-290 the same character signing twice
     public void Sign_Twice_AnswersAlreadySigned_AndTellsTheOwnerWithTheOddInviteError()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item charter = k.Buy(a);
@@ -446,7 +446,7 @@ public sealed class PetitionManagerTests
     [Fact] // :273-274 / GuildMgr.cpp:513-540 another character of an account that already signed
     public void Sign_ByAnotherCharacterOfTheSameAccount_AnswersAlreadySigned()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2, accountId: 50);
         Player twin = k.Add(3, accountId: 50);
@@ -463,7 +463,7 @@ public sealed class PetitionManagerTests
     [Fact] // :229-230 a complete petition is ignored; the client hard limit is 9 (:270-271)
     public void Sign_OnACompletePetition_IsIgnored()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player[] signers = [.. Enumerable.Range(2, 10).Select(i => k.Add((uint)i))];
         Item charter = k.Buy(a);
@@ -482,7 +482,7 @@ public sealed class PetitionManagerTests
     [Fact] // MinPetitionSigns (World:Guild) — GuildMgr.h:124 completes at exactly the configured count
     public void MinPetitionSigns_CapsTheSignaturesAtTheConfiguredCount()
     {
-        using var k = new PetitionKit(options: new GuildOptions { MinPetitionSigns = 2 });
+        using var k = new PetitionTestKit(options: new GuildOptions { MinPetitionSigns = 2 });
         Player a = k.Add(1);
         Player b = k.Add(2);
         Player c = k.Add(3);
@@ -497,7 +497,7 @@ public sealed class PetitionManagerTests
     [Fact] // PetitionsHandler.cpp:223-226: signing needs only the charter's guid, held by the OWNER
     public void Sign_WithAnUnknownCharterGuid_IsIgnored()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         k.Buy(a);
@@ -513,7 +513,7 @@ public sealed class PetitionManagerTests
     [Fact] // :321-338
     public void Decline_TellsAnOnlineOwnerWhoDeclined()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item charter = k.Buy(a);
@@ -530,7 +530,7 @@ public sealed class PetitionManagerTests
     [Fact] // :340-398
     public void Offer_SendsTheSignatureList_WithTheOfferersGuidAsOwner()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Player c = k.Add(3);
@@ -551,7 +551,7 @@ public sealed class PetitionManagerTests
     [Fact] // :344-346 target must be online; :348-353 NOT_ALLIED
     public void Offer_ToAnOfflineOrEnemyTarget_IsRefused()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player orc = k.Add(2, Race.Orc);
         Item charter = k.Buy(a);
@@ -568,7 +568,7 @@ public sealed class PetitionManagerTests
     [Fact] // :355-362 — the OFFERER receives the error and it names the OFFERER
     public void Offer_ToAGuildedOrInvitedTarget_ReportsTheErrorToTheOffererWithTheOfferersName()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player guilded = k.Add(2);
         Player invited = k.Add(3);
@@ -591,7 +591,7 @@ public sealed class PetitionManagerTests
 
     // --- turn in ------------------------------------------------------------------------------------
 
-    private static (Player Owner, Player[] Signers) Nine(PetitionKit k)
+    private static (Player Owner, Player[] Signers) Nine(PetitionTestKit k)
     {
         Player owner = k.Add(1);
         Player[] signers = [.. Enumerable.Range(2, 9).Select(i => k.Add((uint)i))];
@@ -601,7 +601,7 @@ public sealed class PetitionManagerTests
     [Fact] // :435-440
     public void TurnIn_WithEightSignatures_AnswersNeedMore()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player owner, Player[] signers) = Nine(k);
         (_, Item charter) = k.Signed(owner, signers.Take(8).ToArray());
         k.ClearAll();
@@ -617,7 +617,7 @@ public sealed class PetitionManagerTests
     [Fact] // :400-475 and Guild.cpp:104-119
     public void TurnIn_WithNineSignatures_FoundsTheGuild_WithoutJoinEvents_AndDestroysTheCharter()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player owner, Player[] signers) = Nine(k);
         (Petition petition, Item charter) = k.Signed(owner, signers);
         k.ClearAll();
@@ -654,7 +654,7 @@ public sealed class PetitionManagerTests
     [Fact] // :414-416
     public void TurnIn_ByAnotherHolder_IsSilent()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player owner, Player[] signers) = Nine(k);
         (_, Item charter) = k.Signed(owner, signers);
         Player other = k.Add(20);
@@ -672,7 +672,7 @@ public sealed class PetitionManagerTests
     [Fact] // :421-427 (ALREADY_IN_GUILD itself is only reachable with a stale petition: the join removes the owner's petition first)
     public void TurnIn_AfterTheOwnerJoinedAGuild_IsSilent_BecauseThePetitionWentWithTheJoin()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player owner, Player[] signers) = Nine(k);
         (_, Item charter) = k.Signed(owner, signers);
         Player leader = k.Add(30);
@@ -690,7 +690,7 @@ public sealed class PetitionManagerTests
     [Fact] // :443-448
     public void TurnIn_WithAGuildNameTakenMeanwhile_AnswersNameExists()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player owner, Player[] signers) = Nine(k);
         (_, Item charter) = k.Signed(owner, signers);
         Player rival = k.Add(30);
@@ -706,7 +706,7 @@ public sealed class PetitionManagerTests
     [Fact] // Guild.cpp:104-119, :202-204 — a signer who belongs to another guild is skipped
     public void TurnIn_SkipsASignerWhoIsInAnotherGuild_AndStillFoundsTheGuild()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         (Player owner, Player[] signers) = Nine(k);
         (Petition petition, Item charter) = k.Signed(owner, signers.Take(8).ToArray());
         Player stolen = signers[8];
@@ -731,7 +731,7 @@ public sealed class PetitionManagerTests
     [Fact] // Guild.cpp:213 → Player.cpp:17796-17806
     public void JoiningAGuild_RemovesTheJoinersSignaturesOnOtherPetitions_AndItsOwnPetition()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Player joiner = k.Add(3);
@@ -762,7 +762,7 @@ public sealed class PetitionManagerTests
     [Fact] // Player.cpp:10656-10661 / Item.cpp:514-516
     public void DestroyingTheCharter_DeletesThePetition()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Item charter = k.Buy(a);
         k.Petitions.OnPlayerLoggedIn(a);
@@ -781,7 +781,7 @@ public sealed class PetitionManagerTests
     [Fact] // the owner's logout stops the watch
     public void AfterLogout_TheInventoryIsNoLongerWatched()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Item charter = k.Buy(a);
         k.Petitions.OnPlayerLoggedIn(a);
@@ -795,7 +795,7 @@ public sealed class PetitionManagerTests
     [Fact] // login self-heal: an owner without a bound charter loses the petition
     public void Login_RemovesAPetitionWhoseCharterIsGone_AndKeepsOneWhoseCharterIsHeld()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item aCharter = k.Buy(a);
@@ -814,7 +814,7 @@ public sealed class PetitionManagerTests
     [Fact] // design: ids can be reused, so the charter item's guid binds the petition too
     public void ACharterWhoseGuidIsNotThePetitionsCharter_IsRejectedEvenWithTheRightId()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Item aCharter = k.Buy(a);
@@ -839,7 +839,7 @@ public sealed class PetitionManagerTests
     [Fact] // critique: the petition id survives the item's save and load
     public void TheCharterItem_RoundTripsItsPetitionId_ThroughItsPersistentState()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Item charter = k.Buy(a);
         int id = k.Petitions.GetByOwner(1)!.Id;
@@ -855,7 +855,7 @@ public sealed class PetitionManagerTests
     [Fact] // GuildMgr.cpp:222-236 plus the join rule
     public void Load_DropsPetitionsOfUnknownOrGuildedOwners_AndSignaturesOfUnknownCharacters()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player owner = k.Add(1);
         Player signer = k.Add(2);
         Player guilded = k.Add(3);
@@ -883,7 +883,7 @@ public sealed class PetitionManagerTests
     [Fact] // Security (wave-3 scan finding 2): the signature cap of the sign path also holds for persisted rows
     public void Load_CapsAnOversizedPersistedSignatureList_AtTheClientMaximum_AndPersistsTheTrim()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         k.Add(1);
         var signatures = new List<PetitionSignatureData>();
         for (uint guid = 2; guid < 22; guid++)
@@ -904,7 +904,7 @@ public sealed class PetitionManagerTests
     [Fact] // Player.cpp:4353-4354
     public void OnCharacterDeleted_DropsThePetitionAndTheSignatures_WithoutWritingRows()
     {
-        using var k = new PetitionKit();
+        using var k = new PetitionTestKit();
         Player a = k.Add(1);
         Player b = k.Add(2);
         Player c = k.Add(3);

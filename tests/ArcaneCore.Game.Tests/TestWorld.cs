@@ -1,58 +1,10 @@
-using System.Collections.Concurrent;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
-using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.Game.Tests;
-
-/// <summary>A session that records what the world sends it.</summary>
-internal sealed class FakeSession(int accountId = 1, AccountSecurity security = AccountSecurity.Player) : IPlayerSession
-{
-    public ConcurrentQueue<(WorldOpcode Opcode, byte[] Payload)> Sent { get; } = new();
-
-    public bool Kicked { get; private set; }
-
-    public int LoggedOutCount { get; private set; }
-
-    public int AccountId { get; } = accountId;
-
-    public AccountSecurity Security { get; } = security;
-
-    public bool WantsUpdateObjects { get; set; } = true;
-
-    public bool IsPlayerbot { get; set; }
-
-    public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Sent.Enqueue((opcode, payload.ToArray()));
-
-    public void ProcessWorldPackets(Player player)
-    {
-    }
-
-    public void Kick() => Kicked = true;
-
-    public void OnLoggedOut() => LoggedOutCount++;
-
-    public (WorldOpcode Opcode, byte[] Payload) Next()
-        => Sent.TryDequeue(out var packet) ? packet : throw new InvalidOperationException("no packet sent");
-
-    public void Clear() => Sent.Clear();
-}
-
-/// <summary>Records snapshots instead of saving them.</summary>
-internal sealed class RecordingSaveQueue : ICharacterSaveQueue
-{
-    public List<CharacterState> Saved { get; } = [];
-
-    /// <summary>Character ids reported as having a snapshot waiting (<see cref="IsPending"/>).</summary>
-    public HashSet<int> PendingIds { get; } = [];
-
-    public void Enqueue(CharacterState state) => Saved.Add(state);
-
-    public bool IsPending(int characterId) => PendingIds.Contains(characterId);
-}
 
 internal static class TestWorld
 {

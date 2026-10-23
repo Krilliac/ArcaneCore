@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

@@ -8,7 +8,7 @@ using ArcaneCore.Protocol;
 using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
 using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests;
 

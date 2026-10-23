@@ -73,12 +73,12 @@ public sealed class TauntTests
             (Tank, _) = Kit.AddPlayer(1, 0, 0);
             (Dps, _) = Kit.AddPlayer(2, 0, 1);
             (Healer, _) = Kit.AddPlayer(3, 0, 2);
-            var template = CreatureTestSupport.Template(CreatureTestSupport.WolfEntry, t =>
+            var template = CreatureTestKit.Template(CreatureTestKit.WolfEntry, t =>
             {
                 t.MinLevelHealth = 100000;
                 t.MaxLevelHealth = 100000;
             });
-            System = new CreatureMapSystem(Map, CreatureTestSupport.Content([template], [CreatureTestSupport.Spawn(77, CreatureTestSupport.WolfEntry, 3, 0)]),
+            System = new CreatureMapSystem(Map, CreatureTestKit.Content([template], [CreatureTestKit.Spawn(77, CreatureTestKit.WolfEntry, 3, 0)]),
                 null, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile(), Spells = new SpellSystemCreatureCaster(Kit.System) });
             Map.AddUpdater(System);
             Kit.World.RunTick(50);

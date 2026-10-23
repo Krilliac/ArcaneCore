@@ -8,6 +8,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -351,7 +352,7 @@ public sealed class HonorKillRewardsTests : IDisposable
 
     private (Creature Creature, WorldRuntime World, Map Map) CreatureAt(CreatureTemplate template, float x)
     {
-        CreatureContent content = CreatureTestSupport.Content([template], [CreatureTestSupport.Spawn(1, template.Entry, x, 0)]);
+        CreatureContent content = CreatureTestKit.Content([template], [CreatureTestKit.Spawn(1, template.Entry, x, 0)]);
         var system = new CreatureMapSystem(_map, content, random: new Random(1));
         _map.AddUpdater(system);
         _world.RunTick(50);
@@ -359,7 +360,7 @@ public sealed class HonorKillRewardsTests : IDisposable
     }
 
     private static CreatureTemplate Template(uint entry, byte level, bool civilian = false, bool leader = false)
-        => CreatureTestSupport.Template(entry, b => { b.MinLevel = level; b.MaxLevel = level; b.Civilian = civilian; }) with { RacialLeader = leader };
+        => CreatureTestKit.Template(entry, b => { b.MinLevel = level; b.MaxLevel = level; b.Civilian = civilian; }) with { RacialLeader = leader };
 
     [Fact]
     public void A_civilian_at_or_below_gray_costs_dishonor_with_the_level_points_and_a_negative_credit()

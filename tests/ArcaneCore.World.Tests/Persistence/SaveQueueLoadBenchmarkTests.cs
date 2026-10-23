@@ -11,6 +11,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Spells;
 using Microsoft.Data.Sqlite;
@@ -136,7 +137,7 @@ public sealed class SaveQueueLoadBenchmarkTests(ITestOutputHelper output) : IDis
         {
             for (int c = 0; c < SpellCharacters; c++)
             {
-                var player = new Player(records[c], new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), new Session());
+                var player = new Player(records[c], new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), new NullPlayerSession());
                 spellbook.LoadCharacter(records[c].Id, []);
                 for (uint spell = 0; spell < 18; spell++)
                 {
@@ -297,15 +298,5 @@ public sealed class SaveQueueLoadBenchmarkTests(ITestOutputHelper output) : IDis
 
         public Task RemoveAsync(int characterId, uint spell, CancellationToken cancellationToken = default) => inner.RemoveAsync(characterId, spell, cancellationToken);
         public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default) => inner.DeleteCharacterAsync(characterId, cancellationToken);
-    }
-
-    private sealed class Session : IPlayerSession
-    {
-        public int AccountId => 1;
-        public AccountSecurity Security => AccountSecurity.Player;
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) { }
-        public void ProcessWorldPackets(Player player) { }
-        public void Kick() { }
-        public void OnLoggedOut() { }
     }
 }

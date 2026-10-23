@@ -10,8 +10,8 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Npc;
 
@@ -180,7 +180,7 @@ public sealed class VendorMovementPauseTests
 
             var factions = new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(2, 0, 0, 8, 0, 0)]);
             Services = new QuestNpcServices(new QuestStore(new QuestContent([], [], [])), NpcStore.Empty,
-                new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions)), new QuestNpcOptions(), new QuestFlowKit.RecordingSink(),
+                new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions)), new QuestNpcOptions(), new QuestFlowTestKit.RecordingSink(),
                 () => 100, NullLogger.Instance);
             Services.CompleteLoad(Services.Track(Player), new CharacterQuestData([], []));
             Session.Clear();

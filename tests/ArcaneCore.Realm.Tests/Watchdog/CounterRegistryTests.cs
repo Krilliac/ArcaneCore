@@ -7,7 +7,7 @@ namespace ArcaneCore.Realm.Tests.Watchdog;
 
 public sealed class CounterRegistryTests
 {
-    private readonly CounterRegistry _registry = WatchdogTestSupport.NewRegistry();
+    private readonly CounterRegistry _registry = WatchdogTestKit.NewRegistry();
 
     [Fact]
     public void GetOrAdd_ReturnsTheSameCounterForTheSameName_AndRejectsAKindMismatch()
@@ -44,8 +44,8 @@ public sealed class CounterRegistryTests
         Assert.Equal(10, counter.Value);
         Assert.Equal(4, gauge.Value);
         Assert.Equal("c=10", counter.ToString());
-        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(counter.Increment, 1_000_000));
-        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(() => gauge.Set(3), 100_000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(counter.Increment, 1_000_000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(() => gauge.Set(3), 100_000));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public sealed class CounterRegistryTests
     {
         _registry.GetOrAdd("a");
         _registry.GetOrAdd("b");
-        long bytes = WatchdogTestSupport.AllocatedBy(() =>
+        long bytes = WatchdogTestKit.AllocatedBy(() =>
         {
             long sum = 0;
             foreach (Counter counter in _registry.Counters)

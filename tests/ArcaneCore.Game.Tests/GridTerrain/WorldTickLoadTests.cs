@@ -10,6 +10,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Tests.Transports;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -44,7 +45,7 @@ public sealed class WorldTickLoadTests(ITestOutputHelper output)
         var players = new Player[6];
         for (int i = 0; i < players.Length; i++)
         {
-            players[i] = TestWorld.CreatePlayer((uint)i + 1, hubs[0].X + i * 3, hubs[0].Y, new Sink(i + 1));
+            players[i] = TestWorld.CreatePlayer((uint)i + 1, hubs[0].X + i * 3, hubs[0].Y, new NullPlayerSession(i + 1));
             world.AddPlayer(players[i]);
         }
         WorldObject[] movers = spawns.OrderBy(o => MathF.Abs(o.X - hubs[0].X) + MathF.Abs(o.Y - hubs[0].Y)).Take(670).ToArray();
@@ -154,15 +155,6 @@ public sealed class WorldTickLoadTests(ITestOutputHelper output)
     private static long Micros(long start) => (Stopwatch.GetTimestamp() - start) * 1_000_000 / Stopwatch.Frequency;
     private sealed record Row(int Index, long TickUs, long Bytes, int Gen0, int Gen1, int Gen2, long CommandsUs, long FeaturesUs,
         long SimulationUs, long VisibilityUs, long ValuesUs, long FlushUs, long CleanupUs, long LoadUs, long TerrainUs, long VmapUs, long PathUs);
-    private sealed class Sink(int accountId) : IPlayerSession
-    {
-        public int AccountId => accountId;
-        public AccountSecurity Security => AccountSecurity.Player;
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) { }
-        public void ProcessWorldPackets(Player player) { }
-        public void Kick() { }
-        public void OnLoggedOut() { }
-    }
     private sealed class LoadMovement(Player[] players, WorldObject[] movers, Vector2 hub) : IMapUpdater
     {
         public int Ticks { get; private set; }

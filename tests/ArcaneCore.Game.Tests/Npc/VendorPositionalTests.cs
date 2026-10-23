@@ -4,7 +4,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
-using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
+using static ArcaneCore.Game.Tests.Npc.NpcServiceTestKit;
 using ItemsResult = ArcaneCore.Game.Items.InventoryResult;
 
 namespace ArcaneCore.Game.Tests.Npc;
@@ -19,24 +19,24 @@ public sealed class VendorPositionalTests
     private static NpcContent Vendor(params uint[] items)
         => NpcContent.Empty with
         {
-            VendorItems = items.Select((item, slot) => new VendorItem { Entry = NpcServiceKit.Entry, Item = item, Slot = (uint)slot }).ToArray(),
+            VendorItems = items.Select((item, slot) => new VendorItem { Entry = NpcServiceTestKit.Entry, Item = item, Slot = (uint)slot }).ToArray(),
         };
 
-    private static NpcServiceKit Kit(params uint[] items)
+    private static NpcServiceTestKit Kit(params uint[] items)
     {
-        var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(items));
+        var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(items));
         kit.Player.Money = 10_000;
         kit.Session.Clear();
         return kit;
     }
 
-    private static void BuyAt(NpcServiceKit kit, uint item, ObjectGuid bag, byte slot, byte count = 1)
+    private static void BuyAt(NpcServiceTestKit kit, uint item, ObjectGuid bag, byte slot, byte count = 1)
         => kit.Services.BuyItemInSlot(kit.Player, kit.Npc.Guid, item, bag, slot, count);
 
     [Fact]
     public void IntoABackpackSlot_PutsTheItemExactlyThere()
     {
-        using NpcServiceKit kit = Kit(Lantern);
+        using NpcServiceTestKit kit = Kit(Lantern);
         byte slot = InventorySlots.ItemStart + 7;
         BuyAt(kit, Lantern, kit.Player.Guid, slot);
 
@@ -51,7 +51,7 @@ public sealed class VendorPositionalTests
     [Fact]
     public void IntoASlotOfAWornBag_PutsTheItemInThatBag()
     {
-        using NpcServiceKit kit = Kit(Lantern);
+        using NpcServiceTestKit kit = Kit(Lantern);
         Item pouch = kit.Give(Pouch);
         kit.Player.Inventory.AutoEquipItem(pouch.BagSlot, pouch.Slot);
         Assert.Same(pouch, kit.Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.BagStart));
@@ -68,7 +68,7 @@ public sealed class VendorPositionalTests
     public void AnUnknownBagGuid_IsIgnoredAsACheat_WithoutAnyReply()
     {
         // ItemHandler.cpp:681-683: bag not found, return before BuyItemFromVendor (no error packet either).
-        using NpcServiceKit kit = Kit(Lantern);
+        using NpcServiceTestKit kit = Kit(Lantern);
         BuyAt(kit, Lantern, ObjectGuid.WithEntry(HighGuid.Item, 0, 4242), InventorySlots.ItemStart);
 
         Assert.Empty(kit.Drain());
@@ -81,7 +81,7 @@ public sealed class VendorPositionalTests
     {
         // _CanStoreItem_InSpecificSlot: a non-empty slot must merge (Item::CanBeMergedPartlyWith: other entry or
         // full stack is EQUIP_ERR_ITEM_CANT_STACK, Item.cpp:1187-1195).
-        using NpcServiceKit kit = Kit(Lantern);
+        using NpcServiceTestKit kit = Kit(Lantern);
         Item blocker = kit.Give(Junk);
         BuyAt(kit, Lantern, kit.Player.Guid, blocker.Slot);
 
@@ -93,7 +93,7 @@ public sealed class VendorPositionalTests
     [Fact]
     public void IntoASlotHoldingTheSameStackableItem_MergesIntoIt()
     {
-        using NpcServiceKit kit = Kit(Bread);
+        using NpcServiceTestKit kit = Kit(Bread);
         Item stack = kit.Give(Bread, 5);
         BuyAt(kit, Bread, kit.Player.Guid, stack.Slot);   // BuyCount 5 per purchase
 
@@ -106,7 +106,7 @@ public sealed class VendorPositionalTests
     public void IntoAnEquipmentSlot_WearsTheItem()
     {
         // Player.cpp:18469-18491: IsEquipmentPos, one item, CanEquipNewItem, EquipNewItem.
-        using NpcServiceKit kit = Kit(Helm);
+        using NpcServiceTestKit kit = Kit(Helm);
         BuyAt(kit, Helm, kit.Player.Guid, InventorySlots.Head);
 
         Assert.Equal(Helm, kit.Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Head)?.Entry);
@@ -118,7 +118,7 @@ public sealed class VendorPositionalTests
     public void IntoAnEquipmentSlot_MoreThanOneIsNotEquippable()
     {
         // Player.cpp:18471-18475.
-        using NpcServiceKit kit = Kit(Helm);
+        using NpcServiceTestKit kit = Kit(Helm);
         BuyAt(kit, Helm, kit.Player.Guid, InventorySlots.Head, count: 2);
 
         Assert.Equal([ItemsResult.ItemCantBeEquipped], ItemTestData.EquipErrors(kit.Session));
@@ -129,7 +129,7 @@ public sealed class VendorPositionalTests
     [Fact]
     public void IntoTheWrongEquipmentSlot_ItCannotBeEquipped()
     {
-        using NpcServiceKit kit = Kit(Helm);
+        using NpcServiceTestKit kit = Kit(Helm);
         BuyAt(kit, Helm, kit.Player.Guid, InventorySlots.Chest);
 
         Assert.Equal([ItemsResult.ItemCantBeEquipped], ItemTestData.EquipErrors(kit.Session));
@@ -140,7 +140,7 @@ public sealed class VendorPositionalTests
     [Fact]
     public void IntoAWornEquipmentSlot_IsRefusedWithoutSwapping()
     {
-        using NpcServiceKit kit = Kit(Helm);
+        using NpcServiceTestKit kit = Kit(Helm);
         BuyAt(kit, Helm, kit.Player.Guid, InventorySlots.Head);
         kit.Session.Clear();
         BuyAt(kit, Helm, kit.Player.Guid, InventorySlots.Head);
@@ -155,7 +155,7 @@ public sealed class VendorPositionalTests
     public void IntoAPositionThatIsNeitherInventoryNorEquipment_DoesNotGoToThatSlot()
     {
         // Player.cpp:18492-18496: bank and buyback slots are not valid vendor destinations.
-        using NpcServiceKit kit = Kit(Lantern);
+        using NpcServiceTestKit kit = Kit(Lantern);
         BuyAt(kit, Lantern, kit.Player.Guid, InventorySlots.BankItemStart);
         BuyAt(kit, Lantern, kit.Player.Guid, InventorySlots.BuybackStart);
 
@@ -168,12 +168,12 @@ public sealed class VendorPositionalTests
     public void TheVendorChecksStillRunFirst()
     {
         // BuyItemFromVendor checks the vendor list and the money before it looks at the position.
-        using NpcServiceKit poor = Kit(Lantern);
+        using NpcServiceTestKit poor = Kit(Lantern);
         poor.Player.Money = 10;
         BuyAt(poor, Lantern, poor.Player.Guid, InventorySlots.ItemStart + 3);
         Assert.Equal((byte)BuyResult.NotEnoughMoney, poor.Single(WorldOpcode.SmsgBuyFailed)[12]);
 
-        using NpcServiceKit unlisted = Kit(Bread);
+        using NpcServiceTestKit unlisted = Kit(Bread);
         BuyAt(unlisted, Lantern, unlisted.Player.Guid, InventorySlots.ItemStart + 3);
         Assert.Equal((byte)BuyResult.CantFindItem, unlisted.Single(WorldOpcode.SmsgBuyFailed)[12]);
     }
@@ -181,7 +181,7 @@ public sealed class VendorPositionalTests
     [Fact]
     public void ThePlainBuyOpcodeStillPlacesAnywhere()
     {
-        using NpcServiceKit kit = Kit(Lantern);
+        using NpcServiceTestKit kit = Kit(Lantern);
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Lantern, 1);
 
         Assert.Equal(Lantern, kit.Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.ItemStart)?.Entry);

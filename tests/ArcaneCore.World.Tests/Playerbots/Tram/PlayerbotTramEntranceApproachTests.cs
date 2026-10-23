@@ -3,8 +3,8 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
-using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
