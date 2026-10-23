@@ -88,4 +88,19 @@ public sealed class PlayerbotSocialRecorderTests
         PlayerbotSocialRecorder recorder = Make();
         recorder.Guarded(() => throw new InvalidOperationException("boom"));
     }
+
+    [Fact]
+    public void GuardedWithState_RunsTheStepOnItsState_SwallowsAThrowingOne_AndAllocatesNothingPerCall()
+    {
+        PlayerbotSocialRecorder recorder = Make();
+        int ran = 0;
+        recorder.Guarded(5, state => ran += state);
+        Assert.Equal(5, ran);
+        recorder.Guarded("boom", static message => throw new InvalidOperationException(message));
+
+        for (int i = 0; i < 100; i++) recorder.Guarded((Recorder: recorder, Step: i), static state => state.Recorder.Untrack(state.Step + 1000));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++) recorder.Guarded((Recorder: recorder, Step: i), static state => state.Recorder.Untrack(state.Step + 1000));
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 1_000, "a per-call allocation (24 bytes or more) would add up to 24000"); // a stray one-off from the runtime is not one
+    }
 }

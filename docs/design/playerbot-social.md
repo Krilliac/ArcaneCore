@@ -53,7 +53,7 @@ Also persist a short **conversation summary** per (bot, player) (last topic + 1-
 
 Stable **traits** from the guid hash, extending `PlayerbotOpportunityModel.Personality`: sociability, chattiness, generosity, curiosity, helpfulness. Every new behaviour multiplies its chance by the relevant trait so the population varies.
 
-**Help and bystanders** (added 2026-10-23): a bot gains affinity toward anyone who helps it, such as joining the fight on a mob it tagged or healing it (once per fight; the helper bot gains some toward it too). It loses affinity toward a same-faction bystander who deliberately watched it die: in range, healthy, out of combat and able to matter for the whole low-health window, and did not help. The bot chooses whether that can happen: in a losing fight with such a bystander nearby it either **calls for help** (a yell plus a targeted help emote; more likely the more sociable it is and the more it likes them, never toward people it dislikes or the other faction) or **goes it alone**. Only someone it asked and who still ignored it is blamed; a bot that chose to go solo blames nobody. Bots that are asked may answer, weighted by their helpfulness and affinity.
+**Help and bystanders** (added 2026-10-23): a bot gains affinity toward anyone who helps it, such as joining the fight on a mob it tagged or healing it (once per fight; the helper bot gains some toward it too). It loses affinity toward a same-faction bystander who deliberately watched it die: in range, healthy, out of combat and able to matter for the whole low-health window, and did not help. The bot chooses whether that can happen: in a losing fight with such a bystander nearby it either **calls for help** (a yell plus a targeted help emote; more likely the more sociable it is and the more it likes them, never toward people it dislikes or the other faction) or **goes it alone**. Only someone it asked and who still ignored it is blamed; a bot that chose to go solo blames nobody. Bots that are asked may answer, weighted by their helpfulness and affinity (P1 builds the asking, the go-it-alone decision and the blame; answering a call for help is deferred to P2's help lane).
 
 Uses: invite acceptance (affinity threshold instead of only guild/friends), conversation partner choice, help chance, recruitment, prompt facts ("you grouped with X twice; X tanks").
 
@@ -123,6 +123,33 @@ Opposite factions can't understand each other's chat, so emotes are their langua
 - **Escalation**: each side may grow while the other side keeps growing: party → raid (up to 40) when both sides keep adding members and enough bots are nearby. It ends when one side wins, retreats or the fight goes quiet for a few minutes; the outcome feeds back into affinity (shared victory bonds the winners, and so on).
 - **Safeguards (all options, on by default)**: only on PvP-enabled targets (PvP realm rules or a flagged player; never force-flags anyone), no fights inside sanctuaries or capital cities' guarded cores, a level-range check (no level 60 parties hunting level 20 players), a size cap relative to the defending side (hunters can't exceed defenders by more than a ratio until the defence also escalates), a cooldown per rival after a hunt, and corpse-camping prevention (a killed target is not attacked again for a while after it releases or resurrects). Real players can opt out of bot rivalries the same way they opt out of AI chat.
 
+### 4.10 World events, world PvP and world bosses (requested 2026-10-23)
+
+Today bots play battlegrounds (`Battlegrounds/`) and GM-run event scenarios (`EventScenarios/`), and only *talk* about world bosses and the war effort. The server already runs the content (`game_event`, Silithyst, the Eastern Plaguelands towers, the Ahn'Qiraj war effort, world bosses, holidays), so bots join it as players would, through real packets and the existing goal machinery. Each activity is one more goal source for the brain and the group coordinator, weighted by traits and affinity.
+
+**Holidays and seasonal events** (`game_event` active → event goals):
+- Event quests and repeatables at the right level: Lunar Festival elders, Love is in the Air, Noblegarden eggs, Children's Week, Midsummer bonfires (honour your own, and with low affinity toward the other faction, desecrate theirs), Harvest Festival, Hallow's End candy buckets and the Headless Horseman-style event bosses where present, Winter Veil gifts and Greatfather Winter, Darkmoon Faire turn-ins (gathered or crafted items), the Stranglethorn Fishing Extravaganza.
+- Social flavour: holiday emotes and greetings, costumes/wands used on friends (and on rivals), dancing at the Midsummer fires, gifts to high-affinity friends.
+
+**Ahn'Qiraj war effort** (while the war-effort event is active):
+- Bots gather or buy the requested materials (herbs, bars, leather, bandages, food) through their existing gathering/professions and the AH, and turn them in at their faction's collection NPCs; per-resource progress steers what they gather (the most behind first).
+- Commendation/reputation turn-ins, chatter about progress ("Copper bars are almost done!"), guilds pooling materials.
+- The gong and the opening of the gates as a server-wide moment: bots travel to Silithus to see it and fight in the opening battle.
+
+**World PvP objectives** (bots of the right level in the zone):
+- Eastern Plaguelands towers: capture and defend towers in groups; hold them for the buff.
+- Silithus: gather and turn in Silithyst, steal it from carriers of the other faction, escort friendly carriers.
+- These are natural rivalry generators: captures, steals and kills feed affinity (P1) and hunting/defence groups (P6). In War Mode they become the front lines.
+- Same safeguards as 4.8 (PvP rules, level ranges, opt-out, caps unless War Mode).
+
+**World bosses** (Azuregos, Lord Kazzak, the Emerald Dragons and any others in the world database):
+- A boss spawn (or a scout bot seeing one) raises a raid goal through the group coordinator: bots of the right level from both nearby zones and guilds are recruited (affinity and trust decide who gets asked and who answers), assigned roles, travel together and pull when enough are there.
+- Real players can lead or join: bots answer "LFM Azuregos" in world/LFG chat and accept raid invites from players they like.
+- The other faction may contest the boss: in normal mode a standoff with emotes or a fight depending on affinity; in War Mode a battle.
+- Loot follows normal raid rules (no ninja looting, see 4.9); a kill is a shared victory that bonds everyone involved.
+
+**Battlegrounds** (already supported): add the social layer: friends and guildmates queue together as premades, rivals are remembered from battleground fights too, and bots chat about results.
+
 ### 4.9 Additions approved 2026-10-23
 
 | # | Addition | Phase |
@@ -139,17 +166,18 @@ Opposite factions can't understand each other's chat, so emotes are their langua
 | 10 | Server-wide caps on concurrent hunts and raid-size fights | P6 |
 | 11 | Metrics for every social event + a long population soak test that checks affinity settles instead of polarising | each phase |
 
-**War Mode** (`World:Playerbots:Social:WarMode`, off by default; a server mode for massive world PvP): hate mechanics at maximum: negative affinity changes multiplied, never forgotten (no drift back for grudges and rivals), and the caps lifted (daily caps, hunt concurrency, hunter-to-defender ratio, per-rival cooldowns), so feuds can grow into server-wide raid wars. It still never force-flags anyone for PvP, players who opted out stay out, and the bots' think budget still bounds CPU. P1 implements its memory side; P6 its rivalry side. P1 keeps War Mode in a separate war layer (extra columns on the relation row) so switching it off leaves normal mode exactly as if it had never been on. P6 note: hunts that only qualified under War Mode are wound down when it is switched off.
+**War Mode** (`World:Playerbots:Social:WarMode`, off by default; a server mode for massive world PvP): hate mechanics at maximum: negative affinity changes multiplied, never forgotten (no drift back for grudges and rivals), and the caps lifted (daily caps, hunt concurrency, hunter-to-defender ratio, per-rival cooldowns), so feuds can grow into server-wide raid wars. It still never force-flags anyone for PvP, players who opted out stay out, and the bots' think budget still bounds CPU. War Mode keeps its own **war layer** of affinity and rivalries alongside the normal one. Normal affinity keeps following the normal rules the whole time and War Mode never writes to it; decisions read the war layer only while War Mode is on. Turning it off therefore puts every bot back exactly where normal mode would have left it. The war layer stays dormant for the next war (or is wiped, with `ClearOnDisable`), and hunts that only qualified under War Mode wind down. P1 implements its memory side; P6 its rivalry side.
 
 ## 5. Phasing (each phase is shippable on its own, behind options that default to today's behaviour where it changes anything visible)
 
 | Phase | Delivers | Main files |
 |---|---|---|
-| P1 Social memory | `playerbot_relation` + conversation summaries persisted; traits; events wired; prompt/template facts; `.playerbot social <bot>` GM inspect | new `Social/PlayerbotSocialMemory.cs`, Kernel store, Data module (schema 60) |
+| P1 Social memory | `playerbot_relation` + conversation summaries persisted; traits; events wired; prompt/template facts; `.playerbot social <bot>` GM inspect | new `Social/PlayerbotSocialMemory.cs`, Kernel store, Data module (schema 64) |
 | P2 Initiative & help | proactive openings, follow-ups, trouble scan, rez/buff strangers, surroundings comments | `Social/PlayerbotSocialInitiative.cs`, `PlayerbotBrain` help lane |
 | P3 Cooperation | recruitment of non-goal bots, bot LFG answering, guild grouping, affinity invite policy, raid escalation for world elites | `Groups/PlayerbotGroupCoordinator.cs`, `Party/PlayerbotGroupInvites.cs` |
 | P4 Trading | group gifts, bot↔bot swaps/loans, WTS completion, AH reagents | new `Economy/PlayerbotTrades.cs` |
 | P6 Rivalry & world PvP | cross-faction emotes, rival flag, hunting parties, defence groups, escalation to raids, safeguards | `Social/PlayerbotRivalry.cs`, `Groups/PlayerbotGroupCoordinator.cs` (rivalry/defence goals), `Risk/` |
+| P7 World events | holidays and seasonal events; Ahn'Qiraj war effort; world PvP objectives (EPL towers, Silithyst); world-boss raids; social layer for battlegrounds | new `Events/PlayerbotWorldEventGoals.cs`, `Events/PlayerbotWarEffort.cs`, `Events/PlayerbotWorldPvpObjectives.cs`, `Groups/PlayerbotGroupCoordinator.cs` (world-boss raid goal) |
 | P5 Questions & learning | people-questions (a); curiosity mode (b) with claims, verification, trust, rumour spread | `Social/PlayerbotQuestions.cs`, `playerbot_knowledge` (schema 61) |
 
 Every phase: QA scenario tests in `tests/ArcaneCore.World.Tests/Playerbots/`, docs in `docs/areas/playbots-social.md`, options documented (DocKeyAudit), fault sites under `playerbot.social`.
@@ -163,4 +191,5 @@ Approved with every new behaviour **on by default** and the **model enabled**:
 - **D3 Knowledge sharing**: rumours spread between bots, with confidence decaying per hop.
 - **D4 Model use**: model-backed openings, answers and claim parsing are enabled. The chat safety layer (opt-in, "ai off", strikes, disclosure, spend cap) still decides per player whether a model or a template speaks; templates remain the fallback.
 - **D5 Order**: P1 → P3 → P2 → P4 → P5, each phase its own PR.
+- **D7 World events** (added 2026-10-23): after the current work. Holidays and the war effort need no grouping and can follow P1; world-boss raids need P3; world PvP objectives build on P6. So: P7a holidays + war effort after P1, P7b world bosses after P3, P7c world PvP objectives after P6.
 - **D6 Rivalries** (added 2026-10-23): cross-faction emotes for neutral/friendly pairs; hunting parties against disliked targets and defence groups for the target, escalating up to raids. P1 already records PvP kills and emotes; P6 builds the behaviour after P3 (it reuses the group coordinator). Safeguards in 4.8 on by default.

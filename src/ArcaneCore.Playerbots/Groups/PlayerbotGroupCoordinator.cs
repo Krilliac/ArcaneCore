@@ -103,7 +103,23 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>The bots' social memory seam (set by the feature on attach; null in a host without it). Group events are recorded through it.</summary>
     internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
 
-    /// <summary>Record <paramref name="e"/> for every ordered pair of the group's joined or invited members: each managed bot remembers each other member.</summary>
+    /// <summary>A member joined the server group: each managed bot among it and the members that joined before remembers the other as grouped (an invitation alone is not being grouped).</summary>
+    private void NoteJoined(BotGroup group, Member joined)
+    {
+        BotSocial.PlayerbotSocialRecorder? social = Social;
+        if (social is not { Enabled: true }) return;
+        social.Guarded(() =>
+        {
+            foreach (Member other in group.Members)
+            {
+                if (ReferenceEquals(other, joined) || !other.Joined) continue;
+                if (!joined.Real) social.Note(joined.Guid, other.Guid, BotSocial.PlayerbotSocialEvent.Grouped);
+                if (!other.Real) social.Note(other.Guid, joined.Guid, BotSocial.PlayerbotSocialEvent.Grouped);
+            }
+        });
+    }
+
+    /// <summary>Record <paramref name="e"/> for every ordered pair of the group's members: each managed bot remembers each other member.</summary>
     private void NotePairs(BotGroup group, BotSocial.PlayerbotSocialEvent e)
     {
         BotSocial.PlayerbotSocialRecorder? social = Social;
@@ -267,13 +283,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         LoadEncounters();
     }
 
-    // Members the leader kicked since the last scan: leaving by a kick is not abandoning the run.
+    // Members of this coordinator's own groups that were kicked since the last scan: leaving by a kick is not abandoning the run. An entry goes
+    // when the scan consumes it or when its group ends; a kick anywhere else in the world is not kept (it can never be consumed).
     private readonly HashSet<ObjectGuid> _kicked = [];
 
-    private void OnMemberKicked(ObjectGuid kicker, ObjectGuid kicked)
+    /// <summary>Kicks held for the next member scan (tests).</summary>
+    internal int KickedPending => _kicked.Count;
+
+    internal void OnMemberKicked(ObjectGuid kicker, ObjectGuid kicked)
     {
-        if (_kicked.Count >= 64) _kicked.Clear();
-        _kicked.Add(kicked);
+        if (_groups.Any(g => g.Members.Any(m => m.Guid == kicked))) _kicked.Add(kicked);
         Social?.Note(kicked, kicker, BotSocial.PlayerbotSocialEvent.Kicked);
     }
 
@@ -1087,7 +1106,6 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         IPathfinder? pathfinder = _world is not null ? WorldCollision.Of(_world).Pathfinder : null;
         group.Approach = SnapToMesh(pathfinder, goal.MeetingMap, plan.Leader.Position, ApproachPoint(goal, plan.Leader.Position));
         _groups.Add(group);
-        NotePairs(group, BotSocial.PlayerbotSocialEvent.Grouped);
         Totals = (Totals.Formed + 1, Totals.Completed, Totals.Failed);
         Note($"group {group.Id} formed for {goal}: leader {plan.Leader.Name}, "
              + string.Join(", ", group.Members.Select(m => $"{m.Name} {m.Role.ToString().ToLowerInvariant()}")));
@@ -1388,7 +1406,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         uint now = Now;
         Group? formed = groupManager.GetGroup(leader.Guid);
         foreach (Member member in group.Members.Where(m => !m.Joined))
-            if (formed?.IsMember(member.Guid) == true) member.Joined = true;
+            if (formed?.IsMember(member.Guid) == true)
+            {
+                member.Joined = true;
+                NoteJoined(group, member);
+            }
 
         bool needsRaid = group.Goal.Size > PlayerbotGroupContent.PartySize || group.Siege is not null;
         if (needsRaid && formed is { IsRaid: false } && formed.MemberCount >= Group.MinMemberCount && formed.IsLeader(leader.Guid))
@@ -1779,6 +1801,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             foreach (Member member in group.Members.Where(m => !m.Real)) _failStreaks.Remove((member.BotId, group.Goal.Key));
         ResetCompletedRun(group);
         foreach (Member member in group.Members.Where(m => !m.Real).ToArray()) Release(group, member);
+        foreach (Member member in group.Members) _kicked.Remove(member.Guid); // a kick the scan never reached (the group ended first)
         _groups.Remove(group);
         NoteRunEnded(group);
         Note($"group {group.Id} disbanded ({group.Reason})");
@@ -1788,6 +1811,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private void Release(BotGroup group, Member member, ObjectGuid? leftAlready = null)
     {
         _memberOf.Remove(member.BotId);
+        _kicked.Remove(member.Guid);
         if (!_bots.TryGetValue(member.BotId, out PlayerbotGroupBot bot)) return;
         bot.Brain.GroupHeld.Remove((group.Goal.QuestId, group.Goal.ObjectiveEntry));
         if (bot.Session.Player is not { } player) return;

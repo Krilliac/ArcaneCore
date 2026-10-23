@@ -181,7 +181,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
         BotSocial.PlayerbotSocialMemory memory = feature.Social.Memory;
         foreach (string line in SocialLines(botName, BotSocial.PlayerbotTraits.For(bot.Guid.Value), memory.Enabled, memory.Top(botId, 10),
-                     guid => context.World.FindOnlinePlayer(new ObjectGuid(guid))?.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+                     guid => context.World.FindOnlinePlayer(new ObjectGuid(guid))?.Name, memory.NowMs))
             context.Reply(line);
         return true;
     }

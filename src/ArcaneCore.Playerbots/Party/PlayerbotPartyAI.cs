@@ -533,14 +533,18 @@ internal sealed class PlayerbotPartyAI
         if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
         BotSocial.PlayerbotEmoteMood mood = BotSocial.PlayerbotEmoteMoods.Classify(emote.TextEmote);
         if (mood is BotSocial.PlayerbotEmoteMood.Neutral or BotSocial.PlayerbotEmoteMood.Help) return;
-        bool otherFaction = _session.World.FindOnlinePlayer(emote.Emoter) is { } emoter && emoter.Team != player.Team;
         BotSocial.PlayerbotSocialEvent noted = mood switch
         {
             BotSocial.PlayerbotEmoteMood.Friendly => BotSocial.PlayerbotSocialEvent.FriendlyEmote,
             BotSocial.PlayerbotEmoteMood.Apology => BotSocial.PlayerbotSocialEvent.Apologized,
             _ => BotSocial.PlayerbotSocialEvent.RudeEmote,
         };
-        social.NoteById(_botId, player.Guid, emote.Emoter, noted, otherFaction);
+        // The world lookup is part of the recording step: a fault in it is recorded at the social-memory site, never thrown into the packet handler.
+        social.Guarded(() =>
+        {
+            bool otherFaction = _session.World.FindOnlinePlayer(emote.Emoter) is { } emoter && emoter.Team != player.Team;
+            social.NoteById(_botId, player.Guid, emote.Emoter, noted, otherFaction);
+        });
     }
 
     /// <summary>The bot's facts for a line it starts itself (world thread; the social features' guild announcements and greetings).</summary>
@@ -753,8 +757,12 @@ internal sealed class PlayerbotPartyAI
         if (!PlayerbotLootRolls.TryReadWon(payload, out PlayerbotLootRolls.RollResult won)) return;
         if (!_myRolls.Remove((won.Source.Value, won.Slot), out RollVote mine) || Social is not { Enabled: true } social) return;
         if (won.Winner == player.Guid || _session.World.FindOnlinePlayer(won.Winner) is not { } winner) return;
-        if (!PlayerbotLootRolls.IsNinja(mine, won.Vote, PlayerbotLootRolls.WantsItem(winner, won.ItemId, Services.Spells?.System.Store, Services.Spells?.Spellbook))) return;
-        social.NoteById(_botId, player.Guid, won.Winner, BotSocial.PlayerbotSocialEvent.NinjaLoot, winner.Team != player.Team);
+        // Judging whether the winner could use the item reads the item and spell stores: part of the recording step, so a fault is recorded, not thrown.
+        social.Guarded(() =>
+        {
+            if (!PlayerbotLootRolls.IsNinja(mine, won.Vote, PlayerbotLootRolls.WantsItem(winner, won.ItemId, Services.Spells?.System.Store, Services.Spells?.Spellbook))) return;
+            social.NoteById(_botId, player.Guid, won.Winner, BotSocial.PlayerbotSocialEvent.NinjaLoot, winner.Team != player.Team);
+        });
     }
 
     /// <summary>mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted, any other declined.</summary>

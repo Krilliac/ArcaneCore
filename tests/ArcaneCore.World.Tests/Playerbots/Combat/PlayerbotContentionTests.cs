@@ -10,6 +10,8 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.BotSocial;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Combat;
@@ -105,6 +107,94 @@ public sealed class PlayerbotContentionTests
                 Assert.NotSame(held, brain.InspectionTarget);
                 Assert.True(brain.Contention.IsSetAside(held.Guid.Value, host.World.NowMs));
                 Assert.False(brain.Contention.IsAssisting(held.Guid));
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            stranger.Kick(); await stranger.ManagedClosed;
+            bot.Kick(); await bot.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task AHunterWhoLandsTheFirstHitWhileTheBotIsStillApproaching_IsNotAKillSteal()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession bot = await CombatTestSessions.EnterAsync(host, "CONTBOT", "Contbot");
+        WorldSession stranger = await CombatTestSessions.EnterAsync(host, "CONTSTR", "Contstr");
+        var brain = new PlayerbotBrain(bot, Options());
+        var recorder = new PlayerbotSocialRecorder(new PlayerbotSocialMemory(new PlayerbotSocialMemoryOptions(), () => 1_760_000_000_000), NullLogger.Instance);
+        brain.Social = recorder;
+        Guid botId = Guid.NewGuid();
+        try
+        {
+            Creature mob = null!;
+            await host.OnWorldAsync(() => mob = AddCreature(host, bot.Player!, 995061, 4f));
+            await host.WaitForWorldAsync(() => bot.Player!.VisibleObjects.Contains(mob.Guid), "mob");
+            await host.OnWorldAsync(() =>
+            {
+                recorder.Track(botId, (int)bot.Player!.Guid.Low);
+                bot.ManagedBudget = new ManagedActionBudget(1);
+                NoSpells(bot);
+                brain.Update(500);
+                Assert.Same(mob, brain.InspectionTarget); // the bot has chosen the mob and is walking at it (a swing may even be sent), landing nothing
+                Assert.False(bot.Player.Combat.ThreatenedBy.Contains(mob));
+                // The hunter's shot lands first: the tag is the hunter's, and the bot gives the mob up.
+                bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+                Think(bot, brain);
+                Assert.True(brain.Contention.IsSetAside(mob.Guid.Value, host.World.NowMs));
+                Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _), "the first tagger was blamed");
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            stranger.Kick(); await stranger.ManagedClosed;
+            bot.Kick(); await bot.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task AMobTheBotHadEngaged_ThatAnotherPlayersTagTakesOver_IsAKillSteal_Once()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession bot = await CombatTestSessions.EnterAsync(host, "CONTBOT", "Contbot");
+        WorldSession stranger = await CombatTestSessions.EnterAsync(host, "CONTSTR", "Contstr");
+        var brain = new PlayerbotBrain(bot, Options());
+        var options = new PlayerbotSocialMemoryOptions();
+        var recorder = new PlayerbotSocialRecorder(new PlayerbotSocialMemory(options, () => 1_760_000_000_000), NullLogger.Instance);
+        brain.Social = recorder;
+        Guid botId = Guid.NewGuid();
+        try
+        {
+            Creature mob = null!;
+            await host.OnWorldAsync(() => mob = AddCreature(host, bot.Player!, 995062, 4f));
+            await host.WaitForWorldAsync(() => bot.Player!.VisibleObjects.Contains(mob.Guid), "mob");
+            await host.OnWorldAsync(() =>
+            {
+                recorder.Track(botId, (int)bot.Player!.Guid.Low);
+                bot.ManagedBudget = new ManagedActionBudget(1);
+                NoSpells(bot);
+                brain.Update(500);
+                Assert.Same(mob, brain.InspectionTarget);
+                // The bot lands the first hit: it is on the threat list and holds the tap.
+                bot.Player.Map!.Combat.DealDamage(bot.Player, mob, 1);
+                Think(bot, brain);
+                Assert.Same(mob, brain.InspectionTarget);
+                Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _));
+
+                // The mob resets (threat and tap gone) and the other player tags it afresh before the bot is on its list again.
+                mob.Combat.Threat.Clear();
+                mob.ClearLootRecipient();
+                bot.Player.Map!.Combat.CombatStop(bot.Player);
+                Assert.False(bot.Player.Combat.ThreatenedBy.Contains(mob));
+                bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+                Think(bot, brain);
+                Assert.True(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out PlayerbotRelation blamed), "the bot had it first");
+                Assert.Equal((short)options.AffinityPerKillSteal, blamed.Affinity);
                 return true;
             });
         }

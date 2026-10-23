@@ -195,6 +195,15 @@ public sealed class PlayerbotSocialForgivenessTests
     [InlineData("many apologies", true)]
     [InlineData("hello there", false)]
     [InlineData("", false)]
+    [InlineData("I'm so sorry.", true)]
+    [InlineData("sorry! I did not mean it", true)]
+    [InlineData("not sorry", false)]
+    [InlineData("I'm not even sorry", false)]
+    [InlineData("never sorry", false)]
+    [InlineData("I won't say sorry", false)]
+    [InlineData("I don’t apologize", false)]
+    [InlineData("sorrycake", false)]
+    [InlineData("my badass is back", false)]
     public void TheApologyKeywords_AreMatchedCaseInsensitively(string text, bool expected)
         => Assert.Equal(expected, PlayerbotApology.IsApology(text));
 
@@ -401,6 +410,22 @@ public sealed class PlayerbotSocialForgivenessTests
         int value = Get(memory).Affinity;
         Assert.InRange(value, (int)Math.Floor(expected * 0.95), (int)Math.Ceiling(expected * 1.05));
         Assert.InRange(memory.Snapshot(Bot).Single().Affinity, (int)Math.Floor(expected * 0.95), (int)Math.Ceiling(expected * 1.05));
+    }
+
+    [Fact]
+    public void Top_OrdersByTheAffinityDecisionsRead_AndTheMemoryHasItsOwnClock()
+    {
+        (PlayerbotSocialMemory memory, _, PlayerbotWarModeOptions war, Clock clock) = Make(uncapped: true);
+        Assert.Equal(clock.Now, memory.NowMs);
+        // Both end with familiarity 2 and normal affinity -7; the war layer holds 10 at -27 and 11 at -7.
+        memory.Note(Bot, 1, 10, false, PlayerbotSocialEvent.TradeCompleted); // +3
+        memory.Note(Bot, 1, 11, false, PlayerbotSocialEvent.Kicked); // -10
+        war.Enabled = true;
+        memory.Note(Bot, 1, 10, false, PlayerbotSocialEvent.Kicked); // normal -7, war seeded at 3 then -30
+        memory.Note(Bot, 1, 11, false, PlayerbotSocialEvent.TradeCompleted); // normal -7, war -10 + 3
+        Assert.Equal(new ulong[] { 11, 10 }, memory.Top(Bot, 2).Select(r => r.OtherGuid)); // war on: the war layer decides
+        war.Enabled = false;
+        Assert.Equal(new ulong[] { 10, 11 }, memory.Top(Bot, 2).Select(r => r.OtherGuid)); // a tie in the normal layer: the lower guid first
     }
 
     [Fact]

@@ -56,6 +56,9 @@ internal sealed class PlayerbotSocialMemory
 
     internal bool Enabled => _options.Enabled;
 
+    /// <summary>The memory's own clock, in unix ms (what every age and decay here is measured against).</summary>
+    internal long NowMs => _clock();
+
     /// <summary>
     /// Record one event. No-op when disabled or when the bot and the other are the same character (see <see cref="SetSelf"/>).
     /// <paramref name="otherFaction"/> marks the other as being of the opposing team.
@@ -253,7 +256,7 @@ internal sealed class PlayerbotSocialMemory
         return false;
     }
 
-    /// <summary>The bot's <paramref name="n"/> best-known relations (effective familiarity, then affinity, highest first).</summary>
+    /// <summary>The bot's <paramref name="n"/> best-known relations (effective familiarity, then <see cref="EffectiveAffinity(PlayerbotRelation)"/>, highest first).</summary>
     public IReadOnlyList<PlayerbotRelation> Top(Guid botId, int n)
     {
         if (n <= 0) return [];
@@ -263,7 +266,7 @@ internal sealed class PlayerbotSocialMemory
             if (!_bots.TryGetValue(botId, out BotMemory? bot)) return [];
             return [.. bot.Relations.Values
                 .Select(entry => Effective(botId, bot, entry, now))
-                .OrderByDescending(r => r.Familiarity).ThenByDescending(r => r.Affinity).ThenBy(r => r.OtherGuid)
+                .OrderByDescending(r => r.Familiarity).ThenByDescending(EffectiveAffinity).ThenBy(r => r.OtherGuid)
                 .Take(n)];
         }
     }
@@ -317,6 +320,24 @@ internal sealed class PlayerbotSocialMemory
     public void Forget(Guid botId)
     {
         lock (_gate) _bots.Remove(botId);
+    }
+
+    /// <summary>
+    /// Drop every bot's relation toward <paramref name="other"/> (the character no longer exists) and return the bots that held one; their
+    /// <see cref="Version"/> moves, so the next save writes them without it.
+    /// </summary>
+    public IReadOnlyList<Guid> ForgetOthers(ulong other)
+    {
+        List<Guid> changed = [];
+        lock (_gate)
+            foreach ((Guid botId, BotMemory bot) in _bots)
+            {
+                if (!bot.Relations.Remove(other)) continue;
+                bot.Version = ++_versionSeq;
+                changed.Add(botId);
+            }
+
+        return changed;
     }
 
     private BotMemory BotFor(Guid botId)

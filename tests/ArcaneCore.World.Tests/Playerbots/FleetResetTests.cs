@@ -89,6 +89,31 @@ public sealed class FleetResetTests
     }
 
     [Fact]
+    public async Task Reset_ForgetsEveryBotsRelations_InMemoryAndInTheStore()
+    {
+        var store = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        Guid[] ids = await CreateBotsAsync(world, 2, started: 0);
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        var memory = world.Bots.Social.Memory;
+        ulong secondGuid = ArcaneCore.Game.ObjectGuid.Player((uint)registry.Single(b => b.BotId == ids[1]).CharacterId).Value;
+        memory.Note(ids[0], registry.Single(b => b.BotId == ids[0]).CharacterId, secondGuid, true, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        memory.Note(ids[1], registry.Single(b => b.BotId == ids[1]).CharacterId, 4242, false, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        foreach (Guid id in ids) await store.ReplaceAsync(id, memory.Snapshot(id));
+        Assert.Equal(2, (await store.LoadAllAsync()).Count);
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(2, 2), _ => { });
+
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.Empty(await store.LoadAllAsync());
+        foreach (Guid id in ids) Assert.Empty(memory.Snapshot(id));
+    }
+
+    [Fact]
     public async Task Reset_WhenARegistryRowNamesARealPlayersCharacter_RefusesAndTouchesNothing()
     {
         await using PopulationTestHost world = await StartAsync();

@@ -1,4 +1,5 @@
 using System.Text;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Chat;
@@ -98,5 +99,21 @@ public sealed class PlayerbotSocialSpeechTests
         Assert.Contains("guid 2B (bot): affinity -60", lines[2]);
         Assert.Contains("flags Rival, topic -, seen 1d ago", lines[2]);
         Assert.Equal("No relations yet.", PlayerbotExtraCommands.SocialLines("Relbot", PlayerbotTraits.For(9), true, [], _ => null, 0).Last());
+    }
+
+    [Fact]
+    public async Task AHeardLineListener_BuildsNoHeardLines_WhileTheMemoryIsDisabled_AndDoesAgainWhenItIsSwitchedOn()
+    {
+        var options = new PlayerbotOptions();
+        options.Validate();
+        await using var chat = new PlayerbotChat(options, new FakeBotChatClient(), new FakeBotChatEnvironment(new()), new ManualTime(), new ListLogger());
+        chat.Social = new PlayerbotSocialRecorder(new PlayerbotSocialMemory(options.Social.Memory, () => 0, options.Social.WarMode),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        chat.LineHeard += _ => { };
+
+        options.Social.Memory.Enabled = false;
+        Assert.False(chat.HasHearers); // nobody would use the lines: the party AI builds none
+        options.Social.Memory.Enabled = true; // a live reload
+        Assert.True(chat.HasHearers);
     }
 }

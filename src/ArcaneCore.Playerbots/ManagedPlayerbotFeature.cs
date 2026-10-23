@@ -719,6 +719,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
                     .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
                 _homes.TryRemove(bot.BotId, out _);
+                await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
                 orphans.Add(bot.BotId);
                 continue;
             }
@@ -1733,6 +1734,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
             _quarantine.TryRemove(bot.BotId, out _);
             _homes.TryRemove(bot.BotId, out _);
+            await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
             lock (_snapshotGate)
             {
                 Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => s.BotId != bot.BotId).ToArray());
@@ -3201,6 +3203,32 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         BotSocial.PlayerbotWarModeOptions war = _options.Social.WarMode;
         if (war.Enabled) Volatile.Write(ref _warLayerLive, 1);
         else if (war.ClearOnDisable && Interlocked.Exchange(ref _warLayerLive, 0) == 1) memory.ClearWarLayers();
+    }
+
+    /// <summary>
+    /// A bot was deleted (or its character was already gone): forget its relations in memory and in the store, and the other bots' relations
+    /// toward its character, which are written again without it. Never throws: a failure is recorded at <c>playerbot.social-memory</c>.
+    /// </summary>
+    private async Task ForgetRelationsAsync(IServiceProvider provider, Guid botId, int characterId)
+    {
+        try
+        {
+            BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            memory.Forget(botId);
+            IReadOnlyList<Guid> others = characterId > 0 ? memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value) : [];
+            if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
+            await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, []), CancellationToken.None).ConfigureAwait(false);
+            foreach (Guid other in others)
+            {
+                IReadOnlyList<PlayerbotRelation> rows = memory.Snapshot(other);
+                await RetryTransientBusyAsync(() => store.ReplaceAsync(other, rows), CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+            logger.LogWarning(ex, "Playerbot {BotId} social memory could not be removed ({Type})", botId, ex.GetType().Name);
+        }
     }
 
     private async Task SaveBotRelationsAsync(ActiveBot active)

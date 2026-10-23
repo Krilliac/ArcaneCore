@@ -166,6 +166,38 @@ public sealed class PlayerbotSocialFightWorldTests
     }
 
     [Fact]
+    public async Task TheFightObserver_AllocatesNothing_OutOfCombat_OrInsideACombatThinkThatDoesNotSample()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        await world.AddBotAsync("Allocbot");
+        PlayerbotSocialRecorder recorder = RecorderOf(world);
+        var options = new PlayerbotSocialMemoryOptions();
+        var fight = new PlayerbotFightSocial(Guid.NewGuid(), options) { Recorder = recorder };
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player bot = Online(world, "Allocbot");
+            WorldRuntime runtime = world.Host.World;
+            for (int i = 0; i < 50; i++) fight.Observe(bot, runtime, 1000); // warm up: jitted, delegates cached
+            Assert.False(bot.Combat.IsInCombat);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++) fight.Observe(bot, runtime, 1000);
+            Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 1_000, "per-call allocation"); // the closure it replaced cost 56 bytes a call
+
+            // In a fight, between two samples (a think a second apart does read the threat lists; a think inside the second does not).
+            Creature mob = SpawnMob(bot);
+            Engage(mob, bot);
+            Assert.True(bot.Combat.IsInCombat);
+            fight.Observe(bot, runtime, 5000);
+            Assert.True(fight.InFight);
+            for (int i = 0; i < 50; i++) fight.Observe(bot, runtime, 5001);
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++) fight.Observe(bot, runtime, 5001);
+            Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 1_000, "per-call allocation"); // the closure it replaced cost 56 bytes a call
+        });
+    }
+
+    [Fact]
     public async Task AnAssistBetweenTwoBots_IsOneHelp_ExactlyOnEachSide_AssistPathAndFightReadsBoth()
     {
         await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);

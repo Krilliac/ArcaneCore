@@ -427,6 +427,8 @@ public sealed partial class ManagedPlayerbotFeature
                 await setAsides.ReplaceAsync(bot.BotId, [], cancellationToken).ConfigureAwait(false);
             _homes.TryRemove(bot.BotId, out _);
             _loadedSetAsides.TryRemove(bot.BotId, out _);
+            foreach (int characterId in bot.CharacterIds) await ForgetRelationsAsync(provider, bot.BotId, characterId).ConfigureAwait(false);
+            if (bot.CharacterIds.Count == 0) await ForgetRelationsAsync(provider, bot.BotId, 0).ConfigureAwait(false);
             counts.Removed.Add(bot.BotId);
             _spareAccounts.Enqueue(new SpareAccount(bot.AccountId, bot.AccountName));
         }

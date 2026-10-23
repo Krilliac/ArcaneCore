@@ -65,6 +65,38 @@ public sealed class PlayerbotSocialMemoryPersistenceTests
     }
 
     [Fact]
+    public async Task DeletingABot_ForgetsItsRelations_AndEveryOtherBotsRelationTowardIt_InMemoryAndInTheStore()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var store = new MemoryRelationStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Deletedrel", 1, 1)).BotId);
+        Guid kept = Assert.IsType<Guid>((await feature.CreateAsync("Keptrel", 1, 1)).BotId);
+        int goneCharacter = (await owners.FindAsync(gone))!.CharacterId, keptCharacter = (await owners.FindAsync(kept))!.CharacterId;
+        ulong goneGuid = ArcaneCore.Game.ObjectGuid.Player((uint)goneCharacter).Value;
+        PlayerbotSocialMemory memory = feature.Social.Memory;
+        memory.Note(gone, goneCharacter, 4242, false, PlayerbotSocialEvent.Grouped);
+        memory.Note(kept, keptCharacter, goneGuid, true, PlayerbotSocialEvent.Grouped);
+        memory.Note(kept, keptCharacter, 4242, false, PlayerbotSocialEvent.Grouped);
+        await store.ReplaceAsync(gone, memory.Snapshot(gone));
+        await store.ReplaceAsync(kept, memory.Snapshot(kept));
+        Assert.Equal(3, (await store.LoadAllAsync()).Count);
+
+        Assert.True((await feature.DeleteAsync(gone.ToString())).Success);
+
+        Assert.Empty(memory.Snapshot(gone));
+        Assert.False(memory.TryGet(kept, goneGuid, out _));
+        Assert.True(memory.TryGet(kept, 4242, out _)); // the others' other relations stay
+        PlayerbotRelation left = Assert.Single(await store.LoadAllAsync());
+        Assert.Equal((kept, 4242UL), (left.BotId, left.OtherGuid));
+    }
+
+    [Fact]
     public async Task ThrowingStore_NeverBlocksTheStop_AndLeavesTheBotStopped()
     {
         var accounts = new InMemoryAccountStore();
