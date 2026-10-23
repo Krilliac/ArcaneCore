@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
@@ -75,6 +77,33 @@ public sealed class PlayerbotRaidFillWorldTests
             Player leader = world.Host.World.FindOnlinePlayer("Rgathgm")!;
             return names.All(n => world.Host.World.FindOnlinePlayer(n) is { IsInWorld: true } bot && FleetWorld.Xy(bot, leader) < 30f);
         }, "the bots are summoned to the GM");
+    }
+
+    /// <summary>
+    /// A started bot's status line says it runs when the world thread reads it at once, before any tick has published it. A command
+    /// handler picks bots from this read (<c>.bot raid</c> and <c>.bot party fill</c> take only running ones); it used to return the
+    /// last tick's copy, still holding the stopped row of the bot's creation, so <see cref="Raid_WithNoGroup_FormsARaid_AndSummonsTheBots"/>
+    /// and <see cref="Raid_PastFortyMembers_IsClampedToTheFreeSlots"/> answered "invited 2 of 3" or "no eligible online bots" in CI.
+    /// </summary>
+    [Fact]
+    public async Task Snapshot_OnTheWorldThread_ShowsABotTheMomentItsStartReturns()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync(o => o.MaxBots = 12);
+        await world.AddBotAsync("Rsnapa", 6);
+        var missed = new List<string>();
+        for (int i = 0; i < 11; i++)
+        {
+            string name = "Rsnapb" + (char)('a' + i);
+            PlayerbotOperationResult created = await world.Bots.CreateAsync(name, 1, 1);
+            Assert.True(created.Success, created.Code);
+            Guid id = created.BotId!.Value;
+            Assert.True((await world.Bots.StartAsync(id.ToString())).Success);
+            bool running = await world.Host.OnWorldAsync(() =>
+                world.Bots.Snapshot().Any(s => s.BotId == id && s.State == ManagedPlayerbotState.Running));
+            if (!running) missed.Add(name);
+        }
+
+        Assert.Empty(missed);
     }
 
     /// <summary>A party the caller leads is converted to a raid and filled.</summary>
