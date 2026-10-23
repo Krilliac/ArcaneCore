@@ -171,7 +171,7 @@ public sealed class PlayerbotBuiltinChatTests
             {
                 foreach (Match placeholder in Regex.Matches(line, @"\{[A-Za-z]+\}")) Assert.Contains(placeholder.Value, known);
                 string filled = PlayerbotBuiltinChat.Fill(line, full)!;
-                Assert.NotNull(filled);
+                Assert.True(filled is not null, $"{key}: {line}");
                 Assert.True(filled.Length <= PlayerbotChatPrompts.MaxReplyLength, key);
                 Assert.DoesNotContain("|", filled);
             }

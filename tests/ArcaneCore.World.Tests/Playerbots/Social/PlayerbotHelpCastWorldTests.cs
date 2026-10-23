@@ -24,6 +24,9 @@ public sealed class PlayerbotHelpCastWorldTests
     private const byte Priest = 5;
     private const uint Fortitude = 990_801;
 
+    /// <summary>The real resurrection spell casts for 10 seconds on the live clock: the offer reaches the client after that, so the wait must outlast it with room for a loaded machine.</summary>
+    private static readonly TimeSpan ResurrectCastWait = TimeSpan.FromSeconds(60);
+
     /// <summary>The in-memory world data (human and orc warriors only) that also lets a human priest be created.</summary>
     private sealed class PriestWorldData : IWorldDataStore
     {
@@ -102,7 +105,7 @@ public sealed class PlayerbotHelpCastWorldTests
         Assert.Equal(deadGuid, brain.LastHelpTarget);
 
         // The dead player sees the offer and turns it down; only then is "not offered again" worth checking (an offer still open would hide a second one).
-        await dead.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest);
+        await dead.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest, ResurrectCastWait); // the real spell casts for 10 s of real time
         await dead.SendAsync(WorldOpcode.CmsgResurrectResponse, DeclineResponse());
         await world.Host.WaitForWorldAsync(() => ResurrectionRequests.Get(world.Host.World.FindOnlinePlayer("Helpghost")!) is null, "the declined offer to be gone");
         for (int i = 1; i <= 3; i++) await ScanAsync(world, now + i * 6_000L);
@@ -130,7 +133,7 @@ public sealed class PlayerbotHelpCastWorldTests
         await ScanAsync(world, now);
         PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
         Assert.Equal(1, lane.Resurrections);
-        await dead.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest);
+        await dead.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest, ResurrectCastWait); // the real spell casts for 10 s of real time
         await dead.SendAsync(WorldOpcode.CmsgResurrectResponse, DeclineResponse());
         await world.Host.WaitForWorldAsync(() => ResurrectionRequests.Get(world.Host.World.FindOnlinePlayer("Helpstubborn")!) is null, "the declined offer to be gone");
         PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);

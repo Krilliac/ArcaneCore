@@ -2,6 +2,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Progression;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Chat;
@@ -330,6 +331,62 @@ public sealed class PlayerbotInitiativeTests
         long third = Roll(second + 61_000);
         Assert.True(third < second + 10 * 60_000L);
         await PassAsync(world, third);
+        Assert.Equal(1, Lane(world).Comments);
+        _ = bot;
+    }
+
+    [Fact]
+    public async Task AnEnemyRaid_IsRemarkedOn_OnlyWhenFourRealPlayersOfTheOtherFactionAreAround_ManagedBotsDoNotCount()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient listener = await world.AddPlayerAsync("Raidlisten");
+        Guid bot = await world.AddBotAsync("Raidwatch");
+        await using WorldTestClient orcOne = await world.AddPlayerAsync("Raidorca", race: 2);
+        await using WorldTestClient orcTwo = await world.AddPlayerAsync("Raidorcb", race: 2);
+        await using WorldTestClient orcThree = await world.AddPlayerAsync("Raidorcc", race: 2);
+        await world.AddBotAsync("Raidorcbot", race: 2); // the fourth enemy is a managed bot: not a raid of players
+        await HelpTestKit.StandAsync(world, "Raidwatch", ("Raidlisten", 5f), ("Raidorca", 10f), ("Raidorcb", 15f), ("Raidorcc", 20f), ("Raidorcbot", 25f));
+        ObjectGuid botGuid = await world.Host.PlayerStateAsync("Raidwatch", p => p.Guid);
+        uint zone = await world.Host.PlayerStateAsync("Raidwatch", p => p.ZoneId);
+        PlayerbotTraits traits = PlayerbotTraits.For(botGuid.Value);
+        long Roll(long after) => HelpTestKit.NowWhere(t => t > after && PlayerbotInitiativeRules.Rolls(botGuid.Value, zone, t, PlayerbotInitiativeRules.CommentSalt, PlayerbotInitiativeRules.CommentChance(traits.Chattiness, 0f)));
+
+        long first = Roll(0);
+        await PassAsync(world, first);
+        Assert.Equal(0, Lane(world).Comments); // three players and a bot
+
+        await using WorldTestClient orcFour = await world.AddPlayerAsync("Raidorcd", race: 2);
+        await HelpTestKit.StandAsync(world, "Raidwatch", ("Raidorcd", 30f));
+        await PassAsync(world, Roll(first + 30_000));
+        Assert.Equal(1, Lane(world).Comments);
+        _ = bot;
+    }
+
+    [Fact]
+    public async Task AFirstMount_IsRemarkedOn_OnlyForAPlayerSeenOnFootFirst()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient rider = await world.AddPlayerAsync("Mountrider");
+        Guid bot = await world.AddBotAsync("Mountwatch");
+        await HelpTestKit.StandAsync(world, "Mountwatch", ("Mountrider", 5f));
+        ObjectGuid botGuid = await world.Host.PlayerStateAsync("Mountwatch", p => p.Guid);
+        uint zone = await world.Host.PlayerStateAsync("Mountwatch", p => p.ZoneId);
+        PlayerbotTraits traits = PlayerbotTraits.For(botGuid.Value);
+        long Roll(long after) => HelpTestKit.NowWhere(t => t > after && PlayerbotInitiativeRules.Rolls(botGuid.Value, zone, t, PlayerbotInitiativeRules.CommentSalt, PlayerbotInitiativeRules.CommentChance(traits.Chattiness, 0f)));
+        Task SetMountAsync(uint display) => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Mountrider").SetUInt32(UpdateFields.UnitFieldMountdisplayid, display));
+        await world.Host.OnWorldAsync(() => world.Host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.GiveLevel(HelpTestKit.Online(world, "Mountrider"), 40));
+
+        // Mounted from the first sighting: the bot never saw them on foot, so there is no first mount to congratulate.
+        await SetMountAsync(1);
+        long first = Roll(0);
+        await PassAsync(world, first);
+        Assert.Equal(0, Lane(world).Comments);
+
+        // On foot, seen; then mounted at a time whose comment roll says yes.
+        await SetMountAsync(0);
+        await PassAsync(world, first + 30_000);
+        await SetMountAsync(1);
+        await PassAsync(world, Roll(first + 60_000));
         Assert.Equal(1, Lane(world).Comments);
         _ = bot;
     }
