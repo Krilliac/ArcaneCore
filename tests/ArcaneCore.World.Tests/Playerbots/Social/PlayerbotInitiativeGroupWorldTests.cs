@@ -28,6 +28,17 @@ public sealed class PlayerbotInitiativeGroupWorldTests
 {
     private const byte Human = 1, Warrior = 1;
 
+    /// <summary>
+    /// Step the manual clock in small slices until <paramref name="condition"/> holds, within a generous <b>real-time</b> deadline: the work being waited for (a socket read, the chat
+    /// worker) happens off the world thread, so the number of slices says nothing about whether it has finished.
+    /// </summary>
+    private static Task UntilClockAsync(GroupTestWorld world, Func<bool> condition, string what)
+        => HelpTestKit.UntilAsync(() =>
+        {
+            world.RunAsync(50).GetAwaiter().GetResult();
+            return condition();
+        }, what, seconds: 90);
+
     private static async Task GivePlayerQuestAsync(GroupTestWorld world, string playerName, uint quest)
         => await world.OnWorldAsync(() =>
         {
@@ -85,16 +96,16 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         });
 
         await player.SendChatAsync(ChatType.Say, Language.Common, "sure");
-        // The packet crosses a socket in real time while the world's clock is manual: give the server real time to read it.
-        for (int i = 0; i < 100 && lane.Accepted == 0; i++)
+        // The packet crosses a socket and is read off the world thread while the world's clock is manual: step the clock and run the lane's pass until it has accepted, within a real-time deadline.
+        await UntilClockAsync(world, () =>
         {
-            await world.RunAsync(200);
-            await world.OnWorldAsync(() =>
+            world.OnWorldAsync(() =>
             {
                 lane.Run(SocialTestKit.BotPass(world.World.Host, world.World.Host.World.NowMs));
                 return true;
-            });
-        }
+            }).GetAwaiter().GetResult();
+            return lane.Accepted != 0;
+        }, "the lane to accept the player's yes");
 
         Assert.Equal(1, lane.Accepted);
         Assert.Equal(0, lane.Ignored);
@@ -103,15 +114,14 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         byte[] invite = await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
         Assert.Equal(bot.Name, new PacketReader(invite).ReadCString());
         await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
-
-        // The accept crosses a socket in real time while the world clock is manual: step the clock in small slices. The coordinator's own rule (a group with fewer than two bots is
+        // The accept crosses a socket in real time while the world clock is manual: step the clock in small slices until the server has read it, within a real-time deadline. The coordinator's own rule (a group with fewer than two bots is
         // given up as "too-few") disbands this bot-and-player pair a tick after it forms, so the proof is the coordinator's record that the player joined it as a member.
         string trace = string.Empty;
-        for (int i = 0; i < 200 && !trace.Contains("Teamyes damage", StringComparison.Ordinal); i++)
+        await UntilClockAsync(world, () =>
         {
-            await world.RunAsync(100);
-            trace = await world.TraceAsync();
-        }
+            trace = world.TraceAsync().GetAwaiter().GetResult();
+            return trace.Contains("Teamyes damage", StringComparison.Ordinal) && trace.Contains("complete: 2 members", StringComparison.Ordinal);
+        }, "the player to join the bot's group and the group to complete");
 
         Assert.Contains("formed for", trace);
         Assert.Contains("Teambotone tank, Teamyes damage", trace);
@@ -219,24 +229,23 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         Assert.True(lane.Openings >= 1, "the asker opened");
         // The line is phrased by the model and said in real time (the wait for an answer, and the healer's own roll, start when it is said).
         PlayerbotBrain askerBrain = PartyTestHost.Feature(world.World.Host).FindBrain(tank.Id)!;
-        for (int i = 0; i < 200 && await world.OnWorldAsync(() => askerBrain.Risk.GroupSignal) is null; i++)
-        {
-            await world.RunAsync(50);
-        }
+        await UntilClockAsync(world, () => world.OnWorldAsync(() => askerBrain.Risk.GroupSignal).GetAwaiter().GetResult() is not null, "the asker's group signal");
 
         // The answering bot's yes raised the asker's group signal, and the follow-through (one offer per pass until the asker waits) ran from the lane's passes.
         PlayerbotGroupSignal? signal = await world.OnWorldAsync(() => askerBrain.Risk.GroupSignal);
         Assert.True(signal.HasValue);
         Assert.Equal(PlayerbotGroupSignal.ContentionSource, signal!.Value.Source);
-        for (int i = 0; i < 100 && lane.BotOffers == 0; i++)
+        long passAt = at + 1_000;
+        await UntilClockAsync(world, () =>
         {
-            await world.RunAsync(50);
-            await world.OnWorldAsync(() =>
+            world.OnWorldAsync(() =>
             {
-                lane.Run(SocialTestKit.BotPass(world.World.Host, at + 1_000 + i * 50L));
+                lane.Run(SocialTestKit.BotPass(world.World.Host, passAt));
                 return true;
-            });
-        }
+            }).GetAwaiter().GetResult();
+            passAt += 50;
+            return lane.BotOffers != 0;
+        }, "the lane's follow-through offer");
 
         // The coordinator never paired the two itself (the healer set the quest aside), so the lane's follow-through is the only way the healer can have joined.
         Assert.Equal(1, lane.BotOffers);
