@@ -100,6 +100,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (options.BattlegroundCalls) Battlegrounds(pass, chat, options);
         if (options.RunCalls) Runs(pass, chat);
         if (options.LookingForGroup || options.QuestHelp) LookingForGroup(pass, chat, options);
+        Recruits(pass, chat);
         Bots(pass, chat, options);
         Prune(pass);
     }
@@ -816,9 +817,16 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     /// </summary>
     private bool Respond(BotHeardLine line)
     {
-        if (_hooked is not { IsActive: true } chat || chat.VoiceOptions is not { Enabled: true } options || !chat.SpeechOptions.Enabled || line.SenderIsBot) return false;
+        if (_hooked is not { IsActive: true } chat || chat.VoiceOptions is not { Enabled: true } options || !chat.SpeechOptions.Enabled) return false;
         if (services.GetService<ManagedPlayerbotFeature>() is not { } bots || bots.FindPartyAI(line.BotId) is not { } party) return false;
         if (bots.FindSession(line.BotId)?.Player is not { } player || player.Guid != line.BotGuid) return false;
+        if (line.SenderIsBot)
+        {
+            // Another bot's LFG or LFM line: the hearing bot may offer to join (the coordinator decides); no other line of a bot's is answered here.
+            AnswerBotCall(chat, options, bots, line, player, party);
+            return false;
+        }
+
         if (line.Type == ChatType.Whisper && options.AnswerPosts)
             return Answer(chat, options, line, player, party);
         if (options.GroupCalls && line.FirstHearing && line.Type is ChatType.Party or ChatType.Raid or ChatType.RaidLeader or ChatType.Guild
@@ -830,6 +838,55 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// A bot heard another bot's call for a group in a world channel (an LFG or LFM still on the board): it offers to the coordinator
+    /// (<see cref="PlayerbotGroupCoordinator.OfferLfg"/>, with the <see cref="PlayerbotCooperationOptions.LfgAnswerBonus"/> chance). Only a bot
+    /// the coordinator holds a place for ("pledged") answers in the channel, as a reply within the bot-to-bot turns: "inv me, ill tank".
+    /// Any other hearer stays silent.
+    /// </summary>
+    private bool AnswerBotCall(PlayerbotChat chat, PlayerbotVoiceOptions options, ManagedPlayerbotFeature bots, BotHeardLine line, Player player, PlayerbotPartyAI party)
+    {
+        if (line.Type != ChatType.Channel || line.ChannelName is null || services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return false;
+        if (!bots.Social.TryBot(line.SenderGuid, out Guid posterId, out _)) return false;
+        if (chat.Voice.Find(posterId, chat.NowMs, options.PostLifeSeconds * 1000L) is not { Kind: PlayerbotVoicePostKind.LookingForGroup } post) return false;
+        PlayerbotLfgOffer offer = coordinator.OfferLfg(line.BotId, posterId);
+        if (offer.Outcome != PlayerbotLfgOfferOutcome.Pledged) return false;
+        int turn = chat.NextBotTurn(line.SenderGuid, line.BotGuid);
+        if (turn <= 0) return false;
+        BotSpeech reply = BotSpeech.InChannel(line.ChannelName, string.Empty, "recruit-reply", BotSpeechPriority.Normal)
+            with { IsReply = true, ToBot = true, Turn = turn, Target = line.SenderName, TargetGuid = line.SenderGuid };
+        return SayRecruit(chat, line.BotId, player, party, reply, offer.Role, post.What ?? string.Empty);
+    }
+
+    private bool SayRecruit(PlayerbotChat chat, Guid botId, Player player, PlayerbotPartyAI party, BotSpeech speech, PlayerbotGroupRole role, string what)
+    {
+        (string key, string sentence, string instruction) = role switch
+        {
+            PlayerbotGroupRole.Tank => ("voice.recruit.tank", "You offer to tank the group that is looking for more.", "Answer the call for a group: say you will tank. Very short."),
+            PlayerbotGroupRole.Healer => ("voice.recruit.heal", "You offer to heal the group that is looking for more.", "Answer the call for a group: say you will heal. Very short."),
+            _ => ("voice.recruit.dps", "You offer to join the group that is looking for more.", "Answer the call for a group: say you will come along. Very short."),
+        };
+        return Say(chat, botId, player, party, speech, key, sentence, instruction, null, ("task", what), ("dungeon", what));
+    }
+
+    /// <summary>
+    /// The bots the coordinator recruited into a group (no call of theirs was answered) say they come: one line each in /say, "ill come, need
+    /// a healer?" (<see cref="PlayerbotGroupCoordinator.TakeRecruitSays"/>). A bot that cannot speak now (cooldown, nobody to hear) stays silent.
+    /// </summary>
+    private void Recruits(PlayerbotSocialPass pass, PlayerbotChat chat)
+    {
+        if (services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return;
+        foreach ((Guid botId, PlayerbotGroupRole role) in coordinator.TakeRecruitSays())
+        {
+            if (_budget <= 0) return;
+            PlayerbotSocialBot? bot = null;
+            foreach (PlayerbotSocialBot running in pass.Bots)
+                if (running.Id == botId) { bot = running; break; }
+            if (bot is null || !bot.Player.IsAlive || !Spend()) continue;
+            SayRecruit(chat, bot.Id, bot.Player, bot.Party, new BotSpeech(BotSpeechChannel.Say, string.Empty, "recruit", BotSpeechPriority.Normal), role, string.Empty);
+        }
     }
 
     private bool Answer(PlayerbotChat chat, PlayerbotVoiceOptions options, BotHeardLine line, Player player, PlayerbotPartyAI party)

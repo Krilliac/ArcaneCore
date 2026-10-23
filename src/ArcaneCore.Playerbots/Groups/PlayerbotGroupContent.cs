@@ -72,7 +72,10 @@ internal sealed record PlayerbotGroupGoal(
         $"{Kind.ToString().ToLowerInvariant()}:{(InInstance ? MapId : ObjectiveEntry)} quest={QuestId}{(ObjectiveItem != 0 ? $" item={ObjectiveItem} from={ObjectiveEntry}" : "")} size={Size} source={Source}");
 }
 
-/// <summary>A bot as the matcher sees it.</summary>
+/// <summary>
+/// A bot as the matcher sees it. <paramref name="Bonus"/> is the matching preference the cooperation rules add (a guildmate of the group's
+/// caller: 1; 0 otherwise): among bots that waited equally long it comes before level closeness.
+/// </summary>
 internal sealed record PlayerbotGroupCandidate(
     Guid BotId,
     ulong Guid,
@@ -84,7 +87,8 @@ internal sealed record PlayerbotGroupCandidate(
     Vector3 Position,
     PlayerbotRole TalentRole,
     float Gear,
-    uint NeedSinceMs);
+    uint NeedSinceMs,
+    int Bonus = 0);
 
 /// <summary>A formed group, before the invitations go out (<see cref="PlayerbotGroupContent.Match"/>).</summary>
 internal sealed record PlayerbotGroupPlan(
@@ -326,7 +330,7 @@ internal static class PlayerbotGroupContent
 
         if (chosen.Count < tanks + healers) return null;
         byte anchor = chosen.Count > 0 ? chosen[0].Bot.Level : left.Max(c => c.Level);
-        foreach (PlayerbotGroupCandidate rest in left.OrderBy(c => c.NeedSinceMs).ThenBy(c => Math.Abs(c.Level - anchor))
+        foreach (PlayerbotGroupCandidate rest in left.OrderBy(c => c.NeedSinceMs).ThenByDescending(c => c.Bonus).ThenBy(c => Math.Abs(c.Level - anchor))
                      .ThenBy(c => c.BotId).Take(size - chosen.Count).ToArray())
         {
             // A bot that prefers tanking or healing still fills a damage slot when the roles are covered.

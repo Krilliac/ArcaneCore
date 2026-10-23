@@ -291,6 +291,23 @@ internal sealed class PlayerbotSocialMemory
         }
     }
 
+    /// <summary>
+    /// Every relation of the bot a reader can see, as <see cref="TryGet"/> shows it (effective values), in no particular order. For passes
+    /// that look over all of a bot's relations at once (friend and ignore lists, guild invitations); sort the result if the order matters.
+    /// </summary>
+    public IReadOnlyList<PlayerbotRelation> Relations(Guid botId)
+    {
+        long now = _clock();
+        lock (_gate)
+        {
+            if (!_bots.TryGetValue(botId, out BotMemory? bot) || bot.Relations.Count == 0) return [];
+            var list = new List<PlayerbotRelation>(bot.Relations.Count);
+            foreach (Entry entry in bot.Relations.Values)
+                if (Visible(entry)) list.Add(Effective(botId, bot, entry, now));
+            return list;
+        }
+    }
+
     /// <summary>Load stored rows (startup). Does not change any bot's <see cref="Version"/>, so a loaded bot is not saved straight back.</summary>
     public void Load(IEnumerable<PlayerbotRelation> rows)
     {

@@ -317,6 +317,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             _groups.Clear();
             _memberOf.Clear();
             _waiting.Clear();
+            ResetRecruiting();
             _setAside.Clear();
             _failStreaks.Clear();
             _declinedPlayers.Clear();
@@ -997,30 +998,38 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     private void Match()
     {
-        if (!QuestGroupSlotFree() || GroupManagerOrNull() is not { } groupManager) return;
+        PruneRecruiting(Now);
+        if (!QuestGroupSlotFree())
+        {
+            NoteCapBlocked();
+            return;
+        }
+
+        if (GroupManagerOrNull() is not { } groupManager) return;
         foreach (var wanting in _waiting
                      .Select(w => (BotId: w.Key, Waiting: w.Value))
                      .GroupBy(w => (w.Waiting.Goal.Key, Team: _bots[w.BotId].Session.Player?.Team ?? 0))
                      .OrderBy(g => g.Min(w => w.Waiting.SinceMs)).ToArray())
         {
-            if (!QuestGroupSlotFree()) return;
+            if (!QuestGroupSlotFree())
+            {
+                NoteCapBlocked();
+                return;
+            }
+
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
             int size = wanting.Max(w => w.Waiting.Goal.Size);
-            var candidates = new List<PlayerbotGroupCandidate>();
-            foreach ((Guid botId, Waiting waiting) in wanting)
-            {
-                if (_bots[botId].Session.Player is not { IsAlive: true } player || player.MapId != goal.MeetingMap) continue;
-                if (player.Level < goal.MinLevel) continue;
-                if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), goal.Meeting) > MaxMeetingYards) continue;
-                candidates.Add(Candidate(botId, player, waiting.SinceMs));
-            }
+            List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, goal);
 
             PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups);
             if (plan is null && candidates.Count >= 1) plan = MatchWithVolunteer(candidates, size, goal, groupManager); // asked for it (Volunteers.cs)
+            List<Guid> recruited = [];
+            if (plan is null && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
             if (plan is null && _options.Groups.InvitePlayers && candidates.Count >= 1)
                 plan = MatchWithPlayer(candidates, size, goal, groupManager);
             if (plan is null) continue;
             Form(goal with { Size = size }, plan);
+            if (recruited.Count > 0) NoteRecruited(plan, recruited);
         }
     }
 

@@ -109,6 +109,12 @@ internal sealed class PlayerbotSocialPass(
 
     internal PlayerbotChat? Chat => chat;
 
+    /// <summary>The group coordinator, when the host runs one (guild calls for a forming group, <see cref="PlayerbotGuildChat"/>).</summary>
+    internal PlayerbotGroupCoordinator? Coordinator { get; init; }
+
+    /// <summary>The bots' social memory seam (friend and ignore lists, guild invitations by affinity); null without one.</summary>
+    internal PlayerbotSocialRecorder? Recorder { get; init; }
+
     internal IReadOnlySet<uint> Registered => registered;
 
     /// <summary>Whether the registry of bots has been read at least once (until then no guild is founded).</summary>
@@ -414,7 +420,11 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         Func<List<PlayerbotSocialBot>> gather = gatherBots && bots is not null ? (_gatherBots ??= GatherCurrentBots) : EmptyGather;
         return new PlayerbotSocialPass(_options, social, world, services, bots?.Chat, registry ?? EmptyRegistry, registry is not null, Timings, Random, _clockMs,
             elapsed, gather,
-            gatherBots ? _byCharacterScratch : null, gatherBots ? _botIdsScratch : null);
+            gatherBots ? _byCharacterScratch : null, gatherBots ? _botIdsScratch : null)
+        {
+            Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
+            Recorder = bots?.Social,
+        };
     }
 
     private void RunPass(long elapsed)

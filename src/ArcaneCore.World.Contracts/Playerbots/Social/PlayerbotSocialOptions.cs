@@ -37,6 +37,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>The War Mode server mode, memory side (<c>World:Playerbots:Social:WarMode</c>; off by default).</summary>
     public PlayerbotWarModeOptions WarMode { get; set; } = new();
 
+    /// <summary>Friend and ignore lists driven by affinity (<c>World:Playerbots:Social:Lists</c>).</summary>
+    public PlayerbotSocialListsOptions Lists { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
@@ -45,6 +48,8 @@ public sealed class PlayerbotSocialOptions
         if (Emotes is null) throw new InvalidOperationException($"{section}:Emotes is missing.");
         if (Memory is null) throw new InvalidOperationException($"{section}:Memory is missing.");
         if (WarMode is null) throw new InvalidOperationException($"{section}:WarMode is missing.");
+        if (Lists is null) throw new InvalidOperationException($"{section}:Lists is missing.");
+        Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();
         Memory.Validate();
@@ -88,9 +93,32 @@ public sealed class PlayerbotSocialGuildOptions
     /// <summary>How a guild is founded (<see cref="PlayerbotGuildCreation.Auto"/> by default).</summary>
     public PlayerbotGuildCreation Creation { get; set; } = PlayerbotGuildCreation.Auto;
 
+    /// <summary>
+    /// Let a guild's master or officer invite a guildless, same-team character it knows and likes (<see cref="GuildInviteAffinity"/>,
+    /// <see cref="GuildInviteMinFamiliarity"/>; at most one invitation per character per <see cref="GuildInviteCooldownDays"/>), and let a
+    /// guildless bot accept the invitation of a character it likes (<see cref="GuildAcceptAffinity"/>) (on by default).
+    /// </summary>
+    public bool AffinityInvites { get; set; } = true;
+
+    /// <summary>The affinity an officer needs toward a guildless character before it invites it (-100..100).</summary>
+    public int GuildInviteAffinity { get; set; } = 60;
+
+    /// <summary>The familiarity an officer needs with a guildless character before it invites it (0..1000).</summary>
+    public int GuildInviteMinFamiliarity { get; set; } = 8;
+
+    /// <summary>Days before the same character is invited again (0..365).</summary>
+    public int GuildInviteCooldownDays { get; set; } = 7;
+
+    /// <summary>The affinity toward the inviter at which a guildless bot accepts a guild invitation; it declines below it (-100..100).</summary>
+    public int GuildAcceptAffinity { get; set; } = 30;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social:Guilds";
+        if (GuildInviteAffinity is < -100 or > 100) throw new InvalidOperationException($"{section}: GuildInviteAffinity must be -100..100.");
+        if (GuildInviteMinFamiliarity is < 0 or > 1000) throw new InvalidOperationException($"{section}: GuildInviteMinFamiliarity must be 0..1000.");
+        if (GuildInviteCooldownDays is < 0 or > 365) throw new InvalidOperationException($"{section}: GuildInviteCooldownDays must be 0..365.");
+        if (GuildAcceptAffinity is < -100 or > 100) throw new InvalidOperationException($"{section}: GuildAcceptAffinity must be -100..100.");
         if (MaxBotGuilds is < 0 or > MaxBotGuildsCeiling) throw new InvalidOperationException($"{section}: MaxBotGuilds must be 0..{MaxBotGuildsCeiling}.");
         if (TargetSize is < MinTargetSize or > MaxTargetSize)
             throw new InvalidOperationException($"{section}: TargetSize must be {MinTargetSize}..{MaxTargetSize}.");
