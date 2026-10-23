@@ -204,11 +204,7 @@ public sealed partial class GameObject : WorldObject
     public float DistanceTo(WorldObject other)
     {
         ArgumentNullException.ThrowIfNull(other);
-        float dx = other.X - X;
-        float dy = other.Y - Y;
-        float dz = other.Z - Z;
-        float d = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)) - BoundingRadius - other.BoundingRadius;
-        return d > 0 ? d : 0;
+        return WorldGeometry.DistanceMinusRadii(this, other);
     }
 }
 

@@ -125,7 +125,7 @@ public sealed partial class CreatureMapSystem
         }
 
         radius += _options.AggroUsesBoundingRadius ? radii : 0f;
-        if (DistanceSquared(guard, who) >= radius * radius)
+        if (WorldGeometry.DistanceSq3D(guard, who) >= radius * radius)
         {
             return false;
         }
@@ -191,7 +191,7 @@ public sealed partial class CreatureMapSystem
         }
 
         float range = (scriptedRange ?? GetAttackDistance(creature, who)) + (_options.AggroUsesBoundingRadius ? radii : 0f);
-        return DistanceSquared(creature, who) < range * range;
+        return WorldGeometry.DistanceSq3D(creature, who) < range * range;
     }
 
     /// <summary>Stealth and invisibility (players only: creature stealth is not modelled) and line of sight.</summary>

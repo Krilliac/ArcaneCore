@@ -43,7 +43,7 @@ public sealed partial class CreatureMapSystem
         }
 
         float range = creature.Template.Detection;
-        return DistanceSquared(creature, who) <= range * range
+        return WorldGeometry.DistanceSq3D(creature, who) <= range * range
             && Map.Combat.Hooks.CanAttack(creature, who)
             && _ai.Hostility.IsHostile(creature, who)
             && CanSeeForAggro(creature, who);
@@ -154,7 +154,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            float distance = DistanceSquared(civilian, candidate);
+            float distance = WorldGeometry.DistanceSq3D(civilian, candidate);
             if (distance <= best && InLineOfSight(civilian, candidate))
             {
                 best = distance;
