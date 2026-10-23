@@ -76,7 +76,7 @@ public sealed class PlayerbotSameGoalWorldTests
             if (opcode is WorldOpcode.CmsgGroupAccept or WorldOpcode.CmsgGroupDecline) answers.Enqueue(opcode);
         };
         await player.SendAsync(WorldOpcode.CmsgGroupInvite, CString(bot.Name));
-        bool answered = await world.RunUntilAsync(15_000, () => !answers.IsEmpty);
+        bool answered = await world.RunUntilRealTimeAsync(() => !answers.IsEmpty); // the invite is read from the socket in real time
         Assert.True(answered, "the bot never answered the invitation" + Environment.NewLine + await world.TraceAsync());
         await world.RunAsync(500);
         ObjectGuid botGuid = await world.OnWorldAsync(() => world.Player(bot.Id).Guid);

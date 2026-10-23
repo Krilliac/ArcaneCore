@@ -188,6 +188,24 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <summary>Run the world (manual clock) until <paramref name="condition"/> holds after a tick, at most <paramref name="maxMs"/> of game time.</summary>
     public Task<bool> RunUntilAsync(uint maxMs, Func<bool> condition) => World.Host.World.AdvanceClockUntilAsync(maxMs, condition);
 
+    /// <summary>
+    /// Run the world (manual clock) in slices of 500 ms of game time until <paramref name="condition"/> holds after a tick, giving up after
+    /// <paramref name="timeout"/> (default 30 s) of <b>real</b> time. For a condition that waits on work outside the world thread (a chat worker,
+    /// a packet still on its way over the socket): the manual clock runs 200 ticks in well under a second, so a game-time budget alone can run out
+    /// before that work has had a chance on a loaded machine. The pause between slices lets it run.
+    /// </summary>
+    public async Task<bool> RunUntilRealTimeAsync(Func<bool> condition, TimeSpan? timeout = null)
+    {
+        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan limit = timeout ?? TimeSpan.FromSeconds(30);
+        while (true)
+        {
+            if (await RunUntilAsync(500, condition)) return true;
+            if (clock.Elapsed >= limit) return false;
+            await Task.Delay(20);
+        }
+    }
+
     public Task RunAsync(uint ms) => World.Host.World.AdvanceClockAsync(ms);
 
     /// <summary>Whether the bot's quest log has <paramref name="quest"/> (any state).</summary>
