@@ -17,7 +17,7 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.Extensions.Logging;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -202,10 +202,10 @@ public sealed partial class ScriptDev2DungeonTests
         var factory = new CreatureAiFactory();
         factory.Register(aiName, c => new GythAI(c));
         FakeCaster? caster = spellSystem ? new FakeCaster() : null;
-        (WorldRuntime world, Map map, CreatureMapSystem creatures) = CreatureAiTestSupport.CreateAiSystem(content,
+        (WorldRuntime world, Map map, CreatureMapSystem creatures) = CreatureAiTestKit.CreateAiSystem(content,
             new CreatureAiServices { Hostility = new AlwaysHostile(), Factory = factory, Spells = caster });
         using WorldRuntime runtime = world;
-        (Player player, _) = CreatureAiTestSupport.AddPlayer(world, 1, 0, 0);
+        (Player player, _) = CreatureAiTestKit.AddPlayer(world, 1, 0, 0);
         Creature gyth = Assert.Single(creatures.Creatures);
         gyth.AI!.CombatMovement = false;
         map.Combat.DealDamage(player, gyth, 1, direct: false);

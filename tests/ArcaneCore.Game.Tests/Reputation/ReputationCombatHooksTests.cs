@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Duel;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -64,7 +65,7 @@ public sealed class ReputationCombatHooksTests
         }
 
         public Creature Creature(uint template)
-            => new(template + 700, CreatureTestSupport.Template(template + 700, t => t.Faction = template), null, CreatureContent.Empty, new Random(1));
+            => new(template + 700, CreatureTestKit.Template(template + 700, t => t.Faction = template), null, CreatureContent.Empty, new Random(1));
 
         public void Dispose() => World.Dispose();
     }

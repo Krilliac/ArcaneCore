@@ -5,6 +5,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;

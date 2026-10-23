@@ -51,8 +51,8 @@ public sealed class PetTeleportTests : IDisposable
             Instant(Guardian, Effect(SpellEffectName.SummonGuardian, 1, misc: (int)GuardianEntry)),
             Instant(Critter, Effect(SpellEffectName.SummonCritter, 1, misc: (int)MiniPetEntry)),
             Instant(TimedPet, Effect(SpellEffectName.Summon, 0, misc: (int)TimedPetEntry)) with { Duration = new SpellDuration(60_000, 0, 60_000) });
-        _content = CreatureTestSupport.Content(
-            [.. new[] { Imp, HunterPet, TotemEntry, GuardianEntry, MiniPetEntry, TimedPetEntry }.Select(entry => CreatureTestSupport.Template(entry, b =>
+        _content = CreatureTestKit.Content(
+            [.. new[] { Imp, HunterPet, TotemEntry, GuardianEntry, MiniPetEntry, TimedPetEntry }.Select(entry => CreatureTestKit.Template(entry, b =>
             {
                 b.Name = $"Summon {entry}";
                 b.Faction = 14;

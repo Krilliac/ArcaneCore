@@ -15,7 +15,7 @@ using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -286,7 +286,7 @@ public sealed class NaxxramasTests
             SpellTestKit.Effect(SpellEffectName.ScriptEffect, 0));
         using var kit = new SpellTestKit(embrace);
         SpellScriptDispatcher.Install(kit.System, new SpellScriptRegistry([new WidowsEmbraceScript()]));
-        Player caster = ConditionTestSupport.CreatePlayer();
+        Player caster = ConditionTestKit.CreatePlayer();
         kit.World.AddPlayer(caster); kit.World.RunTick(0);
         Assert.True(caster.IsAlive);
         Assert.Equal(SpellCastResult.CastOk,
@@ -622,7 +622,7 @@ public sealed class NaxxramasTests
             SpellTestKit.Effect(SpellEffectName.Heal, 10));
         using var kit = new SpellTestKit(parent, child);
         SpellScriptDispatcher.Install(kit.System, new SpellScriptRegistry([new NaxxramasSpellScripts()]));
-        Player druid = ConditionTestSupport.CreatePlayer(cls: Class.Druid);
+        Player druid = ConditionTestKit.CreatePlayer(cls: Class.Druid);
         kit.World.AddPlayer(druid); kit.World.RunTick(0);
         druid.Health = 10;
         Assert.Equal(SpellCastResult.CastOk,

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Reload;
 using Microsoft.Extensions.Configuration;
@@ -123,12 +124,5 @@ public sealed class ConfReloadTests : IDisposable
         Assert.Equal(ReloadStatus.Applied, result.Status);
         Assert.Equal("FromConfAgain", _options.Motd);
         Assert.Equal(44f, _options.ListenRangeSay);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }

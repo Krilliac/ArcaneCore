@@ -2,10 +2,12 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
 using Xunit;
+using ScriptedRandom = ArcaneCore.Game.Tests.CombatCore.ScriptedRandom;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.CombatMechanics;
@@ -46,17 +48,17 @@ public sealed class MeleeDamageBonusTests
         };
 
     private static SpellTestKit Kit() => new(
-        RuleTestSupport.Grant(HumanoidFlat10, AuraType.ModDamageDoneCreature, 10, misc: 64),
-        RuleTestSupport.Grant(BeastFlat10, AuraType.ModDamageDoneCreature, 10, misc: 1),
-        RuleTestSupport.Grant(HumanoidApVersus140, AuraType.ModMeleeAttackPowerVersus, 140, misc: 64),
-        RuleTestSupport.Grant(MarkedMelee140, AuraType.MeleeAttackPowerAttackerBonus, 140),
-        RuleTestSupport.Grant(HumanoidVersus10, AuraType.ModDamageDoneVersus, 10, misc: 64),
-        RuleTestSupport.Grant(PhysicalTakenMinus10, AuraType.ModDamagePercentTaken, -10, misc: 1),
-        RuleTestSupport.Grant(MeleeTakenPct20, AuraType.ModMeleeDamageTakenPct, 20),
-        RuleTestSupport.Grant(MeleeTakenFlat5, AuraType.ModMeleeDamageTaken, 5),
-        RuleTestSupport.Grant(PhysicalTakenMinus5, AuraType.ModDamageTaken, -5, misc: 1),
-        RuleTestSupport.Grant(FireTakenMinus10, AuraType.ModDamagePercentTaken, -10, misc: 1 << (int)SpellSchool.Fire),
-        RuleTestSupport.Grant(RangedTakenPct50, AuraType.ModRangedDamageTakenPct, 50),
+        RuleTestKit.Grant(HumanoidFlat10, AuraType.ModDamageDoneCreature, 10, misc: 64),
+        RuleTestKit.Grant(BeastFlat10, AuraType.ModDamageDoneCreature, 10, misc: 1),
+        RuleTestKit.Grant(HumanoidApVersus140, AuraType.ModMeleeAttackPowerVersus, 140, misc: 64),
+        RuleTestKit.Grant(MarkedMelee140, AuraType.MeleeAttackPowerAttackerBonus, 140),
+        RuleTestKit.Grant(HumanoidVersus10, AuraType.ModDamageDoneVersus, 10, misc: 64),
+        RuleTestKit.Grant(PhysicalTakenMinus10, AuraType.ModDamagePercentTaken, -10, misc: 1),
+        RuleTestKit.Grant(MeleeTakenPct20, AuraType.ModMeleeDamageTakenPct, 20),
+        RuleTestKit.Grant(MeleeTakenFlat5, AuraType.ModMeleeDamageTaken, 5),
+        RuleTestKit.Grant(PhysicalTakenMinus5, AuraType.ModDamageTaken, -5, misc: 1),
+        RuleTestKit.Grant(FireTakenMinus10, AuraType.ModDamagePercentTaken, -10, misc: 1 << (int)SpellSchool.Fire),
+        RuleTestKit.Grant(RangedTakenPct50, AuraType.ModRangedDamageTakenPct, 50),
         WeaponSpell(WeaponStrike, SpellDamageClass.Melee, SpellAttributes.None),
         WeaponSpell(RangedShot, SpellDamageClass.Ranged, SpellAttributes.None));
 
@@ -89,9 +91,9 @@ public sealed class MeleeDamageBonusTests
 
         public MapCombat Combat { get; }
 
-        public void OnAttacker(uint spell) => RuleTestSupport.Apply(Kit, Attacker, spell);
+        public void OnAttacker(uint spell) => RuleTestKit.Apply(Kit, Attacker, spell);
 
-        public void OnVictim(uint spell) => RuleTestSupport.Apply(Kit, Victim, spell);
+        public void OnVictim(uint spell) => RuleTestKit.Apply(Kit, Victim, spell);
 
         /// <summary>Give the attacker a bow and arrows, as a ranged class spell needs, and keep the ranged damage fields at 100.</summary>
         public void EquipBow()

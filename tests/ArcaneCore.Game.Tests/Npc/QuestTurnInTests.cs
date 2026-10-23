@@ -17,10 +17,10 @@ public sealed class QuestTurnInTests
 {
     private const uint Id = 930001;
 
-    private static QuestFlowKit AutoKit(QuestTemplate quest, Action<QuestNpcOptions>? configure = null, Class cls = Class.Warrior)
+    private static QuestFlowTestKit AutoKit(QuestTemplate quest, Action<QuestNpcOptions>? configure = null, Class cls = Class.Warrior)
         => new([quest], starters: [quest.Entry], enders: [quest.Entry], cls: cls, configure: configure);
 
-    private static void Settle(QuestFlowKit kit, QuestRewardPlan plan)
+    private static void Settle(QuestFlowTestKit kit, QuestRewardPlan plan)
     {
         Guid operation = Guid.NewGuid();
         Assert.True(kit.Player.BeginQuestSettlement(operation));
@@ -35,7 +35,7 @@ public sealed class QuestTurnInTests
     [Fact]
     public void AutocompleteQuest_NeverInTheLog_IsRewardedWithAVirtualRow_AndCannotBeRewardedTwice()
     {
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0));
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0));
         Assert.Equal(QuestConstants.MaxQuestLogSize, kit.State.Quests.FindSlot(Id));
         Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out QuestRewardPlan? plan));
         Assert.True(plan.InsertIfMissing);
@@ -57,7 +57,7 @@ public sealed class QuestTurnInTests
     [Fact]
     public void RepeatableAutocomplete_ReturnsToStatusNone_AndCanBeTurnedInAgain()
     {
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable));
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable));
         for (int pass = 0; pass < 2; pass++)
         {
             Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out QuestRewardPlan? plan), $"pass {pass}");
@@ -70,9 +70,9 @@ public sealed class QuestTurnInTests
     [Fact]
     public void AutocompleteDeliver_NeedsTheItemsInTheBags_AndConsumesThem()
     {
-        QuestTemplate quest = QuestFlowKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable,
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable,
             reqItem: ItemTestData.ToughJerky, reqItemCount: 2);
-        using QuestFlowKit kit = AutoKit(quest);
+        using QuestFlowTestKit kit = AutoKit(quest);
         ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
         kit.Session.Clear();
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
@@ -90,7 +90,7 @@ public sealed class QuestTurnInTests
     public void AutocompleteQuest_FailingTheClassCheck_IsNotRewardable()
     {
         // CanTakeQuest(skipStatusCheck) still applies the class gate (Player.cpp:12684-12698): packet editing cannot help.
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0, classes: 1u << ((byte)Class.Mage - 1)));
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0, classes: 1u << ((byte)Class.Mage - 1)));
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
         Assert.Empty(kit.Session.Sent);
     }
@@ -99,7 +99,7 @@ public sealed class QuestTurnInTests
     public void AutocompleteQuest_FailingTheClassCheck_IsRewardableByAGameMaster()
     {
         // Player.cpp:12688-12692: a game master bypasses the CanTakeQuest gate for an autocomplete quest.
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0, classes: 1u << ((byte)Class.Mage - 1)));
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0, classes: 1u << ((byte)Class.Mage - 1)));
         kit.Player.Flags |= PlayerFlags.Gm;
         Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
     }
@@ -111,7 +111,7 @@ public sealed class QuestTurnInTests
         {
             Entry = Id, Method = 0, QuestLevel = 1, Title = "Pay up", RequestItemsText = "Pay.", RewOrReqMoney = -100_000,
         };
-        using QuestFlowKit kit = AutoKit(quest);
+        using QuestFlowTestKit kit = AutoKit(quest);
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
         var sent = kit.Session.Sent.ToArray();
         Assert.Equal(QuestPackets.QuestInvalid(QuestInvalidReason.NotEnoughMoney).AsSpan().ToArray(),
@@ -123,14 +123,14 @@ public sealed class QuestTurnInTests
     [Fact]
     public void AllowlistOnlyMode_StillGatesAutocompleteQuests()
     {
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0), o => o.RewardMode = QuestRewardMode.AllowlistOnly);
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0), o => o.RewardMode = QuestRewardMode.AllowlistOnly);
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
     }
 
     [Fact]
     public void RequestReward_ForAnAutocompleteQuest_OffersTheReward_WithoutAnyJournalEntry()
     {
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0));
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0));
         kit.Services.RequestReward(kit.Player, kit.Creature.Guid, Id);
         Assert.Equal(WorldOpcode.SmsgQuestgiverOfferReward, Assert.Single(kit.Session.Sent).Opcode);
         Assert.Equal(QuestStatus.None, kit.State.Quests.GetStatus(Id));
@@ -139,9 +139,9 @@ public sealed class QuestTurnInTests
     [Fact]
     public void CompleteQuestRequest_WithoutRequestText_GoesStraightToOfferReward()
     {
-        QuestTemplate quest = QuestFlowKit.Task(Id, method: 0);
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, method: 0);
         var noText = new QuestTemplate { Entry = quest.Entry, Method = 0, QuestLevel = 1, Title = "Quiet" };
-        using QuestFlowKit kit = AutoKit(noText);
+        using QuestFlowTestKit kit = AutoKit(noText);
         kit.Services.CompleteQuest(kit.Player, kit.Creature.Guid, Id);
         Assert.Equal(WorldOpcode.SmsgQuestgiverOfferReward, Assert.Single(kit.Session.Sent).Opcode);
     }
@@ -149,9 +149,9 @@ public sealed class QuestTurnInTests
     [Fact]
     public void CompleteQuestRequest_ForADeliveryQuest_SendsRequestItemsWithTheCompletableFlag()
     {
-        QuestTemplate quest = QuestFlowKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable,
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable,
             reqItem: ItemTestData.ToughJerky, reqItemCount: 1);
-        using QuestFlowKit kit = AutoKit(quest);
+        using QuestFlowTestKit kit = AutoKit(quest);
         kit.Services.CompleteQuest(kit.Player, kit.Creature.Guid, Id);
         var incomplete = Assert.Single(kit.Session.Sent);
         Assert.Equal(WorldOpcode.SmsgQuestgiverRequestItems, incomplete.Opcode);
@@ -170,7 +170,7 @@ public sealed class QuestTurnInTests
     [Fact]
     public void AutocompleteAdapter_IsDiscovered_SoMethodZeroQuestsAreNotWithheld()
     {
-        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0));
+        using QuestFlowTestKit kit = AutoKit(QuestFlowTestKit.Task(Id, method: 0));
         Assert.Equal(QuestAdapter.Autocomplete, kit.Services.ProvidedAdapters & QuestAdapter.Autocomplete);
         Assert.True(kit.Services.Supported(kit.Services.Quests.Get(Id)!));
     }
@@ -191,7 +191,7 @@ public sealed class QuestTurnInTests
             RewChoiceItemId1 = ItemTestData.WornWoodenShield,
             RewChoiceItemCount1 = 1,
         };
-        using QuestFlowKit kit = AutoKit(quest);
+        using QuestFlowTestKit kit = AutoKit(quest);
         Quest definition = kit.Services.Quests.Get(Id)!;
 
         // Fill all 16 backpack slots with non-stacking swords so 0 free slots remain.

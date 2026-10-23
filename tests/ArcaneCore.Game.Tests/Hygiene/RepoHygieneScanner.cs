@@ -4,6 +4,7 @@ using System.Text;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.TestSupport;
 
 namespace ArcaneCore.Game.Tests.Hygiene;
 

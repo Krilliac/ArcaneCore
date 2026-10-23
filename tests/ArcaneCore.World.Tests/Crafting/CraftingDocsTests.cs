@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Crafting;
 using Xunit;
 

@@ -22,7 +22,7 @@ other wave-4 lanes.
 | `Game/Npc/NpcServiceContracts.cs`, `Game/Npc/InventoryItemService.cs` | `ItemInfo.RequiredLevel` (optional last parameter) | the vendor level requirement |
 | `World/Npc/NpcServicesFeature.cs` | `Honor = dependencies.Honor ?? HonorFeature.ActiveService` | wires the gate |
 | `World/Npc/ConditionFeature.cs` | `HonorRank` in the condition context | the PvP_RANK condition |
-| `tests/ArcaneCore.Game.Tests/CombatTestKit.cs` | `CombatTestUnit` is no longer sealed | a controlled-unit (pet) test |
+| `tests/ArcaneCore.Game.Tests/Combat/CombatTestKit.cs` | `CombatTestUnit` is no longer sealed | a controlled-unit (pet) test |
 
 Everything else is new files under `*/Honor/`. The spell effect module (`HonorSpellEffects`) is discovered by `SpellHandlerModules`; the handlers
 (`InspectHandlers`), commands (`HonorCommands`, `HonorModifyExtension`) and features (`HonorFeature`, `HonorMaintenanceFeature`,

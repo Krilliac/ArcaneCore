@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Procs;
@@ -48,7 +49,7 @@ public sealed class ProcEngineTests
     /// </summary>
     private static void ApplyEarlier(SpellTestKit kit, Unit unit, uint id)
     {
-        RuleTestSupport.Apply(kit, unit, id);
+        RuleTestKit.Apply(kit, unit, id);
         kit.Now++;
     }
 
@@ -60,30 +61,30 @@ public sealed class ProcEngineTests
             ProcFlags = ProcFlags.DealMeleeSwing,
             ProcChance = 100,
         },
-        RuleTestSupport.Grant(SwingBuff, AuraType.ModResistance, 5, misc: 1) with { Duration = new SpellDuration(10000, 0, 10000) },
+        RuleTestKit.Grant(SwingBuff, AuraType.ModResistance, 5, misc: 1) with { Duration = new SpellDuration(10000, 0, 10000) },
         Permanent(Thorns, Effect(SpellEffectName.ApplyAura, 25, aura: AuraType.DamageShield)) with { School = SpellSchool.Nature },
         Permanent(KillProc, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ProcTriggerSpell, trigger: KillBuff)) with
         {
             ProcFlags = ProcFlags.Kill,
             ProcChance = 100,
         },
-        RuleTestSupport.Grant(KillBuff, AuraType.ModResistance, 5, misc: 1) with { Duration = new SpellDuration(10000, 0, 10000) },
-        RuleTestSupport.Grant(FrostReflect, AuraType.ReflectSpellsSchool, 100, misc: (int)(1u << (int)SpellSchool.Frost)) with
+        RuleTestKit.Grant(KillBuff, AuraType.ModResistance, 5, misc: 1) with { Duration = new SpellDuration(10000, 0, 10000) },
+        RuleTestKit.Grant(FrostReflect, AuraType.ReflectSpellsSchool, 100, misc: (int)(1u << (int)SpellSchool.Frost)) with
         {
             ProcFlags = ProcFlags.TakeHarmfulSpell,
             ProcChance = 100,
             ProcCharges = 1,
         },
-        NoGcd(RuleTestSupport.Magic(FrostBolt, SpellSchool.Frost)),
-        NoGcd(RuleTestSupport.Magic(FireBolt, SpellSchool.Fire)),
+        NoGcd(RuleTestKit.Magic(FrostBolt, SpellSchool.Frost)),
+        NoGcd(RuleTestKit.Magic(FireBolt, SpellSchool.Fire)),
         Permanent(FamilyProc, Effect(SpellEffectName.ApplyAura, 5, aura: AuraType.ModResistance, misc: 1)) with
         {
             ProcFlags = ProcFlags.DealHarmfulSpell,
             ProcChance = 100,
             ProcCharges = 3,
         },
-        NoGcd(RuleTestSupport.Magic(FamilyBolt) with { SpellFamilyName = 3, SpellFamilyFlags = 0x20 }),
-        NoGcd(RuleTestSupport.Magic(OtherFamilyBolt) with { SpellFamilyName = 3, SpellFamilyFlags = 0x40 }),
+        NoGcd(RuleTestKit.Magic(FamilyBolt) with { SpellFamilyName = 3, SpellFamilyFlags = 0x20 }),
+        NoGcd(RuleTestKit.Magic(OtherFamilyBolt) with { SpellFamilyName = 3, SpellFamilyFlags = 0x40 }),
         Spell(Root, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.ModRoot)) with
         {
             Attributes = SpellAttributes.AuraIsDebuff,
@@ -152,7 +153,7 @@ public sealed class ProcEngineTests
         };
         SpellInfo aimed = autoShot with { Id = 19434, AttributesEx2 = SpellAttributesEx2.None };
         SpellInfo strike = Spell(78, Effect(SpellEffectName.WeaponDamage, 0)) with { DamageClass = SpellDamageClass.Melee };
-        SpellInfo bolt = RuleTestSupport.Magic(116);
+        SpellInfo bolt = RuleTestKit.Magic(116);
 
         Assert.Equal((ProcFlags.DealRangedAttack, ProcFlags.TakeRangedAttack), ProcFlagRules.SpellFlags(autoShot, WeaponAttackType.RangedAttack));
         Assert.Equal((ProcFlags.DealRangedAbility, ProcFlags.TakeRangedAbility), ProcFlagRules.SpellFlags(aimed, WeaponAttackType.RangedAttack));

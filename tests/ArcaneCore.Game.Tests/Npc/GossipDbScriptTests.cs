@@ -32,7 +32,7 @@ public sealed class GossipDbScriptTests
                     OptionText = "Unscripted" },
             ],
         };
-        using var kit = new NpcServiceKit(NpcFlags.Gossip, content);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip, content);
         var started = new List<(Player Player, ObjectGuid Source, uint Script, bool PlayerIsSource)>();
         kit.Services.GossipScriptStarted += (player, npc, script, playerIsSource) => started.Add((player, npc, script, playerIsSource));
 
@@ -53,7 +53,7 @@ public sealed class GossipDbScriptTests
         {
             GossipMenus = [new GossipMenu { Entry = 1405, TextId = 2039, ScriptId = 1405 }, new GossipMenu { Entry = 1406, TextId = 2040 }],
         };
-        using var kit = new NpcServiceKit(NpcFlags.Gossip, content);
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip, content);
         var started = new List<(ObjectGuid Source, uint Script, bool PlayerIsSource)>();
         kit.Services.GossipScriptStarted += (_, npc, script, playerIsSource) => started.Add((npc, script, playerIsSource));
 

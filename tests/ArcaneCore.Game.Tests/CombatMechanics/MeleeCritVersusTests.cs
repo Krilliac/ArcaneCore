@@ -1,10 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
+using ScriptedRandom = ArcaneCore.Game.Tests.CombatCore.ScriptedRandom;
 
 namespace ArcaneCore.Game.Tests.CombatMechanics;
 
@@ -20,8 +22,8 @@ public sealed class MeleeCritVersusTests
     private static MeleeDamageInfo Crit(uint auraSpell)
     {
         using var kit = new SpellTestKit(
-            RuleTestSupport.Grant(HumanoidCritVersus, AuraType.ModCritPercentVersus, 6, misc: 64),
-            RuleTestSupport.Grant(BeastCritVersus, AuraType.ModCritPercentVersus, 6, misc: 1));
+            RuleTestKit.Grant(HumanoidCritVersus, AuraType.ModCritPercentVersus, 6, misc: 64),
+            RuleTestKit.Grant(BeastCritVersus, AuraType.ModCritPercentVersus, 6, misc: 1));
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2); // faces away from the attacker: no dodge, parry or block
         attacker.Level = 60;
@@ -31,7 +33,7 @@ public sealed class MeleeCritVersusTests
         attacker.SetFloat(UpdateFields.UnitFieldMindamage, 100);
         attacker.SetFloat(UpdateFields.UnitFieldMaxdamage, 100);
         attacker.SetFloat(UpdateFields.PlayerCritPercentage, 100f);
-        RuleTestSupport.Apply(kit, attacker, auraSpell);
+        RuleTestKit.Apply(kit, attacker, auraSpell);
         var random = new ScriptedRandom();
         random.Ints.Enqueue(5000); // past the 5% miss range, inside the 100% crit range
         combat.Random = random;

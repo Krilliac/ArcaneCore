@@ -63,7 +63,7 @@ internal sealed class ThreatArena : IDisposable
     /// </summary>
     public Creature SpawnCreature(uint guid, float x, Func<CreatureTemplate, CreatureTemplate>? tweak = null, CreatureOptions? options = null)
     {
-        CreatureTemplate template = CreatureTestSupport.Template(CreatureTestSupport.WolfEntry, t =>
+        CreatureTemplate template = CreatureTestKit.Template(CreatureTestKit.WolfEntry, t =>
         {
             t.MinLevelHealth = 100000;
             t.MaxLevelHealth = 100000;
@@ -73,7 +73,7 @@ internal sealed class ThreatArena : IDisposable
             template = tweak(template);
         }
 
-        var system = new CreatureMapSystem(Map, CreatureTestSupport.Content([template], [CreatureTestSupport.Spawn(guid, CreatureTestSupport.WolfEntry, x, 0)]),
+        var system = new CreatureMapSystem(Map, CreatureTestKit.Content([template], [CreatureTestKit.Spawn(guid, CreatureTestKit.WolfEntry, x, 0)]),
             options, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile(), Spells = new SpellSystemCreatureCaster(Kit.System) });
         Map.AddUpdater(system);
         Kit.World.RunTick(50);

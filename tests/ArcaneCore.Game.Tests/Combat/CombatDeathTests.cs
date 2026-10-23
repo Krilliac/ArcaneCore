@@ -7,7 +7,7 @@ using ArcaneCore.Game.Tests.Death;
 using ArcaneCore.Protocol;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>Death, release (repop), corpses, reclaim, auto release and logout cleanup.</summary>
 public sealed class CombatDeathTests

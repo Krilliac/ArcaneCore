@@ -11,7 +11,7 @@ namespace ArcaneCore.Game.Tests;
 internal sealed record ParsedBlock(ObjectUpdateType Type, IReadOnlyList<ulong> Guids, byte TypeId, MovementInfo? Movement, Dictionary<int, uint> Values);
 
 /// <summary>Builders and packet parsers for the creature tests.</summary>
-internal static class CreatureTestSupport
+internal static class CreatureTestKit
 {
     public const uint WolfEntry = 299;      // "Young Wolf" in vanilla data; any id works here
     public const uint GuardEntry = 68;

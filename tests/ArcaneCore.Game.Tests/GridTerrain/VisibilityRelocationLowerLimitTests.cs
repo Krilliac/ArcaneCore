@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -15,23 +16,13 @@ namespace ArcaneCore.Game.Tests.GridTerrain;
 /// </summary>
 public sealed class VisibilityRelocationLowerLimitTests(ITestOutputHelper output)
 {
-    private sealed class SilentSession(int accountId) : IPlayerSession
-    {
-        public int AccountId { get; } = accountId;
-        public AccountSecurity Security => AccountSecurity.Player;
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) { }
-        public void ProcessWorldPackets(Player player) { }
-        public void Kick() { }
-        public void OnLoggedOut() { }
-    }
-
     [Fact]
     public void ACreatureWalkingInSmallStepsGetsOnePassPerTenYardsAndIsSeenOnceItIsInRange()
     {
         using WorldRuntime world = TestWorld.CreateRuntime();
         Assert.Equal(10f, world.Options.Maps.VisibilityRelocationLowerLimit); // the vmangos default
         Map map = world.GetMap(0);
-        Player watcher = TestWorld.CreatePlayer(1, 0, 0, new SilentSession(1));
+        Player watcher = TestWorld.CreatePlayer(1, 0, 0, new NullPlayerSession(1));
         world.AddPlayer(watcher);
         var walker = new TestUnit(1, 130, 0);
         map.AddObject(walker);
@@ -65,7 +56,7 @@ public sealed class VisibilityRelocationLowerLimitTests(ITestOutputHelper output
         // transport) is re-evaluated on every move.
         using WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
-        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new SilentSession(1)));
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new NullPlayerSession(1)));
         var template = new ArcaneCore.Kernel.WorldData.GameObjects.GameObjectTemplate
         {
             Entry = 1, Type = 5, DisplayId = 1, Name = "Lift", Size = 1f,
@@ -95,7 +86,7 @@ public sealed class VisibilityRelocationLowerLimitTests(ITestOutputHelper output
         using WorldRuntime world = TestWorld.CreateRuntime();
         world.Options.Maps.VisibilityRelocationLowerLimit = 0;
         Map map = world.GetMap(0);
-        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new SilentSession(1)));
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new NullPlayerSession(1)));
         var walker = new TestUnit(1, 50, 0);
         map.AddObject(walker);
         map.Update(50);
@@ -118,7 +109,7 @@ public sealed class VisibilityRelocationLowerLimitTests(ITestOutputHelper output
     {
         using WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
-        Player mover = TestWorld.CreatePlayer(1, 0, 0, new SilentSession(1));
+        Player mover = TestWorld.CreatePlayer(1, 0, 0, new NullPlayerSession(1));
         world.AddPlayer(mover);
         var far = new TestUnit(1, 150, 0);
         map.AddObject(far);
@@ -156,7 +147,7 @@ public sealed class VisibilityRelocationLowerLimitTests(ITestOutputHelper output
             for (uint i = 0; i < 200; i++)
             {
                 Player p = TestWorld.CreatePlayer(i + 1, -9000 + (float)random.NextDouble() * 300, -100 + (float)random.NextDouble() * 300,
-                    new SilentSession((int)i + 1));
+                    new NullPlayerSession((int)i + 1));
                 world.AddPlayer(p);
                 players.Add(p);
             }

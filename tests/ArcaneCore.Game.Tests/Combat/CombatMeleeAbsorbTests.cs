@@ -7,7 +7,7 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>vmangos Unit.cpp:1463-1479,1510-1565,1920-2083: block precedes school/mana absorb.</summary>
 public sealed class CombatMeleeAbsorbTests
@@ -27,7 +27,7 @@ public sealed class CombatMeleeAbsorbTests
     [Fact]
     public void WhiteSwingAbsorbsAfterBlockAndReportsTheRemainingDamage()
     {
-        SpellInfo shield = RuleTestSupport.Grant(Shield, AuraType.SchoolAbsorb, 40, (int)SpellSchoolMasks.Of(SpellSchool.Normal));
+        SpellInfo shield = RuleTestKit.Grant(Shield, AuraType.SchoolAbsorb, 40, (int)SpellSchoolMasks.Of(SpellSchool.Normal));
         using var kit = new SpellTestKit(shield);
         (Player attacker, FakeSession session) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
@@ -36,7 +36,7 @@ public sealed class CombatMeleeAbsorbTests
         attacker.SetFloat(UpdateFields.UnitFieldMindamage, 50);
         attacker.SetFloat(UpdateFields.UnitFieldMaxdamage, 50);
         victim.Health = victim.MaxHealth = 1000;
-        RuleTestSupport.Apply(kit, victim, Shield);
+        RuleTestKit.Apply(kit, victim, Shield);
         var random = new ScriptedRandom();
         random.Ints.Enqueue(5000); // ordinary hit, past miss and crit
         combat.Random = random;
@@ -56,7 +56,7 @@ public sealed class CombatMeleeAbsorbTests
     [InlineData(60u, 0u, 40)]
     public void BlockValueIsRemovedBeforeTheAbsorbShield(uint blockValue, uint expectedAbsorb, int expectedShield)
     {
-        SpellInfo shield = RuleTestSupport.Grant(Shield, AuraType.SchoolAbsorb, 40, (int)SpellSchoolMasks.Of(SpellSchool.Normal));
+        SpellInfo shield = RuleTestKit.Grant(Shield, AuraType.SchoolAbsorb, 40, (int)SpellSchoolMasks.Of(SpellSchool.Normal));
         using var kit = new SpellTestKit(shield);
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
@@ -68,7 +68,7 @@ public sealed class CombatMeleeAbsorbTests
         victim.SetFloat(UpdateFields.PlayerBlockPercentage, 100f);
         victim.SetByte(UpdateFields.UnitFieldBytes2, 0, 1); // shield equipped / sheathed
         victim.Relocate(2, 0, victim.Z, MathF.PI, 0); // faces the attacker
-        RuleTestSupport.Apply(kit, victim, Shield);
+        RuleTestKit.Apply(kit, victim, Shield);
         var random = new ScriptedRandom();
         random.Ints.Enqueue(500); // after the 5% miss range, before the block range ends
         combat.Random = random;
@@ -85,12 +85,12 @@ public sealed class CombatMeleeAbsorbTests
     [Fact]
     public void WhiteSwingHitTableReadsTheAttackersHitAura()
     {
-        using var kit = new SpellTestKit(RuleTestSupport.Grant(HitAura, AuraType.ModHitChance, 3));
+        using var kit = new SpellTestKit(RuleTestKit.Grant(HitAura, AuraType.ModHitChance, 3));
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         MapCombat combat = attacker.Map!.Combat;
         combat.SpellMitigation = kit.System;
-        RuleTestSupport.Apply(kit, attacker, HitAura);
+        RuleTestKit.Apply(kit, attacker, HitAura);
 
         MeleeRollInput input = combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack);
         Assert.Equal(3f, input.HitBonus);
@@ -100,8 +100,8 @@ public sealed class CombatMeleeAbsorbTests
     [Fact]
     public void FullyAbsorbedWhiteSwingStillBreaksDamageInterruptAuras()
     {
-        SpellInfo shield = RuleTestSupport.Grant(Shield, AuraType.SchoolAbsorb, 100, (int)SpellSchoolMasks.Of(SpellSchool.Normal));
-        SpellInfo fragile = RuleTestSupport.Grant(FragileAura, AuraType.ModDamageDone, 1)
+        SpellInfo shield = RuleTestKit.Grant(Shield, AuraType.SchoolAbsorb, 100, (int)SpellSchoolMasks.Of(SpellSchool.Normal));
+        SpellInfo fragile = RuleTestKit.Grant(FragileAura, AuraType.ModDamageDone, 1)
             with { AuraInterruptFlags = SpellAuraInterruptFlags.Damage };
         using var kit = new SpellTestKit(shield, fragile);
         (Player attacker, _) = kit.AddPlayer(1);
@@ -111,8 +111,8 @@ public sealed class CombatMeleeAbsorbTests
         attacker.SetFloat(UpdateFields.UnitFieldMindamage, 50);
         attacker.SetFloat(UpdateFields.UnitFieldMaxdamage, 50);
         victim.Health = victim.MaxHealth = 1000;
-        RuleTestSupport.Apply(kit, victim, Shield);
-        RuleTestSupport.Apply(kit, victim, FragileAura);
+        RuleTestKit.Apply(kit, victim, Shield);
+        RuleTestKit.Apply(kit, victim, FragileAura);
         var random = new ScriptedRandom();
         random.Ints.Enqueue(5000);
         combat.Random = random;

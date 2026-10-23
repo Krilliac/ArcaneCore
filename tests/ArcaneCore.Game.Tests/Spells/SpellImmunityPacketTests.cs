@@ -25,14 +25,14 @@ public sealed class SpellImmunityPacketTests
             School = SpellSchool.Fire, RangeIndex = 4, Range = new SpellRange(0, 30),
             Duration = new SpellDuration(-1, 0, -1),
         };
-        using var kit = new SpellTestKit(RuleTestSupport.Grant(Immunity, AuraType.EffectImmunity, 0, (int)SpellEffectName.SchoolDamage), incoming);
+        using var kit = new SpellTestKit(RuleTestKit.Grant(Immunity, AuraType.EffectImmunity, 0, (int)SpellEffectName.SchoolDamage), incoming);
         kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
         (Player caster, FakeSession session) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 5);
         var relations = new FakeRelations();
         relations.Hostile.Add(target.Guid);
         kit.System.Relations = relations;
-        RuleTestSupport.Apply(kit, target, Immunity);
+        RuleTestKit.Apply(kit, target, Immunity);
         uint health = target.Health;
         session.Clear();
 

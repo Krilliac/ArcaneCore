@@ -5,7 +5,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>Regeneration and the PvP flag.</summary>
 public sealed class CombatRegenTests

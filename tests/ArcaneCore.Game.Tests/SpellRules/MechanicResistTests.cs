@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 
@@ -31,8 +32,8 @@ public sealed class MechanicResistTests
         return new SpellTestKit(
             common with { Id = RootAndDamage, Effects = [damage, root] },
             common with { Id = SameMechanic, Mechanic = (uint)SpellMechanic.Root, Effects = [damage, root] },
-            RuleTestSupport.Grant(ResistRoot, AuraType.ModMechanicResistance, 25, (int)SpellMechanic.Root),
-            RuleTestSupport.Grant(ResistFull, AuraType.ModMechanicResistance, 100, (int)SpellMechanic.Root));
+            RuleTestKit.Grant(ResistRoot, AuraType.ModMechanicResistance, 25, (int)SpellMechanic.Root),
+            RuleTestKit.Grant(ResistFull, AuraType.ModMechanicResistance, 100, (int)SpellMechanic.Root));
     }
 
     private static (Player Caster, Player Victim) Setup(SpellTestKit kit)
@@ -51,7 +52,7 @@ public sealed class MechanicResistTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Setup(kit);
-        RuleTestSupport.Apply(kit, victim, ResistFull);
+        RuleTestKit.Apply(kit, victim, ResistFull);
         uint before = victim.Health;
 
         Hit(kit, caster, victim, RootAndDamage);
@@ -78,7 +79,7 @@ public sealed class MechanicResistTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Setup(kit);
-        RuleTestSupport.Apply(kit, victim, ResistFull);
+        RuleTestKit.Apply(kit, victim, ResistFull);
 
         Hit(kit, caster, victim, SameMechanic);
 
@@ -93,7 +94,7 @@ public sealed class MechanicResistTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Setup(kit);
-        RuleTestSupport.Apply(kit, victim, ResistRoot);
+        RuleTestKit.Apply(kit, victim, ResistRoot);
         kit.System.Random = new ScriptedRandom(roll);
 
         Hit(kit, caster, victim, RootAndDamage);
@@ -106,7 +107,7 @@ public sealed class MechanicResistTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, Player victim) = Setup(kit);
-        RuleTestSupport.Apply(kit, victim, ResistRoot);
+        RuleTestKit.Apply(kit, victim, ResistRoot);
         int resisted = 0;
 
         for (int i = 0; i < 2000; i++)

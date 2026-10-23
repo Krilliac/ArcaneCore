@@ -36,7 +36,7 @@ internal sealed class DispatchLog
 }
 
 /// <summary>Shared set-up of the bot social tests: a host with the guild system loaded, bots of a chosen race, and a hand-built pass.</summary>
-internal static class SocialTestSupport
+internal static class SocialTestKit
 {
     /// <summary>Race ids of the 1.12 character-creation packet (human = 1, orc = 2).</summary>
     public const byte Human = 1, Orc = 2;
@@ -226,22 +226,22 @@ internal sealed class SocialWorld : IAsyncDisposable
 
     public PlayerbotOptions Options => PartyTestHost.PlayerbotOptionsOf(Host);
 
-    public GuildManager Guilds => SocialTestSupport.Social(Host).Context.Guilds;
+    public GuildManager Guilds => SocialTestKit.Social(Host).Context.Guilds;
 
     /// <summary>Start a world. <paramref name="frozen"/>: the feature never runs a pass by itself; otherwise its passes are quick.</summary>
     public static async Task<SocialWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool frozen = false, bool petitioner = false,
         Action<IServiceCollection>? services = null, Action<PlayerbotSocialTimings>? tune = null)
     {
-        WorldTestHost host = await SocialTestSupport.StartAsync(configure, services, petitioner);
-        if (frozen) SocialTestSupport.Freeze(host);
-        else SocialTestSupport.Hasten(host, tune);
+        WorldTestHost host = await SocialTestKit.StartAsync(configure, services, petitioner);
+        if (frozen) SocialTestKit.Freeze(host);
+        else SocialTestKit.Hasten(host, tune);
         return new SocialWorld(host);
     }
 
     /// <summary>Start a bot, record what it dispatches from now on and give it <paramref name="money"/> copper.</summary>
-    public async Task<Guid> AddBotAsync(string name, uint money = 0, byte race = SocialTestSupport.Human)
+    public async Task<Guid> AddBotAsync(string name, uint money = 0, byte race = SocialTestKit.Human)
     {
-        Guid id = await SocialTestSupport.StartBotAsync(Host, name, race);
+        Guid id = await SocialTestKit.StartBotAsync(Host, name, race);
         Bots[name] = id;
         await Host.OnWorldAsync(() =>
         {
@@ -253,7 +253,7 @@ internal sealed class SocialWorld : IAsyncDisposable
     }
 
     /// <summary>A real player on a socket client.</summary>
-    public async Task<WorldTestClient> AddPlayerAsync(string name, byte race = SocialTestSupport.Human)
+    public async Task<WorldTestClient> AddPlayerAsync(string name, byte race = SocialTestKit.Human)
     {
         WorldTestClient client = await Host.EnterWorldAsync(name.ToUpperInvariant(), name, race: race);
         await client.CollectAsync();
@@ -264,7 +264,7 @@ internal sealed class SocialWorld : IAsyncDisposable
     public Task<bool> SendAsync(string bot, WorldOpcode opcode, byte[]? payload = null)
         => Host.OnWorldAsync(() => PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(bot)!.Session, opcode, payload ?? []));
 
-    public Task<Guild?> GuildOfAsync(string player) => Host.OnWorldAsync(() => SocialTestSupport.GuildOf(Host, player));
+    public Task<Guild?> GuildOfAsync(string player) => Host.OnWorldAsync(() => SocialTestKit.GuildOf(Host, player));
 
     public Task<int> GuildCountAsync() => Host.OnWorldAsync(() => Guilds.All.Count());
 
@@ -274,7 +274,7 @@ internal sealed class SocialWorld : IAsyncDisposable
     /// <summary>A bot founds the guild <paramref name="name"/> with CMSG_GUILD_CREATE and the guild exists.</summary>
     public async Task<Guild> FoundGuildAsync(string bot, string name)
     {
-        Assert.True(await SendAsync(bot, WorldOpcode.CmsgGuildCreate, SocialTestSupport.CString(name)));
+        Assert.True(await SendAsync(bot, WorldOpcode.CmsgGuildCreate, SocialTestKit.CString(name)));
         await Host.WaitForWorldAsync(() => Guilds.GetByName(name) is not null, $"the guild {name}");
         return (await Host.OnWorldAsync(() => Guilds.GetByName(name)))!;
     }
@@ -288,7 +288,7 @@ internal sealed class SocialWorld : IAsyncDisposable
         int before = guild.MemberCount;
         await Host.OnWorldAsync(() =>
         {
-            Assert.True(PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(inviter)!.Session, WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(invitee)));
+            Assert.True(PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(inviter)!.Session, WorldOpcode.CmsgGuildInvite, SocialTestKit.CString(invitee)));
             Assert.True(PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(invitee)!.Session, WorldOpcode.CmsgGuildAccept, []));
             return true;
         });
@@ -299,7 +299,7 @@ internal sealed class SocialWorld : IAsyncDisposable
     public async Task PlayerJoinsAsync(string inviter, string player, WorldTestClient client, Guild guild)
     {
         int before = guild.MemberCount;
-        Assert.True(await SendAsync(inviter, WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(player)));
+        Assert.True(await SendAsync(inviter, WorldOpcode.CmsgGuildInvite, SocialTestKit.CString(player)));
         await Host.WaitForWorldAsync(() => Guilds.InvitedTo(Host.World.FindOnlinePlayer(player)!) == guild.Id, $"{player} is invited");
         await client.SendAsync(WorldOpcode.CmsgGuildAccept, []);
         await Host.WaitForWorldAsync(() => guild.MemberCount == before + 1, $"{player} joins {guild.Name}");

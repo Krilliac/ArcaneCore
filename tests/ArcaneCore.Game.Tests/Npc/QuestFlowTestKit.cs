@@ -15,11 +15,11 @@ namespace ArcaneCore.Game.Tests.Npc;
 /// One player next to one quest-giving creature with a configurable quest set, journal and
 /// reward allowlist; the real quest service over the real inventory.
 /// </summary>
-internal sealed class QuestFlowKit : IDisposable
+internal sealed class QuestFlowTestKit : IDisposable
 {
     public const uint CreatureEntry = 910010;
 
-    public QuestFlowKit(IReadOnlyList<QuestTemplate> templates, IReadOnlyList<CharacterQuestStatus>? rows = null,
+    public QuestFlowTestKit(IReadOnlyList<QuestTemplate> templates, IReadOnlyList<CharacterQuestStatus>? rows = null,
         IReadOnlyList<uint>? starters = null, IReadOnlyList<uint>? enders = null, IReadOnlyList<uint>? rewardable = null,
         Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null,
         IPlayerReputation? reputation = null, IQuestSpellCaster? spellCaster = null, uint npcFlags = 2, string scriptName = "")

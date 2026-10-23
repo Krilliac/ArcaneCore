@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Tests.Social;
 /// <see cref="SocialFixture"/> (fake directory and persistence). Item 5863 is the guild charter; item
 /// 91005 fills a backpack slot.
 /// </summary>
-internal sealed class PetitionKit : IDisposable
+internal sealed class PetitionTestKit : IDisposable
 {
     public const uint Filler = 91005;
     public const int NpcGuidCounter = 77;
@@ -31,7 +31,7 @@ internal sealed class PetitionKit : IDisposable
 
     private readonly List<(Player Player, PlayerNpcState State)> _tracked = [];
 
-    public PetitionKit(NpcFlags npcFlags = NpcFlags.Petitioner | NpcFlags.TabardDesigner, GuildOptions? options = null, bool withTemplates = true)
+    public PetitionTestKit(NpcFlags npcFlags = NpcFlags.Petitioner | NpcFlags.TabardDesigner, GuildOptions? options = null, bool withTemplates = true)
     {
         F = new SocialFixture();
         WithTemplates = withTemplates;
@@ -53,7 +53,7 @@ internal sealed class PetitionKit : IDisposable
 
     public NpcInfo Npc { get; set; }
 
-    public NpcServiceKit.RecordingSink Sink { get; } = new();
+    public NpcServiceTestKit.RecordingSink Sink { get; } = new();
 
     public QuestNpcServices Services { get; }
 
@@ -110,7 +110,7 @@ internal sealed class PetitionKit : IDisposable
 
     public void Dispose() => F.Dispose();
 
-    private sealed class Lookup(PetitionKit kit) : ICreatureLookup
+    private sealed class Lookup(PetitionTestKit kit) : ICreatureLookup
     {
         public NpcInfo? Find(Player player, ObjectGuid guid) => guid == kit.Npc.Guid ? kit.Npc : null;
     }

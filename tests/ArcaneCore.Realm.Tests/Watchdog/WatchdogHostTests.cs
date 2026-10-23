@@ -16,7 +16,7 @@ public sealed class WatchdogHostTests
 {
     private readonly FakeClock _clock = new();
     private readonly RecordingLogger<WatchdogHost> _log = new();
-    private readonly CounterRegistry _counters = WatchdogTestSupport.NewRegistry();
+    private readonly CounterRegistry _counters = WatchdogTestKit.NewRegistry();
 
     private sealed class Monitor(string name, Action<long>? check = null) : IWatchdogMonitor
     {

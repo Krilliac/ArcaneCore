@@ -3,6 +3,7 @@ using ArcaneCore.Game.Reload;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Reload;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -343,13 +344,6 @@ public sealed class ReloadCoordinatorTests : IDisposable
         ReloadResult result = await coordinator.ReloadAsync("fake");
 
         Assert.Equal(ReloadStatus.Failed, result.Status);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 
     private sealed class FakeReloadable(string name) : IContentReloadable

@@ -22,17 +22,17 @@ public sealed class QuestReputationObjectiveTests
         RepObjectiveFaction = faction, RepObjectiveValue = Value,
     };
 
-    private static QuestFlowKit Kit(FakeReputation reputation, QuestTemplate? quest = null)
+    private static QuestFlowTestKit Kit(FakeReputation reputation, QuestTemplate? quest = null)
     {
         quest ??= RepQuest();
-        return new QuestFlowKit([quest], starters: [quest.Entry], enders: [quest.Entry], reputation: reputation);
+        return new QuestFlowTestKit([quest], starters: [quest.Entry], enders: [quest.Entry], reputation: reputation);
     }
 
     [Fact]
     public void StandingRisingToTheObjective_CompletesTheQuest_ButOnlyOnceNotified()
     {
         var reputation = new FakeReputation();
-        using QuestFlowKit kit = Kit(reputation);
+        using QuestFlowTestKit kit = Kit(reputation);
         Assert.True(kit.Accept(Id));
         Assert.Equal(QuestStatus.Incomplete, kit.State.Quests.GetStatus(Id));
 
@@ -48,7 +48,7 @@ public sealed class QuestReputationObjectiveTests
     public void StandingFallingBelowTheObjective_RevertsCompleteToIncomplete()
     {
         var reputation = new FakeReputation { Standing = { [Faction] = Value } };
-        using QuestFlowKit kit = Kit(reputation);
+        using QuestFlowTestKit kit = Kit(reputation);
         Assert.True(kit.Accept(Id));
         Assert.Equal(QuestStatus.Complete, kit.State.Quests.GetStatus(Id));
 
@@ -61,7 +61,7 @@ public sealed class QuestReputationObjectiveTests
     public void AnotherFaction_DoesNothing()
     {
         var reputation = new FakeReputation();
-        using QuestFlowKit kit = Kit(reputation);
+        using QuestFlowTestKit kit = Kit(reputation);
         Assert.True(kit.Accept(Id));
         reputation.Standing[Faction] = Value;
         kit.Services.ReputationChanged(kit.Player, Faction + 1);
@@ -72,7 +72,7 @@ public sealed class QuestReputationObjectiveTests
     public void QuestNotInTheLog_IsIgnored()
     {
         var reputation = new FakeReputation { Standing = { [Faction] = Value } };
-        using QuestFlowKit kit = Kit(reputation);
+        using QuestFlowTestKit kit = Kit(reputation);
         kit.Services.ReputationChanged(kit.Player, Faction);
         Assert.Equal(QuestStatus.None, kit.State.Quests.GetStatus(Id));
         Assert.Empty(kit.Sink.Rows);
@@ -82,7 +82,7 @@ public sealed class QuestReputationObjectiveTests
     public void SubscriptionForwardsTheSourcesEvent_AndStopsAfterDispose()
     {
         var reputation = new FakeReputation();
-        using QuestFlowKit kit = Kit(reputation);
+        using QuestFlowTestKit kit = Kit(reputation);
         Assert.True(kit.Accept(Id));
         var source = new FakeSource();
         var subscription = new ReputationObjectiveSubscription(source, () => kit.Services);

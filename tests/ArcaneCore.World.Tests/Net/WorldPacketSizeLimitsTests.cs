@@ -1,7 +1,7 @@
 using ArcaneCore.World.Net;
 using Xunit;
 
-namespace ArcaneCore.World.Tests;
+namespace ArcaneCore.World.Tests.Net;
 
 /// <summary>
 /// Pins the world-socket packet size limits (NetGuard pre-allocation DoS guard). They are

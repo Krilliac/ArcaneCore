@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData;
 using Xunit;

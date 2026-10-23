@@ -4,7 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>A scripted random source: queued values first, then fixed fallbacks.</summary>
 internal sealed class ScriptedRandom : ICombatRandom

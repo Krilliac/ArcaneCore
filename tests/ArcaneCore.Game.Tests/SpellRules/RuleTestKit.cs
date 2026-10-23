@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 
 namespace ArcaneCore.Game.Tests.SpellRules;
@@ -15,7 +16,7 @@ internal sealed class ScriptedRandom(params int[] values) : Random(7)
 }
 
 /// <summary>Helpers shared by the spell-rule tests: synthetic spells and aura grants.</summary>
-internal static class RuleTestSupport
+internal static class RuleTestKit
 {
     /// <summary>A hostile magic spell of <paramref name="school"/> with one damage effect.</summary>
     public static SpellInfo Magic(uint id, SpellSchool school = SpellSchool.Frost) =>

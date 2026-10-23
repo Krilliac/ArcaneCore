@@ -4,6 +4,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.GridTerrain;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Accounts;
@@ -15,7 +16,7 @@ namespace ArcaneCore.Game.Tests.Locomotion;
 /// A world whose map 0 has real terrain: one tile around (30, -30) with ground at 20 and a liquid surface at 100 whose kind is
 /// chosen by the test, plus a player standing in it. Test doubles for the combat random and the graveyard hook come with it.
 /// </summary>
-internal sealed class HazardKit : IDisposable
+internal sealed class HazardTestKit : IDisposable
 {
     public const float X = 30f;
     public const float Y = -30f;
@@ -24,7 +25,7 @@ internal sealed class HazardKit : IDisposable
 
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "arcanecore-hazards-" + Guid.NewGuid().ToString("N"));
 
-    public HazardKit(LiquidTypeFlags? liquid, params SpellInfo[] spells)
+    public HazardTestKit(LiquidTypeFlags? liquid, params SpellInfo[] spells)
     {
         Directory.CreateDirectory(Path.Combine(_directory, "maps"));
         var builder = new MapFileBuilder { GridHeight = Ground };

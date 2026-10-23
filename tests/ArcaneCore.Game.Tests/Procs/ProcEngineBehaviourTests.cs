@@ -1,10 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
+using ScriptedRandom = ArcaneCore.Game.Tests.CombatCore.ScriptedRandom;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Procs;
@@ -51,7 +53,7 @@ public sealed class ProcEngineBehaviourTests
     /// </summary>
     private static void ApplyEarlier(SpellTestKit kit, Unit unit, uint id)
     {
-        RuleTestSupport.Apply(kit, unit, id);
+        RuleTestKit.Apply(kit, unit, id);
         kit.Now++;
     }
 
@@ -74,7 +76,7 @@ public sealed class ProcEngineBehaviourTests
             ProcFlags = ProcFlags.DealMeleeSwing,
             ProcChance = 100,
         },
-        RuleTestSupport.Grant(OnSwingBuff, AuraType.ModResistance, 5, misc: 1) with { Duration = new SpellDuration(10000, 0, 10000) },
+        RuleTestKit.Grant(OnSwingBuff, AuraType.ModResistance, 5, misc: 1) with { Duration = new SpellDuration(10000, 0, 10000) },
         Permanent(ChargedVictimAura, Effect(SpellEffectName.ApplyAura, 5, aura: AuraType.ModResistance, misc: 1)) with
         {
             ProcFlags = ProcFlags.TakeMeleeSwing,
@@ -93,10 +95,10 @@ public sealed class ProcEngineBehaviourTests
             ProcChance = 100,
         },
         Spell(ExtraAttackSpell, Effect(SpellEffectName.AddExtraAttacks, 1)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
-        RuleTestSupport.Grant(ReflectAll, AuraType.ReflectSpells, 100),
-        RuleTestSupport.Grant(FrostReflect, AuraType.ReflectSpellsSchool, 100, misc: (int)(1u << (int)SpellSchool.Frost)),
-        RuleTestSupport.Magic(FrostBolt, SpellSchool.Frost) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
-        RuleTestSupport.Magic(FireBolt, SpellSchool.Fire) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
+        RuleTestKit.Grant(ReflectAll, AuraType.ReflectSpells, 100),
+        RuleTestKit.Grant(FrostReflect, AuraType.ReflectSpellsSchool, 100, misc: (int)(1u << (int)SpellSchool.Frost)),
+        RuleTestKit.Magic(FrostBolt, SpellSchool.Frost) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
+        RuleTestKit.Magic(FireBolt, SpellSchool.Fire) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
         DamageCancelled(ProcSleep, ProcFlags.TakenAnyDamage),
         DamageCancelled(WyvernStingRank1, ProcFlags.TakenAnyDamage),
         DamageCancelled(ProwlRank1, ProcFlags.None, dispel: 5), // build 5875 Spell.dbc: druid Prowl has procFlags 0

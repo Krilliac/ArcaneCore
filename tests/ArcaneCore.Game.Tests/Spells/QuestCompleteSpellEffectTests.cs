@@ -77,7 +77,7 @@ public sealed class QuestCompleteSpellEffectTests
         };
         QuestTemplate covered = Event(QuestId);
         QuestTemplate other = Event(QuestId + 1);
-        using var kit = new QuestFlowKit([covered, other], starters: [QuestId, QuestId + 1], spellCaster: new CreditingCaster(QuestId));
+        using var kit = new QuestFlowTestKit([covered, other], starters: [QuestId, QuestId + 1], spellCaster: new CreditingCaster(QuestId));
         Assert.Equal(QuestAdapter.None, kit.Services.MissingAdapters(kit.Services.Quests.Get(QuestId)!));
         Assert.Equal(QuestAdapter.EventCredit, kit.Services.MissingAdapters(kit.Services.Quests.Get(QuestId + 1)!));
         Assert.True(kit.Accept(QuestId));

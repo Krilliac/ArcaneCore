@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Collision;

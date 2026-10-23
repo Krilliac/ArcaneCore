@@ -8,9 +8,10 @@ using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.TestSupport;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 

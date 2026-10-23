@@ -1,7 +1,7 @@
 using ArcaneCore.Game.Combat;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>
 /// The vanilla attack table (vmangos SpellCaster::RollMeleeOutcomeAgainst) with exact range

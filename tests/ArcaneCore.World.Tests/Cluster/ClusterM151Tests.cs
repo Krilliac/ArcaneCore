@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,13 +12,6 @@ namespace ArcaneCore.World.Tests.Cluster;
 
 public sealed class ClusterM151Tests
 {
-    private sealed class NoOpSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
-    }
-
     private static ClusterNodeManifest CreateManifest(
         int realmId = 1,
         string nodeId = "worker-east-1",
@@ -44,7 +38,7 @@ public sealed class ClusterM151Tests
                 TickIntervalMs = tickIntervalMs,
                 TickTimer = WorldTickTimer.Legacy,
             },
-            new NoOpSaveQueue(),
+            new NullSaveQueue(),
             NullLogger<WorldRuntime>.Instance);
 
     [Fact]

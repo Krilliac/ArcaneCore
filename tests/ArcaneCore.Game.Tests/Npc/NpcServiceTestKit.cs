@@ -17,7 +17,7 @@ namespace ArcaneCore.Game.Tests.Npc;
 /// (<see cref="InventoryItemService"/>) and whatever extra collaborators a test passes.
 /// Items 91001.. are synthetic vendor goods.
 /// </summary>
-internal sealed class NpcServiceKit : IDisposable
+internal sealed class NpcServiceTestKit : IDisposable
 {
     public const uint Bread = 91001;       // stackable 20, buy 25, sell 6
     public const uint Sword = 91002;       // weapon (2/7), ilvl 10, quality 2, durability 50, buy 1000, sell 250
@@ -44,7 +44,7 @@ internal sealed class NpcServiceKit : IDisposable
 
     public static ItemTemplateStore Store { get; } = new(Templates, []);
 
-    public NpcServiceKit(NpcFlags flags, NpcContent? content = null, QuestNpcDependencies? extra = null, float npcDistance = 1,
+    public NpcServiceTestKit(NpcFlags flags, NpcContent? content = null, QuestNpcDependencies? extra = null, float npcDistance = 1,
         bool hostile = false, uint mapId = 0, long now = 1_000, RepairCostTable? repair = null, BankBagSlotPriceTable? bankPrices = null,
         Func<Player, byte, bool>? persistBankSlots = null, ItemTemplateStore? itemStore = null)
     {
@@ -114,7 +114,7 @@ internal sealed class NpcServiceKit : IDisposable
 
     public bool Sent(WorldOpcode opcode) => Session.Sent.Any(p => p.Opcode == opcode);
 
-    internal sealed class MutableLookup(NpcServiceKit kit) : ICreatureLookup
+    internal sealed class MutableLookup(NpcServiceTestKit kit) : ICreatureLookup
     {
         public NpcInfo? Find(Player player, ObjectGuid guid) => guid == kit.Npc.Guid ? kit.Npc : null;
     }

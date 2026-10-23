@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
@@ -216,7 +217,7 @@ public sealed class AuraCasterLifecycleTests
                 .AddSingleton<TeleportFeature>()
                 .BuildServiceProvider();
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
-                new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+                new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
             _services.GetRequiredService<TeleportFeature>().Attach(World);
             Spells = new SpellFeature(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance);
             Spells.Attach(World); // Installs the actual WorldSpellUnitResolver and WorldSpellDamageSink.
@@ -309,10 +310,5 @@ public sealed class AuraCasterLifecycleTests
         public void ProcessWorldPackets(Player player) { }
         public void Kick() { }
         public void OnLoggedOut() => LogoutCount++;
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 }

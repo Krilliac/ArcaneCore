@@ -118,7 +118,7 @@ public sealed class BihTreeTests
         }
 
         byte[] bytes = stream.ToArray();
-        var reader = new Maps.Collision.CollisionDataReader(bytes);
+        var reader = new ArcaneCore.Game.Maps.Collision.CollisionDataReader(bytes);
         BihTree copy = BihTree.Read(ref reader);
         Assert.Equal(tree.Low, copy.Low);
         Assert.Equal(tree.High, copy.High);
@@ -203,7 +203,7 @@ public sealed class BihTreeTests
         byte[] bytes = stream.ToArray()[..^3];
         Assert.Throws<InvalidDataException>(() =>
         {
-            var reader = new Maps.Collision.CollisionDataReader(bytes);
+            var reader = new ArcaneCore.Game.Maps.Collision.CollisionDataReader(bytes);
             BihTree.Read(ref reader);
         });
     }

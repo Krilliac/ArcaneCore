@@ -3,13 +3,14 @@ using System.Globalization;
 using System.Text;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Schema.Upgrade;
+using ArcaneCore.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ArcaneCore.Data.Tests.Upgrade;
 
 /// <summary>Where the committed update files are, how to read them and how to run them the way the operator's client does.</summary>
-internal static class SqlUpdateSupport
+internal static class SqlUpdateTestKit
 {
     public const string UpdateVariable = "ARCANECORE_UPDATE_SQL";
 

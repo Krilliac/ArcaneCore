@@ -5,13 +5,13 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Game.Totems;
 using ArcaneCore.Kernel.WorldData.Creatures;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.ClassSpells.Totems;
 
 /// <summary>A world with a creature system, a spell system sharing its clock and a <see cref="TotemSystem"/>, and synthetic totem spells shaped like classic-db's.</summary>
-internal sealed class TotemKit : IDisposable
+internal sealed class TotemTestKit : IDisposable
 {
     // Spell ids are synthetic; the shapes follow classic-db spell_template (ids in the comments).
     public const uint EarthTotemSummon = 930001;   // Stoneskin Totem 8071 shape: SUMMON_TOTEM_SLOT2, target 41, value 5
@@ -40,7 +40,7 @@ internal sealed class TotemKit : IDisposable
     public const uint ActiveEntry = 940009;
     public const uint SentryEntry = 3968;
 
-    public TotemKit(TotemOptions? options = null, int summonDurationMs = 60_000)
+    public TotemTestKit(TotemOptions? options = null, int summonDurationMs = 60_000)
     {
         CreatureContent content = Content(
         [

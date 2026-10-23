@@ -162,7 +162,7 @@ public sealed class SpellFocusCastCheckTests
         // Spell.cpp:7104-7106: CheckItems returns SPELL_CAST_OK for a non-Player caster before the focus block.
         using var rig = new Rig();
         var creature = new ArcaneCore.Game.Creatures.Creature(
-            9001, CreatureTestSupport.Template(CreatureTestSupport.WolfEntry), null, ArcaneCore.Kernel.WorldData.Creatures.CreatureContent.Empty, new Random(1));
+            9001, CreatureTestKit.Template(CreatureTestKit.WolfEntry), null, ArcaneCore.Kernel.WorldData.Creatures.CreatureContent.Empty, new Random(1));
         var check = new SpellFocusCastCheck(map => rig.Systems);
         SpellInfo forge = rig.Kit.Store.Get(ForgeSpell)!;
         var context = new SpellCastCheckContext(rig.Kit.System, creature, forge, SpellCastTargets.ForUnit(creature.Guid), creature, false, true);

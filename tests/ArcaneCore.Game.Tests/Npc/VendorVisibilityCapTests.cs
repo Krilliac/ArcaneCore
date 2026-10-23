@@ -17,10 +17,10 @@ public sealed class VendorVisibilityCapTests
     private const uint HiddenByCap = FirstItem + 154;
     private const uint Template = 501;
 
-    private static NpcServiceKit Kit(bool hideFirstTen = false)
+    private static NpcServiceTestKit Kit(bool hideFirstTen = false)
     {
         var goods = Enumerable.Range(0, 160)
-            .Select(index => NpcServiceKit.Templates[0] with
+            .Select(index => NpcServiceTestKit.Templates[0] with
             {
                 Entry = FirstItem + (uint)index,
                 BuyPrice = 1,
@@ -29,15 +29,15 @@ public sealed class VendorVisibilityCapTests
                 AllowableRace = hideFirstTen && index < 5 ? 0u : uint.MaxValue,
                 RequiredReputationRank = hideFirstTen && index is >= 8 and < 10 ? 5u : 0u,
             }).ToArray();
-        var store = new ItemTemplateStore([.. NpcServiceKit.Templates, .. goods], []);
+        var store = new ItemTemplateStore([.. NpcServiceTestKit.Templates, .. goods], []);
         var content = NpcContent.Empty with
         {
             VendorItems = Enumerable.Range(0, 10).Select(index => new VendorItem
             {
-                Entry = NpcServiceKit.Entry, Item = FirstItem + (uint)index, Slot = (uint)index,
+                Entry = NpcServiceTestKit.Entry, Item = FirstItem + (uint)index, Slot = (uint)index,
                 ConditionId = hideFirstTen && index is >= 5 and < 8 ? 99u : 0u,
             }).ToArray(),
-            VendorTemplateIds = new Dictionary<uint, uint> { [NpcServiceKit.Entry] = Template },
+            VendorTemplateIds = new Dictionary<uint, uint> { [NpcServiceTestKit.Entry] = Template },
             VendorTemplateItems = Enumerable.Range(10, 150).Select(index => new VendorItem
             {
                 Entry = Template, Item = FirstItem + (uint)index, Slot = (uint)index,
@@ -49,7 +49,7 @@ public sealed class VendorVisibilityCapTests
             ? new QuestNpcDependencies(Reputation: new NpcVendorServiceTests.FixedReputation(1f, rank: 4),
                 Conditions: new RefusingCondition())
             : null;
-        var kit = new NpcServiceKit(NpcFlags.Vendor, content, extra: extra, itemStore: store);
+        var kit = new NpcServiceTestKit(NpcFlags.Vendor, content, extra: extra, itemStore: store);
         kit.Player.Money = 1000;
         return kit;
     }
@@ -134,7 +134,7 @@ public sealed class VendorVisibilityCapTests
         Assert.Null(kit.Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.ItemStart));
         Assert.Equal(1000u, kit.Player.Money);
 
-        var sold = kit.Give(NpcServiceKit.Sword);
+        var sold = kit.Give(NpcServiceTestKit.Sword);
         kit.Services.SellItem(kit.Player, kit.Npc.Guid, sold.Guid, 0);
         kit.Player.Money = 1000;
         kit.Services.BuybackItem(kit.Player, kit.Npc.Guid, InventorySlots.BuybackStart);

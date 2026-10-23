@@ -12,7 +12,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.PacketHeuristics;
 
 /// <summary>Shared fixtures of the packet heuristics tests: a private ledger and clock on the host's feature, real client and bot sessions.</summary>
-internal static class PacketHeuristicsKit
+internal static class PacketHeuristicsTestKit
 {
     internal static PacketHeuristicsFeature FeatureOf(WorldTestHost host) => host.WorldServices.GetRequiredService<PacketHeuristicsFeature>();
 

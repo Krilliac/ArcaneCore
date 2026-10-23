@@ -7,6 +7,7 @@ using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -37,7 +38,7 @@ public sealed class NaxxramasFrostwyrmGateTests
     public void FrostwyrmRow_IsRefusedUntilTheFourWingsAreCleared()
     {
         using var world = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0 },
-            new NullSaves(), NullLogger<WorldRuntime>.Instance);
+            new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
         Map map = world.GetMap(533);
         var raid = new NaxxramasInstance(map);
         raid.Initialize();
@@ -74,36 +75,6 @@ public sealed class NaxxramasFrostwyrmGateTests
         var appearance = new PlayerAppearance(
             DisplayId: 49, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,
             MaxHealth: 60, MaxPower: 1000, StartPower: 0, NextLevelXp: 400);
-        return new Player(character, appearance, new NullSession());
-    }
-
-    private sealed class NullSaves : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(ArcaneCore.Protocol.WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
+        return new Player(character, appearance, new NullPlayerSession());
     }
 }

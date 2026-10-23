@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -239,7 +240,7 @@ public sealed class PeriodicEnergizeThreatWorldTests
             _spells = spells;
             _services = new ServiceCollection().AddLogging().AddSingleton<TeleportFeature>().BuildServiceProvider();
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
-                new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+                new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
             _services.GetRequiredService<TeleportFeature>().Attach(World);
             Spells = new SpellFeature(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance);
             Spells.Attach(World);
@@ -255,7 +256,7 @@ public sealed class PeriodicEnergizeThreatWorldTests
         internal Player AddOwner()
         {
             int id = _nextOwner++;
-            Player player = Owner(new RecordingSession(id), id);
+            Player player = Owner(new NullPlayerSession(id), id);
             foreach (PowerType power in new[] { PowerType.Mana, PowerType.Rage, PowerType.Focus, PowerType.Energy, PowerType.Happiness })
             {
                 player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power, 100);
@@ -281,22 +282,5 @@ public sealed class PeriodicEnergizeThreatWorldTests
             World.Dispose();
             await _services.DisposeAsync();
         }
-    }
-
-    private sealed class RecordingSession : IPlayerSession
-    {
-        private readonly int _accountId;
-        internal RecordingSession(int accountId) => _accountId = accountId;
-        public int AccountId => _accountId;
-        public AccountSecurity Security => AccountSecurity.Player;
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) { }
-        public void ProcessWorldPackets(Player player) { }
-        public void Kick() { }
-        public void OnLoggedOut() { }
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 }

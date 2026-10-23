@@ -61,7 +61,7 @@ internal sealed class RecordingLogger<T> : ILogger<T>
     }
 }
 
-internal static class WatchdogTestSupport
+internal static class WatchdogTestKit
 {
     /// <summary>A fresh registry per test, so counters of one test never leak into another.</summary>
     public static CounterRegistry NewRegistry() => new();

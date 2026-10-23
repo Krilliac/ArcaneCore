@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Ops.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -48,7 +49,7 @@ public sealed class AnomalySummaryFeatureTests
         long delta = feature.RunSummaryPass();
         Assert.Equal(78, delta);
 
-        LogEntry info = Assert.Single(logger.Entries);
+        CapturedLog info = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, info.Level);
         Assert.Contains("bot-nav/code-12=+12", info.Message, StringComparison.Ordinal);
         Assert.Contains("bot-nav/code-03=+3", info.Message, StringComparison.Ordinal);
@@ -76,7 +77,7 @@ public sealed class AnomalySummaryFeatureTests
         logger.Entries.Clear();
         ledger.Report("movement", "below-world", "bot Sylvanas (guid 7)", "z=-5100", AnomalySeverity.Error);
         feature.RunSummaryPass();
-        LogEntry entry = Assert.Single(logger.Entries);
+        CapturedLog entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, entry.Level);
     }
 
@@ -98,7 +99,7 @@ public sealed class AnomalySummaryFeatureTests
         Assert.Equal(1, feature.LastSubsystemDeltas["feature"]);
         Assert.Equal(2, feature.LastSubsystemDeltas["reload"]);
 
-        LogEntry summary = logger.Entries.Single(e => e.Level == LogLevel.Information);
+        CapturedLog summary = logger.Entries.Single(e => e.Level == LogLevel.Information);
         Assert.Contains("subsystems=[reload=+2, feature=+1]", summary.Message, StringComparison.Ordinal);
         Assert.Contains("(new=[feature, reload])", summary.Message, StringComparison.Ordinal);
         Assert.Contains("error_keys=2", summary.Message, StringComparison.Ordinal);
@@ -124,22 +125,8 @@ public sealed class AnomalySummaryFeatureTests
         Assert.Empty(logger.Entries);
 
         feature.OnTick(1);
-        LogEntry info = Assert.Single(logger.Entries);
+        CapturedLog info = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, info.Level);
         Assert.Contains("bot-combat/leash-loop=+1", info.Message, StringComparison.Ordinal);
-    }
-
-    private sealed record LogEntry(LogLevel Level, string Message);
-
-    private sealed class CapturingLogger<T> : ILogger<T>
-    {
-        public List<LogEntry> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Add(new LogEntry(logLevel, formatter(state, exception)));
     }
 }

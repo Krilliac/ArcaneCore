@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps.SpawnGroups;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
+using ArcaneCore.TestSupport;
 using Xunit;
 using static ArcaneCore.Game.Tests.SpawnGroups.ClassicDbSpawnGroupRows;
 

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Collision;

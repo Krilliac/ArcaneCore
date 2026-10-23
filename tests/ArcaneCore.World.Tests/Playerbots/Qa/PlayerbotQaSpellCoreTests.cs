@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Tests.Honor;
 using Microsoft.Extensions.Options;
@@ -242,6 +243,6 @@ public sealed class PlayerbotQaSpellCoreTests : IDisposable
     {
         var character = new CharacterRecord { Id = 1, AccountId = 1, Name = "Human", Race = 1, Class = 8, Gender = 0, Level = 60, MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f };
         var appearance = new PlayerAppearance(49, 1, PowerType.Mana, 60, 0, 60, 1000, 0, 400);
-        return new Player(character, appearance, new HonorNullSession());
+        return new Player(character, appearance, new NullPlayerSession());
     }
 }

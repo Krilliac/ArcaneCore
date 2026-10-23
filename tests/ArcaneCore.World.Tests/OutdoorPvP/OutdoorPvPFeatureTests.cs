@@ -6,6 +6,7 @@ using ArcaneCore.Game.OutdoorPvP;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.WorldState;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.OutdoorPvP;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Tests.Honor;
@@ -51,7 +52,7 @@ public sealed class OutdoorPvPFeatureTests
     private static Player NewPlayer(int id, byte race, uint mapId)
     {
         var character = new CharacterRecord { Id = id, AccountId = 1, Name = "Opvp" + id, Race = race, Class = 1, Gender = 0, Level = 60, MapId = mapId, ZoneId = 0 };
-        return new Player(character, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), new HonorNullSession());
+        return new Player(character, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), new NullPlayerSession());
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Tests.CombatCore;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.CombatMechanics;

@@ -279,7 +279,7 @@ public sealed class QuestShareTests
     {
         using var with = new ShareKit(Templates());
         Assert.Equal(QuestAdapter.None, with.Services.MissingAdapters(with.Services.Quests.Get(Party)!));
-        using var without = new QuestFlowKit(Templates(), starters: [Party]);
+        using var without = new QuestFlowTestKit(Templates(), starters: [Party]);
         Assert.Equal(QuestAdapter.PartyAccept, without.Services.MissingAdapters(without.Services.Quests.Get(Party)!));
     }
 
@@ -321,7 +321,7 @@ public sealed class QuestShareTests
             var options = new QuestNpcOptions();
             configure?.Invoke(options);
             Services = new QuestNpcServices(new QuestStore(new QuestContent(templates, [], [])), NpcStore.Empty,
-                new QuestNpcDependencies(Party: Party), options, new QuestFlowKit.RecordingSink(), () => 100,
+                new QuestNpcDependencies(Party: Party), options, new QuestFlowTestKit.RecordingSink(), () => 100,
                 Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
             foreach (Player player in _sessions.Keys)
             {

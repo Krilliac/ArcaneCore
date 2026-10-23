@@ -14,7 +14,7 @@ public sealed class ThreadPoolProbeTests
     {
         var options = new ThreadPoolProbeOptions { ProbeIntervalSeconds = 5, WarnDelayMs = 200, CriticalDelayMs = 2000, WarnIntervalSeconds = 30 };
         configure?.Invoke(options);
-        return new ThreadPoolProbe(options, _clock, WatchdogTestSupport.NewRegistry(), _log, queue);
+        return new ThreadPoolProbe(options, _clock, WatchdogTestKit.NewRegistry(), _log, queue);
     }
 
     [Fact]
@@ -115,6 +115,6 @@ public sealed class ThreadPoolProbeTests
     {
         ThreadPoolProbe probe = Create(_ => { });
         probe.Probe(_clock.NowMicros);
-        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(probe.Execute, 100_000));
+        Assert.Equal(0, WatchdogTestKit.AllocatedBy(probe.Execute, 100_000));
     }
 }

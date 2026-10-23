@@ -8,8 +8,8 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using System.Globalization;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi;
 

@@ -22,12 +22,12 @@ public sealed class PacketHeuristicsPerformanceTests(ITestOutputHelper output)
     {
         await using var host = WorldTestHost.Start();
         long fakeNow = 1_000_000;
-        (PacketHeuristicsFeature feature, _) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false, () => fakeNow);
+        (PacketHeuristicsFeature feature, _) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => fakeNow);
 
         var sessions = new WorldSession[Sessions];
         for (int i = 0; i < sessions.Length; i++)
         {
-            sessions[i] = await PacketHeuristicsKit.NewBotAtCharacterScreenAsync(host, "PERF" + i);
+            sessions[i] = await PacketHeuristicsTestKit.NewBotAtCharacterScreenAsync(host, "PERF" + i);
         }
 
         // Four message kinds a player sends all the time, each with a payload pool so that nothing repeats within a replay window.

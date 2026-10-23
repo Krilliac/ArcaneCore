@@ -32,7 +32,7 @@ public sealed class PlayerbotGuildInviteWorldTests
         {
             foreach (string name in bots) await world.AddBotAsync(name);
             WorldTestClient player = await world.AddPlayerAsync("Realmaker");
-            await player.SendAsync(WorldOpcode.CmsgGuildCreate, SocialTestSupport.CString(RealGuild));
+            await player.SendAsync(WorldOpcode.CmsgGuildCreate, SocialTestKit.CString(RealGuild));
             await world.Host.WaitForWorldAsync(() => world.Guilds.GetByName(RealGuild) is not null, "the player's guild");
             Guild guild = (await world.Host.OnWorldAsync(() => world.Guilds.GetByName(RealGuild)))!;
             return (world, player, guild);
@@ -47,7 +47,7 @@ public sealed class PlayerbotGuildInviteWorldTests
     /// <summary>The player invites the bot; with the feature frozen, also wait until the server holds the invitation (a live bot answers within a pass).</summary>
     private static async Task InviteAsync(SocialWorld world, WorldTestClient player, string bot, bool held = false)
     {
-        await player.SendAsync(WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(bot));
+        await player.SendAsync(WorldOpcode.CmsgGuildInvite, SocialTestKit.CString(bot));
         if (held) await world.Host.WaitForWorldAsync(() => world.Guilds.InvitedTo(world.Host.World.FindOnlinePlayer(bot)!) != 0, $"{bot} to be invited");
     }
 
@@ -87,9 +87,9 @@ public sealed class PlayerbotGuildInviteWorldTests
         await using (world)
         {
             // Oakleaf puts the player on its own friend list (the inviter's list would show no consent); Pinecone does not.
-            Assert.True(await world.SendAsync("Oakleaf", WorldOpcode.CmsgAddFriend, SocialTestSupport.CString("Realmaker")));
+            Assert.True(await world.SendAsync("Oakleaf", WorldOpcode.CmsgAddFriend, SocialTestKit.CString("Realmaker")));
             await world.Host.WaitForWorldAsync(() => PlayerbotGroupInvites.OnBotsFriendList(
-                SocialTestSupport.Social(world.Host).Context, world.Host.World.FindOnlinePlayer("Oakleaf")!, world.Host.World.FindOnlinePlayer("Realmaker")!), "the friend entry");
+                SocialTestKit.Social(world.Host).Context, world.Host.World.FindOnlinePlayer("Oakleaf")!, world.Host.World.FindOnlinePlayer("Realmaker")!), "the friend entry");
 
             await InviteAsync(world, player, "Oakleaf");
             await InviteAsync(world, player, "Pinecone");
@@ -125,8 +125,8 @@ public sealed class PlayerbotGuildInviteWorldTests
             await world.Host.OnWorldAsync(() =>
             {
                 var membership = new PlayerbotGuildMembership(NullLogger.Instance);
-                PlayerbotSocialPass pass = SocialTestSupport.BotPass(world.Host, nowMs: 0);
-                SocialTestSupport.TakeInvites(pass, membership);
+                PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs: 0);
+                SocialTestKit.TakeInvites(pass, membership);
                 membership.AnswerInvites(pass);
             });
 
@@ -148,12 +148,12 @@ public sealed class PlayerbotGuildInviteWorldTests
         Guild guild = await world.FoundGuildAsync("Oakleaf", "Bot Guild");
 
         // Oakleaf invites Pinecone by hand: the packet is there, the policy says Anyone, yet no founding expected it.
-        Assert.True(await world.SendAsync("Oakleaf", WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString("Pinecone")));
+        Assert.True(await world.SendAsync("Oakleaf", WorldOpcode.CmsgGuildInvite, SocialTestKit.CString("Pinecone")));
         await world.Host.OnWorldAsync(() =>
         {
             var membership = new PlayerbotGuildMembership(NullLogger.Instance);
-            PlayerbotSocialPass pass = SocialTestSupport.BotPass(world.Host, nowMs: 0);
-            SocialTestSupport.TakeInvites(pass, membership);
+            PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs: 0);
+            SocialTestKit.TakeInvites(pass, membership);
             membership.AnswerInvites(pass);
         });
         Assert.Equal(["Pinecone"], world.Log.Who(WorldOpcode.CmsgGuildDecline));
@@ -165,7 +165,7 @@ public sealed class PlayerbotGuildInviteWorldTests
         {
             world.Options.Social.Guilds.Enabled = true;
             var membership = new PlayerbotGuildMembership(NullLogger.Instance);
-            PlayerbotSocialPass pass = SocialTestSupport.BotPass(world.Host, nowMs: 0);
+            PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs: 0);
             membership.Recruit(pass, new PlayerbotGuildFounding(NullLogger.Instance));
             int expected = membership.PendingCount;
             membership.AnswerInvites(pass);
@@ -197,23 +197,23 @@ public sealed class PlayerbotGuildInviteWorldTests
 
         await player.SendAsync(WorldOpcode.CmsgPetitionBuy, PlayerbotSocialPackets.PetitionBuy(npc, "Open Doors"));
         await world.Host.WaitForWorldAsync(
-            () => SocialTestSupport.Social(world.Host).Context.Petitions.GetByOwner(world.Host.World.FindOnlinePlayer("Realmaker")!.Guid.Low) is not null, "the charter");
-        ObjectGuid charter = await world.Host.PlayerStateAsync("Realmaker", p => p.Inventory.AllItems.Single(item => item.Entry == SocialTestSupport.CharterItem).Guid);
+            () => SocialTestKit.Social(world.Host).Context.Petitions.GetByOwner(world.Host.World.FindOnlinePlayer("Realmaker")!.Guid.Low) is not null, "the charter");
+        ObjectGuid charter = await world.Host.PlayerStateAsync("Realmaker", p => p.Inventory.AllItems.Single(item => item.Entry == SocialTestKit.CharterItem).Guid);
         ObjectGuid bot = await world.Host.PlayerStateAsync("Oakleaf", p => p.Guid);
         await player.SendAsync(WorldOpcode.CmsgOfferPetition, PlayerbotSocialPackets.PetitionOffer(charter, bot));
 
         if (signed)
         {
-            await world.Host.WaitForWorldAsync(() => SocialTestSupport.Social(world.Host).Context.Petitions
+            await world.Host.WaitForWorldAsync(() => SocialTestKit.Social(world.Host).Context.Petitions
                 .GetByOwner(world.Host.World.FindOnlinePlayer("Realmaker")!.Guid.Low)!.ForPlayer(bot.Low) is not null, "the bot to sign");
         }
         else
         {
-            await SocialTestSupport.WaitPassesAsync(world.Host, 20);
+            await SocialTestKit.WaitPassesAsync(world.Host, 20);
         }
 
         Assert.Equal(signed ? 1 : 0, world.Log.Count("Oakleaf", WorldOpcode.CmsgPetitionSign));
-        Assert.Equal(signed, await world.Host.OnWorldAsync(() => SocialTestSupport.Social(world.Host).Context.Petitions
+        Assert.Equal(signed, await world.Host.OnWorldAsync(() => SocialTestKit.Social(world.Host).Context.Petitions
             .GetByOwner(world.Host.World.FindOnlinePlayer("Realmaker")!.Guid.Low)!.ForPlayer(bot.Low) is not null));
     }
 }

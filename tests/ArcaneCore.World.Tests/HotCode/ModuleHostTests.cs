@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
-using ArcaneCore.Game.Tests;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;

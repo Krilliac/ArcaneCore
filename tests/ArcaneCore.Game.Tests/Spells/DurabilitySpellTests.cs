@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stats;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Items;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;

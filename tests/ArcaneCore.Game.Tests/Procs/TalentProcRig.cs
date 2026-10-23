@@ -63,7 +63,7 @@ internal sealed class TalentProcRig : IDisposable
     /// <summary>Put the self aura <paramref name="spellId"/> on <paramref name="unit"/> before the event under test.</summary>
     public void Apply(Unit unit, uint spellId)
     {
-        RuleTestSupport.Apply(Kit, unit, spellId);
+        RuleTestKit.Apply(Kit, unit, spellId);
         Kit.Now++;
     }
 
@@ -100,7 +100,7 @@ internal sealed class TalentProcRig : IDisposable
 
     /// <summary>A harmful magic spell of <paramref name="school"/> (the spell that causes the event).</summary>
     public static SpellInfo Bolt(uint id, SpellSchool school, uint family = 0, ulong familyFlags = 0, uint manaCost = 0, uint manaCostPct = 0) =>
-        RuleTestSupport.Magic(id, school) with
+        RuleTestKit.Magic(id, school) with
         {
             SpellFamilyName = family,
             SpellFamilyFlags = familyFlags,

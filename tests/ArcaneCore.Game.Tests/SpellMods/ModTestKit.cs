@@ -6,7 +6,7 @@ using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 namespace ArcaneCore.Game.Tests.SpellMods;
 
 /// <summary>Synthetic talent-shaped spells shared by the spell-modifier tests (never retail data).</summary>
-internal static class ModTestSupport
+internal static class ModTestKit
 {
     /// <summary>The spell family every synthetic spell and modifier below carries.</summary>
     public const uint Family = 3;

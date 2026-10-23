@@ -9,6 +9,7 @@ using ArcaneCore.Game.Maps.Pools;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -45,7 +46,7 @@ public sealed class PoolWorldAuditTests(ITestOutputHelper output)
         int pools = 0, rolled = 0, firstLive = 0, lastLive = 0;
         foreach (uint mapId in maps)
         {
-            using var world = new WorldRuntime(new WorldRuntimeOptions(), new NullSaves(), NullLogger<WorldRuntime>.Instance);
+            using var world = new WorldRuntime(new WorldRuntimeOptions(), new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
             Map map = world.GetMap(mapId);
             var objectSystem = new GameObjectMapSystem(map, objects) { Random = new Random(20261010) };
             map.AddUpdater(objectSystem);
@@ -103,13 +104,6 @@ public sealed class PoolWorldAuditTests(ITestOutputHelper output)
             {
                 Skip = $"Set {PoolScratchWorldProbeTests.Variable} to a scratch SQLite world built from the classic-db z2815 dump to audit the pools.";
             }
-        }
-    }
-
-    private sealed class NullSaves : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
         }
     }
 }

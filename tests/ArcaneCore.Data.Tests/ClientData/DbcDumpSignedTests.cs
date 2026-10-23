@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Data;
 using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests.ClientData;
@@ -19,7 +20,7 @@ public sealed class DbcDumpSignedTests
         Assert.Equal(32, unsigned.WidthBits);
         Assert.False(unsigned.IsSigned);
 
-        using var dir = new TempDirectory();
+        using var dir = new TempDirectory("arcane-clientdata-");
         byte[] image = new byte[20 + map.RecordSize + 1];
         BinaryPrimitives.WriteUInt32LittleEndian(image, 0x43424457);
         BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(4), 1);

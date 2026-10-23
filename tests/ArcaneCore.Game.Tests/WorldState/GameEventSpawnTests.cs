@@ -8,9 +8,10 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 
 namespace ArcaneCore.Game.Tests.WorldState;

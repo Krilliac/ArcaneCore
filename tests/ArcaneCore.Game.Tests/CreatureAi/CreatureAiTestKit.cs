@@ -10,7 +10,7 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Tests.CreatureAi;
 
 /// <summary>Builders and fakes for the creature AI tests.</summary>
-internal static class CreatureAiTestSupport
+internal static class CreatureAiTestKit
 {
     public const string RecorderName = "RecorderAI";
 

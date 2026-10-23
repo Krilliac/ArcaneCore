@@ -5,6 +5,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
@@ -506,7 +507,7 @@ public sealed class LocomotionAnomalyTests
     [Fact]
     public void UnderMap_BelowTheTerrainFloor_IsReported_AndOnlyBeyondFiftyYards()
     {
-        using var kit = new HazardKit(liquid: null);
+        using var kit = new HazardTestKit(liquid: null);
         Player deep = kit.AddPlayer(4_105_003, 20f, out _);
         Player shallow = kit.AddPlayer(4_105_004, 20f, out _);
         Player swimmer = kit.AddPlayer(4_105_005, 20f, out _);
@@ -515,16 +516,16 @@ public sealed class LocomotionAnomalyTests
         void Move(Player p, float z, MovementFlags flags = MovementFlags.None)
         {
             MovementInfo previous = p.Movement;
-            var incoming = new MovementInfo { Flags = flags, Time = 1, X = HazardKit.X, Y = HazardKit.Y, Z = z };
+            var incoming = new MovementInfo { Flags = flags, Time = 1, X = HazardTestKit.X, Y = HazardTestKit.Y, Z = z };
             var context = new MovementObserverContext(p, kit.Kit.World, WorldOpcode.MsgMoveHeartbeat);
             MovementObservers.Before(context, in previous, ref incoming);
             p.ApplyClientMovement(incoming, 1);
             MovementObservers.After(context, in previous);
         }
 
-        Move(shallow, HazardKit.Ground - 49f);                      // 49 yd under the floor: inside the tolerance
-        Move(swimmer, HazardKit.Ground - 60f, MovementFlags.Swimming); // swimming under a floor is not under the map
-        Move(deep, HazardKit.Ground - 60f);
+        Move(shallow, HazardTestKit.Ground - 49f);                      // 49 yd under the floor: inside the tolerance
+        Move(swimmer, HazardTestKit.Ground - 60f, MovementFlags.Swimming); // swimming under a floor is not under the map
+        Move(deep, HazardTestKit.Ground - 60f);
 
         Assert.Equal(1, capture.Count(UnderMapKey));
         AnomalyNotice notice = Assert.Single(capture.Notices);

@@ -6,7 +6,7 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using static ArcaneCore.Game.Tests.Npc.QuestFlowKit;
+using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 
 namespace ArcaneCore.Game.Tests.Quests;
 
@@ -20,7 +20,7 @@ public sealed class EventQuestTests
 
     private sealed class Rig : IDisposable
     {
-        public Rig(QuestFlowKit kit, params (uint Quest, int Event)[] listed)
+        public Rig(QuestFlowTestKit kit, params (uint Quest, int Event)[] listed)
         {
             Kit = kit;
             var events = new GameEventContent(
@@ -38,7 +38,7 @@ public sealed class EventQuestTests
             Quests.Resync(); // what the quest feature does when it wires the service: every listed quest is inactive from load
         }
 
-        public QuestFlowKit Kit { get; }
+        public QuestFlowTestKit Kit { get; }
 
         public Clock Clock { get; } = new(Utc(2026, 10, 3, 10));
 
@@ -63,7 +63,7 @@ public sealed class EventQuestTests
     [Fact]
     public void AQuestListedUnderAnEvent_IsNotOffered_UntilTheEventStarts_AndNotAfterItStops()
     {
-        using var rig = new Rig(new QuestFlowKit([Task(10), Task(11)], starters: [10, 11]), (10, 2));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10), Task(11)], starters: [10, 11]), (10, 2));
         rig.Service.Initialize(new HashSet<ushort>());
         Quest listed = rig.Kit.Services.Quests.Get(10)!;
         Quest plain = rig.Kit.Services.Quests.Get(11)!;
@@ -85,7 +85,7 @@ public sealed class EventQuestTests
     [Fact]
     public void ARunningEventAtStartup_ActivatesItsQuestsAtInitialisation()
     {
-        using var rig = new Rig(new QuestFlowKit([Task(10)], starters: [10]), (10, 2));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10)], starters: [10]), (10, 2));
         rig.Clock.Now = Utc(2026, 10, 3, 12, 30);
 
         rig.Service.Initialize(new HashSet<ushort>());
@@ -97,7 +97,7 @@ public sealed class EventQuestTests
     [Fact]
     public void AQuestListedUnderTwoEvents_IsActiveWhileEitherRuns()
     {
-        using var rig = new Rig(new QuestFlowKit([Task(10)], starters: [10]), (10, 2), (10, 3));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10)], starters: [10]), (10, 2), (10, 3));
         rig.Service.Initialize(new HashSet<ushort>());
         Quest quest = rig.Kit.Services.Quests.Get(10)!;
         Assert.False(quest.IsActive);
@@ -116,7 +116,7 @@ public sealed class EventQuestTests
     public void ADisabledQuestListedUnderAnEvent_IsActiveWhileTheEventRuns_AsInVmangos()
     {
         // vmangos SetQuestActiveState(true) overrides the Method disabled bit for event quests (QuestDef.cpp:143-151 vs :1034)
-        using var rig = new Rig(new QuestFlowKit([Task(10, method: 2 | QuestConstants.MethodDisabled)], starters: [10]), (10, 2));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10, method: 2 | QuestConstants.MethodDisabled)], starters: [10]), (10, 2));
         rig.Service.Initialize(new HashSet<ushort>());
         Quest quest = rig.Kit.Services.Quests.Get(10)!;
         Assert.False(quest.IsActive);
@@ -130,7 +130,7 @@ public sealed class EventQuestTests
     [Fact]
     public void AQuestThatIsNotListed_KeepsItsOwnMethodState()
     {
-        using var kit = new QuestFlowKit([Task(10), Task(11, method: 2 | QuestConstants.MethodDisabled)], starters: [10, 11]);
+        using var kit = new QuestFlowTestKit([Task(10), Task(11, method: 2 | QuestConstants.MethodDisabled)], starters: [10, 11]);
         Assert.True(kit.Services.Quests.Get(10)!.IsActive);
         Assert.False(kit.Services.Quests.Get(11)!.IsActive);
     }
@@ -138,7 +138,7 @@ public sealed class EventQuestTests
     [Fact]
     public void AListedQuestWithoutATemplate_IsReported_NotFatal()
     {
-        using var rig = new Rig(new QuestFlowKit([Task(10)], starters: [10]), (10, 2), (777, 2));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10)], starters: [10]), (10, 2), (777, 2));
         Assert.False(rig.Kit.Services.Quests.Get(10)!.IsActive);
 
         // the construction already handled this store: a second look has nothing to do; the missing template shows on a fresh gate
@@ -150,7 +150,7 @@ public sealed class EventQuestTests
     [Fact]
     public void Release_GivesTheQuestsBackToTheirMethod()
     {
-        using var rig = new Rig(new QuestFlowKit([Task(10)], starters: [10]), (10, 2));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10)], starters: [10]), (10, 2));
         Quest quest = rig.Kit.Services.Quests.Get(10)!;
         Assert.False(quest.IsActive);
 
@@ -162,7 +162,7 @@ public sealed class EventQuestTests
     [Fact]
     public void AQuestInTheLog_KeepsItsState_WhenTheEventEnds()
     {
-        using var rig = new Rig(new QuestFlowKit([Task(10)], starters: [10]), (10, 2));
+        using var rig = new Rig(new QuestFlowTestKit([Task(10)], starters: [10]), (10, 2));
         rig.Service.Initialize(new HashSet<ushort>());
         rig.At(12, 30);
         Assert.True(rig.Kit.Accept(10));

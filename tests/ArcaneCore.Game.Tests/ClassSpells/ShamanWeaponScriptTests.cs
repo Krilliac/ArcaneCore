@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Spells.Shaman;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;

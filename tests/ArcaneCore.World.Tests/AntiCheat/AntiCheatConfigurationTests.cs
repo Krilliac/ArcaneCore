@@ -2,6 +2,7 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Reload;
 using Microsoft.Extensions.Configuration;
@@ -92,12 +93,5 @@ public sealed class AntiCheatConfigurationTests : IDisposable
         Assert.Equal(ReloadStatus.Rejected, result.Status);
         Assert.Same(before, feature.Options);
         Assert.Equal(AntiCheatAction.Log, feature.Options.Action);
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(Kernel.Characters.CharacterState state)
-        {
-        }
     }
 }

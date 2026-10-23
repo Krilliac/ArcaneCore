@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
@@ -52,7 +53,7 @@ public sealed class HitChanceAuraTests
     ], []);
 
     private static SpellInfo WeaponAura(uint id, AuraType type, int amount, int itemClass, int subclassMask) =>
-        RuleTestSupport.Grant(id, type, amount) with
+        RuleTestKit.Grant(id, type, amount) with
         {
             EquippedItemClass = itemClass,
             EquippedItemSubClassMask = subclassMask,
@@ -62,14 +63,14 @@ public sealed class HitChanceAuraTests
     private static SpellTestKit Kit() => new(
         WeaponAura(MeleeHit3, AuraType.ModHitChance, 3, 2, SubclassMaskOneHandedMelee),
         WeaponAura(RangedHit3, AuraType.ModHitChance, 3, 2, SubclassMaskBowGun),
-        RuleTestSupport.Grant(GenericHit2, AuraType.ModHitChance, 2),
-        RuleTestSupport.Grant(AttackerMelee10, AuraType.ModAttackerMeleeHitChance, 10),
-        RuleTestSupport.Grant(AttackerRanged10, AuraType.ModAttackerRangedHitChance, 10),
-        RuleTestSupport.Grant(AttackerMeleeCrit5, AuraType.ModAttackerMeleeCritChance, 5),
-        RuleTestSupport.Grant(CreatureCrit4, AuraType.ModCritPercent, 4),
-        RuleTestSupport.Grant(CreatureDodge3, AuraType.ModDodgePercent, 3),
-        RuleTestSupport.Grant(CreatureParry2, AuraType.ModParryPercent, 2),
-        RuleTestSupport.Grant(CreatureBlock4, AuraType.ModBlockPercent, 4),
+        RuleTestKit.Grant(GenericHit2, AuraType.ModHitChance, 2),
+        RuleTestKit.Grant(AttackerMelee10, AuraType.ModAttackerMeleeHitChance, 10),
+        RuleTestKit.Grant(AttackerRanged10, AuraType.ModAttackerRangedHitChance, 10),
+        RuleTestKit.Grant(AttackerMeleeCrit5, AuraType.ModAttackerMeleeCritChance, 5),
+        RuleTestKit.Grant(CreatureCrit4, AuraType.ModCritPercent, 4),
+        RuleTestKit.Grant(CreatureDodge3, AuraType.ModDodgePercent, 3),
+        RuleTestKit.Grant(CreatureParry2, AuraType.ModParryPercent, 2),
+        RuleTestKit.Grant(CreatureBlock4, AuraType.ModBlockPercent, 4),
         SpellTestKit.Spell(MeleeStrike, SpellTestKit.Effect(SpellEffectName.WeaponDamage, 10, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Melee },
         SpellTestKit.Spell(RangedShot, SpellTestKit.Effect(SpellEffectName.WeaponDamage, 10, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Ranged });
 
@@ -125,9 +126,9 @@ public sealed class HitChanceAuraTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = PvpScene();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, MeleeHit3);
-        RuleTestSupport.Apply(kit, attacker, RangedHit3);
-        RuleTestSupport.Apply(kit, attacker, GenericHit2);
+        RuleTestKit.Apply(kit, attacker, MeleeHit3);
+        RuleTestKit.Apply(kit, attacker, RangedHit3);
+        RuleTestKit.Apply(kit, attacker, GenericHit2);
 
         Assert.Equal(2f, combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack).HitBonus);   // no weapon: only the generic aura
         Equip(attacker, Sword);
@@ -142,7 +143,7 @@ public sealed class HitChanceAuraTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = PvpScene();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, MeleeHit3);
+        RuleTestKit.Apply(kit, attacker, MeleeHit3);
         Equip(attacker, Dagger);
 
         Assert.Equal(0f, combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack).HitBonus);
@@ -157,7 +158,7 @@ public sealed class HitChanceAuraTests
         attacker.Spawn(victim.Map!, 2, 0);
         MapCombat combat = victim.Map!.Combat;
         combat.SpellMitigation = kit.System;
-        RuleTestSupport.Apply(kit, attacker, MeleeHit3);
+        RuleTestKit.Apply(kit, attacker, MeleeHit3);
 
         Assert.Equal(0f, combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack).HitBonus); // no virtual weapon
 
@@ -177,12 +178,12 @@ public sealed class HitChanceAuraTests
         Assert.Equal(5f, Miss(combat, attacker, victim, WeaponAttackType.BaseAttack));
         float ranged = Miss(combat, attacker, victim, WeaponAttackType.RangedAttack);
 
-        RuleTestSupport.Apply(kit, victim, AttackerMelee10);
+        RuleTestKit.Apply(kit, victim, AttackerMelee10);
 
         Assert.Equal(0f, Miss(combat, attacker, victim, WeaponAttackType.BaseAttack));        // 5 - 10, floored at 0
         Assert.Equal(ranged, Miss(combat, attacker, victim, WeaponAttackType.RangedAttack));  // the melee aura leaves ranged alone
 
-        RuleTestSupport.Apply(kit, victim, AttackerRanged10);
+        RuleTestKit.Apply(kit, victim, AttackerRanged10);
         Assert.Equal(ranged - 10f, Miss(combat, attacker, victim, WeaponAttackType.RangedAttack), 3);
     }
 
@@ -207,7 +208,7 @@ public sealed class HitChanceAuraTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = PvpScene();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, victim, AttackerMelee10);
+        RuleTestKit.Apply(kit, victim, AttackerMelee10);
         var rules = new VanillaSpellCombatRules();
         kit.System.Random = new Random(3);
 
@@ -228,7 +229,7 @@ public sealed class HitChanceAuraTests
         attacker.SetFloat(UpdateFields.PlayerCritPercentage, 10f);
         float before = MeleeHitTable.CritChance(combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack));
 
-        RuleTestSupport.Apply(kit, victim, AttackerMeleeCrit5);
+        RuleTestKit.Apply(kit, victim, AttackerMeleeCrit5);
 
         Assert.Equal(before + 5f, MeleeHitTable.CritChance(combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack)), 3);
     }
@@ -243,7 +244,7 @@ public sealed class HitChanceAuraTests
         SpellInfo strike = kit.Store.Get(MeleeStrike)!;
         float before = rules.CritChance(kit.System, attacker, victim, strike);
 
-        RuleTestSupport.Apply(kit, victim, AttackerMeleeCrit5);
+        RuleTestKit.Apply(kit, victim, AttackerMeleeCrit5);
 
         Assert.Equal(before + 5f, rules.CritChance(kit.System, attacker, victim, strike), 3);
     }
@@ -261,7 +262,7 @@ public sealed class HitChanceAuraTests
         combat.SpellMitigation = kit.System;
         Assert.Equal(5f, combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack).BaseCritChance);
 
-        RuleTestSupport.Apply(kit, attacker, CreatureCrit4);
+        RuleTestKit.Apply(kit, attacker, CreatureCrit4);
 
         Assert.Equal(9f, combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack).BaseCritChance);
     }
@@ -275,9 +276,9 @@ public sealed class HitChanceAuraTests
         victim.Spawn(attacker.Map!, 2, 0, orientation: MathF.PI); // faces the attacker
         MapCombat combat = attacker.Map!.Combat;
         combat.SpellMitigation = kit.System;
-        RuleTestSupport.Apply(kit, victim, CreatureDodge3);
-        RuleTestSupport.Apply(kit, victim, CreatureParry2);
-        RuleTestSupport.Apply(kit, victim, CreatureBlock4);
+        RuleTestKit.Apply(kit, victim, CreatureDodge3);
+        RuleTestKit.Apply(kit, victim, CreatureParry2);
+        RuleTestKit.Apply(kit, victim, CreatureBlock4);
 
         MeleeRollInput input = combat.BuildRollInput(attacker, victim, WeaponAttackType.BaseAttack);
 

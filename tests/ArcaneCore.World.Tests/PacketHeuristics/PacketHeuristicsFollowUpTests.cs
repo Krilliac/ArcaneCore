@@ -26,10 +26,10 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task AFarTeleport_WithAPacketInFlightBehindIt_ReportsNothing()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHFAR", "Phfarone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHFAR", "Phfarone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
             Player player = await host.PlayerAsync("Phfarone");
 
@@ -42,7 +42,7 @@ public sealed class PacketHeuristicsFollowUpTests
             });
             await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]);
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Equal(0, feature.Count(PacketCheck.WrongState, PacketTraffic.Player));
             Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
 
@@ -55,10 +55,10 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task AFarTeleport_WhoseLoadingScreenOutlastsTheGraceWindow_StillReportsNothing()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHSLOW", "Phslowone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHSLOW", "Phslowone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host); // the default 5 s WrongStateGraceMs
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host); // the default 5 s WrongStateGraceMs
             using AnomalyCapture capture = ledger.Capture();
             Player player = await host.PlayerAsync("Phslowone");
             await host.OnWorldAsync(() =>
@@ -71,7 +71,7 @@ public sealed class PacketHeuristicsFollowUpTests
             // A loading screen that takes longer than the post-logout window: the map is still null, the teleport stage still Far.
             await Task.Delay(TimeSpan.FromMilliseconds(5600));
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]);
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Null(player.Map);
             Assert.Equal(0, feature.Count(PacketCheck.WrongState, PacketTraffic.Player));
             Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
@@ -85,10 +85,10 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task AMaplessPlayerOutsideAnyTransfer_Reports_EvenWithTheDefaultGrace()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHNOMAP", "Phnomapone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHNOMAP", "Phnomapone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
             Player player = await host.PlayerAsync("Phnomapone");
             await host.OnWorldAsync(() =>
@@ -110,10 +110,10 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task ADoubleClickedEnterWorld_IsInfo_ButAnotherSessionOpcodeInWorldStaysAWarning()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, _) = await PacketHeuristicsKit.EnterClientAsync(host, "PHDBL", "Phdblone");
+        (WorldTestClient client, _) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHDBL", "Phdblone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
 
             await client.SendAsync(WorldOpcode.CmsgPlayerLogin, new byte[8]);
@@ -131,22 +131,22 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task TheGmClassification_FollowsTheGmFlagBothWays_EvenWhileStaffAreExempt()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHGM", "Phgmone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHGM", "Phgmone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, _) = PacketHeuristicsKit.Enable(host);
+            (PacketHeuristicsFeature feature, _) = PacketHeuristicsTestKit.Enable(host);
             Player player = await host.PlayerAsync("Phgmone");
 
             await host.OnWorldAsync(() => player.Flags |= PlayerFlags.Gm);
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]); // a world packet refreshes the flag
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             await client.SendAsync(WorldOpcode.CmsgBootme, []);
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
-            Assert.Equal(0, PacketHeuristicsKit.Total(feature, PacketCheck.UnknownOpcode)); // GM mode: exempt staff
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+            Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.UnknownOpcode)); // GM mode: exempt staff
 
             await host.OnWorldAsync(() => player.Flags &= ~PlayerFlags.Gm);
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]);
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             await client.SendAsync(WorldOpcode.CmsgBootme, []);
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player) >= 1, "checked as a player again");
         }
@@ -156,9 +156,9 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task ABotSubject_NeverStartsWithTheTelemetryPrefix()
     {
         await using var host = WorldTestHost.Start();
-        (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false);
+        (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false);
         using AnomalyCapture capture = ledger.Capture();
-        WorldSession bot = await PacketHeuristicsKit.NewBotAtCharacterScreenAsync(host, "PHSUBJ");
+        WorldSession bot = await PacketHeuristicsTestKit.NewBotAtCharacterScreenAsync(host, "PHSUBJ");
 
         feature.Unhandled(bot, WorldOpcode.CmsgBootme, 0);
 
@@ -172,8 +172,8 @@ public sealed class PacketHeuristicsFollowUpTests
     {
         await using var host = WorldTestHost.Start();
         long now = 1_000_000;
-        (PacketHeuristicsFeature feature, _) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false, () => now);
-        WorldSession bot = await PacketHeuristicsKit.NewBotAtCharacterScreenAsync(host, "PHALLOC");
+        (PacketHeuristicsFeature feature, _) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => now);
+        WorldSession bot = await PacketHeuristicsTestKit.NewBotAtCharacterScreenAsync(host, "PHALLOC");
 
         // The first of each is reported (and may allocate); everything after it inside the interval is only counted.
         feature.WrongState(bot, WorldOpcode.CmsgCastSpell, "bot action while the session is not in the world", SessionState.CharacterSelect);
@@ -212,7 +212,7 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task ConcurrentToggles_NeverLoseOneAnother()
     {
         await using var host = WorldTestHost.Start();
-        PacketHeuristicsFeature feature = PacketHeuristicsKit.FeatureOf(host);
+        PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
         for (int round = 0; round < 300; round++)
         {
             Assert.True(feature.TryApply(new PacketHeuristicsOptions(), out _));
@@ -231,10 +231,10 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task ACastRightAfterANearTeleport_IsNotReported()
     {
         await using var host = WorldTestHost.Start();
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHBLINK", "Phblinkone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHBLINK", "Phblinkone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
             Player player = await host.PlayerAsync("Phblinkone");
             await host.OnWorldAsync(() =>
@@ -245,7 +245,7 @@ public sealed class PacketHeuristicsFollowUpTests
             });
 
             await client.SendAsync(WorldOpcode.CmsgCastSpell, [1, 0, 0, 0, 0, 0]);
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
 
             Assert.Equal(0, feature.Count(PacketCheck.IncapacitatedAction, PacketTraffic.Player));
             Assert.DoesNotContain(capture.Notices, n => n.Key == Key(PacketCheck.IncapacitatedAction));
@@ -256,10 +256,10 @@ public sealed class PacketHeuristicsFollowUpTests
     public async Task AnActionDuringAFarTransfer_IsStillReported()
     {
         await using var host = WorldTestHost.Start();
-        WorldSession bot = await PacketHeuristicsKit.EnterBotAsync(host, "PHFARACT", "Phfaractone");
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "PHFARACT", "Phfaractone");
         try
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host, o => o.ExemptBots = false);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false);
             using AnomalyCapture capture = ledger.Capture();
             Player player = bot.Player!;
             await host.World.InvokeAsync(() =>
@@ -291,17 +291,17 @@ public sealed class PacketHeuristicsFollowUpTests
             new DevelopmentEnvironment(),
             liveServer: false);
         await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(permit));
-        (WorldTestClient client, WorldSession session) = await PacketHeuristicsKit.EnterClientAsync(host, "PHTOOL", "Phtoolone");
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHTOOL", "Phtoolone");
         await using (client)
         {
-            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsKit.Enable(host);
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
             Player player = await host.PlayerAsync("Phtoolone");
             string toolSubject = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"tool {session.AccountId}");
 
             // Network phase: a bad shape (one byte too many, which the handler ignores) found while the injection holds the dispatch gate.
             Assert.Equal(InjectVerdict.Queued, await session.InjectAsync(WorldOpcode.CmsgSetSelection, new byte[9], TimeSpan.FromSeconds(5), CancellationToken.None));
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             AnomalyNotice injected = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.Shape));
             Assert.Equal(toolSubject, injected.Subject);
             Assert.Equal(1, feature.Count(PacketCheck.Shape, PacketTraffic.Tool));
@@ -315,14 +315,14 @@ public sealed class PacketHeuristicsFollowUpTests
                 source.BeginTransit(player);
             });
             Assert.Equal(InjectVerdict.Queued, await session.InjectAsync(WorldOpcode.CmsgCancelAura, new byte[4], TimeSpan.FromSeconds(5), CancellationToken.None));
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             AnomalyNotice dropped = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
             Assert.Equal(toolSubject, dropped.Subject);
             Assert.Equal(1, feature.Count(PacketCheck.WrongState, PacketTraffic.Tool));
 
             // A bad packet from the real client afterwards is the player's, not mistaken for the tool's.
             await client.SendAsync(WorldOpcode.CmsgSetActionbarToggles, [1, 2, 3]);
-            await PacketHeuristicsKit.SettleAsync(host, client, session);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             AnomalyNotice own = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.Shape) && n.Subject != toolSubject);
             Assert.Equal(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"account {session.AccountId}"), own.Subject);
             Assert.Equal(1, feature.Count(PacketCheck.Shape, PacketTraffic.Player));

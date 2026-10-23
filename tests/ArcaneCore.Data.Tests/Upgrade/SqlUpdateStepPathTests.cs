@@ -157,7 +157,7 @@ public sealed class SqlUpdateStepPathTests : IAsyncLifetime
     public async Task BaselineAndBothSteps_BuildWhatABootstrapBuilds(DatabaseProvider provider)
     {
         (UpdateSet baseline, UpdateSet steps) = await GenerateAsync();
-        string folder = SqlUpdateSupport.Folder(provider);
+        string folder = SqlUpdateTestKit.Folder(provider);
         string[] files =
         [
             baseline.Files.Single(f => f.Path.Contains("/" + folder + "/")).Content,
@@ -170,7 +170,7 @@ public sealed class SqlUpdateStepPathTests : IAsyncLifetime
         await ((IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>()).CreateAsync();
         foreach (string file in files)
         {
-            await SqlUpdateSupport.ExecuteAsync(db, provider, file);
+            await SqlUpdateTestKit.ExecuteAsync(db, provider, file);
         }
 
         Assert.Equal(3, await UpgradeTestSupport.ReadVersionAsync(db, "stepprobe"));
@@ -187,9 +187,9 @@ public sealed class SqlUpdateStepPathTests : IAsyncLifetime
         await using StepProbeV3 freshDb = TestContexts.Create<StepProbeV3>(fresh);
         await SchemaBootstrapper.EnsureAsync(freshDb, StepProbeContext.Final);
 
-        string expected = await SqlUpdateSupport.CatalogDumpAsync(freshDb, StepProbeContext.Final);
+        string expected = await SqlUpdateTestKit.CatalogDumpAsync(freshDb, StepProbeContext.Final);
         Assert.Contains("  column c|", expected);
-        Assert.Equal(expected, await SqlUpdateSupport.CatalogDumpAsync(db, StepProbeContext.Final));
+        Assert.Equal(expected, await SqlUpdateTestKit.CatalogDumpAsync(db, StepProbeContext.Final));
     }
 
     [Fact]

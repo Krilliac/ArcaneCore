@@ -5,7 +5,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests.ExtraAttacks;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 public sealed class ExtraAttackStateTests
 {

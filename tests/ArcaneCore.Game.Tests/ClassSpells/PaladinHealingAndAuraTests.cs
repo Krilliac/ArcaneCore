@@ -139,13 +139,13 @@ public sealed class PaladinHealingAndAuraTests : IDisposable
     public void ExclusiveResistance_OnlyTheStrongestCounts_WhateverTheOrder()
     {
         int before = Shadow;
-        RuleTestSupport.Apply(_kit, _friend, ShadowAura1);
+        RuleTestKit.Apply(_kit, _friend, ShadowAura1);
         Assert.Equal(before + 30, Shadow);
 
-        RuleTestSupport.Apply(_kit, _friend, ShadowAura2);          // stronger: 45 replaces 30
+        RuleTestKit.Apply(_kit, _friend, ShadowAura2);          // stronger: 45 replaces 30
         Assert.Equal(before + 45, Shadow);
 
-        RuleTestSupport.Apply(_kit, _friend, ShadowAura3);          // weaker: nothing changes
+        RuleTestKit.Apply(_kit, _friend, ShadowAura3);          // weaker: nothing changes
         Assert.Equal(before + 45, Shadow);
 
         _kit.System.RemoveAuras(_friend, ShadowAura2);              // the best goes: the next best counts

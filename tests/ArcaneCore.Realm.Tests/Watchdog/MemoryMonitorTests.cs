@@ -37,7 +37,7 @@ public sealed class MemoryMonitorTests
     {
         var options = new MemoryMonitorOptions { SampleIntervalSeconds = 10 };
         configure?.Invoke(options);
-        return new MemoryMonitor(options, _clock, WatchdogTestSupport.NewRegistry(), _probe, _actuator, _log);
+        return new MemoryMonitor(options, _clock, WatchdogTestKit.NewRegistry(), _probe, _actuator, _log);
     }
 
     private void Grow(long gen2Mib, long lohMib, long heapMib)
@@ -231,7 +231,7 @@ public sealed class MemoryMonitorTests
     [Fact]
     public void GrowthLine_AndCounters_CarryLohFragmentationAndTheLastFullBlockingPause()
     {
-        CounterRegistry counters = WatchdogTestSupport.NewRegistry();
+        CounterRegistry counters = WatchdogTestKit.NewRegistry();
         var options = new MemoryMonitorOptions { SampleIntervalSeconds = 10, GrowthLogBytes = 16 * Mib };
         var monitor = new MemoryMonitor(options, _clock, counters, _probe, _actuator, _log);
         _probe.Sample = _probe.Sample with { LohBytes = 3000 * Mib, LohFragmentedBytes = 1750 * Mib, LastFullBlockingPauseMs = 2345.4 };
@@ -272,7 +272,7 @@ public sealed class MemoryMonitorTests
         Assert.True(sample.Gen2Collections >= 0);
 
         var options = new MemoryMonitorOptions { FullGcNotifications = true };
-        var monitor = new MemoryMonitor(options, _clock, WatchdogTestSupport.NewRegistry(), new GcMemoryProbe(), _actuator, _log);
+        var monitor = new MemoryMonitor(options, _clock, WatchdogTestKit.NewRegistry(), new GcMemoryProbe(), _actuator, _log);
         monitor.Start();
         try
         {

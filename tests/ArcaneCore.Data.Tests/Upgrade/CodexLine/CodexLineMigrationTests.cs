@@ -7,6 +7,7 @@ using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Xunit;

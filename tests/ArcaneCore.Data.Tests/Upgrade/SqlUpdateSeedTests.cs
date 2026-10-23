@@ -24,7 +24,7 @@ public sealed class SqlUpdateSeedTests
     [Fact]
     public void TheCharactersSnapshot_RecordsTheWorldFenceSeed()
     {
-        SchemaSnapshot snapshot = SqlUpdateSupport.ReadSnapshot("characters");
+        SchemaSnapshot snapshot = SqlUpdateTestKit.ReadSnapshot("characters");
         SnapshotSeed seed = Assert.Single(snapshot.Seeds ?? [], s => s.Table == "character_ownership");
         Assert.Equal("scope=s:world", seed.Key);
         Assert.Equal(SnapshotSeed.Of(UpdateComponent.For("characters").Definition), snapshot.Seeds);
@@ -33,7 +33,7 @@ public sealed class SqlUpdateSeedTests
     [Fact]
     public async Task ASeedWhoseValuesChangedWithoutAStep_IsRefused()
     {
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("characters");
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot("characters");
         SchemaSnapshot tampered = committed with
         {
             Seeds = [.. committed.Seeds!.Select(s => s.Table == "character_ownership" ? s with { Hash = new string('0', 64) } : s)],
@@ -47,7 +47,7 @@ public sealed class SqlUpdateSeedTests
     [Fact]
     public async Task ASeedTheSnapshotLacks_AtTheSnapshotsOwnVersion_IsRefused()
     {
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("characters");
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot("characters");
         SchemaSnapshot withoutSeed = committed with { Seeds = [] };
         UpdateExportException ex = await Assert.ThrowsAsync<UpdateExportException>(
             () => UpdateScriptWriter.GenerateAsync(UpdateComponent.For("characters"), withoutSeed));
@@ -57,7 +57,7 @@ public sealed class SqlUpdateSeedTests
     [Fact]
     public async Task ASnapshotWrittenBeforeSeedsWereRecorded_AdoptsTheDeclaredOnes()
     {
-        SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("characters");
+        SchemaSnapshot committed = SqlUpdateTestKit.ReadSnapshot("characters");
         UpdateSet set = await UpdateScriptWriter.GenerateAsync(UpdateComponent.For("characters"), committed with { Seeds = null });
         Assert.Equal(committed.Seeds, set.Snapshot.Seeds);
     }

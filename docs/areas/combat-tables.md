@@ -3,7 +3,7 @@
 This audit covers the integrated white melee and magic spell tables. The primary
 reference is the read-only vmangos clone at `D:/refs/vmangos`. Its GPL source and
 resistance rows were not copied into ArcaneCore. The arithmetic tests are in
-`tests/ArcaneCore.Game.Tests/CombatTableReferenceTests.cs`, alongside the older
+`tests/ArcaneCore.Game.Tests/Combat/CombatTableReferenceTests.cs`, alongside the older
 `CombatHitTableTests`, `SpellRules/*`, and `CombatMechanics/PowerRulesTests`.
 
 Full reference locations (line ranges are from this clone):

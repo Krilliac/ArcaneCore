@@ -31,7 +31,7 @@ public sealed class ScourgeNecropolisCommuniqueTargetTests
                     Range = new SpellRange(0, 200),
                 },
             ],
-            extraTemplates: [CreatureTestSupport.Template(Proxy, b => b.Faction = 35)]);
+            extraTemplates: [CreatureTestKit.Template(Proxy, b => b.Faction = 35)]);
         kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [],
             [new SpellStore.ScriptTarget(ScourgeInvasionCatalog.CommuniqueNecropolisToProxies, 1, Proxy, 0)]);
         List<Unit> hit = [];

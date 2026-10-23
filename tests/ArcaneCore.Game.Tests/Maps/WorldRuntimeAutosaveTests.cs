@@ -1,8 +1,9 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.TestSupport;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests.Persistence;
+namespace ArcaneCore.Game.Tests.Maps;
 
 /// <summary>
 /// The periodic save (docs/areas/persistence.md): each online character is saved once per interval on its own timer (vmangos

@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Maps;
@@ -614,14 +615,14 @@ public sealed class PlayerbotWorldDestinationsTests
     [Fact]
     public async Task ManyUnreachableQuestEntries_AreCappedPerThink_AndArmBackoff()
     {
-        using var navFixture = new ArcaneCore.Game.Tests.Collision.NavMeshFixture();
-        (int X, int Y, ArcaneCore.Game.Tests.Collision.CellTile Tile)[] unjoined =
+        using var navFixture = new ArcaneCore.TestSupport.NavMeshFixture();
+        (int X, int Y, ArcaneCore.TestSupport.CellTile Tile)[] unjoined =
         [
-            (10, 10, new ArcaneCore.Game.Tests.Collision.CellTile(0, 0, 0, 0, 8, 8, Size: 5) { LinkedSides = [0, 2] }),
-            (10, 11, new ArcaneCore.Game.Tests.Collision.CellTile(0, 1, 40, 0, 8, 8, Size: 5) { LinkedSides = [0, 6], Walkable = (i, _) => i >= 6 }),
-            (11, 10, new ArcaneCore.Game.Tests.Collision.CellTile(1, 0, 0, 40, 8, 8, Size: 5) { LinkedSides = [0, 4, 2] }),
-            (12, 10, new ArcaneCore.Game.Tests.Collision.CellTile(2, 0, 0, 80, 8, 8, Size: 5) { LinkedSides = [0, 4, 2] }),
-            (13, 10, new ArcaneCore.Game.Tests.Collision.CellTile(3, 0, 0, 120, 8, 8, Size: 5) { LinkedSides = [4] }),
+            (10, 10, new ArcaneCore.TestSupport.CellTile(0, 0, 0, 0, 8, 8, Size: 5) { LinkedSides = [0, 2] }),
+            (10, 11, new ArcaneCore.TestSupport.CellTile(0, 1, 40, 0, 8, 8, Size: 5) { LinkedSides = [0, 6], Walkable = (i, _) => i >= 6 }),
+            (11, 10, new ArcaneCore.TestSupport.CellTile(1, 0, 0, 40, 8, 8, Size: 5) { LinkedSides = [0, 4, 2] }),
+            (12, 10, new ArcaneCore.TestSupport.CellTile(2, 0, 0, 80, 8, 8, Size: 5) { LinkedSides = [0, 4, 2] }),
+            (13, 10, new ArcaneCore.TestSupport.CellTile(3, 0, 0, 120, 8, 8, Size: 5) { LinkedSides = [4] }),
         ];
         var templates = Enumerable.Range(0, 40)
             .Select(i => new CreatureTemplate { Entry = (uint)(500 + i), Name = $"giver-{i}", NpcFlags = 2, DisplayIds = [49] })

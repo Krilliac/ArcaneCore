@@ -4,6 +4,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Ops.Control;
 using ArcaneCore.World.Ops.MapFeed;
 using ArcaneCore.World.Tests.Ops.Control;
@@ -116,7 +117,7 @@ public sealed class MapFeedPipeTests
         Assert.False(world.Feed.IsListening);
         Assert.Null(world.Feed.PipeName);
         Assert.Empty(world.Feed.Servers);
-        WorldControlPipeTests.LogEntry warning = Assert.Single(world.FeedLog, e => e.Level == LogLevel.Warning);
+        CapturedCategoryLog warning = Assert.Single(world.FeedLog, e => e.Level == LogLevel.Warning);
         Assert.Contains("MaxHz", warning.Message, StringComparison.Ordinal);
         Assert.Contains("MaxConnections", warning.Message, StringComparison.Ordinal);
         AssertNoErrorsLogged(world);
@@ -144,7 +145,7 @@ public sealed class MapFeedPipeTests
             Assert.True(LocalPipeServer.RejectsRemoteClients(server.SafePipeHandle), "every feed pipe instance must carry PIPE_REJECT_REMOTE_CLIENTS");
         }
 
-        WorldControlPipeTests.LogEntry on = Assert.Single(world.FeedLog, e => e.Message.StartsWith("map feed on:", StringComparison.Ordinal));
+        CapturedCategoryLog on = Assert.Single(world.FeedLog, e => e.Message.StartsWith("map feed on:", StringComparison.Ordinal));
         Assert.Contains(name, on.Message, StringComparison.Ordinal);
         Assert.Contains(user.Value, on.Message, StringComparison.Ordinal);
         AssertNoErrorsLogged(world);
@@ -181,7 +182,7 @@ public sealed class MapFeedPipeTests
         Assert.Null(world.Feed.PipeName);
         Assert.Empty(world.Feed.Servers);
         // Refusing a name is an expected outcome, never an error the QA reporter would publish.
-        WorldControlPipeTests.LogEntry refusal = Assert.Single(world.FeedLog, e => e.Message.Contains("could not create", StringComparison.Ordinal));
+        CapturedCategoryLog refusal = Assert.Single(world.FeedLog, e => e.Message.Contains("could not create", StringComparison.Ordinal));
         Assert.Equal(LogLevel.Warning, refusal.Level);
         AssertNoErrorsLogged(world);
     }
@@ -232,7 +233,7 @@ public sealed class MapFeedPipeTests
         Assert.Contains("protocol 1", error.GetProperty("message").GetString(), StringComparison.Ordinal);
         Assert.Null(await client.TryReadAsync());
 
-        WorldControlPipeTests.LogEntry mismatch = Assert.Single(world.FeedLog, e => e.Message.Contains("speaks protocol 2", StringComparison.Ordinal));
+        CapturedCategoryLog mismatch = Assert.Single(world.FeedLog, e => e.Message.Contains("speaks protocol 2", StringComparison.Ordinal));
         Assert.Equal(LogLevel.Warning, mismatch.Level);
         AssertNoErrorsLogged(world);
 
@@ -349,7 +350,7 @@ public sealed class MapFeedPipeTests
 
         Assert.Equal(0, world.Feed.SubscriptionCount);
         Assert.False(world.Feed.IsAttached);
-        WorldControlPipeTests.LogEntry cut = Assert.Single(world.FeedLog, e => e.Message.Contains("longer than", StringComparison.Ordinal));
+        CapturedCategoryLog cut = Assert.Single(world.FeedLog, e => e.Message.Contains("longer than", StringComparison.Ordinal));
         Assert.Equal(LogLevel.Warning, cut.Level);
 
         FeedClient second = await world.ConnectAsync();

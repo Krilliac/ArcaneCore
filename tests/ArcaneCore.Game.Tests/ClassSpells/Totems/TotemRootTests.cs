@@ -15,11 +15,11 @@ namespace ArcaneCore.Game.Tests.ClassSpells.Totems;
 public sealed class TotemRootTests
 {
     [Theory]
-    [InlineData(TotemKit.EarthTotemSummon, TotemSlot.Earth)]
-    [InlineData(TotemKit.ActiveSummon, TotemSlot.Fire)]
+    [InlineData(TotemTestKit.EarthTotemSummon, TotemSlot.Earth)]
+    [InlineData(TotemTestKit.ActiveSummon, TotemSlot.Fire)]
     public void ASummonedTotem_IsRooted_AndStaysRooted(uint summon, TotemSlot slot)
     {
-        using var kit = new TotemKit();
+        using var kit = new TotemTestKit();
         (Player shaman, _) = kit.AddPlayer(1, 100, 200);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Cast(shaman, summon));

@@ -20,7 +20,7 @@ using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
@@ -39,7 +39,7 @@ public sealed class RemainingRaidBossTests
         /// <summary>creature_ai_scripts rows for the map's creatures (EventAI templates).</summary>
         public CreatureAiContent? Ai { get; init; }
 
-        /// <summary>How a template is built for an entry (default: <see cref="CreatureTestSupport.Template"/>).</summary>
+        /// <summary>How a template is built for an entry (default: <see cref="CreatureTestKit.Template"/>).</summary>
         public Func<uint, CreatureTemplate> Make { get; init; } = e => Template(e);
 
         public void Start(bool aggro = true)

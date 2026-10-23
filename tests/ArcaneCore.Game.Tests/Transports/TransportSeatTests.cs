@@ -4,6 +4,7 @@ using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using static ArcaneCore.Game.Tests.Transports.TransportTestKit;
 

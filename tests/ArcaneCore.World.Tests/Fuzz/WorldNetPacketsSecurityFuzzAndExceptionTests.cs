@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Bans;
 using ArcaneCore.World.Cluster;
@@ -216,14 +217,6 @@ public sealed class WorldNetPacketsSecurityFuzzAndExceptionTests
         public string? GetEnvironmentVariable(string name) => env.GetValueOrDefault(name);
     }
 
-    private sealed class NoOpSaveQueue : ICharacterSaveQueue
-    {
-        public static readonly NoOpSaveQueue Instance = new();
-        public void Enqueue(CharacterState state)
-        {
-        }
-    }
-
     private sealed class StubServiceScopeFactory : IServiceScopeFactory, IServiceScope
     {
         public static readonly StubServiceScopeFactory Instance = new();
@@ -235,7 +228,7 @@ public sealed class WorldNetPacketsSecurityFuzzAndExceptionTests
     }
 
     private static WorldRuntime CreateMinimalWorld() =>
-        new(new WorldRuntimeOptions(), NoOpSaveQueue.Instance, NullLogger<WorldRuntime>.Instance);
+        new(new WorldRuntimeOptions(), NullSaveQueue.Instance, NullLogger<WorldRuntime>.Instance);
 
     private static WorldSession CreateMinimalRemoteSession(WorldRuntime? world = null, SessionRegistry? registry = null)
     {

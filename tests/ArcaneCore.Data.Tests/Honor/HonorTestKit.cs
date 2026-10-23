@@ -6,7 +6,7 @@ using ArcaneCore.Kernel.Characters;
 namespace ArcaneCore.Data.Tests.Honor;
 
 /// <summary>Shared fixtures for the honor store tests.</summary>
-internal static class HonorTestSupport
+internal static class HonorTestKit
 {
     public static async Task<DatabaseConnectionOptions> CreateWithCharactersAsync(
         TestDatabases databases, DatabaseProvider provider, params (string Name, byte Race, byte Level, int Account)[] characters)

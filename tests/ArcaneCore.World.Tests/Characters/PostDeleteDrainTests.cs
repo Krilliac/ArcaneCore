@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Data.Characters.Spells;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
@@ -216,7 +217,7 @@ public sealed class PostDeleteDrainTests
 
     private static WorldRuntime CreateWorld() => new(
         new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
-        new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
 
     private static SpellFeature SpellFeatureOf(ServiceProvider provider)
     {
@@ -266,11 +267,6 @@ public sealed class PostDeleteDrainTests
             Entered.TrySetResult();
             await Open.Task.ConfigureAwait(false);
         }
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state) { }
     }
 
     private sealed class GatedSpellStore(Gate? gate) : ICharacterSpellStore

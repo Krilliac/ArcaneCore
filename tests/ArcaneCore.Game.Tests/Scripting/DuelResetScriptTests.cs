@@ -6,7 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Duel;
 using ArcaneCore.Protocol;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Scripting;

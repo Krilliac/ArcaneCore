@@ -8,7 +8,7 @@ using ArcaneCore.Kernel.Npc;
 namespace ArcaneCore.Game.Tests.Conditions;
 
 /// <summary>Builders shared by the condition tests.</summary>
-internal static class ConditionTestSupport
+internal static class ConditionTestKit
 {
     public static Player CreatePlayer(Race race = Race.Human, Class cls = Class.Warrior, Gender gender = Gender.Male,
         byte level = 1, float x = 0, uint guid = 1)

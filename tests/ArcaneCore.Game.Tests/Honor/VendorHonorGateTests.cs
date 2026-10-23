@@ -18,7 +18,7 @@ public sealed class VendorHonorGateTests
 {
     private const uint RankHelm = 92001;   // rank 6, required level 55
     private const uint PlainHelm = 92002;  // no rank requirement
-    private const uint VendorEntry = NpcServiceKit.Entry;
+    private const uint VendorEntry = NpcServiceTestKit.Entry;
 
     private static readonly ItemTemplateStore Store = new(
     [
@@ -29,10 +29,10 @@ public sealed class VendorHonorGateTests
     private static NpcContent Vendor(params uint[] items)
         => NpcContent.Empty with { VendorItems = [.. items.Select((item, i) => new VendorItem { Entry = VendorEntry, Item = item, Slot = (uint)i + 1 })] };
 
-    private static NpcServiceKit Kit(IPlayerHonor? honor, byte level = 60, uint faction = 0, params uint[] items)
+    private static NpcServiceTestKit Kit(IPlayerHonor? honor, byte level = 60, uint faction = 0, params uint[] items)
     {
         var itemService = new InventoryItemService(() => Store, RepairCostTable.Empty, BankBagSlotPriceTable.Empty, () => 1_000);
-        var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(items.Length == 0 ? [RankHelm, PlainHelm] : items),
+        var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(items.Length == 0 ? [RankHelm, PlainHelm] : items),
             extra: new QuestNpcDependencies { Items = itemService, Honor = honor });
         kit.Player.Inventory.Templates = Store;
         itemService.SessionStarted(kit.Player);
@@ -43,12 +43,12 @@ public sealed class VendorHonorGateTests
         return kit;
     }
 
-    private static byte BuyError(NpcServiceKit kit) => kit.Single(WorldOpcode.SmsgBuyFailed)[12];
+    private static byte BuyError(NpcServiceTestKit kit) => kit.Single(WorldOpcode.SmsgBuyFailed)[12];
 
     [Fact]
     public void A_rank_below_the_requirement_is_refused_with_rank_required()
     {
-        using NpcServiceKit kit = Kit(new FakeHonor(current: 5, highest: 5));
+        using NpcServiceTestKit kit = Kit(new FakeHonor(current: 5, highest: 5));
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, RankHelm, 1);
         Assert.Equal((byte)BuyResult.RankRequire, BuyError(kit));
         Assert.Equal(10_000u, kit.Player.Money);
@@ -58,7 +58,7 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void The_required_rank_with_too_low_a_level_is_refused()
     {
-        using NpcServiceKit kit = Kit(new FakeHonor(current: 6, highest: 6), level: 54);
+        using NpcServiceTestKit kit = Kit(new FakeHonor(current: 6, highest: 6), level: 54);
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, RankHelm, 1);
         Assert.Equal((byte)BuyResult.RankRequire, BuyError(kit));
     }
@@ -66,7 +66,7 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void The_required_rank_and_level_buy_the_item_and_pay_for_it()
     {
-        using NpcServiceKit kit = Kit(new FakeHonor(current: 6, highest: 6), level: 55);
+        using NpcServiceTestKit kit = Kit(new FakeHonor(current: 6, highest: 6), level: 55);
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, RankHelm, 1);
         Assert.Equal(9_000u, kit.Player.Money);
         Assert.Equal(1u, kit.Player.Inventory.GetItemCount(RankHelm));
@@ -75,7 +75,7 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void Purchase_uses_the_current_rank_not_the_highest_one()
     {
-        using NpcServiceKit kit = Kit(new FakeHonor(current: 5, highest: 9)); // equipping would use the 9
+        using NpcServiceTestKit kit = Kit(new FakeHonor(current: 5, highest: 9)); // equipping would use the 9
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, RankHelm, 1);
         Assert.Equal((byte)BuyResult.RankRequire, BuyError(kit));
     }
@@ -83,7 +83,7 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void Without_an_honor_owner_rank_items_still_fail_closed_and_plain_items_sell()
     {
-        using NpcServiceKit kit = Kit(honor: null);
+        using NpcServiceTestKit kit = Kit(honor: null);
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, RankHelm, 1);
         Assert.Equal((byte)BuyResult.RankRequire, BuyError(kit));
 
@@ -94,7 +94,7 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void An_item_without_a_rank_never_consults_honor()
     {
-        using NpcServiceKit kit = Kit(new ThrowingHonor());
+        using NpcServiceTestKit kit = Kit(new ThrowingHonor());
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, PlainHelm, 1);
         Assert.Equal(1u, kit.Player.Inventory.GetItemCount(PlainHelm));
     }
@@ -102,7 +102,7 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void A_capital_vendor_takes_ten_percent_off_at_visual_rank_3_in_the_list_and_the_purchase()
     {
-        using NpcServiceKit kit = Kit(new FakeHonor(current: 7, highest: 7, visual: 3), faction: 76, items: PlainHelm);
+        using NpcServiceTestKit kit = Kit(new FakeHonor(current: 7, highest: 7, visual: 3), faction: 76, items: PlainHelm);
         kit.Services.ListInventory(kit.Player, kit.Npc.Guid);
         var list = new PacketReader(kit.Single(WorldOpcode.SmsgListInventory));
         list.ReadUInt64();
@@ -120,11 +120,11 @@ public sealed class VendorHonorGateTests
     [Fact]
     public void A_vendor_of_another_faction_or_a_lower_rank_gets_no_honor_discount()
     {
-        using NpcServiceKit other = Kit(new FakeHonor(7, 7, visual: 3), faction: 529, items: PlainHelm);
+        using NpcServiceTestKit other = Kit(new FakeHonor(7, 7, visual: 3), faction: 529, items: PlainHelm);
         other.Services.BuyItem(other.Player, other.Npc.Guid, PlainHelm, 1);
         Assert.Equal(9_000u, other.Player.Money);
 
-        using NpcServiceKit low = Kit(new FakeHonor(6, 6, visual: 2), faction: 76, items: PlainHelm);
+        using NpcServiceTestKit low = Kit(new FakeHonor(6, 6, visual: 2), faction: 76, items: PlainHelm);
         low.Services.BuyItem(low.Player, low.Npc.Guid, PlainHelm, 1);
         Assert.Equal(9_000u, low.Player.Money);
     }
@@ -133,7 +133,7 @@ public sealed class VendorHonorGateTests
     public void Honor_adds_to_the_honored_discount_instead_of_multiplying()
     {
         var itemService = new InventoryItemService(() => Store, RepairCostTable.Empty, BankBagSlotPriceTable.Empty, () => 1_000);
-        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(PlainHelm),
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor, Vendor(PlainHelm),
             extra: new QuestNpcDependencies
             {
                 Items = itemService,

@@ -11,7 +11,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
 using Xunit;
-using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 
 namespace ArcaneCore.Game.Tests.Loot;

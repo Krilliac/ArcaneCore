@@ -17,6 +17,7 @@ using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -204,7 +205,7 @@ public sealed class ClassicDbScriptedQuestTests
 
         public Rig(CreatureContent creatures, QuestContent quests, uint mapId, uint giverEntry, IReadOnlyList<CharacterQuestStatus> journal)
         {
-            World = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0 }, new NullSaves(),
+            World = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0 }, new NullSaveQueue(),
                 NullLogger<WorldRuntime>.Instance);
             Map map = World.GetMap(mapId, 0);
             var seams = new QuestSeams(() => Quests!);
@@ -305,7 +306,7 @@ public sealed class ClassicDbScriptedQuestTests
             var appearance = new PlayerAppearance(
                 DisplayId: 51, FactionTemplate: 1, PowerType.Energy, BaseHealth: 500, BaseMana: 0,
                 MaxHealth: 500, MaxPower: 100, StartPower: 100, NextLevelXp: 40000);
-            var player = new Player(character, appearance, new NullSession());
+            var player = new Player(character, appearance, new NullPlayerSession());
             player.Inventory.Templates = new ItemTemplateStore([]);
             player.Inventory.GuidAllocator = new ItemGuidAllocator();
             player.Inventory.Load([]);
@@ -354,36 +355,6 @@ public sealed class ClassicDbScriptedQuestTests
         }
 
         public void CharacterChanged(Player player)
-        {
-        }
-    }
-
-    private sealed class NullSaves : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
         {
         }
     }

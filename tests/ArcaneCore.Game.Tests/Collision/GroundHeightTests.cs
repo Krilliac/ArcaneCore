@@ -8,15 +8,15 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.Collision;
 
 /// <summary>
-/// <see cref="GroundHeight"/> on synthetic ground: a flat one-tile terrain (<see cref="HazardKit"/>, ground at z 20) with scripted model and
+/// <see cref="GroundHeight"/> on synthetic ground: a flat one-tile terrain (<see cref="HazardTestKit"/>, ground at z 20) with scripted model and
 /// mesh services, and a model-only world for the leg tests. The same helper on the real extraction is checked in
 /// <c>GroundSnapRealTerrainTests</c> (gated on <c>ARCANECORE_TEST_TERRAIN_DIR</c>).
 /// </summary>
 public sealed class GroundHeightTests
 {
-    private const float X = HazardKit.X;
-    private const float Y = HazardKit.Y;
-    private const float Ground = HazardKit.Ground;
+    private const float X = HazardTestKit.X;
+    private const float Y = HazardTestKit.Y;
+    private const float Ground = HazardTestKit.Ground;
 
     /// <summary>Model floors from a function of (x, y); null where the function has none.</summary>
     private sealed class ModelFloors(Func<float, float, float?> floorAt) : ILineOfSight
@@ -99,9 +99,9 @@ public sealed class GroundHeightTests
     }
 
     /// <summary>The flat tile with its terrain in memory, as the grid of a player nearby would have it: a drape reads no terrain tile from disk.</summary>
-    private static HazardKit Kit(LiquidTypeFlags? liquid)
+    private static HazardTestKit Kit(LiquidTypeFlags? liquid)
     {
-        var kit = new HazardKit(liquid);
+        var kit = new HazardTestKit(liquid);
         kit.Map.Terrain.GetTile(31, 32);
         return kit;
     }
@@ -274,7 +274,7 @@ public sealed class GroundHeightTests
     {
         using var kit = Kit(LiquidTypeFlags.Water); // ground 20, water surface 100
         MapCollision collision = kit.Map.Collision;
-        float z = HazardKit.Level - 5f;
+        float z = HazardTestKit.Level - 5f;
 
         var bottom = new GroundQuery(Up: 10f, Down: 80f, LiquidMode.Bottom, true, true, false);
         Assert.True(GroundHeight.TrySnap(collision, X, Y, z, bottom, out float floor, out GroundSource floorSource));
@@ -283,7 +283,7 @@ public sealed class GroundHeightTests
 
         var surface = bottom with { Liquid = LiquidMode.Surface };
         Assert.True(GroundHeight.TrySnap(collision, X, Y, z, surface, out float top, out GroundSource topSource));
-        Assert.Equal(HazardKit.Level, top, 0.001f);
+        Assert.Equal(HazardTestKit.Level, top, 0.001f);
         Assert.Equal(GroundSource.LiquidSurface, topSource);
     }
 

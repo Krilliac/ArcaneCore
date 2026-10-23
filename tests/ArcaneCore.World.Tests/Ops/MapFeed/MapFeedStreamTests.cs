@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -375,7 +376,7 @@ public sealed class MapFeedStreamTests
             Assert.Equal(1, first.Counters().GetProperty("pathsOmitted").GetInt32());
             Assert.Equal(1, world.Feed.RouteFaults);
 
-            WorldControlPipeTests.LogEntry warning = Assert.Single(
+            CapturedCategoryLog warning = Assert.Single(
                 world.FeedLog,
                 e => e.Level == LogLevel.Warning && e.Message.Contains("route source", StringComparison.Ordinal));
             Assert.Contains("1 so far", warning.Message, StringComparison.Ordinal);
@@ -384,7 +385,7 @@ public sealed class MapFeedStreamTests
             List<JsonElement> next = await world.StepFramesAsync(client, 99);
             Assert.Equal(99, next.Count);
             Assert.Equal(100, world.Feed.RouteFaults);
-            WorldControlPipeTests.LogEntry[] routeWarnings =
+            CapturedCategoryLog[] routeWarnings =
             [
                 .. world.FeedLog.Where(e => e.Level == LogLevel.Warning && e.Message.Contains("route source", StringComparison.Ordinal)),
             ];

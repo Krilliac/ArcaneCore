@@ -4,6 +4,7 @@ using System.Reflection.Emit;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Ops.Watchdog;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging;
 using Xunit;
 

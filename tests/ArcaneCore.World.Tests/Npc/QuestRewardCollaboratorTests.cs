@@ -11,6 +11,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -206,7 +207,7 @@ public sealed class QuestRewardCollaboratorTests
     private static Player NewPlayer(int id) => new(
         new CharacterRecord { Id = id, AccountId = 1, Name = $"P{id}", Race = 1, Class = 1, Level = 1 },
         new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400),
-        new NullSession());
+        new NullPlayerSession());
 
     private sealed class Kit : IDisposable
     {
@@ -215,7 +216,7 @@ public sealed class QuestRewardCollaboratorTests
         public Kit(IEnumerable<SpellInfo> spells, IEnumerable<(uint, SpellTargetPosition)>? positions = null,
             IEnumerable<ItemTemplate>? items = null)
         {
-            _world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NoopSaveQueue(),
+            _world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NullSaveQueue(),
                 NullLogger<WorldRuntime>.Instance);
             Spells = new SpellSystem(new SpellStore(spells, [], positions ?? []), () => 0, teleport: Teleports);
             Effects = new QuestRewardEffects(Spells, NullLogger.Instance);
@@ -279,35 +280,5 @@ public sealed class QuestRewardCollaboratorTests
         public bool HasSpell(Player player, uint spellId) => Known.Contains(spellId);
 
         public bool LearnSpell(Player player, uint spellId) => Known.Add(spellId);
-    }
-
-    private sealed class NoopSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
-    }
-
-    private sealed class NullSession : IPlayerSession
-    {
-        public int AccountId => 1;
-
-        public AccountSecurity Security => AccountSecurity.Player;
-
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
-        {
-        }
-
-        public void ProcessWorldPackets(Player player)
-        {
-        }
-
-        public void Kick()
-        {
-        }
-
-        public void OnLoggedOut()
-        {
-        }
     }
 }

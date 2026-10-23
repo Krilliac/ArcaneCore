@@ -1,9 +1,9 @@
-using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Ops.Control;
@@ -23,31 +23,6 @@ namespace ArcaneCore.World.Tests.Ops.Control;
 public sealed class WorldControlPipeTests
 {
     private const string Prefix = WorldConsoleExecutor.Prefix;
-
-    internal sealed record LogEntry(string Category, LogLevel Level, string Message);
-
-    internal sealed class CapturingLoggerProvider : ILoggerProvider
-    {
-        private readonly ConcurrentQueue<LogEntry> _entries = new();
-
-        public LogEntry[] Entries => [.. _entries];
-
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, _entries);
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class CapturingLogger(string category, ConcurrentQueue<LogEntry> sink) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-                => sink.Enqueue(new LogEntry(category, logLevel, formatter(state, exception)));
-        }
-    }
 
     internal static string UniqueName() => "arcanecore-test-" + Guid.NewGuid().ToString("N");
 
@@ -375,7 +350,7 @@ public sealed class WorldControlPipeTests
                 await client.RunAsync("account set-password nosuchaccount hunter2secret hunter2secret");
             }
 
-            LogEntry[] lines = [.. logs.Entries.Where(e => e.Category == WorldControlPipe.LogCategory && e.Message.StartsWith("Control pipe command:", StringComparison.Ordinal))];
+            CapturedCategoryLog[] lines = [.. logs.Entries.Where(e => e.Category == WorldControlPipe.LogCategory && e.Message.StartsWith("Control pipe command:", StringComparison.Ordinal))];
             Assert.Equal(2, lines.Length);
             Assert.StartsWith("Control pipe command: .reload status (client pid " + Environment.ProcessId + " ", lines[0].Message, StringComparison.Ordinal);
             Assert.DoesNotContain(logs.Entries, e => e.Message.Contains("hunter2secret", StringComparison.Ordinal));

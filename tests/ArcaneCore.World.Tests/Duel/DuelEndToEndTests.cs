@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using static ArcaneCore.World.Tests.Duel.DuelWorldHost;
 

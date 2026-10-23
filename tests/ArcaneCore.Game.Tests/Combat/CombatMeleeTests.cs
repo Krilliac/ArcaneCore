@@ -5,7 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>Auto attack: start/stop packets, the swing loop, swing errors, damage and its side effects.</summary>
 public sealed class CombatMeleeTests

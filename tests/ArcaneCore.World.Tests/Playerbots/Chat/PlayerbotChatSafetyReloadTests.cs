@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Reload;
@@ -103,12 +104,5 @@ public sealed class PlayerbotChatSafetyReloadTests : IDisposable
         string[] properties = [.. typeof(PlayerbotChatSafetyOptions).GetProperties().Select(p => "World:Playerbots:Chat:Safety:" + p.Name)];
         Assert.Equal(properties.Order(), keys.Order());
         Assert.All(WorldConfigKeys.All.Where(key => keys.Contains(key.Path)), key => Assert.True(key.Live, key.Path));
-    }
-
-    private sealed class NullSaveQueue : ICharacterSaveQueue
-    {
-        public void Enqueue(CharacterState state)
-        {
-        }
     }
 }

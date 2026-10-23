@@ -2,7 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Spells.Rules;
 using Xunit;
 
-namespace ArcaneCore.Game.Tests;
+namespace ArcaneCore.Game.Tests.CombatCore;
 
 /// <summary>
 /// Independent boundary vectors from vmangos SpellCaster.cpp:336-412, 446-725, 795-879,

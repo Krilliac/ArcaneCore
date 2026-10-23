@@ -11,7 +11,7 @@ public sealed class LiquidEnvironmentTests
 {
     private static EnvironmentFlags FlagsAt(LiquidTypeFlags? liquid, float z)
     {
-        using var kit = new HazardKit(liquid);
+        using var kit = new HazardTestKit(liquid);
         Player player = kit.AddPlayer(1, z, out _);
         return player.Locomotion.Environment;
     }
@@ -55,7 +55,7 @@ public sealed class LiquidEnvironmentTests
     [Fact]
     public void TheCollisionHeight_MovesTheSwimAndSubmergedThresholds()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water);
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 97.5f, out _);
         // The default 2 yards: level 100 > 97.5 + 2.0 is true: submerged; the swim depth is 1.5.
         Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.Underwater));
@@ -71,14 +71,14 @@ public sealed class LiquidEnvironmentTests
     [Fact]
     public void AMovementPacket_ChangesTheFlagsAtOnce_AndALoginOrTeleportWithoutOneIsPickedUpByTheTick()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water);
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 110f, out _);
         Assert.Equal(EnvironmentFlags.Liquid, player.Locomotion.Environment);
 
         kit.MoveTo(player, 97f); // no tick in between
         Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.Underwater));
 
-        player.Relocate(HazardKit.X, HazardKit.Y, 110f, 0, 5); // a near teleport: no movement packet
+        player.Relocate(HazardTestKit.X, HazardTestKit.Y, 110f, 0, 5); // a near teleport: no movement packet
         Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.Underwater)); // not yet re-evaluated
         kit.Tick(50);
         Assert.Equal(EnvironmentFlags.Liquid, player.Locomotion.Environment);
@@ -87,7 +87,7 @@ public sealed class LiquidEnvironmentTests
     [Fact]
     public void ANoOpTick_DoesNotAskTheTerrainAgain()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water);
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 97f, out _);
         player.Locomotion.Environment = EnvironmentFlags.None; // tamper: the unchanged position must not refresh it
 
@@ -110,7 +110,7 @@ public sealed class LiquidEnvironmentTests
     [Fact]
     public void EnteringAndLeavingSwimmableWater_RemovesTheAurasThatNeedLandOrWater()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water);
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water);
         var bridge = new Bridge();
         LocomotionEnvironment.RegisterSpellBridge(kit.Kit.World, bridge);
         Player player = kit.AddPlayer(1, 110f, out _);
@@ -146,7 +146,7 @@ public sealed class LiquidEnvironmentTests
             AuraInterruptFlags = flags,
         };
 
-        using var kit = new HazardKit(LiquidTypeFlags.Water, Perm(landBound, SpellAuraInterruptFlags.UnderWaterCancels), Perm(waterBound, SpellAuraInterruptFlags.AboveWaterCancels));
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water, Perm(landBound, SpellAuraInterruptFlags.UnderWaterCancels), Perm(waterBound, SpellAuraInterruptFlags.AboveWaterCancels));
         LocomotionEnvironment.RegisterSpellBridge(kit.Kit.World, new SystemBridge(kit.Kit.System));
         Player player = kit.AddPlayer(1, 110f, out _);
         kit.Kit.System.CastSpell(player, landBound, SpellCastTargets.ForSelf(), triggered: true);
@@ -170,7 +170,7 @@ public sealed class LiquidEnvironmentTests
     [Fact]
     public void LeavingTheMap_ForgetsTheLiquid()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water);
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water);
         Player player = kit.AddPlayer(1, 97f, out _);
 
         kit.Kit.World.RemovePlayer(player);
@@ -181,7 +181,7 @@ public sealed class LiquidEnvironmentTests
     [Fact]
     public void OnTransport_SuppressesLiquidAndHighSeaFlags_AndDeactivatesFatigueAndBreath()
     {
-        using var kit = new HazardKit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
+        using var kit = new HazardTestKit(LiquidTypeFlags.Water | LiquidTypeFlags.DeepWater);
         Player player = kit.AddPlayer(1, 97f, out _);
         Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.HighSea));
         Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.Underwater));

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Duel;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;

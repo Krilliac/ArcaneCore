@@ -562,9 +562,9 @@ public sealed class Wave45ClassSpellPackTests
             });
 
         Map map = spells.World.GetMap(0);
-        CreatureContent content = CreatureTestSupport.Content(
+        CreatureContent content = CreatureTestKit.Content(
             [
-                CreatureTestSupport.Template(impEntry, b =>
+                CreatureTestKit.Template(impEntry, b =>
                 {
                     b.Name = "Imp";
                     b.Faction = 14;

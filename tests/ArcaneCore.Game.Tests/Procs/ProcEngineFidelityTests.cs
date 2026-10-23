@@ -72,7 +72,7 @@ public sealed class ProcEngineFidelityTests
             Duration = new SpellDuration(-1, 0, -1),
             School = SpellSchool.Shadow,
         },
-        RuleTestSupport.Grant(ReflectAll, AuraType.ReflectSpells, 100),
+        RuleTestKit.Grant(ReflectAll, AuraType.ReflectSpells, 100),
         // Effect 0 puts another spell's aura on the target, effect 1 then hits it: the fresh aura must not proc from that hit.
         NoGcd(Spell(MarkThenHit,
             Effect(SpellEffectName.TriggerSpell, 0, SpellImplicitTarget.UnitEnemy, trigger: FreshMark),
@@ -92,7 +92,7 @@ public sealed class ProcEngineFidelityTests
             ProcChance = 100,
             ProcCharges = 2,
         },
-        NoGcd(RuleTestSupport.Magic(FrostBolt, SpellSchool.Frost)),
+        NoGcd(RuleTestKit.Magic(FrostBolt, SpellSchool.Frost)),
         NoGcd(Spell(SelfHeal, Effect(SpellEffectName.Heal, 50, SpellImplicitTarget.UnitCaster))),
         Permanent(SelfBuff, Effect(SpellEffectName.ApplyAura, 5, SpellImplicitTarget.UnitCaster, AuraType.ModResistance, misc: 1)),
         NoGcd(Spell(SleepLike, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, SpellHandlerModuleTests.FixtureAura))) with
@@ -134,7 +134,7 @@ public sealed class ProcEngineFidelityTests
     {
         (SpellTestKit kit, Player caster, Player target) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, target, PeriodicCharge);
+        RuleTestKit.Apply(kit, target, PeriodicCharge);
         kit.System.CastSpell(caster, SiphonLike, SpellCastTargets.ForUnit(target.Guid), triggered: true);
         Assert.True(kit.System.HasAura(target, PeriodicCharge)); // the cast itself is no periodic event
 
@@ -151,7 +151,7 @@ public sealed class ProcEngineFidelityTests
         using SpellTestKit _ = kit;
         var sink = new RecordingSink();
         kit.System.Damage = sink;
-        RuleTestSupport.Apply(kit, target, ReflectAll);
+        RuleTestKit.Apply(kit, target, ReflectAll);
         kit.System.CastSpell(caster, SiphonLike, SpellCastTargets.ForUnit(target.Guid), triggered: true);
         Assert.True(kit.System.GetAuras(caster).Single(h => h.Spell.Id == SiphonLike).IsReflected);
 
@@ -186,7 +186,7 @@ public sealed class ProcEngineFidelityTests
         (SpellTestKit kit, Player caster, Player target) = Kit();
         using SpellTestKit _ = kit;
         GiveMana(caster, target);
-        RuleTestSupport.Apply(kit, target, PeriodicCharge);
+        RuleTestKit.Apply(kit, target, PeriodicCharge);
         kit.System.CastSpell(caster, ImprovedDrainManaRank1, SpellCastTargets.ForSelf(), triggered: true);
         kit.System.CastSpell(caster, ManaLeech, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
@@ -203,7 +203,7 @@ public sealed class ProcEngineFidelityTests
         (SpellTestKit kit, Player caster, Player target) = Kit();
         using SpellTestKit _ = kit;
         GiveMana(caster, target);
-        RuleTestSupport.Apply(kit, target, PeriodicCharge);
+        RuleTestKit.Apply(kit, target, PeriodicCharge);
         kit.System.CastSpell(caster, ManaLeech, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
         kit.Advance(1000);
@@ -235,7 +235,7 @@ public sealed class ProcEngineFidelityTests
         (SpellTestKit kit, Player caster, Player target) = Kit();
         using SpellTestKit _ = kit;
         kit.Now = uint.MaxValue - 50; // getMSTime wraps after ~49.7 days of uptime
-        RuleTestSupport.Apply(kit, caster, ReflectOnly);
+        RuleTestKit.Apply(kit, caster, ReflectOnly);
         kit.Now = 50;
 
         kit.System.CastSpell(caster, Hit, SpellCastTargets.ForUnit(target.Guid), triggered: true);
@@ -249,7 +249,7 @@ public sealed class ProcEngineFidelityTests
         (SpellTestKit kit, Player caster, Player target) = Kit();
         using SpellTestKit _ = kit;
         kit.Now = 0;
-        RuleTestSupport.Apply(kit, caster, ReflectOnly);
+        RuleTestKit.Apply(kit, caster, ReflectOnly);
         kit.Now = (1u << 31) + 10; // ~24.9 days later: a signed 32-bit difference reads the aura as applied in the future
 
         kit.System.CastSpell(caster, Hit, SpellCastTargets.ForUnit(target.Guid), triggered: true);
@@ -304,8 +304,8 @@ public sealed class ProcEngineFidelityTests
     {
         (SpellTestKit kit, Player caster, Player reflector) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, reflector, ReflectAll);
-        RuleTestSupport.Apply(kit, caster, ReflectOnly);
+        RuleTestKit.Apply(kit, reflector, ReflectAll);
+        RuleTestKit.Apply(kit, caster, ReflectOnly);
         kit.System.ProcEvents = new Catalog(new SpellProcEventRecord(ReflectOnly, 0, 0, 0, 0, 0, 0, (uint)ProcFlagsEx.Reflect, 0, 0, 0));
         kit.Advance(1);
 
@@ -363,7 +363,7 @@ public sealed class ProcEngineFidelityTests
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
         kit.System.AuraOptions = new AuraOptions { DamageProcCancelsAura = true }; // the opt-in cancel; the vmangos default never cancels
-        RuleTestSupport.Apply(kit, victim, SleepLike);
+        RuleTestKit.Apply(kit, victim, SleepLike);
         kit.System.RegisterProcHandler(SpellHandlerModuleTests.FixtureAura, (in AuraProcContext context) => AuraProcResult.Failed);
 
         kit.System.CastSpell(attacker, Hit, SpellCastTargets.ForUnit(victim.Guid), triggered: true);

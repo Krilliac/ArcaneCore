@@ -23,8 +23,8 @@ public sealed class HonorStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task StateAndRows_RoundTrip_WithTheirOneDecimalRounding(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Honored", 1, 60, 1));
-        int id = await HonorTestSupport.IdOfAsync(cs, "Honored");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Honored", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Honored");
         AssertEmpty(await LoadAsync(cs, id));
 
         var state = new CharacterHonorState(12345.678f, 12, 3_000_000_000u, 4_000_000_000u, 188.34f, 70_000, 3, 0x03, true);
@@ -68,7 +68,7 @@ public sealed class HonorStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task MissingCharacter_IsIgnored(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Someone", 1, 10, 1));
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Someone", 1, 10, 1));
         await WriteAsync(cs, s => s.SaveStateAsync(9999, CharacterHonorState.Empty with { RankPoints = 5f }));
         await WriteAsync(cs, s => s.AppendCpAsync(9999, [new HonorCpRecord(0, 0, 1f, 1, 1)]));
         await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(cs);
@@ -80,9 +80,9 @@ public sealed class HonorStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task Reset_ClearsTheNumbersAndRows_ButKeepsTheCharacterFlags(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Reset", 1, 60, 1), ("Other", 1, 60, 1));
-        int id = await HonorTestSupport.IdOfAsync(cs, "Reset");
-        int other = await HonorTestSupport.IdOfAsync(cs, "Other");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Reset", 1, 60, 1), ("Other", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Reset");
+        int other = await HonorTestKit.IdOfAsync(cs, "Other");
         foreach (int c in new[] { id, other })
         {
             await WriteAsync(cs, s => s.SaveStateAsync(c, new CharacterHonorState(9000f, 9, 4, 12, 50f, 100, 2, 0x01, true)));
@@ -101,9 +101,9 @@ public sealed class HonorStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task CharacterDeletion_RemovesOnlyThatCharactersHonor(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Gone", 1, 60, 1), ("Stays", 2, 60, 1));
-        int gone = await HonorTestSupport.IdOfAsync(cs, "Gone");
-        int stays = await HonorTestSupport.IdOfAsync(cs, "Stays");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Gone", 1, 60, 1), ("Stays", 2, 60, 1));
+        int gone = await HonorTestKit.IdOfAsync(cs, "Gone");
+        int stays = await HonorTestKit.IdOfAsync(cs, "Stays");
         foreach (int c in new[] { gone, stays })
         {
             await WriteAsync(cs, s => s.SaveStateAsync(c, CharacterHonorState.Empty with { RankPoints = 100f }));
@@ -123,8 +123,8 @@ public sealed class HonorStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task QueuedRemovalAfterDeletion_DoesNotWipeARecreatedCharacter(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Reborn", 1, 60, 1));
-        int id = await HonorTestSupport.IdOfAsync(cs, "Reborn");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Reborn", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Reborn");
         await WriteAsync(cs, s => s.AppendCpAsync(id, [new HonorCpRecord(4, 1, 10f, 5, 1)]));
 
         // The character id still exists (a recreated character): the deleted-id purge must not touch it.
@@ -140,8 +140,8 @@ public sealed class HonorStoreTests : IAsyncLifetime
     [MemberData(nameof(Providers))]
     public async Task ConcurrentAppends_FromTwoScopes_KeepEveryRow(DatabaseProvider provider)
     {
-        DatabaseConnectionOptions cs = await HonorTestSupport.CreateWithCharactersAsync(_databases, provider, ("Busy", 1, 60, 1));
-        int id = await HonorTestSupport.IdOfAsync(cs, "Busy");
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Busy", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Busy");
         await Task.WhenAll(
             Task.Run(async () =>
             {

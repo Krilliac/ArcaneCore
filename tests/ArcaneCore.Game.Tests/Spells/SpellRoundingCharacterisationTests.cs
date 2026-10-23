@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Spells.Procs.Talents;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Tests.CombatCore;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Spells;
