@@ -124,24 +124,18 @@ public sealed class InstanceTemplateDumpImporter
     }
 
     private static string Raw(DumpRow row, string table, params string[] columns)
-        => row.TryGet(out string? raw, columns) && raw is not null
-            ? raw
-            : throw new ImportSchemaException(table, columns[0], $"table `{table}`: the column `{columns[0]}` is missing or NULL");
+        => DumpRowReader.Required(row, column => DumpRowReader.SchemaMissing(table, column), columns);
 
     private static uint Unsigned(DumpRow row, string table, params string[] columns)
     {
         string raw = Raw(row, table, columns);
-        return uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out uint value)
-            ? value
-            : throw new ImportSchemaException(table, columns[0], $"table `{table}`, column `{columns[0]}`: value '{raw}' is not an unsigned number");
+        return DumpRowReader.ParseUnsigned(raw, columns[0], NumberStyles.None, (column, value) => DumpRowReader.SchemaNotUnsigned(table, column, value));
     }
 
     private static int Signed(DumpRow row, string table, params string[] columns)
     {
         string raw = Raw(row, table, columns);
-        return int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int value)
-            ? value
-            : throw new ImportSchemaException(table, columns[0], $"table `{table}`, column `{columns[0]}`: value '{raw}' is not a number");
+        return DumpRowReader.ParseSigned(raw, columns[0], NumberStyles.AllowLeadingSign, (column, value) => new ImportSchemaException(table, column, $"table `{table}`, column `{column}`: value '{value}' is not a number"));
     }
 
     private static float Float(DumpRow row, string table, params string[] columns)

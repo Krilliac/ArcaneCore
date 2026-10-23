@@ -128,12 +128,8 @@ public sealed class TransportDumpImporter
     }
 
     private static uint Required(DumpRow row, string column)
-        => row.TryGet(out string? raw, column) && raw is not null
-            ? Parse(column, raw)
-            : throw new ImportSchemaException(Table, column, $"table `{Table}`: the column `{column}` is missing or NULL");
+        => Parse(column, DumpRowReader.Required(row, static c => DumpRowReader.SchemaMissing(Table, c), column));
 
     private static uint Parse(string column, string raw)
-        => uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out uint value)
-            ? value
-            : throw new ImportSchemaException(Table, column, $"table `{Table}`, column `{column}`: value '{raw}' is not an unsigned number");
+        => DumpRowReader.ParseUnsigned(raw, column, NumberStyles.None, static (c, r) => DumpRowReader.SchemaNotUnsigned(Table, c, r));
 }

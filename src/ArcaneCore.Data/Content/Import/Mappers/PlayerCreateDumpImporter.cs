@@ -264,7 +264,5 @@ public sealed class PlayerCreateDumpImporter
     }
 
     private static int Int(DumpRow row, string column, int fallback)
-        => row.TryGet(out string? raw, column) && !string.IsNullOrEmpty(raw)
-            ? (int)double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture)
-            : fallback;
+        => DumpRowReader.TruncatedInt(row, column, fallback);
 }
