@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Npc;
 
 namespace ArcaneCore.Data.Npc;
@@ -15,10 +15,7 @@ public static class FactionTemplateDbcReader
     public static FactionTemplateCatalog Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != 14 || file.RecordSize != 56)
-        {
-            throw new InvalidDataException("build-5875 FactionTemplate.dbc requires fourteen four-byte fields");
-        }
+        file.RequireFields(14, static _ => "build-5875 FactionTemplate.dbc requires fourteen four-byte fields");
 
         var rows = new List<FactionTemplateRecord>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Data.Characters;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Tests.Skills;
 using ArcaneCore.Kernel.Characters;
 using Xunit;

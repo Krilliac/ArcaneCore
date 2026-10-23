@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Npc;
 
 namespace ArcaneCore.Data.Npc;
@@ -160,19 +160,13 @@ public static class NpcServiceDbcReaders
     private static void RequireOneOf(DbcFile file, string name, int first, int second)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if ((file.FieldCount != first && file.FieldCount != second) || file.RecordSize != file.FieldCount * 4)
-        {
-            throw new InvalidDataException($"build-5875 {name} requires {first} (or {second}) four-byte fields");
-        }
+        file.RequireOneOf(first, second, _ => $"build-5875 {name} requires {first} (or {second}) four-byte fields");
     }
 
     private static void Require(DbcFile file, int fields, string name)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != fields || file.RecordSize != fields * 4)
-        {
-            throw new InvalidDataException($"build-5875 {name} requires {fields} four-byte fields");
-        }
+        file.RequireFields(fields, _ => $"build-5875 {name} requires {fields} four-byte fields");
     }
 
     private static float Finite(float value)

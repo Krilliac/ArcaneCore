@@ -10,13 +10,13 @@ namespace ArcaneCore.Atlas.Reference.Dbc;
 /// </summary>
 /// <remarks>
 /// Layout: D:\WoW-RE-Research\formats\dbc.md:42-98 (header, records, string block) and :100-121 (a localized string is 8 string
-/// offsets plus 1 flags cell); the same header checks as src/ArcaneCore.Data/Content/Spells/DbcFile.cs:36-66
+/// offsets plus 1 flags cell); the same header checks as src/ArcaneCore.Data/ClientData/DbcFile.cs:36-66
 /// (read here for the format only, not referenced).
 /// </remarks>
 public sealed class WdbcFile
 {
     /// <summary>The 'WDBC' magic as a little-endian 32-bit value.</summary>
-    // ref: src/ArcaneCore.Data/Content/Spells/DbcFile.cs:13 ; D:\WoW-RE-Research\formats\dbc.md:51
+    // ref: src/ArcaneCore.Data/ClientData/DbcFile.cs:13 ; D:\WoW-RE-Research\formats\dbc.md:51
     public const uint Magic = 0x43424457;
 
     /// <summary>Size of the header in bytes.</summary>

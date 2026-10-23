@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.Maps;
 
@@ -14,8 +14,7 @@ public static class AreaTableDbcReader
     public static IReadOnlyList<AreaTemplateRow> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
-            throw new InvalidDataException($"AreaTable.dbc requires {FieldCount} four-byte fields, found {file.FieldCount}/{file.RecordSize}");
+        file.RequireFields(FieldCount, static table => $"AreaTable.dbc requires {FieldCount} four-byte fields, found {table.FieldCount}/{table.RecordSize}");
 
         var rows = new List<AreaTemplateRow>(file.RecordCount);
         var ids = new HashSet<uint>();

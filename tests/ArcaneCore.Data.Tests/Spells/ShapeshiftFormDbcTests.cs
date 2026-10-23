@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Tests.Skills;
 using ArcaneCore.Kernel.WorldData;

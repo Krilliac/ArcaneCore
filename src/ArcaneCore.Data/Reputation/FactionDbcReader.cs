@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Reputation;
 
 namespace ArcaneCore.Data.Reputation;
@@ -19,10 +19,7 @@ public static class FactionDbcReader
     public static FactionCatalog Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
-        {
-            throw new InvalidDataException("build-5875 Faction.dbc requires thirty-seven four-byte fields");
-        }
+        file.RequireFields(FieldCount, static _ => "build-5875 Faction.dbc requires thirty-seven four-byte fields");
 
         var rows = new List<FactionRecord>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

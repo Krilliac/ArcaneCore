@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Data.Content.Maps;
@@ -22,7 +22,7 @@ public static class MapDbcReader
     public static IReadOnlyList<MapTemplateRow> Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        RequireLayout(file);
+        file.RequireFields(FieldCount, static table => $"Map.dbc requires {FieldCount} four-byte fields, found {table.FieldCount}/{table.RecordSize}");
 
         var rows = new List<MapTemplateRow>(file.RecordCount);
         var seen = new HashSet<uint>();
@@ -60,11 +60,5 @@ public static class MapDbcReader
             throw new InvalidDataException("Map.dbc must contain both continent ids 0 and 1");
 
         return rows.OrderBy(row => row.Entry).ToArray();
-    }
-
-    private static void RequireLayout(DbcFile file)
-    {
-        if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
-            throw new InvalidDataException($"Map.dbc requires {FieldCount} four-byte fields, found {file.FieldCount}/{file.RecordSize}");
     }
 }

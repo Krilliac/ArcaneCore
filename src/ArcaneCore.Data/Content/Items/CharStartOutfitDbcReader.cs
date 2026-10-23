@@ -1,11 +1,12 @@
 using System.Buffers.Binary;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Data.Content.Items;
 
 /// <summary>
 /// Reads the build-5875 CharStartOutfit.dbc record layout. This is intentionally independent of
-/// <see cref="Spells.DbcFile"/>: CharStartOutfit declares 41 fields but its compact record is 152
+/// <see cref="DbcFile"/>: CharStartOutfit declares 41 fields but its compact record is 152
 /// bytes because race, class, gender and outfit selector are packed byte fields. The record
 /// begins with its row ID; packed identity is the second word, followed by twelve item IDs.
 /// </summary>

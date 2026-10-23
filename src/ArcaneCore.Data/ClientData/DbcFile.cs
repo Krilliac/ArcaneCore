@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace ArcaneCore.Data.Content.Spells;
+namespace ArcaneCore.Data.ClientData;
 
 /// <summary>
 /// A client DBC table (WDBC: "WDBC", u32 records, u32 fields, u32 record size, u32 string block
@@ -119,5 +119,26 @@ public sealed class DbcFile
         if (end < 0) throw new InvalidDataException("policy string is not NUL terminated");
         try { return new UTF8Encoding(false, true).GetString(block[..end]); }
         catch (DecoderFallbackException error) { throw new InvalidDataException("policy string is not valid UTF-8", error); }
+    }
+
+    // Parse already guarantees RecordSize == FieldCount * 4, so the Require* checks only compare the field count.
+    // The caller words the failure (each table keeps its own message); it is built only when the check fails.
+
+    /// <summary>Throws <see cref="InvalidDataException"/> with <paramref name="message"/> unless the table has exactly <paramref name="expected"/> fields.</summary>
+    public void RequireFields(int expected, Func<DbcFile, string> message)
+    {
+        if (FieldCount != expected) throw new InvalidDataException(message(this));
+    }
+
+    /// <summary>Throws <see cref="InvalidDataException"/> with <paramref name="message"/> unless the table has <paramref name="first"/> or <paramref name="second"/> fields.</summary>
+    public void RequireOneOf(int first, int second, Func<DbcFile, string> message)
+    {
+        if (FieldCount != first && FieldCount != second) throw new InvalidDataException(message(this));
+    }
+
+    /// <summary>Throws <see cref="InvalidDataException"/> with <paramref name="message"/> if the table has fewer than <paramref name="minimum"/> fields.</summary>
+    public void RequireAtLeast(int minimum, Func<DbcFile, string> message)
+    {
+        if (FieldCount < minimum) throw new InvalidDataException(message(this));
     }
 }

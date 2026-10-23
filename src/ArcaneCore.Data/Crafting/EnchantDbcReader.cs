@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Kernel.Crafting;
 
 namespace ArcaneCore.Data.Crafting;
@@ -27,10 +27,7 @@ public static class EnchantDbcReader
     public static EnchantCatalog Read(DbcFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != Fields || file.RecordSize != Fields * 4)
-        {
-            throw new InvalidDataException($"build-5875 SpellItemEnchantment.dbc requires {Fields} four-byte fields (found {file.FieldCount})");
-        }
+        file.RequireFields(Fields, static table => $"build-5875 SpellItemEnchantment.dbc requires {Fields} four-byte fields (found {table.FieldCount})");
 
         var rows = new List<SpellItemEnchantment>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)

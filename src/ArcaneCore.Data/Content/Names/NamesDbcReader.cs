@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
-using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.ClientData;
 
 namespace ArcaneCore.Data.Content.Names;
 
@@ -56,8 +56,7 @@ public static class NamesDbcReader
     internal static List<string> ReadPatternStrings(DbcFile file, string kind)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
-            throw new InvalidDataException($"{kind} requires the build-5875 two-field ds layout");
+        file.RequireFields(FieldCount, _ => $"{kind} requires the build-5875 two-field ds layout");
         if (file.RecordCount > MaxRecords)
             throw new InvalidDataException($"{kind} exceeds the {MaxRecords}-record limit");
 
