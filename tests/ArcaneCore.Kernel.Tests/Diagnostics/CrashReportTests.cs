@@ -157,6 +157,19 @@ public sealed class CrashReportTests
         Assert.False(CrashHandler.ShouldIgnoreFirstChance(new NotSupportedException("application feature not supported")));
     }
 
+    [Fact]
+    public void ShouldIgnoreFirstChance_SkipsIoExceptionWrappingSocketOrCancellation_ButKeepsPlainIoException()
+    {
+        // A cancelled HTTP request surfaces as IOException -> SocketException (995, operation aborted).
+        var aborted = new System.Net.Sockets.SocketException(995);
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new IOException("The read operation failed.", aborted)));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new IOException("outer", new InvalidOperationException("mid", aborted))));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new IOException("cancelled", new OperationCanceledException())));
+
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new IOException("disk full")));
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new IOException("wrapped", new InvalidOperationException("not a socket"))));
+    }
+
     private static void ThrowDeep() => throw new InvalidOperationException("deep failure");
 
     private sealed class FixedProvider : ICrashContextProvider
