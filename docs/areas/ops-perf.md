@@ -113,7 +113,7 @@ per-address connection caps were reworked. Measurements and limits: [lane report
 
 ## Shared-file edits (small and additive; for the integrator)
 
-- `WorldRuntime.cs`: `Stats`, timing in `Run`, per-map timing in `RunTick`, `LogIfSlow`.
+- `WorldRuntime.cs`: `Stats`, timing in `Run`, per-map timing in `RunTick`; `WorldRuntime.Perf.cs`: `LogIfSlow`.
 - `WorldRuntimeOptions.cs`: `Perf`. `WorldServiceCollectionExtensions.cs`: one `PostConfigure` line.
 - `WorldSession.cs`: `ProcessWorldPackets` times the handler; `LogIfSlowPacket`.
 - `BuiltinCommands.cs`: `.. ServerLifecycleCommands.Children` in the `server` group.

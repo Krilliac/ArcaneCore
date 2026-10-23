@@ -1,54 +1,5 @@
 namespace ArcaneCore.Game.Reputation;
 
-/// <summary>vmangos SharedDefines.h ReputationRank (the byte quest/vendor/item code compares).</summary>
-public enum ReputationRank : byte
-{
-    Hated = 0,
-    Hostile = 1,
-    Unfriendly = 2,
-    Neutral = 3,
-    Friendly = 4,
-    Honored = 5,
-    Revered = 6,
-    Exalted = 7,
-}
-
-/// <summary>vmangos ReputationMgr.h FactionFlags (the u8 flag byte of SMSG_INITIALIZE_FACTIONS; gtker FactionFlag).</summary>
-[Flags]
-public enum FactionStateFlags : uint
-{
-    None = 0x00,
-
-    /// <summary>Shown in the client's reputation pane.</summary>
-    Visible = 0x01,
-
-    /// <summary>Player-controlled at-war state; makes reputation factions hostile to the player.</summary>
-    AtWar = 0x02,
-
-    /// <summary>Hidden from the pane; reputation still accrues.</summary>
-    Hidden = 0x04,
-
-    /// <summary>Never visible (opposite team factions).</summary>
-    InvisibleForced = 0x08,
-
-    /// <summary>Cannot be set at war (own team core factions) unless already Hated.</summary>
-    PeaceForced = 0x10,
-
-    /// <summary>Player-controlled "inactive" grouping in the pane.</summary>
-    Inactive = 0x20,
-
-    /// <summary>Present in vmangos for vanilla, unused by 1.12 content.</summary>
-    Rival = 0x40,
-}
-
-/// <summary>Where a reputation change comes from (vmangos ReputationSource).</summary>
-public enum ReputationSource
-{
-    Kill,
-    Quest,
-    Spell,
-}
-
 /// <summary>
 /// Rank thresholds and gain arithmetic. Behavior re-implemented from vmangos/core
 /// 4b3d241cffe245a1f68da11380bce96c23db48c0 ReputationMgr.cpp (PointsInRank, ReputationToRank,
@@ -181,12 +132,4 @@ public static class ReputationMath
         double result = value < 0 ? -magnitude : magnitude;
         return (int)Math.Clamp(result, int.MinValue, int.MaxValue);
     }
-}
-
-/// <summary>World rates (vmangos Rate.Reputation.Gain, Rate.Reputation.LowLevel.Kill).</summary>
-public sealed class ReputationRates
-{
-    public float Gain { get; set; } = 1f;
-
-    public float LowLevelKill { get; set; } = 0.2f;
 }

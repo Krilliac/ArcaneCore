@@ -1111,23 +1111,23 @@ public sealed class RaidBossScriptTests
     [Fact]
     public void FiremawAndFlamegor_TrackBwlEncounterState_AndCastShadowFlameWingBuffetAndUniqueBuffets()
     {
-        using var firemawRaid = new Raid(469, BlackwingLairDrakes.FiremawEntry);
+        using var firemawRaid = new Raid(469, BlackwingDrakeAI.FiremawEntry);
         Assert.Equal(EncounterState.InProgress, firemawRaid.Data.GetData(3));
         firemawRaid.Boss.AI!.OnUpdate(5000);
-        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.FlameBuffetSpell);
+        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingDrakeAI.FlameBuffetSpell);
         firemawRaid.Boss.AI.OnUpdate(13000);
-        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.ShadowFlameSpell);
+        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingDrakeAI.ShadowFlameSpell);
         firemawRaid.Boss.AI.OnUpdate(12000);
-        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.WingBuffetSpell);
+        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingDrakeAI.WingBuffetSpell);
         firemawRaid.Boss.AI.OnDeath(firemawRaid.Tank);
         Assert.Equal(EncounterState.Done, firemawRaid.Data.GetData(3));
 
-        using var flamegorRaid = new Raid(469, BlackwingLairDrakes.FlamegorEntry);
+        using var flamegorRaid = new Raid(469, BlackwingDrakeAI.FlamegorEntry);
         Assert.Equal(EncounterState.InProgress, flamegorRaid.Data.GetData(5));
         flamegorRaid.Boss.AI!.OnUpdate(10000);
-        Assert.Contains(flamegorRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.FrenzySpell);
+        Assert.Contains(flamegorRaid.Caster.Casts, c => c.Spell == BlackwingDrakeAI.FrenzySpell);
         flamegorRaid.Boss.AI.OnUpdate(8000);
-        Assert.Contains(flamegorRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.ShadowFlameSpell);
+        Assert.Contains(flamegorRaid.Caster.Casts, c => c.Spell == BlackwingDrakeAI.ShadowFlameSpell);
         flamegorRaid.Boss.AI.OnEvade();
         flamegorRaid.Boss.AI.OnReachedHome();
         Assert.Equal(EncounterState.Fail, flamegorRaid.Data.GetData(5));

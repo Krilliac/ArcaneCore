@@ -57,7 +57,7 @@ flags, time stamp (see [Reference discrepancies](#reference-discrepancies)) and 
 keeps walk mode, and a teleport start (`ResetMovementForTeleport`, which re-applies the block with the moving flags cleared)
 leaves the unit where it is.
 
-### Visibility on cells (`src/ArcaneCore.Game/Maps/Map.cs`)
+### Visibility on cells (`src/ArcaneCore.Game/Maps/Map.Visibility.cs`)
 
 The public `Map` API and the visible behaviour are unchanged (all existing visibility tests
 pass unmodified). Internally:

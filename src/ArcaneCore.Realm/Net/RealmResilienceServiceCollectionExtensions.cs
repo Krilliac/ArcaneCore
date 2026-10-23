@@ -14,9 +14,6 @@ namespace ArcaneCore.Realm.Net;
 /// </summary>
 public static class RealmResilienceServiceCollectionExtensions
 {
-    /// <summary>The key under which the undecorated store registrations are kept.</summary>
-    public const string InnerStoreKey = "ArcaneCore.Realm.Resilience.Inner";
-
     /// <summary>
     /// Register the guard (<see cref="DatabaseResilienceServiceCollectionExtensions.AddDatabaseResilience"/>) and put
     /// the Auth breaker in front of <see cref="IAccountStore"/>, <see cref="IRealmStore"/> and, when registered,
@@ -36,7 +33,7 @@ public static class RealmResilienceServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Move the last registration of <typeparamref name="TService"/> under <see cref="InnerStoreKey"/> (same lifetime,
+    /// Move the last registration of <typeparamref name="TService"/> under <see cref="GuardedCalls{TStore}.InnerStoreKey"/> (same lifetime,
     /// same implementation or factory) and register the decorator in its place; the decorator resolves the inner
     /// store per call, from a scope that call owns (<see cref="GuardedCalls{TStore}"/>).
     /// </summary>
@@ -56,6 +53,7 @@ public static class RealmResilienceServiceCollectionExtensions
             return;
         }
 
+        const string InnerStoreKey = GuardedCalls<TService>.InnerStoreKey;
         if (services.Any(d => d.ServiceType == typeof(TService) && d.IsKeyedService && Equals(d.ServiceKey, InnerStoreKey)))
         {
             return; // already decorated

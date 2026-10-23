@@ -36,7 +36,7 @@ All of `Ops:Observability` is restart-only. Out-of-range values are clamped.
 
 ## Client rejections
 
-`WorldSession.Send` asks `ClientRejectionDecoder` (Game, `Maps/ClientRejection.cs`) whether the opcode can be a refusal (one
+`WorldSession.Send` asks `ClientRejectionDecoder` (Game, `ClientErrors/ClientRejection.cs`) whether the opcode can be a refusal (one
 table load) and, for those that can, reads the reason out of the payload. Hooking `Send` covers every call site without
 editing them. Decoded: `SMSG_CAST_RESULT` / `SMSG_PET_CAST_FAILED` (failure status), `SMSG_INVENTORY_CHANGE_FAILURE`, the
 error form of `SMSG_LOOT_RESPONSE`, `SMSG_BUY_FAILED`, `SMSG_SELL_ITEM`, `SMSG_QUESTGIVER_QUEST_INVALID` / `_FAILED`,

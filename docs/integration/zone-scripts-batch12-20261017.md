@@ -6,8 +6,8 @@ Ported from mangos-classic ScriptDev2 (`src/game/AI/ScriptDevAI/scripts`), check
 | --- | --- | --- |
 | `npc_felhound_tracker` (8668, quest 3602 Azsharite) | kalimdor/azshara.cpp:194-316 | `Creatures/Scripts/FelhoundTrackerAi.cs`, registered as a map entry script by `KalimdorWorldMapData.OnCreatureCreate` |
 | `mob_colonel_kurzen` (813) | eastern_kingdoms/stranglethorn_vale.cpp:110-160 | `Creatures/Scripts/ColonelKurzenAI.cs`, `CreatureAiServices` |
-| `go_marshal_haggards_chest` (GO 1562) | eastern_kingdoms/elwynn_forest.cpp:36-56 | `ArcaneCore.World/GameObjects/ZoneGameObjectScriptsBatch12.cs` |
-| `go_flagongut_fossil` (GO 9630) | eastern_kingdoms/wetlands.cpp:231-253 | same file |
+| `go_marshal_haggards_chest` (GO 1562) | eastern_kingdoms/elwynn_forest.cpp:36-56 | `ArcaneCore.World/GameObjects/HaggardsChestAi.cs` |
+| `go_flagongut_fossil` (GO 9630) | eastern_kingdoms/wetlands.cpp:231-253 | `ArcaneCore.World/GameObjects/FlagongutFossilAi.cs` |
 
 ## Engine seam
 
@@ -32,7 +32,7 @@ source's `OnLootStateChange(GO_JUST_DEACTIVATED)`. Some loot-service call sites 
 ## Correction to batch 11
 
 The batch 11 note said `go_lightning` (azshara.cpp) was not ported. That was wrong: `LightningAi` in
-`ZoneGameObjectScriptsBatch5.cs` already covers it, and the Arcanite Buoy event respawns that object.
+`LightningAi.cs` already covers it, and the Arcanite Buoy event respawns that object.
 
 ## Tests
 

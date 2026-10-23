@@ -7,7 +7,7 @@ in this page claims retail fidelity. The charter rule it serves is "never lose a
 
 Code: `src/ArcaneCore.World/Persistence/CharacterSaveQueue.cs`, `src/ArcaneCore.World/Spells/SpellbookCache.cs`,
 `src/ArcaneCore.Data/Resilience/SqliteConnectionPragmaInterceptor.cs`, `src/ArcaneCore.Data/Stores/EfCharacterStore.cs` (the
-action-button diff), `src/ArcaneCore.Game/Maps/WorldRuntime.cs` (`Autosave`), `src/ArcaneCore.World/Npc/QuestNpcFeature.Rewards.cs`
+action-button diff), `src/ArcaneCore.Game/Maps/WorldRuntime.Autosave.cs` (`Autosave`), `src/ArcaneCore.World/Npc/QuestNpcFeature.Rewards.cs`
 (settlement timing). Tests: `tests/ArcaneCore.World.Tests/Persistence/CharacterSaveQueueTests.cs`,
 `SaveQueueLoadBenchmarkTests.cs`, `tests/ArcaneCore.World.Tests/Spells/SpellbookCacheBatchingTests.cs`,
 `tests/ArcaneCore.Game.Tests/Maps/WorldRuntimeAutosaveTests.cs`, `tests/ArcaneCore.Data.Tests/Resilience/SqliteConnectionPragmaTests.cs`,

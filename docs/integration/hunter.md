@@ -12,7 +12,8 @@ Delivered scope, limits and provenance: `docs/areas/hunter.md`. This note is for
 
 | File | Change |
 |---|---|
-| `Game/Spells/SpellSystem.cs` | `using ArcaneCore.Game.Ranged`; `Prepare`: `CastTimeFor`, `WithAmmoFlag` + `GetAmmoVisual` on SMSG_SPELL_START; `Cast`: `TakeAmmo` after `TakePower`, same on SMSG_SPELL_GO; `CheckCast`: after the movement check `CheckRangedItems` and `CheckStalkedTarget`, the dead-caster check and the range check skipped while `_objectCastDepth > 0`, `CheckRange` gets `movementLeeway` (+ `RangeLeeway.Bonus`); `UpdateCast`: a preparing player cast is cancelled while feigning; `IsSpellReady`: a `COOLDOWN_ON_EVENT` spell waits for its live object; `AddCooldown`: ranged attack time term (no early return when only that term is non-zero), `onEvent` parameter |
+| `Game/Spells/SpellSystem.cs` | `using ArcaneCore.Game.Ranged`; `Prepare`: `CastTimeFor`, `WithAmmoFlag` + `GetAmmoVisual` on SMSG_SPELL_START; `Cast`: `TakeAmmo` after `TakePower`, same on SMSG_SPELL_GO; `CheckCast`: after the movement check `CheckRangedItems` and `CheckStalkedTarget`, the dead-caster check and the range check skipped while `_objectCastDepth > 0`, `CheckRange` gets `movementLeeway` (+ `RangeLeeway.Bonus`); `UpdateCast`: a preparing player cast is cancelled while feigning |
+| `Game/Spells/SpellSystem.Cooldowns.cs` | `IsSpellReady`: a `COOLDOWN_ON_EVENT` spell waits for its live object; `AddCooldown`: ranged attack time term (no early return when only that term is non-zero), `onEvent` parameter |
 | `Game/Spells/SpellInfo.cs` | `GetCastTime(casterLevel, castSpeed, autoRepeat = false, rangedHaste = 1.0f)` |
 | `Game/Spells/SpellPackets.cs` | `BuildSpellStart` / `BuildSpellGo` take an optional `AmmoVisual` (defaults write the old zeros) |
 | `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | see above |

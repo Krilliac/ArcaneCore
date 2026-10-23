@@ -88,7 +88,7 @@ public sealed class DiagnosticsHostingTests : IDisposable
     public async Task BeepOnStartup_And_BeepOnException_InvokeConsoleBeepWhenConfigured()
     {
         int beeps = 0;
-        ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.BeepOverride = () => Interlocked.Increment(ref beeps);
+        CrashAlert.BeepOverride = () => Interlocked.Increment(ref beeps);
         try
         {
             HostApplicationBuilder builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -115,7 +115,7 @@ public sealed class DiagnosticsHostingTests : IDisposable
         }
         finally
         {
-            ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.BeepOverride = null;
+            CrashAlert.BeepOverride = null;
             FaultLedger.Shared.Configure(new DiagnosticsOptions());
             FaultLedger.Shared.Reset();
         }

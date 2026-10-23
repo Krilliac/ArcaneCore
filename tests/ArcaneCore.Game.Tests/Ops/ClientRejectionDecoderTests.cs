@@ -1,6 +1,6 @@
+using ArcaneCore.Game.ClientErrors;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Loot;
-using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;

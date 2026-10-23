@@ -62,7 +62,7 @@ collide there. An integrator may add `.reload config` keys for `World:Guild` / `
 ## Shared-file edits (all additive)
 
 `GuildManager.cs` (partial, `Options`, `MemberJoined/MemberLeft`, length checks, rank rules, offline add),
-`Guild.cs` (`RankName`), `SocialContext.cs` (`CharacterInfo` Level/ZoneId, `Petitions`), `CharacterRecord.cs`
+`Guild.cs` (`RankName`), `CharacterInfo.cs` (Level/ZoneId), `SocialContext.cs` (`Petitions`), `CharacterRecord.cs`
 (`CharacterIdentity` Level/ZoneId, optional trailing), `EfCharacterStore.cs` (projection), `EfSocialStore.cs`
 (`StageGuildAsync` extracted), `SocialWriteQueue.cs` (generic scoped work + `IPetitionPersistence`),
 `SocialFeature.cs` (`World:Guild` binding, directory refresh at logout), `CharacterLookup.cs`,
