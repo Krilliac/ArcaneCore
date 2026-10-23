@@ -85,9 +85,9 @@ internal static class PlayerbotHelpRules
     internal static bool IsPvpFlagged(Player player) => (player.UnitFlags & UnitFlags.Pvp) != 0 || (player.Flags & PlayerFlags.FfaPvp) != 0;
 
     /// <summary>
-    /// Whether attacking <paramref name="attacker"/> would flag the bot for PvP: it is a player, or a creature a player controls (a pet or a totem).
+    /// Whether attacking <paramref name="attacker"/> would flag the bot for PvP: it is a player, a creature a player controls (a pet or a totem), or a unit carrying the PvP flag itself (a guard or an enemy town NPC; <c>MapCombat.Death</c> flags on the same test).
     /// </summary>
-    internal static bool WouldFlag(Unit attacker) => attacker is Player || attacker is Creature { CharmerOrOwnerGuid.IsPlayer: true };
+    internal static bool WouldFlag(Unit attacker) => attacker is Player || attacker is Creature { CharmerOrOwnerGuid.IsPlayer: true } || (attacker.UnitFlags & UnitFlags.Pvp) != 0;
 
     /// <summary>
     /// Whether the bot may take a PvP-flagging fight: it is flagged already or War Mode is on. A creature that is no player's never asks.

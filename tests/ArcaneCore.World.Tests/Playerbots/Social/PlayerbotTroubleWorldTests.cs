@@ -172,4 +172,29 @@ public sealed class PlayerbotTroubleWorldTests
         await ScanAsync(world, warNow);
         Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
     }
+
+    [Fact]
+    public async Task APvpFlaggedCreature_IsAFlaggingFight_AndIsOnlyHelpedWithWarMode()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        await using WorldTestClient victim = await world.AddPlayerAsync("Troublevic");
+        Scene scene = await SetUpAsync(world);
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player self = HelpTestKit.Online(world, "Troublebot");
+            Player vic = HelpTestKit.Online(world, "Troublevic");
+            scene.Mob.UnitFlags |= UnitFlags.Pvp; // a guard or an enemy town NPC
+            Assert.True(PlayerbotHelpRules.WouldFlag(scene.Mob));
+            Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false));
+        });
+
+        long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
+        await ScanAsync(world, now);
+        Assert.Equal(0, SocialTestKit.Feature(world.Host).Help.Helped);
+
+        await world.Host.OnWorldAsync(() => world.Options.Social.WarMode.Enabled = true);
+        long warNow = HelpTestKit.NowWhere(t => t > now + 60_000 && PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
+        await ScanAsync(world, warNow);
+        Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
+    }
 }
