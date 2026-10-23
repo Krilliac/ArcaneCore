@@ -58,7 +58,8 @@ public sealed class PlayerbotTroubleWorldTests
         Assert.Equal(scene.VictimGuid, brain.LastHelpTarget);
         await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => scene.Mob.Health).Result < before, "the bot to damage the attacker");
 
-        // Recorded once, in the bot's memory (HelpedThem) and, the victim being a real player, nowhere else.
+        // Recorded once, in the bot's memory (HelpedThem) and, the victim being a real player, nowhere else. The credit comes with the bot's next think after it hurt the attacker.
+        await HelpTestKit.UntilAsync(() => HelpTestKit.RecorderOf(world).Memory.TryGet(scene.Bot, scene.VictimGuid.Value, out _), "the help to be credited");
         Assert.True(HelpTestKit.RecorderOf(world).Memory.TryGet(scene.Bot, scene.VictimGuid.Value, out PlayerbotRelation relation));
         Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerHelp, relation.Affinity);
         Assert.Equal(1, relation.Familiarity);

@@ -215,7 +215,16 @@ public sealed class PlayerbotHelpCastWorldTests
         await ScanAsync(world, now);
 
         Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
-        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helphealvic").Health).Result > wounded, "the priest's heal to land on the victim");
+        try
+        {
+            await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helphealvic").Health).Result > wounded, "the priest's heal to land on the victim", seconds: 30);
+        }
+        catch (TimeoutException)
+        {
+            PlayerbotBrain priest = HelpTestKit.BrainOf(world, bot);
+            string state = await world.Host.OnWorldAsync(() => $"helps={priest.HelpsDone} kind={priest.LastHelpKind} pending={priest.PendingHelp} goal={priest.Goal} victimHp={HelpTestKit.Online(world, "Helphealvic").Health}/{HelpTestKit.Online(world, "Helphealvic").MaxHealth} wounded={wounded} priestHp={HelpTestKit.Online(world, "Helpprie").Health} alive={HelpTestKit.Online(world, "Helpprie").IsAlive} combat={HelpTestKit.Online(world, "Helpprie").Combat.IsInCombat}");
+            throw new Xunit.Sdk.XunitException("the heal never landed: " + state);
+        }
 
         // The heal is help: the healer is credited (HelpedThem) for it, once the heal landed.
         Assert.True(HelpTestKit.RecorderOf(world).Memory.TryGet(bot, victimGuid.Value, out PlayerbotRelation credit));
