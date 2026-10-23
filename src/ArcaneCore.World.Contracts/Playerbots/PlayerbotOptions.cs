@@ -59,7 +59,7 @@ public sealed class PlayerbotOptions
     /// <summary>
     /// The least wall time (ms, 1..200) a world tick spends on the bots' thinks, however loaded the tick is: the guarantee that a busy
     /// server still thinks (<c>PlayerbotThinkBudget</c>). At least one bot always thinks per tick. Equal to
-    /// <see cref="ThinkBudgetMaxMs"/> it is a fixed budget. Raised, up to <see cref="ThinkBudgetMaxMs"/>, to what walking every bot within <see cref="ThinkStarvedGapMs"/> takes at the measured cost of a think (<c>PlayerbotThinkBudget.CoverageMs</c>): 8 ms covers about 400 bots (1.3 ms a visit, 50 ms ticks, 3 ms of fights), 1000 bots need about 16 ms, and twice as long a real tick twice that, up to the ceiling: the bots then take more of each tick.
+    /// <see cref="ThinkBudgetMaxMs"/> it is a fixed budget. Raised, up to <see cref="ThinkBudgetMaxMs"/>, to what walking every bot within <see cref="ThinkStarvedGapMs"/> takes at the measured cost of a think (<c>PlayerbotThinkBudget.CoverageMs</c>): 8 ms covers about 400 bots (1.3 ms a visit, 50 ms ticks, 3 ms of fights) and 1000 bots need about 16 ms, up to the ceiling: the bots then take more of each tick. The walk is sized from the configured tick interval, not the real one: a real tick longer than the configured one does not raise the budget (that would slow the ticks further), so a full pass of the bots then takes longer than the bound it was sized for (1000 bots at about 10 bots a tick: 8 to 30 s at 80 to 260 ms ticks). The motion lease and the think-starved report follow the measured pass instead (<see cref="ThinkStarvedGapMs"/>).
     /// </summary>
     public double ThinkBudgetMinMs { get; set; } = 8;
 
@@ -85,7 +85,10 @@ public sealed class PlayerbotOptions
     /// <summary>
     /// A bot that goes longer than this many milliseconds (1000..3600000) of world time without a think is reported once per episode as a
     /// "cadence think-starved" anomaly (<c>PlayerbotAnomalies</c>); 0 turns the report off. The default is the ghost walk's stuck
-    /// bound (<c>PlayerbotRecovery.StuckMs</c>).
+    /// bound (<c>PlayerbotRecovery.StuckMs</c>). The report fires only for a bot that falls behind the rotation: its bound is
+    /// the larger of this value and 1.5 times the measured time of a full pass of the main think lane (three times this value
+    /// until a pass is measured), so a rotation that is slow for every bot alike raises nothing. The think budget is still sized
+    /// from this value unraised.
     /// </summary>
     public int ThinkStarvedGapMs { get; set; } = 10_000;
 
