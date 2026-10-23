@@ -542,7 +542,7 @@ internal sealed class PlayerbotPartyAI
         if (mood == BotSocial.PlayerbotEmoteMood.Help)
         {
             // A call for help aimed at this bot: the social pass decides whether it answers (BotSocial.PlayerbotHelpLane).
-            social.NoteHelpCall(_botId, emote.Emoter);
+            social.NoteHelpCall(player.Guid, emote.Emoter);
             return;
         }
 

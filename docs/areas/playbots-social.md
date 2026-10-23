@@ -257,7 +257,7 @@ per fight** (the same 60-second pair window as the help record):
 
 - a `thank` text emote (97) at the helper within 30 yards, **always**, across factions too (`CMSG_TEXT_EMOTE`);
 - for a same-faction real player, a short line (`social.thanks` templates, or the model) with the bot's Chattiness as the chance, through
-  `TryAnnounce` (limiter, safety screen, opt-in, disclosure);
+  `TryAnnounce` (limiter, safety screen, disclosure; the opt-in decides only whether a model may phrase the line, never who is spoken to);
 - with the Generosity trait at 0.6 or more and affinity 30 or more (never a rival), one favour, chosen by a hash: with the chance
   `TipChance` x Generosity a tip, else a buff (the bot's class buff, through the help request) or a debt of resurrection (the help lane raises the helper without
   a roll if they die within 30 minutes).
@@ -284,8 +284,8 @@ initiative chances below use it too). At +0.3 or more the tone is cheerful, at -
 ## Initiative (`World:Playerbots:Social:Initiative`, live)
 
 `PlayerbotInitiativeLane` (`Social/PlayerbotSocialInitiative.cs`, social pass, world thread) lets a bot start a conversation. At most
-`MaxOpeningsPerPass` (4) openings happen server-wide per pass; every one goes through `PlayerbotChat.TryAnnounce`, so the limiter, the safety screen, the
-opt-in rules and the AI disclosure apply, and a model may phrase it where the player opted in (otherwise the `social.*` templates). A round of 24 free bots (their own brain
+`MaxOpeningsPerPass` (4) openings happen server-wide per pass; every one goes through `PlayerbotChat.TryAnnounce`, so the limiter, the safety screen and the AI disclosure apply (TryAnnounce itself does not refuse a whisper to a player who never opted in: the opt-in only decides whether a model may phrase it; who is whispered to is decided by the lane, below),
+and a model may phrase it where the player opted in (otherwise the `social.*` templates). A round of 24 free bots (their own brain
 drives them, alive, out of combat, healthy, on a low-priority goal) looks at the same-faction characters within 20 yards, one bot at most every 20 seconds. An opening needs a reason:
 
 - **Shared objective**: the bot is on a quest and the other holds the same quest unfinished (`PlayerbotGroupCoordinator.SharesGoal`): "You on the <quest> too? Want to team up?"
@@ -319,6 +319,11 @@ Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one p
 - **Lane isolation.** Each social lane runs in its own try/catch; a lane that throws is reported (anomaly `feature-fault`, subject `social`, lane in the message) and the others still run.
 - **Tips.** A tip trade is cancelled (`CMSG_CANCEL_TRADE`) when gratitude is disabled live or the feature stops, and `TipsPaid` counts completed trades (`SMSG_TRADE_STATUS` complete), not requests. A dead bot owes its thanks for up to 2 minutes.
 - **Mood.** A PvP death moves the mood once (the death), not also as `KilledBy`.
+- **The wait for an answer starts when the opening is said.** The speech path calls the opening's `Sent` callback once the line was really said; only then does the lane wait for the player's next say. An opening the limiter or the place refused costs the player nothing (no wait, no penalty, no back-off). A say that names another online character ("hey Bob, no thanks") is not the answer; the wait goes on. A pending opening's reply is kept in its own slot: it is never dropped when the shared 256-line queue is full.
+- **A waiting bot opens on its goal.** A bot that waits for a group has no quest id of its own; the quest and creature of the goal it waits for are used for its team-up line. The answering bot's yes (a bot-to-bot opening) raises the asker's group signal and the lane then offers it to the coordinator (`OfferLfg`), retried each pass until the asker waits (two minutes).
+- **Relations stored before this change have no `Interacted` bit,** so a bot greets or whispers such a player only after their next exchange, trade, help or group.
+- **Lane faults** are reported (fault ledger and anomaly `bot-social/feature-fault`, the lane in the message) once per lane per minute; every fault is counted (`LaneFaultCount`). A ghost is judged by where its corpse lies, and a corpse in sight counts as a dead player in reach. Trade-completed notes (tip payments) live five minutes and are capped at 256; the unmounted sightings behind the first-mount comment drop the oldest first.
+- **`{objective}` in announcements.** The template placeholder `{objective}` may now be filled from the bot's own facts (it was topic-only for a moment, which broke `doing.objective`). It is always the bot's own quest progress, or the shared quest title the initiative lane puts in the topic; no template can show another player's objective, because no fact of another player's is ever put into a bot's persona.
 - **Verified.** `TryAnnounce` does not refuse whispers to non-opted players (the opt-in only gates model use), so the Interacted gate in the lane is the guard. `SpellSystem.HolderAdded` is raised on the world thread. The thank emote id 97 is the repo's `PlayerbotSocialEmotes.TextEmotes.Thank`.
 
 

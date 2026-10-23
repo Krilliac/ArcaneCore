@@ -152,6 +152,7 @@ internal sealed class PlayerbotInitiativeLane
 
     private readonly List<Follow> _follow = [];
     private readonly HashSet<(Guid Bot, ulong Other)> _unmounted = [];
+    private readonly Queue<(Guid Bot, ulong Other)> _unmountedOrder = [];
     private readonly Dictionary<ulong, long> _playerNext = [];
     private readonly Dictionary<ulong, int> _ignored = [];
     private readonly Dictionary<(Guid Bot, ulong Other), Pending> _pending = [];
@@ -523,11 +524,12 @@ internal sealed class PlayerbotInitiativeLane
     private void NoteEvents(PlayerbotSocialPass pass)
     {
         if (pass.Services.GetService<GameEventFeature>() is not { } feature) return;
+        IReadOnlyCollection<ushort> active = feature.ActiveEvents; // a copy per read: read once a pass
         if (_eventsKnown)
-            foreach (ushort id in feature.ActiveEvents)
+            foreach (ushort id in active)
                 if (!_events.Contains(id)) _newEvents.Add(id);
         _events.Clear();
-        foreach (ushort id in feature.ActiveEvents) _events.Add(id);
+        foreach (ushort id in active) _events.Add(id);
         _eventsKnown = true;
     }
 
@@ -535,8 +537,8 @@ internal sealed class PlayerbotInitiativeLane
     private void NoteMount(Guid bot, Player other)
     {
         if (other.Level < FirstMountLevel || other.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0) return;
-        if (_unmounted.Count >= Bound) _unmounted.Clear();
-        _unmounted.Add((bot, other.Guid.Value));
+        if (_unmounted.Add((bot, other.Guid.Value))) _unmountedOrder.Enqueue((bot, other.Guid.Value));
+        while ((_unmounted.Count > Bound || _unmountedOrder.Count > 2 * Bound) && _unmountedOrder.TryDequeue(out (Guid, ulong) oldest)) _unmounted.Remove(oldest); // the oldest sightings go first
     }
 
     private bool TryComment(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, PlayerbotSocialInitiativeOptions options, PlayerbotSocialBot bot, PlayerbotTraits traits, float mood)

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Death.Resurrection;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -215,5 +216,9 @@ public sealed class PlayerbotHelpCastWorldTests
 
         Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
         await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helphealvic").Health).Result > wounded, "the priest's heal to land on the victim");
+
+        // The heal is help: the healer is credited (HelpedThem) for it, once the heal landed.
+        Assert.True(HelpTestKit.RecorderOf(world).Memory.TryGet(bot, victimGuid.Value, out PlayerbotRelation credit));
+        Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerHelp, credit.Affinity);
     }
 }

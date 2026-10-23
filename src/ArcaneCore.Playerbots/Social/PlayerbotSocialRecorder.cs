@@ -240,41 +240,58 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         return false;
     }
 
-    private readonly ConcurrentDictionary<Guid, byte> _tradesDone = new();
+    private readonly ConcurrentDictionary<Guid, long> _tradesDone = new();
 
-    /// <summary>A trade the bot was in completed (its own trade status 8): the gratitude lane counts a tip as paid from it.</summary>
+    private const long TradeDoneLifeMs = 5 * 60_000;
+
+    private const int MaxTradesDone = 256;
+
+    /// <summary>A trade the bot was in completed (its own trade status 8): the gratitude lane counts a tip as paid from it. A note stays 5 minutes and at most 256 are kept.</summary>
     public void NoteTradeDone(Guid botId)
     {
-        if (_tradesDone.Count < 256) _tradesDone[botId] = 1;
+        long now = Environment.TickCount64;
+        if (_tradesDone.Count >= MaxTradesDone)
+        {
+            foreach (KeyValuePair<Guid, long> entry in _tradesDone)
+                if (now - entry.Value > TradeDoneLifeMs) _tradesDone.TryRemove(entry.Key, out _);
+            if (_tradesDone.Count >= MaxTradesDone && !_tradesDone.ContainsKey(botId))
+            {
+                // Still full of live notes: the oldest makes room.
+                Guid oldest = _tradesDone.MinBy(entry => entry.Value).Key;
+                _tradesDone.TryRemove(oldest, out _);
+            }
+        }
+
+        _tradesDone[botId] = now;
     }
 
-    /// <summary>Take the note that the bot's trade completed; false when none has since the last take.</summary>
-    internal bool TryTakeTradeDone(Guid botId) => _tradesDone.TryRemove(botId, out _);
+    /// <summary>Take the note that the bot's trade completed; false when none has since the last take, or when it is older than 5 minutes.</summary>
+    internal bool TryTakeTradeDone(Guid botId) => _tradesDone.TryRemove(botId, out long at) && Environment.TickCount64 - at <= TradeDoneLifeMs;
 
-    private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Asker)> _helpCalls = new();
+    private readonly ConcurrentQueue<(ObjectGuid Bot, ObjectGuid Asker)> _helpCalls = new();
 
     /// <summary>
-    /// <paramref name="asker"/> called for help within earshot of the managed bot <paramref name="botId"/> (a help emote aimed at it, or a help yell
+    /// <paramref name="asker"/> called for help within earshot of the managed bot with the character <paramref name="bot"/> (a help emote aimed at it, or a help yell
     /// or say it heard). The social pass answers the queue (<see cref="PlayerbotHelpLane"/>); at most 256 calls wait.
     /// </summary>
-    public void NoteHelpCall(Guid botId, ObjectGuid asker)
+    public void NoteHelpCall(ObjectGuid bot, ObjectGuid asker)
     {
-        if (_helpCalls.Count < 256) _helpCalls.Enqueue((botId, asker));
+        if (_helpCalls.Count < 256) _helpCalls.Enqueue((bot, asker));
     }
 
     /// <summary>Calls for help waiting for the social pass (tests).</summary>
     internal int PendingHelpCalls => _helpCalls.Count;
 
     /// <summary>Take the oldest call for help that has not been answered.</summary>
-    internal bool TryTakeHelpCall(out Guid botId, out ObjectGuid asker)
+    internal bool TryTakeHelpCall(out ObjectGuid bot, out ObjectGuid asker)
     {
-        if (_helpCalls.TryDequeue(out (Guid BotId, ObjectGuid Asker) call))
+        if (_helpCalls.TryDequeue(out (ObjectGuid Bot, ObjectGuid Asker) call))
         {
-            (botId, asker) = call;
+            (bot, asker) = call;
             return true;
         }
 
-        botId = Guid.Empty;
+        bot = default;
         asker = default;
         return false;
     }

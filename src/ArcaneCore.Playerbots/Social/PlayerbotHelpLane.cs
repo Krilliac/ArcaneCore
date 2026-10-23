@@ -53,7 +53,6 @@ internal sealed class PlayerbotHelpLane
 
     private readonly Dictionary<(Guid Bot, ulong Asker), long> _answered = [];
     private readonly Dictionary<ulong, (long Until, int Count)> _callAnswers = [];
-    private readonly Dictionary<Guid, PlayerbotSocialBot> _byId = [];
     private readonly Dictionary<ulong, (long Since, long Seen)> _trouble = [];
     private readonly Dictionary<ulong, long> _deadSince = [];
     private readonly Dictionary<ulong, long> _rezzedFor = [];
@@ -131,12 +130,11 @@ internal sealed class PlayerbotHelpLane
     {
         PlayerbotSocialMemoryOptions memory = pass.Options.Memory;
         if (recorder.PendingHelpCalls == 0) return;
-        _byId.Clear();
-        foreach (PlayerbotSocialBot candidate in pass.Bots) _byId[candidate.Id] = candidate;
-        for (int budget = CallsPerPass; budget > 0 && recorder.TryTakeHelpCall(out Guid botId, out ObjectGuid askerGuid); budget--)
+        for (int budget = CallsPerPass; budget > 0 && recorder.TryTakeHelpCall(out ObjectGuid botGuid, out ObjectGuid askerGuid); budget--)
         {
-            if (!_byId.TryGetValue(botId, out PlayerbotSocialBot? bot) || !IsFree(bot) || pass.World.FindOnlinePlayer(askerGuid) is not { } asker) continue;
+            if (!pass.ByCharacter.TryGetValue(botGuid.Low, out PlayerbotSocialBot? bot) || !IsFree(bot) || pass.World.FindOnlinePlayer(askerGuid) is not { } asker) continue;
             Player self = bot.Player;
+            Guid botId = bot.Id;
             if (ReferenceEquals(asker, self) || !ReferenceEquals(asker.Map, self.Map) || asker.Team != self.Team || !asker.IsAlive
                 || !asker.Combat.IsInCombat || Distance(self, asker) > memory.BystanderRadiusYards) continue;
             if (_answered.TryGetValue((botId, askerGuid.Value), out long until) && until > pass.NowMs) continue;
@@ -208,10 +206,33 @@ internal sealed class PlayerbotHelpLane
         int looked = 0;
         foreach (ObjectGuid guid in self.VisibleObjects)
         {
+            if (guid.High == HighGuid.Corpse)
+            {
+                // A released ghost stands at its graveyard: the body that can be raised is the corpse, so a corpse in sight is a dead player in reach too.
+                if (self.Map?.FindObject(guid) is ArcaneCore.Game.Combat.Corpse { IsInWorld: true } lying && lying.Owner.IsPlayer && lying.Owner != self.Guid
+                    && pass.World.FindOnlinePlayer(lying.Owner) is { IsAlive: false } owner && ReferenceEquals(owner.Map, self.Map) && owner.Team == self.Team)
+                {
+                    float bodyYards = Distance(self, lying);
+                    if (bodyYards <= radius)
+                    {
+                        _deadSince.TryAdd(owner.Guid.Value, pass.NowMs);
+                        if (bodyYards < deadYards)
+                        {
+                            deadVictim = owner;
+                            deadYards = bodyYards;
+                        }
+                    }
+                }
+
+                continue;
+            }
+
             if (!guid.IsPlayer || guid == self.Guid) continue;
             if (++looked > SightLimit) break;
             if (pass.World.FindOnlinePlayer(guid) is not { } other || !ReferenceEquals(other.Map, self.Map) || other.Team != self.Team) continue;
             float yards = Distance(self, other);
+            // A released ghost stands at the graveyard: its reach is measured at its corpse.
+            if (!other.IsAlive && (other.Flags & PlayerFlags.Ghost) != 0 && other.Combat.Corpse is { IsInWorld: true } ghostBody && ReferenceEquals(ghostBody.Map, self.Map)) yards = Distance(self, ghostBody);
             if (yards > radius) continue;
             if (!other.IsAlive)
             {

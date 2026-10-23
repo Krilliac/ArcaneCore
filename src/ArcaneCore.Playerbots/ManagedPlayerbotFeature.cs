@@ -408,7 +408,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 else if (line.Type == ChatType.Say && !line.SenderIsBot && line.SenderGuid != line.BotGuid) recorder.NoteHeardSay(line.BotId, line.SenderGuid, line.Text);
                 // A yell or a say that calls for help is a call every bot in earshot may answer (BotSocial.PlayerbotHelpLane decides who).
                 if (line.SenderGuid != line.BotGuid && line.Type is ChatType.Yell or ChatType.Say && BotSocial.PlayerbotHelpRules.LooksLikeHelpCall(line.Text))
-                    recorder.NoteHelpCall(line.BotId, line.SenderGuid);
+                    recorder.NoteHelpCall(line.BotGuid, line.SenderGuid);
             };
         }
 

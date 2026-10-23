@@ -165,7 +165,7 @@ public sealed class PlayerbotHelpAnswerWorldTests
 
         await world.Host.OnWorldAsync(() =>
         {
-            foreach (Guid id in ids) HelpTestKit.RecorderOf(world).NoteHelpCall(id, askerGuid);
+            foreach (ObjectGuid guid in guids) HelpTestKit.RecorderOf(world).NoteHelpCall(guid, askerGuid);
         });
         await RunLaneAsync(world, now);
 
