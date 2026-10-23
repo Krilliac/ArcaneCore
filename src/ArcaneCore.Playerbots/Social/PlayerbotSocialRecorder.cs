@@ -179,7 +179,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// </summary>
     public void NoteChatLine(Guid botId, ObjectGuid botGuid, ObjectGuid sender, string? text)
     {
-        if (sender.IsPlayer && (TakeExpected(botId, sender) || _replies.Count < 256)) _replies.Enqueue((botId, sender, text));
+        if (sender.IsPlayer && (TakeExpected(botId, sender) || _replies.Count < 256)) EnqueueReply(botId, sender, text);
         if (PlayerbotApology.IsApology(text)) NoteById(botId, botGuid, sender, PlayerbotSocialEvent.Apologized);
         NoteById(botId, botGuid, sender, PlayerbotSocialEvent.ChatExchange);
     }
@@ -199,13 +199,29 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     }
 
     private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Sender, string? Text)> _replies = new();
+
+    private int _repliesHeard;
+
+    /// <summary>Replies enqueued for the initiative lane so far (tests wait on it instead of a delay).</summary>
+    internal int RepliesHeard => Volatile.Read(ref _repliesHeard);
+
+    private void EnqueueReply(Guid botId, ObjectGuid sender, string? text)
+    {
+        _replies.Enqueue((botId, sender, text));
+        Interlocked.Increment(ref _repliesHeard);
+    }
     private readonly ConcurrentDictionary<(Guid Bot, ulong Player), byte> _expected = new();
 
     /// <summary>The initiative lane opened with <paramref name="player"/> and waits for the answer: their next say within the bot's hearing is it, named or not.</summary>
-    internal void Expect(Guid botId, ObjectGuid player)
+    internal bool Expect(Guid botId, ObjectGuid player)
     {
-        if (_expected.Count < 1024 || _expected.ContainsKey((botId, player.Value))) _expected[(botId, player.Value)] = 1;
+        if (_expected.Count >= MaxExpected && !_expected.ContainsKey((botId, player.Value))) return false;
+        _expected[(botId, player.Value)] = 1;
+        return true;
     }
+
+    /// <summary>How many openings may be awaited at once.</summary>
+    internal const int MaxExpected = 1024;
 
     /// <summary>Whether <paramref name="player"/> is awaited by the bot and has not answered yet; the answer is then taken (a pending opening's reply is never dropped for a full queue).</summary>
     private bool TakeExpected(Guid botId, ObjectGuid player) => _expected.TryUpdate((botId, player.Value), 2, 1);
@@ -222,7 +238,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// </summary>
     public void NoteHeardSay(Guid botId, ObjectGuid sender, string? text)
     {
-        if (sender.IsPlayer && TakeExpected(botId, sender)) _replies.Enqueue((botId, sender, text));
+        if (!sender.IsPlayer) return;
+        // The first line of an awaited player is always kept; a later one (before the lane has read the first) follows the shared cap.
+        if (TakeExpected(botId, sender) || (_expected.ContainsKey((botId, sender.Value)) && _replies.Count < 256)) EnqueueReply(botId, sender, text);
     }
 
     /// <summary>Take the oldest line a character addressed to a bot (the answer to an opening, <see cref="PlayerbotInitiativeLane"/>).</summary>

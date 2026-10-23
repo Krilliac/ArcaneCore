@@ -529,9 +529,8 @@ internal sealed class PlayerbotInitiativeLane
     /// <summary>Wait for the answer of <paramref name="other"/> to an opening (also the tests' way to stage one): the player's next say within hearing is the reply.</summary>
     internal void Expect(PlayerbotSocialRecorder recorder, Guid bot, ObjectGuid botGuid, ObjectGuid other, PlayerbotOpeningKind kind, uint entry, uint quest, long nowMs)
     {
-        if (_pending.Count >= Bound) return;
+        if (!recorder.Expect(bot, other)) return; // too many openings awaited: this one is not waited for
         _pending[(bot, other.Value)] = new Pending(botGuid, nowMs, kind, entry, quest);
-        recorder.Expect(bot, other);
     }
 
     // --- surroundings comments -------------------------------------------------------------------------------------------------

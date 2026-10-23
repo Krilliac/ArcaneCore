@@ -513,4 +513,26 @@ public sealed class PlayerbotInitiativeTests
         Assert.Equal(2, Lane(world).Accepted);
         Assert.False(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid));
     }
+
+    [Fact]
+    public async Task ASecondSay_WhileTheFirstIsStillQueued_IsNotLost()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient player = await world.AddPlayerAsync("Initdouble");
+        await using WorldTestClient other = await world.AddPlayerAsync("Initfriendc");
+        Pair pair = await FamiliarAsync(world, "Initdblbot", "Initdouble");
+        await HelpTestKit.StandAsync(world, "Initdblbot", ("Initfriendc", 4f));
+        PlayerbotSocialRecorder recorder = HelpTestKit.RecorderOf(world);
+        long now = 10_000;
+        await world.Host.OnWorldAsync(() => Lane(world).Expect(recorder, pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, now));
+
+        // Two lines before the lane reads the first: one for somebody else, then the answer.
+        int before = recorder.RepliesHeard;
+        await player.SendChatAsync(ChatType.Say, Language.Common, "hey Initfriendc");
+        await player.SendChatAsync(ChatType.Say, Language.Common, "sure");
+        await HelpTestKit.UntilAsync(() => recorder.RepliesHeard >= before + 2, "both lines to be heard");
+
+        await AnswerTakenAsync(world, pair, now + 1_000);
+        Assert.Equal(1, Lane(world).Accepted); // the second line was dropped before: the lane then waited for an answer that never came
+    }
 }
