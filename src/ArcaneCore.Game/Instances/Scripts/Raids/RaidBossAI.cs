@@ -39,8 +39,8 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
         return (creature.Map?.FindUpdater<InstanceData>(), creature.Template.Entry) switch
         {
             (BlackwingLairInstance, 12017) => new BroodlordAI(creature),
-            (BlackwingLairInstance, 11983) => new FiremawAI(creature),
-            (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
+            (BlackwingLairInstance, BlackwingDrakeAI.FiremawEntry) => new FiremawAI(creature),
+            (BlackwingLairInstance, BlackwingDrakeAI.FlamegorEntry) => new FlamegorAI(creature),
             (BlackwingLairInstance, 14601) => new EbonrocAI(creature),
             (BlackwingLairInstance, 14020) => new ChromaggusAI(creature),
             (BlackwingLairInstance, 13020) => new VaelastraszAI(creature),
