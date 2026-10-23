@@ -398,7 +398,7 @@ public sealed class PlayerbotChatProviderOptions
     internal string ClassifierReasoningEffort
         => NormalizedReasoningEffort == OmitReasoningEffort ? string.Empty
             : NormalizedReasoningEffort.Length > 0 ? NormalizedReasoningEffort
-            : Kind == PlayerbotChatProviderKind.OpenAICompatible && Uri.TryCreate(BaseUrl?.Trim(), UriKind.Absolute, out Uri? root) && IsLoopback(root) ? "none"
+            : Kind == PlayerbotChatProviderKind.OpenAICompatible && Uri.TryCreate(BaseUrl?.Trim(), UriKind.Absolute, out Uri? root) && root.Scheme is "http" or "https" && IsLoopback(root) ? "none"
             : string.Empty;
 
     /// <summary>What identifies this provider's runtime state (hour window, cooldown) across a reload.</summary>
