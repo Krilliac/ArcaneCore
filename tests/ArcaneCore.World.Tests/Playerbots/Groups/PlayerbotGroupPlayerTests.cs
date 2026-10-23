@@ -109,21 +109,42 @@ public sealed class PlayerbotGroupPlayerTests
     }
 
     [Fact]
-    public async Task APlayerOnAnotherGoal_ARival_AndANoWhispersPlayer_AreNeverInvited()
+    public async Task APlayerOnAnotherGoal_AndANoWhispersPlayer_AreNeverInvited()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
         await using WorldTestClient elsewhere = await world.World.EnterWorldAsync("GROUPELSE", "Groupelse", AccountSecurity.Player);
-        await using WorldTestClient rival = await world.World.EnterWorldAsync("GROUPRIVAL", "Grouprival", AccountSecurity.Player);
         await using WorldTestClient quiet = await world.World.EnterWorldAsync("GROUPQUIET", "Groupquiet", AccountSecurity.Player);
         var bot = await world.AddBotAsync("Askerthree", Human, Warrior, 1, []);
-        await GivePlayerQuestAsync(world, "Grouprival", DuoQuest);
         await GivePlayerQuestAsync(world, "Groupquiet", DuoQuest);
         await RememberPlayerAsync(world, bot, "Groupelse", 90);                                         // liked, but not on the goal
-        await RememberPlayerAsync(world, bot, "Grouprival", -80);                                       // on the goal, a rival
         await RememberPlayerAsync(world, bot, "Groupquiet", 90, PlayerbotRelationFlags.NoWhispers);     // on the goal, liked, but asked for quiet
 
         await world.RunAsync(60_000);
         Assert.False(PlayerInvited(world), await world.TraceAsync());
+    }
+
+    /// <summary>The rival is on the goal and opted in to AI chat, so only the bot's rival flag keeps it out; forgiven, the same player is invited.</summary>
+    [Fact]
+    public async Task AnOptedInPlayerOnTheGoal_WhoIsARival_IsNeverInvited_UntilTheBotForgives()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using WorldTestClient rival = await world.World.EnterWorldAsync("GROUPRIVAL", "Grouprival", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askerrival", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Grouprival", DuoQuest);
+        await rival.SendChatAsync(ChatType.Whisper, Language.Common, "ai on", bot.Name);
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Bots.Chat!.Safety.Player("Grouprival")?.AiReplies == true), "the player opted in to AI chat");
+
+        await RememberPlayerAsync(world, bot, "Grouprival", -80);
+        Assert.True(await world.OnWorldAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Grouprival")!;
+            return world.Bots.Social.Memory.TryGet(bot.Id, them.Guid.Value, out PlayerbotRelation relation) && world.Bots.Social.Memory.IsRival(relation);
+        }), "the bot holds the player as a rival");
+        await world.RunAsync(60_000);
+        Assert.False(PlayerInvited(world), await world.TraceAsync());
+
+        await RememberPlayerAsync(world, bot, "Grouprival", 0); // forgiven: the same opted-in player on the goal now qualifies
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
     }
 
     [Fact]

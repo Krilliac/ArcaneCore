@@ -29,6 +29,9 @@ public sealed class PlayerbotRecruitWorldTests
 
     private static readonly Vector3 South = new(StartX, StartY - 150f, StartZ);
 
+    /// <summary>Too far from the quest giver for a bot to walk there and take the quest by itself within the test (so only a recruit can bring it into the group).</summary>
+    private static readonly Vector3 FarSouth = new(StartX, StartY - 900f, StartZ);
+
     /// <summary>Bots crawl (they stay where the test puts them, and a bot far from the giver never takes the quest) and found no guilds of their own.</summary>
     private static void Still(PlayerbotOptions options)
     {
@@ -86,8 +89,59 @@ public sealed class PlayerbotRecruitWorldTests
         Assert.Contains(world.Coordinator.Events, e => e.Contains("shares quest", StringComparison.Ordinal) && e.Contains("Recheal", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A rival by the memory's own Rival flag and nothing else: the flag follows <c>RivalAffinity</c>, so the line is raised to -20 and the
+    /// affinity is -30, above the refusal line (-40). With the rule deleted this candidate, the only healer around and the nearest bot, comes.
+    /// </summary>
+    [Theory]
+    [InlineData(false)] // the candidate holds a member as a rival
+    [InlineData(true)]  // a member holds the candidate as a rival
+    public async Task ARivalByTheRivalFlagAlone_IsNeverRecruited_EvenAsTheOnlyAndNearestCandidate(bool memberHoldsCandidate)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Eager(options);
+            options.Social.Memory.RivalAffinity = -20;
+        });
+        var (tank, mage) = await WaitingPairAsync(world);
+        var rival = await world.AddBotAsync("Rivalpr", Human, Priest, 10, [LesserHeal, Smite], FarSouth);
+        await world.OnWorldAsync(() =>
+        {
+            world.Bots.Social.Memory.Load([memberHoldsCandidate ? Relation(world, tank, rival, -30, PlayerbotRelationFlags.None) : Relation(world, rival, tank, -30, PlayerbotRelationFlags.None)]);
+            return true;
+        });
+        Assert.True(await world.OnWorldAsync(() =>
+        {
+            PlayerbotSocialMemory memory = world.Bots.Social.Memory;
+            (Guid holder, Guid other) = memberHoldsCandidate ? (tank.Id, rival.Id) : (rival.Id, tank.Id);
+            return memory.TryGet(holder, world.Player(other).Guid.Value, out PlayerbotRelation relation) && memory.IsRival(relation)
+                && memory.EffectiveAffinity(relation) > world.Options.Groups.Cooperation.RefuseAffinity;
+        }), "the relation is a rival by the flag and above the refusal affinity");
+
+        await world.RunAsync(90_000);
+        Assert.False(world.Coordinator.Groups.Any(g => g.Find(rival.Id) is not null), await world.TraceAsync());
+    }
+
     [Fact]
-    public async Task ARivalAndADislikedBot_AreNeverRecruited_TheLikedOneIs()
+    public async Task ADislikedBotAtOrBelowTheRefusalAffinity_WithoutTheRivalFlag_IsNeverRecruited()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], Eager);
+        var (tank, mage) = await WaitingPairAsync(world);
+        var disliked = await world.AddBotAsync("Dislikepr", Human, Priest, 10, [LesserHeal, Smite], FarSouth);
+        await world.OnWorldAsync(() =>
+        {
+            world.Bots.Social.Memory.Load([Relation(world, disliked, mage, -45, PlayerbotRelationFlags.None)]); // -45: below -40, above the default rival line -50
+            PlayerbotSocialMemory memory = world.Bots.Social.Memory;
+            Assert.True(memory.TryGet(disliked.Id, world.Player(mage.Id).Guid.Value, out PlayerbotRelation relation) && !memory.IsRival(relation));
+            return true;
+        });
+
+        await world.RunAsync(90_000);
+        Assert.False(world.Coordinator.Groups.Any(g => g.Find(disliked.Id) is not null), await world.TraceAsync());
+    }
+
+    [Fact]
+    public async Task ALikedBot_IsRecruited_WhereARivalAndADislikedOneAreNot()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], Eager);
         var (tank, mage) = await WaitingPairAsync(world);
