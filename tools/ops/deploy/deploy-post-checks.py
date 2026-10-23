@@ -4,7 +4,7 @@ Reads the run's report.json and the live databases (mode=ro only), runs the same
 and, only if they all pass, marks the report healthy, records the new PIDs in the profile's standard-processes.json and opens the
 status console. It never starts, stops or signals a process.
 
-Usage: py -3 tools/ops/deploy/deploy-post-checks.py --label live-w37-r1 [--deploy-dir DIR] [--status-console PS1] [--no-transports] [--no-optional-data]
+Usage: py -3 tools/ops/deploy/deploy-post-checks.py --label live-w37-r1 [--deploy-dir DIR] [--status-console PS1] [--no-transports] [--no-optional-data] [--no-elevators]
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import deploy_log_lines  # noqa: E402
 import opsenv  # noqa: E402
 
 
@@ -45,6 +46,7 @@ def main() -> int:
     ap.add_argument("--status-console", default=None, help="status script to open in its own window after checks pass")
     ap.add_argument("--no-transports", action="store_true")
     ap.add_argument("--no-optional-data", action="store_true")
+    ap.add_argument("--no-elevators", action="store_true")
     args = ap.parse_args()
 
     deploy_dir = Path(args.deploy_dir) if args.deploy_dir else opsenv.deploy_root()
@@ -98,15 +100,10 @@ def main() -> int:
     flipped = [b for b in report["bots_stopped"] if b[0] not in pop and now_bots[tuple(b[:4])] != b[4]]
     require(not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}")
 
-    expected_lines = ["Terrain: reading .map files from", "Collision: vmaps from", "Collision: navmeshes from", "elevators and trams:",
-                      "Started managed playerbot", "loaded 44 maps, 1081 areas", "loaded 122 graveyards and 191 graveyard-zone links"]
-    if not args.no_transports:
-        expected_lines.append("Transports: 9 routes, 9 ships sailing")
-    if not args.no_optional_data:
-        expected_lines += ["Loaded 172 item sets", "Loaded 2012 random properties and 772 item_enchantment_template entries",
-                           "Loaded 1427 page texts", "Enchanting: 1460 enchantments",
-                           "appearance is checked against 3603 CharSections and 136 CharacterFacialHairStyles rows"]
-    report["world_log_checks"] = {k: (k in text) for k in expected_lines}
+    checks = deploy_log_lines.check_log(text, args.no_transports, args.no_optional_data, args.no_elevators)
+    missing = [k for k, ok in checks.items() if not ok]
+    require(not missing, f"the world log lacks expected lines {missing}; the run is not marked healthy and standard-processes.json is untouched")
+    report["world_log_checks"] = checks
     report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
     report.update(enabled_bots=enabled, max_bots=max_bots, started_bots=started, post_checks="deploy-post-checks.py",
                   healthy=True, finished=datetime.datetime.now(datetime.timezone.utc).isoformat())
@@ -125,7 +122,6 @@ def main() -> int:
         subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
                           "-WorldPort", str(world_port), "-AuthPort", str(auth_port)],
                          creationflags=subprocess.CREATE_NEW_CONSOLE)
-    missing = [k for k, ok in report["world_log_checks"].items() if not ok]
     print(json.dumps(dict(healthy=True, world=world_pid, realm=realm_pid, started_bots=started, enabled_bots=enabled, max_bots=max_bots,
                           missing_log_lines=missing, log_counts=report["world_log_counts"])))
     return 0
