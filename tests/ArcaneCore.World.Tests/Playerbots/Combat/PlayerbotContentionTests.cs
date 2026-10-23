@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -157,21 +158,20 @@ public sealed class PlayerbotContentionTests
         }
     }
 
-    [Fact]
-    public async Task AMobTheBotHadEngaged_ThatAnotherPlayersTagTakesOver_IsAKillSteal_Once()
+    /// <summary>One bot, one stranger and one mob four yards off, a recorder for the bot, and the mob on the bot's screen; <paramref name="act"/> runs on the world thread.</summary>
+    private static async Task KillStealScenarioAsync(uint low, Action<WorldTestHost, WorldSession, WorldSession, Creature, PlayerbotBrain, PlayerbotSocialRecorder, Guid> act)
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession bot = await CombatTestSessions.EnterAsync(host, "CONTBOT", "Contbot");
         WorldSession stranger = await CombatTestSessions.EnterAsync(host, "CONTSTR", "Contstr");
         var brain = new PlayerbotBrain(bot, Options());
-        var options = new PlayerbotSocialMemoryOptions();
-        var recorder = new PlayerbotSocialRecorder(new PlayerbotSocialMemory(options, () => 1_760_000_000_000), NullLogger.Instance);
+        var recorder = new PlayerbotSocialRecorder(new PlayerbotSocialMemory(new PlayerbotSocialMemoryOptions(), () => 1_760_000_000_000), NullLogger.Instance);
         brain.Social = recorder;
         Guid botId = Guid.NewGuid();
         try
         {
             Creature mob = null!;
-            await host.OnWorldAsync(() => mob = AddCreature(host, bot.Player!, 995062, 4f));
+            await host.OnWorldAsync(() => mob = AddCreature(host, bot.Player!, low, 4f));
             await host.WaitForWorldAsync(() => bot.Player!.VisibleObjects.Contains(mob.Guid), "mob");
             await host.OnWorldAsync(() =>
             {
@@ -180,21 +180,7 @@ public sealed class PlayerbotContentionTests
                 NoSpells(bot);
                 brain.Update(500);
                 Assert.Same(mob, brain.InspectionTarget);
-                // The bot lands the first hit: it is on the threat list and holds the tap.
-                bot.Player.Map!.Combat.DealDamage(bot.Player, mob, 1);
-                Think(bot, brain);
-                Assert.Same(mob, brain.InspectionTarget);
-                Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _));
-
-                // The mob resets (threat and tap gone) and the other player tags it afresh before the bot is on its list again.
-                mob.Combat.Threat.Clear();
-                mob.ClearLootRecipient();
-                bot.Player.Map!.Combat.CombatStop(bot.Player);
-                Assert.False(bot.Player.Combat.ThreatenedBy.Contains(mob));
-                bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
-                Think(bot, brain);
-                Assert.True(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out PlayerbotRelation blamed), "the bot had it first");
-                Assert.Equal((short)options.AffinityPerKillSteal, blamed.Affinity);
+                act(host, bot, stranger, mob, brain, recorder, botId);
                 return true;
             });
         }
@@ -205,6 +191,91 @@ public sealed class PlayerbotContentionTests
             bot.Kick(); await bot.ManagedClosed;
         }
     }
+
+    [Fact]
+    public async Task AMobAggroedOntoTheBot_ThatAPasserbyTags_IsAKillSteal_Once()
+        => await KillStealScenarioAsync(995062, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            var options = new PlayerbotSocialMemoryOptions();
+            // The mob aggroes onto the bot: the bot is on its threat list, nobody has tagged it.
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            Assert.True(bot.Player!.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            Assert.Same(mob, brain.InspectionTarget);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _));
+            // A passerby tags it while the bot is still on the list.
+            bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+            Assert.True(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            Think(bot, brain);
+            Assert.True(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out PlayerbotRelation blamed), "the bot had it first");
+            Assert.Equal((short)options.AffinityPerKillSteal, blamed.Affinity); // once: a second note would double it
+        });
+
+    [Fact]
+    public async Task AMobTheBotLandedTheFirstHitOn_ThatAnotherPlayerTagsOver_IsAKillSteal()
+        => await KillStealScenarioAsync(995063, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            bot.Player!.Map!.Combat.DealDamage(bot.Player, mob, 1);
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _));
+            mob.ClearLootRecipient(); // the tag is taken away from the bot, the mob still fights it
+            bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+            Think(bot, brain);
+            Assert.True(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _));
+        });
+
+    [Fact]
+    public async Task AMobThatEvadedAndIsTaggedAfreshByAnotherPlayer_IsNoKillSteal()
+        => await KillStealScenarioAsync(995064, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            Think(bot, brain);
+            // The mob evades: threat and tap gone. The bot is off its list when the other player tags it afresh.
+            mob.Combat.Threat.Clear();
+            mob.ClearLootRecipient();
+            bot.Player!.Map!.Combat.CombatStop(bot.Player);
+            Assert.False(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1);
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _), "a reset mob tagged afresh was blamed");
+        });
+
+    [Fact]
+    public async Task AMobTheBotKilledThatRespawnsAndIsTaggedByAHunterWhileTheBotApproaches_IsNoKillSteal()
+        => await KillStealScenarioAsync(995065, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            Think(bot, brain);
+            bot.Player!.Map!.Combat.DealDamage(bot.Player, mob, mob.Health, direct: true, meleeDamage: true);
+            Assert.False(mob.IsAlive);
+            Think(bot, brain);
+            // The same creature, the same guid, alive again with nothing on it.
+            mob.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Alive;
+            mob.Health = mob.MaxHealth;
+            mob.ClearLootRecipient();
+            Assert.True(mob.IsAlive);
+            Assert.False(bot.Player.Combat.ThreatenedBy.Contains(mob));
+            bot.Player.Map!.Combat.DealDamage(stranger.Player!, mob, 1); // the hunter tags it while the bot walks up
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out _), "the respawned mob's first tagger was blamed");
+        });
+
+    [Fact]
+    public async Task AGroupmateTakingTheTag_IsNoKillSteal()
+        => await KillStealScenarioAsync(995066, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            GroupManager groups = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+            groups.Invite(bot.Player!, stranger.Player!.Name);
+            groups.Accept(stranger.Player);
+            Assert.True(groups.AreInSameGroup(bot.Player!.Guid, stranger.Player.Guid));
+            mob.Combat.Threat.AddThreat(bot.Player, 1f);
+            Think(bot, brain);
+            bot.Player.Map!.Combat.DealDamage(stranger.Player, mob, 1);
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out _), "a groupmate's tag was blamed");
+        });
 
     [Theory]
     [InlineData(false)]
